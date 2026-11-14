@@ -177,14 +177,24 @@ pub fn commands() -> Vec<C> {
             crate::model::check_file(&v)?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
             // A model file (`*.model.json`) holds a graph; a web tool its steps.
+            let mark = s.notice_mark();
             let imported = if let Some(graph) = v.get("graph") {
                 s.run("model.new", &json!({"name": name, "graph": graph, "imported": true}))?
             } else {
                 let steps = v.get("steps").cloned().ok_or("not a RustGIS model or web tool (no graph or steps)")?;
                 s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))?
             };
-            if v.get("name").map_or(Some("Tool"), Value::as_str) != imported.get("model").and_then(Value::as_str) {
-                s.notify("1 model name was trimmed, shortened, replaced or made unique during import.", false);
+            // A name `model.new` cut to tell it apart is said once, by it (#1923), unless this cut
+            // it first: `model.new` saw only the first 200 characters, so that cut is said here.
+            let said = s.notices_since(mark).iter().any(|n| n.text.starts_with("ModelBuilder: a model has that name already"));
+            let cut_here = v["name"].as_str().is_some_and(|n| n.chars().count() > 200);
+            if (cut_here || !said) && v.get("name").map_or(Some("Tool"), Value::as_str) != imported.get("model").and_then(Value::as_str) {
+                // A cut to the 200 says how much it cut.
+                let text = match v["name"].as_str() {
+                    Some(n) if cut_here => format!("1 model name was cut from {} to 200 characters, a model name's limit, during import.", n.chars().count()),
+                    _ => "1 model name was trimmed, shortened, replaced or made unique during import.".to_string(),
+                };
+                s.notify(text, false);
             }
             Ok(imported)
         }).roles(&[crate::ParamRole { key: "text", role: crate::Role::Document(crate::Document::Model) }]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files))
@@ -207,13 +217,13 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
     match kind {
         "webMap" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("webMap", l)).try_for_each(load_whole)?;
+            m.layers.iter_mut().filter(|l| shared_layer("webMap", l)).try_for_each(|l| load_whole(s, l))?;
             let html = web_map_html(&m, &m.name)?;
             Ok((m.name.clone(), html.into_bytes(), m.name))
         }
         "webLayer" => {
             let mut l = layer_of(s, p)?;
-            load_whole(&mut l)?;
+            load_whole(s, &mut l)?;
             Ok((l.name.clone(), web_layer_zip(s, &l)?, l.name.clone()))
         }
         "webStyle" => {
@@ -230,7 +240,7 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
         }
         "geodataService" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("geodataService", l)).try_for_each(load_whole)?;
+            m.layers.iter_mut().filter(|l| shared_layer("geodataService", l)).try_for_each(|l| load_whole(s, l))?;
             let mut layers: Vec<&Dataset> = m.layers.iter().filter(|l| shared_layer("geodataService", l)).map(|l| &l.dataset).collect();
             layers.extend(s.project.tables.iter().map(|t| &t.dataset));
             Ok((m.name.clone(), ogc_zip(&m.name, &layers, &[])?, m.name.clone()))
@@ -260,7 +270,7 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
         }
         "webScene" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("webScene", l)).try_for_each(load_whole)?;
+            m.layers.iter_mut().filter(|l| shared_layer("webScene", l)).try_for_each(|l| load_whole(s, l))?;
             let scene = gltf(&m, s.view_size)?;
             for note in scene.notes() {
                 s.notify(note, false);
@@ -297,10 +307,13 @@ fn map_of(s: &Session, p: &Value) -> Result<Map, String> {
     Ok(m)
 }
 
-/// A streamed layer shares its whole source, not the features read for the current view.
-fn load_whole(l: &mut Layer) -> Result<(), String> {
+/// A streamed layer shares its whole source, not the features read for the current view; what
+/// that read couldn't read as it is (rows left out, dates read as null or rounded) is said.
+fn load_whole(s: &mut Session, l: &mut Layer) -> Result<(), String> {
     if l.is_streamed() {
-        l.dataset = l.load_all()?;
+        let (ds, unread) = l.load_all_counted()?;
+        l.dataset = ds;
+        super::whole::Unread::of(l.name.clone(), unread).say(s);
     }
     Ok(())
 }
@@ -1013,8 +1026,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
         let mut tri: std::collections::BTreeMap<[u8; 4], (Vec<[f32; 3]>, Vec<u32>)> = Default::default();
         let mut lines: std::collections::BTreeMap<[u8; 4], Vec<[f32; 3]>> = Default::default();
         let ex = l.extrusion.as_ref();
-        let hf = ex.and_then(|e| e.field.as_deref()).and_then(|f| l.dataset.field_index(f));
-        let (base_h, factor) = ex.map_or((0.0, 0.0), |e| (e.height, e.factor));
+        let columns = ex.map(|e| e.columns(&l.dataset)).unwrap_or_default();
         let rows = l.visible_rows();
         let styler = l.styler(Some(m.scale()));
         // The bytes built so far: a feature only adds to its own colour, so each step adds what
@@ -1066,8 +1078,14 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                 return Err("the scene would be too large; share fewer features".into());
             }
             let sym = styler.symbol(row);
-            let h = (hf.and_then(|fi| l.dataset.value(row, fi).as_f64()).filter(|v| v.is_finite()).unwrap_or(base_h) * factor)
-                .clamp(0.0, 1e6) as f32;
+            // A layer without an extrusion stands flat on the ground; the base and the height
+            // together stay within 1e6 m (the base is never NaN, so the height's cap is a number).
+            let (h, foot) = ex.map_or((0.0, 0.0), |e| {
+                let foot = e.base_metres_at(&l.dataset, row, columns).clamp(0.0, 1e6);
+                ((e.metres_at(&l.dataset, row, columns).clamp(0.0, 1e6 - foot)) as f32, foot as f32)
+            });
+            // The walls stand from the base, the cap sits on them.
+            let top = foot + h;
             let key = [sym.fill.r(), sym.fill.g(), sym.fill.b(), sym.fill.a()];
             last = Some((key, size(&tri, &lines, &key)));
             match g {
@@ -1123,7 +1141,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                         let (pos, idx) = tri.entry(key).or_default();
                         let base = pos.len() as u32;
                         for (x, z) in flat.get(..cap).unwrap_or(&[]) {
-                            pos.push([*x as f32, h, *z as f32]);
+                            pos.push([*x as f32, top, *z as f32]);
                         }
                         for t in &tris {
                             // Seen from above (+y), with z pointing south: reverse the winding.
@@ -1137,7 +1155,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                                     let (a, b) = (flat.get(first + i).copied(), flat.get(first + (i + 1) % n).copied());
                                     let (Some(a), Some(b)) = (a, b) else { continue };
                                     let w = pos.len() as u32;
-                                    for (p, y) in [(a, 0.0), (b, 0.0), (b, h), (a, h)] {
+                                    for (p, y) in [(a, foot), (b, foot), (b, top), (a, top)] {
                                         pos.push([p.0 as f32, y, p.1 as f32]);
                                     }
                                     idx.extend([w, w + 1, w + 2, w, w + 2, w + 3]);
@@ -1153,24 +1171,24 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                         scene.single_vertex_lines += usize::from(part.len() == 1);
                         for w in part.windows(2) {
                             let ((ax, az), (bx, bz)) = (xy(w[0]), xy(w[1]));
-                            seg.push([ax, h, az]);
-                            seg.push([bx, h, bz]);
+                            seg.push([ax, top, az]);
+                            seg.push([bx, top, bz]);
                         }
                     }
                 }
                 Geometry::Point(p) => {
                     let (x, z) = xy(*p);
                     let seg = lines.entry(key).or_default();
-                    // A vertical stick, as tall as the feature (or 50 m).
-                    seg.push([x, 0.0, z]);
-                    seg.push([x, h.max(50.0), z]);
+                    // A vertical stick from the base, as tall as the feature (or 50 m).
+                    seg.push([x, foot, z]);
+                    seg.push([x, top.max(foot + 50.0), z]);
                 }
                 Geometry::MultiPoint(ps_) => {
                     let seg = lines.entry(key).or_default();
                     for p in ps_ {
                         let (x, z) = xy(*p);
-                        seg.push([x, 0.0, z]);
-                        seg.push([x, h.max(50.0), z]);
+                        seg.push([x, foot, z]);
+                        seg.push([x, top.max(foot + 50.0), z]);
                     }
                 }
             }

@@ -369,25 +369,23 @@ impl GpkgSource {
     }
 
     /// Turns a row (id, geometry, fields…) into a feature; `None` for an unreadable geometry.
-    /// Dates that aren't ones are counted in `unread_dates` ([`Batch::unread_dates`]).
+    /// Dates that aren't ones are counted in `unread_dates` ([`Batch::unread_dates`]), date-times
+    /// rounded to the microsecond in `rounded_dates`.
     fn feature(
         &self,
         r: &rusqlite::Row<'_>,
         native: Option<&Extent>,
         req: &Request,
         unread_dates: &mut Vec<usize>,
+        rounded_dates: &mut Vec<usize>,
     ) -> rusqlite::Result<Row> {
         // Integer keys, negative ones too, map to distinct ids.
         let Some(id) = r.get::<_, Option<i64>>(0)?.map(|i| i as u64) else { return Ok(Row::Bad) };
         let mut attrs = || {
             let mut out = Vec::with_capacity(self.info.fields.len());
             for (k, f) in self.info.fields.iter().enumerate() {
-                out.push(match r.get_ref(k + 2).map(|v| value(v, f.ty)) {
-                    Ok(Some(v)) => v,
-                    Ok(None) => {
-                        super::unread_date(unread_dates, k);
-                        Value::Null
-                    }
+                out.push(match r.get_ref(k + 2).map(|v| value(v, f.ty, unread_dates, Some(&mut *rounded_dates), k)) {
+                    Ok(v) => v,
                     // The select list holds a column for every field, so there is no column to miss.
                     Err(_) => Value::Null,
                 });
@@ -431,11 +429,17 @@ impl FeatureSource for GpkgSource {
         &self.info
     }
 
+    /// Samples native-envelope matches, or decoded view matches when the native box is refused.
+    /// Scans count records and check Cancel between them.
     fn read(&self, req: &Request) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
         let guard = self.conn.lock().map_err(|_| DataError::Format("GeoPackage connection poisoned".into()))?;
         let conn = guard.as_ref().ok_or_else(|| DataError::Format("GeoPackage connection closed".into()))?;
-        let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
+        let native = req.extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
+        // Preserve ordinary candidate counts; a refused view needs a geometry scan to count.
+        if limit == 0 && req.extent.is_some() && native.is_none() {
+            return Err(super::unbounded_count());
+        }
         let mut out = Batch::default();
         let push = |row: Row, out: &mut Batch| match row {
             Row::Feature(f) => out.features.push(f),
@@ -468,7 +472,7 @@ impl FeatureSource for GpkgSource {
                     let mut st = conn.prepare(&sql).map_err(err)?;
                     let mut rows = st.query(params_from_iter(chunk.iter())).map_err(err)?;
                     while let Some(r) = rows.next().map_err(err)? {
-                        let row = self.feature(r, native.as_ref(), req, &mut out.unread_dates).map_err(err)?;
+                        let row = self.feature(r, native.as_ref(), req, &mut out.unread_dates, &mut out.rounded_dates).map_err(err)?;
                         push(row, &mut out);
                     }
                     if out.features.len() >= limit {
@@ -483,9 +487,12 @@ impl FeatureSource for GpkgSource {
                 let sql = format!("SELECT {} FROM {}", self.select_list(), quote(&self.table));
                 let mut st = conn.prepare(&sql).map_err(err)?;
                 let mut rows = st.query([]).map_err(err)?;
+                // A whole read knows its count; an extent, bounded natively or not, is matched as it goes.
                 let mut sample =
-                    if native.is_none() { Sampler::with_total(limit, self.info.count.unwrap_or(0)) } else { Sampler::new(limit) };
+                    if req.extent.is_none() { Sampler::with_total(limit, self.info.count.unwrap_or(0)) } else { Sampler::new(limit) };
+                crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
                 while let Some(r) = rows.next().map_err(err)? {
+                    crate::progress::step(1)?;
                     // With an extent, the envelope in the geometry's header says whether the row
                     // matches before anything is decoded; without an envelope, only the decoded
                     // geometry can, so the match is counted after it.
@@ -498,11 +505,11 @@ impl FeatureSource for GpkgSource {
                     {
                         continue;
                     }
-                    let known = native.is_none() || envelope.is_some();
+                    let known = req.extent.is_none() || (native.is_some() && envelope.is_some());
                     if known && !sample.wants() {
                         continue;
                     }
-                    match self.feature(r, native.as_ref(), req, &mut out.unread_dates).map_err(err)? {
+                    match self.feature(r, native.as_ref(), req, &mut out.unread_dates, &mut out.rounded_dates).map_err(err)? {
                         Row::Feature(f) if known || sample.wants() => sample.keep(f),
                         Row::Feature(_) | Row::Skip => {}
                         Row::Bad => out.skipped += 1,
@@ -527,7 +534,8 @@ impl FeatureSource for GpkgSource {
     /// map's reads of the layer go on, and the source's connection isn't held while the visitor
     /// runs; another program writing to the file waits for the scan to end, as for any reader
     /// (outside WAL mode). A file put in place of the one opened is refused (where the system
-    /// says files' identities); a file removed fails as missing.
+    /// says files' identities); a file removed fails as missing. Counts scanned records and checks
+    /// Cancel between them.
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         let Some((path, id)) = &self.file else { return Err(DataError::Format("GeoPackage: no file to read".into())) };
@@ -543,13 +551,15 @@ impl FeatureSource for GpkgSource {
         let conn = open_db(path)?;
         same_file()?;
         let req = Request { extent, limit: usize::MAX };
-        let native = extent.map(|e| self.reproject.extent_from_lonlat(&e));
+        let native = extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
         let sql = format!("SELECT {} FROM {}", self.select_list(), quote(&self.table));
         let mut st = conn.prepare(&sql).map_err(err)?;
         let mut rows = st.query([]).map_err(err)?;
         let mut out = Batch { complete: true, ..Batch::default() };
+        crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         while let Some(r) = rows.next().map_err(err)? {
-            match self.feature(r, native.as_ref(), &req, &mut out.unread_dates).map_err(err)? {
+            crate::progress::step(1)?;
+            match self.feature(r, native.as_ref(), &req, &mut out.unread_dates, &mut out.rounded_dates).map_err(err)? {
                 Row::Feature(f) => {
                     out.matched += 1;
                     chunks.push(f)?;
@@ -1161,10 +1171,14 @@ fn sql_value(v: &Value, ty: FieldType) -> rusqlite::types::Value {
         (Value::Date(d), FieldType::DateTime) => Sql::Text(gpkg_datetime(crate::date::DateTime::from_date(*d))),
         (Value::Date(d), _) => Sql::Text(d.to_string()),
         (Value::DateTime(t), FieldType::Date) if t.is_date() => Sql::Text(t.date().to_string()),
+        // A moment in a date field isn't a day: written as it is, not rounded into a midnight a
+        // read would take as one; it reads as null, as `io::text_in_dates` counts it.
+        (Value::DateTime(t), FieldType::Date) => Sql::Text(t.to_string()),
         (Value::DateTime(t), _) => Sql::Text(gpkg_datetime(*t)),
-        // Text that reads as a date is written as that date; other text is kept as it is, though
-        // a read finds it isn't a date and gives null.
-        (Value::Text(s), FieldType::Date | FieldType::DateTime) => match Value::parse_stored(s, ty) {
+        // Text that reads as a date is written as that date, as a read takes it (digits past the
+        // microsecond rounded); other text is kept as it is, though a read finds it isn't a date
+        // and gives null.
+        (Value::Text(s), FieldType::Date | FieldType::DateTime) => match Value::parse_stored_counted(s, ty).0 {
             Value::Null => Sql::Text(s.clone()),
             date => sql_value(&date, ty),
         },
@@ -1179,9 +1193,11 @@ fn sql_value(v: &Value, ty: FieldType) -> rusqlite::types::Value {
 
 /// A date-time as a GeoPackage DATETIME holds it, `YYYY-MM-DDTHH:MM:SS.SSSZ`: one with a zone in
 /// UTC, so another offset isn't kept ([`crate::io::offset_dates`] counts them), and one without a
-/// zone without the `Z`, rather than relabelled as UTC. Milliseconds are always written, and
-/// microseconds when there are any, so nothing is cut.
+/// zone without the `Z`, rather than relabelled as UTC. Milliseconds are always written, as the
+/// specification has them, rounded to the nearest (cut at the end of year 9999);
+/// [`crate::io::fine_dates`] counts the values that lose digits.
 fn gpkg_datetime(t: crate::date::DateTime) -> String {
+    let t = to_millisecond(t);
     let t = match t.offset() {
         Some(o) if o != 0 => crate::date::DateTime::with_offset(t.micros(), 0).unwrap_or(t),
         _ => t,
@@ -1194,14 +1210,32 @@ fn gpkg_datetime(t: crate::date::DateTime) -> String {
     text
 }
 
-/// An attribute value of a field's type: `None` for one a date field can't hold, read as null
-/// and counted ([`Batch::unread_dates`]).
-fn value(v: ValueRef<'_>, ty: FieldType) -> Option<Value> {
-    Some(match (v, ty) {
+/// A date-time at the nearest millisecond (halves up), cut instead where that would leave years 1
+/// to 9999.
+fn to_millisecond(t: crate::date::DateTime) -> crate::date::DateTime {
+    use crate::date::DateTime;
+    let rest = t.micros().rem_euclid(1000);
+    if rest == 0 {
+        return t;
+    }
+    let cut = t.micros() - rest;
+    let at = |micros: i64| match t.offset() {
+        Some(o) => DateTime::with_offset(micros, o),
+        None => DateTime::local(micros),
+    };
+    let up = (rest >= 500).then(|| at(cut + 1000)).flatten();
+    up.or_else(|| at(cut)).unwrap_or(t)
+}
+
+/// An attribute value of a field's type, for the field `k`. One a date field can't hold is null,
+/// and counted in `unread` ([`Batch::unread_dates`]); with `rounded`, a date-time with digits past
+/// the microsecond is rounded and counted there ([`Batch::rounded_dates`]), else it isn't a date.
+fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Option<&mut Vec<usize>>, k: usize) -> Value {
+    match (v, ty) {
         (ValueRef::Null, _) => Value::Null,
         (v, FieldType::Date | FieldType::DateTime) => {
             let text = if let ValueRef::Text(t) = v { Some(String::from_utf8_lossy(t)) } else { None };
-            return super::gpkg_blob::temporal(text.as_deref(), ty);
+            super::gpkg_blob::temporal(text.as_deref(), ty, unread, rounded, k)
         }
         (ValueRef::Integer(i), FieldType::Boolean) => Value::Bool(i != 0),
         (ValueRef::Integer(i), FieldType::Double) => Value::Float(i as f64),
@@ -1211,7 +1245,7 @@ fn value(v: ValueRef<'_>, ty: FieldType) -> Option<Value> {
         (ValueRef::Text(t), FieldType::Text) => Value::Text(String::from_utf8_lossy(t).into_owned()),
         (ValueRef::Text(t), ty) => Value::parse_source(&String::from_utf8_lossy(t), ty),
         (ValueRef::Blob(_), _) => Value::Null,
-    })
+    }
 }
 
 /// An SQL identifier, quoted.

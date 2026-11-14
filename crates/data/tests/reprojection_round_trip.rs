@@ -2,9 +2,9 @@
 //! with `Transformer::from_lonlat` and back with `to_lonlat` is the place it was, within a
 //! centimetre on the ground. Inside a system's area of use a place must go there and back; outside
 //! it the system may refuse it (`None`), but a place it does take must come back, never somewhere
-//! else. What a system does instead is listed in [`LIMITS`] and [`OUTLINE_REFUSALS`] with the
-//! reason; a known bug is marked `bug:` (#1925). Places lean on the areas' edges and corners, the poles
-//! and the antimeridian.
+//! else (`from_lonlat` refuses a place that doesn't, #1925). What a system does instead is listed
+//! in [`LIMITS`] with the reason. Places lean on the areas' edges and corners, the poles and the
+//! antimeridian.
 //!
 //! Pull requests run a fixed seed; the nightly a new one with more cases. A failure gives its seed
 //! and the place found that doesn't come back. To run a seed again, or deeper:
@@ -51,43 +51,77 @@ const SYSTEMS: &[(&str, (f64, f64, f64, f64))] = &[
 /// Where a system doesn't bring a place back to within [`TOLERANCE_M`], as (system, how far in
 /// metres a place may come back from where it was, whether inside its area of use too or only
 /// outside it, why). Each is PROJ's behaviour too, checked with PROJ 9.8.1.
-const LIMITS: &[(&str, f64, bool, &str)] = &[
-    ("EPSG:3857", f64::INFINITY, false, "a latitude past 85.05° is taken as 85.05°, where Web Mercator ends; an export says so"),
-    // bug: transverse Mercator takes places up to 150° from its central meridian (as PROJ does),
-    // and those near its singular points, 90° off on the equator, come back anywhere.
-    ("EPSG:32617", f64::INFINITY, false, "transverse Mercator takes places it can't bring back"),
-    ("EPSG:32760", f64::INFINITY, false, "transverse Mercator takes places it can't bring back"),
-    ("EPSG:32601", f64::INFINITY, false, "transverse Mercator takes places it can't bring back"),
-    ("EPSG:2193", f64::INFINITY, false, "transverse Mercator takes places it can't bring back"),
-    ("EPSG:27700", f64::INFINITY, false, "transverse Mercator takes places it can't bring back"),
+const LIMITS: &[(&str, f64, Where, &str)] = &[
+    ("EPSG:3857", f64::INFINITY, Where::Outside, "a latitude past 85.05° is taken as 85.05°, where Web Mercator ends; an export says so"),
     // The authalic latitude's sine is nearly 1 near a pole, and its arcsine loses half its digits
     // there: about R·√ε, a decimetre.
-    ("EPSG:3035", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
-    ("EPSG:6933", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
-    // Eckert IV: within a millionth of a degree of a pole, y is a rounding step or two from the
-    // pole line's, which is about a centimetre on the ground (`rustgis_geom::world`, #1911).
-    ("+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs", 0.05, true, "a Double holds y to about a centimetre near a pole"),
+    ("EPSG:3035", 0.2, Where::Outside, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
+    ("EPSG:6933", 0.2, Where::Outside, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
+    // Eckert IV: near a pole its inverse solves for the latitude only to about half a kilometre
+    // (503 m at 89.9955°, 30°E; PROJ 9.8.1 the same).
+    ("+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs", 600.0, Where::NearPole(0.01), "the inverse's latitude is coarse near a pole"),
     // Robinson's curve between its table rows (every 5°) is in pieces whose single-precision
     // coefficients don't quite meet: at 10°, 35°, 45°, 65° and 90° a band of y up to 2.13 m wide is
     // reached from both sides of the row, and the inverse takes the side above. As PROJ's.
-    ("+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", 2.5, true, "Robinson's pieces overlap at some table rows"),
-    // bug: Albers' inverse (proj4rs's, as PROJ's) snaps a latitude within about 0.02° of a pole
-    // onto it.
-    ("EPSG:5070", 5_000.0, false, "Albers takes a place near a pole as the pole"),
-    ("EPSG:3577", 5_000.0, false, "Albers takes a place near a pole as the pole"),
-    ("EPSG:3338", 5_000.0, false, "Albers takes a place near a pole as the pole"),
-    // bug: oblique Mercator takes a place more than 90° round its sphere from Bern (as PROJ
-    // does), and brings it back mirrored, thousands of kilometres away.
-    ("EPSG:2056", f64::INFINITY, false, "Swiss oblique Mercator mirrors the far side of the globe"),
+    (
+        "+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs",
+        2.5,
+        Where::Anywhere,
+        "Robinson's pieces overlap at some table rows",
+    ),
+    // Transverse and oblique Mercator take places up to 150° from their central line (as PROJ
+    // does); far from it they bring them back less closely. `from_lonlat` refuses a place that
+    // doesn't come back within 1e-4° on each axis (#1925), at most 16 m on the ground, such as
+    // those near their singular points 90° off on the equator or on the far side of the globe.
+    ("EPSG:32617", 16.0, Where::Outside, "transverse Mercator far from its meridian, within 1e-4°"),
+    ("EPSG:32760", 16.0, Where::Outside, "transverse Mercator far from its meridian, within 1e-4°"),
+    ("EPSG:32601", 16.0, Where::Outside, "transverse Mercator far from its meridian, within 1e-4°"),
+    ("EPSG:2193", 16.0, Where::Outside, "transverse Mercator far from its meridian, within 1e-4°"),
+    // The datum transformation is chosen for each place by its area of use, as PROJ chooses it:
+    // there and back may take different ones at the area's edge (OSGB 1936's at 9°W, 45.6 m
+    // apart; at 0°E 61°N 135 m, at 1.72°E 49.75°N 150 m: PROJ 9.8.1 the same to the digit).
+    ("EPSG:27700", 16.0, Where::Outside, "transverse Mercator far from its meridian, within 1e-4°"),
+    ("EPSG:27700", 200.0, Where::NearEdge(0.5), "the datum transformation differs there and back at the area's edge"),
+    ("EPSG:2056", 16.0, Where::Outside, "oblique Mercator far from its centre line, within 1e-4°"),
+    // Albers' inverse (PROJ's) snaps a latitude within about 0.02° of a pole onto
+    // it. Those `from_lonlat` takes are the ones within 1e-4° of the pole.
+    ("EPSG:5070", 16.0, Where::Outside, "Albers takes a place near a pole as the pole, within 1e-4°"),
+    ("EPSG:3577", 16.0, Where::Outside, "Albers takes a place near a pole as the pole, within 1e-4°"),
+    ("EPSG:3338", 16.0, Where::Outside, "Albers takes a place near a pole as the pole, within 1e-4°"),
 ];
 
-/// Systems that refuse a place in their area of use on a world map's outline (within a hundredth
-/// of a degree of ±180° or a pole), as (system, why).
-const OUTLINE_REFUSALS: &[(&str, &str)] = &[
-    // bug: Robinson's inverse refuses a longitude its latitude's rounding puts past ±180°, so a
-    // world Robinson file loses every shape that touches the map's edge.
-    ("+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", "Robinson's inverse refuses the map's edge"),
-];
+/// Where a limit in [`LIMITS`] holds.
+#[derive(Clone, Copy)]
+enum Where {
+    /// Outside the system's area of use only.
+    Outside,
+    /// Anywhere.
+    Anywhere,
+    /// Within this many degrees of a pole.
+    NearPole(f64),
+    /// Within this many degrees of the area of use's edge, on either side.
+    NearEdge(f64),
+}
+
+impl Where {
+    fn holds(self, (w, e, s, n): (f64, f64, f64, f64), p: Coord, inside: bool) -> bool {
+        match self {
+            Where::Outside => !inside,
+            Where::Anywhere => true,
+            Where::NearPole(d) => p.y.abs() >= 90.0 - d,
+            // Within `d` of the box's outline, inside or out.
+            Where::NearEdge(d) => {
+                // The longitude as it lies nearest the box, a turn either way (boxes run east of
+                // 180° across the antimeridian).
+                let off = |lon: f64| (w - lon).max(lon - e).max(0.0);
+                let lon = [p.x, p.x + 360.0, p.x - 360.0].into_iter().min_by(|a, b| off(*a).total_cmp(&off(*b))).unwrap_or(p.x);
+                let outside_by = off(lon).hypot((s - p.y).max(p.y - n).max(0.0));
+                let inside_by = (lon - w).min(e - lon).min(p.y - s).min(n - p.y);
+                if inside { inside_by < d } else { outside_by < d }
+            }
+        }
+    }
+}
 
 /// A number from the environment, else `default`.
 fn env(name: &str, default: u64) -> u64 {
@@ -166,16 +200,10 @@ fn a_place_taken_into_a_coordinate_system_comes_back() {
         let (Some((name, area)), Some(t)) = (SYSTEMS.get(i), transformers.get(i)) else { return Ok(()) };
         // Inside the area of use by where the place is, whichever way it was made.
         let inside = in_area(*area, p);
-        let limit = LIMITS.iter().find(|(s, _, anywhere, _)| s == name && (*anywhere || !inside));
-        let allowed = limit.map_or(TOLERANCE_M, |l| l.1.max(TOLERANCE_M));
-        let edge = (p.x.abs() > 179.99 || p.y.abs() > 89.99) && OUTLINE_REFUSALS.iter().any(|(s, _)| s == name);
-        let trip = match trip(t, p) {
-            // Only a refusal on the way back, not a place that comes back wrong.
-            Err(e) if edge && e.contains("didn't come back") => None,
-            other => other.map_err(|e| TestCaseError::fail(format!("{name}: {e}")))?,
-        };
-        match trip {
-            None if inside && !edge => Err(TestCaseError::fail(format!("{name}: {p:?} is in the area of use but was refused"))),
+        let limits = LIMITS.iter().filter(|(s, _, at, _)| s == name && at.holds(*area, p, inside));
+        let allowed = limits.fold(TOLERANCE_M, |most, l| most.max(l.1));
+        match trip(t, p).map_err(|e| TestCaseError::fail(format!("{name}: {e}")))? {
+            None if inside => Err(TestCaseError::fail(format!("{name}: {p:?} is in the area of use but was refused"))),
             None => {
                 REFUSED.fetch_add(1, Ordering::Relaxed);
                 Ok(())

@@ -35,7 +35,6 @@ pub mod tiles;
 pub mod time;
 pub mod view;
 mod view_memory;
-pub mod world;
 
 pub use camera::Camera;
 pub use color::{Ramp, RampGroup, Rgba};
@@ -151,6 +150,9 @@ pub struct Unreadable {
     /// What it says of values in date fields that weren't dates, read as null
     /// ([`rustgis_data::source::unread_dates_note`]).
     pub dates: Option<String>,
+    /// What it says of date-times rounded to the microsecond
+    /// ([`rustgis_data::source::rounded_dates_note`]).
+    pub rounded: Option<String>,
 }
 
 /// A layer: a dataset drawn with a renderer and labels.
@@ -612,7 +614,7 @@ impl Layer {
         // previous view's features.
         match src.poll(block) {
             source::Polled::Done(_, batch) => {
-                src.saw_unread_dates(&batch.unread_dates);
+                src.saw_unread_dates(&batch.unread_dates, &batch.rounded_dates);
                 self.install(batch.features)
             }
             source::Polled::Failed(_) => self.install(Vec::new()),
@@ -623,7 +625,7 @@ impl Layer {
             src.start(e, block);
             match src.poll(block) {
                 source::Polled::Done(_, batch) => {
-                    src.saw_unread_dates(&batch.unread_dates);
+                    src.saw_unread_dates(&batch.unread_dates, &batch.rounded_dates);
                     self.install(batch.features)
                 }
                 source::Polled::Failed(_) => self.install(Vec::new()),
@@ -801,7 +803,7 @@ impl Layer {
             }
         }
         ds.source = self.dataset.source.clone();
-        Ok((ds, Unreadable { rows: report.skipped, dates: report.unread_dates }))
+        Ok((ds, Unreadable { rows: report.skipped, dates: report.unread_dates, rounded: report.rounded_dates }))
     }
 
     /// A streamed layer's source, to export whole a chunk at a time, with a dataset of no
@@ -1255,14 +1257,16 @@ impl Layer {
 
     /// Rows passing the definition query (all rows when none or invalid).
     pub fn visible_rows(&self) -> Vec<bool> {
-        let n = self.dataset.features.len();
-        match self.definition_query.as_deref().filter(|q| !q.trim().is_empty()) {
-            Some(q) => match rustgis_data::query::parse_fields(q, &self.dataset) {
-                Ok(e) => (0..n).map(|r| rustgis_data::query::eval(&e, &self.dataset, r)).collect(),
-                Err(_) => vec![true; n],
-            },
-            None => vec![true; n],
-        }
+        self.query_rows(&self.dataset).unwrap_or_else(|| vec![true; self.dataset.features.len()])
+    }
+
+    /// Which rows of `dataset` (this layer's features, or the whole source it streams) its
+    /// definition query keeps. `None` when it has no query, or one that doesn't read: every feature
+    /// is drawn then.
+    pub fn query_rows(&self, dataset: &Dataset) -> Option<Vec<bool>> {
+        let query = self.definition_query.as_deref().filter(|q| !q.trim().is_empty())?;
+        let expr = rustgis_data::query::parse_fields(query, dataset).ok()?;
+        Some((0..dataset.features.len()).map(|r| rustgis_data::query::eval(&expr, dataset, r)).collect())
     }
 
     /// Extent in longitude/latitude.
@@ -3152,6 +3156,7 @@ impl Layer {
             LayerRole::Streamed
             | LayerRole::GdalPath
             | LayerRole::DuckDbDatabase
+            | LayerRole::DuckDbSql
             | LayerRole::PostgisDatabase
             | LayerRole::MysqlDatabase
             | LayerRole::SqlServerDatabase => self.source.as_mut()?.output_slot_mut(role),

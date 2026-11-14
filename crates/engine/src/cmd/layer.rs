@@ -20,7 +20,7 @@ pub const MAX_LAYER_NAME: usize = 200;
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "as"?: "scan" (a TIFF, PNG or JPEG, even a photo or a GeoTIFF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for Shapefile coordinates (overrides .prj), a CSV, a CityJSON or CityGML model (it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows), or a GDAL or DuckDB file that doesn't say (GDAL takes an authority code such as EPSG:2263 or the exact names WGS84, WGS72, NAD27, NAD83, not WKT or a file)", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "blocks"?: "bool: a DXF's block (图块) contents, true by default", "stream"?: bool, "as"?: "scan" (a TIFF, PNG or JPEG, even a photo or a GeoTIFF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for Shapefile coordinates (overrides .prj), a CSV, a DXF (which never says), a CityJSON or CityGML model (it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows), or a GDAL or DuckDB file that doesn't say (GDAL takes an authority code such as EPSG:2263 or the exact names WGS84, WGS72, NAD27, NAD83, not WKT or a file)", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("layer.addPhotos", "Add Photos", "Home › Add", add_photos).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
             r#"{"paths"?: [JPEG photo files], "folder"?: "a folder of photos (every JPEG in it)", "name"?: "the layer (default Photos; photos join it when it exists)"}"#,
         ),
@@ -28,11 +28,17 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"path": string, "crs"?: "EPSG:… for a CityJSON model (.city.json, a .json, or in a zip) or a CityGML model (.gml, .xml, or in a zip): it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows (as layer.addData)"}"#),
         C::new("info.fileColumns", "List Columns in File", "Home › Add › Add Data › Delimited Text", file_columns).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).view().params(
-            r#"{"path": "a delimited text file (CSV, TSV, TXT) or a spreadsheet", "delimiter"?: ","|";"|"\\t"|"|", "layer"?: "a spreadsheet's sheet (the first by default)"}"#,
+            r#"{"path": "a delimited text file (CSV, TSV, TXT, DAT, or gzip-compressed text) or a spreadsheet", "delimiter"?: ","|";"|"\\t"|"|", "layer"?: "a spreadsheet's sheet (the first by default)"}"#,
         ),
-        C::new("layer.addSql", "Add Data From SQL", "Home › Add", add_sql).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files).with(crate::policy::Effect::Network)).params(
-            r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file or a PostgreSQL connection (postgres:host=… dbname=…) whose tables the query names", "password"?: "the connection's, kept for this session only", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool, "ran"?: "a result the app ran (the SQL pane)"}"#,
-        ),
+        C::new("layer.addSql", "Add Data From SQL", "Home › Add", add_sql)
+            .roles(&[
+                crate::roles::ParamRole { key: "sql", role: crate::roles::Role::Sql },
+                crate::roles::ParamRole { key: "query", role: crate::roles::Role::Sql },
+            ])
+            .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files).with(crate::policy::Effect::Network))
+            .params(
+                r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file or a PostgreSQL connection (postgres:host=… dbname=…) whose tables the query names", "password"?: "the connection's, kept for this session only", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool, "ran"?: "a result the app ran (the SQL pane)"}"#,
+            ),
         C::new("layer.addDatabase", "Add Data From Database", "Home › Add › Add Data", add_database).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network).with(crate::policy::Effect::Files)).params(
             r#"{"database": "postgres:host=… dbname=… user=… (or a postgresql:// address; PostGIS tables are read live), a mysql://user@host:port/database address (MySQL or MariaDB, read live; mariadb:// too), an mssql://user@host:1433/database address (SQL Server or Azure SQL, read live; ?encrypt=strict|false, ?trust-server-certificate=true for a self-signed certificate, ?instance=NAME; on Windows DOMAIN\\user or no user signs in with Windows), or a .duckdb file", "password"?: "kept for this session only, never saved", "layer"?: "a table, as table or schema.table (table:column for one of several geometry columns; default: every table with a geometry column)", "crs"?: "EPSG:… of a geometry that doesn't say", "name"?: string, "stream"?: bool}"#,
         ),
@@ -44,14 +50,14 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).roles(&[]).effects(crate::policy::Effects::NONE).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files))
-            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
+            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
-        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml (CityJSON and CityGML: all their layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model), "layer"?, "paperSpace"? (as layer.addData, for a file of several layers)}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml|.dxf (CityJSON and CityGML: all their layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model, and for a DXF), "layer"?, "paperSpace"?, "blocks"? (as layer.addData, for a DXF)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).roles(&[]).effects(crate::policy::Effects::NONE)
             .key("Delete")
@@ -1480,10 +1486,12 @@ pub(crate) fn add_photos_to(s: &mut Session, name: &str, zoom: Option<bool>, fee
         }
         None => add_dataset(s, ds),
     };
+    let mut out = json!({"layer": id, "photos": added, "skipped": report.skipped});
+    // Framed on the photos this added, `zoomed` says whether the view moved to them.
     if zoom.unwrap_or(empty_before) {
-        s.zoom_to(&extent);
+        out["zoomed"] = json!(s.zoom_to(&extent));
     }
-    Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
+    Ok(out)
 }
 
 /// The most folder entries `layer.addPhotos` lists (it keeps the first photos by name).
@@ -1587,7 +1595,14 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         match gdal.then(|| add_gdal(s, &q, path)) {
             Some(Ok(r)) => results.push(r),
             Some(Err(g)) => s.notify(format!("{path}: {table} not read: {why}; through GDAL: {g}"), true),
-            None => s.notify(format!("{path}: {table} not read: {why} (GDAL, when installed, reads it)"), true),
+            None if rustgis_data::RUNS_PROGRAMS => {
+                s.notify(format!("{path}: {table} not read: {why} (GDAL, when installed, reads it)"), true)
+            }
+            // Installing GDAL is no help where no program runs (a phone, #1902).
+            None => s.notify(
+                format!("{path}: {table} not read: {why} (GDAL reads it, a program {} can't run)", rustgis_data::no_programs_here()),
+                true,
+            ),
         }
     }
     if results.is_empty() {
@@ -1655,7 +1670,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         if rustgis_data::io::is_cityjson(path, &bytes) {
             let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
-            return add_layers(s, p, &full, &bytes, None);
+            return add_layers(s, p, &full, &bytes, None, true);
         }
     }
     // A large GeoJSON FeatureCollection (any, with `"stream": true`) is read in place, streamed
@@ -1764,15 +1779,25 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if large_osm(path) {
         return add_gdal(s, p, path);
     }
+    if rustgis_data::dxf::is_dxf_name(path) {
+        let (full, reads) = match super::reads::take::<LayersRead>(s, &whole_key(path)) {
+            Some(read) => read,
+            None => read_dxf_file(p, path),
+        }?;
+        if let Some(crs) = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()) {
+            super::say_crs_note(s, crs);
+        }
+        return add_reads(s, p, &full, reads, Vec::new(), None);
+    }
     if rustgis_data::io::is_multi_layer_name(path) {
-        // A city model read ahead (the desktop app's, on a thread of its own): its layers, as
-        // add_layers reads them here.
-        if let Some(read) = super::reads::take::<CityRead>(s, &city_key(path)) {
+        // A city model or ZIP read ahead on the desktop: add the prepared layers without
+        // reading the file again on the UI thread.
+        if let Some(read) = super::reads::take::<LayersRead>(s, &layers_key(path)) {
             if let Some(crs) = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()) {
                 super::say_crs_note(s, crs);
             }
             let (full, reads) = read?;
-            return add_picked(s, p, &full, reads, true, Vec::new(), None);
+            return add_picked(s, p, &full, reads, !path.to_ascii_lowercase().ends_with(".zip"), Vec::new(), None);
         }
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
@@ -1780,7 +1805,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
-        return add_layers(s, p, &full, &bytes, None);
+        return add_layers(s, p, &full, &bytes, None, true);
     }
     let read = match super::reads::take(s, &whole_key(path)) {
         Some(read) => read,
@@ -1798,7 +1823,7 @@ fn whole_key(path: &str) -> String {
 }
 
 /// A city model's layers in the coordinate system given, over the one it names: what
-/// [`add_layers`] reads, and Add Data's read ahead ([`read_city_file`]).
+/// [`add_layers`] reads, and Add Data's read ahead ([`read_layers_file`]).
 fn city_reads(file_name: &str, bytes: &[u8], crs: Option<rustgis_data::raster::Crs>) -> Result<Vec<rustgis_data::io::LayerRead>, String> {
     Ok(rustgis_data::io::read_city_model(file_name, bytes, crs)
         .map_err(|e| e.to_string())?
@@ -1810,12 +1835,12 @@ fn city_reads(file_name: &str, bytes: &[u8], crs: Option<rustgis_data::raster::C
         .collect())
 }
 
-/// A city model's layers, read whole, with the full path they are read under.
-type CityRead = Result<(String, Vec<rustgis_data::io::LayerRead>), String>;
+/// A city model or ZIP's layers, read whole, with the full path they are read under.
+type LayersRead = Result<(String, Vec<rustgis_data::io::LayerRead>), String>;
 
-/// The key Add Data's read of the city model at `path` is taken by.
-fn city_key(path: &str) -> String {
-    format!("city:{path}")
+/// The key Add Data's read of the layers at `path` is taken by.
+fn layers_key(path: &str) -> String {
+    format!("layers:{path}")
 }
 
 /// Whether Add Data reads `path` as a city model's layers: a CityJSON model named `.city.json`, or
@@ -1836,10 +1861,11 @@ fn is_city_model_path(path: &str) -> bool {
         .is_ok_and(|_| rustgis_data::citygml::looks_like_citygml(&head))
 }
 
-/// A city model's layers, read as [`add_layers`] reads them: in the coordinate system `p` gives
-/// (over the one the model names), or as the file says.
+/// A city model or ZIP's layers, as [`add_layers`] reads them. The desktop runs this off the
+/// UI thread; a ZIP's CRS applies to Shapefiles, text tables and unnamed city models, as when read inline.
+/// Reading the compressed file and inflating one ZIP member cannot be interrupted mid-read.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_city_file(p: &Value, path: &str) -> CityRead {
+fn read_layers_file(p: &Value, path: &str) -> LayersRead {
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
     if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
         return Err(format!("{path} is too large to open"));
@@ -1848,12 +1874,54 @@ fn read_city_file(p: &Value, path: &str) -> CityRead {
     let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let reads = match crs {
+        Some(text) if full.to_ascii_lowercase().ends_with(".zip") => {
+            rustgis_data::io::read_zip_in(&full, &bytes, Some(rustgis_data::raster::Crs::parse(text)?))
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+                .collect()
+        }
         Some(text) if rustgis_data::io::is_city_model(&full, &bytes) => {
             city_reads(&full, &bytes, Some(rustgis_data::raster::Crs::parse(text)?))?
         }
         _ => rustgis_data::io::read_layers(&full, &bytes).map_err(|e| e.to_string())?,
     };
     Ok((full, reads))
+}
+
+/// A DXF drawing read whole with its import options. Parsing checks Cancel between entities;
+/// decoding and the bounded file read complete before cancellation can be observed.
+fn read_dxf_file(p: &Value, path: &str) -> LayersRead {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut bytes = Vec::new();
+    file.take(rustgis_data::io::MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()).map(rustgis_data::raster::Crs::parse).transpose()?;
+    Ok((full.clone(), dxf_reads(p, &full, &bytes, crs)?))
+}
+
+/// Reads drawing layers with the same limits and options for paths, uploads and text.
+fn dxf_reads(
+    p: &Value,
+    name: &str,
+    bytes: &[u8],
+    crs: Option<rustgis_data::raster::Crs>,
+) -> Result<Vec<rustgis_data::io::LayerRead>, String> {
+    if bytes.len() as u64 > rustgis_data::io::MAX_BYTES {
+        return Err(format!("{name} is too large to open"));
+    }
+    let opts = rustgis_data::dxf::Options {
+        crs,
+        layer: ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()),
+        paper_space: b(p, "paperSpace").unwrap_or(false),
+        blocks: b(p, "blocks").unwrap_or(true),
+    };
+    Ok(rustgis_data::dxf::read(name, bytes, &opts)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+        .collect())
 }
 
 /// A spreadsheet's sheet ("layer"), read like delimited text.
@@ -1941,7 +2009,7 @@ fn read_synced(path: &str, read: impl FnOnce() -> WholeRead) -> WholeRead {
 
 /// Add Data's read of the file `p` names, made before it runs ([`super::reads`]): a raster read
 /// whole or converted by GDAL, a GeoJSON read whole, delimited text, a spreadsheet or a city model
-/// (CityJSON or CityGML) read into its layers, a Shapefile read whole. `None` for
+/// (CityJSON or CityGML) or DXF drawing read into its layers, a Shapefile read whole. `None` for
 /// any other file, which [`add_data`] reads as it adds it. Each is picked only where `add_data`
 /// takes that read, so a read made is never wasted; a few it makes whole are left to it (a `.json`
 /// with a coordinate system or layer given, a large GeoJSON that isn't a FeatureCollection).
@@ -1966,6 +2034,10 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
         let (key, layer, crs) = (super::raster::gdal_key(&path), text("layer"), text("crs"));
         return Some(ahead(NAME, key, move || super::raster::read_gdal(&path, layer.as_deref(), crs.as_deref())));
     }
+    if rustgis_data::dxf::is_dxf_name(&path) {
+        let (key, q) = (whole_key(&path), p.clone());
+        return Some(ahead(NAME, key, move || read_dxf_file(&q, &path)));
+    }
     let given = |k: &str| ps(p, k).is_some_and(|v| !v.trim().is_empty());
     let lower = path.to_ascii_lowercase();
     // A GeoJSON read whole: small with no "stream" given (which add_data decides by), or any size
@@ -1977,11 +2049,11 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
         && !(lower.ends_with(".json") && (given("crs") || given("layer")))
         && std::fs::metadata(&path)
             .is_ok_and(|m| m.is_file() && (b(p, "stream") == Some(false) || m.len() <= rustgis_data::source::geojson::IN_PLACE_ABOVE));
-    // A city model: its layers, read whole. A model named `.json` (not `.city.json`) is a file of
-    // several layers only with a coordinate system or a layer given, which Add Data reads as it runs.
-    if rustgis_data::io::is_multi_layer_name(&path) && is_city_model_path(&path) {
-        let (key, q) = (city_key(&path), p.clone());
-        return Some(ahead(NAME, key, move || read_city_file(&q, &path)));
+    // A ZIP or city model: its layers, read whole. A model named `.json` (not `.city.json`) is a
+    // file of several layers only with options given, which Add Data reads as it runs.
+    if lower.ends_with(".zip") || (rustgis_data::io::is_multi_layer_name(&path) && is_city_model_path(&path)) {
+        let (key, q) = (layers_key(&path), p.clone());
+        return Some(ahead(NAME, key, move || read_layers_file(&q, &path)));
     }
     // A Shapefile read whole, in the coordinate system given if one is: as add_data reads it (one
     // past the whole-file reader's cap, or with more records than it takes, is read in place).
@@ -2019,7 +2091,7 @@ pub(crate) fn add_data_ahead(_: &Value) -> Option<super::reads::ReadWork> {
 /// Adds every layer of a file that holds several: the Shapefiles (and other files) of a zip, a KML
 /// or KMZ's points, lines and polygons drawn in its styles, a GPX's waypoints, routes, tracks and
 /// track points. `"layer"` picks one by name; a name given applies to the first.
-pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8], zoom: Option<bool>) -> CmdResult {
+pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8], zoom: Option<bool>, local_file: bool) -> CmdResult {
     // A LandXML file in a coordinate system it doesn't say.
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let landxml = rustgis_data::landxml::is_landxml_name(file_name)
@@ -2028,7 +2100,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let lower = file_name.to_ascii_lowercase();
     let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
     // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
-    let overlays = if kml && ps(p, "layer").is_none() { ground_overlays(s, file_name, bytes) } else { Vec::new() };
+    let overlays = if kml && ps(p, "layer").is_none() { ground_overlays(s, file_name, bytes, local_file) } else { Vec::new() };
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
     let reads = match crs.filter(|_| landxml) {
@@ -2046,18 +2118,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             let crs = crs.map(|text| super::parse_crs(s, text)).transpose()?;
             city_reads(file_name, bytes, crs)?
         }
-        _ if dxf => {
-            let opts = rustgis_data::dxf::Options {
-                crs: crs.map(|text| super::parse_crs(s, text)).transpose()?,
-                layer: ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()),
-                paper_space: b(p, "paperSpace").unwrap_or(false),
-            };
-            rustgis_data::dxf::read(file_name, bytes, &opts)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
-                .collect()
-        }
+        _ if dxf => dxf_reads(p, file_name, bytes, crs.map(|text| super::parse_crs(s, text)).transpose()?)?,
         Some(c) => {
             let crs = super::parse_crs(s, c)?;
             rustgis_data::landxml::read(file_name, bytes, Some(crs))
@@ -2209,14 +2270,14 @@ fn add_reads(
 
 /// A KML or KMZ's ground overlays as rasters: pictures inside a KMZ, or files beside a KML on
 /// disk (by a relative path that stays in its folder). Overlays that can't be drawn are said.
-fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(String, rustgis_data::raster::Raster)> {
+fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8], local_file: bool) -> Vec<(String, rustgis_data::raster::Raster)> {
     let (found, undrawn) = match rustgis_data::kml::ground_overlays(file_name, bytes) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
     let mut notes = Vec::new();
-    let dir = Path::new(file_name).parent().filter(|d| d.is_absolute());
+    let dir = local_file.then(|| Path::new(file_name).parent()).flatten().filter(|d| d.is_absolute());
     for (g, picture) in found {
         let href = g.href.trim();
         // `Err(None)`: not in the file or beside it; `Err(Some(why))`: beside it but unreadable.
@@ -2448,13 +2509,13 @@ pub(crate) enum Origin<'a> {
     Path(&'a str),
     Bytes(&'a str, std::sync::Arc<Vec<u8>>),
     /// A PostGIS table, always opened by the caller (desktop only).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "database sources are desktop only"))]
     Postgis(&'a rustgis_map::source::PostgisOrigin),
     /// A MySQL or MariaDB table, always opened by the caller (desktop only).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "database sources are desktop only"))]
     Mysql(&'a rustgis_map::source::MysqlOrigin),
     /// A SQL Server table, always opened by the caller (desktop only).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "database sources are desktop only"))]
     Sqlserver(&'a rustgis_map::source::SqlServerOrigin),
 }
 
@@ -2630,8 +2691,14 @@ fn add_source_with(
                 l.renderer = r;
             }
             ids.push(id);
+            // The source names itself by its file (a DuckDB result's cache file); the layer has the
+            // name the user knows.
+            let shown = s.map().layer(id).map_or_else(|| info.name.clone(), |l| l.name.clone());
             for m in report.messages {
-                s.notify(m, false);
+                match m.strip_prefix(&format!("{}: ", info.name)) {
+                    Some(rest) => s.notify(format!("{shown}: {rest}"), false),
+                    None => s.notify(m, false),
+                }
             }
         }
     }
@@ -3524,6 +3591,12 @@ pub fn columns_in_file(path: &str, p: &Value) -> CmdResult {
     if meta.len() > limit {
         return Err(format!("{path} is too large to open"));
     }
+    if rustgis_data::io::is_gzip_text_name(path) {
+        let reader = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let prefix = rustgis_data::io::gzip_text_prefix(reader, COLUMNS_PREFIX).map_err(|e| format!("{path}: {e}"))?;
+        let plain = path.get(..path.len().saturating_sub(3)).unwrap_or(path);
+        return gzip_columns(plain, &prefix, p);
+    }
     let mut bytes = Vec::new();
     let read = if sheet {
         std::fs::File::open(path).and_then(|mut f| f.read_to_end(&mut bytes))
@@ -3532,6 +3605,16 @@ pub fn columns_in_file(path: &str, p: &Value) -> CmdResult {
     };
     read.map_err(|e| format!("{path}: {e}"))?;
     columns_of(path, &bytes, p)
+}
+
+/// Gzip import accepts UTF-8 only. A bounded picker prefix may end inside one character.
+fn gzip_columns(plain: &str, prefix: &[u8], p: &Value) -> CmdResult {
+    let text = match std::str::from_utf8(prefix) {
+        Ok(text) => text,
+        Err(e) if e.error_len().is_none() => std::str::from_utf8(prefix.get(..e.valid_up_to()).unwrap_or_default()).unwrap_or_default(),
+        Err(_) => return Err(format!("{plain}.gz: gzip text must be UTF-8; decompress and add as .txt for another encoding")),
+    };
+    columns_of(plain, text.as_bytes(), p)
 }
 
 /// What `info.fileColumns` reads of delimited text: its header and first rows, not all of it.
@@ -3546,6 +3629,10 @@ pub fn columns_of(name: &str, bytes: &[u8], p: &Value) -> CmdResult {
     let c = if rustgis_data::sheets::is_sheet_name(name) {
         let sheet = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty());
         rustgis_data::sheets::columns(bytes, sheet).map_err(err)?
+    } else if rustgis_data::io::is_gzip_text_name(name) {
+        let prefix = rustgis_data::io::gzip_text_prefix(bytes, COLUMNS_PREFIX).map_err(err)?;
+        let plain = name.get(..name.len().saturating_sub(3)).unwrap_or(name);
+        return gzip_columns(plain, &prefix, p);
     } else if is_delimited_name(name) {
         let bytes = bytes.get(..COLUMNS_PREFIX).unwrap_or(bytes);
         let text = match std::str::from_utf8(bytes) {
@@ -3559,7 +3646,7 @@ pub fn columns_of(name: &str, bytes: &[u8], p: &Value) -> CmdResult {
         };
         rustgis_data::io::csv_columns(&text, parse_delimiter(ps(p, "delimiter"))?).map_err(err)?
     } else {
-        return Err(format!("{name}: not delimited text (CSV, TSV, TXT) or a spreadsheet"));
+        return Err(format!("{name}: not delimited text (CSV, TSV, TXT, DAT, or gzip-compressed text) or a spreadsheet"));
     };
     Ok(json!({
         "columns": c.names,
@@ -3570,10 +3657,9 @@ pub fn columns_of(name: &str, bytes: &[u8], p: &Value) -> CmdResult {
     }))
 }
 
-/// Whether a file name is delimited text (CSV, TSV, TXT).
+/// Whether a file name is delimited text (CSV, TSV, TXT or DAT).
 fn is_delimited_name(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n.ends_with(".csv") || n.ends_with(".tsv") || n.ends_with(".txt")
+    rustgis_data::io::is_delimited_name(name)
 }
 
 /// Reads delimited text with the options `p` gives, or `None` when it gives none (or the file
@@ -3586,18 +3672,26 @@ fn read_delimited(
     if !is_delimited_name(name) {
         return Ok(None);
     }
-    let Some(opts) = csv_options(p)? else { return Ok(None) };
-    let bytes = bytes()?;
-    let (text, note) = rustgis_data::io::delimited_text(name, &bytes).map_err(|e| e.to_string())?;
-    let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
-    let (ds, mut report) = rustgis_data::io::read_csv_with(&text, stem, &opts).map_err(|e| format!("{name}: {e}"))?;
-    report.messages.extend(note);
+    if csv_options(p)?.is_none() {
+        return Ok(None);
+    }
+    read_delimited_bytes(p, name, &bytes()?).map(Some)
+}
+
+/// Reads local/uploaded delimited bytes with the same options and CRS notices on every path.
+pub(crate) fn read_delimited_bytes(
+    p: &Value,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(rustgis_data::Dataset, rustgis_data::ReadReport), String> {
+    let opts = csv_options(p)?.unwrap_or_default();
+    let (ds, mut report) = rustgis_data::io::read_delimited_bytes(name, bytes, &opts).map_err(|e| format!("{name}: {e}"))?;
     if let (Some(text), Some(crs)) = (ps(p, "crs"), opts.crs)
         && let Some(note) = rustgis_data::raster::wkt::typed_crs_note(text, crs)
     {
         report.messages.push(format!("crs: {note}"));
     }
-    Ok(Some((ds, report)))
+    Ok((ds, report))
 }
 
 /// The file name for data downloaded from `url`: its last path segment when that has an extension
@@ -4458,7 +4552,7 @@ pub(crate) fn address_extension(url: &str) -> Option<String> {
 }
 
 /// `layer.addUrl` keys for other kinds of address, which a window (`"bbox"`) doesn't read.
-const WINDOW_UNREAD: [&str; 16] = [
+const WINDOW_UNREAD: [&str; 17] = [
     "layer",
     "x",
     "y",
@@ -4466,6 +4560,7 @@ const WINDOW_UNREAD: [&str; 16] = [
     "crs",
     "delimiter",
     "paperSpace",
+    "blocks",
     "stream",
     "start",
     "end",
@@ -5185,11 +5280,10 @@ fn added_download(s: &mut Session, p: &Value, mut r: Value, mark_source: bool, u
     }
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
     // says whether framing happened now, including the tile archive's own bounds handling. A photo result
-    // was already framed on the photos this download added; `zoom_to_added` would frame the whole
-    // photo layer, earlier photos included.
+    // says itself whether it framed the photos this download added (`zoom_to_added` would frame the
+    // whole photo layer, earlier photos included), so one that doesn't wasn't framed.
     if b(p, "zoom") == Some(true) {
-        let zoomed =
-            r.get("zoomed").and_then(Value::as_bool).unwrap_or_else(|| if r.get("photos").is_some() { true } else { zoom_to_added(s, &r) });
+        let zoomed = r.get("zoomed").and_then(Value::as_bool).unwrap_or_else(|| r.get("photos").is_none() && zoom_to_added(s, &r));
         if let Some(o) = r.as_object_mut() {
             o.insert("zoomed".into(), json!(zoomed));
         }
@@ -5198,7 +5292,8 @@ fn added_download(s: &mut Session, p: &Value, mut r: Value, mark_source: bool, u
 }
 
 /// Zooms to the layers a command's result names (`layer`, `layers`), all of them together;
-/// whether any had an extent.
+/// whether the view framed them (not when none had an extent, or the map's projection doesn't
+/// reach it).
 fn zoom_to_added(s: &mut Session, r: &Value) -> bool {
     let ids = r.get("layers").and_then(Value::as_array).into_iter().flatten().chain(r.get("layer"));
     let e = ids
@@ -5210,8 +5305,7 @@ fn zoom_to_added(s: &mut Session, r: &Value) -> bool {
     if e.is_empty() {
         return false;
     }
-    s.zoom_to(&e);
-    true
+    s.zoom_to(&e)
 }
 
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
@@ -5220,15 +5314,18 @@ pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
 
 /// [`add_data_text`], with the adding command's `"zoom"` (layer.addUrl, layer.addDownload).
 pub(crate) fn add_data_text_after(s: &mut Session, p: &Value, zoom: Option<bool>) -> CmdResult {
-    let name = s_req(p, "fileName")?;
+    let raw_name = s_req(p, "fileName")?;
+    let name = super::raster::bytes_file_name(raw_name).ok_or("fileName is required")?;
     let text = s_req(p, "text")?;
-    // A city model: all its layers, in the coordinate system given or with a layer picked.
-    if rustgis_data::cityjson::is_cityjson_name(name)
+    // A city model: all its layers, in the coordinate system given or with a layer picked. A DXF
+    // drawing too, which takes its coordinate system and whether its blocks are drawn from here.
+    if rustgis_data::dxf::is_dxf_name(name)
+        || rustgis_data::cityjson::is_cityjson_name(name)
         || rustgis_data::io::is_citygml(name, text.as_bytes())
         || (["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
             && rustgis_data::io::is_cityjson(name, text.as_bytes()))
     {
-        return add_layers(s, p, name, text.as_bytes(), zoom);
+        return add_layers(s, p, name, text.as_bytes(), zoom, false);
     }
     if let Some(read) = read_delimited(p, name, || Ok(text.as_bytes().to_vec()))? {
         return add_read(s, p, read, zoom);
@@ -5972,6 +6069,15 @@ fn class_style(s: &mut Session, p: &Value) -> CmdResult {
 pub(crate) fn external_dataset_selector(command: &str) -> bool {
     matches!(
         command,
-        "layer.addData" | "layer.addDatabase" | "info.fileColumns" | "layer.addUrl" | "layer.addDownload" | "layer.addDataText"
+        "layer.addData"
+            | "layer.addDataBytes"
+            | "layer.addDatabase"
+            | "info.fileColumns"
+            | "layer.addUrl"
+            | "layer.addDownload"
+            | "layer.addDataText"
+            | "service.add"
+            | "service.coverage"
+            | "identify.featureInfo"
     )
 }

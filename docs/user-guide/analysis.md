@@ -42,9 +42,55 @@ A text column's menu also has **Convert to Date** and **Convert to Date and Time
 (`edit.convertField`, `"type"`: `date` or `datetime`): the field becomes a date field and each
 value is read as ISO 8601 (`2026-03-05`; `2026-03-05T14:30:00+02:00`, or with a space for the
 `T`). Text that isn't a date becomes empty, and a notice counts those rows and shows the first
-few; undo brings the text back. Use it for dates from CSV, GeoJSON or other files that hold them as
+few; undo brings the text back. Digits past the microsecond are rounded to it, and a notice counts
+those. A field with text and none of it a date is refused and stays text. Use it for dates from CSV, GeoJSON or other files that hold them as
 text. A field with a domain, subtypes or contingent values, or one a definition query or display
 filter would no longer read as dates (comparing it with a number), is refused.
+
+#### Editing a standalone table
+
+A standalone table opens from its right-click menu in Layers and is edited as a layer is:
+double-click a cell to change it, and use the toolbar to add a row, add a field or calculate a
+field over every row; a column's menu converts its field or deletes it (**Delete Field**).
+Cells, new rows and Calculate Field need editing on (**Edit › Edit**); adding, converting and
+deleting fields don't, as for a layer. Each edit is one undo step. On the desktop, table writes
+run in the background with progress or a busy indicator and **Cancel**. Queued edits run in
+order, each using the preceding edit's result. If the table changes independently while an edit
+runs, its result is refused; run the edit again to use the new values. A schema change clears
+the view's sort when it lands, including a sort picked while an edit waits. Replacing a table
+with a tool result discards its open cell draft and waiting writes. Field edits that change the
+schema also discard open drafts; ordinary row edits keep them.
+
+Desktop scripts also prepare table writes off the frame and keep the script as one undo step.
+If an earlier line cannot be prepared safely (for example, opening a file or saving a project),
+run that setup separately from the table-writing script. Models and batches before a table
+write are checked for file-producing and plugin tools too; those steps must run separately.
+Native restricted callers must prepare table writes in the background; synchronous table writes
+are refused. Run those edits from the table view or an ordinary Script pane script instead.
+A failed worker start refuses the edit instead of running it on the window thread. The command
+line continues to run scripts synchronously. Native tasks and notebooks cannot write standalone
+tables, including through script steps: run those edits directly or as a separate script so the
+desktop can offer progress and Cancel.
+Calculate Field lists only columns reachable by name; a later column whose name differs only
+by case cannot be changed there.
+
+The `edit.*` commands take the table as `"table"` (its name or id) instead of `"layer"`:
+`edit.setValue`, `edit.addField`, `edit.deleteField`, `edit.convertField`, `edit.calculateField`,
+and `edit.addFeature` with `"attributes"` and no geometry, which adds a row. As for a layer, a
+notice says when a field can't hold a value whole (a fraction in a whole-number field), and when
+an attribute names no field. A new row's attributes match exact field names first, then a unique
+match ignoring case; an ambiguous name is refused. When two keys reach the same field, a notice
+names the key left out.
+
+A table's rows live in the project, as they were copied in when it was added: edits change the
+project, not the CSV or other file the table came from. **Export Table** (`share.exportTable`)
+writes the edited table to a file. Tables have no selection yet, so rows can't be deleted.
+
+```text
+edit.setValue={"table":"sites","row":0,"field":"street","value":"Rue Cler"}
+edit.addFeature={"table":"sites","attributes":{"id":3,"street":"Quai Branly"}}
+edit.calculateField={"table":"sites","field":"visits","expression":"visits + 1"}
+```
 
 <figure markdown="span">
   ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
@@ -312,7 +358,8 @@ origins are restored when a project replacement is undone or redone. Browser dow
 check the eventual save destination; choose a different file in the browser's save dialog to
 avoid replacing an input.
 An active selection is exported; otherwise the geoprocessing extent applies, and streamed
-sources are read in full rather than limited to the visible map window. It exports points,
+sources are read in full rather than limited to the visible map window. A layer's definition
+query leaves out the features it hides in either case. It exports points,
 lines and polygons, including multipart geometry, attributes and feature IDs—not the map's
 style or labels. Antimeridian paths are unwrapped and clipped with an 8/4096-tile buffer;
 latitudes beyond Web Mercator's limit are clamped and reported. Geometry parts collapsed by
@@ -369,7 +416,9 @@ receives the feature's weight, a part with a coordinate missing or infinite is l
 counted, and a feature with no finite part is skipped). Calculations are performed in the linear units
 of a projected coordinate system (defaults to the layer's projected system; if the input layer lacks a
 coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
-e.g. `EPSG:32618`).
+e.g. `EPSG:32618`). Geocentric systems such as `EPSG:4978` (X, Y and Z from the Earth's centre)
+are refused, whether supplied via `crs` or inherited from the layer: their three axes do not
+define the two-dimensional projected plane Kernel Density needs.
 Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
 projections such as Web Mercator (EPSG:3857) introduce scale distortion that increases with latitude;
 use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
@@ -383,11 +432,18 @@ size so points are not missed between cell centres.
 The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
 as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
 
-Most feature tools process only the selected rows when an input has a selection. Selection tools
-instead replace the input's selection; Select Layer By Location honours the selecting layer's
-selection. Summarize Within counts the selected points against **all** input polygons, and
-Calculate Geometry Attributes updates **all** rows. For tools that create a map layer, `output`
-is the layer name; `vectorToPmtiles` uses it as a file destination.
+Most feature tools process only the selected rows when an input has a selection, and only the
+features a layer's definition query keeps (with the selection cut to them): a Clip by a layer
+filtered to one country uses that country, and a Buffer of a filtered layer buffers the features
+the filter keeps. Tools go by the definition query alone: the time slider's window and display
+filters, which follow the map's time and scale, don't change what a tool reads. A feature tool
+refuses a layer whose definition query hides every feature it would read. Selection tools instead
+replace the input's selection with features the map draws, leaving out the ones its definition
+query, time window or display filters hide and saying how many (none, if they hide every match);
+Select Layer By Location honours the selecting layer's selection. Summarize Within counts the
+selected points against **all** input polygons, and Calculate Geometry Attributes updates **all**
+rows, including the ones a definition query hides: the run says how many. For tools that create a map layer, `output` is the layer name; `vectorToPmtiles`
+uses it as a file destination.
 
 **Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
 (the WGS 84 ellipsoid, as PROJ and GeographicLib measure it), not in the map's display
@@ -458,8 +514,8 @@ type (points, lines or polygons) into a new layer. It needs no GeoLibre runner. 
 Layers** and **Preserve Attributes** in the tool pane, or pass names separated by `;` or a JSON
 array. Desktop runs can also name local vector files without adding them to the map first.
 In the browser, load the files as layers first. Each layer contributes its selection, or all its
-features when it has no selection; read-in-place layers without a selection contribute their
-complete source.
+features when it has no selection (only the ones its definition query keeps); read-in-place
+layers without a selection contribute their complete source.
 
 ```json
 {"tool":"merge","params":{"inputs":["Survey A","Survey B"],"attributes":true,"output":"Combined survey"}}
@@ -1261,7 +1317,7 @@ click them on the map:
 
 | Workflow | What it does |
 | --- | --- |
-| Raster Functions | Slope, aspect, hillshade (8-bit shades from 1 to 255, with 0 for no data), NDVI, band math (`(b4-b3)/(b4+b3)`), remapping, thresholds, resampling |
+| Raster Functions | Slope in degrees (not percent), aspect, hillshade (8-bit shades from 1 to 255, with 0 for no data), NDVI, band math (`(b4-b3)/(b4+b3)`), remapping, thresholds, resampling |
 | Function Editor | Chains raster functions, each on the previous output |
 | Suitability Modeler | Scores rasters 1–10 and adds them with weights |
 | Visibility Analysis | A viewshed from a point on an elevation raster, with the Earth's curvature and the refraction of visible light (1/7, as `gdal_viewshed`). The ground along each ray is the cell each point falls in by default; `heights: "bilinear"` (**Ground heights › Between cells (bilinear)** in the Workflows pane) reads it between the cells' centres instead. Both are estimates of the ground between cell centres; between cells is closer on ground that bulges (a hill seen from its top), where the nearest cell can hide cells just inside the horizon. With no radius, or one longer than the raster's diagonal, the viewshed covers the whole raster. The map's **Viewshed N km Here** reads the ground as the Workflows pane's **Ground heights** says. On a raster round the whole Earth the rays don't cross its east–west edge, which the analysis says when the radius reaches it and the way across is shorter: the ground just across the edge is left out, worked out the long way round where the radius reaches the far edge through the raster too (always with no radius), or partly both, near the observer's row and not farther from it. The observer's height must be from 0 to 10,000 m. Ground with no data hides nothing, and next to it bilinear heights take the nearest cell's height; the analysis says how many cells this touched, in a notice. The answer gives both counts (0 when there is nothing to say): `acrossNoData` counts the visible cells whose rays crossed ground with no data (a hidden cell stays hidden whatever that ground is, so it isn't counted, and 0 doesn't mean no ray crossed any); `readNearest` counts every cell, visible or hidden, whose ray took a nearest height next to no data in bilinear mode |
@@ -1274,6 +1330,26 @@ click them on the map:
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
+
+Slope, in Raster Functions and the Function Editor, is in degrees, from 0 (flat) to 90
+(vertical), from Horn's 3 × 3 gradient; there is no percent option. Percent slope is
+`100 × tan(slope × π / 180)` (the angle in radians, as `tan` takes it), so 45° is 100%: convert
+each cell before averaging, since a converted mean angle isn't the mean percent. The result's
+band is named **Slope (degrees)**, which `raster.info` shows and a saved project or GeoTIFF
+export keeps; a later step in a chain names it again.
+
+Slope, aspect and hillshade need the cell size in the elevation's unit. On a projected DEM the
+cell size is taken as it is, so elevations must be in the same unit as the coordinates (feet
+aren't converted). On a geographic DEM the cell size is worked out in metres once for the whole
+raster, at the latitude of its centre (longitude spacing × 111,320 × cos(latitude), latitude
+spacing × 110,574), so elevations must be in metres. `zFactor` multiplies the elevations first:
+`0.3048` turns feet into metres.
+
+A remap range, in Raster Functions, the Function Editor and the Suitability Modeler, takes values
+from its low end up to, but not including, its high end: `[21, 22, 1]` maps class 21 to 1, and
+`[21, 21, 1]` matches nothing. The first range that matches a cell wins. One notice lists the
+ranges that can match nothing, and another says when a remap, or a suitability whose criteria
+score no cell in common, leaves no cells with values.
 
 Network routing rebuilds its graph for each request and solves each edge length on WGS 84.
 Large line networks can therefore take longer to route than with spherical lengths; repeated

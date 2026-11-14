@@ -17,6 +17,8 @@ pub const READ_EXTENSIONS: &[&str] = &[
     "csv",
     "tsv",
     "txt",
+    "dat",
+    "gz",
     "shp",
     "zip",
     "kml",
@@ -257,7 +259,8 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "json" if is_cityjson(file_name, bytes) => return first_layer(file_name, bytes),
         "json" if crate::topojson::looks_like_topojson(text()?) => return first_layer(file_name, bytes),
         "geojson" | "json" => read_geojson(text()?, &name)?,
-        "csv" | "tsv" | "txt" => read_csv_bytes(file_name, bytes, &name)?,
+        "csv" | "tsv" | "txt" | "dat" => read_delimited_bytes(file_name, bytes, &CsvOptions::default())?,
+        "gz" => read_gzip_text(bytes, file_name, &CsvOptions::default())?,
         // A MIF without its .mid (an upload of the one file): no attributes.
         "mif" => crate::mapinfo::read_bytes(bytes, None, &name)?,
         // Picked or dropped with its .dbf, a Shapefile comes zipped (`gather_shapefiles`).
@@ -316,10 +319,14 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
                 read_geojson(&text, &name)?
             }
         }
-        "csv" | "tsv" | "txt" => {
+        "csv" | "tsv" | "txt" | "dat" => {
             check_size(path)?;
             let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("layer.csv");
-            read_csv_bytes(leaf, &std::fs::read(path)?, &name)?
+            read_delimited_bytes(leaf, &std::fs::read(path)?, &CsvOptions::default())?
+        }
+        "gz" => {
+            check_size(path)?;
+            read_gzip_text(std::io::BufReader::new(std::fs::File::open(path)?), &path.display().to_string(), &CsvOptions::default())?
         }
         "shp" => {
             check_size(path)?;
@@ -394,13 +401,27 @@ pub const PROJECTED_FORMATS: [&str; 4] = ["gpkg", "shp", "zip", "fgb"];
 
 /// The coordinate system an export to extension `ext` is written in when none is asked for: the
 /// one the dataset was read in, for a format that can say it, else WGS 84. A system without an
-/// EPSG code goes only into a Shapefile, whose `.prj` gives it in full; GeoPackage and FlatGeobuf
-/// readers (RustGIS's among them) go by the code.
+/// EPSG code goes into a GeoPackage or FlatGeobuf by its WKT definition, as into a Shapefile's
+/// `.prj`; one WKT can't describe goes into a Shapefile (without a `.prj`, said) and not into the
+/// others ([`default_export_note`] says which system is written instead).
 pub fn default_export_crs(ds: &Dataset, ext: &str) -> Crs {
     let ext = ext.to_ascii_lowercase();
-    ds.crs
-        .filter(|c| PROJECTED_FORMATS.contains(&ext.as_str()) && (c.epsg() > 0 || matches!(ext.as_str(), "shp" | "zip")))
-        .unwrap_or(Crs::LonLat)
+    ds.crs.filter(|&c| PROJECTED_FORMATS.contains(&ext.as_str()) && check_projected(&ext, c).is_ok()).unwrap_or(Crs::LonLat)
+}
+
+/// What is said when an export to `path` is written in WGS 84 where the layer has a system of
+/// its own that the format can't hold ([`default_export_crs`]); `None` when it keeps its system
+/// or has none to keep.
+pub fn default_export_note(ds: &Dataset, path: &str) -> Option<String> {
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let own = ds.crs.filter(|&c| c != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()))?;
+    (default_export_crs(ds, &ext) == Crs::LonLat).then(|| {
+        format!(
+            "{path}: the coordinate system of {} ({}) has no EPSG code and no WKT definition RustGIS can write, so it is written in WGS 84 (EPSG:4326); give a \"crs\" to write another",
+            ds.name,
+            own.label()
+        )
+    })
 }
 
 /// The dataset (in longitude/latitude, as every dataset is) in `crs`'s coordinates. Fails on a
@@ -476,11 +497,15 @@ pub fn define_projection(ds: &Dataset, crs: Crs) -> Result<Dataset> {
     Ok(out)
 }
 
-/// Refuses a system without an EPSG code for a GeoPackage or FlatGeobuf: their readers (RustGIS's
-/// among them) go by the code, and would read the file as longitude/latitude.
+/// Refuses a system for a GeoPackage or FlatGeobuf that the file couldn't declare: one without an
+/// EPSG code is declared by its WKT definition, and without one (a projection WKT1 has no name
+/// for) the file would read as longitude/latitude.
 pub(crate) fn check_projected(ext: &str, crs: Crs) -> Result<()> {
-    if crs.epsg() == 0 && matches!(ext, "gpkg" | "fgb") {
-        return Err(DataError::Unsupported(format!(".{ext} in {}: give the system as an EPSG code", crs.label())));
+    if crs.epsg() == 0 && matches!(ext, "gpkg" | "fgb") && crate::raster::wkt::to_wkt(crs).is_none() {
+        return Err(DataError::Unsupported(format!(
+            ".{ext} in {}: it has no EPSG code or WKT definition; give the system as an EPSG code",
+            crs.label()
+        )));
     }
     Ok(())
 }
@@ -603,78 +628,8 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
         "shp" => {
             crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
-            // Every part is written to a temporary file first and renamed into place only once all
-            // are written, the .shp last, so a failed write leaves the old Shapefile whole.
-            let mut written: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
-            let staged = parts.iter().try_for_each(|(e, bytes)| {
-                // The .shp keeps the name given (`Roads.SHP` stays so); the others take its stem.
-                let target = if *e == "shp" { path.to_path_buf() } else { path.with_extension(e) };
-                let tmp = temp_beside(&target)?;
-                let result = write_new(&tmp, bytes);
-                if result.is_ok() {
-                    written.push((tmp, target));
-                }
-                result
-            });
-            // A cancel before the parts land leaves the old Shapefile as it was.
-            if let Err(e) = staged.map_err(DataError::from).and_then(|()| crate::progress::check()) {
-                for (tmp, _) in &written {
-                    let _ = std::fs::remove_file(tmp);
-                }
-                return Err(e);
-            }
-            written.sort_by_key(|(_, target)| target == path);
-            // The old parts are moved aside first and put back if any new part fails to land, so
-            // the old Shapefile stays a matching set.
-            let mut backups: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
-            let mut placed: Vec<std::path::PathBuf> = Vec::new();
-            let mut result = Ok(());
-            for (tmp, target) in &written {
-                // A cancel before the last part lands rolls back like a failed rename.
-                if crate::progress::check().is_err() {
-                    result = Err(std::io::Error::other(DataError::Cancelled));
-                    break;
-                }
-                if target.exists() {
-                    // Any failure here rolls back like a failed rename.
-                    let bak = match temp_beside(target) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            result = Err(e);
-                            break;
-                        }
-                    };
-                    if let Err(e) = std::fs::rename(target, &bak) {
-                        result = Err(e);
-                        break;
-                    }
-                    backups.push((bak, target.clone()));
-                }
-                if let Err(e) = std::fs::rename(tmp, target) {
-                    result = Err(e);
-                    break;
-                }
-                placed.push(target.clone());
-            }
-            if let Err(e) = result {
-                for p in &placed {
-                    let _ = std::fs::remove_file(p);
-                }
-                for (bak, target) in &backups {
-                    let _ = std::fs::rename(bak, target);
-                }
-                for (tmp, _) in &written {
-                    let _ = std::fs::remove_file(tmp);
-                }
-                return Err(e.into());
-            }
-            for (bak, _) in &backups {
-                let _ = std::fs::remove_file(bak);
-            }
-            // A spatial index left from an older file of the same name would no longer match.
-            for stale in ["qix", "sbn", "sbx"] {
-                let _ = std::fs::remove_file(path.with_extension(stale));
-            }
+            let parts: Vec<(std::path::PathBuf, Vec<u8>)> = parts.into_iter().map(|(e, bytes)| (shapefile_part(path, e), bytes)).collect();
+            place_shapefile(path, &stage_shapefile(&parts)?)?;
             Ok((left_out, None))
         }
         _ if crs != Crs::LonLat && !PROJECTED_FORMATS.contains(&ext.as_str()) => {
@@ -686,6 +641,142 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
             Ok((left_out, None))
         }
     }
+}
+
+/// The path of the part with extension `ext` of the Shapefile at `path`: the `.shp` keeps the
+/// name given (`Roads.SHP` stays so); the others take its stem.
+pub(crate) fn shapefile_part(path: &Path, ext: &str) -> std::path::PathBuf {
+    if ext == "shp" { path.to_path_buf() } else { path.with_extension(ext) }
+}
+
+/// Writes each of a Shapefile's parts (its path and bytes) to a temporary file beside it, synced
+/// to the disk; returns each temporary file with the part it becomes. Nothing is left behind
+/// when one fails or the run is cancelled (see [`place_shapefile`]).
+pub(crate) fn stage_shapefile(parts: &[(std::path::PathBuf, Vec<u8>)]) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+    let mut written: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    let staged = parts.iter().try_for_each(|(target, bytes)| {
+        let tmp = temp_beside(target)?;
+        let result = write_new_like(&tmp, target, bytes);
+        if result.is_ok() {
+            written.push((tmp, target.clone()));
+        }
+        result
+    });
+    // A cancel before the parts land leaves the old Shapefile as it was.
+    if let Err(e) = staged.map_err(DataError::from).and_then(|()| crate::progress::check()) {
+        unstage(&written);
+        return Err(e);
+    }
+    Ok(written)
+}
+
+/// Removes the temporary files [`stage_shapefile`] wrote.
+pub(crate) fn unstage(staged: &[(std::path::PathBuf, std::path::PathBuf)]) {
+    for (tmp, _) in staged {
+        let _ = std::fs::remove_file(tmp);
+    }
+}
+
+/// Renames each staged part of the Shapefile at `path` ([`stage_shapefile`]) into place, the
+/// `.shp` last, so a failed write leaves the old Shapefile whole: each old part is moved aside
+/// first and put back if any new part fails to land, and a Cancel before the last part lands
+/// rolls back the same way. Once all have landed, the old parts and the spatial indexes that
+/// would no longer match (`.qix`, `.sbn`, `.sbx`) are removed.
+pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<()> {
+    let mut written: Vec<&(std::path::PathBuf, std::path::PathBuf)> = staged.iter().collect();
+    written.sort_by_key(|(_, target)| target == path);
+    let mut backups: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    let mut placed: Vec<std::path::PathBuf> = Vec::new();
+    let mut result = Ok(());
+    for (tmp, target) in written {
+        // A cancel before the last part lands rolls back like a failed rename.
+        if crate::progress::check().is_err() {
+            result = Err(std::io::Error::other(DataError::Cancelled));
+            break;
+        }
+        if target.exists() {
+            // Any failure here rolls back like a failed rename.
+            let bak = match temp_beside(target) {
+                Ok(b) => b,
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            };
+            // Reserve this name before moving the old part: a previous crash's backup
+            // (or a symlink) must never be replaced when a process id is reused.
+            if let Err(e) = std::fs::OpenOptions::new().write(true).create_new(true).open(&bak).map(drop) {
+                result = Err(e);
+                break;
+            }
+            if let Err(e) = std::fs::rename(target, &bak) {
+                let _ = std::fs::remove_file(&bak);
+                result = Err(e);
+                break;
+            }
+            backups.push((bak, target.clone()));
+        }
+        if let Err(e) = std::fs::rename(tmp, target) {
+            result = Err(e);
+            break;
+        }
+        placed.push(target.clone());
+    }
+    if let Err(e) = result {
+        for p in &placed {
+            let _ = std::fs::remove_file(p);
+        }
+        // An old part that can't be put back is named, so it isn't lost under its temporary name.
+        let mut kept = Vec::new();
+        for (bak, target) in &backups {
+            if std::fs::rename(bak, target).is_err() {
+                kept.push(format!("{} is kept as {}", target.display(), bak.display()));
+            }
+        }
+        unstage(staged);
+        // The old parts put back, durably too.
+        sync_folder(path);
+        let e = DataError::from(e);
+        if kept.is_empty() {
+            return Err(e);
+        }
+        return Err(DataError::Format(format!("{e}; putting the old file back failed: {}", kept.join(", "))));
+    }
+    for (bak, _) in &backups {
+        let _ = std::fs::remove_file(bak);
+    }
+    // A spatial index left from an older file of the same name would no longer match.
+    for stale in ["qix", "sbn", "sbx"] {
+        // Sidecars may use any letter case, even beside a lowercase `.shp`.
+        for capitals in 0..8 {
+            let extension: String = stale
+                .bytes()
+                .enumerate()
+                .map(|(i, b)| char::from(if capitals & (1 << i) == 0 { b } else { b.to_ascii_uppercase() }))
+                .collect();
+            let _ = std::fs::remove_file(path.with_extension(extension));
+        }
+    }
+    // Every part is renamed within `path`'s folder.
+    sync_folder(path);
+    Ok(())
+}
+
+/// Makes a rename into `path`'s folder survive a power cut: on Linux and macOS a synced file can
+/// still come back under its old name until the folder itself is synced. Best effort, after the
+/// rename: the file is written either way, so a folder that can't be opened (writable but not
+/// readable) or synced (some network and FUSE mounts refuse it) leaves the rename to land when
+/// the system writes it, as every rename did before, and the write still succeeds. Windows can't
+/// open a folder this way without unsafe code, so there NTFS's own journal decides when it lands;
+/// the browser has no folders to sync.
+pub(crate) fn sync_folder(path: &Path) {
+    #[cfg(unix)]
+    {
+        let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let _ = std::fs::File::open(folder).and_then(|f| f.sync_all());
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// A new temporary name beside `path`, unique per call, so concurrent writes to the same target
@@ -704,17 +795,48 @@ pub(crate) fn temp_beside(path: &Path) -> std::io::Result<std::path::PathBuf> {
 
 /// Writes and syncs a new file (`create_new`, so an existing file or symlink is never followed);
 /// removes it on failure.
+#[cfg(test)]
 fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_new_with(path, |w| w.write_all(bytes))
+    write_new_with(path, |_, w| w.write_all(bytes))
 }
 
-/// [`write_new`] with the content written by `write`, through a buffer, as it goes.
-fn write_new_with(path: &Path, write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<()> {
+/// [`write_new`], the new file taking the mode of the file at `like` (on Unix, when there is one)
+/// before any content is written: a private part (`0600`) stays private once the new file
+/// replaces it, and its content is never readable by others meanwhile. A mode that can't be set
+/// is an error, rather than a part made readable.
+fn write_new_like(path: &Path, like: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let mode = match std::fs::symlink_metadata(like) {
+        Ok(old) if !old.file_type().is_symlink() => Some(old.permissions()),
+        Ok(_) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    #[cfg(not(unix))]
+    let _ = like;
+    write_new_with(path, |file, w| {
+        // Through the handle opened, not the path, which could name another file by now.
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            use std::os::unix::fs::PermissionsExt;
+            if file.metadata()?.permissions().mode() != mode.mode() {
+                file.set_permissions(mode)?;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = file;
+        w.write_all(bytes)
+    })
+}
+
+/// [`write_new`] with the content written by `write`, through a buffer, as it goes; `write` is
+/// also given the file opened, before anything is written to it.
+fn write_new_with(path: &Path, write: impl FnOnce(&std::fs::File, &mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<()> {
     use std::io::Write;
     let f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     let res = (|| {
         let mut w = std::io::BufWriter::new(&f);
-        write(&mut w)?;
+        write(&f, &mut w)?;
         w.flush()?;
         drop(w);
         f.sync_all()
@@ -798,6 +920,7 @@ fn atomic_write_at<T, E: From<std::io::Error>>(
     }
     std::fs::rename(&tmp, path)?;
     std::mem::forget(staged);
+    sync_folder(path);
     Ok(value)
 }
 
@@ -1447,8 +1570,8 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
 
 /// Longitude and latitude columns, recognised in any order; CSV export names its coordinate
 /// columns with the first of each that no field has.
-const LON_NAMES: &[&str] = &["longitude", "lon", "lng", "long", "x", "lon_dd", "longitude_dd"];
-const LAT_NAMES: &[&str] = &["latitude", "lat", "y", "lat_dd", "latitude_dd"];
+const LON_NAMES: &[&str] = &["longitude", "lon", "lng", "long", "x", "lon_dd", "longitude_dd", "stop_lon"];
+const LAT_NAMES: &[&str] = &["latitude", "lat", "y", "lat_dd", "latitude_dd", "stop_lat"];
 
 /// Projected coordinate columns, recognised as well as longitude/latitude ones.
 const X_NAMES: &[&str] = &["easting", "point_x", "xcoord", "x_coord"];
@@ -1594,11 +1717,202 @@ pub fn delimited_text<'a>(file_name: &str, bytes: &'a [u8]) -> Result<(std::borr
     Ok((text, Some(format!("{file_name} isn't UTF-8 text: it was read as Windows-1252 (Latin-1)"))))
 }
 
-/// Reads delimited text from its bytes, in the encoding [`delimited_text`] finds, saying which
-/// when it isn't UTF-8.
-fn read_csv_bytes(file_name: &str, bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
+/// Whether a name is gzip-compressed delimited text, rather than an arbitrary gzip archive.
+pub fn is_gzip_text_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".gz") && is_delimited_name(&lower)
+}
+
+/// Whether a name is delimited text, including gzip-compressed CSV, TSV, TXT and DAT.
+pub fn is_delimited_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let plain = lower.strip_suffix(".gz").unwrap_or(&lower);
+    [".csv", ".tsv", ".txt", ".dat"].iter().any(|ext| plain.ends_with(ext))
+}
+
+/// A gzip decoder with a limit on expanded bytes. The limit is checked while reading, rather
+/// than trusting a gzip trailer's 32-bit size; concatenated members share the same budget.
+struct GzipText<R: std::io::Read> {
+    decoder: flate2::read::MultiGzDecoder<R>,
+    left: u64,
+}
+
+impl<R: std::io::Read> GzipText<R> {
+    /// Starts a streaming decode; callers still check cancellation at record boundaries.
+    fn new(reader: R) -> Self {
+        Self { decoder: flate2::read::MultiGzDecoder::new(reader), left: MAX_BYTES }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for GzipText<R> {
+    /// Reads at most the remaining budget plus one byte, refusing expansion past the limit.
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        crate::progress::check().map_err(std::io::Error::other)?;
+        let size = buf.len().min(usize::try_from(self.left.saturating_add(1)).unwrap_or(usize::MAX));
+        let n = self.decoder.read(buf.get_mut(..size).unwrap_or_default())?;
+        if n as u64 > self.left {
+            return Err(std::io::Error::other(format!("expanded delimited text exceeds the {MAX_BYTES}-byte limit")));
+        }
+        self.left -= n as u64;
+        Ok(n)
+    }
+}
+
+/// The first `limit` expanded bytes, for the column picker. It deliberately stops at the
+/// prefix; adding the file later validates its complete gzip stream and checksum.
+pub fn gzip_text_prefix(reader: impl std::io::Read, limit: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let result = GzipText::new(reader).take(limit.min(MAX_BYTES as usize) as u64).read_to_end(&mut bytes);
+    crate::progress::check()?;
+    result.map_err(|e| DataError::Format(format!("gzip delimited text: {e}")))?;
+    Ok(bytes)
+}
+
+/// Reads UTF-8 gzip-compressed delimited text, streaming records without holding the whole
+/// expanded file. Other encodings can be decompressed and added as .txt. The existing table
+/// builder retains rows for type inference; this isn't a read-in-place provider.
+pub fn read_gzip_text(reader: impl std::io::Read, file_name: &str, opts: &CsvOptions) -> Result<(Dataset, ReadReport)> {
+    read_gzip_text_budget(reader, file_name, opts, &mut csv_memory_budget())
+}
+
+/// Reads a gzip member against the remaining retained-table allowance shared by its archive.
+fn read_gzip_text_budget(
+    reader: impl std::io::Read,
+    file_name: &str,
+    opts: &CsvOptions,
+    budget: &mut usize,
+) -> Result<(Dataset, ReadReport)> {
+    use std::io::{BufRead, Read};
+    if !is_gzip_text_name(file_name) {
+        return Err(DataError::Unsupported(format!("{file_name}: decompress it first, then add the supported file inside")));
+    }
+    let mut decoder = std::io::BufReader::new(GzipText::new(reader));
+    let mut prefix = Vec::new();
+    let result = (|| -> std::io::Result<()> {
+        decoder.by_ref().take(64 << 10).read_to_end(&mut prefix)?;
+        if opts.delimiter.is_none() {
+            // The existing sniffer compares physical lines. Finish its sampled line and include
+            // a data line even when the header or first row exceeds the usual prefix size.
+            if prefix.last().is_some_and(|c| *c != b'\n') {
+                decoder.read_until(b'\n', &mut prefix)?;
+            }
+            let mut lines = prefix.split(|b| *b == b'\n').filter(|line| !line.iter().all(u8::is_ascii_whitespace)).count();
+            while lines < 2 {
+                let start = prefix.len();
+                if decoder.read_until(b'\n', &mut prefix)? == 0 {
+                    break;
+                }
+                if prefix.get(start..).is_some_and(|line| !line.iter().all(u8::is_ascii_whitespace)) {
+                    lines += 1;
+                }
+                crate::progress::check().map_err(std::io::Error::other)?;
+            }
+        }
+        Ok(())
+    })();
+    crate::progress::check()?;
+    result.map_err(|e| DataError::Format(format!("{file_name}: gzip: {e}")))?;
+    if prefix.starts_with(b"\xEF\xBB\xBF") {
+        prefix.drain(..3);
+    }
+    let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(&String::from_utf8_lossy(&prefix)));
+    let plain = file_name.get(..file_name.len().saturating_sub(3)).unwrap_or(file_name);
+    let name = Path::new(plain).file_stem().and_then(|n| n.to_str()).unwrap_or("table");
+    let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(std::io::Cursor::new(prefix).chain(decoder));
+    // The sample can end inside a record. Parse the complete header from the stream before
+    // deciding whether an ambiguous DAT is delimited text.
+    if plain.to_ascii_lowercase().ends_with(".dat") && opts.delimiter.is_none() {
+        let headers = rdr.headers();
+        crate::progress::check()?;
+        let headers = headers.map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+        if headers.len() < 2 || headers.iter().any(|h| h.chars().any(char::is_control)) {
+            return Err(DataError::Format(format!(
+                "{file_name}: not recognised as delimited text; give a delimiter, or decompress and rename to .txt"
+            )));
+        }
+    }
+    let result = read_csv_records(&mut rdr, name, opts, budget);
+    crate::progress::check()?;
+    let (mut dataset, report) =
+        result.map_err(|e| DataError::Format(format!("{file_name}: {e}; if not UTF-8, decompress and add as .txt")))?;
+    dataset.source = Some(file_name.to_string());
+    Ok((dataset, report))
+}
+
+/// Estimated memory for retained CSV rows and the dataset built alongside them: a quarter
+/// of physical memory, between 256 MiB (also the browser limit) and 4 GiB.
+fn csv_memory_budget() -> usize {
+    let ceiling = usize::try_from(4u64 << 30).unwrap_or(usize::MAX);
+    crate::memory::scaled(crate::memory::physical(), 256 << 20, ceiling, 1)
+}
+
+/// Collects records for type inference, charging text and row/cell objects before copying.
+/// The estimate includes the dataset built while these rows remain alive and room for vector
+/// capacity. Reader failures and a spent memory budget refuse the whole import.
+fn read_csv_records(
+    reader: &mut csv::Reader<impl std::io::Read>,
+    name: &str,
+    opts: &CsvOptions,
+    budget: &mut usize,
+) -> Result<(Dataset, ReadReport)> {
+    let cost = |r: &csv::StringRecord, columns: usize| {
+        r.as_slice()
+            .len()
+            .saturating_mul(2)
+            .saturating_add(r.len().saturating_mul(2 * std::mem::size_of::<String>()))
+            .saturating_add(columns.saturating_mul(2 * std::mem::size_of::<Value>()))
+            .saturating_add(2 * (std::mem::size_of::<Vec<String>>() + std::mem::size_of::<crate::Feature>()))
+    };
+    let allowance = *budget;
+    let too_large =
+        || DataError::Format(format!("CSV retained table exceeds the {allowance}-byte remaining memory budget; import a smaller file"));
+    let header = reader.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?;
+    let mut left = budget.checked_sub(cost(header, header.len())).ok_or_else(too_large)?;
+    let headers: Vec<String> = header.iter().map(str::to_string).collect();
+    let mut malformed = 0;
+    let mut rows = Vec::new();
+    for record in reader.records() {
+        crate::progress::check()?;
+        match record {
+            Ok(r) => {
+                left = left.checked_sub(cost(&r, headers.len())).ok_or_else(too_large)?;
+                rows.push(r.iter().map(str::to_string).collect());
+            }
+            Err(e) if e.is_io_error() || matches!(e.kind(), csv::ErrorKind::Utf8 { .. }) => {
+                return Err(DataError::Format(format!("CSV: {e}")));
+            }
+            Err(_) => malformed += 1,
+        }
+    }
+    let result = read_rows(&headers, &rows, malformed, name, opts, None)?;
+    *budget = left;
+    Ok(result)
+}
+
+/// Reads delimited text with explicit columns/separator, including gzip. Uncompressed text
+/// uses [`delimited_text`]'s encoding detection. A DAT needs a delimiter or recognisable rows.
+pub fn read_delimited_bytes(file_name: &str, bytes: &[u8], opts: &CsvOptions) -> Result<(Dataset, ReadReport)> {
+    read_delimited_bytes_budget(file_name, bytes, opts, &mut csv_memory_budget())
+}
+
+/// Reads an archive member without resetting the retained-table allowance.
+fn read_delimited_bytes_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(DataError::Format(format!("{file_name}: file exceeds the {MAX_BYTES}-byte limit")));
+    }
+    if is_gzip_text_name(file_name) {
+        return read_gzip_text_budget(bytes, file_name, opts, budget);
+    }
     let (text, note) = delimited_text(file_name, bytes)?;
-    let (ds, mut report) = read_csv(&text, name)?;
+    if file_name.to_ascii_lowercase().ends_with(".dat") && opts.delimiter.is_none() && delimited_table_columns(&text) < 2 {
+        return Err(DataError::Format(format!(
+            "{file_name}: not recognised as delimited text; give a delimiter, or rename to .txt to read it as a table"
+        )));
+    }
+    let name = Path::new(file_name).file_stem().and_then(|n| n.to_str()).unwrap_or("table");
+    let (mut ds, mut report) = read_csv_with_budget(&text, name, opts, budget)?;
+    ds.source = Some(file_name.to_string());
     report.messages.extend(note);
     Ok((ds, report))
 }
@@ -1611,36 +1925,31 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
 /// Reads delimited text: points from x/y columns (longitude/latitude unless `crs` says
 /// otherwise), or geometry from a WKT column; without either it is a table.
 pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Dataset, ReadReport)> {
+    read_csv_with_budget(text, name, opts, &mut csv_memory_budget())
+}
+
+/// Parses a text member using the same retained-table accounting as streamed gzip records.
+fn read_csv_with_budget(text: &str, name: &str, opts: &CsvOptions, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
     // Spreadsheet exports often start with a byte-order mark, which would hide the first header.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(text));
     let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
-    let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
-    let mut malformed = 0usize;
-    let rows: Vec<Vec<String>> = rdr
-        .records()
-        .filter_map(|r| match r {
-            Ok(r) => Some(r.iter().map(|s| s.to_string()).collect()),
-            Err(_) => {
-                malformed += 1;
-                None
-            }
-        })
-        .collect();
-    read_rows(&headers, &rows, malformed, name, opts, None)
+    read_csv_records(&mut rdr, name, opts, budget)
 }
 
 /// Rows of text cells under a header row (delimited text, a spreadsheet's sheet) as a dataset, as
-/// [`read_csv_with`] describes; `malformed` rows were already passed over. Workbook cell types
-/// may override text inference by source column, before removing the geometry column.
+/// [`read_csv_with`] describes; `malformed` rows were already passed over. A workbook gives its
+/// cell types, which may override text inference by source column, and the dates it already read
+/// as empty (the cells counted for each source column), before removing the geometry column.
 pub(crate) fn read_rows(
     headers: &[String],
     rows: &[Vec<String>],
     malformed: usize,
     name: &str,
     opts: &CsvOptions,
-    types: Option<&[Option<FieldType>]>,
+    workbook: Option<(&[Option<FieldType>], &[usize])>,
 ) -> Result<(Dataset, ReadReport)> {
+    let types = workbook.map(|(types, _)| types);
     let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
         match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) => headers
@@ -1684,6 +1993,21 @@ pub(crate) fn read_rows(
     let mut ds = Dataset::new(name, gt, fields);
     let mut srid: Option<u32> = None;
     let mut unread_dates = Vec::new();
+    for (k, &i) in columns.iter().enumerate() {
+        crate::source::unread_dates_by(&mut unread_dates, k, workbook.and_then(|(_, empty)| empty.get(i)).copied().unwrap_or(0));
+    }
+    // The WKT column is the geometry, not a field: a workbook date there that never was is empty,
+    // so its row has no geometry, said here.
+    if let Some(w) = wkt {
+        let column = headers.get(w).map_or("", |h| h.trim());
+        match workbook.and_then(|(_, empty)| empty.get(w)).copied().unwrap_or(0) {
+            0 => {}
+            1 => report.messages.push(format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry")),
+            n => report
+                .messages
+                .push(format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry")),
+        }
+    }
     let (mut bad_wkt, mut zm_rows) = (0usize, 0usize);
     for r in rows {
         crate::progress::step(1)?;
@@ -1912,6 +2236,19 @@ fn has_leading_zero(v: &str) -> bool {
     d.len() > 1 && d.starts_with('0') && d.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())
 }
 
+/// A number with more than 15 significant digits (e.g. an account or card number, or a decimal
+/// such as `+1234567890123456.5`); spreadsheets retain only 15, so these must be apostrophe-guarded in CSV export.
+/// Redundant fractional trailing zeros (e.g. `+35.13294600000000`) do not count towards precision loss.
+fn is_long_number(v: &str) -> bool {
+    let mantissa = v.split(['e', 'E']).next().unwrap_or_default();
+    let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let frac = frac.trim_end_matches('0');
+    let mut digits = String::new();
+    digits.extend(whole.chars().filter(char::is_ascii_digit));
+    digits.extend(frac.chars().filter(char::is_ascii_digit));
+    digits.trim_start_matches('0').len() > 15
+}
+
 /// Undoes the export formula guard: `'=x` reads back as `=x`.
 fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
     match cell.strip_prefix('\'') {
@@ -1923,9 +2260,16 @@ fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
 const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
+/// Valid numbers whose digits fit in Double precision without loss, without leading zeros,
+/// and with at most 15 significant digits (to avoid truncation in spreadsheets) are exported bare.
 fn csv_cell(v: &Value) -> String {
     match v {
-        Value::Text(t) if t.starts_with(FORMULA_START) => format!("'{t}"),
+        Value::Text(t)
+            if t.starts_with(FORMULA_START)
+                && !(t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t) && !has_leading_zero(t) && !is_long_number(t)) =>
+        {
+            format!("'{t}")
+        }
         other => other.to_file_text(),
     }
 }
@@ -2181,19 +2525,47 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<(String, Vec<&'static str>)> {
 /// Most layers read from one zip archive.
 pub const MAX_ZIP_LAYERS: usize = 32;
 
+/// A text table has matching CSV records, or an identifier-only header for an empty table.
+/// Read records rather than counting separators: quoted commas and embedded newlines belong
+/// to cells. A one-line prose readme with punctuation isn't an empty GTFS table.
+fn delimited_table_columns(text: &str) -> usize {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if text.chars().take(4096).any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) {
+        return 0;
+    }
+    let mut reader = csv::ReaderBuilder::new().delimiter(sniff_delimiter(text)).from_reader(text.as_bytes());
+    let Ok(headers) = reader.headers() else { return 0 };
+    let columns = headers.len();
+    if columns == 0 {
+        return 0;
+    }
+    let identifiers = headers.iter().all(|name| !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    match reader.records().next() {
+        Some(Ok(row)) if row.len() == columns && (columns > 1 || identifiers) => columns,
+        None if identifiers => columns,
+        _ => 0,
+    }
+}
+
 /// Reads the vector data in a zip archive: each Shapefile in it (its `.shp` with the `.dbf`,
 /// `.shx` and `.prj` beside it), then every other file the readers understand (GeoJSON, CSV,
-/// GeoParquet, FlatGeobuf…; `.txt` files in archives are readmes, so they're skipped), at most
+/// GeoParquet, FlatGeobuf…; `.txt` files that sniff as delimited text become tables or points), at most
 /// [`MAX_ZIP_LAYERS`]. Folders inside are fine; macOS
 /// resource forks (`__MACOSX/`, `._*`) are ignored.
 pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
     read_zip_in(file_name, bytes, None)
 }
 
-/// Reads a ZIP, optionally overriding the source CRS of every Shapefile in it. Other formats
-/// retain their own coordinate systems; a CityJSON model takes it only when it names none RustGIS
-/// knows. The override is applied before reading any shapes.
+/// Reads a ZIP, optionally overriding the source CRS of its Shapefiles and delimited text.
+/// Other formats retain their own coordinate systems; a CityJSON model takes it only when it names none RustGIS
+/// knows. The override is applied before reading any shapes. Cancellation is checked between
+/// archive members and records; inflating one member cannot be interrupted mid-decompression.
 pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    read_zip_budget(file_name, bytes, crs, &mut csv_memory_budget())
+}
+
+/// Delimited members share one allowance, including gzip members whose text is nested in ZIP.
+fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut usize) -> Result<Vec<(Dataset, ReadReport)>> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
     }
@@ -2204,14 +2576,23 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(lower).unwrap_or_default();
     // A `.pbf` is read only as an OpenStreetMap extract (`.osm.pbf`): a vector tile set's
     // `z/x/y.pbf` files aren't extracted at all.
+    let geodatabase = std::cell::Cell::new(false);
     let wanted = |n: &str| {
+        if crate::progress::check().is_err() {
+            return false;
+        }
+        if !is_resource_fork(n) && n.split('/').any(|part| part.to_ascii_lowercase().ends_with(".gdb")) {
+            geodatabase.set(true);
+            return false;
+        }
         let e = ext_of(n);
         !is_resource_fork(n)
             && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj" | "cpg" | "mid")
                 || (e == "pbf" && lower(n).ends_with(".osm.pbf"))
-                || (!matches!(e.as_str(), "zip" | "txt" | "pbf") && READ_EXTENSIONS.contains(&e.as_str())))
+                || (!matches!(e.as_str(), "zip" | "pbf") && READ_EXTENSIONS.contains(&e.as_str())))
     };
     let entries = crate::zip::read_matching(bytes, wanted).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    crate::progress::check()?;
     // Sidecar files by their path without the extension, compared without regard to case.
     let stem = |n: &str| lower(n.get(..n.len().saturating_sub(ext_of(n).len() + 1)).unwrap_or(n));
     // Entries are taken out as they're used, so no file's bytes are copied.
@@ -2244,6 +2625,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
                 read.0.source = Some(format!("{file_name}/{n}"));
                 out.push(read);
             }
+            Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
         }
     }
@@ -2264,6 +2646,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
                 read.0.source = Some(format!("{file_name}/{n}"));
                 out.push(read);
             }
+            Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
         }
     }
@@ -2274,13 +2657,28 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
         .collect();
     others.sort_by(|a, b| a.0.cmp(&b.0));
     for (n, b) in others {
+        // Prose readmes aren't tables; optional empty GTFS tables still have headers.
+        if ext_of(&n) == "txt" {
+            let columns = delimited_text(&n, &b).map_or(0, |(text, _)| delimited_table_columns(&text));
+            let readme = n.rsplit('/').next().is_some_and(|leaf| leaf.eq_ignore_ascii_case("readme.txt"));
+            if columns == 0 || (columns == 1 && readme) {
+                skipped.push(format!("{n} (not recognised as a data table; extract it and open separately to read as text)"));
+                continue;
+            }
+        }
         if out.len() >= MAX_ZIP_LAYERS {
             skipped.push(format!("{n} (past the {MAX_ZIP_LAYERS}-layer limit)"));
             continue;
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
         // A city model has many layers.
-        let read = if is_city_model(leaf, &b) { read_city_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
+        let read = if is_city_model(leaf, &b) {
+            read_city_member(leaf, &b, crs)
+        } else if is_delimited_name(leaf) {
+            read_delimited_bytes_budget(leaf, &b, &CsvOptions { crs, ..Default::default() }, budget).map(|r| vec![r])
+        } else {
+            read_bytes(leaf, &b).map(|r| vec![r])
+        };
         match read {
             Ok(layers) => {
                 for (mut ds, report) in layers {
@@ -2299,7 +2697,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     }
     // At most this many skipped members are named; the rest are counted.
     const NAMED_SKIPPED: usize = 20;
-    let skipped = if skipped.len() > NAMED_SKIPPED {
+    let mut skipped = if skipped.len() > NAMED_SKIPPED {
         let more = skipped.len() - NAMED_SKIPPED;
         let mut named: Vec<String> = skipped.into_iter().take(NAMED_SKIPPED).collect();
         named.push(format!("and {more} more"));
@@ -2307,9 +2705,17 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     } else {
         skipped
     };
+    if geodatabase.get() {
+        skipped.push("File Geodatabase contents (unzip the archive and add the .gdb folder on the desktop)".into());
+    }
     if out.is_empty() {
         let why = if skipped.is_empty() { String::new() } else { format!(": {}", skipped.join("; ")) };
-        return Err(DataError::Format(format!("{file_name}: no Shapefile or other vector data in the archive could be read{why}")));
+        let hint = if skipped.is_empty() {
+            "; unzip it and add a supported file (rename delimited text to .txt if it was not recognised)"
+        } else {
+            ""
+        };
+        return Err(DataError::Format(format!("{file_name}: no supported layers or tables in the archive could be read{why}{hint}")));
     }
     if let Some((_, report)) = out.first_mut()
         && !skipped.is_empty()
@@ -2320,17 +2726,17 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
 }
 
 /// The files of a Shapefile, read into memory.
-struct ShapefileParts {
-    shp: Vec<u8>,
-    shx: Option<Vec<u8>>,
-    dbf: Vec<u8>,
-    prj: Option<String>,
-    cpg: Option<Vec<u8>>,
+pub(crate) struct ShapefileParts {
+    pub shp: Vec<u8>,
+    pub shx: Option<Vec<u8>>,
+    pub dbf: Vec<u8>,
+    pub prj: Option<String>,
+    pub cpg: Option<Vec<u8>>,
 }
 
 /// Decodes attributes and shapes together, tracking geometry lost during CRS conversion so
 /// a later projection definition cannot silently repair an incomplete layer.
-fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>) -> Result<(Dataset, ReadReport)> {
+pub(crate) fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>) -> Result<(Dataset, ReadReport)> {
     use shapefile::Shape;
     use shapefile::dbase::FieldValue;
     use std::io::Cursor;
@@ -2339,8 +2745,11 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
     let encoding = crate::dbf::encoding(parts.cpg.as_deref(), parts.dbf.get(29).copied().unwrap_or(0), &mut encoding_notes);
     crate::dbf::readable_header_date(&mut parts.dbf);
     let date_columns = crate::dbf::dates_as_text(&mut parts.dbf);
+    crate::dbf::floats_as_numeric(&mut parts.dbf);
     let dbf = shapefile::dbase::ReaderBuilder::new()
         .with_encoding(encoding.decoder())
+        // A date's year may be padded with spaces on the left (`   10101`): keep them.
+        .with_options(shapefile::dbase::ReadingOptions::default().character_trim(shapefile::dbase::TrimOption::End))
         .build(Cursor::new(parts.dbf))
         .map_err(|e| DataError::Format(format!("Shapefile: the .dbf: {e}")))?;
     // Field order comes from the .dbf header (records are unordered maps).
@@ -2383,6 +2792,8 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
     };
     let (mut converted, mut unconverted, mut zm_shapes) = (0usize, 0usize, 0usize);
     let mut unread_dates = vec![0usize; ds.fields.len()];
+    // Numbers that aren't finite (`nan`, `inf`), read as empty and counted for a notice.
+    let mut nonfinite = vec![0usize; ds.fields.len()];
     let mut source_kind = GeometryType::None;
     let pt = |x: f64, y: f64| Coord::new(x, y);
     for item in reader.iter_shapes_and_records() {
@@ -2438,8 +2849,8 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
         let attrs = ds
             .fields
             .iter()
-            .zip(&mut unread_dates)
-            .map(|(f, unread)| match record.get(&f.name) {
+            .zip(unread_dates.iter_mut().zip(nonfinite.iter_mut()))
+            .map(|(f, (unread, nonfinite))| match record.get(&f.name) {
                 Some(FieldValue::Character(Some(s))) if f.ty == FieldType::Date => match crate::dbf::date(s.as_bytes()) {
                     Ok(d) => d.map_or(Value::Null, Value::Date),
                     Err(()) => {
@@ -2449,7 +2860,10 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
                 },
                 Some(FieldValue::Character(Some(s))) => Value::Text(s.trim().to_string()),
                 Some(FieldValue::Numeric(Some(n))) if n.is_finite() => Value::Float(*n),
-                Some(FieldValue::Float(Some(n))) => Value::Float(f64::from(*n)),
+                Some(FieldValue::Numeric(Some(_))) => {
+                    *nonfinite += 1;
+                    Value::Null
+                }
                 Some(FieldValue::Integer(i)) => Value::Int(i64::from(*i)),
                 Some(FieldValue::Double(d)) => Value::Float(*d),
                 Some(FieldValue::Currency(d)) => Value::Float(*d),
@@ -2463,6 +2877,15 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
     ds.drop_zm(&mut report, zm_shapes);
     report.unread_dates = crate::source::unread_dates_note(&ds.fields, &unread_dates);
     report.messages.extend(report.unread_dates.iter().map(|n| format!("{name}: {n}")));
+    let nonfinite_total: usize = nonfinite.iter().sum();
+    if nonfinite_total > 0 {
+        let what = if nonfinite_total == 1 {
+            "1 number isn't finite (nan or inf) and was".to_string()
+        } else {
+            format!("{nonfinite_total} numbers aren't finite (nan or inf) and were")
+        };
+        report.messages.push(format!("{name}: {what} read as empty, in {}", named_fields(&ds.fields, &nonfinite)));
+    }
     ds.geometry_type = dominant_type(&ds);
     // A bad .prj must not turn a spatial layer into an attribute-only table and hide the
     // conversion warning. Its shapes can be recovered by importing with an override.
@@ -2549,7 +2972,31 @@ fn integral_numeric_to_integer(ds: &mut Dataset) {
 }
 
 /// WGS 84 as ESRI WKT, for a Shapefile's `.prj`.
-const WGS84_PRJ: &str = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+pub(crate) const WGS84_PRJ: &str = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+
+/// The longest prefix of `s` whose text takes at most `max` bytes in `encoding`, cut at a
+/// character boundary: what a `.dbf` in that code page holds of it.
+fn cut_encoded<'a>(s: &'a str, max: usize, encoding: &crate::dbf::DbfEncoding) -> &'a str {
+    use shapefile::dbase::encoding::Encoding;
+    let encoder = encoding.decoder();
+    let fits = |t: &str| encoder.encode(t).map_or(t.len(), |b| b.len()) <= max;
+    if fits(s) {
+        return s;
+    }
+    // The longest prefix that fits: a character takes at least one byte, so it is within `max`
+    // characters, and a shorter prefix never takes more bytes.
+    let ends: Vec<usize> = s.char_indices().map(|(i, _)| i).skip(1).take(max).chain([s.len()]).collect();
+    let (mut lo, mut hi) = (0usize, ends.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if ends.get(mid - 1).is_some_and(|&e| fits(s.get(..e).unwrap_or(""))) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo.checked_sub(1).and_then(|i| ends.get(i)).and_then(|&e| s.get(..e)).unwrap_or("")
+}
 
 /// The longest prefix of `s` that fits in `max` bytes, cut at a character boundary.
 pub(crate) fn cut(s: &str, max: usize) -> &str {
@@ -2654,14 +3101,55 @@ pub fn offset_dates<'a>(features: impl IntoIterator<Item = &'a crate::Feature>, 
     let mut counts = vec![0usize; fields.len()];
     for f in features {
         for ((n, field), v) in counts.iter_mut().zip(fields).zip(&f.attrs) {
-            // Text in a date field that reads as a date is written as that date.
-            let text = matches!(v, Value::Text(t) if field.ty.is_temporal() && offset(&Value::parse_stored(t, field.ty)));
+            // Text in a date field that reads as a date is written as that date (as a read takes it).
+            let text = matches!(v, Value::Text(t) if field.ty.is_temporal() && offset(&Value::parse_stored_counted(t, field.ty).0));
             if offset(v) || text {
                 *n += 1;
             }
         }
     }
     counts
+}
+
+/// Whether a value written to a date field of type `ty` has digits past the millisecond, which a
+/// GeoPackage's DATETIME doesn't keep (text that reads as a date-time counts as that, digits past
+/// the microsecond included).
+pub(crate) fn past_millisecond(v: &Value, ty: FieldType) -> bool {
+    // A moment in a date field is written as it is, and reads as null ([`text_in_dates`] counts
+    // it); in any other field a date-time is written to the millisecond.
+    if ty == FieldType::Date {
+        return false;
+    }
+    let fine = |v: &Value| matches!(v, Value::DateTime(t) if t.micros().rem_euclid(1000) != 0);
+    fine(v)
+        || matches!(v, Value::Text(t) if ty.is_temporal() && {
+            let (d, cut) = Value::parse_stored_counted(t, ty);
+            cut || fine(&d)
+        })
+}
+
+/// Counts, for each field, the date-times with digits past the millisecond, which a GeoPackage
+/// holds rounded to the millisecond.
+pub fn fine_dates<'a>(features: impl IntoIterator<Item = &'a crate::Feature>, fields: &[Field]) -> Vec<usize> {
+    let mut counts = vec![0usize; fields.len()];
+    for f in features {
+        for ((n, field), v) in counts.iter_mut().zip(fields).zip(&f.attrs) {
+            *n += usize::from(past_millisecond(v, field.ty));
+        }
+    }
+    counts
+}
+
+/// What a GeoPackage export to `target` says of the date-times it rounded to the millisecond
+/// ([`fine_dates`]). `None` when there were none.
+pub fn fine_dates_note(fields: &[Field], counts: &[usize], target: &str) -> Option<String> {
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let target: String = target.chars().map(dbf_notice_char).collect();
+    let what = if total == 1 { "1 date-time was".to_string() } else { format!("{total} date-times were") };
+    Some(format!("{target}: {what} rounded to the millisecond, as GeoPackage stores them, in {}", named_fields(fields, counts)))
 }
 
 /// What a GeoPackage export to `target` says of the date-times it wrote in UTC ([`offset_dates`]).
@@ -2679,6 +3167,36 @@ pub fn utc_dates_note(fields: &[Field], counts: &[usize], target: &str) -> Optio
     ))
 }
 
+/// Counts, for each field, the values a FlatGeobuf export writes: non-null ones of features that
+/// have geometry (the others aren't in the file).
+pub fn written_values<'a>(features: impl IntoIterator<Item = &'a crate::Feature>, fields: &[Field]) -> Vec<usize> {
+    let mut counts = vec![0usize; fields.len()];
+    for f in features.into_iter().filter(|f| f.geometry.is_some()) {
+        for (n, v) in counts.iter_mut().zip(&f.attrs) {
+            *n += usize::from(!v.is_null());
+        }
+    }
+    counts
+}
+
+/// What a FlatGeobuf export to `target` says of its date fields with no values written
+/// ([`written_values`]): the format has no date type, so a reader tells dates from date-times by
+/// the values, and these come back as date-time fields. `None` when there were none.
+pub fn fgb_empty_dates_note(fields: &[Field], written: &[usize], target: &str) -> Option<String> {
+    let empty: Vec<usize> =
+        fields.iter().enumerate().map(|(i, f)| usize::from(f.ty == FieldType::Date && written.get(i).copied().unwrap_or(0) == 0)).collect();
+    let total: usize = empty.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let target: String = target.chars().map(dbf_notice_char).collect();
+    let what = if total == 1 { "1 date field has".to_string() } else { format!("{total} date fields have") };
+    Some(format!(
+        "{target}: {what} no values, and FlatGeobuf can't tell a date from a date-time, so it reads back as a date-time field, in {}",
+        named_fields(fields, &empty)
+    ))
+}
+
 /// Counts, for each date field, the values in it that a GeoPackage export writes in a form a read
 /// gives back as null: text that isn't a date, a number or yes/no, and a date-time with a time or
 /// zone in a date field.
@@ -2686,7 +3204,7 @@ pub fn text_in_dates<'a>(features: impl IntoIterator<Item = &'a crate::Feature>,
     let mut counts = vec![0usize; fields.len()];
     for f in features {
         for ((n, field), v) in counts.iter_mut().zip(fields).zip(&f.attrs) {
-            let text = matches!(v, Value::Text(t) if !v.asks_null() && Value::parse_stored(t, field.ty).is_null());
+            let text = matches!(v, Value::Text(t) if !v.asks_null() && Value::parse_stored_counted(t, field.ty).0.is_null());
             let moment = field.ty == FieldType::Date && matches!(v, Value::DateTime(t) if !t.is_date());
             let other = matches!(v, Value::Int(_) | Value::Float(_) | Value::Bool(_));
             if field.ty.is_temporal() && (text || moment || other) {
@@ -2792,7 +3310,7 @@ pub fn shapefile_values_notes(ds: &Dataset, target: &str) -> Vec<String> {
                 FieldType::Date if !value.asks_null() && dbf_date(value).is_none() => loss.empty += 1,
                 FieldType::Integer | FieldType::Double => {
                     let d = decimals.get(k).copied().unwrap_or(0);
-                    match dbf_number(value, field.ty, d) {
+                    match dbf_number(value, field.ty, d, if field.ty == FieldType::Integer { 18 } else { 24 }) {
                         None => loss.empty += 1,
                         Some(number) => {
                             // The writer uses fixed decimal text, including ties rounded to even.
@@ -2839,6 +3357,13 @@ pub fn shapefile_values_notes(ds: &Dataset, target: &str) -> Vec<String> {
     notes
 }
 
+/// The names of the `.dbf` columns a Shapefile written from `fields` has, in order
+/// ([`dbf_names`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn shapefile_column_names(fields: &[Field]) -> Vec<String> {
+    dbf_names(fields)
+}
+
 /// dBase field names (at most 10 bytes, unique without regard to case) for the fields.
 fn dbf_names(fields: &[Field]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(fields.len());
@@ -2877,15 +3402,15 @@ fn dbf_decimals(ds: &Dataset, k: usize) -> usize {
 }
 
 /// The number a `.dbf` numeric field of type `ty` with `d` decimals holds for `v`: none for a
-/// value that isn't a number, or one rejected by the writer's size and precision checks.
+/// value that isn't a number, or one rejected by the selected column's `width` and precision.
 /// Rejected numbers are left empty rather than cut short.
-fn dbf_number(v: &Value, ty: FieldType, d: usize) -> Option<f64> {
+fn dbf_number(v: &Value, ty: FieldType, d: usize, width: usize) -> Option<f64> {
     let x = v.as_f64().filter(|x| {
         // A whole number past 2^53 would be held only rounded (dBase's decimal text goes through
         // f64), and one too small for the field's decimals would read 0.
         let exact = !(matches!(v, Value::Int(i) if i.unsigned_abs() > 1 << 53)
             || ty == FieldType::Double && *x != 0.0 && x.abs() < 0.5 * 10f64.powi(-(d as i32)));
-        exact && format!("{x:.d$}").len() <= if ty == FieldType::Integer { 18 } else { 24 }
+        exact && format!("{x:.d$}").len() <= width
     })?;
     Some(if ty == FieldType::Integer { x.round() } else { x })
 }
@@ -3209,48 +3734,159 @@ pub fn shapefile_parts(ds: &Dataset) -> Result<(Vec<(&'static str, Vec<u8>)>, us
 /// As [`shapefile_parts`], for a dataset whose geometry is in `crs`'s coordinates: the `.prj`
 /// says `crs`, and is left out for a system WKT can't describe.
 pub fn shapefile_parts_in(ds: &Dataset, crs: Crs) -> Result<(Vec<(&'static str, Vec<u8>)>, usize)> {
+    shapefile_parts_styled(ds, crs, None).map(|(parts, left_out, _)| (parts, left_out))
+}
+
+/// What a Shapefile written over the one a layer was read from keeps of that file's `.dbf`
+/// (#1385): its code page (the encoding its text is written in, and the language driver byte
+/// its header names), and each column's width, decimals and type (`F` stays `F`) where the
+/// layer's field of that name still fits it.
+pub(crate) struct DbfStyle {
+    pub encoding: crate::dbf::DbfEncoding,
+    pub ldid: u8,
+    pub columns: Vec<crate::dbf::Column>,
+}
+
+/// The `.dbf` column a field is written to: its type letter, width and decimals.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Spec {
+    ty: u8,
+    len: u8,
+    decimals: u8,
+}
+
+/// The column field `k` of `ds` is written to as a new file has it: numbers in 18 digits
+/// (integers) or 24 characters with as many decimals as fit, text as wide as its longest value.
+fn new_column(ds: &Dataset, k: usize) -> Spec {
+    let Some(f) = ds.fields.get(k) else { return Spec { ty: b'C', len: 1, decimals: 0 } };
+    match f.ty {
+        // 18 digits: GDAL reads a wider field as a real number.
+        FieldType::Integer => Spec { ty: b'N', len: 18, decimals: 0 },
+        FieldType::Double => Spec { ty: b'N', len: 24, decimals: u8::try_from(dbf_decimals(ds, k)).unwrap_or(15) },
+        FieldType::Boolean => Spec { ty: b'L', len: 1, decimals: 0 },
+        FieldType::Date => Spec { ty: b'D', len: 8, decimals: 0 },
+        // A `.dbf` has no date-time field that other programs read, so they're ISO text.
+        FieldType::Text | FieldType::DateTime => {
+            let longest = ds.features.iter().filter_map(|r| r.attrs.get(k)).map(|v| v.to_string().len()).max().unwrap_or(0);
+            Spec { ty: b'C', len: u8::try_from(longest.clamp(1, 254)).unwrap_or(254), decimals: 0 }
+        }
+    }
+}
+
+impl std::fmt::Display for Spec {
+    /// As a `.dbf` column is described: its type letter, width and, for a number, decimals
+    /// (`N(10,2)`, `C(24)`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = char::from(self.ty);
+        if matches!(self.ty, b'N' | b'F') { write!(f, "{ty}({},{})", self.len, self.decimals) } else { write!(f, "{ty}({})", self.len) }
+    }
+}
+
+/// The column field `k` (written as `name`) is written to over a file whose `.dbf` `style`
+/// describes: the file's column of that name where the field's kind and every value still fit
+/// it, so the file keeps its widths and decimals; otherwise a new one ([`new_column`]), at least
+/// as wide as the file's, and, when a column of that name changes kind or can't
+/// hold the values, what changed (`'ACRES' N(10,2) to N(24,9)`).
+fn kept_column(ds: &Dataset, k: usize, name: &str, style: &DbfStyle) -> (Spec, Option<String>) {
+    let new = new_column(ds, k);
+    let (Some(field), Some(was)) = (ds.fields.get(k), style.columns.iter().find(|c| c.name == name.as_bytes())) else {
+        return (new, None);
+    };
+    let values = || ds.features.iter().filter_map(|r| r.attrs.get(k)).filter(|v| !v.is_null());
+    let ty = was.ty.to_ascii_uppercase();
+    let kept = Spec { ty, len: was.len, decimals: was.decimals };
+    let encoding = style.encoding.decoder();
+    // Bytes of a value's text in the file's code page.
+    let encoded_len = |v: &Value| {
+        use shapefile::dbase::encoding::Encoding;
+        let text = v.to_string();
+        encoding.encode(&text).map_or(text.len(), |b| b.len())
+    };
+    let fits = match (field.ty, ty) {
+        (FieldType::Integer | FieldType::Double, b'N' | b'F') => values().all(|v| {
+            let d = usize::from(was.decimals);
+            dbf_number(v, field.ty, d, usize::from(was.len)).is_some_and(|x| {
+                let text = format!("{x:.d$}");
+                text.len() <= usize::from(was.len) && text.parse::<f64>().ok() == v.as_f64()
+            })
+        }),
+        (FieldType::Boolean, b'L') | (FieldType::Date, b'D') => true,
+        (FieldType::Text | FieldType::DateTime, b'C') => values().all(|v| encoded_len(v) <= usize::from(was.len)),
+        // Another kind of field now: say how its physical column changes too.
+        _ => return (new, Some(format!("'{}' {kept} to {new}", dbf_notice_name(&field.name)))),
+    };
+    if fits {
+        return (kept, None);
+    }
+    let spec = if new.ty == b'C' {
+        // Text wider than the file's column: as wide as its longest value, in the file's code
+        // page, up to the 254 bytes written (a longer value is cut, which publishing refuses).
+        let longest = values().map(encoded_len).max().unwrap_or(0).min(254);
+        Spec { len: u8::try_from(longest).unwrap_or(254), ..new }
+    } else {
+        // A number with more digits or decimals: never narrower than the file's column.
+        Spec { len: new.len.max(was.len), ..new }
+    };
+    (spec, Some(format!("'{}' {kept} to {spec}", dbf_notice_name(&field.name))))
+}
+
+/// As [`shapefile_parts_in`], the `.dbf` written as `style` says when it's given (in the file's
+/// code page, its columns kept where the values fit): also returns, for each field whose column
+/// couldn't hold its values, how its column changed.
+pub(crate) fn shapefile_parts_styled(
+    ds: &Dataset,
+    crs: Crs,
+    style: Option<&DbfStyle>,
+) -> Result<(Vec<(&'static str, Vec<u8>)>, usize, Vec<String>)> {
     use shapefile::dbase::{FieldName, FieldValue, Record, TableWriterBuilder};
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
     let names = dbf_names(&ds.fields);
     let dbf_name = |n: &str| FieldName::try_from(n).map_err(|e| DataError::Format(format!("Shapefile: field {n}: {e}")));
-    let mut table = TableWriterBuilder::new();
-    // Per field: decimals of a Double field (numbers too large for 24 characters become null).
-    let mut decimals = vec![0usize; ds.fields.len()];
-    for (k, (f, n)) in ds.fields.iter().zip(&names).enumerate() {
-        table = match f.ty {
-            // 18 digits: GDAL reads a wider field as a real number.
-            FieldType::Integer => table.add_numeric_field(dbf_name(n)?, 18, 0),
-            FieldType::Double => {
-                let d = dbf_decimals(ds, k);
-                if let Some(slot) = decimals.get_mut(k) {
-                    *slot = d;
-                }
-                table.add_numeric_field(dbf_name(n)?, 24, u8::try_from(d).unwrap_or(15))
+    let mut table = match style {
+        Some(style) => TableWriterBuilder::with_encoding(style.encoding.decoder()),
+        None => TableWriterBuilder::new(),
+    };
+    // Per field: its column (numbers too large for it become null), and how the columns that
+    // couldn't hold their values changed.
+    let mut specs = Vec::with_capacity(ds.fields.len());
+    let mut widened = Vec::new();
+    for (k, n) in names.iter().enumerate() {
+        let spec = match style {
+            Some(style) => {
+                let (spec, changed) = kept_column(ds, k, n, style);
+                widened.extend(changed);
+                spec
             }
-            FieldType::Boolean => table.add_logical_field(dbf_name(n)?),
-            FieldType::Date => table.add_date_field(dbf_name(n)?),
-            // A `.dbf` has no date-time field that other programs read, so they're ISO text.
-            FieldType::Text | FieldType::DateTime => {
-                let longest = ds.features.iter().filter_map(|r| r.attrs.get(k)).map(|v| v.to_string().len()).max().unwrap_or(0);
-                table.add_character_field(dbf_name(n)?, u8::try_from(longest.clamp(1, 254)).unwrap_or(254))
-            }
+            None => new_column(ds, k),
         };
+        table = match spec.ty {
+            // A float column is written as a numeric one (both hold the number as text) and
+            // marked `F` again below: `dbase` writes an `F` column's number as an `f32`.
+            b'N' | b'F' => table.add_numeric_field(dbf_name(n)?, spec.len, spec.decimals),
+            b'L' => table.add_logical_field(dbf_name(n)?),
+            b'D' => table.add_date_field(dbf_name(n)?),
+            _ => table.add_character_field(dbf_name(n)?, spec.len),
+        };
+        specs.push(spec);
     }
     let record = |r: &crate::Feature| -> Record {
         let mut rec = Record::default();
         for (k, (f, n)) in ds.fields.iter().zip(&names).enumerate() {
             let v = r.attrs.get(k).unwrap_or(&Value::Null);
+            let decimals = specs.get(k).map_or(0, |s| usize::from(s.decimals));
+            let width = specs.get(k).map_or(0, |s| usize::from(s.len));
             let value = match f.ty {
-                FieldType::Integer | FieldType::Double => FieldValue::Numeric(dbf_number(v, f.ty, decimals.get(k).copied().unwrap_or(0))),
+                FieldType::Integer | FieldType::Double => FieldValue::Numeric(dbf_number(v, f.ty, decimals, width)),
                 FieldType::Boolean => FieldValue::Logical(dbf_boolean(v)),
                 FieldType::Date => FieldValue::Date(dbf_date(v).and_then(|d| {
                     let (y, m, d) = d.ymd();
                     shapefile::dbase::Date::new(u32::try_from(d).ok()?, u32::try_from(m).ok()?, u32::try_from(y).ok()?).ok()
                 })),
-                FieldType::Text | FieldType::DateTime => {
-                    FieldValue::Character((!v.is_null()).then(|| cut(&v.to_string(), 254).to_string()))
-                }
+                FieldType::Text | FieldType::DateTime => FieldValue::Character((!v.is_null()).then(|| match style {
+                    Some(style) => cut_encoded(&v.to_string(), 254, &style.encoding).to_string(),
+                    None => cut(&v.to_string(), 254).to_string(),
+                })),
             };
             rec.insert(n.clone(), value);
         }
@@ -3326,10 +3962,25 @@ pub fn shapefile_parts_in(ds: &Dataset, crs: Crs) -> Result<(Vec<(&'static str, 
         }
     }
     let prj = if crs == Crs::LonLat { Some(WGS84_PRJ.to_string()) } else { crate::raster::wkt::to_wkt(crs) };
-    let mut parts = vec![("shp", shp.into_inner()), ("shx", shx.into_inner()), ("dbf", dbf.into_inner())];
+    let mut dbf = dbf.into_inner();
+    if let Some(style) = style {
+        // The file's language driver, whatever `dbase` takes the encoding for, and its float
+        // columns marked `F` again.
+        if let Some(b) = dbf.get_mut(29) {
+            *b = style.ldid;
+        }
+        for (k, spec) in specs.iter().enumerate() {
+            if spec.ty == b'F'
+                && let Some(b) = dbf.get_mut(32 + k * 32 + 11)
+            {
+                *b = b'F';
+            }
+        }
+    }
+    let mut parts = vec![("shp", shp.into_inner()), ("shx", shx.into_inner()), ("dbf", dbf)];
     parts.extend(prj.map(|p| ("prj", p.into_bytes())));
     parts.push(("cpg", b"UTF-8".to_vec()));
-    Ok((parts, left_out))
+    Ok((parts, left_out, widened))
 }
 
 fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {
@@ -3352,6 +4003,33 @@ pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Text is cut to what its code page holds in the bytes given, at a character boundary.
+    #[test]
+    fn text_is_cut_to_its_code_page_bytes() {
+        let cp1252 = crate::dbf::DbfEncoding::Standard(encoding_rs::WINDOWS_1252);
+        let e = "é".repeat(300);
+        assert_eq!(cut_encoded(&e, 254, &cp1252).chars().count(), 254);
+        assert_eq!(cut_encoded(&e, 254, &crate::dbf::DbfEncoding::Utf8).chars().count(), 127);
+        assert_eq!(cut_encoded("short", 254, &cp1252), "short");
+        assert_eq!(cut_encoded("ab", 0, &cp1252), "");
+    }
+
+    /// A text column as wide as a `.dbf` allows (255 bytes, a width the writer never uses) with a
+    /// longer value gets a column of the 254 bytes written, not a crash.
+    #[test]
+    fn a_full_width_text_column_with_a_longer_value_is_written_at_254() {
+        let mut ds = Dataset::new("a", GeometryType::Point, vec![Field::new("NOTE", FieldType::Text)]);
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("x".repeat(300))]);
+        let style = DbfStyle {
+            encoding: crate::dbf::DbfEncoding::Utf8,
+            ldid: 0,
+            columns: vec![crate::dbf::Column { name: b"NOTE".to_vec(), ty: b'C', len: 255, decimals: 0 }],
+        };
+        let (spec, changed) = kept_column(&ds, 0, "NOTE", &style);
+        assert_eq!(spec.len, 254);
+        assert_eq!(changed.as_deref(), Some("'NOTE' C(255) to C(254)"));
+    }
 
     /// A Shapefile export of a polygon layer holding a point and a feature without geometry writes
     /// the polygon and counts both left out, the point for its kind; a layer of polygons loses none.
@@ -3565,7 +4243,7 @@ mod tests {
         Ok(())
     }
 
-    /// Exercises caller cleanup through the public Shapefile writer, one fresh process per collision.
+    /// Exercises staging and backup cleanup through the public writer, one fresh process per collision.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shapefile_staging_collisions_preserve_existing_entries() -> std::io::Result<()> {
@@ -3576,32 +4254,35 @@ mod tests {
         const CHILD: &str = "RUSTGIS_SHAPEFILE_STAGING_COLLISION";
         let Ok(case) = std::env::var(CHILD) else {
             let kinds: &[&str] = if cfg!(unix) { &["file", "live", "dangling"] } else { &["file"] };
-            for index in 0..parts.len() {
-                for kind in kinds {
-                    let output = std::process::Command::new(std::env::current_exe()?)
-                        .args([
-                            "--exact",
-                            "io::tests::shapefile_staging_collisions_preserve_existing_entries",
-                            "--nocapture",
-                            "--test-threads=1",
-                        ])
-                        .env(CHILD, format!("{index}:{kind}"))
-                        .output()?;
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    assert!(
-                        output.status.success()
-                            && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;")
-                            && stdout.contains(&format!("collision case completed: {index}:{kind}")),
-                        "part={index} kind={kind}: {}{}",
-                        stdout,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+            for phase in ["stage", "backup"] {
+                for index in 0..parts.len() {
+                    for kind in kinds {
+                        let output = std::process::Command::new(std::env::current_exe()?)
+                            .args([
+                                "--exact",
+                                "io::tests::shapefile_staging_collisions_preserve_existing_entries",
+                                "--nocapture",
+                                "--test-threads=1",
+                            ])
+                            .env(CHILD, format!("{phase}:{index}:{kind}"))
+                            .output()?;
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        assert!(
+                            output.status.success()
+                                && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                                && stdout.contains(&format!("collision case completed: {phase}:{index}:{kind}")),
+                            "phase={phase} part={index} kind={kind}: {}{}",
+                            stdout,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
                 }
             }
-            println!("collision scenarios: {}", parts.len() * kinds.len());
+            println!("collision scenarios: {}", 2 * parts.len() * kinds.len());
             return Ok(());
         };
-        let (index, kind) = case.split_once(':').ok_or_else(|| std::io::Error::other("missing collision case"))?;
+        let (phase, case_parts) = case.split_once(':').ok_or_else(|| std::io::Error::other("missing collision phase"))?;
+        let (index, kind) = case_parts.split_once(':').ok_or_else(|| std::io::Error::other("missing collision case"))?;
         let index = index.parse::<usize>().map_err(std::io::Error::other)?;
         if !matches!(kind, "file" | "live" | "dangling") {
             return Err(std::io::Error::other("unknown collision kind"));
@@ -3613,12 +4294,17 @@ mod tests {
         for (extension, bytes) in &parts {
             std::fs::write(destination(extension), bytes)?;
         }
-        let (extension, _) = parts.get(index).ok_or_else(|| std::io::Error::other("collision part out of range"))?;
+        let mut ordered: Vec<_> = parts.iter().collect();
+        if phase == "backup" {
+            ordered.sort_by_key(|(extension, _)| *extension == "shp");
+        }
+        let (extension, _) = ordered.get(index).ok_or_else(|| std::io::Error::other("collision part out of range"))?;
         let target = destination(extension);
-        // This child runs only this test: write_path's first staging counter is zero.
+        // This child starts the counter at zero; backups follow all staged parts.
         let mut name = std::ffi::OsString::from(".");
         name.push(target.file_name().ok_or_else(|| std::io::Error::other("missing part name"))?);
-        name.push(format!(".{}.{index}.tmp", std::process::id()));
+        let counter = if phase == "backup" { parts.len() + index } else { index };
+        name.push(format!(".{}.{counter}.tmp", std::process::id()));
         let collision = target.with_file_name(name);
         #[cfg(unix)]
         let link_target = root.join("link-target");
@@ -4521,6 +5207,84 @@ mod tests {
     }
 
     #[test]
+    fn csv_export_does_not_escape_valid_signed_numbers() {
+        let mut ds =
+            Dataset::new("tiger", GeometryType::None, vec![Field::new("INTPTLAT", FieldType::Text), Field::new("note", FieldType::Text)]);
+        ds.push(None, vec![Value::Text("+35.1329460".into()), Value::Text("=SUM(A1)".into())]);
+        ds.push(None, vec![Value::Text("-90.1234567".into()), Value::Text("+cmd|' /C calc'!A0".into())]);
+        ds.push(None, vec![Value::Text("+447700900123".into()), Value::Text("-12345678901234567890".into())]);
+        ds.push(None, vec![Value::Text("-007".into()), Value::Text("-123456789012345678".into())]);
+        ds.push(None, vec![Value::Text("-1234567890123456".into()), Value::Text("+1234567890123456".into())]);
+        ds.push(None, vec![Value::Text("+1234567890123456.5".into()), Value::Text("+1.234567890123456e5".into())]);
+        ds.push(None, vec![Value::Text("-1152921504606846976".into()), Value::Text("-9007199254740992".into())]);
+        ds.push(None, vec![Value::Text("+987654321098765".into()), Value::Text("+0.00001234".into())]);
+        ds.push(None, vec![Value::Text("+35.13294600000000".into()), Value::Text("-90.12345670000000".into())]);
+        let out = to_csv(&ds).unwrap();
+        assert!(out.contains("+35.1329460"), "{out}");
+        assert!(!out.contains("'+35.1329460"), "{out}");
+        assert!(out.contains("+35.13294600000000"), "{out}");
+        assert!(!out.contains("'+35.13294600000000"), "{out}");
+        assert!(out.contains("-90.12345670000000"), "{out}");
+        assert!(!out.contains("'-90.12345670000000"), "{out}");
+        assert!(out.contains("-90.1234567"), "{out}");
+        assert!(!out.contains("'-90.1234567"), "{out}");
+        assert!(out.contains("+447700900123"), "{out}");
+        assert!(!out.contains("'+447700900123"), "{out}");
+        assert!(out.contains("+987654321098765"), "{out}");
+        assert!(!out.contains("'+987654321098765"), "{out}");
+        assert!(out.contains("+0.00001234"), "{out}");
+        assert!(!out.contains("'+0.00001234"), "{out}");
+        assert!(out.contains("'-007,"), "{out}");
+        assert!(out.contains("'-1234567890123456,"), "{out}");
+        assert!(out.contains(",'+1234567890123456\n"), "{out}");
+        assert!(out.contains("'+1234567890123456.5,"), "{out}");
+        assert!(out.contains(",'+1.234567890123456e5\n"), "{out}");
+        assert!(out.contains("'-1152921504606846976,"), "{out}");
+        assert!(out.contains(",'-9007199254740992\n"), "{out}");
+        assert!(out.contains(",'-123456789012345678\n"), "{out}");
+        assert!(out.contains(",'-12345678901234567890\n"), "{out}");
+        assert!(out.contains("'=SUM(A1)"), "{out}");
+        assert!(out.contains("'+cmd"), "{out}");
+    }
+
+    #[test]
+    fn csv_signed_numbers_and_text_round_trip() {
+        let mut ds = Dataset::new(
+            "test",
+            GeometryType::None,
+            vec![
+                Field::new("coord", FieldType::Text),
+                Field::new("phone", FieldType::Text),
+                Field::new("code", FieldType::Text),
+                Field::new("long_id", FieldType::Text),
+                Field::new("formula", FieldType::Text),
+            ],
+        );
+        ds.push(
+            None,
+            vec![
+                Value::Text("+35.1329460".into()),
+                Value::Text("+447700900123".into()),
+                Value::Text("-007".into()),
+                Value::Text("-123456789012345678".into()),
+                Value::Text("=SUM(A1)".into()),
+            ],
+        );
+        let csv_text = to_csv(&ds).unwrap();
+        let (reimported, _) = read_csv(&csv_text, "test").unwrap();
+        assert_eq!(reimported.fields[0].ty, FieldType::Double);
+        assert_eq!(reimported.features[0].attrs[0], Value::Float(35.132946));
+        assert_eq!(reimported.fields[1].ty, FieldType::Integer);
+        assert_eq!(reimported.features[0].attrs[1], Value::Int(447700900123));
+        assert_eq!(reimported.fields[2].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[2], Value::Text("-007".into()));
+        assert_eq!(reimported.fields[3].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[3], Value::Text("-123456789012345678".into()));
+        assert_eq!(reimported.fields[4].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[4], Value::Text("=SUM(A1)".into()));
+    }
+
+    #[test]
     fn hostile_geojson_is_an_error_not_a_panic() {
         for t in ["", "{", "[]", "{\"type\":5}", "{\"type\":\"FeatureCollection\",\"features\":7}"] {
             let _ = read_geojson(t, "x");
@@ -4591,6 +5355,67 @@ mod tests {
         assert_eq!(std::fs::read(&dbf).unwrap(), bytes);
     }
 
+    /// A floating point (`F`) field is read at full `f64` precision, as GDAL reads it, not rounded
+    /// through `f32` (`1809878594` as `1809878656`): read from a file, from a zip, and streamed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shapefile_float_fields_keep_f64_precision() {
+        use shapefile::dbase::{FieldValue, Record, TableWriterBuilder};
+        let dir = tempfile::tempdir().unwrap();
+        let shp = dir.path().join("parcels.shp");
+        {
+            let table = TableWriterBuilder::new().add_numeric_field("valuation".try_into().unwrap(), 12, 0).add_numeric_field(
+                "lat".try_into().unwrap(),
+                19,
+                9,
+            );
+            let mut w = shapefile::Writer::from_path(&shp, table).unwrap();
+            let mut r = Record::default();
+            r.insert("valuation".into(), FieldValue::Numeric(Some(1_809_878_594.0)));
+            r.insert("lat".into(), FieldValue::Numeric(Some(35.373_575_453)));
+            w.write_shape_and_record(&shapefile::Point::new(1.0, 2.0), &r).unwrap();
+        }
+        // The writer has no `f64` floating point field: relabel the two columns `F`, as GDAL writes them.
+        let dbf = shp.with_extension("dbf");
+        let mut bytes = std::fs::read(&dbf).unwrap();
+        for column in 0..2 {
+            bytes[32 + column * 32 + 11] = b'F';
+        }
+        std::fs::write(&dbf, &bytes).unwrap();
+        let exact = |ds: &Dataset| {
+            assert_eq!(ds.value(0, 0).as_f64(), Some(1_809_878_594.0));
+            assert_eq!(ds.value(0, 1).as_f64(), Some(35.373_575_453));
+        };
+        let (ds, rep) = read_path(&shp).unwrap();
+        exact(&ds);
+        assert!(rep.messages.is_empty(), "{:?}", rep.messages);
+        let entries: Vec<(String, Vec<u8>)> =
+            ["shp", "shx", "dbf"].iter().map(|e| (format!("parcels.{e}"), std::fs::read(shp.with_extension(e)).unwrap())).collect();
+        exact(&read_zip("parcels.zip", &crate::zip::write(&entries).unwrap()).unwrap()[0].0);
+        let src = crate::source::shp::ShpSource::open_path(&shp, "parcels").unwrap();
+        exact(&crate::source::materialize(&src).unwrap().0);
+
+        // A value that isn't finite is read as empty, and a notice counts it.
+        let odd = dir.path().join("odd.shp");
+        {
+            let table = TableWriterBuilder::new().add_numeric_field("lat".try_into().unwrap(), 19, 9);
+            let mut w = shapefile::Writer::from_path(&odd, table).unwrap();
+            for v in [f64::NAN, 1.5] {
+                let mut r = Record::default();
+                r.insert("lat".into(), FieldValue::Numeric(Some(v)));
+                w.write_shape_and_record(&shapefile::Point::new(1.0, 2.0), &r).unwrap();
+            }
+        }
+        let dbf = odd.with_extension("dbf");
+        let mut bytes = std::fs::read(&dbf).unwrap();
+        bytes[32 + 11] = b'F';
+        std::fs::write(&dbf, &bytes).unwrap();
+        let (ds, rep) = read_path(&odd).unwrap();
+        assert_eq!(ds.value(0, 0), &Value::Null);
+        assert_eq!(ds.value(1, 0).as_f64(), Some(1.5));
+        assert!(rep.messages.iter().any(|m| m.contains("1 number isn't finite") && m.contains("'lat'")), "{:?}", rep.messages);
+    }
+
     /// A projected Shapefile is converted to longitude/latitude by its `.prj` (issue #84).
     #[test]
     fn shapefile_prj_reprojects() {
@@ -4650,6 +5475,208 @@ mod tests {
         assert!(report.messages.is_empty(), "{:?}", report.messages);
     }
 
+    /// Tiny gzip fixtures exercise the public byte/path readers, concatenation and corruption.
+    fn gzip_csv(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn published_gzip_text_imports() {
+        let bytes = gzip_csv(b"\xEF\xBB\xBFid|count\nA|12\n");
+        let (table, report) = read_bytes("SUMMARY.DAT.GZ", &bytes).unwrap();
+        assert_eq!(table.name, "SUMMARY");
+        assert_eq!(table.geometry_type, GeometryType::None);
+        assert_eq!(table.value(0, 1), &Value::Int(12));
+        assert!(report.messages.is_empty());
+        let long = format!("id|value\n{}|1\n", "A".repeat(70_000));
+        let (table, report) = read_bytes("long.dat.gz", &gzip_csv(long.as_bytes())).unwrap();
+        assert_eq!(table.value(0, 1), &Value::Int(1));
+        assert!(report.messages.is_empty());
+        let ambiguous = format!("label, description;value\n{};1\n", "A".repeat(70_000));
+        let plain = read_bytes("ambiguous.csv", ambiguous.as_bytes()).unwrap().0;
+        let zipped = read_bytes("ambiguous.csv.gz", &gzip_csv(ambiguous.as_bytes())).unwrap().0;
+        assert_eq!(zipped.fields, plain.fields);
+        assert_eq!(zipped.value(0, 1), &Value::Int(1));
+        let mut members = gzip_csv(b"id,count\nA,12\n");
+        members.extend(gzip_csv(b"B,13\n"));
+        assert_eq!(read_bytes("counts.csv.gz", &members).unwrap().0.features.len(), 2);
+        for n in [0, 1, members.len() - 1] {
+            assert!(read_bytes("counts.csv.gz", &members[..n]).is_err(), "truncated at {n}");
+        }
+        let mut corrupt = gzip_csv(b"id,count\nA,12\n");
+        let crc = corrupt.len() - 8;
+        corrupt[crc] ^= 1;
+        assert!(read_bytes("counts.csv.gz", &corrupt).is_err());
+        // The checksum is also checked after records have streamed beyond the sniffed prefix.
+        let mut late = gzip_csv(format!("id,count\n{}", "A,12\n".repeat(20_000)).as_bytes());
+        let crc = late.len() - 8;
+        late[crc] ^= 1;
+        assert!(read_bytes("counts.csv.gz", &late).is_err());
+        assert!(read_bytes("counts.tar.gz", &bytes).unwrap_err().to_string().contains("decompress"));
+        let opts = CsvOptions { delimiter: Some(b'|'), ..Default::default() };
+        assert_eq!(read_delimited_bytes("one.dat.gz", &gzip_csv(b"id|count\n"), &opts).unwrap().0.fields.len(), 2);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("counts.csv.gz");
+        std::fs::write(&path, &members).unwrap();
+        assert_eq!(read_path(&path).unwrap().0.features.len(), 2);
+    }
+
+    /// Short repeated cells cost more as owned cells than as compressed or expanded text.
+    #[test]
+    fn gzip_retained_cells_have_a_memory_budget() {
+        let bytes = gzip_csv(format!("a,b,c,d\n{}", ",,,\n".repeat(1000)).as_bytes());
+        assert!(bytes.len() < 100);
+        let mut reader = csv::ReaderBuilder::new().from_reader(GzipText::new(bytes.as_slice()));
+        let error = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut 4096).unwrap_err();
+        assert!(error.to_string().contains("memory budget"), "{error}");
+        let mut reader = csv::ReaderBuilder::new().from_reader(GzipText::new(bytes.as_slice()));
+        let (table, report) = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut (1 << 20)).unwrap();
+        assert_eq!(table.features.len(), 1000);
+        assert!(report.messages.is_empty());
+        // Missing fields still become dataset attributes, so charge the complete header width.
+        let header = (0..100).map(|i| format!("f{i}")).collect::<Vec<_>>().join(",");
+        let bytes = gzip_csv(format!("{header}\n{}", "x\n".repeat(100)).as_bytes());
+        let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(GzipText::new(bytes.as_slice()));
+        let error = read_csv_records(&mut reader, "short", &CsvOptions::default(), &mut (64 << 10)).unwrap_err();
+        assert!(error.to_string().contains("memory budget"), "{error}");
+    }
+
+    /// Two nested gzip tables can each fit while their combined retained cells do not.
+    #[test]
+    fn zip_delimited_members_share_retained_budget() {
+        let text = b"id,n\nA,1\n";
+        let gzip = gzip_csv(text);
+        let mut left = 1 << 20;
+        read_delimited_bytes_budget("a.csv.gz", &gzip, &CsvOptions::default(), &mut left).unwrap();
+        let cost = (1 << 20) - left;
+        for second in ["b.csv.gz", "b.csv"] {
+            let bytes = if second.ends_with(".gz") { gzip.clone() } else { text.to_vec() };
+            let zip = crate::zip::write(&[("a.csv.gz".into(), gzip.clone()), (second.into(), bytes)]).unwrap();
+            let limited = read_zip_budget("tables.zip", &zip, None, &mut { cost }).unwrap();
+            assert_eq!(limited.len(), 1);
+            assert!(limited[0].1.messages.iter().any(|m| m.contains(second) && m.contains("memory budget")));
+            let clean = read_zip_budget("tables.zip", &zip, None, &mut (cost * 2)).unwrap();
+            assert_eq!(clean.len(), 2);
+            assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+        }
+    }
+
+    /// Cancellation while the CSV parser asks for more of a long DAT header stays cancellation.
+    #[test]
+    fn gzip_long_dat_header_preserves_cancellation() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, atomic::Ordering};
+        struct HeaderRead {
+            bytes: std::io::Cursor<Vec<u8>>,
+            probe: Arc<crate::progress::tests::Counted>,
+        }
+        impl Read for HeaderRead {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let limit = buf.len().min(4096);
+                let n = self.bytes.read(&mut buf[..limit])?;
+                if self.bytes.position() >= 96 << 10 {
+                    self.probe.cancel.store(true, Ordering::Relaxed);
+                }
+                Ok(n)
+            }
+        }
+        // Stored blocks ensure decoding the first 64 KiB cannot consume the cancellation point.
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+        encoder.write_all(format!("{},value\nA,1\n", "h".repeat(200_000)).as_bytes()).unwrap();
+        let probe = Arc::new(crate::progress::tests::Counted::default());
+        let reader = HeaderRead { bytes: std::io::Cursor::new(encoder.finish().unwrap()), probe: probe.clone() };
+        let _guard = crate::progress::install(Some(probe.clone()));
+        assert!(matches!(read_gzip_text(reader, "long.dat.gz", &CsvOptions::default()), Err(DataError::Cancelled)));
+        assert!(probe.cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn gzip_expansion_is_bounded_and_cancellable() {
+        use std::io::Read;
+        let bytes = gzip_csv(b"id,count\nA,12\n");
+        let mut limited = GzipText::new(bytes.as_slice());
+        limited.left = 4;
+        assert!(limited.read_to_end(&mut Vec::new()).is_err());
+        assert_eq!(gzip_text_prefix(bytes.as_slice(), 2).unwrap(), b"id");
+        let probe = crate::progress::tests::Counted::cancelling_after(0);
+        let _guard = crate::progress::install(Some(probe));
+        assert!(matches!(read_bytes("counts.csv.gz", &bytes), Err(DataError::Cancelled)));
+    }
+
+    #[test]
+    fn published_dat_and_gtfs_imports() {
+        let (table, report) = read_bytes("summary.dat", b"id|count\nA|12\n").unwrap();
+        assert_eq!(table.geometry_type, GeometryType::None);
+        assert_eq!(table.value(0, 1), &Value::Int(12));
+        assert!(report.messages.is_empty());
+        assert_eq!(read_bytes("quoted.dat", b"id|name\nA|\"Main|First\"\n").unwrap().0.value(0, 1), &Value::Text("Main|First".into()));
+        assert!(read_bytes("binary.dat", b"\0\x01\x02").unwrap_err().to_string().contains("rename"));
+        let zip = crate::zip::write(&[
+            ("feed/stops.txt".into(), b"stop_id,stop_name,stop_lat,stop_lon\ns1,\"Main, First\",35.1,-89.9\n".to_vec()),
+            ("feed/routes.txt".into(), b"route_id,route_short_name\nr1,Main\n".to_vec()),
+            ("feed/transfers.txt".into(), b"from_stop_id,to_stop_id,transfer_type\n".to_vec()),
+            ("README.txt".into(), b"A transit feed.\nRead the documentation.\n".to_vec()),
+        ])
+        .unwrap();
+        let layers = read_zip("transit.zip", &zip).unwrap();
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[2].0.name, "transfers");
+        assert!(layers[2].0.features.is_empty());
+        assert_eq!(layers[2].0.fields.len(), 3);
+        assert_eq!(layers[0].0.name, "routes");
+        assert_eq!(layers[0].0.geometry_type, GeometryType::None);
+        assert_eq!(layers[1].0.features[0].geometry, Some(Geometry::Point(Coord::new(-89.9, 35.1))));
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("README.txt")));
+        let readme = crate::zip::write(&[
+            ("nested/README.txt".into(), b"README\nA transit feed.\nRead the documentation.\n".to_vec()),
+            ("ids.txt".into(), b"id\nA\n".to_vec()),
+        ])
+        .unwrap();
+        let layers = read_zip("readme.zip", &readme).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].0.name, "ids");
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("nested/README.txt")));
+        let clean = crate::zip::write(&[("ids.txt".into(), b"id\nA\n".to_vec())]).unwrap();
+        let layers = read_zip("ids.zip", &clean).unwrap();
+        assert_eq!(layers[0].0.value(0, 0), &Value::Text("A".into()));
+        assert!(layers[0].1.messages.is_empty());
+        let ragged =
+            crate::zip::write(&[("ids.txt".into(), b"id\nA\n".to_vec()), ("ragged.txt".into(), b"id,n\nA,1,extra\n".to_vec())]).unwrap();
+        let layers = read_zip("ragged.zip", &ragged).unwrap();
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("ragged.txt") && m.contains("extract")));
+    }
+
+    /// A supplied ZIP CRS also places coordinates from its delimited members.
+    #[test]
+    fn zip_text_tables_use_the_supplied_crs() {
+        let bytes = b"id,easting,northing\nA,500000,4649776.22482\n";
+        let zip = crate::zip::write(&[("projected.txt".into(), bytes.to_vec()), ("projected.csv.gz".into(), gzip_csv(bytes))]).unwrap();
+        let crs = Crs::from_epsg(32633).unwrap();
+        let layers = read_zip_in("projected.zip", &zip, Some(crs)).unwrap();
+        assert_eq!(layers.len(), 2);
+        for (table, report) in layers {
+            let point = table.features[0].geometry.as_ref().unwrap().label_point().unwrap();
+            assert!((point.x - 15.0).abs() < 1e-6 && (point.y - 42.0).abs() < 1e-6, "{point:?}");
+            assert_eq!(table.crs, Some(crs));
+            assert!(report.messages.is_empty(), "{:?}", report.messages);
+        }
+    }
+
+    #[test]
+    fn zipped_geodatabase_has_actionable_refusal() {
+        let zip = crate::zip::write(&[("County.GDB/a00000001.gdbtable".into(), vec![0])]).unwrap();
+        let error = read_zip("county.zip", &zip).err().unwrap().to_string();
+        assert!(error.contains("unzip") && error.contains(".gdb folder"), "{error}");
+        let mut entries = vec![("county.gdb/a00000001.gdbtable".into(), vec![0]), ("counts.csv".into(), b"id,n\nA,12\n".to_vec())];
+        entries.extend((0..21).map(|i| (format!("bad{i}.csv.gz"), vec![0])));
+        let mixed = crate::zip::write(&entries).unwrap();
+        let layers = read_zip("mixed.zip", &mixed).unwrap();
+        assert!(layers[0].1.messages.iter().any(|m| m.contains(".gdb folder")));
+    }
+
     /// Zipped Shapefiles are read from memory (the web app's way to open them), with their `.prj`,
     /// from folders inside the archive, beside other vector files; truncations are errors.
     #[test]
@@ -4682,7 +5709,7 @@ mod tests {
         assert_eq!(ds.name, "Paris");
         let c = ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
         assert!((c.x - 2.335).abs() < 1e-6 && (c.y - 48.855).abs() < 1e-6, "{c:?}");
-        assert!(rep.messages.is_empty(), "{:?}", rep.messages);
+        assert!(rep.messages.iter().any(|m| m.contains("ne_VERSION.txt")), "{:?}", rep.messages);
         assert_eq!(ds.value(0, 0), &Value::Text("paris".into()));
         assert_eq!(layers[1].0.name, "points");
         // read_bytes takes the first layer.
@@ -4703,7 +5730,7 @@ mod tests {
         with_tiles.extend((0..3).map(|i| (format!("tiles/3/{i}/1.pbf"), vec![0x1a, 2, 0, 0])));
         let layers = read_zip("x.zip", &crate::zip::write(&with_tiles).unwrap()).unwrap();
         assert_eq!(layers.len(), 2);
-        assert!(layers[0].1.messages.is_empty(), "{:?}", layers[0].1.messages);
+        assert!(layers[0].1.messages.iter().all(|m| !m.contains(".pbf")), "{:?}", layers[0].1.messages);
         // Nothing readable at all is an error.
         let only_shp: Vec<_> = entries.iter().filter(|(n, _)| n.ends_with(".SHP")).cloned().collect();
         assert!(read_zip("x.zip", &crate::zip::write(&only_shp).unwrap()).is_err());
@@ -4953,7 +5980,7 @@ mod tests {
 
     /// A Shapefile's date fields are written as `.dbf` dates and read back as dates, whole and
     /// streamed; its date-times as text. A date that isn't one (`20260230`) is null and said, and
-    /// its shape is kept; a blank or zero date is just null.
+    /// its shape is kept; a blank or zero date is just null; a year padded with spaces is read.
     #[test]
     fn shapefile_dates_are_written_and_read_as_dates() {
         let fields = vec![Field::new("issued", FieldType::Date), Field::new("ts", FieldType::DateTime)];
@@ -4988,6 +6015,8 @@ mod tests {
         };
         replace(&mut table, b"19991231", b"20260230");
         replace(&mut table, b"20000101", b"00000000");
+        // GDAL pads a year below 1000 with spaces (`%4d%02d%02d`): still year 1.
+        replace(&mut table, b"00010101", b"   10101");
         std::fs::write(&dbf, table).unwrap();
         let whole = read_shapefile_in(&shp, "permits", None).unwrap();
         let streamed = crate::source::materialize(&crate::source::shp::ShpSource::open_path(&shp, "permits").unwrap()).unwrap();
