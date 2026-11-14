@@ -500,12 +500,10 @@ fn choices(
         return Some(subtypes.subtypes.iter().map(|s| (s.code.to_string(), s.name.clone())).collect());
     }
     if let Some(DomainKind::Coded(codes)) = layer.design.domains.iter().find(|d| same(&d.field)).map(|d| &d.kind) {
-        return Some(
-            codes
-                .iter()
-                .map(|(code, says)| (code.to_string(), if says.trim().is_empty() { code.to_string() } else { says.clone() }))
-                .collect(),
-        );
+        // A code of no text is left out: it would be stored as nothing, and its chip would show
+        // as chosen whenever nothing is.
+        let list = codes.iter().map(|(code, says)| (code.to_string(), says)).filter(|(code, _)| !code.is_empty());
+        return Some(list.map(|(code, says)| if says.trim().is_empty() { (code.clone(), code) } else { (code, says.clone()) }).collect());
     }
     (field.ty == FieldType::Boolean)
         .then(|| vec![("true".to_string(), tl!("Yes").to_string()), ("false".to_string(), tl!("No").to_string())])
@@ -668,6 +666,12 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ),
             None => Default::default(),
         };
+        // A template chosen and since removed from the layer is let go, and said: the next
+        // feature would otherwise be added without the defaults the form still seemed to promise.
+        if let Some(gone) = state.template.clone().filter(|name| !templates.contains(name)) {
+            state.template = None;
+            app.session.notify(rustgis_ui_egui::i18n::fmt("The template {name} is no longer on this layer.", &[("name", &gone)]), false);
+        }
         // The layer's feature templates: one fills in its defaults for what the form leaves empty.
         if !templates.is_empty() {
             ui.horizontal(|ui| {
@@ -1025,6 +1029,20 @@ mod tests {
         let mark = app.session.notice_mark();
         assert!(!add_point(&mut app, cities.id, &state));
         assert!(app.session.notices_since(mark).iter().any(|n| n.error));
+        // A code of no text is not offered: it would show as chosen whenever nothing is.
+        run(
+            &mut app,
+            "data.domain",
+            json!({"layer": cities.id, "field": text.name, "coded": [["", "None"], ["cap", "Capital"]], "force": true}),
+        );
+        let layer = app.session.map().layer(cities.id).unwrap();
+        assert_eq!(choices(layer, &text), Some(vec![("cap".into(), "Capital".into())]));
+        // A template chosen and since removed is let go by the sheet, with a notice.
+        set_form(&ctx, Form { shown: Some(cities.instance), template: Some("Gone".into()), ..Form::default() });
+        let mark = app.session.notice_mark();
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert_eq!(form(&ctx).template, None);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text.contains("Gone")));
         // The sheet draws the lists, the range hint and the templates.
         set_form(&ctx, Form { shown: Some(cities.instance), template: Some("Capital".into()), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
