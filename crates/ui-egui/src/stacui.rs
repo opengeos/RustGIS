@@ -160,6 +160,11 @@ pub struct State {
     /// search to send once it lands; Clear drops it.
     preparing: Option<Preparing>,
     pub max_cloud: String,
+    /// Whether the dates and the cloud limit are used in the search: off, the typed values stay
+    /// in their boxes but are not sent (a collection without `eo:cloud_cover` finds nothing
+    /// with a limit).
+    pub use_dates: bool,
+    pub use_cloud: bool,
     /// The order of an API's items (`eo:cloud_cover`…); empty for the API's own.
     pub sortby: String,
     /// The Web Data service the dialog was opened as.
@@ -202,6 +207,18 @@ pub struct State {
     pub info: Option<String>,
 }
 
+impl State {
+    /// The typed dates (from, to), empty when the dates are switched off.
+    fn dates(&self) -> (&str, &str) {
+        if self.use_dates { (self.from.trim(), self.to.trim()) } else { ("", "") }
+    }
+
+    /// The cloud limit typed, none when it is switched off or not a number.
+    fn cloud_limit(&self) -> Option<f64> {
+        if self.use_cloud { self.max_cloud.trim().parse::<f64>().ok() } else { None }
+    }
+}
+
 impl Default for State {
     fn default() -> Self {
         State {
@@ -221,6 +238,8 @@ impl Default for State {
             loading: None,
             preparing: None,
             max_cloud: "20".into(),
+            use_dates: true,
+            use_cloud: true,
             sortby: String::new(),
             preset: None,
             node: String::new(),
@@ -1013,21 +1032,30 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             });
             ui.end_row();
         }
-        ui.label(tl!("Dates"));
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut st.from)
-                    .hint_text("2024-06-01")
-                    .desired_width(((ui.available_width() - 30.0) / 2.0).clamp(70.0, 110.0)),
-            );
-            let input_label = ui.label("–");
-            ui.add(egui::TextEdit::singleline(&mut st.to).hint_text("2024-06-30").desired_width(ui.available_width().clamp(70.0, 110.0)))
+        ui.checkbox(&mut st.use_dates, tl!("Dates")).on_hover_text(tl!("Search only items in these dates"));
+        ui.add_enabled_ui(st.use_dates, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.from)
+                        .hint_text("2024-06-01")
+                        .desired_width(((ui.available_width() - 30.0) / 2.0).clamp(70.0, 110.0)),
+                );
+                let input_label = ui.label("–");
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.to).hint_text("2024-06-30").desired_width(ui.available_width().clamp(70.0, 110.0)),
+                )
                 .labelled_by(input_label.id);
+            })
         });
         ui.end_row();
-        let input_label = ui.label(tl!("Most cloud cover (%)"));
-        ui.add(egui::TextEdit::singleline(&mut st.max_cloud).hint_text(tl!("any")).desired_width(ui.available_width().clamp(70.0, 110.0)))
-            .labelled_by(input_label.id);
+        let cloud_label = ui
+            .checkbox(&mut st.use_cloud, tl!("Most cloud cover (%)"))
+            .on_hover_text(tl!("Turn off for collections without eo:cloud_cover"));
+        ui.add_enabled(
+            st.use_cloud,
+            egui::TextEdit::singleline(&mut st.max_cloud).hint_text(tl!("any")).desired_width(ui.available_width().clamp(70.0, 110.0)),
+        )
+        .labelled_by(cloud_label.id);
         ui.end_row();
         if !is_static {
             // A static catalog is walked in its own order, so it has no sort.
@@ -1208,10 +1236,11 @@ fn cube_row(app: &mut RustGisApp, ui: &mut egui::Ui, busy: bool) {
 /// dates the items span, used where no date is typed.
 #[cfg(not(target_arch = "wasm32"))]
 fn cube_params(st: &State, first: String, last: String, connection: Option<String>) -> Result<serde_json::Value, String> {
+    let (from, to) = st.dates();
     let mut p = json!({
         "url": st.api, "collection": st.collection.trim(), "asset": st.cube_asset,
-        "start": if st.from.trim().is_empty() { first } else { st.from.trim().to_string() },
-        "end": if st.to.trim().is_empty() { last } else { st.to.trim().to_string() },
+        "start": if from.is_empty() { first } else { from.to_string() },
+        "end": if to.is_empty() { last } else { to.to_string() },
     });
     if let Some(connection) = connection {
         p["connection"] = json!(connection);
@@ -1226,7 +1255,7 @@ fn cube_params(st: &State, first: String, last: String, connection: Option<Strin
     if let Some(b) = area {
         p["bbox"] = json!(b);
     }
-    if let Ok(c) = st.max_cloud.trim().parse::<f64>() {
+    if let Some(c) = st.cloud_limit() {
         p["maxCloud"] = json!(c);
     }
     let typed: Vec<&str> = st.cube_range.split([',', ';', ' ']).map(str::trim).filter(|v| !v.is_empty()).collect();
@@ -1585,7 +1614,7 @@ fn find_items(app: &mut RustGisApp) {
         app.ui.stac.error = Some(tl!("The search area is still loading: search when it has finished").to_string());
         return;
     }
-    let datetime = match (st.from.trim(), st.to.trim()) {
+    let datetime = match st.dates() {
         ("", "") => None,
         (a, "") => Some(format!("{a}/..")),
         ("", b) => Some(format!("../{b}")),
@@ -1599,7 +1628,7 @@ fn find_items(app: &mut RustGisApp) {
     if let Some(d) = datetime {
         p["datetime"] = json!(d);
     }
-    if let Ok(c) = st.max_cloud.trim().parse::<f64>() {
+    if let Some(c) = st.cloud_limit() {
         p["maxCloud"] = json!(c);
     }
     // The sort picked in the dialog (a preset starts with its own); a static catalog has none.
@@ -1866,6 +1895,16 @@ fn properties(ui: &mut egui::Ui, i: usize, item: &Item) {
 mod tests {
     use super::*;
     use crate::RustGisApp;
+
+    #[test]
+    fn switched_off_dates_and_cloud_limit_are_not_sent() {
+        let mut st = State { from: "2024-06-01".into(), to: "2024-06-30".into(), ..State::default() };
+        assert_eq!((st.dates(), st.cloud_limit()), (("2024-06-01", "2024-06-30"), Some(20.0)));
+        (st.use_dates, st.use_cloud) = (false, false);
+        // The typed values stay in their boxes, but none goes with the search.
+        assert_eq!((st.dates(), st.cloud_limit()), (("", ""), None));
+        assert_eq!((st.from.as_str(), st.max_cloud.as_str()), ("2024-06-01", "20"));
+    }
 
     #[test]
     fn opening_a_stac_api_from_the_tree_drops_the_last_apis_catalog_walk() {
