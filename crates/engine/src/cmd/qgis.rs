@@ -1040,7 +1040,8 @@ fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report
 /// the referenced, parent layer; destination: the referencing, child layer). A relation whose
 /// layers didn't come in, or haven't its fields, is noted; one whose name is taken is numbered.
 /// One to a layer that came in as several tables is related to the one with the field, noted, as
-/// QGIS's own table (by `layerid`) isn't known.
+/// QGIS's own table (by `layerid`) isn't known; one of such a layer to itself whose two fields are
+/// in two of its tables isn't made, and is noted.
 fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], report: &mut Report) {
     // The map layer a project layer came in as, with the field. A file of several layers (one
     // QGIS names by `layerid`, which isn't read) adds them all: when more than one has the field,
@@ -1071,6 +1072,8 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
     let mut ambiguous = Vec::new();
     // Those related to the one table of several that has the field.
     let mut guesses = Vec::new();
+    // Those of a layer to itself whose fields are each in another of the tables it came in as.
+    let mut split = Vec::new();
     let mut names = Names::new(s.map().editing.relationships.iter().map(|r| r.name.as_str()), MAX_RELATION_NAME);
     for r in &project.relations {
         let (origin, destination) = (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field));
@@ -1088,7 +1091,7 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
         // A relation of a layer to itself relates one table: two tables of it, each with one of
         // the fields, can't both be QGIS's layer.
         if r.referenced == r.referencing && origin != destination {
-            ambiguous.push(r.name.as_str());
+            split.push(r.name.as_str());
             continue;
         }
         if *origin_guessed || *destination_guessed {
@@ -1123,6 +1126,15 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
             format!(
                 "its relations to a layer that came in as several tables with the field, any of which it could mean ({})",
                 listed(&ambiguous)
+            ),
+        );
+    }
+    if !split.is_empty() {
+        report.skipped(
+            "",
+            format!(
+                "its relations of a layer to itself whose two fields are in two of the tables it came in as, neither holding both ({})",
+                listed(&split)
             ),
         );
     }
