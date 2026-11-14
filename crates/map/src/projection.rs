@@ -1145,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn codes_whose_method_cannot_be_drawn_are_refused() {
+    fn codes_whose_method_was_refused_draw_or_are_named() {
         // EPSG:8441 (Laborde, Madagascar), refused while its method had no implementation
         // (opengeos/RustGIS#208), draws where PROJ does: pyproj 3.8.0 (PROJ 9.8.1) puts 47°E 19°S
         // at (459 248.289, 788 988.914).

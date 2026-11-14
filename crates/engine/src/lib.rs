@@ -2407,7 +2407,8 @@ impl Session {
         // and the custom systems a run keeps.
         if !found.is_empty() {
             let labels: Vec<String> = found.iter().map(|(_, label)| label.clone()).collect();
-            self.notify(grid_notes_text(&labels), false);
+            // A few named, each cut, and the rest counted: the notice stays short however many.
+            self.notify(grid_notes_text(labels.len(), &names_said(&labels)), false);
             self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
         }
         if rustgis_data::raster::crs::take_unnamed_grid_need() {

@@ -4266,6 +4266,11 @@ fn missing_datum_grids_are_said_from_a_background_export_and_counted() {
     let said = grid(&s, mark);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("2 coordinate systems (") && said[0].contains("EPSG:4267") && said[0].contains("EPSG:26717"), "{said:?}");
+    // Many at once: a few named, the rest counted, so the notice keeps its explanation.
+    let many: Vec<String> = (0..300).map(|i| format!("Custom system {i} {}", "x".repeat(200))).collect();
+    let text = rustgis_data::raster::crs::grid_notes_text(many.len(), &crate::names_said(&many));
+    assert!(text.starts_with("300 coordinate systems (") && text.contains("and 295 more") && text.contains("10 m"), "{text}");
+    assert!(text.len() < 1000, "{}", text.len());
     // A map drawn in a system before any command: the frame after it says it.
     let mut s = world();
     s.project.maps[0].projection = rustgis_map::Projection::Custom("EPSG:26717".into());

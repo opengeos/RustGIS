@@ -496,8 +496,9 @@ const PRIME_MERIDIANS: [&str; 14] = [
     "copenhagen",
 ];
 
-/// The angle parameters of a PROJ definition.
-const ANGLES: [&str; 10] = ["lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc", "alpha", "gamma", "lon_1", "lon_2"];
+/// The angle parameters of a PROJ definition: every one terrio-crs reads as an angle (Laborde's
+/// azimuth `azi` among them), and the longitudes it reads otherwise.
+const ANGLES: [&str; 12] = ["lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc", "alpha", "gamma", "lon_1", "lon_2", "azi", "rot_xy"];
 
 /// Whether `key=value` is an angle ([`ANGLES`]), a prime meridian given as one (`+pm=2D`, not
 /// `+pm=paris`) included.
@@ -531,9 +532,9 @@ fn build(def: &str) -> Result<Transformer, String> {
 
 /// The numeric parameters of a PROJ definition: each must be a finite number, or degrees,
 /// minutes and seconds (`30d30'N`), as PROJ reads them.
-const NUMERIC_PARAMETERS: [&str; 22] = [
+const NUMERIC_PARAMETERS: [&str; 28] = [
     "lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc", "alpha", "gamma", "k", "k_0", "x_0", "y_0", "to_meter", "a", "b", "R", "rf", "f",
-    "h", "zone", "lon_1", "lon_2",
+    "h", "zone", "lon_1", "lon_2", "azi", "rot_xy", "e", "es", "n", "h_0",
 ];
 
 /// Refuses what terrio-crs would read otherwise than PROJ, so a place is never put somewhere
@@ -703,9 +704,9 @@ struct Terrio {
     own: Option<(terrio_crs::Transformer, terrio_crs::Transformer, terrio_crs::Transformer)>,
     /// Its coordinates are degrees.
     geographic: bool,
-    /// Its degrees are latitude first (`+axis=neu`).
+    /// Its coordinates are north first (`+axis=neu`).
     lat_first: bool,
-    /// Its longitudes point west (`+axis=wnu`): -1, else 1.
+    /// Its east-west coordinate points west (`+axis=wnu`, `wsu`): -1, else 1.
     lon_sign: f64,
     /// The conversion's parameters (centre, offsets, unit, prime meridian), when it has some.
     params: Option<terrio_crs::ProjParams>,
@@ -842,13 +843,14 @@ pub fn definition_and_label(crs: Crs) -> Option<(String, String)> {
     }
 }
 
-/// The note of the systems called `labels` whose most accurate datum transformation needed a
-/// grid ([`needs_a_missing_grid`]): one notice for all of them, with their count.
-pub fn grid_notes_text(labels: &[String]) -> String {
+/// The note of `count` systems whose most accurate datum transformation needed a grid
+/// ([`needs_a_missing_grid`]), `names` naming them (the app lists a few and counts the rest):
+/// one notice for all of them, with their count.
+pub fn grid_notes_text(count: usize, names: &str) -> String {
     const TAIL: &str = "the most accurate datum transformation needs a grid RustGIS doesn't have yet, so the next one was used; places may be metres off (NAD27, for one, is about 10 m off without its grid)";
-    match labels {
-        [one] => format!("{one}: {TAIL}"),
-        _ => format!("{} coordinate systems ({}): {TAIL}", labels.len(), labels.join(", ")),
+    match count {
+        1 => format!("{names}: {TAIL}"),
+        _ => format!("{count} coordinate systems ({names}): {TAIL}"),
     }
 }
 
@@ -948,7 +950,7 @@ pub fn take_used() -> Vec<(String, String)> {
 
 /// [`grid_note`] for a PROJ definition (a map's projection), called `label`.
 pub fn grid_note_of(def: &str, label: &str) -> Option<String> {
-    needs_a_missing_grid(def).then(|| grid_notes_text(&[label.to_string()]))
+    needs_a_missing_grid(def).then(|| grid_notes_text(1, label))
 }
 
 /// Whether a definition's most accurate datum transformation needed a grid RustGIS doesn't have,
@@ -1042,17 +1044,7 @@ impl Transformer {
             });
         let method = |names: &[&str]| params.as_ref().is_some_and(|p| !geographic && names.contains(&p.method.as_str()));
         let (wraps, eck4) = (method(&WRAPPING), method(&["eck4"]));
-        let t = Terrio {
-            to_lonlat,
-            from_lonlat,
-            own,
-            geographic,
-            lat_first: geographic && lat_first,
-            lon_sign: if geographic && west { -1.0 } else { 1.0 },
-            params,
-            wraps,
-            eck4,
-        };
+        let t = Terrio { to_lonlat, from_lonlat, own, geographic, lat_first, lon_sign: if west { -1.0 } else { 1.0 }, params, wraps, eck4 };
         Ok(Transformer { kind: Kind::Terrio(std::sync::Arc::new(t)) })
     }
 
@@ -1072,7 +1064,7 @@ impl Transformer {
                 // the map: a world layer's shapes on its west edge stay there, at -180°.
                 if (at.x.abs() - 180.0).abs() < 1e-9 {
                     // Its longitude pointing east, whatever its axes' order and direction.
-                    let x = if t.geographic { t.lon_sign * if t.lat_first { c.y } else { c.x } } else { c.x };
+                    let x = t.lon_sign * if t.lat_first { c.y } else { c.x };
                     let east = t.params.as_ref().is_none_or(|p| x >= p.x_0 / if p.to_meter > 0.0 { p.to_meter } else { 1.0 });
                     Coord::new(if east { 180.0 } else { -180.0 }, at.y)
                 } else {
@@ -1344,6 +1336,19 @@ mod tests {
         }
         assert!((pm("paris").x - (2.0 + 20.0 / 60.0 + 14.025 / 3600.0)).abs() < 1e-9);
         assert!(Crs::parse("+proj=longlat +datum=WGS84 +pm=2x").and_then(Crs::transformer).is_err());
+        // Laborde's azimuth is an angle too: in radians or degrees and minutes as in degrees, and
+        // refused when it isn't one (terrio-crs would take 0).
+        let labrd = |azi: &str| {
+            Crs::parse(&format!("+proj=labrd +lat_0=-18.9 +lon_0=44.1 +azi={azi} +k_0=0.9995 +x_0=400000 +y_0=800000 +ellps=intl +units=m"))
+                .and_then(Crs::transformer)
+                .map(|t| t.from_lonlat(Coord::new(47.0, -19.0)).unwrap())
+        };
+        let degrees = labrd("18.9").unwrap();
+        for azi in [format!("{}r", 18.9f64.to_radians()), "18d54'".to_string(), "18°54'".to_string()] {
+            let at = labrd(&azi).unwrap();
+            assert!((at.x - degrees.x).abs() < 1e-6 && (at.y - degrees.y).abs() < 1e-6, "{azi}: {at:?} {degrees:?}");
+        }
+        assert!(labrd("abc").is_err());
         // A name PROJ doesn't know, as it spells them, is refused, as PROJ 9.8.1 refuses it.
         for v in ["Paris", "pariss"] {
             assert!(Crs::parse(&format!("+proj=longlat +datum=WGS84 +pm={v}")).and_then(Crs::transformer).is_err(), "{v}");
@@ -1378,6 +1383,14 @@ mod tests {
         assert_eq!(t.to_lonlat(Coord::new(45.0, 180.0)).map(|c| c.x), Some(180.0));
         assert_eq!(west.to_lonlat(Coord::new(180.0, 10.0)).map(|c| c.x), Some(-180.0));
         assert_eq!(west.to_lonlat(Coord::new(-180.0, 10.0)).map(|c| c.x), Some(180.0));
+        // A projection's easting pointing west or north first: the same side.
+        let edge = std::f64::consts::PI * 6_378_137.0;
+        let wsu = Crs::parse("+proj=eqc +datum=WGS84 +axis=wsu").and_then(Crs::transformer).unwrap();
+        assert_eq!(wsu.to_lonlat(Coord::new(-edge, 0.0)).map(|c| c.x), Some(180.0));
+        assert_eq!(wsu.to_lonlat(Coord::new(edge, 0.0)).map(|c| c.x), Some(-180.0));
+        let neu = Crs::parse("+proj=eqc +datum=WGS84 +axis=neu").and_then(Crs::transformer).unwrap();
+        assert_eq!(neu.to_lonlat(Coord::new(0.0, edge)).map(|c| c.x), Some(180.0));
+        assert_eq!(neu.to_lonlat(Coord::new(0.0, -edge)).map(|c| c.x), Some(-180.0));
     }
 
     /// Hostile definitions in every method terrio-crs computes, typed or read from a file: refused
