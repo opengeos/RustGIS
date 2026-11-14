@@ -545,7 +545,7 @@ fn proj4_of_keys(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(String, 
         Some(21) => format!("+proj=ortho +lat_0={lat0} +lon_0={lon0} +x_0={x0} +y_0={y0}"),
         // CT_Robinson.
         Some(23) => format!("+proj=robin +lon_0={lon0} +x_0={x0} +y_0={y0}"),
-        // MODIS's grid; RustGIS computes it (`rustgis_geom::Sinusoidal`).
+        // MODIS's grid.
         Some(24) => format!("+proj=sinu +lon_0={lon0} +x_0={x0} +y_0={y0}"),
         Some(28) => format!("+proj=cea +lat_ts={lat1} +lon_0={lon0} +x_0={x0} +y_0={y0}"),
         Some(c) => return Err(err(format!("the file's own projection (coordinate transformation {c}) isn't supported"))),
@@ -581,8 +581,7 @@ fn proj4_of_keys(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(String, 
 }
 
 /// Whether two PROJ definitions place the same points: points around the projection's origin,
-/// unprojected by both (as RustGIS computes them, sinusoidal and PROJ-compatible equidistant
-/// cylindrical included), land within a centimetre.
+/// unprojected by both, land within a centimetre.
 fn same_projection(a: &str, b: &str) -> bool {
     let offsets = [(0.0, 0.0), (100_000.0, 50_000.0), (-250_000.0, 150_000.0), (300_000.0, -200_000.0), (-50_000.0, -400_000.0)];
     let (Ok(ta), Ok(tb)) = (super::crs::transformer_of(a), super::crs::transformer_of(b)) else { return false };
@@ -807,12 +806,23 @@ fn lzw<R: Read + Seek>(dec: &mut Decoder<R>) -> bool {
     dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(5)
 }
 
-/// Decodes chunk `index` (a strip or tile) of the current image. The `tiff` crate fails on some
-/// LZW chunks it should read (issue #350): those are decoded by [`super::lzw`] instead.
-pub(crate) fn read_chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<DecodingResult> {
+/// Decodes chunk `index` (a strip or tile) of the current image: its samples, and which of them
+/// its own encoding marks invalid (LERC's validity masks), for the caller to make no-data with
+/// [`super::lerc::blank`]. The `tiff` crate fails on some LZW chunks it should read (issue #350):
+/// those are decoded by [`super::lzw`] instead. It has no LERC codec: LERC chunks are decoded by
+/// [`super::lerc`] (#1818), `table` keeping the image's chunk offsets from one call to the next.
+pub(crate) fn read_chunk<R: Read + Seek>(
+    dec: &mut Decoder<R>,
+    index: u32,
+    table: &mut super::lerc::Table,
+) -> Result<(DecodingResult, Option<Vec<bool>>)> {
+    if super::lerc::is_lerc(dec) {
+        let c = super::lerc::chunk(dec, index, table)?;
+        return Ok((c.samples, c.gaps));
+    }
     match dec.read_chunk(index) {
-        Ok(v) => Ok(v),
-        Err(e) if lzw(dec) => super::lzw::chunk(dec, index).map_err(|_| err(e)),
+        Ok(v) => Ok((v, None)),
+        Err(e) if lzw(dec) => super::lzw::chunk(dec, index).map(|v| (v, None)).map_err(|_| err(e)),
         Err(e) => Err(err(e)),
     }
 }
@@ -1095,7 +1105,6 @@ impl Chunks {
     /// Copies every `k`-th pixel each way of chunk `c` of `plane` (decoded as `values`) into
     /// `bands`, each `ow` pixels wide, counting in `rounded` (by band) the pixels copied whose bit
     /// is set in `changed` (from [`rounded_bits`]).
-    #[allow(clippy::too_many_arguments)]
     fn place(
         &self,
         bands: &mut [Vec<f32>],
@@ -1159,7 +1168,6 @@ const PARALLEL_CHUNKS: u64 = 16;
 /// each reading image `image` of its own copy of the file.
 /// Progress counts chunks examined, including ones skipped by the overview. Cancel is checked
 /// between chunks; decoding and placing an individual chunk cannot be interrupted.
-#[allow(clippy::too_many_arguments)]
 fn decimate<R: Read + Seek>(
     dec: &mut Decoder<R>,
     w: u32,
@@ -1193,12 +1201,14 @@ fn decimate<R: Read + Seek>(
     crate::progress::begin(usize::try_from(chunks.count()).unwrap_or(usize::MAX));
     let mut data_type = "Float32";
     let mut rounded = vec![0u64; nbands];
+    let mut table = super::lerc::Table::default();
     for i in 0..chunks.count() {
         crate::progress::check()?;
         if let Some((plane, index)) = chunks.wanted(i, k) {
-            let buf = read_chunk(dec, index)?;
+            let (buf, gaps) = read_chunk(dec, index, &mut table)?;
             let changed = rounded_bits(&buf, nodata);
-            let (values, dt) = to_f32(buf, (ow, oh))?;
+            let (mut values, dt) = to_f32(buf, (ow, oh))?;
+            super::lerc::blank(&mut values, gaps.as_deref());
             data_type = dt;
             chunks.place(&mut bands, &values, changed.as_deref(), &mut rounded, plane, index, k, ow);
         }
@@ -1210,7 +1220,6 @@ fn decimate<R: Read + Seek>(
 
 /// [`decimate`] on `threads` threads, each with its own decoder taking the next chunk in turn.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 fn decimate_parallel(
     chunks: Chunks,
     bands: Vec<Vec<f32>>,
@@ -1248,6 +1257,7 @@ fn decimate_parallel(
             Ok(d) => d,
             Err(e) => return fail(e),
         };
+        let mut table = super::lerc::Table::default();
         while !failed.load(Ordering::Relaxed) {
             if let Err(e) = crate::progress::check() {
                 return fail(e);
@@ -1262,13 +1272,14 @@ fn decimate_parallel(
                 }
                 continue;
             };
-            match read_chunk(&mut dec, index) {
-                Ok(buf) => {
+            match read_chunk(&mut dec, index, &mut table) {
+                Ok((buf, gaps)) => {
                     let changed = rounded_bits(&buf, nodata);
-                    let (values, dt) = match to_f32(buf, (ow, oh)) {
+                    let (mut values, dt) = match to_f32(buf, (ow, oh)) {
                         Ok(v) => v,
                         Err(e) => return fail(e),
                     };
+                    super::lerc::blank(&mut values, gaps.as_deref());
                     if let Ok(mut o) = out.lock() {
                         let (bands, data_type, rounded) = &mut *o;
                         *data_type = dt;
@@ -1556,7 +1567,10 @@ pub(super) fn read_limited_with_nodata(
     // A large image, from a file, is read a chunk at a time on several threads (not one of
     // fewer than 8 bits a sample, whose chunks pack several pixels to a byte).
     let chunked = open.is_some() && n >= 1 << 20 && bits(&mut dec) >= 8;
-    let whole = if decimate_by > 1 || extra_samples || planar_tiles || chunked {
+    // The decoder has no LERC codec: such an image is read a chunk at a time, every chunk decoded
+    // by [`super::lerc`] (#1818).
+    let lerc = super::lerc::is_lerc(&mut dec);
+    let whole = if decimate_by > 1 || extra_samples || planar_tiles || chunked || lerc {
         None
     } else {
         let mut buf = DecodingResult::U8(Vec::new());
@@ -2433,8 +2447,9 @@ mod tests {
             let back = custom_crs(&k, &d, &a).unwrap().custom_def().unwrap().proj4.clone();
             assert!(same_projection(def, &back), "{def}: {back}");
         }
-        // PROJ uses the same coordinates on a sphere of the semi-major axis.
-        assert!(same_projection(
+        // PROJ 9.8 computes it on the ellipsoid: on the sphere of its semi-major axis it is
+        // another projection.
+        assert!(!same_projection(
             "+proj=eqc +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +no_defs",
             "+proj=eqc +lat_ts=0 +lon_0=0 +R=6378137 +units=m +no_defs"
         ));
