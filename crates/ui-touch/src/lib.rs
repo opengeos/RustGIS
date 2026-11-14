@@ -388,8 +388,15 @@ fn fewest(kind: GeometryType) -> usize {
 
 /// The GeoJSON geometry of a feature of `kind` through `vertices` (longitude and latitude, in
 /// order): a point at the first, a line through them, or a polygon whose ring closes on the
-/// first. `None` with fewer than the kind needs.
+/// first. A polygon closed by hand (its last vertex placed on its first) is not closed twice.
+/// `None` with fewer than the kind needs.
 fn geometry(kind: GeometryType, vertices: &[(f64, f64)]) -> Option<Value> {
+    let vertices = match vertices {
+        [first, middle @ .., last] if kind == GeometryType::Polygon && first == last && !middle.is_empty() => {
+            &vertices[..vertices.len() - 1]
+        }
+        _ => vertices,
+    };
     if vertices.len() < fewest(kind) {
         return None;
     }
@@ -532,7 +539,8 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     } else {
         let placed = state.vertices.len();
-        let enough = placed >= fewest(target.kind);
+        // Enough, once the vertices make the layer's kind of shape.
+        let enough = geometry(target.kind, &state.vertices).is_some();
         if action(ui, t, tl!("Add Vertex Here"), width, !enough, true) {
             match cross {
                 Some(at) if state.place(at) => {}
@@ -809,6 +817,12 @@ mod tests {
             frame(&mut app, &ctx, Sheet::Capture);
             assert_eq!(form(&ctx).vertices.len(), 3);
         }
+        // Closed by hand, on its first vertex: the ring is the same, and three in all are too few.
+        let by_hand = [square[0], square[1], square[2], square[3], square[0]];
+        assert_eq!(geometry(GeometryType::Polygon, &by_hand), geometry(GeometryType::Polygon, &square));
+        assert_eq!(geometry(GeometryType::Polygon, &[square[0], square[1], square[0]]), None);
+        // A line may come back to where it began.
+        assert!(geometry(GeometryType::Polyline, &[square[0], square[1], square[0]]).is_some());
         // A vertex where the last one is isn't placed; one anywhere else is.
         let mut drawing = Form::default();
         assert!(drawing.place(square[0]));
