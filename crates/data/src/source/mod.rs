@@ -1190,7 +1190,8 @@ pub(crate) fn read_ca_roots(label: &str, file: &Path, der: CaDer) -> Result<rust
         return Err(bad("no certificates"));
     }
     let mut roots = rustls::RootCertStore::empty();
-    let has_pem = bytes.windows(10).any(|w| w == b"-----BEGIN");
+    let pem_bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let has_pem = pem_bytes.windows(10).any(|w| w == b"-----BEGIN");
     let try_der = match der {
         CaDer::None => false,
         CaDer::Extension => !has_pem && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("der")),
@@ -1200,7 +1201,7 @@ pub(crate) fn read_ca_roots(label: &str, file: &Path, der: CaDer) -> Result<rust
         roots.add(CertificateDer::from(bytes)).map_err(|_| bad("invalid certificate"))?;
         return Ok(roots);
     }
-    for cert in CertificateDer::pem_slice_iter(&bytes) {
+    for cert in CertificateDer::pem_slice_iter(pem_bytes) {
         let cert = cert.map_err(|_| bad("invalid certificate"))?;
         roots.add(cert).map_err(|_| bad("invalid certificate"))?;
     }

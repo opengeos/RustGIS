@@ -1050,6 +1050,8 @@ mod tests {
         let (der, pem) = super::super::tests::synthetic_ca_cert();
         let good_pem = dir.path().join("ca.pem");
         std::fs::write(&good_pem, &pem).unwrap();
+        let bom_pem = dir.path().join("bom.pem");
+        std::fs::write(&bom_pem, [b"\xef\xbb\xbf".as_slice(), pem.as_bytes()].concat()).unwrap();
         let good_der = dir.path().join("ca.der");
         std::fs::write(&good_der, &der).unwrap();
 
@@ -1059,6 +1061,8 @@ mod tests {
             c
         };
         assert!(check_ca(&cfg_with(&good_pem)).is_ok());
+        assert!(super::super::read_ca_roots("ca", &bom_pem, super::super::CaDer::Extension).is_ok());
+        assert!(check_ca(&cfg_with(&bom_pem)).is_ok());
         assert!(check_ca(&cfg_with(&good_der)).is_ok());
         assert!(check_ca(&cfg_with(&dir.path().join("missing.pem"))).is_err());
         assert!(check_ca(&cfg_with(dir.path())).is_err());

@@ -168,7 +168,13 @@ pub struct Conn {
 
 impl Conn {
     fn has_open_client(&self) -> bool {
-        self.client.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| !c.is_closed())
+        match self.client.try_lock() {
+            Ok(guard) => guard.as_ref().is_some_and(|c| !c.is_closed()),
+            // A connection actively running a query or save holds `client`; treat it as open
+            // rather than blocking the global `live()` pool lock.
+            Err(std::sync::TryLockError::WouldBlock) => true,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().as_ref().is_some_and(|c| !c.is_closed()),
+        }
     }
 
     fn reconnect_cfg(&self) -> postgres::Config {
@@ -1841,13 +1847,31 @@ mod tests {
         assert_eq!(dropped_plain.reconnect_cfg().get_ssl_mode(), postgres::config::SslMode::Prefer);
 
         let dsn = "host=db.example dbname=gis user=me";
-        let pw = Some("secret".to_string());
+        let pw = None;
         let mut pool: Vec<Live> = vec![(dsn.to_string(), pw.clone(), false, Arc::downgrade(&dropped_tls))];
         assert!(find_live(&mut pool, dsn, &pw, false).is_none());
         let replaced = finish_live(&mut pool, dsn, pw.clone(), false, dropped_plain.clone());
         assert!(Arc::ptr_eq(&replaced, &dropped_plain));
         assert_eq!(pool.len(), 1);
         assert!(Arc::ptr_eq(&pool[0].3.upgrade().unwrap(), &dropped_plain));
+
+        // `find_live` never blocks on a `Conn`'s `client` mutex while another thread holds it:
+        // a blocking lock inside `has_open_client` would deadlock before `done.wait()`.
+        let ready = std::sync::Barrier::new(2);
+        let done = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _held = dropped_plain.client.lock().unwrap();
+                ready.wait();
+                done.wait();
+            });
+            ready.wait();
+            assert!(dropped_plain.has_open_client());
+            let found = find_live(&mut pool, dsn, &pw, false).expect("busy connection treated as open");
+            assert!(Arc::ptr_eq(&found, &dropped_plain));
+            assert!(find_live(&mut pool, "host=other.example dbname=gis user=me", &pw, false).is_none());
+            done.wait();
+        });
 
         // Custom CA loader: accepts valid PEM <= 1 MiB, rejects folders, oversized files and
         // invalid files without echoing their contents.

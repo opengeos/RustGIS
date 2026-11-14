@@ -388,6 +388,32 @@ fn check_pg_query(query: &str, strict: bool) -> Result<()> {
     Ok(())
 }
 
+/// Validates the host list of a PostgreSQL URI (including `[ipv6]` and comma-separated hosts) and
+/// returns the remainder starting at `/`, `?`, or the end of `s`.
+fn after_uri_hosts(mut s: &str) -> Result<&str> {
+    loop {
+        if let Some(after_open) = s.strip_prefix('[') {
+            let Some((inside, after_close)) = after_open.split_once(']') else {
+                return Err(DataError::Format("the connection: invalid connection string".into()));
+            };
+            if inside.is_empty() || inside.contains(['?', '/', '#', '&', '=', ';', '@', '[']) {
+                return Err(DataError::Format("the connection: invalid connection string".into()));
+            }
+            s = after_close;
+        }
+        let next = s.find([',', '/', '?', '[']).unwrap_or(s.len());
+        match s.as_bytes().get(next).copied() {
+            Some(b'[') => {
+                return Err(DataError::Format("the connection: invalid connection string".into()));
+            }
+            Some(b',') => {
+                s = s.get(next + 1..).unwrap_or("");
+            }
+            _ => return Ok(s.get(next..).unwrap_or("")),
+        }
+    }
+}
+
 /// Checks a PostgreSQL connection string before handing it to DuckDB's `ATTACH … (TYPE postgres)`.
 fn check_postgres_attach(dsn: &str) -> Result<()> {
     if dsn.contains('\0') {
@@ -399,12 +425,24 @@ fn check_postgres_attach(dsn: &str) -> Result<()> {
         let Some((_, rest)) = t.split_once("://") else {
             return Err(DataError::Format("the connection: invalid connection string".into()));
         };
-        let before_slash = rest.split('/').next().unwrap_or(rest);
-        if let Some(at) = before_slash.find('@') {
-            if let Some((_, query)) = rest.get(at + 1..).and_then(|s| s.split_once('?')) {
+        if rest.starts_with('[') {
+            let tail = after_uri_hosts(rest)?;
+            if let Some((_, query)) = tail.split_once('?') {
                 check_pg_query(query, true)?;
             }
-            if let Some((_, pre_q)) = before_slash.get(..at).and_then(|s| s.split_once('?')) {
+            return Ok(());
+        }
+        let before_slash = rest.split('/').next().unwrap_or(rest);
+        if let Some(at) = before_slash.find('@') {
+            let user_part = before_slash.get(..at).unwrap_or("");
+            if user_part.contains(['[', ']']) {
+                return Err(DataError::Format("the connection: invalid connection string".into()));
+            }
+            let tail = after_uri_hosts(rest.get(at + 1..).unwrap_or(""))?;
+            if let Some((_, query)) = tail.split_once('?') {
+                check_pg_query(query, true)?;
+            }
+            if let Some((_, pre_q)) = user_part.split_once('?') {
                 check_pg_query(pre_q, false)?;
                 if !rest.contains('/')
                     && let Some((_, full_q)) = rest.split_once('?')
@@ -412,8 +450,11 @@ fn check_postgres_attach(dsn: &str) -> Result<()> {
                     check_pg_query(full_q, false)?;
                 }
             }
-        } else if let Some((_, query)) = rest.split_once('?') {
-            check_pg_query(query, true)?;
+        } else {
+            let tail = after_uri_hosts(rest)?;
+            if let Some((_, query)) = tail.split_once('?') {
+                check_pg_query(query, true)?;
+            }
         }
         return Ok(());
     }
@@ -1216,13 +1257,27 @@ mod tests {
             "postgresql://u?x@db.example/gis?sslrootcert=/tmp/root.crt",
             "postgresql://db.example?options=-c%20foo@bar?sslmode=require",
             "postgresql://me@db.example/gis?sslkeylogfile=/tmp/keys.log",
+            "postgresql://[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://u@[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://h1,[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://[::1]:5432/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://[::1/gis",
+            "postgresql://u@[::1/gis",
             "host=db.example dbname=gis sslkeylogfile=/tmp/keys.log",
             "host=db.example bare passfile=/tmp/pgpass",
             "host='unterminated",
         ] {
             assert!(prelude(&dir, Some(&Database::Postgres(bad.into())), true).is_err(), "{bad}");
         }
-        assert!(prelude(&dir, Some(&Database::Postgres("postgresql://u?x@db.example/gis?sslmode=require".into())), true).is_ok());
+        for good in [
+            "postgresql://u?x@db.example/gis?sslmode=require",
+            "postgresql://[::1]:5432/gis?sslmode=require",
+            "postgresql://[::1]/gis",
+            "postgresql://user@[fe80::1%25eth0]:5432/gis?sslmode=require",
+            "postgresql://[::1]:5432,[fe80::1%25eth0]:5433/gis?sslmode=require",
+        ] {
+            assert!(prelude(&dir, Some(&Database::Postgres(good.into())), true).is_ok(), "{good}");
+        }
     }
 
     #[test]
