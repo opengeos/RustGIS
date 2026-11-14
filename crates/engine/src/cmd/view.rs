@@ -92,9 +92,6 @@ pub fn commands() -> Vec<C> {
             let next = match ps(p, "mode").ok_or("mode is required")? {
                 "global" => rustgis_map::Projection::Globe,
                 "local" => {
-                    if !rustgis_map::projection::local_views_supported() {
-                        return Err("local views aren't available in the web app".to_string());
-                    }
                     let c = s.map().center_lonlat();
                     rustgis_map::Projection::from_code(&format!("local:{:.4},{:.4}", c.x, c.y))?
                 }
@@ -104,7 +101,7 @@ pub fn commands() -> Vec<C> {
             m.set_projection(next);
             Ok(json!({"projection": m.projection.code(), "label": m.projection.label()}))
         }).roles(&[]).effects(crate::policy::Effects::NONE)
-        .params(r#"{"mode": "global" (a globe)|"local" (a flat view centred here; not in the web app)}"#),
+        .params(r#"{"mode": "global" (a globe)|"local" (a flat view centred here)}"#),
         C::new("map.walk", "Walk", "Home › Navigate", walk).roles(&[]).effects(crate::policy::Effects::NONE).view().params(r#"{"forward"?: steps, "right"?: steps, "up"?: steps (first-person navigation)}"#),
     ]
 }
@@ -340,7 +337,7 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
     let out = json!({
         "source": match &t.source {
             TerrainSource::Layer(n) => json!({"layer": n}),
-            TerrainSource::Tiles { url, encoding } => json!({"tiles": url, "encoding": encoding.code()}),
+            TerrainSource::Tiles { url, encoding } => json!({"tiles": crate::sources::redact_output(url), "encoding": encoding.code()}),
         },
         "exaggeration": t.exaggeration,
     });

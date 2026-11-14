@@ -502,11 +502,14 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             true,
             |ui, app| {
                 menu_item(ui, app, "", "Delimited Text…", "ui.addDelimited", Value::Null);
+                menu_item(ui, app, "", "DXF…", "ui.addDxf", Value::Null);
                 menu_item(ui, app, "", "Geocode Addresses…", "ui.dialog", json!({"name": "geocode"}));
                 menu_item(ui, app, "", "From URL…", "ui.addUrl", Value::Null);
                 menu_item(ui, app, "", "From Service…", "ui.addService", Value::Null);
                 menu_item(ui, app, "", "Zarr…", "ui.dialog", json!({"name": "zarr"}));
-                // Databases are read through DuckDB, a program the browser can't run.
+                // Databases are read through DuckDB, a program the browser can't run. A phone keeps
+                // the row: its PostGIS, MySQL and SQL Server connections need no program, and a
+                // DuckDB database refused there says why (#1902).
                 #[cfg(not(target_arch = "wasm32"))]
                 menu_item(ui, app, "", "Database…", "ui.dialog", json!({"name": "addDatabase"}));
                 #[cfg(not(target_arch = "wasm32"))]
@@ -988,6 +991,31 @@ fn offline_group(app: &mut RustGisApp, ui: &mut Ui) {
             false,
             false,
         );
+        // The same, as a file for a phone (#1902): the data in view and the map's tile archives.
+        big(
+            ui,
+            app,
+            "package",
+            "Package for\nthe Field",
+            "Save the data in view, with the map's MBTiles and PMTiles basemaps, as a field package to open on a phone.",
+            "ui.saveItem",
+            json!({"kind": "fieldPackage"}),
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            // A field package sent back from a phone: its edits and photos, to its offline area.
+            crate::widgets::small(
+                ui,
+                app,
+                "open",
+                "Bring Back",
+                "Bring a field package's edits and photos back to the offline area it was made from.",
+                "ui.openItem",
+                json!({"kind": "fieldPackage"}),
+                false,
+            );
+        });
         col(ui, |ui| {
             for (icon, label, cmd, desc) in [
                 ("redo", "Sync", "offline.sync", "Send offline edits back and refresh."),
@@ -1907,18 +1935,16 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             small(ui, app, "globe_view", "Global", "A globe scene.", "map.viewMode", json!({"mode": "global"}), on);
-            if rustgis_engine::map::projection::local_views_supported() {
-                small(
-                    ui,
-                    app,
-                    "map",
-                    "Local",
-                    "A flat scene centred on the view (azimuthal equidistant).",
-                    "map.viewMode",
-                    json!({"mode": "local"}),
-                    local,
-                );
-            }
+            small(
+                ui,
+                app,
+                "map",
+                "Local",
+                "A flat scene centred on the view (azimuthal equidistant).",
+                "map.viewMode",
+                json!({"mode": "local"}),
+                local,
+            );
         });
     });
     let v = app.session.map().view.clone();
@@ -2629,6 +2655,25 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
         if r.clicked() {
             app.map.cancel_sketch();
         }
+        let can_box = crate::boxedit::ready(app);
+        ui.add_enabled_ui(can_box, |ui| {
+            let r = big(
+                ui,
+                app,
+                "g_rect",
+                "Rotated\nBox",
+                "Draw boxes; drag the paddle to rotate, corners to resize. Space or middle-drag pans.",
+                "tool.set",
+                json!({"tool":"rotatedBox"}),
+                app.session.tool == Tool::RotatedBox,
+                false,
+            );
+            if r.clicked() {
+                app.map.cancel_sketch();
+                app.ui.open_right(RightPane::Editing);
+            }
+            r.on_disabled_hover_text(tl!("Turn editing on and select a loaded polygon layer in a flat Earth map."));
+        });
         big(ui, app, "delete", "Delete", "Delete the selected features.", "edit.delete", Value::Null, false, false);
         let r = big(
             ui,
@@ -5216,7 +5261,6 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;

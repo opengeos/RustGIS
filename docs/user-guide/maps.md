@@ -37,7 +37,9 @@ tile layers whose capabilities advertise geographic bounds, including WMS. WMS 1
 bounds and WMS 1.1 latitude/longitude bounds are inherited from parent layers when needed and
 saved with the project. Re-add a service layer saved by an older version to retain its bounds.
 Tile layers without known bounds (such as plain XYZ/TMS or MVT templates, styles and MBTiles
-archives) have no **Zoom To Layer** action unless bounds were supplied when adding them.
+archives) have no **Zoom To Layer** action unless bounds were supplied when adding them. A zoom to a
+place the map's projection doesn't reach (wholly past Web Mercator's 85°, say) doesn't move the
+view to it, and says so.
 
 **Rotating and tilting the map.** Drag with the right mouse button, or hold ++ctrl++ and drag
 with the Pan tool, to turn the map about the centre of the view (to the right turns it clockwise)
@@ -554,8 +556,12 @@ projection, and clicking the coordinate system in the status bar opens the **Coo
 System** dialog, which also takes a projected EPSG code (such as `3035`, `32633` for UTM zone
 33N or `2056` for Switzerland) or an ESRI code, the one `.prj` files and ArcGIS name (such as
 `ESRI:102033` for South America Albers Equal Area Conic, or `ESRI:54030` for World Robinson). A
-code whose projection method or datum grid RustGIS can't use (Laborde such as `8441`, or a NAD27
-code that needs a grid) is refused with the reason, rather than drawn in another projection.
+code whose projection method RustGIS can't compute is refused with the reason, rather than drawn
+in another projection. Projections and datum transformations are computed by
+[terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.8 computes them. Datum shift grids
+aren't used yet, neither those installed for PROJ nor downloaded: a datum whose most accurate
+transformation needs one takes the next PROJ lists (a NAD27 code: NAD27 to WGS 84 (4), about
+10 m), and says so once.
 RustGIS supports a subset of Esri's projected systems, checked against
 PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) and the
 two-point oblique Mercators (`ESRI:53025`, `ESRI:54025`) are refused as unknown codes. The presets:
@@ -685,6 +691,7 @@ masking, swipe, blending, aggregation, graphics, stacked strokes, fills or label
 on the CPU. Extrusions use the GPU only on a tilted map. In the desktop app, if the graphics
 card runs out of memory (a card with 2 GB at a large window size, with other programs using it
 too), the map switches to the CPU, with a notice, instead of the app closing; clicking **CPU**
-in the status bar tries the GPU again, as does the next start (the setting stays on). Any other
-error the graphics card reports is said once, as the map (or, with the map on the CPU, the
-window) may then be drawn wrongly.
+in the status bar tries the GPU again, as does the next start (the setting stays on); errors
+that follow from running out in the same moment aren't said on their own. Any other error the
+graphics card reports is said once, as the map (or, with the map on the CPU, the window) may
+then be drawn wrongly; so is running out of memory with the map already on the CPU.

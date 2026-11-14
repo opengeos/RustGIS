@@ -23,6 +23,10 @@ pub struct Dialogs {
     pub reload: Option<crate::reloaddata::Form>,
     pub open: Option<&'static str>,
     pub layer: String,
+    /// The standalone table Add Field and Calculate Field act on, when opened from its view: the
+    /// project it is in ([`Session::opened`]) and its id, which another project may give again;
+    /// None for the active layer.
+    pub table: Option<(u64, u32)>,
     /// GeoPackage save/discard targets use IDs because display names can repeat.
     pub gpkg_layer: Option<u32>,
     /// The live instance captured with the map-local ID; Undo can make that ID reusable.
@@ -59,6 +63,8 @@ pub struct Dialogs {
     pub listed: Option<String>,
     /// Add Delimited Text's file, picked before the dialog opens.
     pub csv: Option<CsvFile>,
+    /// Import DXF's file, picked before the dialog opens.
+    pub dxf: Option<DxfFile>,
     /// Reset collapsed then closed dialogs when reopening
     pub reset_collapse: bool,
 }
@@ -76,7 +82,52 @@ pub enum CsvSource {
     Bytes(Vec<u8>),
 }
 
+/// A drawing picked for Import DXF.
+pub struct DxfFile {
+    pub name: String,
+    pub source: DxfSource,
+}
+
+/// Where a drawing picked for Import DXF is: on disk, or (in the browser) its bytes, kept until it
+/// is added.
+pub enum DxfSource {
+    Path(String),
+    Bytes(Vec<u8>),
+}
+
 impl Dialogs {
+    /// Opens Add Field or Calculate Field (`which`) on standalone table `id`.
+    pub fn open_on_table(&mut self, which: &str, s: &Session, id: u32) -> Result<(), String> {
+        // The name kept is a `&'static str`, as `open` keeps it.
+        let name: &'static str = match which {
+            "addField" => "addField",
+            "calculateField" => "calculateField",
+            other => return Err(format!("dialog '{other}' doesn't open on a table")),
+        };
+        let dataset = &s.project.table(id).ok_or("no such table")?.dataset;
+        *self = Dialogs { open: Some(name), mode: "new", reset_collapse: true, table: Some((s.opened, id)), ..Dialogs::default() };
+        match name {
+            "addField" => self.b = "Double".into(),
+            _ => self.a = calculation_fields(dataset).last().map(|f| f.name.clone()).unwrap_or_default(),
+        }
+        Ok(())
+    }
+
+    /// The standalone table the dialog acts on, as `"table"` names it in `p`; refused once another
+    /// project is open, whose table of that id is another table.
+    fn on_table(&self, s: &Session, mut p: Value) -> Result<Value, String> {
+        match self.table {
+            Some((opened, _)) if opened != s.opened => {
+                Err(tl!("Another project is open now: open the dialog again from its table.").into())
+            }
+            Some((_, id)) => {
+                p["table"] = json!(id);
+                Ok(p)
+            }
+            None => Ok(p),
+        }
+    }
+
     /// Opens a dialog on the current selection, capturing the target of CRS changes.
     pub fn open(&mut self, which: &str, s: &Session) -> Result<(), String> {
         let active = s.active_layer.and_then(|id| s.map().layer(id));
@@ -102,6 +153,7 @@ impl Dialogs {
             "layerTemplate" => "layerTemplate",
             "addPolyline" => "addPolyline",
             "addCsv" => "addCsv",
+            "addDxf" => "addDxf",
             "findPlace" => "findPlace",
             "geocode" => "geocode",
             "addUrl" => "addUrl",
@@ -153,6 +205,12 @@ impl Dialogs {
                 let is_code = self.text.to_ascii_lowercase().starts_with("epsg");
                 self.a = if is_code { self.text.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string() } else { String::new() };
             }
+            "addDxf" => {
+                // A drawing never says its coordinate system: the map's, where it is drawn.
+                self.text = map_crs(&s.map().projection);
+                // Its blocks (图块) are drawn unless the user says otherwise.
+                self.flag = true;
+            }
             "goToXY" => {
                 let c = s.map().center_lonlat();
                 self.a = format!("{:.4}", c.x);
@@ -166,7 +224,9 @@ impl Dialogs {
                 self.c = format!("{:.0}", s.scale());
             }
             "addField" => self.b = "Double".into(),
-            "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
+            "calculateField" => {
+                self.a = active.and_then(|l| calculation_fields(&l.dataset).last()).map(|f| f.name.clone()).unwrap_or_default()
+            }
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
             // A file name can't hold a folder separator, which a project name may.
             "saveProject" => self.text = format!("{}.rgis", s.project.name.replace(['/', '\\'], "-")),
@@ -266,6 +326,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "layerTemplate" => "Layer Template",
         "addPolyline" => "Add Encoded Polyline",
         "addCsv" => "Add Delimited Text",
+        "addDxf" => "Import DXF",
         "findPlace" => "By Place or Address",
         "geocode" => "Geocode Addresses",
         "addUrl" => "Add Data From URL",
@@ -411,6 +472,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             "addTiles" => close = add_tiles(app, ui),
             "addCsv" => close = add_csv(app, ui),
+            "addDxf" => close = add_dxf(app, ui),
             "findPlace" => close = crate::geocodeui::find_place(app, ui),
             "geocode" => close = crate::geocodeui::geocode(app, ui),
             "addUrl" => close = add_url(app, ui),
@@ -479,10 +541,20 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     }).response.labelled_by(input_label.id);
                     ui.end_row();
                 });
-                close = buttons(app, ui, "Add", |app| app.run("edit.addField", json!({"name": app.dialogs.a, "type": app.dialogs.b})).map(|_| ()));
+                close = buttons(app, ui, "Add", |app| {
+                    let p = app.dialogs.on_table(&app.session, json!({"name": app.dialogs.a, "type": app.dialogs.b}))?;
+                    app.run("edit.addField", p).map(|_| ())
+                });
             }
             "calculateField" => {
-                let fields: Vec<String> = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
+                /// The data Calculate Field reads: the table's it was opened on, else the active layer's.
+                fn data(app: &crate::RustGisApp) -> Option<&rustgis_engine::data::Dataset> {
+                    match app.dialogs.table {
+                        Some((opened, id)) => app.session.project.table(id).filter(|_| opened == app.session.opened).map(|t| &t.dataset),
+                        None => app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| &l.dataset),
+                    }
+                }
+                let fields: Vec<String> = data(app).map(|d| calculation_fields(d).map(|f| f.name.clone()).collect()).unwrap_or_default();
                 ui.horizontal(|ui| {
                     let input_label = ui.label(tl!("Field"));
                     egui::ComboBox::from_id_salt("cf_field").selected_text(app.dialogs.a.clone()).width(220.0).show_ui(ui, |ui| {
@@ -499,13 +571,25 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     .desired_width(f32::INFINITY);
                 ui.add(edit).labelled_by(input_label.id);
                 let text = app.dialogs.text.trim();
-                let reads = app.session.active_layer.and_then(|id| app.session.map().layer(id)).filter(|_| !text.is_empty()).map(|l| rustgis_engine::cmd::edit::check_calculation(text, &l.dataset));
+                let reads = data(app).filter(|_| !text.is_empty()).map(|d| rustgis_engine::cmd::edit::check_calculation(text, d));
                 if let Some(Err(e)) = reads {
                     let t = Tokens::get(ui.ctx());
                     ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
                 }
-                ui.label(egui::RichText::new(tl!("Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to the selected rows, or every row when none is selected.")).small().weak());
-                close = buttons(app, ui, "Calculate", |app| app.run("edit.calculateField", json!({"field": app.dialogs.a, "expression": app.dialogs.text})).map(|_| ()));
+                // A standalone table has no selection: every row.
+                let help = if app.dialogs.table.is_some() {
+                    tl!("Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to every row of the table.")
+                } else {
+                    tl!("Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to the selected rows, or every row when none is selected.")
+                };
+                ui.label(egui::RichText::new(help).small().weak());
+                close = buttons(app, ui, "Calculate", |app| {
+                    if !fields.contains(&app.dialogs.a) {
+                        return Err(tl!("Choose a field from the list: the previous choice is missing or shadowed by an earlier field with the same name ignoring case.").into());
+                    }
+                    let p = app.dialogs.on_table(&app.session, json!({"field": app.dialogs.a, "expression": app.dialogs.text}))?;
+                    app.run("edit.calculateField", p).map(|_| ())
+                });
             }
             "saveProject" => close = save_project(app, ui),
             // `a` is the map or layout being renamed; an empty or unchanged name just closes.
@@ -556,6 +640,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     });
     if (!open || close) && app.dialogs.open == Some(which) {
         app.dialogs.open = None;
+        if which == "addDxf" {
+            app.dialogs.dxf = None;
+        }
+        // Drawings picked or dropped together: the next opens as one closes.
+        if which == "addDxf"
+            && let Some(next) = app.ui.dxf_waiting.pop_front()
+            && app.dialogs.open("addDxf", &app.session).is_ok()
+        {
+            app.dialogs.dxf = Some(next);
+        }
     }
 }
 
@@ -683,6 +777,100 @@ pub fn open_csv(app: &mut RustGisApp, name: &str, source: CsvSource) -> Result<V
     show_columns(&mut app.dialogs, csv_columns(&file, "auto"));
     app.dialogs.csv = Some(file);
     Ok(Value::Null)
+}
+
+/// Opens Import DXF for a drawing picked: its coordinate system (the map's, to start with) and
+/// whether its blocks (图块) are drawn. A drawing picked while another waits opens after it, so
+/// neither is lost.
+pub fn open_dxf(app: &mut RustGisApp, name: &str, source: DxfSource) -> Result<Value, String> {
+    let file = DxfFile { name: name.to_string(), source };
+    if app.dialogs.open == Some("addDxf") && app.dialogs.dxf.is_some() {
+        app.ui.dxf_waiting.push_back(file);
+        return Ok(Value::Null);
+    }
+    app.run("ui.dialog", json!({"name": "addDxf"}))?;
+    app.dialogs.dxf = Some(file);
+    Ok(Value::Null)
+}
+
+/// Opens Import DXF for a drawing on disk (a drop, Add Data, the Browser pane, `ui.addFile`).
+pub fn open_dxf_path(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
+    open_dxf(app, path, DxfSource::Path(path.to_string()))
+}
+
+/// The current map's coordinate system, as a DXF import can be given it: Web Mercator and the
+/// globe as their EPSG codes; another flat projection as its EPSG code or, for a preset, what the
+/// map projects with, which is the map's exactly (a definition `Crs::parse` reads).
+fn map_crs(p: &rustgis_engine::map::Projection) -> String {
+    use rustgis_engine::map::Projection;
+    match p {
+        Projection::WebMercator => "EPSG:3857".into(),
+        Projection::Globe => "EPSG:4326".into(),
+        Projection::Custom(code) => {
+            let up = code.trim().to_ascii_uppercase();
+            if up.starts_with("EPSG:") {
+                up
+            } else {
+                rustgis_engine::map::projection::lookup(code).map(|(def, _)| def).unwrap_or_else(|_| code.trim().to_string())
+            }
+        }
+    }
+}
+
+/// Import DXF, for the drawing picked: the coordinate system its coordinates are in (blank keeps
+/// them as they are) and whether its blocks (图块) are drawn.
+fn add_dxf(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let Some(name) = app.dialogs.dxf.as_ref().map(|f| f.name.clone()) else {
+        // Opened without a file (`ui.dialog`): the file first.
+        ui.label(tl!("Choose a DXF drawing, then set its coordinate system and whether its blocks are drawn."));
+        let close = buttons(app, ui, "Choose File…", |app| app.run("ui.addDxf", Value::Null).map(|_| ()));
+        return close && app.dialogs.dxf.is_none();
+    };
+    let shown = std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(&name).to_string();
+    ui.label(egui::RichText::new(shown).strong());
+    ui.label(
+        egui::RichText::new(tl!(
+            "A drawing never says its coordinate system: its coordinates are read in this one. Leave it blank to keep them as they are."
+        ))
+        .weak(),
+    );
+    egui::Grid::new("dxf").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        let input_label = ui.label(tl!("Coordinate system"));
+        let response = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:3857").desired_width(260.0));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Coordinate system")));
+        response.labelled_by(input_label.id);
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+    ui.checkbox(&mut app.dialogs.flag, tl!("Import block contents"));
+    buttons(app, ui, "Add", |app| {
+        let mut p = json!({"blocks": app.dialogs.flag});
+        if !app.dialogs.text.trim().is_empty() {
+            p["crs"] = json!(app.dialogs.text.trim());
+        }
+        let file = app.dialogs.dxf.take().ok_or("choose a file first")?;
+        let r = match &file.source {
+            DxfSource::Path(path) => {
+                p["path"] = json!(path);
+                add_dxf_file(app, p)
+            }
+            DxfSource::Bytes(bytes) => app.import_dxf_bytes(&file.name, bytes, p),
+        };
+        // Kept for another try.
+        if r.is_err() {
+            app.dialogs.dxf = Some(file);
+        }
+        r.map(|_| ())
+    })
+}
+
+/// Adds a drawing on disk, read as Add Data reads a file (on a thread of its own when the desktop
+/// app reads it so, [`crate::readjob`]).
+pub(crate) fn add_dxf_file(app: &mut RustGisApp, p: Value) -> Result<Value, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::readjob::run(app, "layer.addData", p);
+    #[cfg(target_arch = "wasm32")]
+    app.run("layer.addData", p)
 }
 
 /// The columns of a file picked for Add Delimited Text, split at `separator` (a code of
@@ -2148,7 +2336,7 @@ pub fn pick_open(_: &[&str], _: &str) -> Option<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "the browser has no folder picker; kept beside the desktop one")]
 pub fn pick_folder() -> Option<String> {
     None
 }
@@ -2157,9 +2345,6 @@ pub fn pick_folder() -> Option<String> {
 pub fn pick_save(_: &str, _: &[&str], _: &str) -> Option<String> {
     None
 }
-
-#[allow(dead_code)]
-fn unused(_: Value) {}
 
 /// The map's coordinate system: Web Mercator, the globe, a preset, or any projected EPSG code. The
 /// list is on the left; the right shows what the selection is, where it can be used, its PROJ
@@ -2410,9 +2595,68 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     }
 }
 
+/// The columns a name-based edit can reach. Keep both the initial choice and the picker in
+/// step with the command's case-insensitive lookup, including duplicate names in imported data.
+fn calculation_fields(dataset: &rustgis_engine::data::Dataset) -> impl Iterator<Item = &rustgis_engine::data::Field> {
+    dataset.fields.iter().enumerate().filter(|(i, field)| dataset.field_index(&field.name) == Some(*i)).map(|(_, field)| field)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A field dialog opened on a standalone table acts on that table, and on no other once
+    /// another project is open: table ids start again in each project.
+    #[test]
+    fn a_table_dialog_refuses_another_project() {
+        let mut app = RustGisApp::with_sample();
+        let csv = json!({"fileName": "sites.csv", "text": "id,street\n1,Rue Cler\n"});
+        app.run("layer.addDataText", csv.clone()).unwrap();
+        let id = app.session.project.tables[0].id;
+        app.run("ui.dialog", json!({"name": "addField", "table": id})).unwrap();
+        let p = app.dialogs.on_table(&app.session, json!({"name": "note"})).unwrap();
+        assert_eq!(p["table"], json!(id));
+        app.run("project.new", json!({})).unwrap();
+        app.run("layer.addDataText", csv).unwrap();
+        assert_eq!(app.session.project.tables[0].id, id, "the new project's table has the same id");
+        assert!(app.dialogs.on_table(&app.session, json!({"name": "note"})).is_err());
+    }
+
+    /// A case-shadowed field cannot be selected or submitted as another column by the dialog.
+    #[test]
+    fn table_calculation_dialog_refuses_a_shadowed_field() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        app.run("layer.addDataText", json!({"fileName": "names.csv", "text": "Name,name\nfirst,second\n"})).unwrap();
+        app.run("edit.enable", json!({"on": true})).unwrap();
+        let id = app.session.project.tables[0].id;
+        app.run("ui.dialog", json!({"name": "calculateField", "table": id})).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        // A stale choice (for example after a schema change) must not reach the first column.
+        h.state_mut().dialogs.a = "name".into();
+        h.state_mut().dialogs.text = "'changed'".into();
+        h.run_steps(1);
+        h.get_by_label("Calculate").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.open, Some("calculateField"));
+        assert!(h.state().dialogs.error.is_some());
+        let ds = &h.state().session.project.tables[0].dataset;
+        assert_eq!(ds.value(0, 0), &rustgis_engine::data::Value::Text("first".into()));
+        assert_eq!(ds.value(0, 1), &rustgis_engine::data::Value::Text("second".into()));
+        // The reachable first name is still offered and works.
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(2);
+        assert!(h.query_by_label("name").is_none(), "the shadowed option is not offered");
+        h.get_by_label("Name").click();
+        h.run_steps(2);
+        h.get_by_label("Calculate").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.open, None);
+        let ds = &h.state().session.project.tables[0].dataset;
+        assert_eq!(ds.value(0, 0), &rustgis_engine::data::Value::Text("changed".into()));
+        assert_eq!(ds.value(0, 1), &rustgis_engine::data::Value::Text("second".into()));
+    }
 
     /// The app in a harness, its fonts installed on the first pass (the dialog draws on the next).
     fn app_harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
