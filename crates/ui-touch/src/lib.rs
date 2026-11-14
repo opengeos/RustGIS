@@ -502,8 +502,16 @@ fn choices(
     if let Some(DomainKind::Coded(codes)) = layer.design.domains.iter().find(|d| same(&d.field)).map(|d| &d.kind) {
         // A code of no text is left out: it would be stored as nothing, and its chip would show
         // as chosen whenever nothing is.
-        let list = codes.iter().map(|(code, says)| (code.to_string(), says)).filter(|(code, _)| !code.is_empty());
-        return Some(list.map(|(code, says)| if says.trim().is_empty() { (code.clone(), code) } else { (code, says.clone()) }).collect());
+        let list: Vec<(String, String)> = codes
+            .iter()
+            .map(|(code, says)| (code.to_string(), says))
+            .filter(|(code, _)| !code.is_empty())
+            .map(|(code, says)| if says.trim().is_empty() { (code.clone(), code) } else { (code, says.clone()) })
+            .collect();
+        // A list with nothing left to offer is no list: the field is typed into.
+        if !list.is_empty() {
+            return Some(list);
+        }
     }
     (field.ty == FieldType::Boolean)
         .then(|| vec![("true".to_string(), tl!("Yes").to_string()), ("false".to_string(), tl!("No").to_string())])
@@ -592,6 +600,16 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     };
     state = state.for_layer(target.instance);
+    // A template chosen and since removed from the layer is let go, and said, before a button can
+    // add a feature without the defaults the form still seemed to promise: nothing is added on
+    // the frame that finds it, so the next tap is made knowing.
+    let on_layer = |name: &String| app.session.map().layer(target.id).is_some_and(|l| l.design.templates.iter().any(|t| &t.name == name));
+    let stale = state.template.clone().filter(|name| !on_layer(name));
+    if let Some(gone) = &stale {
+        state.template = None;
+        app.session.notify(rustgis_ui_egui::i18n::fmt("The template {name} is no longer on this layer.", &[("name", gone)]), false);
+    }
+    let fresh = stale.is_none();
     // The buttons stay in reach above the fields, however many the layer has.
     let cross = cross_place(app);
     let place = match cross {
@@ -603,7 +621,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(RichText::new(place).size(13.0).color(t.text_dim));
     let width = ui.available_width();
     if target.kind == GeometryType::Point {
-        if action(ui, t, tl!("Add Point Here"), width, true, true) && add_point(app, target.id, &state) {
+        if action(ui, t, tl!("Add Point Here"), width, true, true) && fresh && add_point(app, target.id, &state) {
             state.values.clear();
         }
     } else {
@@ -632,6 +650,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 _ => tl!("Finish Line"),
             };
             if action(ui, t, finish, third, enough, enough)
+                && fresh
                 && let Some(shape) = geometry(target.kind, &state.vertices)
                 && add_feature(app, target.id, &state, shape)
             {
@@ -666,12 +685,6 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ),
             None => Default::default(),
         };
-        // A template chosen and since removed from the layer is let go, and said: the next
-        // feature would otherwise be added without the defaults the form still seemed to promise.
-        if let Some(gone) = state.template.clone().filter(|name| !templates.contains(name)) {
-            state.template = None;
-            app.session.notify(rustgis_ui_egui::i18n::fmt("The template {name} is no longer on this layer.", &[("name", &gone)]), false);
-        }
         // The layer's feature templates: one fills in its defaults for what the form leaves empty.
         if !templates.is_empty() {
             ui.horizontal(|ui| {
@@ -1037,6 +1050,14 @@ mod tests {
         );
         let layer = app.session.map().layer(cities.id).unwrap();
         assert_eq!(choices(layer, &text), Some(vec![("cap".into(), "Capital".into())]));
+        // With no code left to offer, the field is typed into, as one without a list is.
+        // (The command itself drops a code of no text; a design read from a project may hold one.)
+        use rustgis_ui_egui::rustgis_engine::data::Value as Stored;
+        use rustgis_ui_egui::rustgis_engine::map::design::{Domain, DomainKind};
+        let mut copy = app.session.map().layer(cities.id).unwrap().clone();
+        copy.design.domains =
+            vec![Domain { field: text.name.clone(), kind: DomainKind::Coded(vec![(Stored::Text(String::new()), "None".into())]) }];
+        assert_eq!(choices(&copy, &text), None);
         // A template chosen and since removed is let go by the sheet, with a notice.
         set_form(&ctx, Form { shown: Some(cities.instance), template: Some("Gone".into()), ..Form::default() });
         let mark = app.session.notice_mark();
