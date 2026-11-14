@@ -50,7 +50,19 @@ if [ "$profile" = release ]; then xcrun strip -x "$app/RustGIS"; fi
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
 # The build number App Store Connect wants rising with each upload: IOS_BUILD, or the commits.
-build=${IOS_BUILD:-$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)}
+# A shallow clone or a tree without git can't count them: for a device (an upload) that is
+# refused, as a repeated number would be; the Simulator's build takes 1.
+build=${IOS_BUILD:-}
+if [ -z "$build" ]; then
+    if [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = false ]; then
+        build=$(git -C "$root" rev-list --count HEAD)
+    elif [ "$kind" = device ]; then
+        echo "build-ios: no full git history to number the build: set IOS_BUILD" >&2
+        exit 1
+    else
+        build=1
+    fi
+fi
 sed -e "s/@VERSION@/$version/" -e "s/@BUILD@/$build/" -e "s/@PLATFORM@/$platform/" "$here/ios/Info.plist" > "$app/Info.plist"
 # What Xcode's own builds record, which App Store Connect checks an upload for.
 sdk_version=$(xcrun --sdk "$sdk" --show-sdk-version)

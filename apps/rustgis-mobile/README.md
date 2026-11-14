@@ -274,7 +274,8 @@ Development or Distribution identity in the keychain) and `IOS_PROFILE` (a provi
 TestFlight. There is no Xcode project: cargo builds the executable and the script makes the bundle
 around it, with `ios/Info.plist`, the app icon (the logo, drawn by `build.rs` from the same code as
 the desktop's window icon and compiled with `actool`), and the build keys Xcode's own builds
-record. The build number is the commit count, or `IOS_BUILD`.
+record. The build number is the commit count, or `IOS_BUILD` (a device build from a shallow
+clone, which can't count them, is refused without it).
 
 ### TestFlight and the App Store
 

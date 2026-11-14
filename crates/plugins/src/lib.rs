@@ -65,7 +65,19 @@ pub const NOT_INSTALLED_HERE: &str = "Plugins can't be installed on iOS: Apple d
 
 /// `Ok` where plugins can be installed ([`INSTALLS`]), or why not.
 pub fn may_install() -> Result<(), String> {
-    allowed(INSTALLS)
+    allowed(INSTALLS && !REFUSED_HERE.with(std::cell::Cell::get))
+}
+
+thread_local! {
+    /// Whether this thread refuses installs as iOS does ([`refuse_installs_on_this_thread`]).
+    static REFUSED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes [`may_install`] refuse on this thread, as it does on iOS (`refuse`), or not: for tests
+/// of every way of installing, on any computer. It can only refuse, never allow.
+#[doc(hidden)]
+pub fn refuse_installs_on_this_thread(refuse: bool) {
+    REFUSED_HERE.with(|r| r.set(refuse));
 }
 
 fn allowed(installs: bool) -> Result<(), String> {
