@@ -14,7 +14,7 @@ mod phone;
 /// The files of `picked` to open, each by its path: all but the parts another of them reads from
 /// beside it (a Shapefile's `.dbf`, `.shx`, `.prj` and `.cpg`, a MapInfo file's `.mid`), matched
 /// by name whatever the case. A part picked without its main file stays, and is refused by name.
-#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "android", test)), expect(dead_code, reason = "only Android picks files"))]
 fn without_sidecars(picked: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     let lower = |part: Option<&std::ffi::OsStr>| part.map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
     let named: Vec<(String, String)> = picked.iter().map(|p| (lower(p.file_stem()), lower(p.extension()))).collect();
@@ -92,6 +92,9 @@ mod android {
         poll: Option<u64>,
         /// Whether the phone was last asked for positions (`RustGisApp::locate`, as last seen).
         locating: bool,
+        /// Whether the phone was last asked to keep positions coming out of sight
+        /// (`RustGisApp::keep_locating`, as last seen).
+        keeping: bool,
         /// Whether the soft keyboard was up, where the phone says.
         keyboard: Option<bool>,
         /// Until when the window looks again for the soft keyboard's room: a moment after the
@@ -137,6 +140,13 @@ mod android {
                 self.app.session.notify(text, true);
             }
             let Some(phone) = self.phone.clone() else { return };
+            // Positions out of sight follow what the interface asks for (a track being recorded).
+            if self.app.keep_locating != self.keeping {
+                self.keeping = self.app.keep_locating;
+                if let Err(e) = phone.keep_locating(self.keeping) {
+                    self.app.session.notify(e, true);
+                }
+            }
             // Positioning follows what the interface asks for; off, the last position is let go.
             if self.app.locate != self.locating {
                 self.locating = self.app.locate;
@@ -153,6 +163,7 @@ mod android {
                 match event {
                     Event::Picked { purpose, name, path } => self.waiting.push((purpose, name, path)),
                     Event::Cancelled => {}
+                    Event::Photo { path, .. } => self.app.photos.push(path),
                     Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                     Event::Position(fix) if self.locating => self.app.report_position(fix),
                     // A fix that was on its way when positioning was turned off.
@@ -334,6 +345,8 @@ mod android {
         let saver = phone.clone();
         app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes)));
         app.services.inbox = Some(inbox.clone());
+        let camera = phone.clone();
+        app.services.take_photo = Some(Box::new(move || camera.take_photo()));
     }
 
     impl eframe::App for App {
@@ -474,7 +487,7 @@ mod android {
 
     /// Android's entry point for a `NativeActivity` (`android-activity` calls it on its own thread).
     // `no_mangle` is the one unsafe attribute here: the name is what `android-activity` calls.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code, reason = "`no_mangle`: `android-activity` calls this name")]
     #[unsafe(no_mangle)]
     fn android_main(android: AndroidApp) {
         android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("rustgis"));
@@ -521,6 +534,7 @@ mod android {
                     app,
                     poll: None,
                     locating: false,
+                    keeping: false,
                     typing: None,
                     keyboard: None,
                     bars_light: None,

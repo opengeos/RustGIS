@@ -31,7 +31,7 @@ impl Phone {
                     // SAFETY: `android-activity` keeps this global reference to the activity alive
                     // for as long as `android_main` runs, and it is only borrowed here to make a
                     // global reference of our own.
-                    #[allow(unsafe_code)]
+                    #[expect(unsafe_code, reason = "see SAFETY above")]
                     let activity = unsafe { JObject::from_raw(env, raw) };
                     let held = env.new_global_ref(&activity);
                     // The borrowed reference is `android-activity`'s to delete, not ours.
@@ -109,6 +109,16 @@ impl Platform for Phone {
 
     fn locate(&self, on: bool) -> Result<(), String> {
         self.java(|env, activity| env.call_method(activity, jni_str!("locate"), jni_sig!((on: boolean) -> void), &[JValue::Bool(on)])?.v())
+    }
+
+    fn keep_locating(&self, on: bool) -> Result<(), String> {
+        self.java(|env, activity| {
+            env.call_method(activity, jni_str!("keepLocating"), jni_sig!((on: boolean) -> void), &[JValue::Bool(on)])?.v()
+        })
+    }
+
+    fn take_photo(&self) -> Result<(), String> {
+        self.java(|env, activity| env.call_method(activity, jni_str!("takePhoto"), jni_sig!(() -> void), &[])?.v())
     }
 
     fn take_events(&self) -> Vec<Event> {
