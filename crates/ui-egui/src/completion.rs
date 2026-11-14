@@ -349,11 +349,13 @@ mod tests {
             let offered = items.clone();
             let mut h = egui_kittest::Harness::new_ui_state(
                 move |ui, (text, list): &mut (String, super::List<Words>)| {
+                    let label = ui.label("Expression");
                     let out = egui::TextEdit::singleline(text).show(ui);
+                    let _ = out.response.response.clone().labelled_by(label.id);
                     out.response.response.request_focus();
                     let visible = ui.clip_rect();
                     let offer = Words(offered.clone());
-                    list.show(ui, egui::Id::new("list"), &out, visible, |_| Some(offer), |_, _| None, |_, _, _, _| {});
+                    list.show(ui, egui::Id::unique("list"), &out, visible, |_| Some(offer), |_, _| None, |_, _, _, _| {});
                 },
                 (String::new(), super::List::default()),
             );
