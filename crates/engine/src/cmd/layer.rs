@@ -5180,11 +5180,10 @@ fn added_download(s: &mut Session, p: &Value, mut r: Value, mark_source: bool, u
     }
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
     // says whether framing happened now, including the tile archive's own bounds handling. A photo result
-    // was already framed on the photos this download added; `zoom_to_added` would frame the whole
-    // photo layer, earlier photos included.
+    // says itself whether it framed the photos this download added (`zoom_to_added` would frame the
+    // whole photo layer, earlier photos included), so one that doesn't wasn't framed.
     if b(p, "zoom") == Some(true) {
-        let zoomed =
-            r.get("zoomed").and_then(Value::as_bool).unwrap_or_else(|| if r.get("photos").is_some() { true } else { zoom_to_added(s, &r) });
+        let zoomed = r.get("zoomed").and_then(Value::as_bool).unwrap_or_else(|| r.get("photos").is_none() && zoom_to_added(s, &r));
         if let Some(o) = r.as_object_mut() {
             o.insert("zoomed".into(), json!(zoomed));
         }
