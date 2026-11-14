@@ -1070,7 +1070,7 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
     // Those between layers that came in as several, either of which could be meant.
     let mut ambiguous = Vec::new();
     // Those related to the one table of several that has the field.
-    let mut guessed = Vec::new();
+    let mut guesses = Vec::new();
     let mut names = Names::new(s.map().editing.relationships.iter().map(|r| r.name.as_str()), MAX_RELATION_NAME);
     for r in &project.relations {
         let (origin, destination) = (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field));
@@ -1086,7 +1086,7 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
             continue;
         };
         if *origin_guessed || *destination_guessed {
-            guessed.push(r.name.as_str());
+            guesses.push(r.name.as_str());
         }
         let (origin, origin_key, destination, destination_key) =
             (origin.clone(), origin_key.clone(), destination.clone(), destination_key.clone());
@@ -1120,12 +1120,12 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
             ),
         );
     }
-    if !guessed.is_empty() {
+    if !guesses.is_empty() {
         report.approximated(
             "",
             format!(
                 "its relations to a layer that came in as several tables, related to the one table with the field, QGIS's own not being known ({})",
-                listed(&guessed)
+                listed(&guesses)
             ),
         );
     }

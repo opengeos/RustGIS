@@ -46289,15 +46289,16 @@ fn a_zoom_beyond_web_mercators_latitudes_says_so() {
 /// A command whose steps each zoom to a place the projection can't reach (an add framing each
 /// layer of a file, then all of them) says so once.
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
 fn a_command_says_once_that_it_couldnt_zoom() {
     let mut s = world();
     let gpx = r#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="87" lon="10"><name>a</name></wpt><trk><name>b</name><trkseg><trkpt lat="86" lon="10"/><trkpt lat="88" lon="20"/></trkseg></trk></gpx>"#;
-    let (base, _) = serve_ranged_files(vec![("/arctic.gpx".into(), gpx.as_bytes().to_vec())]);
     let view = s.map().camera;
+    let id = s.download_started();
+    assert!(s.download_landed(id, gpx.as_bytes().to_vec()));
     let mark = s.notice_mark();
-    let out = s.run("layer.addUrl", &json!({"url": format!("{base}/arctic.gpx"), "zoom": true})).unwrap();
+    let out = s.run("layer.addDownload", &json!({"id": id, "url": "https://example.org/arctic.gpx", "zoom": true})).unwrap();
     let beyond = s.notices_since(mark).iter().filter(|n| n.text.contains("beyond what the map's projection shows")).count();
     assert_eq!(beyond, 1, "{out}");
+    assert_eq!(out["zoomed"], json!(false), "{out}");
     assert_eq!(s.map().camera.center, view.center);
 }

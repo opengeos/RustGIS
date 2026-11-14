@@ -719,7 +719,9 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     // for one of its own. With the map already off the card, running out is said as another
     // error is.
     let leaves = ran_out && app.map.gpu_enabled;
-    // (The swap comes first, so the flag is cleared every frame whatever else holds.)
+    // (The swap comes first, so the flag is cleared every frame whatever else holds.) An unrelated
+    // error in the very frame the card ran out goes unsaid with the rest: a trade-off, as the
+    // errors that follow from running out can't be told apart from it.
     let other = (app.map.gpu_errors.other.swap(false, Ordering::SeqCst) || ran_out) && !leaves;
     if other && !app.map.gpu_error_said {
         app.map.gpu_error_said = true;

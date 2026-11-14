@@ -232,8 +232,9 @@ the coordinate system each was saved in), turned as QGIS turns them; their group
 relations come in as [relationships](editing.md#data-design) between the layers that came in (one on several
 pairs of fields relates by the first, noted; one to a layer that came in as several tables
 relates to the one table with its field, noted as a guess, or isn't made when several have it).
-A layer whose time QGIS reads from a date field (or starts at one) is bound to the [time slider](#views-and-tools) on that field, the slider left off, as
-QGIS opens a project with its time navigation off: every feature draws until it is turned on; the
+A layer whose time QGIS reads from a date field (or starts at one) is bound to the
+[time slider](#views-and-tools) on that field, the slider left off, as QGIS opens a project with
+its time navigation off: every feature draws until it is turned on; the
 project's own span and steps, when it sets one, are noted. The import is one undo step.
 Relative layer paths resolve from the project's folder on desktop. In the browser, relative
 file sources cannot be resolved and are listed in the import notes.

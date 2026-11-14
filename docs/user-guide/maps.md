@@ -38,8 +38,8 @@ bounds and WMS 1.1 latitude/longitude bounds are inherited from parent layers wh
 saved with the project. Re-add a service layer saved by an older version to retain its bounds.
 Tile layers without known bounds (such as plain XYZ/TMS or MVT templates, styles and MBTiles
 archives) have no **Zoom To Layer** action unless bounds were supplied when adding them. A zoom to a
-place the map's projection doesn't reach (wholly past Web Mercator's 85°, say) leaves the view
-where it is and says so.
+place the map's projection doesn't reach (wholly past Web Mercator's 85°, say) doesn't move the
+view to it, and says so.
 
 **Rotating and tilting the map.** Drag with the right mouse button, or hold ++ctrl++ and drag
 with the Pan tool, to turn the map about the centre of the view (to the right turns it clockwise)

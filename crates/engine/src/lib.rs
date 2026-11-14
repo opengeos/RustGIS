@@ -739,10 +739,10 @@ pub struct Session {
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
     /// less those a failed command withdrew.
     notices_given: u64,
-    /// The notice mark when the outermost command now running began; `None` between commands. A
-    /// notice a command's inner steps would each give (a zoom refused by each layer an add frames)
-    /// is said once in it.
-    command_mark: Option<u64>,
+    /// Whether the outermost command now running has said that a zoom couldn't reach its place;
+    /// `None` between commands. Its inner steps would each say it (a zoom refused by each layer an
+    /// add frames): it is said once in a command, however many notices come after.
+    beyond_said: Option<bool>,
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
@@ -1167,7 +1167,7 @@ impl Session {
             bundled_roots_said: false,
             diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
-            command_mark: None,
+            beyond_said: None,
             cog_headers_seen: 0,
             table_layer: None,
             table_standalone: None,
@@ -1539,12 +1539,12 @@ impl Session {
             // A step that joins the last one (a held arrow key nudging an element: `merge_undo`) is
             // one entry too, as it is one step to undo.
             let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
-            self.command_mark = Some(notice_mark);
+            self.beyond_said = Some(false);
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
             #[cfg(not(target_arch = "wasm32"))]
             let files_before: Vec<String> = self.mbtiles_files().map(str::to_string).collect();
             let res = self.with_unread_bools(source, run);
-            self.command_mark = None;
+            self.beyond_said = None;
             // Whichever command took its last layer away (removed, undone, the project closed):
             // the file can now be moved or replaced, so what was read of it is forgotten too.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1600,7 +1600,7 @@ impl Session {
         // Every top-level invocation consumes its key, even a refusal or panic before guarded.
         if outermost {
             self.merge = None;
-            self.command_mark = None;
+            self.beyond_said = None;
         }
         match result {
             Ok(result) => result,
@@ -2848,28 +2848,28 @@ impl Session {
     }
 
     /// Fits the camera to a lon/lat extent in the current view size; whether it did. One the map's
-    /// projection doesn't reach (wholly past Web Mercator's 85°, say) leaves the view where it is,
-    /// and says so; an empty extent or view leaves it too, quietly.
+    /// projection doesn't reach (wholly past Web Mercator's 85°, say) doesn't move the view to it,
+    /// and says so; an empty extent or view doesn't either, quietly.
     pub fn zoom_to(&mut self, e: &rustgis_geom::Extent) -> bool {
         let (w, h) = self.view_size;
         let m = self.map_mut();
-        let fitted = if e.is_empty() || w <= 1.0 || h <= 1.0 {
-            false
-        } else if m.projection.is_globe() {
+        if e.is_empty() || w <= 1.0 || h <= 1.0 {
+            return false;
+        }
+        if m.projection.is_globe() {
             rustgis_map::Globe::fit(&mut m.camera, e, w, h);
-            true
-        } else if m.fit_lonlat(e, w, h) {
-            true
-        } else {
-            const BEYOND: &str = "The place lies beyond what the map's projection shows, so the view stays where it is.";
+        } else if !m.fit_lonlat(e, w, h) {
             // Once in a command, though several of its steps zoom (each layer an add frames).
-            if !self.command_mark.is_some_and(|mark| self.notices_since(mark).iter().any(|n| n.text == BEYOND)) {
-                self.notify(BEYOND, false);
+            if self.beyond_said != Some(true) {
+                self.notify("The place lies beyond what the map's projection shows, so the view wasn't moved to it.", false);
+                if self.beyond_said.is_some() {
+                    self.beyond_said = Some(true);
+                }
             }
             return false;
-        };
+        }
         self.record_extent();
-        fitted
+        true
     }
 
     pub fn title(&self) -> String {
