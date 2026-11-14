@@ -29,7 +29,7 @@ pub fn commands() -> Vec<C> {
             r#"{"kind"?: "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "group"?: text}"#,
         ),
         C::new("connection.new", "New Connection", "Home › Add › Data Sources", new).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(
-            r#"{"kind": "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "address"?: "as the kind's add command takes it, without its password or token (postgres:host=… dbname=… user=…, mysql://user@host/db, mssql://user@host/db, a service's or STAC API's https:// address, an S3 endpoint: AWS when absent)", "name"?: "unique (default from the address)", "group"?: text, "options"?: {"region"?: text, "buckets"?: "a,b", "credentials"?: "keys"|"profile"|"environment"|"none", "profile"?: text} (S3 only), "auth"?: "none"|"basic"|"header": how a web-service connection logs in (basic authentication or an API key in a header; the password or key is given to connection.login, never kept here), "user"?: "the basic login's user name", "keyName"?: "the header the API key goes in, e.g. X-API-Key"}"#,
+            r#"{"kind": "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "address"?: "as the kind's add command takes it, without its password or token (postgres:host=… dbname=… user=…, mysql://user@host/db, mssql://user@host/db, a service's or STAC API's https:// address, an S3 endpoint: AWS when absent)", "name"?: "unique (default from the address)", "group"?: text, "options"?: {"region"?: text, "buckets"?: "a,b", "credentials"?: "keys"|"profile"|"environment"|"none", "profile"?: text} (S3 only), "auth"?: "none"|"basic"|"header"|"query": how a web-service connection logs in (basic authentication, an API key in a header, or an API key in a query parameter; the password or key is given to connection.login, never kept here), "user"?: "the basic login's user name", "keyName"?: "the header (auth header, e.g. X-API-Key) or the query parameter (auth query, e.g. api_key) the API key goes in; a query parameter of that name is taken out of the address"} (the result's stripped is true when a password, token or key was left out of the address; strippedParameters names the key parameters left out, to give as keyName with auth query)"#,
         ),
         C::new("connection.edit", "Edit Connection", "Home › Add › Data Sources", edit).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(
             r#"{"id": "a connection's id or name", "name"?: text, "group"?: text, "address"?: text, "options"?: "as connection.new (replaces them)", "auth"?: "as connection.new", "user"?: text, "keyName"?: text, "kind"?: "its kind (unchanged)"} (another origin, login method, user or key name ends the web connection's session login)"#,
@@ -37,7 +37,7 @@ pub fn commands() -> Vec<C> {
         C::new("connection.duplicate", "Duplicate Connection", "Home › Add › Data Sources", duplicate).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(r#"{"id": "a connection's id or name", "name"?: text}"#),
         C::new("connection.remove", "Remove Connection", "Home › Add › Data Sources", remove).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(r#"{"id": "a connection's id or name"} (deletes its saved database password or S3 keys; ends its web-service session login)"#),
         C::new("connection.login", "Log In to Connection", "Home › Add › Data Sources", login_command).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(
-            r#"{"id": "a connection's id or name; blank credentials explicitly use this ID's session credentials (or saved credentials for database/S3 connections)", "password"?: "a database password, or a web service's basic-authentication password", "apiKey"?: "a web service's API key (auth header)", "allowInsecure"?: "boolean, default false: confirms sending a web service's login to its plain http:// address, unencrypted", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "temporary S3 credentials, never persisted", "remember"?: "boolean, default false: opt into this computer's credential store for a newly typed database password or complete S3 key pair (saved keys mode only). Web-service credentials are session-only and reject remember:true. No credentials are stored in connections or projects; a failed database/S3 save preserves the session login"} (a web service's login is sent only with this session's requests bound to that connection and only to its address's origin: the same scheme, host and port; logging in to one of several connections chooses it for unassigned requests to that address)"#,
+            r#"{"id": "a connection's id or name; blank credentials explicitly use this ID's session credentials (or saved credentials for database/S3 connections)", "password"?: "a database password, or a web service's basic-authentication password", "apiKey"?: "a web service's API key (auth header or query)", "allowInsecure"?: "boolean, default false: confirms sending a web service's login to its plain http:// address, unencrypted", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "temporary S3 credentials, never persisted", "remember"?: "boolean, default false: opt into this computer's credential store for a newly typed database password or complete S3 key pair (saved keys mode only). Web-service credentials are session-only and reject remember:true. No credentials are stored in connections or projects; a failed database/S3 save preserves the session login"} (a web service's login is sent only with this session's requests bound to that connection and only to its address's origin: the same scheme, host and port; an API key in the query replaces a parameter of the same name in the address; logging in to one of several connections chooses it for unassigned requests to that address)"#,
         ),
         C::new("connection.logout", "Log Out of Connection", "Home › Add › Data Sources", logout).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(
             r#"{"id": "a web-service connection's id or name"} (clears this session's login and its password or key, which is no longer sent)"#,
@@ -214,13 +214,20 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     let (c, stripped) = s.connections.add(c, explicit)?;
     resolve_keys(s, &address_keys(&c.address));
     resolve_origins(s, &[&c]);
-    Ok(shown_stripped(s, &c, stripped))
+    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or("")))
 }
 
-fn shown_stripped(s: &Session, c: &Connection, stripped: bool) -> Value {
+/// A connection as `shown` gives it, and what was left out of its address: `stripped`, and the
+/// names of the key parameters (`strippedParameters`, no values) a query login could send, when
+/// it isn't one already.
+fn shown_stripped(s: &Session, c: &Connection, stripped: bool, given: &str) -> Value {
     let mut out = shown(s, c);
     if stripped {
         out["stripped"] = json!(true);
+        let names = if c.auth == "query" { Vec::new() } else { crate::connections::stripped_parameters(given, &c.address) };
+        if !names.is_empty() {
+            out["strippedParameters"] = json!(names);
+        }
     }
     out
 }
@@ -262,6 +269,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
                 || (old.options.get("credentials").is_some_and(|v| v == "keys")
                     && prepared.options.get("credentials").is_none_or(|v| v != "keys"))));
     let slot = s.connections.connections.iter_mut().find(|c| c.id == old.id).ok_or("connection no longer exists")?;
+    crate::connections::register_query_name(&prepared)?;
     if credentials_changed {
         delete_account(&mut s.database_logins, &old)?;
         prepared.saved_keys = false;
@@ -290,7 +298,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             s3::disconnect(&c.name);
         }
     }
-    Ok(shown_stripped(s, &c, stripped))
+    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or("")))
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> CmdResult {
@@ -867,7 +875,7 @@ fn service_login(s: &mut Session, c: &Connection, p: &Value, remember: bool) -> 
             web::activate(s, c, None, false)?;
             return Ok(Reopened::default());
         }
-        ("", ..) => return Err("this connection has no login method: set auth (basic or header) with connection.edit first".into()),
+        ("", ..) => return Err("this connection has no login method: set auth (basic, header or query) with connection.edit first".into()),
         ("basic", typed, None) => typed,
         ("basic", _, Some(_)) => return Err("a basic login takes a password, not an apiKey".into()),
         (_, None, typed) => typed,

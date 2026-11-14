@@ -269,6 +269,7 @@ impl LoginFile {
                 }
                 let request = String::from_utf8_lossy(&request).into_owned();
                 let authorized = request.to_ascii_lowercase().contains("\r\nx-key: fixture-login-757\r\n")
+                    || request.lines().next().is_some_and(|line| line.contains("api_key=fixture-query-757 "))
                     || request.split_whitespace().nth(1).is_some_and(|p| p.starts_with("/public"));
                 // A range asked for (a file read in place): that part.
                 let range =
@@ -542,7 +543,11 @@ fn web_login_methods_and_encoded_basic_size_are_checked() {
     let mut s = session(None);
     for bad in [
         json!({"kind":"wms","address":"https://m757.example.org","auth":"digest"}),
-        json!({"kind":"wms","address":"https://m757.example.org","auth":"query","keyName":"key"}),
+        json!({"kind":"wms","address":"https://m757.example.org","auth":"query"}),
+        json!({"kind":"wms","address":"https://m757.example.org","auth":"query","keyName":"bad name"}),
+        json!({"kind":"wms","address":"https://m757.example.org","auth":"query","keyName":"a=b"}),
+        json!({"kind":"wms","address":"https://m757.example.org","auth":"query","keyName":"x".repeat(65)}),
+        json!({"kind":"s3","auth":"query","keyName":"key"}),
         json!({"kind":"wms","address":"https://m757.example.org","auth":"basic"}),
         json!({"kind":"wms","address":"https://m757.example.org","auth":"basic","user":"a:b"}),
         json!({"kind":"wms","address":"https://m757.example.org","auth":"header","keyName":"Cookie"}),
@@ -1910,4 +1915,174 @@ fn a_cog_read_in_place_from_a_connection_records_it_and_follows_its_login() {
     assert!(raster.data.is_some() && raster.error.is_none(), "{:?}", raster.error);
     assert_eq!(layer.connection, id);
     assert!(carried(&server), "{:?}", server.requests.lock().unwrap());
+}
+
+/// The query key rides on every request bound to the connection at its own origin, in place of a
+/// copy of the parameter an address already had, and is in no saved text, notice or error.
+#[test]
+fn query_logins_send_the_key_only_to_their_origin_and_save_none() {
+    let origin = "https://query757.example.org";
+    let key = "query-sentinel/757 é";
+    let encoded = "query-sentinel%2F757%20%C3%A9";
+    let mut s = session(Some(Arc::new(MemorySecrets::new())));
+    let id = new(&mut s, json!({"kind":"wmts","address":format!("{origin}/basemaps/v1/mosaics/wmts"),"auth":"query","keyName":"api_key"}));
+    assert_eq!(s.connections.find(&id).map(|c| (c.auth.as_str(), c.key_name.as_str())), Some(("query", "api_key")));
+    assert_eq!(
+        s.run("connection.login", &json!({"id":id,"password":"not-a-key-757"})).unwrap_err(),
+        "an API-key login takes an apiKey, not a password"
+    );
+    // Not a header: any characters travel, percent-encoded.
+    s.run("connection.login", &json!({"id":id,"apiKey":key})).unwrap();
+    assert!(logins::apply(&format!("{origin}/wmts")).unwrap().is_none(), "a raw URL is never authority to use the login");
+    let address = bound(&mut s, &id, &format!("{origin}/tiles/1/2/3.png?layer=a&API_KEY=stale-757#top"));
+    let applied = logins::apply(&address).unwrap().unwrap();
+    assert_eq!(applied.url, format!("{origin}/tiles/1/2/3.png?layer=a&api_key={encoded}#top"));
+    assert!(applied.header.is_none());
+    assert!(!applied.url.contains("stale"), "the login's value replaces the address's own copy: {}", applied.url);
+    for other in [
+        "https://other757.example.org/wmts",
+        "https://query757.example.org.evil.example/wmts",
+        "https://query757.example.org:8443/wmts",
+        "http://query757.example.org/wmts",
+    ] {
+        assert!(logins::apply(&bound(&mut s, &id, other)).unwrap().is_none(), "{other}");
+        assert!(logins::apply(&logins::inherit(&address, other)).unwrap().is_none(), "{other}");
+    }
+    s.run("map.addTiles", &json!({"url":format!("{origin}/tiles/{{z}}/{{x}}/{{y}}.png"),"name":"Mosaic","connection":id})).unwrap();
+    let tile = s.map().tiles.iter().find(|t| t.name == "Mosaic").unwrap().url.clone();
+    assert!(logins::apply(&tile).unwrap().unwrap().url.ends_with(&format!("{{z}}/{{x}}/{{y}}.png?api_key={encoded}")));
+    // Nothing that is saved or shown holds the key, its encoding, or the runtime binding.
+    s.notify(format!("server echoed {key} and {encoded}"), true);
+    let error = s.run("map.addTiles", &json!({"url":format!("{origin}/tiles/{{z}}/{{x}}/{{y}}.png"),"kind":key})).unwrap_err();
+    let (project, _) = s.project.saved_text(None).unwrap();
+    let visible = format!(
+        "{error}\n{}\n{}\n{project}\n{:?}\n{:?}",
+        s.run("connection.list", &Value::Null).unwrap(),
+        s.connections.to_json(),
+        s.notices,
+        s.database_logins
+    );
+    for private in [key, encoded, "query-sentinel", "rustgis-login"] {
+        assert!(!visible.contains(private), "{private} reached a saved or shown text: {visible}");
+    }
+    assert!(visible.contains(r#""keyName":"api_key""#) || visible.contains(r#""keyName": "api_key""#));
+    // A later session has the definition and no key: it asks for it.
+    let mut later = session(None);
+    later.connections = crate::connections::Connections::from_json(&s.connections.to_json());
+    assert_eq!(later.run("connection.login", &json!({"id":id})).unwrap_err(), web::REQUIRED);
+    // Another parameter name, like another origin, is another login.
+    s.run("connection.edit", &json!({"id":id,"keyName":"token757"})).unwrap();
+    assert!(logins::apply(&address).is_err());
+    s.run("connection.login", &json!({"id":id,"apiKey":key})).unwrap();
+    let renamed = bound(&mut s, &id, &format!("{origin}/wmts"));
+    assert!(logins::apply(&renamed).unwrap().unwrap().url.ends_with(&format!("?token757={encoded}")));
+    s.run("connection.logout", &json!({"id":id})).unwrap();
+    assert!(logins::apply(&renamed).is_err());
+    assert_eq!(logins::scrub(key), key, "a logged-out key is no longer held for redaction");
+}
+
+/// A key typed in the address is left out, said so, and its name (never its value) is offered;
+/// an address with nothing to leave out says nothing.
+#[test]
+fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
+    let origin = "https://offer757.example.org";
+    let mut s = session(None);
+    let made =
+        s.run("connection.new", &json!({"kind":"wmts","address":format!("{origin}/wmts?api_key=typed-key-757&layer=a#frag")})).unwrap();
+    assert_eq!(made["stripped"], true);
+    assert_eq!(made["strippedParameters"], json!(["api_key"]));
+    assert_eq!(made["address"], format!("{origin}/wmts?layer=a"));
+    assert!(!made.to_string().contains("typed-key-757"));
+    // Already a query login: the parameter is the login, so nothing more is offered.
+    let query = s
+        .run(
+            "connection.new",
+            &json!({"kind":"wmts","name":"Query","address":format!("{origin}/q?zqoffer757=typed-custom-757&layer=a"),"auth":"query","keyName":"zqoffer757"}),
+        )
+        .unwrap();
+    assert_eq!(query["stripped"], true);
+    assert!(query.get("strippedParameters").is_none());
+    assert_eq!(query["address"], format!("{origin}/q?layer=a"));
+    assert!(!query.to_string().contains("typed-custom-757"));
+    // Its name now marks any address that carries it as holding a key, saved or recorded.
+    assert_eq!(crate::sources::redact(&format!("{origin}/other?ZQOffer757=typed-custom-757&x=1")), format!("{origin}/other?x=1"));
+    assert!(crate::sources::holds_secret(&json!({"url":format!("{origin}/other?zqoffer757=typed-custom-757")})));
+    // Clean addresses and ordinary parameters: no notice, nothing offered.
+    let clean = s.run("connection.new", &json!({"kind":"wmts","name":"Clean","address":format!("{origin}/clean?layer=a&empty=")})).unwrap();
+    assert!(clean.get("stripped").is_none() && clean.get("strippedParameters").is_none(), "{clean}");
+    let plain = s
+        .run(
+            "connection.new",
+            &json!({"kind":"wmts","name":"Plain query","address":format!("{origin}/p?layer=a&"),"auth":"query","keyName":"zqother757"}),
+        )
+        .unwrap();
+    assert!(plain.get("stripped").is_none(), "{plain}");
+    // An edit that moves a key into the address is the same.
+    let edited = s.run("connection.edit", &json!({"id":clean["id"],"address":format!("{origin}/clean?token=edited-757")})).unwrap();
+    assert_eq!(edited["stripped"], true);
+    assert_eq!(edited["strippedParameters"], json!(["token"]));
+}
+
+/// A key in a query login is sent on the wire to the origin (and only as the parameter the
+/// connection names), and the saved definition and project hold none.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_query_login_authenticates_requests_to_its_server_without_saving_the_key() {
+    use crate::render::rustgis_tiles::cache::{self, Payload, State, Want};
+    let server = LoginFile::new(br#"{"queryLogin":true}"#.to_vec());
+    let url = format!("{}/mosaics/wmts", server.base);
+    let mut s = session(None);
+    let id = new(&mut s, json!({"kind":"wmts","address":format!("{url}?api_key=fixture-query-757"),"auth":"query","keyName":"api_key"}));
+    assert_eq!(s.connections.find(&id).unwrap().address, url);
+    let fetch = |address: &str| {
+        let started = std::time::Instant::now();
+        loop {
+            match cache::get(address, Want::Json) {
+                State::Pending => {
+                    assert!(started.elapsed() < std::time::Duration::from_secs(10), "query login fetch timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                state => break state,
+            }
+        }
+    };
+    s.run("connection.login", &json!({"id":id,"apiKey":"fixture-query-757","allowInsecure":true})).unwrap();
+    match fetch(&bound(&mut s, &id, &format!("{url}?SERVICE=WMTS"))) {
+        State::Ready(payload) => match payload.as_ref() {
+            Payload::Json(value) => assert_eq!(value["queryLogin"], true),
+            _ => panic!("expected the authenticated JSON response"),
+        },
+        _ => panic!("the query login did not authenticate"),
+    }
+    assert!(matches!(fetch(&url), State::Failed(_)), "a bare URL stays anonymous");
+    let requests = server.requests.lock().unwrap().clone();
+    assert!(
+        requests.iter().any(|r| r.starts_with("GET /mosaics/wmts?SERVICE=WMTS&api_key=fixture-query-757 HTTP/1.1\r\n")),
+        "{requests:?}"
+    );
+    assert!(requests.iter().filter(|r| r.contains("fixture-query-757")).all(|r| r.matches("api_key=").count() == 1), "{requests:?}");
+    let (project, _) = s.project.saved_text(None).unwrap();
+    for saved in [s.connections.to_json(), project, format!("{:?}", s.notices)] {
+        assert!(!saved.contains("fixture-query-757"), "{saved}");
+    }
+}
+
+#[test]
+fn query_login_parameters_never_panic() {
+    let mut s = session(Some(Arc::new(MemorySecrets::new())));
+    let id = new(&mut s, json!({"kind":"csw","address":"https://junkquery757.example.org/csw","auth":"query","keyName":"junk_key_757"}));
+    let junk = [
+        json!({"id":id,"auth":"query","keyName":"\u{0}","user":":"}),
+        json!({"id":id,"auth":"QUERY ","keyName":"é"}),
+        json!({"id":id,"auth":"query","keyName":"x".repeat(10_000),"address":"https://junkquery757.example.org/?%"}),
+        json!({"id":id,"auth":"query","keyName":"a%41","apiKey":"\n"}),
+        json!({"id":id,"apiKey":"\u{7f}"}),
+        json!({"id":id,"apiKey":"x".repeat(5000)}),
+        json!({"kind":"wms","address":"https://junkquery757.example.org/?;;&&=%zz#","auth":"query","keyName":"junk_key_757"}),
+    ];
+    for cmd in ["connection.new", "connection.edit", "connection.login", "connection.logout", "connection.test", "map.addTiles"] {
+        for p in &junk {
+            let _ = s.run(cmd, p);
+        }
+    }
 }

@@ -232,7 +232,16 @@ pub(crate) fn keep_button(ui: &mut egui::Ui) -> bool {
 
 fn stripped_notice(app: &mut RustGisApp, v: &Value) {
     if v["stripped"] == true {
-        app.session.notify(tl!("A password or token in the address was left out of the saved connection definition.").to_string(), false);
+        let names: Vec<&str> = v["strippedParameters"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        let text = if names.is_empty() {
+            tl!("A password or token in the address was left out of the saved connection definition.").to_string()
+        } else {
+            i18n::fmt(
+                "A password or token in the address ({names}) was left out of the saved connection definition. To send it, edit the connection: choose API key in the query, name that parameter, and give the key when you log in.",
+                &[("names", &names.join(", "))],
+            )
+        };
+        app.session.notify(text, false);
     }
 }
 
@@ -706,7 +715,7 @@ fn typed_secrets(st: &State) -> bool {
         || (WEB_KINDS.contains(&st.kind.as_str())
             && match st.auth.as_str() {
                 "basic" => !st.password.is_empty(),
-                "header" => !st.api_key.is_empty(),
+                "header" | "query" => !st.api_key.is_empty(),
                 _ => false,
             })
         || (st.kind == "s3"
@@ -977,7 +986,12 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 ui.label("");
                 ui.end_row();
                 let input_label = ui.label(tl!("Method"));
-                let methods = [("", tl!("None")), ("basic", tl!("Basic authentication")), ("header", tl!("API key in a header"))];
+                let methods = [
+                    ("", tl!("None")),
+                    ("basic", tl!("Basic authentication")),
+                    ("header", tl!("API key in a header")),
+                    ("query", tl!("API key in the query")),
+                ];
                 let shown = methods.iter().find(|(code, _)| *code == st.auth).map_or(tl!("None"), |(_, name)| *name);
                 let mut method_changed = false;
                 egui::ComboBox::from_id_salt("connection_auth")
@@ -999,11 +1013,29 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                     let input_label = ui.label(tl!("User"));
                     changed |= ui.add(egui::TextEdit::singleline(&mut st.user).desired_width(360.0)).labelled_by(input_label.id).changed();
                     ui.end_row();
-                } else if st.auth == "header" {
-                    let input_label = ui.label(tl!("Header name"));
-                    changed |=
-                        ui.add(egui::TextEdit::singleline(&mut st.key_name).desired_width(360.0)).labelled_by(input_label.id).changed();
+                } else if matches!(st.auth.as_str(), "header" | "query") {
+                    let query = st.auth == "query";
+                    let input_label = ui.label(if query { tl!("Parameter name") } else { tl!("Header name") });
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut st.key_name)
+                                .hint_text(if query { "api_key" } else { "X-API-Key" })
+                                .desired_width(360.0),
+                        )
+                        .labelled_by(input_label.id)
+                        .changed();
                     ui.end_row();
+                    if query {
+                        ui.label("");
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "The key is added to each request to this address as this parameter. It is never saved."
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                        ui.end_row();
+                    }
                 }
                 if !st.auth.is_empty() {
                     let basic = st.auth == "basic";
@@ -1360,7 +1392,7 @@ mod tests {
     #[test]
     fn failed_unsaved_service_probe_clears_credentials() {
         let mut app = RustGisApp::with_sample();
-        for auth in ["basic", "header"] {
+        for auth in ["basic", "header", "query"] {
             open_new(&mut app, "wmts").unwrap();
             let st = &mut app.ui.connection;
             st.address = String::new();
@@ -1413,7 +1445,7 @@ mod tests {
         let id = made["id"].as_str().unwrap();
         app.run("connection.login", json!({"id":id,"apiKey":"saved-validation-key"})).unwrap();
         let saved = app.session.connections.find(id).unwrap().clone();
-        for auth in ["basic", "header"] {
+        for auth in ["basic", "header", "query"] {
             for secret in ["", "invalid\ncredential"] {
                 open_new(&mut app, "wmts").unwrap();
                 let st = &mut app.ui.connection;
@@ -1577,5 +1609,38 @@ mod tests {
         app.ui.connection.secret_key.clear();
         assert!(save(&mut app).is_err());
         assert!(app.session.connections.connections.is_empty(), "nothing saved");
+    }
+
+    #[test]
+    fn a_query_login_saves_its_parameter_and_logs_in_without_keeping_the_key() {
+        let mut app = RustGisApp::with_sample();
+        open_new(&mut app, "wmts").unwrap();
+        let st = &mut app.ui.connection;
+        st.name = "Query form".into();
+        st.address = "https://query-form-1979.example/basemaps/wmts?ZQForm1979=typed-in-address&layer=a".into();
+        st.auth = "query".into();
+        st.key_name = "zqform1979".into();
+        st.api_key = "query-form-secret-1979".into();
+        save(&mut app).unwrap();
+        let saved = app.session.connections.connections.last().unwrap().clone();
+        assert_eq!((saved.auth.as_str(), saved.key_name.as_str()), ("query", "zqform1979"));
+        assert_eq!(saved.address, "https://query-form-1979.example/basemaps/wmts?layer=a");
+        assert!(web::logged_in(&app.session, &saved));
+        let kept = app.session.connections.to_json();
+        assert!(!kept.contains("query-form-secret-1979") && !kept.contains("typed-in-address"), "{kept}");
+    }
+
+    #[test]
+    fn saving_an_address_with_a_key_names_its_parameter_but_not_the_key() {
+        let mut app = RustGisApp::with_sample();
+        let mark = app.session.notice_mark();
+        keep(&mut app, json!({"kind":"wmts","address":"https://keep-key-1979.example/wmts?api_key=keep-key-secret-1979&layer=a"})).unwrap();
+        let said = format!("{:?}", app.session.notices_since(mark));
+        assert!(said.contains("api_key") && said.contains("API key in the query"), "{said}");
+        assert!(!said.contains("keep-key-secret-1979"), "{said}");
+        let mark = app.session.notice_mark();
+        keep(&mut app, json!({"kind":"wmts","name":"No key","address":"https://keep-key-1979.example/clean?layer=a"})).unwrap();
+        assert!(!format!("{:?}", app.session.notices_since(mark)).contains("left out"));
+        assert!(!app.session.connections.to_json().contains("keep-key-secret-1979"));
     }
 }
