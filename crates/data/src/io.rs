@@ -2017,9 +2017,16 @@ fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
 const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
+/// Valid numbers whose digits fit in integer or Double precision without loss are exported
+/// bare, matching [`double_holds`].
 fn csv_cell(v: &Value) -> String {
     match v {
-        Value::Text(t) if t.starts_with(FORMULA_START) && !t.parse::<f64>().is_ok_and(|f| f.is_finite()) => format!("'{t}"),
+        Value::Text(t)
+            if t.starts_with(FORMULA_START)
+                && !(t.parse::<i64>().is_ok() || (t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t))) =>
+        {
+            format!("'{t}")
+        }
         other => other.to_file_text(),
     }
 }
@@ -4827,11 +4834,15 @@ mod tests {
             Dataset::new("tiger", GeometryType::None, vec![Field::new("INTPTLAT", FieldType::Text), Field::new("note", FieldType::Text)]);
         ds.push(None, vec![Value::Text("+35.1329460".into()), Value::Text("=SUM(A1)".into())]);
         ds.push(None, vec![Value::Text("-90.1234567".into()), Value::Text("+cmd|' /C calc'!A0".into())]);
+        ds.push(None, vec![Value::Text("+447700900123".into()), Value::Text("-12345678901234567890".into())]);
         let out = to_csv(&ds).unwrap();
         assert!(out.contains("+35.1329460"), "{out}");
         assert!(!out.contains("'+35.1329460"), "{out}");
         assert!(out.contains("-90.1234567"), "{out}");
         assert!(!out.contains("'-90.1234567"), "{out}");
+        assert!(out.contains("+447700900123"), "{out}");
+        assert!(!out.contains("'+447700900123"), "{out}");
+        assert!(out.contains("'-12345678901234567890"), "{out}");
         assert!(out.contains("'=SUM(A1)"), "{out}");
         assert!(out.contains("'+cmd"), "{out}");
     }
