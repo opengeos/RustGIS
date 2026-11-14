@@ -92,6 +92,15 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     }
     let frame = egui::Frame::NONE.fill(t.pane).stroke(Stroke::new(1.0, t.border));
     egui::Panel::bottom("touch_bar").exact_size(BAR).frame(frame).show(ui, |ui| bar(app, ui, &t, shown));
+    // The device's position off while a track is recorded (Android stopped it): the next
+    // position starts a run of its own, the track not joined across the gap.
+    let mut field = track::field(&ctx);
+    if !app.locate
+        && let Some(recording) = field.track.as_mut().filter(|t| !t.broken)
+    {
+        recording.broken = true;
+        track::set_field(&ctx, field);
+    }
     // A track being recorded says so over the bar, with its Stop, whatever sheet is up.
     if let Some(recording) = track::field(&ctx).track {
         let margin = egui::Margin::symmetric(12, 0);
@@ -164,10 +173,19 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         // The track being recorded, as it grows.
         if let (Some(recording), Some((map, _))) = (track::field(&ctx).track, app.map.view_rect) {
             let painter = ui.painter().with_clip_rect(map);
-            // One line for each run of points the view shows (a point behind the globe breaks it),
-            // a point on the pixel of the last left out: hours of a track stay a few shapes.
+            // One line for each run of points the view shows (a point behind the globe breaks it,
+            // as do a break in the track and a step across the antimeridian, which would be drawn
+            // the long way round), a point on the pixel of the last left out: hours of a track
+            // stay a few shapes.
             let mut runs: Vec<Vec<egui::Pos2>> = vec![Vec::new()];
-            for at in recording.points.iter().map(|f| app.lonlat_to_screen(f.lon, f.lat)) {
+            let mut before: Option<f64> = None;
+            for (i, f) in recording.points.iter().enumerate() {
+                let across = before.is_some_and(|lon| (f.lon - lon).abs() > 180.0);
+                before = Some(f.lon);
+                if (across || recording.runs.contains(&i)) && runs.last().is_some_and(|r| !r.is_empty()) {
+                    runs.push(Vec::new());
+                }
+                let at = app.lonlat_to_screen(f.lon, f.lat);
                 match (at, runs.last_mut()) {
                     (Some(p), Some(run)) if run.last().is_none_or(|q| q.distance(p) >= 1.0) => run.push(p),
                     (Some(_), _) => {}
@@ -1922,11 +1940,14 @@ mod tests {
         let mark = app.session.notice_mark();
         assert!(!stop_track(&mut app, &ctx));
         assert_eq!(track::field(&ctx).track.map(|t| t.points.len()), Some(3));
-        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("kept")));
+        // Why it was refused is said, then that it is kept.
+        let said: Vec<String> = app.session.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
+        assert!(said.len() >= 2 && said.last().is_some_and(|t| t.contains("kept")), "{said:?}");
         // The More sheet has room for its row while positioning is off.
         app.locate = false;
         frame(&mut app, &ctx, Sheet::More);
-        assert!(track::field(&ctx).track.is_some());
+        // With positioning off, the next position starts a run of its own.
+        assert!(track::field(&ctx).track.is_some_and(|t| t.broken));
     }
 
     #[test]
