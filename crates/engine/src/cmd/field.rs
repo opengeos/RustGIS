@@ -102,7 +102,12 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         match crate::project::read_file(Path::new(&file), budget) {
             Ok(bytes) => {
                 budget = budget.saturating_sub(bytes.len() as u64);
-                let stem = Path::new(&file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "basemap".into());
+                // A name the package's folders can hold as one file, the same in the entry and the
+                // layer's address: `:` and `\` (fine in a Linux name) would be refused or split.
+                let stem: String = Path::new(&file).file_name().map_or_else(
+                    || "basemap".into(),
+                    |n| n.to_string_lossy().chars().map(|c| if matches!(c, ':' | '\\' | '/') { '_' } else { c }).collect(),
+                );
                 let mut name = stem.clone();
                 for n in 2.. {
                     if taken.insert(name.to_ascii_lowercase()) {
@@ -139,12 +144,13 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     if !unread.is_empty() {
         s.notify(format!("{} tile archive(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")), true);
     }
-    // A project of the one map: what else the project holds stays at home.
-    let mut project = s.project.clone();
-    project.name = area.clone();
+    // A project of the one map: what else the project holds (tables, notebooks, models, shared
+    // items and their paths…) stays at home. The custom colour ramps and styles go with it, as its
+    // layers may draw with them.
+    let mut project = crate::project::Project::new(area.clone());
     project.maps = vec![super::items::embedded_map(&map, &mut budget)];
-    project.active_map = 0;
-    project.offline_areas.clear();
+    project.ramps = s.project.ramps.clone();
+    project.styles = s.project.styles.clone();
     let readme = format!(
         "{area}: a RustGIS field package.\nOpen it with RustGIS on a phone or a computer (Open Project). Its basemaps are in {BASEMAPS}/.\n"
     );
@@ -323,6 +329,31 @@ mod tests {
         assert_eq!(again, temp.path().join("unpacked 2"));
         unpack_into(&bytes, &again).unwrap();
         assert!(into.join("basemaps/site.mbtiles").is_file() && again.join("basemaps/site.mbtiles").is_file());
+    }
+
+    #[test]
+    fn a_field_package_holds_only_its_map_and_a_basemap_of_any_name_is_read() {
+        let temp = Temp::new("only");
+        // A name a Linux file can have, which a package's folders couldn't hold as it is.
+        let archive = temp.path().join("site:a\\b.mbtiles");
+        std::fs::write(&archive, b"stand-in archive bytes").unwrap();
+        let mut s = sample();
+        s.map_mut().tiles.push(TileLayer::new("Site", TileKind::MbTiles, archive.display().to_string()));
+        // What else the project holds stays at home.
+        s.project
+            .tables
+            .push(crate::project::Table::new(7, rustgis_data::Dataset::new("Inventory", rustgis_data::GeometryType::None, Vec::new())));
+        s.project.folders.push("/home/someone/data".into());
+        let (_, bytes) = package(&mut s, &json!({"name": "Survey", "extent": [-20.0, -40.0, 60.0, 40.0]})).unwrap();
+        let names: Vec<String> = rustgis_data::zip::read(&bytes).unwrap().into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"basemaps/site_a_b.mbtiles".to_string()), "{names:?}");
+        let into = temp.path().join("unpacked");
+        let project = project_in(&unpack_into(&bytes, &into).unwrap(), &into).unwrap();
+        assert!(project.tables.is_empty() && project.folders.is_empty() && project.offline_areas.is_empty());
+        assert_eq!(project.maps.len(), 1);
+        let base = project.maps[0].tiles.iter().find(|t| t.name == "Site").unwrap();
+        assert_eq!(Path::new(&base.url), into.join("basemaps/site_a_b.mbtiles"));
+        assert!(into.join("basemaps/site_a_b.mbtiles").is_file());
     }
 
     #[test]
