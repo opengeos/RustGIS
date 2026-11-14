@@ -113,14 +113,17 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             && let Some((map, _)) = app.map.view_rect
         {
             let painter = ui.painter().with_clip_rect(map);
-            sketch(app, &painter, map.center(), &t, &ctx);
-            // The feature being edited, and where the cross snapped to.
+            // The shape being drawn, kept while Edit is on but drawn only in Add; the feature
+            // being edited, and where the cross snapped to.
             let state = form(&ctx);
+            if !state.edit_mode {
+                sketch(app, &painter, map.center(), &t, &ctx);
+            }
             if state.edit_mode
                 && let (Some(target), Some(editing)) = (capture_layer(app, &state), state.editing)
-                && let Some(shape) = edit::row_of(app, target.id, editing.feature).and_then(|row| edit::shape(app, target.id, row))
+                && let Some(shape) = edit::row_of(app, target.id, editing.feature).and_then(|row| edit::shape_ref(app, target.id, row))
             {
-                edit::draw(app, &painter, &shape, editing.vertex, &t);
+                edit::draw(app, &painter, shape, editing.vertex, &t);
             }
             if let Some(snapped) = state.snap {
                 edit::draw_snap(app, &painter, snapped, map.center(), &t);
@@ -341,6 +344,9 @@ struct Form {
     editing: Option<edit::Editing>,
     /// Where the cross's place snapped to on the last frame, with snapping on.
     snap: Option<edit::Snapped>,
+    /// What [`Form::snap`] was found for: it is looked for again only when the cross moved, the
+    /// map zoomed, the vertex being moved changed or the project did.
+    snap_for: Option<SnapFor>,
     /// The height of the window the sheet was last drawn in: when it changes (the soft keyboard
     /// came or went), the field being typed in is scrolled back into view.
     window: f32,
@@ -358,6 +364,7 @@ impl Form {
             self.calendar = None;
             self.editing = None;
             self.snap = None;
+            self.snap_for = None;
             self.shown = Some(instance);
         }
         self
@@ -376,6 +383,17 @@ impl Form {
         self.vertices.push(at);
         true
     }
+}
+
+/// What the cross's place was snapped for: its place, the vertex being moved, the project's state,
+/// the map's resolution and whether snapping was on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SnapFor {
+    at: Option<(f64, f64)>,
+    moving: Option<(u32, usize, rustgis_ui_egui::rustgis_engine::data::VertexId)>,
+    state: u64,
+    res: f64,
+    on: bool,
 }
 
 fn form(ctx: &egui::Context) -> Form {
@@ -748,12 +766,20 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // The feature being edited, while it is still there (an undo may have taken it away).
     let picked = state.editing.and_then(|e| edit::row_of(app, target.id, e.feature).map(|row| (row, e)));
     // A picked vertex an Undo moved or took away is let go.
-    let picked = picked.map(|(row, e)| (row, e.checked(edit::shape(app, target.id, row).as_ref())));
+    let picked = picked.map(|(row, e)| (row, e.checked(edit::shape_ref(app, target.id, row))));
     state.editing = picked.map(|(_, e)| e);
     // The cross's place, snapped with snapping on: a vertex being moved doesn't snap to itself.
     let moving = picked.filter(|_| state.edit_mode).and_then(|(row, e)| e.vertex.map(|v| (target.id, row, v)));
-    state.snap = cross_place(app).and_then(|at| edit::snap(app, at, moving));
-    let cross = state.snap.map(|s| (s.lon, s.lat)).or_else(|| cross_place(app));
+    // Snapping looks through every visible layer, so it is done again only when what it depends
+    // on changed, not on every frame.
+    let at = cross_place(app);
+    let map = app.session.map();
+    let wants = SnapFor { at, moving, state: app.session.state(), res: map.camera.res, on: map.editing.snapping.enabled };
+    if state.snap_for != Some(wants) {
+        state.snap = at.and_then(|at| edit::snap(app, at, moving));
+        state.snap_for = Some(wants);
+    }
+    let cross = state.snap.map(|s| (s.lon, s.lat)).or(at);
     // The buttons stay in reach above the fields, however many the layer has.
     let place = match (cross, state.snap) {
         (Some((lon, lat)), Some(snapped)) => rustgis_ui_egui::i18n::fmt(
@@ -780,9 +806,9 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             state.edit_mode = false;
             state.editing = None;
         }
+        // The vertices drawn so far are kept for Add to go on with.
         if toggle_chip(ui, t, tl!("Edit"), third, state.edit_mode) {
             state.edit_mode = true;
-            state.vertices.clear();
         }
         let snapping = app.session.map().editing.snapping.enabled;
         if toggle_chip(ui, t, tl!("Snap"), third, snapping) {
@@ -1058,6 +1084,11 @@ fn edit_sheet(
                     let at = if act == "delete" { None } else { cross };
                     if act != "delete" && at.is_none() {
                         app.session.notify(off(), true);
+                    } else if at.is_some_and(|at| edit::doubles(app, &shape, v, act, at)) {
+                        app.session.notify(
+                            tl!("Nothing was changed: the cross is on the vertex next to it, and two in one place make an edge of no length. Move the map."),
+                            true,
+                        );
                     } else if let Some(next) = edit::vertex(app, target.id, row, v, act, at) {
                         let now = edit::shape(app, target.id, row);
                         state.editing = Some(editing.picking(next, now.as_ref()));
@@ -1492,6 +1523,30 @@ mod tests {
         set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some(("seen".into(), (2026, 3))), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
         assert!(form(&ctx).calendar.is_some());
+    }
+
+    #[test]
+    fn a_vertex_put_on_the_one_next_to_it_is_found_and_a_place_apart_is_not() {
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        let rivers = target(&mut app, GeometryType::Polyline);
+        let shape = app.session.map().layer(rivers.id).unwrap().dataset.features[0].geometry.clone().unwrap();
+        let vertices = shape.vertices();
+        let ((first, a), (second, b), (_, c)) = (vertices[0], vertices[1], vertices[2]);
+        run(&mut app, "map.goToXY", json!({"lon": b.x, "lat": b.y, "scale": 50_000}));
+        frame(&mut app, &ctx, Sheet::Capture);
+        // Moved onto the vertex before or after it, or one added after it on itself or the next.
+        assert!(edit::doubles(&app, &shape, second, "move", (a.x, a.y)));
+        assert!(edit::doubles(&app, &shape, second, "move", (c.x, c.y)));
+        assert!(edit::doubles(&app, &shape, second, "insert", (b.x, b.y)));
+        assert!(edit::doubles(&app, &shape, second, "insert", (c.x, c.y)));
+        assert!(edit::doubles(&app, &shape, first, "insert", (b.x, b.y)));
+        // A place between them is fine, and so is moving a vertex where it already is.
+        let between = ((b.x + c.x) / 2.0, (b.y + c.y) / 2.0);
+        assert!(!edit::doubles(&app, &shape, second, "move", between));
+        assert!(!edit::doubles(&app, &shape, second, "insert", between));
+        assert!(!edit::doubles(&app, &shape, second, "move", (b.x, b.y)));
+        assert!(!edit::doubles(&app, &shape, second, "delete", (a.x, a.y)));
     }
 
     #[test]
