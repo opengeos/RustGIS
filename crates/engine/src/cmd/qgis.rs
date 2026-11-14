@@ -1085,6 +1085,12 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
             }
             continue;
         };
+        // A relation of a layer to itself relates one table: two tables of it, each with one of
+        // the fields, can't both be QGIS's layer.
+        if r.referenced == r.referencing && origin != destination {
+            ambiguous.push(r.name.as_str());
+            continue;
+        }
         if *origin_guessed || *destination_guessed {
             guesses.push(r.name.as_str());
         }

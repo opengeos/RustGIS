@@ -1944,6 +1944,7 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
         <relation id="gone" name="To nowhere" referencedLayer="parcels_1" referencingLayer="missing_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="trip" name="Trip names" referencedLayer="trip_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="name" referencingField="pid"/></relation>
         <relation id="points" name="Trip points" referencedLayer="trip_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="points" referencingField="pid"/></relation>
+        <relation id="self" name="Trip self" referencedLayer="trip_1" referencingLayer="trip_1" strength="Association"><fieldRef referencedField="points" referencingField="track"/></relation>
       </relations>
       <Bookmarks>
         <Bookmark extent="Polygon ((8.4 47.3, 8.6 47.3, 8.6 47.45, 8.4 47.45, 8.4 47.3))" group="" id="a" name="Zurich" rotation="0"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
@@ -1992,10 +1993,12 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
         ("Owners of parcel", "parcels", "id", "owners (2)", "pid")
     );
     assert!(notes.contains("its relations between layers that didn't come in or haven't the fields (1: To nowhere)"), "{notes}");
-    // Its layer came in as two with the field: not related to either, and said.
+    // Its layer came in as two with the field, or a relation of it to itself would join two of its
+    // tables: not related, and said.
     assert!(
-        notes
-            .contains("its relations to a layer that came in as several tables with the field, any of which it could mean (1: Trip names)"),
+        notes.contains(
+            "its relations to a layer that came in as several tables with the field, any of which it could mean (2: Trip names, Trip self)"
+        ),
         "{notes}"
     );
     // Of its tables, only the tracks have `points` (routes have it too, but this file has none):

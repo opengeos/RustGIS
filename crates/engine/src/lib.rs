@@ -339,6 +339,9 @@ fn param_entries<'a>(desc: &'a str, mut visit: impl FnMut(&'a str, bool)) -> Opt
     Some(())
 }
 
+/// What a zoom to a place the map's projection doesn't reach says, once in a command.
+const BEYOND_PROJECTION: &str = "The place lies beyond what the map's projection shows, so the view wasn't moved to it.";
+
 /// `s` cut to `n` characters, with `…` when cut.
 fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { s.chars().take(n).chain(['…']).collect() } else { s.to_string() }
@@ -1831,7 +1834,12 @@ impl Session {
                 // go; its errors stay.
                 let new = usize::try_from(self.notices_given.saturating_sub(said)).unwrap_or(usize::MAX).min(self.notices.len());
                 let start = self.notices.len() - new;
-                let errors: Vec<Notice> = self.notices.drain(start..).filter(|n| n.error).collect();
+                let withdrawn: Vec<Notice> = self.notices.drain(start..).collect();
+                // A zoom it couldn't make, said and now withdrawn, is said again by the next one.
+                if withdrawn.iter().any(|n| n.text == BEYOND_PROJECTION) && self.beyond_said == Some(true) {
+                    self.beyond_said = Some(false);
+                }
+                let errors: Vec<Notice> = withdrawn.into_iter().filter(|n| n.error).collect();
                 self.notices_given -= (new - errors.len()) as u64;
                 self.notices.extend(errors);
                 let mut recorded_failure = false;
@@ -2861,7 +2869,7 @@ impl Session {
         } else if !m.fit_lonlat(e, w, h) {
             // Once in a command, though several of its steps zoom (each layer an add frames).
             if self.beyond_said != Some(true) {
-                self.notify("The place lies beyond what the map's projection shows, so the view wasn't moved to it.", false);
+                self.notify(BEYOND_PROJECTION, false);
                 if self.beyond_said.is_some() {
                     self.beyond_said = Some(true);
                 }
