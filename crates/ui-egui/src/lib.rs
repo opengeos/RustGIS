@@ -2614,6 +2614,11 @@ impl RustGisApp {
             if id == "source.syncState" {
                 return readjob::run_then(self, "source.syncState", params, Some(sync_state_said));
             }
+            // Counting a column goes over every row of the layer: on a thread of its own, and the
+            // answer shown once it lands (the table's Statistics window).
+            if id == "table.statistics" {
+                return readjob::run_then(self, "table.statistics", params, Some(table::statistics_landed));
+            }
             // Publishing hashes, reads and writes the whole file: on a thread of its own, with
             // progress and Cancel, as an export is.
             if id == "source.publish" {

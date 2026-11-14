@@ -155,12 +155,13 @@ impl Session {
                 | "service.layers"
                 | "service.add"
                 | "source.syncState"
+                | "table.statistics"
         ) && crate::cmd::edit::table_edit_in_background(command).is_none()
         {
-            return Err("only Add Data, Load All, Repair/Reload Data, Convert To Annotation, models, scripts, tile archives, service reads, topology and Source File State prepare background work".into());
+            return Err("only Add Data, Load All, Repair/Reload Data, Convert To Annotation, models, scripts, tile archives, service reads, topology, Source File State and Column Statistics prepare background work".into());
         }
         let mut params = params.as_object().cloned().ok_or("read parameters must be an object")?;
-        if matches!(command, "layer.loadAll" | "layer.reloadData" | "layer.repairSource" | "labels.convert" | "source.syncState") {
+        if matches!(command, "layer.loadAll" | "layer.reloadData" | "layer.repairSource" | "labels.convert" | "source.syncState" | "table.statistics") {
             let id = self.layer_id(&Value::Object(params.clone()))?;
             params.insert("layer".into(), json!(id));
         }

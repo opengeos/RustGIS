@@ -38,6 +38,20 @@ map are unchanged. The toolbar says how many columns are hidden, and clicking it
 Hiding the column the rows are sorted by clears the sort. The order and hidden columns are kept
 per table until another project is opened, and are not saved in the project.
 
+**Statistics…** in the same menu shows the count, sum, mean, minimum, maximum and standard
+deviation of a number column in a small window, without making a table. With **Selected only** on
+it covers the selected rows, otherwise every row; the window says which. Empty values are counted
+apart, and numbers that aren't finite (NaN, infinity) are left out and counted in a notice. The
+standard deviation is the population one (divided by n), as in Summary Statistics. A column of
+whole numbers is added up exactly, so a sum, minimum or maximum past 2^53 keeps all its digits;
+when a column mixes whole numbers past 2^53 with decimals, a notice says how many were rounded. A
+sum or mean too large for a decimal number is left out, with a notice. A text or date column gives
+its count, distinct values (counted up to 100,000, then "more than 100,000" with a notice), and
+first and last in order. The count runs in the background in the desktop app, with progress and
+Cancel. Scripts run `table.statistics` (`"layer"`, `"field"` or `"index"` (the column's place in
+the table, for columns of the same name), and `"selected"` for the selected rows only), which
+answers the same numbers as JSON. It changes nothing in the project, so there is nothing to undo.
+
 A text column's menu also has **Convert to Date** and **Convert to Date and Time**
 (`edit.convertField`, `"type"`: `date` or `datetime`): the field becomes a date field and each
 value is read as ISO 8601 (`2026-03-05`; `2026-03-05T14:30:00+02:00`, or with a space for the
