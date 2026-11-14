@@ -307,5 +307,41 @@ mod tests {
         let clean = read("clean.rss", feed("45.2 -110.2 45.8 -110.2 45.8 -110.8 45.2 -110.2").as_bytes()).unwrap();
         assert_eq!(clean[0].0.features.len(), 1);
         assert!(!clean[0].1.messages.iter().any(|m| m.contains("hole")), "{:?}", clean[0].1.messages);
+
+        let multi = r#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:georss="http://www.georss.org/georss" xmlns:gml="http://www.opengis.net/gml">
+<channel><title>Zoning</title>
+<item><title>Park</title><georss:where><gml:Polygon>
+  <gml:exterior><gml:LinearRing><gml:posList>45 -110 46 -110 46 -111 45 -110</gml:posList></gml:LinearRing></gml:exterior>
+  <gml:interior><gml:LinearRing><gml:posList>bad one</gml:posList></gml:LinearRing></gml:interior>
+  <gml:interior><gml:LinearRing><gml:posList>bad two</gml:posList></gml:LinearRing></gml:interior>
+</gml:Polygon></georss:where></item>
+</channel></rss>"#;
+        let lossy_multi = read("multi.rss", multi.as_bytes()).unwrap();
+        assert!(
+            lossy_multi[0].1.messages.iter().any(|m| m.contains("2 holes in polygons were unreadable and left out")),
+            "{:?}",
+            lossy_multi[0].1.messages
+        );
+
+        let mixed = r#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:georss="http://www.georss.org/georss" xmlns:gml="http://www.opengis.net/gml">
+<channel><title>Zoning</title>
+<item><title>Park</title><georss:where><gml:Polygon>
+  <gml:exterior><gml:LinearRing><gml:posList>45 -110 46 -110 46 -111 45 -110</gml:posList></gml:LinearRing></gml:exterior>
+  <gml:interior><gml:LinearRing><gml:posList>45.2 -110.2 45.8 -110.2 45.8 -110.8 45.2 -110.2</gml:posList></gml:LinearRing></gml:interior>
+  <gml:interior><gml:LinearRing><gml:posList>corrupt hole</gml:posList></gml:LinearRing></gml:interior>
+</gml:Polygon></georss:where></item>
+</channel></rss>"#;
+        let mixed_lossy = read("mixed.rss", mixed.as_bytes()).unwrap();
+        assert!(
+            mixed_lossy[0].1.messages.iter().any(|m| m.contains("1 hole in a polygon was unreadable and left out")),
+            "{:?}",
+            mixed_lossy[0].1.messages
+        );
+        match &mixed_lossy[0].0.features[0].geometry {
+            Some(Geometry::Polygon(polys)) => assert_eq!(polys[0].len(), 2, "must keep exterior and valid interior ring"),
+            other => panic!("expected polygon, got {other:?}"),
+        }
     }
 }
