@@ -2630,7 +2630,7 @@ fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Result<Option<(C
 }
 
 /// A dBASE Numeric column with no decimals declared whose values are all whole numbers
-/// within i64 range is read as Integer. A column with decimals declared (decimals > 0)
+/// within ±9.0e15 is read as Integer. A column with decimals declared (decimals > 0)
 /// remains Double.
 fn integral_numeric_to_integer(ds: &mut Dataset, decimals: &[u8]) {
     const LIMIT: f64 = 9.0e15;
@@ -3423,6 +3423,7 @@ fn kept_column(ds: &Dataset, k: usize, name: &str, style: &DbfStyle) -> (Spec, O
         encoding.encode(&text).map_or(text.len(), |b| b.len())
     };
     let fits = match (field.ty, ty) {
+        (FieldType::Integer, b'N' | b'F') if was.decimals > 0 => false,
         (FieldType::Integer | FieldType::Double, b'N' | b'F') => values().all(|v| {
             let d = usize::from(was.decimals);
             dbf_number(v, field.ty, d, usize::from(was.len)).is_some_and(|x| {

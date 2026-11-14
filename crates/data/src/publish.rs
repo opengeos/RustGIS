@@ -1334,6 +1334,30 @@ mod tests {
         assert!(note.contains(&path.display().to_string()), "{note}");
     }
 
+    /// When an existing file column has declared decimals (e.g. N(10,2)), an Integer field does not
+    /// keep the decimal column; it remakes the column without decimals and stays Integer.
+    #[test]
+    fn an_integer_field_does_not_reuse_a_decimal_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parcels.shp");
+        let (mut ds, sync) = written(&parcels(), &path);
+        assert_eq!(ds.fields[1].ty, FieldType::Double);
+
+        ds.fields[1].ty = FieldType::Integer;
+        let mut rows: Vec<_> = ds.features.iter().cloned().collect();
+        rows[0].attrs[1] = Value::Int(100);
+        rows[1].attrs[1] = Value::Int(200);
+        ds.features = rows.into();
+
+        let published = shapefile(&ds, &path, &sync).unwrap();
+        assert_eq!(published.read.fields[1].ty, FieldType::Integer);
+        assert_eq!(published.read.features.first().unwrap().attrs[1], Value::Int(100));
+        assert_eq!(published.notes.len(), 1, "{:?}", published.notes);
+        let note = &published.notes[0];
+        assert!(note.contains("'ACRES' N(24,15) to N(24,0)"), "{note}");
+        assert!(note.contains(&path.display().to_string()), "{note}");
+    }
+
     /// A whole-valued double reads as Double when decimals are declared, and its existing wide decimal column still fits.
     #[test]
     fn an_integral_double_keeps_its_wide_decimal_column() {
