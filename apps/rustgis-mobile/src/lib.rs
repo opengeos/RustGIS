@@ -83,9 +83,9 @@ mod android {
         app: RustGisApp,
         /// The files pushed to the app's folder ([`pushed`]), until the first frame takes them.
         pushed: Vec<std::path::PathBuf>,
-        /// Whether something of Android's is still to arrive, so the window draws again soon
-        /// to take it.
-        poll: bool,
+        /// How soon (milliseconds) the window draws again to take what is still to arrive from
+        /// Android; `None` when nothing is.
+        poll: Option<u64>,
         /// Whether the phone was last asked for positions (`RustGisApp::locate`, as last seen).
         locating: bool,
         /// Whether the system bars' icons were last asked to be dark (a light ground); `None`
@@ -185,7 +185,15 @@ mod android {
             }
             // Positions arrive on a thread of Android's too: looked for while they are wanted.
             // Asked for from inside the frame (`ui`): asked from here, before it, it isn't kept.
-            self.poll = busy || self.locating || self.reading.load(Ordering::Relaxed) > 0;
+            // Soon for what is quick (a file being copied or read); once a second for positions,
+            // which come no faster: redrawing the map more often than that would only cost battery.
+            self.poll = if busy || self.reading.load(Ordering::Relaxed) > 0 {
+                Some(250)
+            } else if self.locating {
+                Some(1000)
+            } else {
+                None
+            };
         }
 
         /// Opens the picked files, now that every picker has answered in full, what was picked
@@ -339,8 +347,8 @@ mod android {
             ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
             ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
             // Something of Android's is still to arrive (a picked file, a position): look again.
-            if self.poll {
-                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            if let Some(wait) = self.poll {
+                ctx.request_repaint_after(std::time::Duration::from_millis(wait));
             }
         }
 
@@ -477,7 +485,7 @@ mod android {
             Box::new(move |_cc| {
                 Ok(Box::new(App {
                     app,
-                    poll: false,
+                    poll: None,
                     locating: false,
                     bars_light: None,
                     pushed,

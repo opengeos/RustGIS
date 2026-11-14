@@ -110,8 +110,12 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
 fn position(app: &RustGisApp, painter: &egui::Painter, fix: rustgis_ui_egui::rustgis_engine::platform::Fix, t: &Tokens) {
     let Some(at) = app.lonlat_to_screen(fix.lon, fix.lat) else { return };
     let metres_a_point = app.session.map().ground_res();
+    // A ring wider than the view has no edge in it to show, and an accuracy out of all measure
+    // (it is the system's to give) would make one of no size a painter can take.
+    let widest = painter.clip_rect().size().length();
     if let Some(radius) = fix.accuracy.filter(|_| metres_a_point > 0.0).map(|m| (m / metres_a_point) as f32)
         && radius > 9.0
+        && radius <= widest
     {
         painter.circle(at, radius, t.accent.gamma_multiply(0.15), Stroke::new(1.0, t.accent.gamma_multiply(0.6)));
     }
@@ -1129,9 +1133,12 @@ mod tests {
         let (lon, lat) = cross_place(&app).unwrap();
         assert!((lon - 30.0).abs() < 1e-6 && (lat + 2.0).abs() < 1e-6, "{lon} {lat}");
         // Every sheet draws with the position on the map, its ring too (a wide one, to be drawn).
-        app.position = Some(Fix { lon: 30.0, lat: -2.0, accuracy: Some(500_000.0) });
-        for shown in [Sheet::None, Sheet::Capture, Sheet::More] {
-            frame(&mut app, &ctx, shown);
+        // An accuracy out of all measure draws too, without its ring.
+        for accuracy in [500_000.0, 1e300, f64::INFINITY] {
+            app.position = Some(Fix { lon: 30.0, lat: -2.0, accuracy: Some(accuracy) });
+            for shown in [Sheet::None, Sheet::Capture, Sheet::More] {
+                frame(&mut app, &ctx, shown);
+            }
         }
     }
 
