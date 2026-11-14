@@ -47432,7 +47432,11 @@ fn go_to_xy_reads_a_position_as_the_search_box_does() {
     assert!(axis_refused(&mut s, "74 60 0", "40").contains("under 60"));
     assert!(axis_refused(&mut s, "-74W", "40").contains("both a minus sign"));
     assert!(axis_refused(&mut s, "74", "91 N").contains("within ±90"));
-    assert!(axis_refused(&mut s, "Paris", "40").contains("write the longitude"));
+    // A word that ends in N, S, E or W is no hemisphere: it gets the usage message.
+    for word in ["Paris", "Lisbon"] {
+        let refused = axis_refused(&mut s, word, "40");
+        assert!(refused.contains("write the longitude") && !refused.contains("belongs to"), "{refused}");
+    }
     // A decimal comma or a pasted pair in one box is refused, not read as degrees and minutes.
     assert!(axis_refused(&mut s, "2,35", "48").contains("one value"));
     assert!(axis_refused(&mut s, "48.85, 2.35", "48").contains("one value"));

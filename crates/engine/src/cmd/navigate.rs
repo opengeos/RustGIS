@@ -409,11 +409,16 @@ pub(crate) fn read_axis(text: &str, latitude: bool) -> Result<f64, String> {
         return Err(format!("the {name} is longer than 64 characters"));
     }
     let (own, other) = if latitude { (['N', 'S'], ['E', 'W']) } else { (['E', 'W'], ['N', 'S']) };
+    // A letter at either end is a hemisphere only in text that is otherwise a number: a word
+    // ending in N, S, E or W (`Paris`, `Lisbon`) gets the usage message, not a refusal as the
+    // other axis.
+    let hemispheres_only = text.chars().all(|c| !c.is_ascii_alphabetic() || matches!(c.to_ascii_uppercase(), 'N' | 'S' | 'E' | 'W'));
     let mut hemisphere = None;
     let mut rest = text;
     for at_end in [false, true] {
         let c = if at_end { rest.chars().next_back() } else { rest.chars().next() };
         if let Some(c) = c.map(|c| c.to_ascii_uppercase())
+            && hemispheres_only
             && (own.contains(&c) || other.contains(&c))
         {
             if other.contains(&c) {
