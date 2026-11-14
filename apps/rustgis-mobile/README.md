@@ -187,11 +187,14 @@ offline basemap with no package.
 The edits come back the same way. With a field package's map open, **Send Field Package** in the
 More sheet saves the map as a field package again (through Android's picker), with the photos its
 features name, under `photos/`, each feature naming its photos there. Only picture files go in
-(`.jpg`, `.png`, `.heic`, `.webp`), under a plain file name; a package going out to the field carries
-none. On the computer, in the
+(`.jpg`, `.png`, `.heic`, `.webp`), under a plain file name, listed in `photos/index.tsv` with the
+path their feature named them by; other files a photos field names are said, not put in; a package
+going out to the field carries none. A photos field lists paths separated by `;`, so a path that
+holds a `;` can't be listed in it. On the computer, in the
 project the package was made from (saved after packaging, so it holds the offline area), **Data ›
 Offline › Bring Back** (`offline.bringBack`) reads it: the photos go in a `<area> photos` folder
-beside the project and the features name them there (one whose name is taken there by other
+beside the project and the features name them there (a photo whose listed path holds the same
+bytes here, sent from this computer, keeps that path; one whose name is taken there by other
 bytes, from an earlier package, gets a name of its own, and the summary says how many); a field the phone added to a layer (its
 photos field) is added to the layer at home; and the edits are copied back by feature, as Sync
 does for an offline area: changed and new features update the map, deleted ones are removed from

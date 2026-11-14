@@ -151,11 +151,24 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     }
     // Coming back, the photos taken in the field go with their features.
     if coming_back {
-        let (photos, unread) = take_photos(&mut map, &mut budget);
-        if !unread.is_empty() {
+        let photos = take_photos(&mut map, &mut budget);
+        if !photos.unread.is_empty() {
+            let unread = &photos.unread;
             s.notify(format!("{} photo(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")), true);
         }
-        entries.extend(photos);
+        if !photos.not_pictures.is_empty() {
+            let named = &photos.not_pictures;
+            s.notify(
+                format!(
+                    "{} file(s) a photos field names weren't put in the field package: only pictures go ({}): {}",
+                    named.len(),
+                    PICTURES.join(", "),
+                    named.join(", ")
+                ),
+                false,
+            );
+        }
+        entries.extend(photos.entries);
     }
     // A project of the one map: what else the project holds stays at home.
     let mut project = s.project.clone();
@@ -207,8 +220,10 @@ fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> S
 /// that couldn't be read. Only picture files ([`PICTURES`]) named by an absolute path go in, each
 /// under a plain name ([`plain_name`]): a photos field is free text, and could name any file. A
 /// photo named that isn't on this device (one named at home) is left as it is named.
-fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
-    let (mut entries, mut unread) = (Vec::new(), Vec::new());
+fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> Photos {
+    let (mut entries, mut unread, mut not_pictures) = (Vec::new(), Vec::new(), Vec::new());
+    // Each photo's entry and the path it was named by, for the way back.
+    let mut index = String::new();
     let mut placed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut taken = std::collections::HashSet::new();
     rewrite_photos(map, |path| {
@@ -218,7 +233,11 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> (Vec<(String, Ve
         let file = Path::new(path);
         // A picture only: a photos field is free text, and could name any file on the device.
         let picture = file.extension().is_some_and(|e| PICTURES.iter().any(|p| e.eq_ignore_ascii_case(p)));
-        if !file.is_absolute() || !picture || !file.is_file() {
+        if !file.is_absolute() || !file.is_file() {
+            return path.to_string();
+        }
+        if !picture {
+            not_pictures.push(path.to_string());
             return path.to_string();
         }
         match crate::project::read_file(file, *budget) {
@@ -233,6 +252,7 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> (Vec<(String, Ve
                     name = format!("{n}-{stem}");
                 }
                 let entry = format!("{PHOTOS}/{name}");
+                index.push_str(&format!("{entry}\t{path}\n"));
                 entries.push((entry.clone(), bytes));
                 placed.insert(path.to_string(), entry.clone());
                 entry
@@ -243,8 +263,24 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> (Vec<(String, Ve
             }
         }
     });
-    (entries, unread)
+    if !index.is_empty() {
+        entries.push((INDEX.to_string(), index.into_bytes()));
+    }
+    Photos { entries, unread, not_pictures }
 }
+
+/// What [`take_photos`] found: the package's photo entries (with [`INDEX`]), the photos that
+/// couldn't be read, and the files named that aren't pictures.
+struct Photos {
+    entries: Vec<(String, Vec<u8>)>,
+    unread: Vec<String>,
+    not_pictures: Vec<String>,
+}
+
+/// The entry listing each photo of a package and the path its feature named it by before
+/// (`photos/a.jpg<TAB>/storage/…/a.jpg`), so a photo brought back to where it already is keeps
+/// that path.
+const INDEX: &str = "photos/index.tsv";
 
 /// The extensions of the picture files a returning field package carries.
 const PICTURES: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "webp"];
@@ -283,8 +319,11 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     let mut photos = Vec::new();
     // Photo entries that aren't a plain file name, left out.
     let mut strange = 0usize;
+    let mut index = String::new();
     for (name, data) in entries {
-        if !name.contains('/') && crate::project::is_project_file(&name) {
+        if name == INDEX {
+            index = String::from_utf8_lossy(&data).into_owned();
+        } else if !name.contains('/') && crate::project::is_project_file(&name) {
             text = Some(String::from_utf8(data).map_err(|_| "the field package's project is damaged".to_string())?);
         } else if let Some(file) = name.strip_prefix(&format!("{PHOTOS}/")) {
             // A photo's own name only: nothing that would put it outside its folder.
@@ -322,7 +361,15 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         };
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut written = std::collections::HashMap::new();
+        // The path each photo was named by where it was packaged.
+        let before: std::collections::HashMap<&str, &str> = index.lines().filter_map(|l| l.split_once('\t')).collect();
         for (name, data) in photos {
+            let entry = format!("{PHOTOS}/{name}");
+            // Packaged from here (the same file, the same bytes): it keeps its own path.
+            if let Some(own) = before.get(entry.as_str()).filter(|p| std::fs::read(p).is_ok_and(|there| there == data)) {
+                written.insert(entry, own.to_string());
+                continue;
+            }
             // A file of that name already there (an earlier package's) is kept: the same bytes
             // are that photo, other bytes get a name of their own.
             let mut path = dir.join(&name);
@@ -728,6 +775,8 @@ mod tests {
         assert_eq!(area, "Trip");
         let entries = rustgis_data::zip::read(&back).unwrap();
         assert!(entries.iter().any(|(n, b)| n == "photos/photo-1.jpg" && b == b"jpeg bytes"));
+        // On the phone it was taken on, not here: brought back, it is copied in.
+        std::fs::remove_file(&photo).unwrap();
         // Meanwhile at home, the renamed city was changed too: a conflict, said.
         let row = home.map().layer(layer(&home, "Cities")).unwrap().dataset.features.iter().position(|f| f.id == renamed).unwrap();
         let home_cities = layer(&home, "Cities");
@@ -780,12 +829,14 @@ mod tests {
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let back = |field: &mut Session| package(field, &Value::Null).unwrap().1;
         let entries = rustgis_data::zip::read(&back(&mut field)).unwrap();
-        let photos: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).filter(|n| n.starts_with("photos/")).collect();
+        let photos: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).filter(|n| n.starts_with("photos/") && *n != INDEX).collect();
         assert_eq!(photos, ["photos/_pending.jpg"]);
         let first = back(&mut field);
         // A second package's photo of that name, other bytes: kept beside the first, renamed.
         std::fs::write(&picture, b"second").unwrap();
         let second = back(&mut field);
+        // Brought back where the photo isn't (as from a phone): copied in beside the project.
+        std::fs::remove_file(&picture).unwrap();
         let path = temp.path().join("back.rgisfield");
         std::fs::write(&path, &first).unwrap();
         home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
@@ -796,6 +847,40 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("_pending.jpg")).unwrap(), b"first");
         assert_eq!(std::fs::read(dir.join("2-_pending.jpg")).unwrap(), b"second");
         assert!(home.notices_since(mark).iter().any(|n| n.text.contains("under a new name")));
+    }
+
+    #[test]
+    fn a_photo_brought_back_to_where_it_already_is_keeps_its_path_and_no_edit_is_counted() {
+        let temp = Temp::new("same-place");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let cities = layer(&home, "Cities");
+        home.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        let photo = temp.path().join("a.jpg");
+        std::fs::write(&photo, b"a picture").unwrap();
+        let gif = temp.path().join("b.gif");
+        std::fs::write(&gif, b"gif").unwrap();
+        home.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
+        home.run("edit.setValue", &json!({"layer": cities, "row": 1, "field": "photos", "value": gif.display().to_string()})).unwrap();
+        let (_, out) = package(&mut home, &json!({"name": "Here", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        // Sent back with no edit: the picture goes in, listed with its path; the gif is said.
+        let mark = field.notice_mark();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("only pictures go") && t.contains("b.gif")), "{said:?}");
+        let entries = rustgis_data::zip::read(&back).unwrap();
+        assert!(entries.iter().any(|(n, b)| n == INDEX && String::from_utf8_lossy(b).contains(&*photo.display().to_string())));
+        // Brought back here: the photo is where it was, so nothing changed and nothing is copied.
+        let sent = temp.path().join("back.rgisfield");
+        std::fs::write(&sent, &back).unwrap();
+        let done = home.run("offline.bringBack", &json!({"path": sent.display().to_string()})).unwrap();
+        assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(0), Some(0)), "{done}");
+        assert_eq!(value(&home, "Cities", 0, "photos"), photo.display().to_string());
+        assert!(!temp.path().join("Here photos").join("a.jpg").exists());
     }
 
     #[test]
