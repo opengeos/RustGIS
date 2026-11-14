@@ -244,6 +244,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"name"?: string, "extent"?: [minLon, minLat, maxLon, maxLat] (the map view when omitted)}"#),
         C::new("offline.package", "Package for the Field", "Data › Offline", |s, p| {
             let path = super::ps(p, "path").ok_or("path is required")?.to_string();
+            super::field::not_the_project(s, std::path::Path::new(&path))?;
             let had = s.project.offline_areas.len();
             let (area, bytes) = super::field::package(s, p)?;
             if let Err(e) = rustgis_data::io::write_atomic(std::path::Path::new(&path), &bytes) {

@@ -1923,6 +1923,10 @@ impl RustGisApp {
             }
             return r;
         }
+        // A field package's basemaps are files beside its project, which a page has no folder for.
+        if lower.ends_with(".rgisfield") {
+            return Err(tl!("A field package opens on a computer or a phone, which have a folder for its basemaps: open it there. Bring Back (Data › Offline) takes its edits into the project here.").to_string());
+        }
         if lower.ends_with(".rgispkg") {
             let text = rustgis_engine::cmd::items::package_text(bytes)?;
             let r = self.run("project.openText", json!({"text": text, "package": true}));
@@ -4831,6 +4835,9 @@ impl RustGisApp {
             let result = self.run("project.importGeolibre", json!({"text":text}));
             self.map.invalidate();
             return result;
+        }
+        if file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgisfield")) {
+            return Err(tl!("A field package opens on a computer or a phone, which have a folder for its basemaps: open it there. Bring Back (Data › Offline) takes its edits into the project here.").to_string());
         }
         let package = file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgispkg"));
         let text = if package {

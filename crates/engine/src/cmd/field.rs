@@ -102,11 +102,17 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         match crate::project::read_file(Path::new(&file), budget) {
             Ok(bytes) => {
                 budget = budget.saturating_sub(bytes.len() as u64);
-                // A name the package's folders can hold as one file, the same in the entry and the
-                // layer's address: `:` and `\` (fine in a Linux name) would be refused or split.
+                // A name every system's folders can hold as one file, the same in the entry and
+                // the layer's address: letters, digits, `-`, `_`, `.` and spaces, anything else `_`
+                // (`:`, `\`, `*`, `?`… are fine in a Linux name, refused or split elsewhere).
                 let stem: String = Path::new(&file).file_name().map_or_else(
                     || "basemap".into(),
-                    |n| n.to_string_lossy().chars().map(|c| if matches!(c, ':' | '\\' | '/') { '_' } else { c }).collect(),
+                    |n| {
+                        n.to_string_lossy()
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' })
+                            .collect()
+                    },
                 );
                 let mut name = stem.clone();
                 for n in 2.. {
@@ -148,7 +154,27 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     // items and their paths…) stays at home. The custom colour ramps and styles go with it, as its
     // layers may draw with them.
     let mut project = crate::project::Project::new(area.clone());
-    project.maps = vec![super::items::embedded_map(&map, &mut budget)];
+    // Rasters were taken out above, so the map goes as it is.
+    project.maps = vec![map];
+    let home = &s.project;
+    let stayed: Vec<String> = [
+        (home.tables.len(), "table(s)"),
+        (home.notebooks.len(), "notebook(s)"),
+        (home.models.len(), "model(s)"),
+        (home.layouts.len(), "layout(s)"),
+        (home.reports.len(), "report(s)"),
+        (home.presentations.len(), "presentation(s)"),
+        (home.workspaces.len(), "imagery workspace(s)"),
+        (home.dl_models.len(), "deep learning model(s)"),
+        (home.maps.len().saturating_sub(1), "other map(s)"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    if !stayed.is_empty() {
+        s.notify(format!("The field package holds only the map '{area}': {} stayed in this project", stayed.join(", ")), false);
+    }
     project.ramps = s.project.ramps.clone();
     project.styles = s.project.styles.clone();
     let readme = format!(
@@ -254,6 +280,16 @@ pub fn forget_new_areas(s: &mut Session, had: usize) {
     }
 }
 
+/// Refuses `path` when it is the open project's own file (or the field package it was opened
+/// from): written there, the package would replace the project, as an export there is refused.
+pub(crate) fn not_the_project(s: &Session, path: &Path) -> Result<(), String> {
+    let same = |a: &Path, b: &Path| a == b || a.canonicalize().ok().zip(b.canonicalize().ok()).is_some_and(|(a, b)| a == b);
+    if s.path.iter().chain(s.opened_package.iter()).any(|project| same(project, path)) {
+        return Err("the field package can't go in the open project's own file: choose another".into());
+    }
+    Ok(())
+}
+
 /// What `offline.package` returns.
 pub(crate) fn packaged(path: &str, area: &str, bytes: usize) -> Value {
     json!({"path": path, "area": area, "bytes": bytes})
@@ -335,7 +371,7 @@ mod tests {
     fn a_field_package_holds_only_its_map_and_a_basemap_of_any_name_is_read() {
         let temp = Temp::new("only");
         // A name a Linux file can have, which a package's folders couldn't hold as it is.
-        let archive = temp.path().join("site:a\\b.mbtiles");
+        let archive = temp.path().join("site:a\\b*?.mbtiles");
         std::fs::write(&archive, b"stand-in archive bytes").unwrap();
         let mut s = sample();
         s.map_mut().tiles.push(TileLayer::new("Site", TileKind::MbTiles, archive.display().to_string()));
@@ -344,16 +380,20 @@ mod tests {
             .tables
             .push(crate::project::Table::new(7, rustgis_data::Dataset::new("Inventory", rustgis_data::GeometryType::None, Vec::new())));
         s.project.folders.push("/home/someone/data".into());
+        let mark = s.notice_mark();
         let (_, bytes) = package(&mut s, &json!({"name": "Survey", "extent": [-20.0, -40.0, 60.0, 40.0]})).unwrap();
+        // What stayed at home is said.
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("stayed in this project") && t.contains("table(s)")), "{said:?}");
         let names: Vec<String> = rustgis_data::zip::read(&bytes).unwrap().into_iter().map(|(n, _)| n).collect();
-        assert!(names.contains(&"basemaps/site_a_b.mbtiles".to_string()), "{names:?}");
+        assert!(names.contains(&"basemaps/site_a_b__.mbtiles".to_string()), "{names:?}");
         let into = temp.path().join("unpacked");
         let project = project_in(&unpack_into(&bytes, &into).unwrap(), &into).unwrap();
         assert!(project.tables.is_empty() && project.folders.is_empty() && project.offline_areas.is_empty());
         assert_eq!(project.maps.len(), 1);
         let base = project.maps[0].tiles.iter().find(|t| t.name == "Site").unwrap();
-        assert_eq!(Path::new(&base.url), into.join("basemaps/site_a_b.mbtiles"));
-        assert!(into.join("basemaps/site_a_b.mbtiles").is_file());
+        assert_eq!(Path::new(&base.url), into.join("basemaps/site_a_b__.mbtiles"));
+        assert!(into.join("basemaps/site_a_b__.mbtiles").is_file());
     }
 
     #[test]
@@ -371,6 +411,29 @@ mod tests {
         forget_new_areas(&mut s, had);
         assert_eq!(s.project.offline_areas.len(), had);
         assert!(s.notices_since(mark).iter().any(|n| n.text.contains("'Cancelled' was removed")));
+        // Not over the open project's own file.
+        let temp = Temp::new("own");
+        let own = temp.path().join("home.rgis");
+        std::fs::write(&own, b"{}").unwrap();
+        s.path = Some(own.clone());
+        let e = s.run("offline.package", &json!({"path": own.display().to_string(), "name": "Own"})).unwrap_err();
+        assert!(e.contains("open project's own file"), "{e}");
+        assert_eq!(std::fs::read(&own).unwrap(), b"{}");
+        // A project of the one map and nothing else: nothing is said to have stayed.
+        let home = &mut s.project;
+        home.maps.truncate(1);
+        home.active_map = 0;
+        home.tables.clear();
+        home.notebooks.clear();
+        home.models.clear();
+        home.layouts.clear();
+        home.reports.clear();
+        home.presentations.clear();
+        home.workspaces.clear();
+        home.dl_models.clear();
+        let mark = s.notice_mark();
+        package(&mut s, &json!({"name": "Alone"})).unwrap();
+        assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("stayed in this project")));
     }
 
     #[test]
