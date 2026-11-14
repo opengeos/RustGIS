@@ -360,20 +360,10 @@ impl ExtrusionSpool {
     }
 }
 
-/// How high (metres) feature `row` of `ds` is extruded: its height field, else `height`, times `factor`.
-pub(crate) fn extrusion_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
-    x.metres(ds, row)
-}
-
 /// A base in pixels within 0..=`cap`, 0 when it is no number, so the height's cap above it is
 /// always a number.
 pub fn base_within(v: f64, cap: f64) -> f64 {
     if v.is_nan() { 0.0 } else { v.clamp(0.0, cap.max(0.0)) }
-}
-
-/// How high (metres) the walls of feature `row` of `ds` start; 0 when it has no usable base.
-pub(crate) fn extrusion_base_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
-    x.base_metres(ds, row)
 }
 
 /// The light of a tilted view's extrusions, as MapLibre's default: from the view's upper left,
@@ -543,6 +533,7 @@ pub(crate) fn extrude_tilted(
     // (centroid depth along the view, outer rings and holes in ground px, base and height in
     // ground px, fog, row)
     let mut shapes: Vec<(f64, Rings, Rings, f64, f64, f64, usize)> = Vec::new();
+    let columns = x.columns(ds);
     for (row, g) in geoms.iter().enumerate() {
         let Some(Geometry::Polygon(polys)) = g else { continue };
         if rows.get(row) != Some(&true) {
@@ -584,8 +575,8 @@ pub(crate) fn extrude_tilted(
         let centroid = rustgis_geom::Coord::new(sum.x / n, sum.y / n);
         // At the feature's own scale (Web Mercator stretches the ground toward the poles).
         let (unit, res) = (m_per_unit(centroid).max(1e-9), cam.res.max(1e-9));
-        let base = base_within(extrusion_base_metres(ds, x, row) / unit / res, 1e7);
-        let up = (extrusion_metres(ds, x, row) / unit / res).clamp(0.0, 1e7 - base);
+        let base = base_within(x.base_metres_at(ds, row, columns) / unit / res, 1e7);
+        let up = (x.metres_at(ds, row, columns) / unit / res).clamp(0.0, 1e7 - base);
         // Fog on the way to the view's reach, by the middle of the feature.
         let depth = cam.depth_scale(centroid, h).map_or(1.0, |k| 1.0 / k.max(1e-9));
         let t = ((depth - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);

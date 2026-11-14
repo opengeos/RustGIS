@@ -3030,7 +3030,8 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
             })
             .unwrap_or(usize::MAX);
         // The roof stands at the base plus the height.
-        let metres = effects::extrusion_base_metres(&layer.dataset, x, row) + effects::extrusion_metres(&layer.dataset, x, row);
+        let columns = x.columns(&layer.dataset);
+        let metres = x.base_metres_at(&layer.dataset, row, columns) + x.metres_at(&layer.dataset, row, columns);
         let offset = |x: f32, y: f32| {
             let m = cam.try_to_map(f64::from(x), f64::from(y), w, h)?;
             let up = (metres / (flat.ground_per_unit(m) * map.body().ratio()).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
@@ -3133,14 +3134,15 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         let layer: &rustgis_map::Layer = layer;
         let styler = layer.styler(Some(scale));
         let extents = layer.projected_extents();
+        let columns = x.columns(&layer.dataset);
         for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
             let Some(Geometry::Polygon(polys)) = g else { continue };
             if rows.get(row) != Some(&true) {
                 continue;
             }
             let Some(origin) = polys.iter().flatten().flatten().find(|c| c.is_finite()).copied() else { continue };
-            let metres = effects::extrusion_metres(&layer.dataset, &x, row);
-            let base_metres = effects::extrusion_base_metres(&layer.dataset, &x, row);
+            let metres = x.metres_at(&layer.dataset, row, columns);
+            let base_metres = x.base_metres_at(&layer.dataset, row, columns);
             let per_unit = (flat.ground_per_unit(origin) * body).max(1e-9);
             let height = metres / per_unit;
             let base_height = base_metres / per_unit;
