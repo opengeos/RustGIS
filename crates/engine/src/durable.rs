@@ -279,8 +279,18 @@ impl<'a> Prepare<'a> {
         self.owners.pop();
     }
 
-    /// Counts the values `dataset` is written without ([`rustgis_data::Dataset::unsaved_numbers`]).
+    /// Counts the values `dataset` is written without ([`rustgis_data::Dataset::unsaved_numbers`]),
+    /// and refuses the output when a feature has a coordinate that isn't a number: the file would
+    /// hold it as null and couldn't be opened again (#1985). Refused here, before anything is
+    /// written, so a file already there is kept as it was.
     pub(crate) fn count_numbers(&mut self, dataset: &rustgis_data::Dataset) {
+        let unsaved = dataset.unsaved_coordinates();
+        if unsaved > 0 && self.refusal.is_none() {
+            self.refusal = Some(format!(
+                "not saved: {unsaved} feature(s) in '{}' have a coordinate that isn't a number (NaN or infinite), which the file can't hold and couldn't be opened with; delete or redraw their geometry first",
+                crate::project::short_name(&dataset.name)
+            ));
+        }
         self.record_numbers(dataset.unsaved_numbers(), format!("'{}'", crate::project::short_name(&dataset.name)).into());
     }
 
