@@ -142,7 +142,7 @@ pub fn commands() -> Vec<C> {
             .roles(&[])
             .effects(crate::policy::Effects::NONE)
             .when(need_polygons)
-            .params(r#"{"layer"?, "field"?: numeric field (metres; null or "" clears it), "base"?: metres}"#),
+            .params(r#"{"layer"?, "field"?: numeric field (metres; null or "" clears it), "base"?: metres (0 to 10,000,000)}"#),
     ]
 }
 
@@ -213,21 +213,31 @@ fn numeric_field(ds: &rustgis_data::Dataset, n: &str) -> Result<String, String> 
 /// `layer.extrusionBase`: what an extruded layer's walls stand on, a numeric field (`field`) else
 /// a constant (`base`), in metres times the extrusion's factor. Each left out stays as it is, so
 /// the height, its field and the factor never change here; null or an empty name clears the
-/// field, and a base that is no number is refused.
+/// field, and a base that is no number, or is outside 0 to 1e7 metres (the height's limit), is
+/// refused rather than changed.
 fn extrusion_base(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
+    if l.extrusion.is_none() {
+        return Err("turn extrusion on first (Layer Extrusion)".into());
+    }
     let field = match p.get("field") {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(v) => match v.as_str().map(str::trim).ok_or("field is a field name, or null to clear it")? {
+        Some(v) => match v.as_str().ok_or("field is a field name, or null to clear it")? {
             "" => Some(None),
             n => Some(Some(numeric_field(&l.dataset, n)?)),
         },
     };
     let base = match p.get("base") {
         None => None,
-        Some(_) => Some(f(p, "base").ok_or("base is a number of metres")?.clamp(0.0, 1e7)),
+        Some(_) => {
+            let b = f(p, "base").ok_or("base is a number of metres")?;
+            if !(0.0..=1e7).contains(&b) {
+                return Err("base is between 0 and 10,000,000 metres".into());
+            }
+            Some(b)
+        }
     };
     change_extrusion(s, p, |x| {
         if let Some(v) = field {
