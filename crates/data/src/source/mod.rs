@@ -211,6 +211,7 @@ impl SourceInfo {
 }
 
 /// A read: the features intersecting `extent` (longitude/latitude; `None` = all), at most `limit`.
+/// A zero-limit count may be refused when matching would require a full geometry scan.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Request {
     pub extent: Option<Extent>,
@@ -222,6 +223,12 @@ impl Request {
     pub fn all() -> Self {
         Request { extent: None, limit: MAX_LIMIT }
     }
+}
+
+/// Refuses an unknown count rather than reporting an unbounded view as empty. A zero-limit
+/// request does not start the full geometry scan needed to determine its matches.
+pub(crate) fn unbounded_count() -> DataError {
+    DataError::Format("A zero-limit read cannot count a view that cannot be bounded in the source coordinate system; request a nonzero limit to count matching features".into())
 }
 
 /// The answer to a [`Request`].
@@ -843,17 +850,40 @@ impl Reproject {
         }
     }
 
-    /// A longitude/latitude extent in native coordinates.
-    pub(crate) fn extent_from_lonlat(&self, e: &Extent) -> Extent {
+    /// A database's query box: refuse an unbounded view before any whole-table sampling.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn database_extent(&self, e: &Extent) -> Result<Extent> {
+        self.extent_from_lonlat(e)
+            .filter(|n| !n.is_empty() && [n.min_x, n.min_y, n.max_x, n.max_y].iter().all(|v| v.is_finite()))
+            .ok_or_else(unbounded_database_view)
+    }
+
+    /// A longitude/latitude extent in native coordinates, or `None` when the system refuses a
+    /// place on its edge (one it can't bring back, #1925): the edge's other places no longer bound
+    /// what's inside it. Local reads scan and filter geometry; database reads refuse explicitly
+    /// rather than sample the whole table before filtering.
+    pub(crate) fn extent_from_lonlat(&self, e: &Extent) -> Option<Extent> {
         match &self.t {
-            None => *e,
+            None => Some(*e),
             Some(t) => {
                 // Clamp to the valid range first: projections fail near the poles.
                 let c = Extent::new(e.min_x.max(-180.0), e.min_y.max(-89.9), e.max_x.min(180.0), e.max_y.min(89.9));
-                around(&c, |p| t.from_lonlat(p))
+                let refused = std::cell::Cell::new(false);
+                let out = around(&c, |p| {
+                    let q = t.from_lonlat(p);
+                    refused.set(refused.get() || q.is_none());
+                    q
+                });
+                (!refused.get()).then_some(out)
             }
         }
     }
+}
+
+/// A refused database view must not become a whole-table sample before local filtering.
+#[cfg(not(target_arch = "wasm32"))]
+fn unbounded_database_view() -> DataError {
+    DataError::Format("the requested view can't be bounded in the database's coordinate system; choose a smaller view".into())
 }
 
 /// A GeoPackage table's `gpkg_spatial_ref_sys` row: organization, its code, and its WKT
@@ -1143,6 +1173,72 @@ pub(crate) fn in_request(g: &Geometry, req: &Request) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tls_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+/// Largest custom CA certificate bundle read (`sslrootcert`, `ssl-ca`, `ca`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CA_BYTES: u64 = 1 << 20;
+
+/// How [`read_ca_roots`] treats non-PEM custom CA files.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaDer {
+    /// PEM only (`sslrootcert`).
+    None,
+    /// Single DER certificate when the file extension is `.der` (`ca`).
+    Extension,
+    /// Single DER certificate regardless of extension when no PEM block header is present (`ssl-ca`).
+    Fallback,
+}
+
+/// Reads and validates a custom CA certificate file (`<= 1 MiB`, regular file, valid PEM or single
+/// DER per `der`), never echoing file contents in an error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_ca_roots(label: &str, file: &Path, der: CaDer) -> Result<rustls::RootCertStore> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    use std::io::Read;
+
+    let bad = |msg: &str| DataError::Format(format!("{label} {}: {msg}", file.display()));
+    let io_err = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::NotFound => bad("no such file"),
+        std::io::ErrorKind::PermissionDenied => bad("permission denied"),
+        _ => bad("couldn't read file"),
+    };
+    let meta = std::fs::metadata(file).map_err(io_err)?;
+    if !meta.is_file() {
+        return Err(bad("not a file"));
+    }
+    if meta.len() > MAX_CA_BYTES {
+        return Err(bad("file is larger than 1 MB"));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    std::fs::File::open(file).map_err(io_err)?.take(MAX_CA_BYTES + 1).read_to_end(&mut bytes).map_err(io_err)?;
+    if bytes.len() as u64 > MAX_CA_BYTES {
+        return Err(bad("file is larger than 1 MB"));
+    }
+    if bytes.is_empty() {
+        return Err(bad("no certificates"));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    let pem_bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let has_pem = pem_bytes.windows(10).any(|w| w == b"-----BEGIN");
+    let try_der = match der {
+        CaDer::None => false,
+        CaDer::Extension => !has_pem && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("der")),
+        CaDer::Fallback => !has_pem,
+    };
+    if try_der {
+        roots.add(CertificateDer::from(bytes)).map_err(|_| bad("invalid certificate"))?;
+        return Ok(roots);
+    }
+    for cert in CertificateDer::pem_slice_iter(pem_bytes) {
+        let cert = cert.map_err(|_| bad("invalid certificate"))?;
+        roots.add(cert).map_err(|_| bad("invalid certificate"))?;
+    }
+    if roots.is_empty() {
+        return Err(bad("no certificates"));
+    }
+    Ok(roots)
 }
 
 #[cfg(test)]

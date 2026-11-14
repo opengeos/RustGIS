@@ -49,6 +49,7 @@ enum DragKind {
     SelectRadius,
     /// Moving or inserting a vertex with the Edit Vertices tool.
     Vertex,
+    BoxEdit,
     /// Moving the selected text graphic, grabbed by its text (#516): its layer id and row, and
     /// where the press was. Held by the drag itself, so it ends with it, however it ends.
     Text {
@@ -481,6 +482,12 @@ impl Default for MapView {
 }
 
 impl MapView {
+    pub(crate) fn cancel_rotated_box_drag(&mut self) {
+        if matches!(self.drag, Some((_, DragKind::BoxEdit))) {
+            self.drag = None;
+        }
+    }
+
     /// Retire old drawings before any of them can report errors for a replacement project.
     fn follow_project(&mut self, opened: u64) {
         if self.project.is_some_and(|p| p != opened) {
@@ -643,12 +650,6 @@ fn now(ui: &Ui) -> f64 {
     ui.input(|i| i.time)
 }
 
-/// Puts a handler on the desktop device for the errors nothing else catches (#1777). wgpu's own
-/// closes the app on any of them, a graphics card running out of memory (2 GB at 2560 × 1440)
-/// too; this one logs them, and notes running out in `out_of_memory`, after which the map
-/// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
-/// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
-/// into a crash once a handler is there.
 /// Puts [`handle_gpu_errors`] on the device once there is one, from the app's frame (the start
 /// page and backstage included, so egui's own uploads are covered from the first frame).
 pub(crate) fn handle_gpu_errors_once(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -661,9 +662,16 @@ pub(crate) fn handle_gpu_errors_once(app: &mut RustGisApp, ctx: &egui::Context) 
     }
 }
 
+/// Puts a handler on the desktop device for the errors nothing else catches (#1777). wgpu's own
+/// closes the app on any of them, a graphics card running out of memory (2 GB at 2560 × 1440)
+/// too; this one logs them, and notes running out in `out_of_memory`, after which the map
+/// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
+/// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
+/// into a crash once a handler is there.
+///
 /// A frame is asked of `ctx` for each error, so the map leaves the card even when nothing else
 /// would draw again (an error in the last frame before the window goes idle).
-#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+#[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "only native builds catch uncaptured GPU errors"))]
 pub(crate) fn handle_gpu_errors(device: &egui_wgpu::wgpu::Device, errors: std::sync::Arc<GpuErrors>, ctx: egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     device.on_uncaptured_error(std::sync::Arc::new(move |e: egui_wgpu::wgpu::Error| {
@@ -689,7 +697,7 @@ const MAX_GPU_ERRORS_LOGGED: u32 = 20;
 
 impl GpuErrors {
     /// Notes `e`, and logs it while few have been: whether it was logged.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "only native builds catch uncaptured GPU errors"))]
     fn note(&self, e: &egui_wgpu::wgpu::Error) -> bool {
         use std::sync::atomic::Ordering;
         let oom = matches!(e, egui_wgpu::wgpu::Error::OutOfMemory { .. });
@@ -698,7 +706,7 @@ impl GpuErrors {
         if n < MAX_GPU_ERRORS_LOGGED {
             log::error!("graphics card error: {e}");
         }
-        if n + 1 == MAX_GPU_ERRORS_LOGGED {
+        if n.saturating_add(1) == MAX_GPU_ERRORS_LOGGED {
             log::error!("further graphics card errors are not logged");
         }
         n < MAX_GPU_ERRORS_LOGGED
@@ -708,10 +716,21 @@ impl GpuErrors {
 /// Once the graphics card has run out of memory, the map is drawn on the CPU: the GPU map's
 /// pictures, tiles and targets are let go, and a notice says so and how to go back. Turning the
 /// GPU on again from the status bar is up to the user; running out again comes back here.
-/// Another error the card reports is said once a session, as it may leave the map drawn wrong.
+/// Another error the card reports is said once a session, as it may leave the map drawn wrong;
+/// so is running out with the map already on the CPU (egui's own textures), for the window.
 pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     use std::sync::atomic::Ordering;
-    if app.map.gpu_errors.other.swap(false, Ordering::SeqCst) && !app.map.gpu_error_said {
+    let ran_out = app.map.gpu_errors.out_of_memory.swap(false, Ordering::SeqCst);
+    // Errors with running out of memory follow from it (what couldn't be made, used): when the
+    // map leaves the card for it, only that is said, and the notice for another error is kept
+    // for one of its own. With the map already off the card, running out is said as another
+    // error is.
+    let leaves = ran_out && app.map.gpu_enabled;
+    // (The swap comes first, so the flag is cleared every frame whatever else holds.) An unrelated
+    // error in the very frame the card ran out goes unsaid with the rest: a trade-off, as the
+    // errors that follow from running out can't be told apart from it.
+    let other = (app.map.gpu_errors.other.swap(false, Ordering::SeqCst) || ran_out) && !leaves;
+    if other && !app.map.gpu_error_said {
         app.map.gpu_error_said = true;
         // (Clicking GPU helps only with the map on the GPU; otherwise it's egui's own drawing.)
         let text = if app.map.gpu_enabled {
@@ -723,7 +742,7 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
         };
         app.session.notify(text, true);
     }
-    if !app.map.gpu_errors.out_of_memory.swap(false, Ordering::SeqCst) || !app.map.gpu_enabled {
+    if !ran_out || !app.map.gpu_enabled {
         return;
     }
     app.map.gpu_enabled = false;
@@ -1752,7 +1771,6 @@ fn show_gpu_frame(
 
 /// Shows a frame the CPU drew for `view` (of a `w × h` map view) as the map's texture, with its
 /// labels, credits and tile errors.
-#[allow(clippy::too_many_arguments)]
 fn show_frame(
     app: &mut RustGisApp,
     ctx: &egui::Context,
@@ -2711,6 +2729,16 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         app.map.kept_lonlat = Some((c, app.session.map().instance_id(), app.session.opened));
     }
     let tool = app.session.tool;
+    crate::boxedit::cancel_stale(app);
+    if tool == Tool::RotatedBox {
+        if resp.secondary_clicked() {
+            if let Some(c) = resp.interact_pointer_pos().and_then(|p| screen_to_lonlat(app, rect, p)) {
+                crate::boxedit::click(app, c, false, false);
+            }
+            app.map.popup = None;
+        }
+        resp.context_menu(|ui| crate::boxedit::context_menu(app, ui));
+    }
     cancel_changed_selection(app, rect);
 
     // A map tool aims with a crosshair, only over the map: the ribbon and panes keep their cursor.
@@ -2827,7 +2855,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
 
     let shift = ui.input(|i| i.modifiers.shift);
-    let middle = ui.input(|i| i.pointer.middle_down());
+    let middle = ui.input(|i| i.pointer.middle_down() || (tool == Tool::RotatedBox && i.key_down(egui::Key::Space)));
     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
     // Dragging with the right button turns the map or the globe (to the right turns it
     // clockwise) and tilts it (up tilts it further), as in MapLibre.
@@ -2870,7 +2898,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.moving_label = Some(MovingLabel { label: l, layer, feature, class, project, map });
             DragKind::Label { origin }
         } else if middle {
+            crate::boxedit::cancel(app);
             DragKind::Pan
+        } else if tool == Tool::RotatedBox && crate::boxedit::drag_start(app, rect, origin, ctrl) {
+            DragKind::BoxEdit
         } else if tool == Tool::EditVertices && crate::vertexedit::drag_start(app, rect, origin) {
             DragKind::Vertex
         } else {
@@ -2979,6 +3010,17 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             ui.ctx().request_repaint();
         }
+    }
+    if let (Some((_, DragKind::BoxEdit)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
+        crate::boxedit::drag_to(app, rect, p, shift);
+        ui.ctx().request_repaint();
+    }
+    if resp.drag_stopped()
+        && let Some((_, DragKind::BoxEdit)) = app.map.drag
+    {
+        app.map.drag = None;
+        crate::boxedit::drag_stop(app);
+        return;
     }
     if let (Some((_, DragKind::Vertex)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
         crate::vertexedit::drag_to(app, rect, p);
@@ -3093,7 +3135,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.double_clicked() {
         if matches!(tool, Tool::Measure | Tool::MeasureArea) || tool.draws_edit() || vertex_shape(tool) {
             finish_sketch(app);
-        } else if tool == Tool::EditVertices {
+        } else if matches!(tool, Tool::EditVertices | Tool::RotatedBox) {
             // Its two clicks chose a vertex or a feature; zooming would lose the place.
         } else if let Some(p) = resp.interact_pointer_pos() {
             // A double-click on a text graphic edits it in the Format pane; elsewhere it zooms in.
@@ -3221,6 +3263,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 app.map.camera_moved = true;
             }
             Tool::EditVertices => crate::vertexedit::click(app, rect, p, c, shift),
+            Tool::RotatedBox => {
+                if !middle {
+                    crate::boxedit::click(app, c, shift, ui.input(|i| i.modifiers.alt));
+                }
+            }
             Tool::CreatePoint => {
                 let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
@@ -3257,12 +3304,19 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     {
         ui.ctx().set_cursor_icon(icon);
     }
-    if resp.secondary_clicked() {
+    if tool == Tool::RotatedBox
+        && let Some(icon) = hover.and_then(|p| crate::boxedit::cursor(app, rect, p))
+    {
+        ui.ctx().set_cursor_icon(icon);
+    }
+    if resp.secondary_clicked() && tool != Tool::RotatedBox {
         app.map.menu_lonlat = app.map.pointer_lonlat;
         app.map.menu_text = resp.interact_pointer_pos().and_then(|p| text_graphic_at(app, ui.ctx(), rect, p));
     }
     // No menu off the Earth (a globe's corners): there is no place for it to act on.
-    if let Some(c) = app.map.menu_lonlat {
+    if tool != Tool::RotatedBox
+        && let Some(c) = app.map.menu_lonlat
+    {
         resp.context_menu(|ui| crate::mapmenu::show(app, ui, c));
     }
     if hover.is_some() && (matches!(tool, Tool::Measure | Tool::MeasureArea) || tool.draws_edit()) && !app.map.sketch.is_empty() {
@@ -3419,7 +3473,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     let editing = &app.session.map().editing;
     if editing.settings.enabled
         && editing.settings.show_vertices
-        && app.session.tool != Tool::EditVertices
+        && !matches!(app.session.tool, Tool::EditVertices | Tool::RotatedBox)
         && (app.session.tool.creates() || app.session.tool.draws_edit() || app.ui.right == Some(crate::RightPane::Editing))
     {
         let mut verts: Vec<Coord> = Vec::new();
@@ -3445,6 +3499,9 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     // The Edit Vertices tool's handles.
     if app.session.tool == Tool::EditVertices {
         crate::vertexedit::draw(app, p, rect, accent);
+    }
+    if app.session.tool == Tool::RotatedBox {
+        crate::boxedit::draw(app, p, rect, accent);
     }
     // The navigator: a compass, zoom buttons and a pan pad in the top-left corner.
     if app.session.map().view.navigator {
@@ -3683,6 +3740,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             Some("Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex")
         }
         Tool::EditVertices => Some("Click a feature, then drag its vertices · click an edge to add one"),
+        Tool::RotatedBox => Some("Drag a box · paddle rotates · Shift snaps · Space or middle-drag pans · Alt-click cycles overlaps"),
         Tool::ZoomIn => Some("Drag a box or click to zoom in"),
         Tool::MoveLabel => Some("Drag a label to where it should be · drag the map to pan · Esc to stop"),
         Tool::Graphic("point") => Some("Click the map to place a point"),
@@ -5017,7 +5075,8 @@ mod tests {
 
     /// The graphics card running out of memory doesn't close the app (#1777): it's noted, and
     /// the map then leaves the GPU for the CPU with a notice, its GPU resources let go. Once:
-    /// turned on again, running out again falls back again. A map on the CPU only forgets it.
+    /// turned on again, running out again falls back again. With the map already on the CPU,
+    /// running out is said once a session, as another error is, worded for the window.
     #[test]
     fn running_out_of_gpu_memory_draws_the_map_on_the_cpu() {
         use egui_wgpu::wgpu::Error;
@@ -5044,12 +5103,19 @@ mod tests {
         assert!(!app.map.gpu_enabled && app.map.gpu_renderer.is_none() && app.map.gpu_frame.is_none() && app.map.split_gpu.is_none());
         assert_eq!(app.session.notices.len(), before + 1);
         assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("ran out of memory"));
-        // Said once; on the CPU already, running out (egui's own textures) is only forgotten.
-        leave_gpu_if_out_of_memory(&mut app);
-        ran_out(&app);
+        // Said once; on the CPU already, running out (egui's own textures) is said as another
+        // error is, once a session, for the window.
         leave_gpu_if_out_of_memory(&mut app);
         assert_eq!(app.session.notices.len(), before + 1);
+        ran_out(&app);
+        leave_gpu_if_out_of_memory(&mut app);
+        assert!(app.map.gpu_error_said && !app.map.gpu_enabled);
+        assert_eq!(app.session.notices.len(), before + 2);
+        assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("window may be drawn wrongly"));
         assert!(!app.map.gpu_errors.out_of_memory.load(Ordering::SeqCst));
+        // (A new session, for what follows.)
+        app.map.gpu_error_said = false;
+        let before = before + 1;
         // Turned on again, running out again falls back again.
         app.run("ui.map.gpu", serde_json::json!({"on": true, "remember": false})).unwrap();
         assert!(app.map.gpu_enabled);
@@ -5057,6 +5123,15 @@ mod tests {
         leave_gpu_if_out_of_memory(&mut app);
         assert!(!app.map.gpu_enabled);
         assert_eq!(app.session.notices.len(), before + 2);
+        // Running out with errors that follow from it, in one frame: only running out is said,
+        // and the notice for another error is kept.
+        app.run("ui.map.gpu", serde_json::json!({"on": true, "remember": false})).unwrap();
+        ran_out(&app);
+        app.map.gpu_errors.note(&invalid());
+        leave_gpu_if_out_of_memory(&mut app);
+        assert!(!app.map.gpu_enabled && !app.map.gpu_error_said);
+        assert_eq!(app.session.notices.len(), before + 3);
+        assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("ran out of memory"));
         // Another error is said once a session, the map left as it is.
         app.map.gpu_enabled = true;
         for _ in 0..2 {
@@ -5064,11 +5139,14 @@ mod tests {
             leave_gpu_if_out_of_memory(&mut app);
         }
         assert!(app.map.gpu_enabled);
-        assert_eq!(app.session.notices.len(), before + 3);
+        assert_eq!(app.session.notices.len(), before + 4);
         assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("Clicking GPU"));
-        // With the map on the CPU, the notice doesn't point at the GPU switch.
+        // With the map on the CPU, the notice doesn't point at the GPU switch, and is said once
+        // for an error and running out together.
         let mut cpu = RustGisApp::with_sample();
+        assert!(!cpu.map.gpu_enabled);
         let before = cpu.session.notices.len();
+        ran_out(&cpu);
         cpu.map.gpu_errors.note(&invalid());
         leave_gpu_if_out_of_memory(&mut cpu);
         assert_eq!(cpu.session.notices.len(), before + 1);
@@ -5087,8 +5165,16 @@ mod tests {
         let r = Raster::new("dem", 4, 4, vec![vec![0.0; 16]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
         let mut map = Map::new("Relief");
         let id = map.add_raster("dem", RasterLayer::from_path(r, "dem.tif"));
-        let relief =
-            |shadow| RasterRenderer::ShadedRelief { band: 0, ramp: None, azimuth: 315.0, altitude: 30.0, z_factor: 1.0, shadow, sky: 0.0 };
+        let relief = |shadow| RasterRenderer::ShadedRelief {
+            band: 0,
+            ramp: None,
+            azimuth: 315.0,
+            altitude: 30.0,
+            z_factor: 1.0,
+            shadow,
+            sky: 0.0,
+            fill: 0.0,
+        };
         let set = |map: &mut Map, shadow: f64, visible: bool| {
             let l = map.layer_mut(id).unwrap();
             l.visible = visible;
