@@ -30,6 +30,14 @@ pub(crate) struct Track {
     pub poor: usize,
     /// When it was started, in milliseconds since 1970, when the clock could say.
     pub started: Option<i64>,
+    /// Where a later run of positions starts, by index into `points`: the device's position was
+    /// off in between (Android stopped it), so the track isn't joined across the gap.
+    pub runs: Vec<usize>,
+    /// The device's position went off since the last position kept: the next starts a run.
+    pub broken: bool,
+    /// The positions left out because they came after a later one (two providers' positions
+    /// out of order): kept, the line would double back.
+    pub late: usize,
 }
 
 impl Track {
@@ -38,13 +46,32 @@ impl Track {
         Track { started: now_ms(), ..Track::default() }
     }
 
-    /// Keeps a position, unless it is less exact than [`TRACK_ACCURACY`] (counted instead).
+    /// Keeps a position, unless it is less exact than [`TRACK_ACCURACY`] or older than the last
+    /// kept (each counted instead). The first after a break starts a run of its own.
     pub fn push(&mut self, fix: Fix) {
         if fix.accuracy.is_some_and(|m| m > TRACK_ACCURACY) {
             self.poor += 1;
-        } else {
-            Arc::make_mut(&mut self.points).push(fix);
+            return;
         }
+        let last = self.points.last().and_then(|f| f.time);
+        if let (Some(last), Some(time)) = (last, fix.time)
+            && time < last
+        {
+            self.late += 1;
+            return;
+        }
+        if std::mem::take(&mut self.broken) && !self.points.is_empty() {
+            self.runs.push(self.points.len());
+        }
+        Arc::make_mut(&mut self.points).push(fix);
+    }
+
+    /// The runs of positions, each between two breaks.
+    pub fn parts(&self) -> Vec<&[Fix]> {
+        let mut starts = vec![0];
+        starts.extend(self.runs.iter().copied().filter(|i| *i > 0 && *i < self.points.len()));
+        starts.push(self.points.len());
+        starts.windows(2).filter_map(|w| self.points.get(*w.first()?..*w.get(1)?)).collect()
     }
 
     /// How long it ran, in whole minutes, from its first position's time to its last.
@@ -167,20 +194,39 @@ pub(crate) fn track_text(track: &Track, locating: bool) -> String {
 /// added and what was left out. A track of fewer than two positions adds nothing, and says so.
 /// `Ok` once a line was added or the track was too short to be one; a track that couldn't be
 /// added (editing or the layer refused, the front end says why) comes back, to be kept rather
-/// than lost.
+/// than lost. A track with breaks (the device's position was off) is stored in parts, one for
+/// each run of positions, and that is said.
+///
+/// Runs on the window's thread, as `edit.addFeature` does: it is one feature, one edit that
+/// undoes, of a line of a position a second (a day's track is under 100,000 coordinates, read and
+/// copied once), not work that grows with the map's data.
 pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> Result<(), Track> {
-    let left_out = |app: &mut RustGisApp, poor: usize| {
-        if poor > 0 {
+    let left_out = |app: &mut RustGisApp, track: &Track, alone: usize| {
+        if track.poor > 0 {
             let text = i18n::fmt(
                 "{n} positions were left out of the track: each was less exact than {m} m.",
-                &[("n", &poor.to_string()), ("m", &TRACK_ACCURACY.to_string())],
+                &[("n", &track.poor.to_string()), ("m", &TRACK_ACCURACY.to_string())],
+            );
+            app.session.notify(text, false);
+        }
+        if track.late > 0 {
+            let text =
+                i18n::fmt("{n} positions were left out of the track: each came after a later one.", &[("n", &track.late.to_string())]);
+            app.session.notify(text, false);
+        }
+        if alone > 0 {
+            let text = i18n::fmt(
+                "{n} positions were left out of the track: each was alone between two breaks, too few for a line.",
+                &[("n", &alone.to_string())],
             );
             app.session.notify(text, false);
         }
     };
-    if track.points.len() < 2 {
+    let parts: Vec<&[Fix]> = track.parts().into_iter().filter(|p| p.len() >= 2).collect();
+    let alone = track.points.len() - parts.iter().map(|p| p.len()).sum::<usize>();
+    if parts.is_empty() {
         app.session.notify(tl!("The track wasn't added: it has fewer than two positions."), true);
-        left_out(app, track.poor);
+        left_out(app, &track, 0);
         return Ok(());
     }
     // Editing first: a Tracks layer isn't made for a track that then can't be added.
@@ -192,22 +238,30 @@ pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> Result<(), Track> {
     };
     let started = track.started.or(track.points.first().and_then(|f| f.time)).and_then(stamp).unwrap_or_default();
     let name = if started.is_empty() { tl!("Track").to_string() } else { i18n::fmt("Track {start}", &[("start", &started)]) };
+    let kept = (track.points.len() - alone).to_string();
     let notes = match track.minutes() {
-        Some(m) => i18n::fmt("{n} positions over {m} min", &[("n", &track.points.len().to_string()), ("m", &m.to_string())]),
-        None => i18n::fmt("{n} positions", &[("n", &track.points.len().to_string())]),
+        Some(m) => i18n::fmt("{n} positions over {m} min", &[("n", &kept), ("m", &m.to_string())]),
+        None => i18n::fmt("{n} positions", &[("n", &kept)]),
     };
-    let line: Vec<Value> = track.points.iter().map(|f| json!([f.lon, f.lat])).collect();
-    let feature = json!({
-        "layer": layer,
-        "geometry": {"type": "LineString", "coordinates": line},
-        "attributes": {"name": name, "notes": notes},
-    });
+    let line = |part: &[Fix]| -> Vec<Value> { part.iter().map(|f| json!([f.lon, f.lat])).collect() };
+    let geometry = match parts.as_slice() {
+        [one] => json!({"type": "LineString", "coordinates": line(one)}),
+        many => json!({"type": "MultiLineString", "coordinates": many.iter().map(|p| line(p)).collect::<Vec<_>>()}),
+    };
+    let feature = json!({"layer": layer, "geometry": geometry, "attributes": {"name": name, "notes": notes}});
     if app.run_by_user("edit.addFeature", feature).is_err() {
         return Err(track);
     }
     let named = app.session.map().layer(layer).map_or_else(|| TRACKS.to_string(), |l| l.name.clone());
     app.session.notify(i18n::fmt("Added the track to {layer}: {notes}.", &[("layer", &named), ("notes", &notes)]), false);
-    left_out(app, track.poor);
+    if parts.len() > 1 {
+        let text = i18n::fmt(
+            "The track has breaks where this device's position was off: it is stored in {n} parts, not joined across them.",
+            &[("n", &parts.len().to_string())],
+        );
+        app.session.notify(text, false);
+    }
+    left_out(app, &track, alone);
     Ok(())
 }
 
@@ -322,6 +376,45 @@ mod tests {
         let wide = Track { points: Arc::new(vec![fix(0.0, 0.0, None, Some(0)), fix(1.0, 0.0, None, Some(i64::MAX))]), ..Track::default() };
         assert_eq!(wide.minutes(), Some(i64::MAX / 60_000));
         assert_eq!(stamp(1_794_614_460_123).as_deref(), Some("2026-11-14 00:01Z"));
+    }
+
+    #[test]
+    fn a_track_with_a_break_is_stored_in_parts_and_a_late_position_is_left_out() {
+        use rustgis_ui_egui::rustgis_engine::data::Geometry;
+        let mut app = RustGisApp::with_sample();
+        let mut track = Track::default();
+        track.push(fix(1.0, 1.0, None, Some(0)));
+        track.push(fix(1.1, 1.0, None, Some(2000)));
+        // Out of order: before the last kept.
+        track.push(fix(1.05, 1.0, None, Some(1000)));
+        // The position went off, then came back somewhere else.
+        track.broken = true;
+        track.push(fix(2.0, 1.0, None, Some(60_000)));
+        track.push(fix(2.1, 1.0, None, Some(61_000)));
+        // And off again, with one position before the end: too few for a line of its own.
+        track.broken = true;
+        track.push(fix(3.0, 1.0, None, Some(90_000)));
+        assert_eq!((track.points.len(), track.late, track.runs.clone()), (5, 1, vec![2, 4]));
+        assert_eq!(track.parts().iter().map(|p| p.len()).collect::<Vec<_>>(), [2, 2, 1]);
+        let mark = app.session.notice_mark();
+        assert!(finish(&mut app, track).is_ok());
+        let tracks = app.session.map().layers.iter().find(|l| l.name == TRACKS).unwrap();
+        match &tracks.dataset.features[0].geometry {
+            Some(Geometry::Line(parts)) => assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2]),
+            other => panic!("{other:?}"),
+        }
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("stored in 2 parts")), "{said:?}");
+        assert!(said.iter().any(|t| t.starts_with("1 positions") && t.contains("after a later one")), "{said:?}");
+        assert!(said.iter().any(|t| t.starts_with("1 positions") && t.contains("alone between two breaks")), "{said:?}");
+        // A track without breaks or late positions says none of it.
+        let mut clean = Track::default();
+        clean.push(fix(1.0, 1.0, None, Some(0)));
+        clean.push(fix(1.1, 1.0, None, Some(1000)));
+        let mark = app.session.notice_mark();
+        assert!(finish(&mut app, clean).is_ok());
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().all(|t| !t.contains("parts") && !t.contains("left out")), "{said:?}");
     }
 
     #[test]
