@@ -2434,6 +2434,7 @@ pub(crate) fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: O
     crate::dbf::readable_header_date(&mut parts.dbf);
     let date_columns = crate::dbf::dates_as_text(&mut parts.dbf);
     crate::dbf::floats_as_numeric(&mut parts.dbf);
+    let decimals = crate::dbf::field_decimals(&parts.dbf);
     let dbf = shapefile::dbase::ReaderBuilder::new()
         .with_encoding(encoding.decoder())
         .build(Cursor::new(parts.dbf))
@@ -2578,7 +2579,7 @@ pub(crate) fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: O
     if ds.geometry_type == GeometryType::None && unconverted > 0 {
         ds.geometry_type = source_kind;
     }
-    integral_numeric_to_integer(&mut ds);
+    integral_numeric_to_integer(&mut ds, &decimals);
     let e = ds.extent();
     if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
         report.messages.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
@@ -2628,12 +2629,16 @@ fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Result<Option<(C
     }
 }
 
-/// The .dbf header doesn't say whether a Numeric column has decimals, so a Double column whose
-/// values are all whole numbers within i64 range is read as Integer.
-fn integral_numeric_to_integer(ds: &mut Dataset) {
+/// A dBASE Numeric column with no decimals declared whose values are all whole numbers
+/// within i64 range is read as Integer. A column with decimals declared (decimals > 0)
+/// remains Double.
+fn integral_numeric_to_integer(ds: &mut Dataset, decimals: &[u8]) {
     const LIMIT: f64 = 9.0e15;
     for fi in 0..ds.fields.len() {
         if ds.fields.get(fi).map(|f| f.ty) != Some(FieldType::Double) {
+            continue;
+        }
+        if decimals.get(fi).is_some_and(|&d| d > 0) {
             continue;
         }
         let whole = ds.features.iter().all(|f| match f.attrs.get(fi) {
@@ -5491,5 +5496,22 @@ mod tests {
         for e in ["shp", "shx", "dbf"] {
             assert!(dir.path().join(format!("out.{e}")).exists());
         }
+    }
+
+    #[test]
+    fn shapefile_dbf_double_with_whole_numbers_remains_double() {
+        let dir = tempfile::tempdir().unwrap();
+        let shp = dir.path().join("values.shp");
+        let fields = vec![Field::new("rate", FieldType::Double), Field::new("count", FieldType::Integer)];
+        let mut ds = Dataset::new("values", GeometryType::Point, fields);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Float(10.0), Value::Int(1)]);
+        ds.push(Some(Geometry::Point(Coord::new(2.0, 3.0))), vec![Value::Float(20.0), Value::Int(2)]);
+        write_path(&ds, &shp).unwrap();
+
+        let (read_back, _) = read_shapefile_in(&shp, "values", None).unwrap();
+        assert_eq!(read_back.fields[0].ty, FieldType::Double);
+        assert_eq!(read_back.features[0].attrs[0], Value::Float(10.0));
+        assert_eq!(read_back.fields[1].ty, FieldType::Integer);
+        assert_eq!(read_back.features[0].attrs[1], Value::Int(1));
     }
 }
