@@ -47232,7 +47232,7 @@ fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
         let said = if stream {
             "pts: 1 row couldn't be read and was left out"
         } else {
-            "1 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
+            "pts: 1 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
         };
         assert!(notices.iter().any(|n| n == said), "stream {stream}: {notices:?}");
         let geometries: Vec<_> = t.map().layer(id).unwrap().dataset.features.iter().map(|f| f.geometry.clone()).collect();

@@ -2640,7 +2640,7 @@ pub(crate) fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: O
     }
     if not_numbers > 0 {
         report.messages.push(format!(
-            "{not_numbers} shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
+            "{name}: {not_numbers} shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
         ));
     }
     ds.crs_incomplete = unconverted > 0;
@@ -5158,7 +5158,8 @@ mod tests {
         assert_eq!(ds.unsaved_coordinates(), 0);
         assert!(
             rep.messages.contains(
-                &"2 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry".to_string()
+                &"bad: 2 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
+                    .to_string()
             ),
             "{:?}",
             rep.messages
