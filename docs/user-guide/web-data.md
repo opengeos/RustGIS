@@ -43,8 +43,11 @@ Data added by its address, from a web server or an S3 bucket, is described in
 ## STAC catalogs
 
 **Home › Add › Web Data › STAC Search…** searches a [STAC](https://stacspec.org) API for imagery and
-other assets: by collection, dates, the most cloud cover and (by default) where the map is. The
-default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1);
+other assets: by collection, dates, the most cloud cover and (by default) where the map is, in the
+order you pick under **Sort by** (the API's own, newest first, oldest first or least cloud first;
+an API whose items come back visibly not in that order is reported, and so is a page whose order
+can't be checked, such as dates in mixed time zones). A static catalog is walked
+in its own order, so it has no sort. The default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1);
 Microsoft's [Planetary Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered
 beside it, and other APIs with GET item search work. **Collections** lists what the API offers,
 and **Find Items** shows up to 50 items as cards
@@ -754,6 +757,31 @@ most 32 tile layers on a map):
 rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-122.55,37.7,-122.3,37.85]}' --cmd 'embeddings.search={"dataset":"alphaearth","year":2024}' --cmd 'embeddings.add={"dataset":"alphaearth","url":"https://data.source.coop/tge-labs/aef/v1/annual/2024/10N/xcyo46pot2fg6a61t-0000008192-0000000000.tiff"}' --cmd 'share.exportMap={"path":"aef.png"}'
 rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-42.91,-20.78,-42.85,-20.735]}' --cmd 'embeddings.addCube={"dataset":"alphaearth"}' --cmd 'time.goTo={"date":"2017"}' --cmd 'share.exportMap={"path":"aef_2017.png"}' --cmd 'time.goTo={"date":"2025"}' --cmd 'share.exportMap={"path":"aef_2025.png"}'
 rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-83.96,35.94,-83.9,35.98]}' --cmd 'embeddings.add={"dataset":"tessera","year":2024}' --cmd 'share.exportMap={"path":"tessera.png"}'
+```
+
+AlphaEarth's 64 values have no meaning one by one, so a picture of three of them only shows where
+places differ. What they are for is comparing places and years, which two commands do over the map's
+extent (or `"bbox"`), reading one AlphaEarth tile's window by range, all 64 bands (at most about
+1000 × 1000 cells, 10 × 10 km; `"cellSize"` reads an overview for a larger area). Each makes a
+32-bit raster in the tile's UTM coordinate system; a cell with no embedding (AlphaEarth's −128) has
+no value.
+
+- `embeddings.similarity` (`"point"`: [longitude, latitude], or `"points"`: up to 1000 of them,
+  averaged; `"year"`, 2024 by default): each cell's cosine similarity to the reference's embedding,
+  from −1 to 1. 1 is a place like the reference. Reference points outside the area read, or on no
+  data, are left out and said.
+- `embeddings.change` (`"from"`, 2017 by default, and `"to"`, 2025): how far each cell's embedding
+  moved between the two years, 1 − their cosine, from 0 (unchanged) to 2.
+
+The vectors are dequantised (`sign(v)·(v/127.5)²`) and scaled to unit length first. When the area
+meets several tiles, the one nearest its centre with the years asked for is read, and the others
+are said: keep the area within one tile. They run on the desktop and the command line (in the web
+app, not yet), and there is no button for them yet. Each adds its raster as a layer: `share.exportRaster`
+saves its values as a GeoTIFF, and `share.exportMap` a PNG preview of the map:
+
+```sh
+rustgis-cli run --cmd 'embeddings.similarity={"dataset":"alphaearth","year":2024,"point":[-42.88,-20.75],"bbox":[-42.91,-20.78,-42.85,-20.735]}' --cmd 'share.exportRaster={"layer":"AlphaEarth 2024 similarity","path":"aef_similarity.tif"}' --cmd 'share.exportMap={"path":"aef_similarity.png"}'
+rustgis-cli run --cmd 'embeddings.change={"dataset":"alphaearth","from":2017,"to":2025,"bbox":[-42.91,-20.78,-42.85,-20.735]}' --cmd 'share.exportRaster={"layer":"AlphaEarth change 2017–2025","path":"aef_change.tif"}' --cmd 'share.exportMap={"path":"aef_change.png"}'
 ```
 
 These reach the network: the AI Assistant asks first and plugins need the network permission.

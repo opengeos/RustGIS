@@ -22,6 +22,7 @@ mod bookmarkpane;
 mod catalogsui;
 mod chrome;
 mod comets;
+mod completion;
 mod connectiontree;
 mod connectionui;
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +44,8 @@ mod extensionsui;
 mod failureui;
 mod fieldlists;
 mod fieldmenu;
+#[cfg(not(target_arch = "wasm32"))]
+mod filedialog;
 mod fill_editor;
 mod geocodeui;
 mod geolibreui;
@@ -158,6 +161,10 @@ fn complete_gp_file(result: Result<Value, String>, id: u64, completed: &Result<V
     visit(&mut result, id, completed)?;
     Ok(result)
 }
+
+/// Another shell's interface around the map ([`RustGisApp::chrome`]): it lays out its own panels
+/// in the window's `Ui` and draws the map with [`RustGisApp::map_view`] in what is left.
+pub type Chrome = fn(&mut RustGisApp, &mut egui::Ui);
 
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
@@ -812,9 +819,11 @@ pub struct UiState {
     /// Add Delimited Text, for the file being picked (web): `null` opens its dialog for the file,
     /// a script's options are read with it.
     pub pending_csv: Option<Value>,
-    /// Import DXF, for the drawing being picked (web): `null` opens its dialog for the file, a
-    /// script's options are read with it.
-    pub pending_dxf: Option<Value>,
+    /// Import DXF options by picker request (web): `null` opens the dialog; a script's options
+    /// are read with its drawing even when other pickers finish first.
+    pub pending_dxf: std::collections::BTreeMap<u64, Value>,
+    /// Monotonic identifier keeps concurrently open DXF pickers distinct.
+    pub next_dxf: u64,
     /// CRS override for the next Shapefile picked by Import Shapefile with Projection.
     pub pending_shapefile: Option<Value>,
     /// Drawings picked while Import DXF was open for one (several dropped together): each opens
@@ -1027,7 +1036,8 @@ impl Default for UiState {
             pending_open: None,
             web_file: None,
             pending_csv: None,
-            pending_dxf: None,
+            pending_dxf: Default::default(),
+            next_dxf: 0,
             pending_shapefile: None,
             dxf_waiting: std::collections::VecDeque::new(),
             downloads: Vec::new(),
@@ -1140,6 +1150,16 @@ pub struct RustGisApp {
     /// Add Data and Load All Features read on a thread of their own (the desktop app; see
     /// [`readjob`]). Off, as for tests and the examples, they read as the command runs.
     pub reads_off_frame: bool,
+    /// What another shell draws around the map in place of the ribbon, the panes and the status
+    /// bar (the touch interface, `rustgis-ui-touch`). `None` is the desktop interface. Dialogs
+    /// and the Project menu's page are drawn either way.
+    pub chrome: Option<Chrome>,
+    /// Whether the user wants the device's position shown: a shell that can report one (a
+    /// phone's) starts and stops its positioning by this, and fills in [`RustGisApp::position`].
+    pub locate: bool,
+    /// Where the device is, as the shell last reported it; `None` until it has, and again once
+    /// positioning is off. An interface draws it on the map and can capture at it.
+    pub position: Option<rustgis_engine::platform::Fix>,
     /// Watches linked local files for changes made outside RustGIS and offers Reload Data
     /// (the desktop app; see [`diskwatch`]). Off for tests, unless one turns it on (as `ui_shot`'s
     /// `watchFiles` does).
@@ -1406,6 +1426,9 @@ impl RustGisApp {
             #[cfg(not(target_arch = "wasm32"))]
             reads: readjob::Reads::default(),
             reads_off_frame: false,
+            chrome: None,
+            locate: false,
+            position: None,
             #[cfg(not(target_arch = "wasm32"))]
             watch_files: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1808,11 +1831,17 @@ impl RustGisApp {
             };
             return self.open_bytes_with(name, bytes, Some(options));
         }
-        if let Some(name) = name.strip_prefix(DXF_PICK) {
-            return match self.ui.pending_dxf.take() {
-                Some(Value::Null) => dialogs::open_dxf(self, name, dialogs::DxfSource::Bytes(bytes.to_vec())),
-                options @ Some(_) => self.open_bytes_with(name, bytes, options),
-                None => self.open_bytes(name, bytes),
+        if let Some(picked) = name.strip_prefix(DXF_PICK) {
+            let (id, name) = picked.split_once(':').ok_or(tl!("Invalid DXF picker request"))?;
+            let id = id.parse::<u64>().map_err(|_| tl!("Invalid DXF picker request"))?;
+            let options = self.ui.pending_dxf.remove(&id).ok_or(tl!("DXF picker request is no longer available"))?;
+            if name.is_empty() {
+                return Ok(Value::Null);
+            }
+            return if options.is_null() {
+                dialogs::open_dxf(self, name, dialogs::DxfSource::Bytes(bytes.to_vec()))
+            } else {
+                self.import_dxf_bytes(name, bytes, options)
             };
         }
         match name.strip_prefix(DELIMITED_PICK) {
@@ -1822,6 +1851,14 @@ impl RustGisApp {
             },
             None => self.open_bytes(name, bytes),
         }
+    }
+
+    /// Imports a DXF drawing with its own options, leaving unrelated picker commands intact.
+    fn import_dxf_bytes(&mut self, name: &str, bytes: &[u8], mut options: Value) -> Result<Value, String> {
+        use base64::Engine;
+        options["fileName"] = json!(name);
+        options["data"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
+        self.run("layer.addDataBytes", options)
     }
 
     /// Opens file bytes with picker options (import options, a source CRS), forwarding them before
@@ -1989,10 +2026,14 @@ impl RustGisApp {
             // cannot confirm that this renamed document reached a file.
             self.session.mark_unsaved();
         }
-        self.session.notify(
-            crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)]),
-            false,
-        );
+        // On Android the file is written once the user has chosen its place, and the shell
+        // says then whether it was.
+        let offered = if cfg!(target_os = "android") {
+            crate::i18n::fmt("Choose where to save {name}.", &[("name", &file)])
+        } else {
+            crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)])
+        };
+        self.session.notify(offered, false);
         report.notify(&mut self.session);
         self.ui.web_file = Some(file);
         Ok(())
@@ -2012,7 +2053,12 @@ impl RustGisApp {
                     self.session.notify(e, true);
                     return false;
                 }
-                self.session.notify(crate::i18n::fmt("Download offered: {name}", &[("name", name)]), false);
+                let offered = if cfg!(target_os = "android") {
+                    crate::i18n::fmt("Choose where to save {name}.", &[("name", name)])
+                } else {
+                    crate::i18n::fmt("Download offered: {name}", &[("name", name)])
+                };
+                self.session.notify(offered, false);
                 true
             }
             None => false,
@@ -2367,6 +2413,32 @@ impl RustGisApp {
         readjob::stop(self, std::time::Duration::from_secs(5));
     }
 
+    /// Draws the map into `ui`, with its own controls (zoom, compass, scale bar): for a shell
+    /// that lays out its own interface ([`RustGisApp::chrome`]).
+    pub fn map_view(&mut self, ui: &mut egui::Ui) {
+        mapview::show(self, ui);
+    }
+
+    /// Where a longitude and latitude is on screen (points), in the map as it was last drawn: for
+    /// a shell that draws over the map ([`RustGisApp::chrome`]). `None` before the map is drawn,
+    /// and for a place the view doesn't show (behind the globe, off the projection).
+    pub fn lonlat_to_screen(&self, lon: f64, lat: f64) -> Option<egui::Pos2> {
+        let (rect, _) = self.map.view_rect?;
+        mapview::lonlat_to_screen(self, rect, rustgis_engine::geom::Coord::new(lon, lat))
+    }
+
+    /// Whether background work is running that the user is shown, with its Cancel: an export, a
+    /// file or a layer being read, a download. A shell that draws its own interface
+    /// ([`RustGisApp::chrome`]) shows [`RustGisApp::background_status`] while it is.
+    pub fn background_busy(&self) -> bool {
+        chrome::background_busy(self)
+    }
+
+    /// Draws that work's progress and Cancel into `ui`, as the desktop's status bar does.
+    pub fn background_status(&mut self, ui: &mut egui::Ui) {
+        chrome::background_status(self, ui);
+    }
+
     /// Whether this shell opens files by path (the desktop app; the web app picks them in the
     /// browser instead).
     pub(crate) fn opens_files(&self) -> bool {
@@ -2480,6 +2552,11 @@ impl RustGisApp {
             if let Some(command) = archive {
                 return readjob::run(self, command, params);
             }
+            if params.get("table").is_some_and(|t| !t.is_null())
+                && let Some((command, _)) = rustgis_engine::cmd::edit::table_edit_in_background(id)
+            {
+                return readjob::run(self, command, params);
+            }
             // The topology check's work grows with the layers: on a thread of its own (#1291).
             if id == "topology.validate" {
                 let params = if params.is_null() { json!({}) } else { params };
@@ -2489,6 +2566,15 @@ impl RustGisApp {
             // it found said once it lands (Command Search shows no answer).
             if id == "source.syncState" {
                 return readjob::run_then(self, "source.syncState", params, Some(sync_state_said));
+            }
+            // Publishing hashes, reads and writes the whole file: on a thread of its own, with
+            // progress and Cancel, as an export is.
+            if id == "source.publish" {
+                let params = if params.is_null() { json!({}) } else { params };
+                // Refused before it starts (another export running, no record): said, as Command
+                // Search shows no answer.
+                let mark = self.session.notice_mark();
+                return exportjob::start(self, "source.publish", params).inspect_err(|e| self.command_failed(id, e, mark));
             }
             // Converting the labels of a layer read in place reads all of its source first, on a
             // thread of its own, whoever asks (a click, the assistant).
@@ -2732,6 +2818,11 @@ impl RustGisApp {
         if id == "stac.search"
             && !params.get("intersects").and_then(Value::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case("selection"))
         {
+            return None;
+        }
+        // An edit of a standalone table acts on the table, not the active layer: a step naming
+        // both would be refused when it runs again.
+        if id.starts_with("edit.") && params.get("table").is_some_and(|t| !t.is_null()) {
             return None;
         }
         let spec = self.session.registry.get(id).filter(|c| c.mutates && params.get("layer").is_none_or(Value::is_null)).copied()?;
@@ -3543,7 +3634,6 @@ impl RustGisApp {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
                     self.ui.pending_open = None;
-                    self.ui.pending_dxf = None;
                     // `null`: the dialog, for the file picked.
                     self.ui.pending_csv = Some(opts.unwrap_or(Value::Null));
                     open("text");
@@ -3569,13 +3659,18 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     // `null`: the dialog, for the file picked.
-                    self.ui.pending_dxf = Some(opts.unwrap_or(Value::Null));
-                    open("dxf");
+                    if self.ui.pending_dxf.len() >= 64 {
+                        return Err(tl!("Too many DXF pickers are open; close one before choosing another drawing").into());
+                    }
+                    self.ui.next_dxf = self.ui.next_dxf.checked_add(1).ok_or(tl!("DXF picker request limit reached"))?;
+                    let id = self.ui.next_dxf;
+                    self.ui.pending_dxf.insert(id, opts.unwrap_or(Value::Null));
+                    open(&format!("dxf:{id}"));
                 } else if let Some(path) = dialogs::pick_open(&["dxf"], tl!("DXF drawing")) {
                     return match opts {
                         Some(mut q) => {
                             q["path"] = json!(path);
-                            self.run("layer.addData", q)
+                            dialogs::add_dxf_file(self, q)
                         }
                         None => dialogs::open_dxf_path(self, &path),
                     };
@@ -3740,7 +3835,6 @@ impl RustGisApp {
                     self.ui.pending_picture = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
-                    self.ui.pending_dxf = None;
                     open("data");
                 } else if let Some(path) = dialogs::pick_open(
                     &[
@@ -4012,7 +4106,7 @@ impl RustGisApp {
             }
             "ui.addFolder" => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                if let Some(dir) = crate::filedialog::FileDialog::new().pick_folder() {
                     return self.run("project.addFolder", json!({"path": dir.display().to_string()}));
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -4656,6 +4750,13 @@ impl RustGisApp {
                     {
                         embeddingsui::pick(self, d)?;
                     }
+                    return Ok(Value::Null);
+                }
+                // Add Field and Calculate Field from a standalone table's view act on that table.
+                if p.get("table").is_some_and(|t| !t.is_null()) {
+                    let i = self.session.table_index(p)?;
+                    let id = self.session.project.tables.get(i).map(|t| t.id).ok_or("no such table")?;
+                    self.dialogs.open_on_table(which, &self.session, id)?;
                     return Ok(Value::Null);
                 }
                 self.dialogs.open(which, &self.session)?;
@@ -5771,6 +5872,16 @@ impl RustGisApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
+        // A picker Android doesn't have was asked for: said, as the click did nothing.
+        #[cfg(target_os = "android")]
+        for what in filedialog::take_refused() {
+            let text = match what {
+                "choose a folder" => tl!("Choosing a folder isn't available on Android yet."),
+                "save a file" => tl!("Saving to a file of your choice isn't available here on Android yet."),
+                _ => tl!("Choosing a file isn't available here on Android yet."),
+            };
+            self.session.notify(text, false);
+        }
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
             Some(inbox) => std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner())),
@@ -5914,6 +6025,8 @@ impl RustGisApp {
         }
         if self.ui.backstage {
             backstage::show(self, ui);
+        } else if let Some(chrome) = self.chrome {
+            chrome(self, ui);
         } else {
             chrome::header(self, ui);
             ribbon::show(self, ui);

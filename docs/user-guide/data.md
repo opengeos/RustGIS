@@ -218,8 +218,9 @@ the fallback. Keep the sidecar files together.
 
 Open a feature layer's table with ++ctrl+t++ (++cmd+t++ on macOS), **Home › Selection › Attributes**
 or **Attribute Table** on a feature layer's **Data** tab (`table.open`). Rows and map selections stay in sync.
-Standalone tables open from their right-click menu; their cells are read only. See [The attribute table](analysis.md#the-attribute-table) for
-sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
+Standalone tables open from their right-click menu and are edited the same way
+([editing a standalone table](analysis.md#editing-a-standalone-table)). See
+[The attribute table](analysis.md#the-attribute-table) for sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
 and **Definition Query** (the full grammar is in [Expressions](expressions.md)). These clauses filter a layer; they are not DuckDB queries.
 
 For an editable feature layer, double-click a cell to change it. The table's toolbar also adds
@@ -283,7 +284,9 @@ WHERE bbox.xmin BETWEEN -83.95 AND -83.89 AND bbox.ymin BETWEEN 35.94 AND 35.98
 ```
 
 The first geometry column becomes the layer's geometry; other columns become its attributes (types
-RustGIS doesn't read, such as dates and lists, as text). A geometry that says its coordinate system
+RustGIS doesn't read, such as lists, as text). `DATE` columns become dates, `TIMESTAMP` columns
+date-times without a zone and `TIMESTAMPTZ` columns instants in UTC; a `TIMESTAMP_NS` stays text,
+which keeps its nanoseconds. A geometry that says its coordinate system
 is converted to longitude/latitude; give `"crs"` (such as `EPSG:2263`) for one that doesn't. A
 result mixing geometry types becomes a layer per type (points on top, polygons at the bottom), and
 rows without a geometry are left out.
@@ -322,6 +325,12 @@ type, points on top, and empty tables (such as the TIGER geocoder's) are left ou
 their ids between views: the table's integer primary key, else the row's place in the table (the
 rows of a view or a partitioned table without a key are numbered as read, so theirs can change
 between views).
+
+`date` columns are read as dates, and `timestamp` and `timestamptz` columns as date-times:
+a `timestamp` stays the wall-clock time it holds, and a `timestamptz` is the instant, shown in UTC
+whatever the server's or database's time zone. Values a date field can't hold (`infinity`, a
+year BC or after 9999) are read as empty, and the layer counts them by field. `time` and
+`interval` columns stay text.
 
 Passwords are never written to the project. By default, an entered password lasts until
 RustGIS closes. For a named desktop connection, **Remember on this computer** is an unchecked
@@ -393,8 +402,11 @@ Only what you changed is written: the columns whose values differ, and the geome
 takes the value of its key field, else the table's default key (`serial`, identity), else its
 feature id, and its feature takes the key it was saved with. A new row's empty fields take their
 column's default, NULL when it has none. Fields the table has no column for
-aren't saved, and the message names them. The layer says when the database's user can't insert,
-update or delete the table's rows; saving is then refused.
+aren't saved, and the message names them. A date-time with an offset (`+02:00`) saved to a
+`timestamptz` column keeps its moment, held in UTC; saved to a `timestamp` column, it keeps the
+clock time it shows. Either way its offset isn't kept. A date-time without a zone saved to a
+`timestamptz` column is taken as UTC. The message counts each of these by field. The layer says
+when the database's user can't insert, update or delete the table's rows; saving is then refused.
 
 ```sh
 rustgis-cli run --cmd 'pg.connect={"host":"localhost","database":"gis","user":"postgres"}' \
@@ -493,6 +505,11 @@ columns). An address without a database lists the tables of every database but t
 as `database.table`. The session is read only, and a server asking for a local file (`LOAD DATA
 LOCAL INFILE`) is sent none.
 
+`DATE` columns are read as dates and `DATETIME` columns as date-times without a zone. `TIMESTAMP`
+columns, which MySQL holds as instants, are read in UTC whatever the server's time zone. Zero
+and partial dates (`0000-00-00`, `2026-03-00`) are read as empty, and the layer counts them by
+field. `TIME` and `YEAR` columns stay as they were: text and numbers.
+
 `ssl-mode` in the address's query sets the encryption, as the `mysql` client names it:
 `PREFERRED` (the default) encrypts, connecting unencrypted only when the server offers no
 encryption (the layer then says so), and `REQUIRED` always encrypts; neither checks the server's
@@ -557,6 +574,12 @@ more rows match than a view draws; small tables are loaded whole. Curves are lin
 coordinates converted to longitude/latitude. Only rows with the first non-null geometry's SRID
 are read; give `"crs"` for SRID 0. Mixed geometry families become separate layers. An integer
 primary key provides stable feature ids; without one (including views), ids are numbered as read.
+
+`date` columns are read as dates, and `datetime`, `datetime2` and `smalldatetime` columns as
+date-times without a zone. A `datetimeoffset` keeps its offset. RustGIS keeps times to the
+microsecond, so a seventh digit of a second (100 ns) is left out. Looking at up to 100,000 rows,
+the layer names the columns where those rows hold one, and says a larger table's may when they
+hold none (or all of them may, when they couldn't be looked at). `time` columns stay text.
 
 At database compatibility level 100 or lower, streamed `geography` layers filter their whole-table
 read or sample locally instead of sending a viewport polygon to the server. A small view can
@@ -1206,9 +1229,12 @@ longitude/latitude degrees. On the desktop, a GDAL `.aux.xml` file next to a ras
 or `dem.aux.xml`) names its bands from their descriptions, gives the no-data value when the file
 has none, and supplies the band statistics when only an overview of the raster is read. Its
 category names (GDAL's `SetCategoryNames`, one per value) label the classes in the legend of a
-Colormap or Unique Values layer; a value without a name shows the value itself. The band
+Colormap or Unique Values layer; a value without a name shows the value itself. Without category
+names, the name column of a raster attribute table in the sidecar labels them the same way (a table
+of value ranges isn't read, and is said). The band
 descriptions GDAL and rasterio write inside a GeoTIFF (its `GDAL_METADATA` tag) name its bands
-too, a sidecar's taking precedence.
+too, a sidecar's taking precedence; a table's names don't replace class names the GeoTIFF itself
+gives, or the sidecar's category names, and a table left unread that way is said.
 Exporting a raster opened from an overview writes that overview; the results of adding and of
 exporting it (`layer.addData`, `share.exportRaster`) give the full size as `overviewOf`, so scripts
 and the MCP server see it too. A GeoTIFF read in place that is added before its overview is in
@@ -1260,6 +1286,17 @@ With a raster layer selected in Layers, the **Style** and **Data** tabs show its
 | Style › Enhancement | Brightness, contrast, gamma |
 | Data | Raster information (size, bands, statistics, coordinate system) and Export Raster (GeoTIFF) |
 
+**See-through cells** of an image with an alpha band (RGBA, or grey and alpha) are left out of
+its colour bands' statistics. These are the cells the map draws fully see-through: an alpha of no
+value, or one under half a 256th of opaque. That is alpha 0 in an 8-bit image, 128 or less of
+65535 in a 16-bit one, and under about 0.002 of 1 in a Float32 one. Leaving them out changes
+Raster information's counts and ranges, and the stretches taken from them: Minimum Maximum,
+Percent Clip, Standard Deviation, Histogram Equalize, a style mask's, and a cloud-optimised
+GeoTIFF's own. So a value those cells hold, such as −3.4e38 in a Float32 image, doesn't set the
+stretch, and an opaque black cell still counts. The alpha band's own statistics count every
+alpha with a value, see-through ones included.
+**Change Detection** gives no-data where either image is see-through.
+
 **Cast shadows**, on a Shaded Relief layer (`raster.symbology` `"shadow"`, 0 to 1), darkens the
 slopes the terrain hides from the sun as well as those facing away from it: a valley behind a ridge
 is in shadow, with a soft edge. Only the direct light is darkened: a slope in full shadow keeps the
@@ -1276,6 +1313,25 @@ rasters of at most 500,000 cells, and a cloud-optimised GeoTIFF read in place ha
 whole image is held: either way the layer is drawn without them, and a notice says so. Terrain
 outside the raster casts nothing on it, and a grid spanning 0 to 360° casts nothing across its
 seam.
+
+**Sky visibility**, on a Shaded Relief layer (`raster.symbology` `"sky"`, 0 to 1), dims the
+relief's ambient light where the terrain around a cell hides part of the sky: valley floors, pits
+and the foot of a cliff get less of it than a plain or a ridge, whatever the sun. Each cell's sky is
+the share of the half sphere above its horizon, looked for in 16 directions up to 100 cells away
+(past 32 cells, in steps of a sixteenth of the distance, so a peak narrower than that far away can
+be missed); 1 scales the ambient light by it, 0, the default, draws the relief as before, and the
+direct light (and its cast shadows) is left as it is. It is worked out once for the layer's band,
+Z factor and mask, not for the sun, so moving the sun doesn't work it out again: off the map's
+frame on the desktop, about a second for two million cells on a multi-core computer, nine or so on
+one thread. It is drawn, waited for by
+exports, and said when it can't be drawn (in the browser over 500,000 cells, or a cloud-optimised
+GeoTIFF read in place) as cast shadows are. Terrain outside the raster, or farther than 100 cells,
+hides none of its sky.
+
+With **Resampling** set to bilinear, a Shaded Relief layer's light (its hillshade, cast shadows and
+sky visibility) is blended between the cells' centres, as its values are, so a cell drawn over many
+pixels shades smoothly instead of in squares; nearest keeps one light per cell, as before. A cell
+with no data, or masked, is left out of the blend, so it doesn't darken the relief next to it.
 
 **Masking**, at the foot of the Symbology pane (`raster.mask`), hides pixel values from view without
 changing the data: values to draw as no data (a background of 0 or −9999 the file doesn't flag, QA
@@ -1340,6 +1396,18 @@ Google Cloud's CMIP6 bucket does, ARCO-ERA5's doesn't (the desktop reads both).
 ```sh
 rustgis-cli run --cmd 'layer.addZarr={"url":"https://storage.googleapis.com/gcp-public-data-arco-era5/ar/1959-2022-full_37-1h-0p25deg-chunk-1.zarr-v2","variable":"2m_temperature","index":{"time":539100}}'
 ```
+
+**A window** of the map (`layer.addZarr` with `"cells": [first column, first row, end column, end
+row]`, the ends not included, or `"bbox": [west, south, east, north]` in the grid's coordinates,
+degrees for a longitude/latitude grid) reads only the chunks it touches, and only its part of the
+coordinates (by byte range when they are stored uncompressed). A box is placed by the variable's
+coordinates, read whole, so it takes grids of up to 4,000,000 cells a side; a longer one takes
+`"cells"`. A box reaching past the grid is read within it, and says so; one over a longitude grid's
+edge (0°/360°, or ±180°) is refused: give a box on each side (one round the whole globe is the
+whole grid); `raster.zarrInfo` with
+`"bbox"` gives the cells a box covers (`window.cells`). A window is at least 2 × 2 cells (a box within one cell is widened to two, and says so), and
+doesn't follow the time slider yet. A window is kept in the project as a GeoTIFF, as a web
+store's slice is, also from a folder.
 
 **Follow the time slider** (desktop; `layer.addZarr` with `"time": true`) adds the variable as one
 layer whose step is the time slider's. The slider turns on over the variable's dates when it is
@@ -1416,10 +1484,12 @@ Packages are zip files. Project and map packages can newly embed a combined 512 
 raster files on the desktop (128 MiB in the web app); a raster that doesn't fit stays linked.
 Already embedded uploads are retained. Local streamed vector files, databases and web layers
 stay linked to their sources. A mobile map package keeps only the visible layers and simplifies their
-geometry, for phones and tablets. Styles can also be imported from the layers of a layer file,
-map file or project. Data › Layer Templates adds empty layers with ready-made schemas (places,
-routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser, which
-also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
+geometry, for phones and tablets; what simplifying changes or leaves alone (a latitude past a pole
+taken as the pole, a one-vertex line part left out, a feature left as it was or too intricate to
+simplify whole) is said, as Simplify says it. Styles can also be imported from the layers of a
+layer file, map file or project. Data › Layer Templates adds empty layers with ready-made schemas
+(places, routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser,
+which also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
 From History turns the geoprocessing history into a task you can replay.
 
 Saved projects, templates, map and layer files, and packages remove recognized credentials from

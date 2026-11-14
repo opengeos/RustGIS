@@ -1169,13 +1169,18 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             // A file picked for Add Delimited Text carries its dialog's options.
             // So does a file picked for a tool's file parameter, which goes to the Tools pane.
             let tool_exts = purpose.strip_prefix(rustgis_ui_egui::TOOL_FILE_PURPOSE);
-            let mark = match (purpose, tool_exts) {
-                ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
-                ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
-                ("dxf", _) => rustgis_ui_egui::DXF_PICK,
-                ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
-                (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
-                _ => "",
+            let dxf = purpose.strip_prefix("dxf:");
+            let mark = if let Some(id) = dxf {
+                format!("{}{id}:", rustgis_ui_egui::DXF_PICK)
+            } else {
+                match (purpose, tool_exts) {
+                    ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
+                    ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
+                    ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
+                    (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
+                    _ => "",
+                }
+                .to_string()
             };
             let dialog = if let Some(exts) = tool_exts {
                 let exts: Vec<&str> = exts.split(',').filter(|e| !e.is_empty()).collect();
@@ -1217,7 +1222,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else if purpose == "text" {
                 rfd::AsyncFileDialog::new()
                     .add_filter("Delimited text and spreadsheets", &["csv", "tsv", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"])
-            } else if purpose == "dxf" {
+            } else if dxf.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
             } else if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
@@ -1226,10 +1231,14 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             };
             // Data may come several files at once (photos gather in one layer).
             let many = matches!(purpose, "data" | "shapefile");
+            let dxf = dxf.is_some();
             wasm_bindgen_futures::spawn_local(async move {
                 let files: Vec<rfd::FileHandle> =
                     if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
-                read_together(files.iter().map(|f| f.inner().clone()).collect(), mark, &inbox, notes).await;
+                if dxf && files.is_empty() {
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.clone(), Vec::new()));
+                }
+                read_together(files.iter().map(|f| f.inner().clone()).collect(), &mark, &inbox, notes).await;
                 ctx.request_repaint();
             });
         })),

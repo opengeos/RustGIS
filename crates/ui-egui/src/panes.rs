@@ -3207,6 +3207,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .size(11.5)
                 .color(t.text_dim),
             );
+            geolibre_passed_over(app, ui, t, true);
             ui.add_space(6.0);
             let progress = app.gp.install.as_ref().and_then(|st| st.lock().ok().map(|s| (s.done, s.total)));
             match progress {
@@ -3244,7 +3245,8 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         ui.add(egui::Hyperlink::from_label_and_url(tl!("Download the GeoLibre runner"), download).open_in_new_tab(true));
                         #[cfg(not(target_arch = "wasm32"))]
                         if ui.small_button(tl!("Locate…")).clicked()
-                            && let Some(path) = rfd::FileDialog::new().set_title(tl!("Locate the GeoLibre runner")).pick_file()
+                            && let Some(path) =
+                                crate::filedialog::FileDialog::new().set_title(tl!("Locate the GeoLibre runner")).pick_file()
                         {
                             let path = path.display().to_string();
                             match app.run("gp.setGeolibre", json!({"path": path})) {
@@ -3267,6 +3269,19 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         },
     );
+}
+
+/// Why a GeoLibre runner that was found (or remembered from Locate…) isn't used, its version
+/// being outside the range this RustGIS works with: which one and how to fix it, shown on the card
+/// and, while another runner is in use, under the tools' heading. Once: on the card
+/// (`shown_below`), not when the Locate… error drawn below it already says it.
+fn geolibre_passed_over(app: &RustGisApp, ui: &mut Ui, t: &Tokens, shown_below: bool) {
+    let Some(note) = rustgis_engine::cmd::gp::geolibre_passed_over() else { return };
+    if shown_below && matches!(&app.gp.last, Some((false, msgs)) if msgs.contains(&note)) {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(note).size(11.0).color(t.red));
 }
 
 /// Uninstalls the GeoLibre tools (a second press confirms): natively the runner that Install
@@ -3542,6 +3557,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if let Some(e) = &app.gp.uninstall_error {
                     ui.label(egui::RichText::new(e).size(11.0).color(t.red));
                 }
+                geolibre_passed_over(app, ui, t, false);
                 // As in GeoLibre's Processing menu: category › subcategory › tools
                 // (`GeoLibre › Terrain › Derivatives`; a tool without a subcategory sits
                 // directly in its category).
@@ -4099,7 +4115,7 @@ fn browse_file(app: &mut RustGisApp, tool: &'static str, param: &'static str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
-        let dialog = rfd::FileDialog::new();
+        let dialog = crate::filedialog::FileDialog::new();
         let dialog = if exts.is_empty() { dialog } else { dialog.add_filter(exts.join(", "), &exts).add_filter(tl!("All files"), &["*"]) };
         if let Some(path) = dialog.pick_file() {
             app.gp.files.remove(param);
@@ -6716,10 +6732,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         RasterRenderer::Colormap => {
             ui.label(egui::RichText::new(tl!("Colors from the raster's own color table.")).size(11.5).color(t.text_dim));
         }
-        RasterRenderer::ShadedRelief { band, ramp, azimuth, altitude, z_factor, shadow } => {
-            let (az, alt, zf, sh, rp) = (*azimuth, *altitude, *z_factor, *shadow, ramp.as_ref().map(|r| r.name().to_string()));
+        RasterRenderer::ShadedRelief { band, ramp, azimuth, altitude, z_factor, shadow, sky } => {
+            let (az, alt, zf, sh, sk, rp) = (*azimuth, *altitude, *z_factor, *shadow, *sky, ramp.as_ref().map(|r| r.name().to_string()));
             let relief = move |band: usize, az: f64, alt: f64, zf: f64, sh: f64| {
-                let mut p = json!({"type": "shadedRelief", "band": band + 1, "azimuth": az, "altitude": alt, "zFactor": zf, "shadow": sh});
+                let mut p = json!({"type": "shadedRelief", "band": band + 1, "azimuth": az, "altitude": alt, "zFactor": zf, "shadow": sh, "sky": sk});
                 match &rp {
                     Some(r) => p["ramp"] = json!(r),
                     None => p["grey"] = json!(true),
@@ -6733,6 +6749,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     ("Altitude", alt, 0.0..=90.0, 0.5, 1),
                     ("Z factor", zf, 0.001..=1000.0, 0.01, 2),
                     ("Cast shadows", sh, 0.0..=1.0, 0.01, 3),
+                    ("Sky visibility", sk, 0.0..=1.0, 0.01, 4),
                 ] {
                     let input_label = ui.label(tl!(label));
                     let mut x = v;
@@ -6741,19 +6758,26 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     let r = ui
                         .add(egui::DragValue::new(&mut x).update_while_editing(false).range(range).speed(speed).max_decimals(3))
                         .labelled_by(input_label.id);
-                    let r = if which == 3 {
-                        r.on_hover_text(tl!("How dark the shadows the terrain casts are, from 0 (none) to 1, for the sun set above"))
-                    } else {
-                        r
+                    let r = match which {
+                        3 => r.on_hover_text(tl!("How dark the shadows the terrain casts are, from 0 (none) to 1, for the sun set above")),
+                        4 => r.on_hover_text(tl!(
+                            "How much the sky each cell sees, over the terrain around it, scales its ambient light, from 0 (not at all) to 1"
+                        )),
+                        _ => r,
                     };
                     if drag.settled(ui, &r, &mut x) && x != v {
                         let (a, b, c, d) = match which {
                             0 => (x, alt, zf, sh),
                             1 => (az, x, zf, sh),
                             2 => (az, alt, x, sh),
-                            _ => (az, alt, zf, x),
+                            3 => (az, alt, zf, x),
+                            _ => (az, alt, zf, sh),
                         };
-                        let _ = app.run("raster.symbology", relief(*band, a, b, c, d));
+                        let mut p = relief(*band, a, b, c, d);
+                        if which == 4 {
+                            p["sky"] = json!(x);
+                        }
+                        let _ = app.run("raster.symbology", p);
                     }
                     ui.end_row();
                 }

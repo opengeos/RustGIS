@@ -190,11 +190,12 @@ struct Record<'a> {
 
 /// The records of a drawing, in order, up to a line that isn't a group code (a stray line, or a
 /// pairing shifted by a missing one): what came before is kept, and the line is said.
-fn records(text: &str) -> (Vec<Record<'_>>, Option<String>) {
+fn records(text: &str) -> Result<(Vec<Record<'_>>, Option<String>)> {
     let mut lines = text.lines();
     let mut out: Vec<Record> = Vec::new();
     let mut line = 0usize;
     while let Some(code) = lines.next() {
+        crate::progress::step(code.len() + 1)?;
         line += 1;
         let code = code.trim();
         if code.is_empty() {
@@ -202,10 +203,11 @@ fn records(text: &str) -> (Vec<Record<'_>>, Option<String>) {
         }
         let Some(value) = lines.next() else { break };
         line += 1;
+        crate::progress::step(value.len() + 1)?;
         let value = value.trim_end_matches('\r');
         let Ok(code) = code.parse::<i32>() else {
             let said = format!("line {}: '{}' isn't a DXF group code: the drawing is read up to it", line - 1, crate::io::cut(code, 40));
-            return (out, Some(said));
+            return Ok((out, Some(said)));
         };
         if code == 0 {
             let kind = value.trim();
@@ -217,7 +219,7 @@ fn records(text: &str) -> (Vec<Record<'_>>, Option<String>) {
             r.groups.push((code, value));
         }
     }
-    (out, None)
+    Ok((out, None))
 }
 
 /// A point in three dimensions.
@@ -1043,13 +1045,14 @@ struct Drawing {
 }
 
 /// Reads the records of each section.
-fn drawing(records: &[Record]) -> Drawing {
+fn drawing(records: &[Record]) -> Result<Drawing> {
     let mut d = Drawing { layers: HashMap::new(), blocks: HashMap::new(), entities: Vec::new(), unread: BTreeMap::new(), bad: 0 };
     let mut section = "";
     // The block being read: name, base point, entities.
     let mut block: Option<(String, P3, Vec<Ent>)> = None;
     let mut i = 0usize;
     while let Some(r) = records.get(i) {
+        crate::progress::check()?;
         i += 1;
         let g = G { p: &r.groups };
         match r.kind {
@@ -1142,7 +1145,7 @@ fn drawing(records: &[Record]) -> Drawing {
             _ => {}
         }
     }
-    d
+    Ok(d)
 }
 
 /// What an inserted entity takes from the INSERT placing it.
@@ -1204,21 +1207,31 @@ fn finite(ps: &[P3]) -> bool {
 }
 
 /// Draws entities through `xf` (a block's placement), into `out`.
-fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: &mut Vec<String>, opts: &Options, out: &mut Out) {
+fn emit(
+    d: &Drawing,
+    ents: &[Ent],
+    xf: &Xf,
+    from: Inherit,
+    depth: usize,
+    stack: &mut Vec<String>,
+    opts: &Options,
+    out: &mut Out,
+) -> Result<()> {
     for e in ents {
+        crate::progress::check()?;
         if out.vertex_capped {
-            return;
+            return Ok(());
         }
         if out.count >= MAX_FEATURES {
             out.capped = true;
-            return;
+            return Ok(());
         }
         // Every placement costs a step, drawn or not: nested arrays of empty or filtered blocks
         // can't make the walk run on.
         out.steps += 1;
         if out.steps > MAX_STEPS {
             out.overworked = true;
-            return;
+            return Ok(());
         }
         // A layout's entities (paper space) aren't the model's: drawn only when asked for.
         if depth == 0 && e.paper && !opts.paper_space {
@@ -1248,7 +1261,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
         if let Shape::Insert(ins) = &e.shape {
             // The contents of blocks (图块) are drawn only when asked for: left out, they are
             // counted, not walked.
-            if !opts.blocks {
+            if !opts.blocks && (ins.fallback.is_empty() || d.blocks.contains_key(&ins.block.to_ascii_lowercase())) {
                 out.blocked += 1;
                 continue;
             }
@@ -1277,7 +1290,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
                             shape: s.clone(),
                         })
                         .collect();
-                    emit(d, &drawn, xf, from, depth + 1, stack, opts, out);
+                    emit(d, &drawn, xf, from, depth + 1, stack, opts, out)?;
                     continue;
                 }
                 out.cut += 1;
@@ -1310,11 +1323,11 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
                         block: Some(ins.block.as_str()),
                         paper: from.paper || e.paper,
                     };
-                    emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out);
+                    emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out)?;
                     if out.capped || out.overworked || out.vertex_capped {
                         stack.pop();
                         out.copies = outer;
-                        return;
+                        return Ok(());
                     }
                 }
             }
@@ -1337,7 +1350,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
         };
         if out.vertices.saturating_add(n) > MAX_TOTAL_VERTICES {
             out.vertex_capped = true;
-            return;
+            return Ok(());
         }
         out.vertices += n;
         let tr = |ps: &[P3]| -> Vec<P3> { ps.iter().map(|p| xf.apply(*p)).collect() };
@@ -1395,6 +1408,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
         ds.push_next(Some(geometry), attrs);
         out.count += 1;
     }
+    Ok(())
 }
 
 /// Reads a DXF drawing into its points, lines and polygons layers (those with features).
@@ -1403,15 +1417,17 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     if is_binary(bytes) {
         return Err(DataError::Unsupported(format!("{file_name}: a binary DXF (save it as an ASCII DXF to read it here)")));
     }
+    crate::progress::check()?;
     let (text, encoding_note) = decode(bytes);
-    let (recs, cut_short) = records(text.trim_start_matches('\u{feff}'));
+    crate::progress::begin(text.len());
+    let (recs, cut_short) = records(text.trim_start_matches('\u{feff}'))?;
     if !recs.iter().any(|r| r.kind == "SECTION") {
         return Err(DataError::Format(match cut_short {
             Some(why) => format!("{file_name}: not a DXF drawing ({why})"),
             None => format!("{file_name}: not a DXF drawing"),
         }));
     }
-    let d = drawing(&recs);
+    let d = drawing(&recs)?;
     let mut out = Out {
         points: Dataset::new(format!("{name} points"), GeometryType::Point, fields()),
         lines: Dataset::new(format!("{name} lines"), GeometryType::Polyline, fields()),
@@ -1429,7 +1445,7 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         copies: 1,
     };
     let none = Inherit { layer: None, layer_key: None, color: None, linetype: None, block: None, paper: false };
-    emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out);
+    emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out)?;
 
     let mut report = ReadReport::default();
     if let Some(why) = encoding_note {
@@ -1496,6 +1512,7 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         if let Some((t, c)) = &transformer {
             let mut lost = 0usize;
             for f in &mut ds.features {
+                crate::progress::check()?;
                 if let Some(g) = f.geometry.take() {
                     let moved = g.map_coords(&|p| t.to_lonlat(p).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
                     let mut ok = true;
@@ -1533,13 +1550,13 @@ pub fn layers(file_name: &str, bytes: &[u8]) -> Result<Vec<String>> {
         return Err(DataError::Unsupported(format!("{file_name}: a binary DXF (save it as an ASCII DXF to read it here)")));
     }
     let (text, _) = decode(bytes);
-    let (recs, _) = records(text.trim_start_matches('\u{feff}'));
+    let (recs, _) = records(text.trim_start_matches('\u{feff}'))?;
     if !recs.iter().any(|r| r.kind == "SECTION") {
         return Err(DataError::Format(format!("{file_name}: not a DXF drawing")));
     }
     // The table's layers and those entities (paper space and blocks' too) are on, without
     // drawing anything. Layer 0 in a block takes its INSERT's, so it isn't one of its own there.
-    let d = drawing(&recs);
+    let d = drawing(&recs)?;
     let mut names: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut add = |name: &str, key: &str| {
@@ -2274,8 +2291,15 @@ mod tests {
         assert!(l[0].1.messages.iter().any(|m| m.contains("ANSI_9999") && m.contains("Latin-1")), "{:?}", l[0].1.messages);
     }
 
-    /// `blocks: false`: what the drawing draws on its own, the contents of its inserted blocks left
-    /// out and counted (a missing or cyclic block is no longer a failure either).
+    /// Cancellation during record parsing returns an error rather than a partial drawing.
+    #[test]
+    fn reading_stops_when_cancelled() {
+        let probe = std::sync::Arc::new(crate::progress::tests::Counted { after: Some(10), ..Default::default() });
+        let _guard = crate::progress::install(Some(probe));
+        assert!(matches!(read("site.dxf", &sample(), &Options::default()), Err(DataError::Cancelled)));
+    }
+
+    /// Disabling blocks keeps standalone entities and DIMENSION fallback geometry.
     #[test]
     fn blocks_can_be_left_out() {
         let l = read("site.dxf", &sample(), &Options { blocks: false, ..Options::default() }).unwrap();
@@ -2286,6 +2310,30 @@ mod tests {
         assert!(l.iter().all(|(d, _)| d.features.iter().all(|f| f.attrs[1] != Value::Text("CIRCLE".into()))));
         assert_eq!(l[0].1.skipped, 0, "{:?}", l[0].1.messages);
         assert!(l[0].1.messages.iter().any(|m| m.contains("3 inserted blocks") && m.contains("\"blocks\": true")), "{:?}", l[0].1.messages);
+        // A DIMENSION without a block keeps the lines and text it describes itself.
+        let dimension = dxf(&[
+            (0, "SECTION"),
+            (2, "ENTITIES"),
+            (0, "DIMENSION"),
+            (2, "missing"),
+            (70, "0"),
+            (10, "0"),
+            (20, "2"),
+            (13, "0"),
+            (23, "0"),
+            (14, "5"),
+            (24, "0"),
+            (0, "ENDSEC"),
+            (0, "EOF"),
+        ]);
+        let kept = read("dimension.dxf", &dimension, &Options { blocks: false, ..Options::default() }).unwrap();
+        let all_dimension = read("dimension.dxf", &dimension, &Options::default()).unwrap();
+        assert_eq!(
+            kept.iter().map(|(ds, _)| ds.features.len()).sum::<usize>(),
+            all_dimension.iter().map(|(ds, _)| ds.features.len()).sum::<usize>()
+        );
+        assert!(kept.iter().any(|(ds, _)| ds.geometry_type == GeometryType::Polyline));
+        assert!(kept.iter().all(|(_, r)| r.skipped == 0 && !r.messages.iter().any(|m| m.contains("left out"))));
         // Asked for, they are drawn as before.
         let all = read("site.dxf", &sample(), &Options::default()).unwrap();
         assert_eq!(all[0].0.features.len(), 2 + 2, "the block adds its point for each of two copies");
