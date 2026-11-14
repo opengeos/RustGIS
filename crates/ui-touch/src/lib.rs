@@ -345,8 +345,8 @@ struct Form {
     /// Where the cross's place snapped to on the last frame, with snapping on.
     snap: Option<edit::Snapped>,
     /// What [`Form::snap`] was found for: it is looked for again only when the cross moved, the
-    /// map zoomed, the vertex being moved changed, the session changed or a background read
-    /// brought in features.
+    /// map zoomed, the vertex being moved changed, the session changed or a layer's shapes did
+    /// (a streamed layer's features put in place).
     snap_for: Option<SnapFor>,
     /// The height of the window the sheet was last drawn in: when it changes (the soft keyboard
     /// came or went), the field being typed in is scrolled back into view.
@@ -387,14 +387,15 @@ impl Form {
 }
 
 /// What the cross's place was snapped for: its place, the vertex being moved, the session's
-/// revision, the background reads finished (a streamed layer's features come in without a change
-/// to the session), the map's resolution and whether snapping was on.
+/// revision, the layers' geometry revisions summed (a streamed layer's features are put in place
+/// by the map view without a change to the session), the map's resolution and whether snapping
+/// was on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SnapFor {
     at: Option<(f64, f64)>,
     moving: Option<(u32, usize, rustgis_ui_egui::rustgis_engine::data::VertexId)>,
     revision: u64,
-    sources: u64,
+    shapes: u64,
     res: f64,
     on: bool,
 }
@@ -781,7 +782,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         at,
         moving,
         revision: app.session.revision,
-        sources: rustgis_ui_egui::rustgis_engine::map::source::generation(),
+        shapes: map.layers.iter().fold(0u64, |sum, l| sum.wrapping_add(l.geometry_rev)),
         res: map.camera.res,
         on: map.editing.snapping.enabled,
     };
@@ -1538,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn the_snap_is_looked_for_again_once_a_background_read_lands() {
+    fn the_snap_is_looked_for_again_once_a_layers_shapes_change() {
         let ctx = egui::Context::default();
         let mut app = RustGisApp::with_sample();
         target(&mut app, GeometryType::Polyline);
@@ -1547,7 +1548,12 @@ mod tests {
         // A stale snap the cache holds, then features read in the background: it is let go.
         let stale = edit::Snapped { lon: 1.0, lat: 2.0, kind: "vertex" };
         set_form(&ctx, Form { snap: Some(stale), ..form(&ctx) });
-        rustgis_ui_egui::rustgis_engine::map::source::wake();
+        frame(&mut app, &ctx, Sheet::Capture);
+        // Nothing changed since the snap was found: the one held is kept.
+        assert_eq!(form(&ctx).snap, Some(stale));
+        // A layer's shapes put in place, as the map view does with a streamed layer's features.
+        let id = app.session.map().layers[0].id;
+        app.session.map_mut().layer_mut(id).unwrap().touch_geometry();
         frame(&mut app, &ctx, Sheet::Capture);
         assert_ne!(form(&ctx).snap, Some(stale));
     }
