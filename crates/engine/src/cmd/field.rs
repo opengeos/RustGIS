@@ -65,6 +65,9 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         }
         None => {
             let rasters = s.map().layers.iter().filter(|l| l.is_raster()).count();
+            let features =
+                |m: &rustgis_map::Map| m.layers.iter().filter(|l| !l.is_raster()).map(|l| l.dataset.features.len()).sum::<usize>();
+            let had = features(s.map());
             let made = super::workspace::offline_download(s, p)?;
             let name = made.get("name").and_then(Value::as_str).ok_or("the offline area wasn't made")?.to_string();
             let data =
@@ -79,6 +82,14 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
                 format!("Made the offline area '{name}' of this map for the field package: save this project to bring the field's edits back to it later"),
                 false,
             );
+            // The area holds the features its extent (the view, unless one is given) touches.
+            let out = had.saturating_sub(features(&data));
+            if out > 0 {
+                s.notify(
+                    format!("{out} feature(s) outside the offline area's extent, or without a shape, stayed out of the field package"),
+                    false,
+                );
+            }
             let mut m = data;
             m.name = format!("{name}{OFFLINE}");
             (name, m)
@@ -343,6 +354,8 @@ mod tests {
         let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.contains("Streets") && t.contains("online")), "{said:?}");
         assert!(said.iter().any(|t| t.contains("offline area 'Survey'")), "{said:?}");
+        // Clipped to the extent: the features left outside it are said.
+        assert!(said.iter().any(|t| t.contains("outside the offline area's extent")), "{said:?}");
         // The package: the project, the archive under basemaps/, a README.
         let entries = rustgis_data::zip::read(&bytes).unwrap();
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
@@ -501,6 +514,11 @@ mod tests {
         let (area, _) = package(&mut s, &json!({"name": "Plan"})).unwrap();
         assert_eq!(area, "Plan 2");
         assert_eq!(s.project.offline_areas.len(), had + 1);
+        // The whole world: every feature is in it, and nothing is said to have stayed out.
+        let mark = s.notice_mark();
+        package(&mut s, &json!({"name": "World", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().all(|t| !t.contains("outside the offline area's extent")), "{said:?}");
     }
 
     #[test]
