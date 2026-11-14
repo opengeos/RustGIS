@@ -97,7 +97,7 @@ feature with it empty, and no default for it from the template or subtype chosen
 sheet names the fields to fill in. A field in a contingent value set offers only the values that
 fit what the set's other fields hold, as chips (a value chosen before the others changed stays,
 so the conflict shows). A date or date and time field has a calendar button: a month of days a
-finger's width each, with **Today** (in UTC; the phone's time zone isn't asked) and, for a date and
+finger tall each, with **Today** (in UTC; the phone's time zone isn't asked) and, for a date and
 time, **Now**.
 
 While a field is typed in, the sheet takes most of the window and stays above the soft keyboard:

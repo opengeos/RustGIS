@@ -151,6 +151,19 @@ pub(crate) fn vertex(
     Some(Some(VertexId::new(read("part")?, read("ring")?, read("index")?)))
 }
 
+/// Moves the point in row `row` of layer `id` to `at`. A multipoint isn't moved, and that is said:
+/// its points can't be moved one at a time by touch, and moving its first would leave the rest.
+/// Says whether it moved.
+pub(crate) fn move_point(app: &mut RustGisApp, id: u32, row: usize, at: (f64, f64)) -> bool {
+    match shape(app, id, row) {
+        Some(Geometry::Point(_)) => vertex(app, id, row, VertexId::new(0, 0, 0), "move", Some(at)).is_some(),
+        _ => {
+            app.session.notify(tl!("Nothing was moved: only a single point moves here, not a multipoint's points."), true);
+            false
+        }
+    }
+}
+
 /// Deletes the feature in row `row` of layer `id`, as one edit that undoes. Says whether it was.
 /// The map's selections are set aside while it is (Delete takes every layer's selection) and
 /// put back after, the rows of layer `id` past it moved up one.
