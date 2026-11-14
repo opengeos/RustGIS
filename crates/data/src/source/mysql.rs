@@ -247,15 +247,39 @@ fn broken(e: &mysql::Error) -> bool {
 }
 
 impl Conn {
+    fn is_plain(&self) -> bool {
+        self.plain.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn has_open_client(&self) -> bool {
+        match self.client.try_lock() {
+            Ok(guard) => guard.is_some(),
+            // A connection actively running a query holds `client`; treat it as open rather than
+            // blocking the global `live()` pool lock.
+            Err(std::sync::TryLockError::WouldBlock) => true,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().is_some(),
+        }
+    }
+
+    fn reconnect_cfg(&self) -> Config {
+        let mut cfg = self.config.clone();
+        if !self.is_plain() && cfg.tls == Tls::Prefer {
+            cfg.tls = Tls::Require;
+        }
+        cfg
+    }
+
     /// Runs `f` with the client, connecting again when the connection dropped: a drop shows only
     /// when it is used, so `f` runs once more on a new one.
     fn with<T>(&self, mut f: impl FnMut(&mut mysql::Conn) -> std::result::Result<T, mysql::Error>) -> Result<T> {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.is_none() {
-                let ((client, _), plain) = open_client(&self.config, self.password.as_deref())?;
-                // A connection that was encrypted isn't continued in the clear.
-                if plain && !self.plain.load(std::sync::atomic::Ordering::Acquire) {
+                // Reconnect an encrypted `Prefer` session as `Require` so the driver never falls
+                // back to sending the password or session statements in cleartext.
+                let cfg = self.reconnect_cfg();
+                let ((client, _), plain) = open_client(&cfg, self.password.as_deref())?;
+                if plain && !self.is_plain() {
                     return Err(DataError::Format(
                         "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
                     ));
@@ -377,6 +401,31 @@ fn live() -> &'static Mutex<Vec<Live>> {
     L.get_or_init(Default::default)
 }
 
+fn find_live(live: &mut Vec<Live>, address: &str, password: &Option<String>) -> Option<Arc<Conn>> {
+    live.retain(|(_, _, w)| w.strong_count() > 0);
+    live.iter().filter(|(a, p, _)| a == address && p == password).find_map(|(_, _, w)| w.upgrade().filter(|c| c.has_open_client()))
+}
+
+fn finish_live(live: &mut Vec<Live>, address: &str, password: Option<String>, conn: Arc<Conn>) -> Arc<Conn> {
+    let want_plain = conn.is_plain();
+    live.retain(|(_, _, w)| w.strong_count() > 0);
+    if let Some(c) = live
+        .iter()
+        .filter(|(a, p, _)| a == address && *p == password)
+        .find_map(|(_, _, w)| w.upgrade().filter(|c| c.has_open_client() && c.is_plain() == want_plain))
+    {
+        return c;
+    }
+    live.retain(|(a, p, w)| {
+        if a != address || *p != password {
+            return true;
+        }
+        w.upgrade().is_some_and(|c| c.has_open_client() && c.is_plain() == want_plain)
+    });
+    live.push((address.to_string(), password, Arc::downgrade(&conn)));
+    conn
+}
+
 /// Connects to a database (`address`: a `mysql://` or `mariadb://` address as
 /// [`super::duckdb::Database::Mysql`] holds it, without its password), or shares a connection
 /// already open to it.
@@ -388,19 +437,11 @@ pub fn connect(address: &str, ask: bool) -> Result<Arc<Conn>> {
     let config = config(address)?;
     let password =
         super::duckdb::remembered_password(address).or_else(|| if ask { super::duckdb::ambient_password("mysql") } else { None });
-    let find = |live: &mut Vec<Live>| {
-        live.retain(|(_, _, w)| w.strong_count() > 0);
-        live.iter().find(|(a, p, _)| a == address && *p == password).and_then(|(_, _, w)| w.upgrade())
-    };
-    if let Some(c) = find(&mut live().lock().unwrap_or_else(|e| e.into_inner())) {
+    if let Some(c) = find_live(&mut live().lock().unwrap_or_else(|e| e.into_inner()), address, &password) {
         return Ok(c);
     }
     // Connecting can take as long as the timeout: other connections don't wait for it.
     let ((client, server), plain) = open_client(&config, password.as_deref())?;
-    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = find(&mut live) {
-        return Ok(c);
-    }
     let conn = Arc::new(Conn {
         config,
         password: password.clone(),
@@ -408,8 +449,8 @@ pub fn connect(address: &str, ask: bool) -> Result<Arc<Conn>> {
         plain: std::sync::atomic::AtomicBool::new(plain),
         client: Mutex::new(Some(client)),
     });
-    live.push((address.to_string(), password, Arc::downgrade(&conn)));
-    Ok(conn)
+    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
+    Ok(finish_live(&mut live, address, password, conn))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -719,7 +760,7 @@ impl MysqlSource {
                 ),
             }
         }
-        if let Some(note) = tls_note(&conn.config.tls, conn.plain.load(std::sync::atomic::Ordering::Acquire)) {
+        if let Some(note) = tls_note(&conn.config.tls, conn.is_plain()) {
             notes.push(note.into());
         }
         let reproject = Reproject::from_epsg(Some(srid), &mut notes);
@@ -1118,6 +1159,49 @@ mod tests {
             tls_note(&Tls::Verified { ca: None, identity: false }, false),
             Some("the server's host name isn't checked against its certificate (ssl-mode=VERIFY_IDENTITY checks it)")
         );
+
+        let base_cfg = config("mysql://me@db.example:3306/gis?ssl-mode=PREFERRED").unwrap();
+        assert_eq!(base_cfg.tls, Tls::Prefer);
+        let dropped_tls = Arc::new(Conn {
+            config: base_cfg.clone(),
+            password: None,
+            server: Server::from_version("8.4.11"),
+            plain: std::sync::atomic::AtomicBool::new(false),
+            client: Mutex::new(None),
+        });
+        assert!(!dropped_tls.has_open_client());
+        assert_eq!(dropped_tls.reconnect_cfg().tls, Tls::Require);
+        let dropped_plain = Arc::new(Conn {
+            config: base_cfg,
+            password: None,
+            server: Server::from_version("8.4.11"),
+            plain: std::sync::atomic::AtomicBool::new(true),
+            client: Mutex::new(None),
+        });
+        assert_eq!(dropped_plain.reconnect_cfg().tls, Tls::Prefer);
+
+        let addr = "mysql://me@db.example:3306/gis";
+        let pw = None;
+        let mut pool: Vec<Live> = vec![(addr.to_string(), pw.clone(), Arc::downgrade(&dropped_tls))];
+        assert!(find_live(&mut pool, addr, &pw).is_none());
+        let replaced = finish_live(&mut pool, addr, pw.clone(), dropped_plain.clone());
+        assert!(Arc::ptr_eq(&replaced, &dropped_plain));
+        assert_eq!(pool.len(), 1);
+
+        let ready = std::sync::Barrier::new(2);
+        let done = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _held = dropped_plain.client.lock().unwrap();
+                ready.wait();
+                done.wait();
+            });
+            ready.wait();
+            assert!(dropped_plain.has_open_client());
+            let found = find_live(&mut pool, addr, &pw).expect("busy connection treated as open");
+            assert!(Arc::ptr_eq(&found, &dropped_plain));
+            done.wait();
+        });
 
         let dir = tempfile::tempdir().unwrap();
         let bad_cfg = |p: &std::path::Path| {
