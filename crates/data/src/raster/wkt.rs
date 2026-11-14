@@ -2054,29 +2054,56 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
     let datum = text("datum").and_then(|d| DATUMS.iter().find(|r| r.0.eq_ignore_ascii_case(d)));
     let ellps = text("ellps").or(datum.map(|d| d.2));
     let known = ellps.and_then(|e| ELLIPSOIDS.iter().find(|r| r.0.eq_ignore_ascii_case(e)));
-    // `+R_A`: the sphere with the ellipsoid's area, which the projection is computed on
-    // (EPSG:9311's), not the ellipsoid. Its radius is computed, so it isn't given EPSG's name
-    // for the sphere, whose radius is rounded. A radius given (`+R`) wins, as in PROJ.
-    let authalic = flag("R_A") && text("R").is_none();
-    let ellps_name = match known {
-        Some(r) if authalic => format!("Authalic sphere of {}", r.1),
-        Some(r) => r.1.to_string(),
-        None => "unnamed".to_string(),
+    // The figure the projection is computed on, as PROJ 9.8.1 computes it, which isn't always
+    // the ellipsoid terrio-crs reports for the definition: `+f`, `+es` or `+e` without `+a`,
+    // `+R`, `+rf` or `+b` reshape the named ellipsoid (or the datum's), and `+R_A`, switched on,
+    // turns an ellipsoid into the sphere with its area (EPSG:9311's).
+    let number = |k: &str| text(k).and_then(|v| v.trim().parse::<f64>().ok());
+    let reshaped = ["f", "es", "e"].iter().any(|k| flag(k)) && !["a", "R", "rf", "b"].iter().any(|k| flag(k));
+    let reported_es = 1.0 - (proj.b / proj.a).powi(2);
+    let es = match (number("f"), number("es"), number("e")) {
+        (Some(f), _, _) if reshaped => f * (2.0 - f),
+        (None, Some(es), _) if reshaped => es,
+        (None, None, Some(e)) if reshaped => e * e,
+        _ => reported_es,
     };
+    let switched_on = |k: &str| {
+        params.iter().find(|(n, _)| *n == k).is_some_and(|(_, v)| {
+            v.is_none_or(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "t" | "yes" | "y" | "on" | "1"))
+        })
+    };
+    let authalic = switched_on("R_A") && es != 0.0;
     let (a, b) = if authalic {
-        let r = authalic_radius(proj.a, proj.b);
+        let r = authalic_radius(proj.a, proj.a * (1.0 - es).sqrt());
         (r, r)
+    } else if es != reported_es {
+        (proj.a, proj.a * (1.0 - es).sqrt())
     } else {
         (proj.a, proj.b)
     };
+    if !(a.is_finite() && b.is_finite() && a > 0.0 && b > 0.0) {
+        return None;
+    }
+    // A figure other than the named ellipsoid isn't given its name, nor its datum's: a reader
+    // would take the named one back. The authalic sphere isn't given EPSG's name either, whose
+    // radius is rounded.
+    let changed = authalic || es != reported_es;
+    let ellps_name = match known {
+        Some(r) if authalic => format!("Authalic sphere of {}", r.1),
+        Some(r) if !changed => r.1.to_string(),
+        _ if authalic => "Authalic sphere".to_string(),
+        _ => "unnamed".to_string(),
+    };
+    let named_datum = datum.filter(|_| !changed);
     // A named ellipsoid's flattening as published; else from its axes (PROJ keeps a and b).
     let rf = match known {
-        Some(k) if !authalic && text("rf").is_none() && text("b").is_none() => k.2,
+        Some(k) if !changed && text("rf").is_none() && text("b").is_none() => k.2,
         _ if (a - b).abs() < 1e-9 => 0.0,
         _ => (a / (a - b) * 1e9).round() / 1e9,
     };
-    let datum_name = match datum {
+    let datum_name = match named_datum {
         Some(d) => d.1.to_string(),
+        None if changed => format!("Unknown based on {ellps_name} ellipsoid"),
         None => match national_datum_name(def, code) {
             Some(n) => n.to_string(),
             None => format!("Unknown based on {ellps_name} ellipsoid"),
@@ -2107,7 +2134,7 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
         None if pm == 0.0 => "Greenwich".to_string(),
         None => "unnamed".to_string(),
     };
-    let geog_name = match datum {
+    let geog_name = match named_datum {
         Some(d) if d.0 == "WGS84" => "WGS 84".to_string(),
         _ => datum_name.trim_start_matches("Unknown based on ").to_string(),
     };
@@ -2492,6 +2519,28 @@ pub(crate) mod tests {
         // "EPSG:4326", def, always_xy=True).transform(-80, 30)`. PROJ's own WKT1 for `+R_A` gives
         // the ellipsoid instead, which places points elsewhere.
         assert!((b.x - 1_921_494.528).abs() < 0.001 && (b.y + 1_439_433.375).abs() < 0.001, "{b:?}");
+        // Switched off, it is the ellipsoid.
+        let off = proj4_to_wkt(&def.replace("+R_A", "+R_A=false"), "X").unwrap();
+        assert!(off.contains(r#"SPHEROID["Clarke 1866",6378206.4,294.978698213898]"#), "{off}");
+        // On a named datum, and on a datum's ellipsoid reshaped to the sphere of its semi-major
+        // axis (`+f=0`, Esri's spherical orthographic): each is placed where the definition
+        // places it, not on the named datum's ellipsoid. PROJ 9.8.1 (pyproj 3.8.0) places
+        // (-80°, 30°) there too.
+        for (def, proj) in [
+            ("+proj=laea +R_A +lat_0=45 +lon_0=-100 +datum=WGS84 +units=m +no_defs", (1_921_497.526, -1_439_435.621)),
+            ("+proj=ortho +lat_0=45 +lon_0=-100 +datum=WGS84 +f=0 +units=m +no_defs", (1_889_192.270, -1_415_235.050)),
+            ("+proj=ortho +lat_0=45 +lon_0=-100 +ellps=WGS84 +f=0 +units=m +no_defs", (1_889_192.270, -1_415_235.050)),
+        ] {
+            let wkt = proj4_to_wkt(def, "X").unwrap();
+            assert!(!wkt.contains("WGS_1984") && !wkt.contains(r#"SPHEROID["WGS 84""#), "{def}: {wkt}");
+            let (crs, back) = (Crs::parse(def).unwrap(), crs_from_wkt(&wkt).unwrap());
+            let (a, b) = (crs.transformer().unwrap().from_lonlat(c).unwrap(), back.transformer().unwrap().from_lonlat(c).unwrap());
+            assert!((a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001, "{def}: {a:?} {b:?}\n{wkt}");
+            assert!((a.x - proj.0).abs() < 0.001 && (a.y - proj.1).abs() < 0.001, "{def}: {a:?} PROJ {proj:?}");
+        }
+        // A definition without a unit is in metres.
+        let wkt = proj4_to_wkt("+proj=tmerc +lon_0=9 +x_0=500000 +datum=WGS84 +no_defs", "X").unwrap();
+        assert!(wkt.contains(r#"PARAMETER["false_easting",500000]"#) && wkt.contains(r#"UNIT["metre",1],AXIS"#), "{wkt}");
     }
 
     /// The world projections (Natural Earth, Winkel Tripel, Eckert IV) are written as WKT, on
