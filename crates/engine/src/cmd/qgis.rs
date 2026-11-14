@@ -1040,8 +1040,8 @@ fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report
 /// the referenced, parent layer; destination: the referencing, child layer). A relation whose
 /// layers didn't come in, or haven't its fields, is noted; one whose name is taken is numbered.
 /// One to a layer that came in as several tables is related to the one with the field, noted, as
-/// QGIS's own table (by `layerid`) isn't known; one of such a layer to itself whose two fields are
-/// in two of its tables isn't made, and is noted.
+/// QGIS's own table (by `layerid`) isn't known; a relation of such a layer to itself whose two
+/// fields are in two of its tables isn't made, and is noted.
 fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], report: &mut Report) {
     // The map layer a project layer came in as, with the field. A file of several layers (one
     // QGIS names by `layerid`, which isn't read) adds them all: when more than one has the field,
