@@ -81,6 +81,16 @@ pub(crate) fn take(app: &mut RustGisApp, ctx: &egui::Context) {
     // Taken out of egui's memory while positions go in, so the points' `Arc` has one owner and
     // `make_mut` adds to it in place instead of copying the track.
     let mut state: Field = ctx.data_mut(|d| d.remove_temp(egui::Id::unique("touch_field"))).unwrap_or_default();
+    // More came than are kept between frames (a day of them, with the app out of sight): the
+    // oldest are gone, which a track or an average being taken missed.
+    let dropped = std::mem::take(&mut app.fixes_dropped);
+    if dropped > 0 && (state.track.is_some() || state.averaging.is_some()) {
+        let text = i18n::fmt(
+            "{n} of the oldest positions were dropped before they could be taken: at most {kept} are kept between looks.",
+            &[("n", &dropped.to_string()), ("kept", &rustgis_ui_egui::FIXES_KEPT.to_string())],
+        );
+        app.session.notify(text, true);
+    }
     for fix in app.fixes.drain(..) {
         if let Some(fixes) = &mut state.averaging {
             Arc::make_mut(fixes).push(fix);
@@ -155,31 +165,30 @@ pub(crate) fn track_text(track: &Track, locating: bool) -> String {
 
 /// Adds a finished track to the map's Tracks layer, made when the map has none, and says what was
 /// added and what was left out. A track of fewer than two positions adds nothing, and says so.
-/// Says whether a line was added.
-pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> bool {
-    let left_out = |app: &mut RustGisApp| {
-        if track.poor > 0 {
+/// `Ok` once a line was added or the track was too short to be one; a track that couldn't be
+/// added (editing or the layer refused, the front end says why) comes back, to be kept rather
+/// than lost.
+pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> Result<(), Track> {
+    let left_out = |app: &mut RustGisApp, poor: usize| {
+        if poor > 0 {
             let text = i18n::fmt(
                 "{n} positions were left out of the track: each was less exact than {m} m.",
-                &[("n", &track.poor.to_string()), ("m", &TRACK_ACCURACY.to_string())],
+                &[("n", &poor.to_string()), ("m", &TRACK_ACCURACY.to_string())],
             );
             app.session.notify(text, false);
         }
     };
     if track.points.len() < 2 {
         app.session.notify(tl!("The track wasn't added: it has fewer than two positions."), true);
-        left_out(app);
-        return false;
+        left_out(app, track.poor);
+        return Ok(());
     }
-    // Editing first: a Tracks layer isn't made for a track that then can't be added. Every way
-    // out still says what was left out (the refusal itself the front end says).
+    // Editing first: a Tracks layer isn't made for a track that then can't be added.
     if !super::edit::ensure_editing(app) {
-        left_out(app);
-        return false;
+        return Err(track);
     }
     let Some(layer) = tracks_layer(app) else {
-        left_out(app);
-        return false;
+        return Err(track);
     };
     let started = track.started.or(track.points.first().and_then(|f| f.time)).and_then(stamp).unwrap_or_default();
     let name = if started.is_empty() { tl!("Track").to_string() } else { i18n::fmt("Track {start}", &[("start", &started)]) };
@@ -194,13 +203,12 @@ pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> bool {
         "attributes": {"name": name, "notes": notes},
     });
     if app.run_by_user("edit.addFeature", feature).is_err() {
-        left_out(app);
-        return false;
+        return Err(track);
     }
     let named = app.session.map().layer(layer).map_or_else(|| TRACKS.to_string(), |l| l.name.clone());
     app.session.notify(i18n::fmt("Added the track to {layer}: {notes}.", &[("layer", &named), ("notes", &notes)]), false);
-    left_out(app);
-    true
+    left_out(app, track.poor);
+    Ok(())
 }
 
 /// The map's Tracks layer: its line layer of that name with a text `name` and `notes` field, or
@@ -292,7 +300,7 @@ mod tests {
             app.run_by_user("edit.addField", json!({"layer": theirs, "name": new, "type": "text"})).unwrap();
         }
         let track = Track { points: Arc::new(vec![fix(1.0, 1.0, None, Some(0)), fix(1.1, 1.0, None, Some(60_000))]), ..Track::default() };
-        assert!(finish(&mut app, track));
+        assert!(finish(&mut app, track).is_ok());
         // Not theirs: a layer of its own, holding the track's name.
         assert!(app.session.map().layer(theirs).unwrap().dataset.features.is_empty());
         let ours = app.session.map().layers.iter().find(|l| l.id != theirs && tracks_name(&l.name)).unwrap();
@@ -335,26 +343,26 @@ mod tests {
         assert_eq!(state.averaging.as_ref().map(|a| a.len()), Some(4));
         // Added as one line to a new Tracks layer, and the position left out said.
         let mark = app.session.notice_mark();
-        assert!(finish(&mut app, track.clone()));
+        assert!(finish(&mut app, track.clone()).is_ok());
         let tracks = app.session.map().layers.iter().find(|l| l.name == TRACKS).unwrap();
         assert_eq!(tracks.dataset.features.len(), 1);
         let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.contains("left out")), "{said:?}");
         // A second goes to the same layer.
-        assert!(finish(&mut app, track.clone()));
+        assert!(finish(&mut app, track.clone()).is_ok());
         assert_eq!(app.session.map().layers.iter().filter(|l| l.name == TRACKS).count(), 1);
         // A Tracks layer without the fields is passed over: one with them is made.
         let tracks = app.session.map().layers.iter().find(|l| l.name == TRACKS).map(|l| l.id).unwrap();
         app.run_by_user("edit.deleteField", json!({"layer": tracks, "field": "notes"})).unwrap();
-        assert!(finish(&mut app, track.clone()));
+        assert!(finish(&mut app, track.clone()).is_ok());
         assert_eq!(app.session.map().layers.iter().filter(|l| tracks_name(&l.name)).count(), 2);
         // And it is the one the next track goes to.
-        assert!(finish(&mut app, track));
+        assert!(finish(&mut app, track).is_ok());
         assert_eq!(app.session.map().layers.iter().filter(|l| tracks_name(&l.name)).count(), 2);
         assert!(tracks_name("Tracks (2)") && !tracks_name("Tracks of deer") && !tracks_name("My Tracks"));
         // Too short: nothing, said as an error.
         let mark = app.session.notice_mark();
-        assert!(!finish(&mut app, Track { points: Arc::new(vec![fix(1.0, 1.0, None, None)]), ..Track::default() }));
+        assert!(finish(&mut app, Track { points: Arc::new(vec![fix(1.0, 1.0, None, None)]), ..Track::default() }).is_ok());
         assert!(app.session.notices_since(mark).iter().any(|n| n.error));
     }
 }
