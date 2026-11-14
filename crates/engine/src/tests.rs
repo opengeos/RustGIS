@@ -4234,6 +4234,53 @@ fn a_missing_datum_grid_is_said_once() {
     assert!(s.notices.iter().all(|n| !n.text.starts_with("EPSG:32617:")), "{:?}", s.notices);
 }
 
+/// A background export's target system is said as the export lands, as when it runs here; and
+/// several systems that need a missing grid are said in one notice, with their count.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn missing_datum_grids_are_said_from_a_background_export_and_counted() {
+    use crate::cmd::exports::{export_land, export_start};
+    use rustgis_analysis::control::Control;
+    let grid = |s: &Session, mark| {
+        s.notices_since(mark).iter().filter(|n| n.text.contains("needs a grid")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let mut s = world();
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-nad27-bg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cities.gpkg");
+    let run = export_start(&mut s, "share.exportLayer", &json!({"layer": "Cities", "path": path, "crs": "EPSG:4267"})).unwrap();
+    let (mark, started) = (s.notice_mark(), run.started());
+    let wrote = std::thread::spawn(move || run.run(&Control::new())).join().unwrap();
+    export_land(&mut s, started, wrote).unwrap();
+    let said = grid(&s, mark);
+    assert_eq!(said.len(), 1, "{:?}", s.notices);
+    assert!(said[0].starts_with("EPSG:4267: "), "{said:?}");
+    std::fs::remove_dir_all(&dir).ok();
+    // A layer in NAD27 longitude/latitude on a map in NAD27's UTM: both said at once, counted.
+    let mut s = world();
+    let nad27 = rustgis_data::raster::Crs::from_epsg(4267).unwrap();
+    assert!(nad27.transformer().is_ok());
+    s.project.maps[0].layers[0].dataset.crs = Some(nad27);
+    let mark = s.notice_mark();
+    s.run("map.projection", &json!({"type": "EPSG:26717"})).unwrap();
+    let said = grid(&s, mark);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].starts_with("2 coordinate systems (") && said[0].contains("EPSG:4267") && said[0].contains("EPSG:26717"), "{said:?}");
+    // A map drawn in a system before any command: the frame after it says it.
+    let mut s = world();
+    s.project.maps[0].projection = rustgis_map::Projection::Custom("EPSG:26717".into());
+    let mark = s.notice_mark();
+    assert!(crate::cmd::share::map_png(&mut s, Some(200.0), Some(150.0), None).unwrap().len() > 100);
+    s.notice_landed_rasters();
+    let said = grid(&s, mark);
+    assert!(said.len() == 1 && said[0].starts_with("EPSG:26717: "), "{said:?}");
+    // Said once: another frame or command says nothing more.
+    let mark = s.notice_mark();
+    s.notice_landed_rasters();
+    s.run("map.zoomIn", &json!({})).unwrap();
+    assert!(grid(&s, mark).is_empty());
+}
+
 #[test]
 fn custom_projections_switch_keep_scale_query_and_render() {
     let mut s = with_raster();

@@ -390,11 +390,8 @@ impl Crs {
     /// system and shared ([`Transformer`] is cheap to clone).
     pub fn transformer(self) -> Result<Transformer, String> {
         match self {
-            Crs::LonLat => return Ok(Transformer { kind: Kind::LonLat }),
-            Crs::WebMercator => return Ok(Transformer { kind: Kind::Merc }),
-            _ => {}
-        }
-        match self {
+            Crs::LonLat => Ok(Transformer { kind: Kind::LonLat }),
+            Crs::WebMercator => Ok(Transformer { kind: Kind::Merc }),
             // By the code's PROJ definition, with its datum shift, as a WKT naming the same
             // system is read: both put a place at the same point.
             Crs::Epsg(c) => match epsg_proj4(c) {
@@ -415,9 +412,8 @@ impl Crs {
     }
 }
 
-/// The transformers built this run, by definition, kept for the run: terrio-crs's transformers
-/// mustn't be dropped by a thread's own storage as the thread ends (a map's projections are kept
-/// per thread), building one reads its tables, and [`grid_note`] asks each what it had to do.
+/// The transformers built this run, by definition, kept for the run: building one reads
+/// terrio-crs's tables, and [`grid_note`] asks each what it had to do.
 type Built = std::collections::HashMap<String, Result<Transformer, String>>;
 
 fn built() -> &'static std::sync::Mutex<Built> {
@@ -431,18 +427,24 @@ const MAX_BUILT: usize = 4 * MAX_CUSTOM;
 
 /// A transformer between the system a PROJ definition describes and WGS 84 longitude/latitude,
 /// computed by terrio-crs. Winkel Tripel's standard parallel (`+lat_1`) must be a latitude short
-/// of a pole, where the projection has no width.
+/// of a pole, where the projection has no width. Natural Earth, Winkel Tripel and Eckert IV have no scale factor:
+/// one other than 1, which PROJ ignores, is refused.
 pub fn transformer_of(def: &str) -> Result<Transformer, String> {
     if let Some(t) = built().lock().unwrap_or_else(|e| e.into_inner()).get(def) {
         return t.clone();
     }
     let degrees = in_degrees(def);
     let param = |key: &str| degrees.split_whitespace().find_map(|t| t.strip_prefix(key));
+    let world = param("+proj=").is_some_and(|m| WORLD_METHODS.contains(&m));
+    let scale = param("+k=").or_else(|| param("+k_0="));
     let t = if param("+proj=") == Some("wintri")
         && let Some(v) = param("+lat_1=")
-        && !v.parse::<f64>().is_ok_and(|v| v.is_finite() && v.abs() < 90.0)
+        && !parse_angle(v).is_some_and(|v| v.is_finite() && v.abs() < 90.0)
     {
         Err(format!("+lat_1={v} isn't a latitude short of a pole"))
+    } else if world && let Some(k) = scale.filter(|k| k.parse::<f64>().ok() != Some(1.0)) {
+        // PROJ ignores it; refused, as it was before, rather than dropped without a word.
+        Err(format!("a scale factor (+k={k}) other than 1 isn't supported in this projection"))
     } else {
         misread_parameter(def).and_then(|()| build(&degrees))
     };
@@ -459,11 +461,14 @@ fn in_degrees(def: &str) -> String {
     def.split_whitespace()
         .map(|token| {
             let t = token.trim_start_matches('+');
-            let radians = t.split_once('=').filter(|(k, _)| ANGLES.contains(k)).and_then(|(k, v)| {
+            let angle = t.split_once('=').filter(|(k, _)| ANGLES.contains(k));
+            let radians = angle.and_then(|(k, v)| {
                 let d = v.strip_suffix(['r', 'R'])?.parse::<f64>().ok()?.to_degrees();
                 d.is_finite().then(|| format!("+{k}={d}"))
             });
-            radians.unwrap_or_else(|| token.to_string())
+            // The degree marks PROJ reads besides `d`, which terrio-crs doesn't.
+            let marked = angle.filter(|(_, v)| v.contains(['D', '°'])).map(|(k, v)| format!("+{k}={}", v.replace(['D', '°'], "d")));
+            radians.or(marked).unwrap_or_else(|| token.to_string())
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -475,7 +480,11 @@ const ANGLES: [&str; 10] = ["lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc"
 /// [`transformer_of`]'s transformer, built.
 fn build(def: &str) -> Result<Transformer, String> {
     let sr = terrio_crs::SpatialRef::from_proj4(def).map_err(|e| e.to_string())?;
-    let t = Transformer::of(&sr, geographic_def(def))?;
+    // The order and direction of its axes, which terrio-crs applies (`+axis=neu`, `wnu`).
+    let axis = def.split_whitespace().find_map(|t| t.strip_prefix("+axis=")).unwrap_or("enu");
+    let lat_first = axis.starts_with(['n', 's']);
+    let west = axis.chars().take(2).any(|c| c == 'w');
+    let t = Transformer::of(&sr, geographic_def(def), (lat_first, west))?;
     // A definition that can't place its own centre (a unit of 0 metres) is no system.
     let centre = t.params().map_or(Coord::new(0.0, 0.0), |p| Coord::new(p.lon_0 + p.prime_meridian, p.lat_0.clamp(-89.0, 89.0)));
     if !t.is_geographic() && t.from_lonlat_unchecked(centre).is_none() {
@@ -492,26 +501,73 @@ const NUMERIC_PARAMETERS: [&str; 22] = [
 ];
 
 /// Refuses what terrio-crs would read otherwise than PROJ, so a place is never put somewhere
-/// else silently: a numeric parameter that isn't a number, degrees or radians (`+lat_ts=abc`,
-/// which PROJ refuses; radians are turned into degrees, [`in_degrees`]).
+/// else silently, where PROJ refuses the definition: a numeric parameter that isn't a number
+/// (`+lat_ts=abc`, `+x_0=500000d`, which terrio-crs would read as 0), an angle that isn't
+/// degrees, degrees, minutes and seconds, or radians (turned into degrees, [`in_degrees`]), and
+/// a datum shift that isn't 3 or 7 numbers (`+towgs84=100,bad,200,300`, which terrio-crs would
+/// read as the 3 that are).
 fn misread_parameter(def: &str) -> Result<(), String> {
     for token in def.split_whitespace() {
         let t = token.trim_start_matches('+');
         let Some((key, value)) = t.split_once('=') else { continue };
+        if key == "towgs84" {
+            let values: Vec<Option<f64>> =
+                value.trim_matches('"').split(',').map(|v| v.trim().parse::<f64>().ok().filter(|v| v.is_finite())).collect();
+            if !matches!(values.len(), 3 | 7) || values.contains(&None) {
+                return Err(format!("+towgs84={value} isn't 3 or 7 numbers"));
+            }
+            continue;
+        }
         if !NUMERIC_PARAMETERS.contains(&key) {
             continue;
         }
-        let number = value.parse::<f64>().is_ok_and(f64::is_finite)
-            || (ANGLES.contains(&key)
-                && value.strip_suffix(['r', 'R']).and_then(|r| r.parse::<f64>().ok()).is_some_and(|r| r.to_degrees().is_finite()));
-        let dms = value.chars().any(|c| c.is_ascii_digit())
-            && value.chars().all(|c| c.is_ascii_digit() || "+-.dD'\"NSEWnsew".contains(c))
-            && !value.parse::<f64>().is_ok();
-        if !(number || dms) {
-            return Err(format!("+{key}={value} isn't a number or degrees"));
+        let read = if ANGLES.contains(&key) {
+            parse_angle(value).is_some_and(f64::is_finite)
+                || value.strip_suffix(['r', 'R']).and_then(|r| r.parse::<f64>().ok()).is_some_and(|r| r.to_degrees().is_finite())
+        } else {
+            value.parse::<f64>().is_ok_and(f64::is_finite)
+        };
+        if !read {
+            let what = if ANGLES.contains(&key) { "an angle" } else { "a number" };
+            return Err(format!("+{key}={value} isn't {what}"));
         }
     }
     Ok(())
+}
+
+/// An angle as PROJ reads it: decimal degrees, or degrees, minutes and seconds
+/// (`30d30'15"N`, the degree mark `d`, `D` or `°`), a hemisphere letter giving the sign over a
+/// minus (`-52.5N` is 52.5°), as terrio-crs reads it too once its mark is `d` ([`in_degrees`]).
+/// `None` for anything else (`30x`, `d`, `30d30d`).
+fn parse_angle(value: &str) -> Option<f64> {
+    let s = value.trim().replace(['D', '°'], "d");
+    if let Ok(v) = s.parse::<f64>() {
+        return Some(v);
+    }
+    let (body, sign) = match s.chars().last()? {
+        'N' | 'n' | 'E' | 'e' => (&s[..s.len() - 1], 1.0),
+        'S' | 's' | 'W' | 'w' => (&s[..s.len() - 1], -1.0),
+        _ => (s.as_str(), 1.0),
+    };
+    let negative = body.len() == s.len() && body.starts_with('-');
+    let mut rest = body.strip_prefix(['-', '+']).unwrap_or(body);
+    let part = |v: &str| v.parse::<f64>().ok().filter(|v| *v >= 0.0);
+    let (mut degrees, mut any, mut next) = (0.0, false, 1.0);
+    for (mark, div) in [('d', 1.0), ('\'', 60.0), ('"', 3600.0)] {
+        if let Some((v, r)) = rest.split_once(mark) {
+            degrees += part(v)? / div;
+            (any, next, rest) = (true, div * 60.0, r);
+        }
+    }
+    // A last unmarked part is the next unit down (`30d30` is 30.5°), or the degrees themselves.
+    if !rest.is_empty() {
+        if next > 3600.0 {
+            return None;
+        }
+        degrees += part(rest)? / next;
+        any = true;
+    }
+    any.then_some(sign * if negative { -degrees } else { degrees })
 }
 
 /// Whether a PROJ definition is in degrees: `longlat`, or one of the names PROJ takes for it.
@@ -610,6 +666,10 @@ struct Terrio {
     own: Option<(terrio_crs::Transformer, terrio_crs::Transformer, terrio_crs::Transformer)>,
     /// Its coordinates are degrees.
     geographic: bool,
+    /// Its degrees are latitude first (`+axis=neu`).
+    lat_first: bool,
+    /// Its longitudes point west (`+axis=wnu`): -1, else 1.
+    lon_sign: f64,
     /// The conversion's parameters (centre, offsets, unit, prime meridian), when it has some.
     params: Option<terrio_crs::ProjParams>,
     /// A world projection whose inverse may go on past its edges ([`WRAPPING`]).
@@ -716,20 +776,34 @@ fn needs_grid() -> &'static std::sync::Mutex<Vec<String>> {
 /// have yet, so the next one was used: for the app to say once (`Session`'s notices). A system
 /// that hasn't needed one, or hasn't been used, has none.
 pub fn grid_note(crs: Crs) -> Option<String> {
-    let (def, label) = match crs {
-        Crs::Epsg(c) => (epsg_proj4(c)?.to_string(), format!("EPSG:{c}")),
-        Crs::Custom(_) => {
-            let d = crs.custom_def()?;
-            (d.proj4.clone(), d.label.clone())
-        }
-        Crs::LonLat | Crs::WebMercator => return None,
-    };
+    let (def, label) = definition_and_label(crs)?;
     grid_note_of(&def, &label)
 }
 
+/// The PROJ definition a system is transformed by, and what a note calls it; `None` for WGS 84
+/// longitude/latitude and Web Mercator, which need no datum transformation.
+pub fn definition_and_label(crs: Crs) -> Option<(String, String)> {
+    match crs {
+        Crs::Epsg(c) => Some((epsg_proj4(c)?.to_string(), format!("EPSG:{c}"))),
+        Crs::Custom(_) => crs.custom_def().map(|d| (d.proj4.clone(), d.label.clone())),
+        Crs::LonLat | Crs::WebMercator => None,
+    }
+}
+
+/// The note of the systems called `labels` whose most accurate datum transformation needed a
+/// grid ([`needs_a_missing_grid`]): one notice for all of them, with their count.
+pub fn grid_notes_text(labels: &[String]) -> String {
+    const TAIL: &str = "the most accurate datum transformation needs a grid RustGIS doesn't have yet, so the next one was used; places may be metres off (NAD27 without its grid: about 10 m)";
+    match labels {
+        [one] => format!("{one}: {TAIL}"),
+        _ => format!("{} coordinate systems ({}): {TAIL}", labels.len(), labels.join(", ")),
+    }
+}
+
 /// The middle of an EPSG system's area of use, as the registry gives it (west past east runs
-/// across the antimeridian). Each code's answer, none included, is kept: asking reads
-/// terrio-crs's whole catalog.
+/// across the antimeridian). Each code's answer, none included, is kept: asking searches
+/// terrio-crs's whole catalog, about half a millisecond, after it is read once a run (about
+/// 50 ms).
 pub fn area_centre(code: u16) -> Option<Coord> {
     type Centres = std::sync::Mutex<std::collections::HashMap<u16, Option<Coord>>>;
     static CENTRES: std::sync::OnceLock<Centres> = std::sync::OnceLock::new();
@@ -762,7 +836,7 @@ fn area_centre_uncached(code: u16) -> Option<Coord> {
 /// of use): terrio-crs notes a missing grid by the first place a transformer takes, which may be
 /// one where the grid doesn't reach (a world map's corner), and then never again. A system
 /// without a code, which has no area of use to ask at, has only that first place. The first use
-/// of a code reads terrio-crs's catalog of areas (once a run, some milliseconds).
+/// of a code reads terrio-crs's catalog of areas ([`area_centre`]: about 50 ms, once a run).
 pub fn probe_grid(def: &str, at: impl FnOnce() -> Option<Coord>) {
     static PROBED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
     {
@@ -773,6 +847,7 @@ pub fn probe_grid(def: &str, at: impl FnOnce() -> Option<Coord>) {
     }
     let Some(at) = at().filter(|c| c.is_finite()) else { return };
     PROBED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).insert(def.to_string());
+    no_grids();
     let strict = terrio_crs::TransformOptions { only_best: true, ..Default::default() };
     let Ok(sr) = terrio_crs::SpatialRef::from_proj4(&in_degrees(def)) else { return };
     let Ok(wgs84) = terrio_crs::SpatialRef::from_epsg(4326) else { return };
@@ -809,12 +884,23 @@ fn note_used(def: &str, label: impl FnOnce() -> String) {
 /// The notes ([`grid_note`]) of the systems this thread asked for a transformer for since it
 /// last looked: what a command used beyond its project's layers and maps.
 pub fn take_used_notes() -> Vec<String> {
-    let used = USED.try_with(|u| std::mem::take(&mut *u.borrow_mut())).unwrap_or_default();
-    used.iter().filter_map(|(def, label)| grid_note_of(def, label)).collect()
+    take_used().iter().filter_map(|(def, label)| grid_note_of(def, label)).collect()
+}
+
+/// The systems this thread asked for a transformer for since it last looked, as (definition,
+/// label): for a worker thread (a background export) to hand to the session that says them.
+pub fn take_used() -> Vec<(String, String)> {
+    USED.try_with(|u| std::mem::take(&mut *u.borrow_mut())).unwrap_or_default()
 }
 
 /// [`grid_note`] for a PROJ definition (a map's projection), called `label`.
 pub fn grid_note_of(def: &str, label: &str) -> Option<String> {
+    needs_a_missing_grid(def).then(|| grid_notes_text(&[label.to_string()]))
+}
+
+/// Whether a definition's most accurate datum transformation needed a grid RustGIS doesn't have,
+/// as far as it has been used or probed ([`probe_grid`]).
+pub fn needs_a_missing_grid(def: &str) -> bool {
     let map = built().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(Ok(Transformer { kind: Kind::Terrio(t) })) = map.get(def) {
         let _ = FLUSHING.try_with(|l| *l.borrow_mut() = Some(def.to_string()));
@@ -827,11 +913,7 @@ pub fn grid_note_of(def: &str, label: &str) -> Option<String> {
         let _ = FLUSHING.try_with(|l| *l.borrow_mut() = None);
     }
     drop(map);
-    needs_grid().lock().unwrap_or_else(|e| e.into_inner()).iter().any(|d| d == def).then(|| {
-        format!(
-            "{label}: the most accurate datum transformation needs a grid RustGIS doesn't have yet, so the next one was used; places may be metres off (NAD27 without its grid: about 10 m)"
-        )
-    })
+    needs_grid().lock().unwrap_or_else(|e| e.into_inner()).iter().any(|d| d == def)
 }
 
 /// How far past a world projection's east or west edge, as shares of the distance from its
@@ -859,20 +941,24 @@ impl std::fmt::Debug for Transformer {
 /// central one (#1701), by PROJ's name.
 const WORLD_METHODS: [&str; 3] = ["natearth", "wintri", "eck4"];
 
+/// No datum grids yet (opengeos/RustGIS#2032, A4): none read from the computer's PROJ folders,
+/// from paths a definition names (a project file's), or downloaded, so a place lands where it does
+/// on every computer and in the browser. A transformation that needs one takes the next PROJ
+/// lists, and says so ([`grid_note`]). Set before terrio-crs builds any transformer.
+fn no_grids() {
+    static NO_GRIDS: std::sync::Once = std::sync::Once::new();
+    NO_GRIDS.call_once(|| {
+        terrio_crs::set_grid_search_paths(Some(Vec::new()));
+        terrio_crs::set_network_enabled(Some(false));
+    });
+}
+
 impl Transformer {
     /// The transformer between `sr` and WGS 84 longitude/latitude; `geographic` when its
     /// coordinates are degrees. A system on another body than the Earth goes to and from its own
     /// longitude/latitude instead, which is read as it is, on the Earth ([`Crs::is_planetary`]).
-    fn of(sr: &terrio_crs::SpatialRef, geographic: bool) -> Result<Transformer, String> {
-        // No datum grids yet (opengeos/RustGIS#2032, A4): none read from the computer's PROJ
-        // folders, from paths a definition names (a project file's), or downloaded, so a place
-        // lands where it does on every computer and in the browser. A transformation that needs one
-        // takes the next PROJ lists, and says so ([`grid_note`]).
-        static NO_GRIDS: std::sync::Once = std::sync::Once::new();
-        NO_GRIDS.call_once(|| {
-            terrio_crs::set_grid_search_paths(Some(Vec::new()));
-            terrio_crs::set_network_enabled(Some(false));
-        });
+    fn of(sr: &terrio_crs::SpatialRef, geographic: bool, (lat_first, west): (bool, bool)) -> Result<Transformer, String> {
+        no_grids();
         let wgs84 = terrio_crs::SpatialRef::from_epsg(4326).map_err(|e| e.to_string())?;
         let pair = |to: &terrio_crs::SpatialRef| -> Result<_, String> {
             let forward = terrio_crs::Transformer::new(sr, to).map_err(|e| e.to_string())?.with_warning_handler(record_warning);
@@ -903,7 +989,17 @@ impl Transformer {
             });
         let method = |names: &[&str]| params.as_ref().is_some_and(|p| !geographic && names.contains(&p.method.as_str()));
         let (wraps, eck4) = (method(&WRAPPING), method(&["eck4"]));
-        let t = Terrio { to_lonlat, from_lonlat, own, geographic, params, wraps, eck4 };
+        let t = Terrio {
+            to_lonlat,
+            from_lonlat,
+            own,
+            geographic,
+            lat_first: geographic && lat_first,
+            lon_sign: if geographic && west { -1.0 } else { 1.0 },
+            params,
+            wraps,
+            eck4,
+        };
         Ok(Transformer { kind: Kind::Terrio(std::sync::Arc::new(t)) })
     }
 
@@ -914,7 +1010,8 @@ impl Transformer {
             Kind::Merc => merc_to_lonlat(c),
             Kind::Terrio(t) => {
                 // A latitude past a pole is no place (terrio-crs would fold it back to one).
-                if !c.is_finite() || (t.geographic && c.y.abs() > 90.0 + 1e-9) {
+                let lat = if t.lat_first { c.x } else { c.y };
+                if !c.is_finite() || (t.geographic && lat.abs() > 90.0 + 1e-9) {
                     return None;
                 }
                 let at = t.unproject(&t.to_lonlat, &t.from_lonlat, c)?;
@@ -938,7 +1035,8 @@ impl Transformer {
         if let Kind::Terrio(t) = &self.kind
             && t.geographic
         {
-            let greenwich = c.x + t.params.as_ref().map_or(0.0, |p| p.prime_meridian);
+            let lon = t.lon_sign * if t.lat_first { c.y } else { c.x };
+            let greenwich = lon + t.params.as_ref().map_or(0.0, |p| p.prime_meridian);
             out.x += 360.0 * ((greenwich - out.x) / 360.0).round();
         }
         out.is_finite().then_some(out)
@@ -1127,6 +1225,64 @@ mod tests {
         // Winkel Tripel's parallel in radians is checked in degrees.
         assert!(Crs::parse("+proj=wintri +lat_1=0.5r +datum=WGS84").is_ok());
         assert!(Crs::parse("+proj=wintri +lat_1=1.6r +datum=WGS84").is_err());
+    }
+
+    /// What PROJ 9.8.1 refuses (pyproj 3.8.0) is refused, not read otherwise by terrio-crs: a
+    /// distance in degrees, minutes and seconds, a datum shift of other than 3 or 7 numbers. An
+    /// angle in degrees, minutes and seconds is read as PROJ reads it, Winkel Tripel's parallel
+    /// included.
+    #[test]
+    fn misread_numbers_are_refused_and_dms_angles_read() {
+        for def in [
+            "+proj=tmerc +ellps=WGS84 +x_0=500000d",
+            "+proj=tmerc +ellps=WGS84 +k=1d",
+            "+proj=longlat +ellps=intl +towgs84=100,bad,200,300",
+            "+proj=longlat +ellps=intl +towgs84=1,2",
+            "+proj=longlat +ellps=intl +towgs84=1,2,3,4",
+            "+proj=tmerc +ellps=WGS84 +lat_0=30x",
+            "+proj=tmerc +ellps=WGS84 +lat_0=30d30d",
+            "+proj=tmerc +ellps=WGS84 +lat_0=d",
+        ] {
+            assert!(Crs::parse(def).and_then(Crs::transformer).is_err(), "{def}");
+        }
+        for def in ["+proj=longlat +ellps=intl +towgs84=1,2,3", "+proj=longlat +ellps=intl +towgs84=1,2,3,4,5,6,7"] {
+            assert!(Crs::parse(def).and_then(Crs::transformer).is_ok(), "{def}");
+        }
+        assert_eq!(parse_angle("30d30"), Some(30.5));
+        assert_eq!(parse_angle("30d30'36\"S"), Some(-30.51));
+        assert_eq!(parse_angle("-52.5N"), Some(52.5));
+        assert_eq!(parse_angle("-5W"), Some(-5.0));
+        // The degree marks PROJ reads besides `d`, as proj4rs read them before (main).
+        assert_eq!(parse_angle("38D30'"), Some(38.5));
+        assert_eq!(parse_angle("38°30'"), Some(38.5));
+        assert_eq!(parse_angle("30d30\"\""), None);
+        let marked = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30°30' +lon_0=9D").and_then(Crs::transformer).unwrap();
+        let plain = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30.5 +lon_0=9").and_then(Crs::transformer).unwrap();
+        assert_eq!(marked.from_lonlat(Coord::new(9.5, 47.0)), plain.from_lonlat(Coord::new(9.5, 47.0)));
+        let dms = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30d30 +lon_0=9").and_then(Crs::transformer).unwrap();
+        let dec = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30.5 +lon_0=9").and_then(Crs::transformer).unwrap();
+        assert_eq!(dms.from_lonlat(Coord::new(9.5, 47.0)), dec.from_lonlat(Coord::new(9.5, 47.0)));
+        assert!(Crs::parse("+proj=wintri +lat_1=50d27'35\" +datum=WGS84").and_then(Crs::transformer).is_ok());
+        assert!(Crs::parse("+proj=wintri +lat_1=90d +datum=WGS84").and_then(Crs::transformer).is_err());
+    }
+
+    /// Latitude first (`+axis=neu`): the latitude is the first coordinate, so a longitude past 90°
+    /// is a place, and a first coordinate past 90° isn't.
+    #[test]
+    fn latitude_first_degrees_are_checked_by_their_latitude() {
+        let t = Crs::parse("+proj=longlat +datum=WGS84 +axis=neu").and_then(Crs::transformer).unwrap();
+        let native = t.from_lonlat(Coord::new(120.0, 45.0)).unwrap();
+        let back = t.to_lonlat(native).unwrap();
+        assert!((back.x - 120.0).abs() < 1e-9 && (back.y - 45.0).abs() < 1e-9, "{native:?} {back:?}");
+        assert_eq!(t.to_lonlat(Coord::new(95.0, 10.0)), None);
+        // An extent's corner keeps its turn of the world, latitude first or longitude west.
+        let corner = t.to_lonlat_for_extent(Coord::new(45.0, 120.0)).unwrap();
+        assert!((corner.x - 120.0).abs() < 1e-9 && (corner.y - 45.0).abs() < 1e-9, "{corner:?}");
+        let west = Crs::parse("+proj=longlat +datum=WGS84 +axis=wnu").and_then(Crs::transformer).unwrap();
+        let native = west.from_lonlat(Coord::new(100.0, 10.0)).unwrap();
+        assert!((native.x + 100.0).abs() < 1e-9, "{native:?}");
+        let corner = west.to_lonlat_for_extent(native).unwrap();
+        assert!((corner.x - 100.0).abs() < 1e-9 && (corner.y - 10.0).abs() < 1e-9, "{corner:?}");
     }
 
     /// Hostile definitions in every method terrio-crs computes, typed or read from a file: refused

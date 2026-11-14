@@ -757,8 +757,12 @@ pub struct Session {
     /// `None` between commands. Its inner steps would each say it (a zoom refused by each layer an
     /// add frames): it is said once in a command, however many notices come after.
     beyond_said: Option<bool>,
-    /// The datum grid notes this session has said ([`Session::say_grid_notes`]).
+    /// The definitions of the systems whose datum grid note this session has said
+    /// ([`Session::say_grid_notes`]).
     crs_notes_said: Vec<String>,
+    /// The coordinate systems a background export used on its worker thread, as (definition,
+    /// label), for [`Session::say_grid_notes`].
+    pub(crate) crs_used_elsewhere: Vec<(String, String)>,
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
@@ -1189,6 +1193,7 @@ impl Session {
             notices_given: 0,
             beyond_said: None,
             crs_notes_said: Vec::new(),
+            crs_used_elsewhere: Vec::new(),
             cog_headers_seen: 0,
             table_layer: None,
             table_standalone: None,
@@ -1578,8 +1583,8 @@ impl Session {
                 render::rustgis_tiles::mbtiles::close_unused(files.into_iter());
             }
             // Pixels the command read in place (a project, an import) say what they lost.
+            // And the coordinate systems that needed a missing datum grid ([`Self::say_grid_notes`]).
             self.notice_landed_rasters();
-            self.say_grid_notes();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they
             // land: logged then, once. (Another command's `pending`, a download the web app makes, is
             // logged as it is asked for: nothing runs it again.)
@@ -2255,6 +2260,8 @@ impl Session {
                 )
             }
         }
+        // Each frame: a system a frame first drew needs no command after it to be said.
+        self.say_grid_notes();
     }
 
     /// Says once a session that native HTTPS trusts the bundled Mozilla roots, as a Linux or BSD
@@ -2351,30 +2358,51 @@ impl Session {
     }
 
     /// Says, once per system, that a coordinate system this project uses (a map's projection, a
-    /// layer's or a raster's) or the command used (an export's target) needed a datum grid RustGIS doesn't have, so a less accurate
-    /// transformation placed it: after the command, or the frame drawn before it, that first
-    /// used it.
+    /// layer's or a raster's) or a command used (an export's target, on its worker thread too)
+    /// needed a datum grid RustGIS doesn't have, so a less accurate transformation placed it:
+    /// after the command, or the frame, that first used it, in one notice with their count.
     fn say_grid_notes(&mut self) {
-        use rustgis_data::raster::crs::{grid_note, grid_note_of, take_used_notes};
-        // What the command used beyond its layers and maps, on this thread (an export's target
-        // system, a grid's, a calculation's).
-        let mut notes = take_used_notes();
+        use rustgis_data::raster::crs::{definition_and_label, grid_notes_text, needs_a_missing_grid, take_used};
+        // What a command used beyond its layers and maps: on this thread (an export's target
+        // system, a grid's, a calculation's), and on a background export's.
+        let mut used = take_used();
+        used.append(&mut self.crs_used_elsewhere);
+        // Each system once: this runs after every frame.
+        let mut codes: Vec<&str> = Vec::new();
+        let mut systems: Vec<rustgis_data::raster::Crs> = Vec::new();
         for map in &self.project.maps {
             if let rustgis_map::Projection::Custom(code) = &map.projection
-                && let Ok((def, label)) = rustgis_map::projection::lookup(code)
+                && !codes.contains(&code.as_str())
             {
-                notes.extend(grid_note_of(&def, &label));
+                codes.push(code);
             }
             for layer in &map.layers {
-                notes.extend(layer.dataset.crs.and_then(grid_note));
-                notes.extend(layer.raster.as_ref().and_then(|r| r.data.as_ref()).and_then(|r| grid_note(r.crs)));
+                let raster = layer.raster.as_ref().and_then(|r| r.data.as_ref()).map(|r| r.crs);
+                for crs in layer.dataset.crs.into_iter().chain(raster) {
+                    if !systems.contains(&crs) {
+                        systems.push(crs);
+                    }
+                }
             }
         }
-        for note in notes {
-            if !self.crs_notes_said.contains(&note) && self.crs_notes_said.len() < 256 {
-                self.notify(note.clone(), false);
-                self.crs_notes_said.push(note);
+        used.extend(codes.into_iter().filter_map(|code| rustgis_map::projection::lookup(code).ok()));
+        used.extend(systems.into_iter().filter_map(definition_and_label));
+        // By definition: two typed systems share a label ("Custom PROJ").
+        let mut found: Vec<(String, String)> = Vec::new();
+        for (def, label) in used {
+            if !found.iter().any(|(d, _)| *d == def) && !self.crs_notes_said.contains(&def) && needs_a_missing_grid(&def) {
+                found.push((def, label));
             }
+        }
+        if !found.is_empty() && self.crs_notes_said.len() < 256 {
+            let mut labels: Vec<String> = Vec::new();
+            for (_, label) in &found {
+                if !labels.contains(label) {
+                    labels.push(label.clone());
+                }
+            }
+            self.notify(grid_notes_text(&labels), false);
+            self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
         }
     }
 

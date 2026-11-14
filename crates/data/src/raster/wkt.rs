@@ -593,7 +593,23 @@ fn eqc_semi_major(crs: Crs) -> Option<f64> {
         _ => None,
     };
     let proj4 = proj4.filter(|p| p.split_whitespace().any(|p| p == "+proj=eqc"))?;
-    proj4rs::Proj::from_proj_string(proj4).ok().map(|proj| proj.ellipse_parameters().0)
+    earth_params(proj4).map(|proj| proj.ellipse_parameters().0)
+}
+
+/// A definition read by proj4rs for its ellipsoid, prime meridian and unit only (transforms are
+/// terrio-crs's): a method proj4rs lacks (Natural Earth, Winkel Tripel, Eckert IV, Laborde, and
+/// the azimuthal equidistant in the browser, where its build leaves it out) is read as the same
+/// definition's longitude/latitude.
+fn earth_params(def: &str) -> Option<proj4rs::Proj> {
+    match proj4rs::Proj::from_proj_string(def) {
+        Ok(proj) => Some(proj),
+        // Only a method it lacks: a definition it can't read otherwise isn't read.
+        Err(proj4rs::errors::Error::ProjectionNotFound) => {
+            let kind = def.split_whitespace().find_map(|t| t.strip_prefix("+proj="))?;
+            proj4rs::Proj::from_proj_string(&def.replacen(&format!("+proj={kind}"), "+proj=longlat", 1)).ok()
+        }
+        Err(_) => None,
+    }
 }
 
 /// The ellipsoidal formula of EPSG method 1028, as PROJ 9.8 computes it (PROJ #4656): files
@@ -1638,8 +1654,8 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
             ));
         }
         // None of the three has a scale factor, and PROJ ignores one. A definition with a scale
-        // other than 1 is refused (`WorldProjection::from_proj4`), so WKT with one is too, rather
-        // than read without it.
+        // other than 1 is refused (`crs::transformer_of`), so WKT with one is too, rather than
+        // read without it.
         "NATURAL_EARTH" | "ECKERT_IV" | "WINKEL_TRIPEL" if k0 != 1.0 => {
             return Err(format!(
                 "the {} projection with a scale factor other than 1 isn't supported",
@@ -1775,7 +1791,7 @@ fn national_datum(datum: Option<&Node>) -> Option<&'static str> {
 
 /// Whether the file's ellipsoid axes agree with a known definition within a centimetre.
 fn ellipsoid_matches(datum: &Node, def: &str) -> bool {
-    let Ok(proj) = proj4rs::Proj::from_proj_string(def) else { return false };
+    let Some(proj) = earth_params(def) else { return false };
     let Some(sph) = datum.child_of(&["SPHEROID", "ELLIPSOID"]) else { return false };
     let (Some(actual_a), Some(rf)) = (sph.num(0), sph.num(1)) else { return false };
     let (a, b) = proj.ellipse_parameters();
@@ -1966,7 +1982,7 @@ fn national_datum_name(def: &str, code: Option<u16>) -> Option<&'static str> {
 /// A definition's ellipsoid axes and its shift to WGS 84 as seven parameters (three padded with
 /// zeros), a named datum's shift included; `None` without a shift.
 fn earth_of(def: &str) -> Option<((f64, f64), [f64; 7])> {
-    let proj = proj4rs::Proj::from_proj_string(def).ok()?;
+    let proj = earth_params(def)?;
     let value = |k: &str| def.split_whitespace().find_map(|t| t.strip_prefix(k));
     let shift = value("+towgs84=").or_else(|| DATUMS.iter().find(|r| value("+datum=").is_some_and(|d| r.0.eq_ignore_ascii_case(d)))?.3)?;
     let parts: Vec<f64> = shift.split(',').map(|v| v.trim().parse().ok()).collect::<Option<_>>()?;
@@ -2035,16 +2051,7 @@ pub fn proj4_to_wkt(def: &str, name: &str) -> Option<String> {
 
 /// A PROJ definition as WKT1, with `code` as its EPSG authority.
 fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
-    // proj4rs doesn't read the world projections it lacks (Natural Earth, Winkel Tripel, Eckert
-    // IV): their ellipsoid, prime meridian and unit are read from the definition as a geographic
-    // one.
-    let proj = proj4rs::Proj::from_proj_string(def).ok().or_else(|| {
-        let kind = def.split_whitespace().find_map(|t| t.strip_prefix("+proj="))?;
-        if !matches!(kind, "natearth" | "wintri" | "eck4") {
-            return None;
-        }
-        proj4rs::Proj::from_proj_string(&def.replacen(&format!("+proj={kind}"), "+proj=longlat", 1)).ok()
-    })?;
+    let proj = earth_params(def)?;
     let params: Vec<(&str, Option<&str>)> = def
         .split_whitespace()
         .filter_map(|t| t.strip_prefix('+'))
@@ -2494,6 +2501,13 @@ pub(crate) mod tests {
         assert!(wkt.contains("PARAMETER[\"standard_parallel_1\",50.459776252189805]"), "{wkt}");
         let wkt = proj4_to_wkt("+proj=wintri +lon_0=0 +datum=WGS84 +units=m +no_defs", "W").unwrap();
         assert!(wkt.contains("PARAMETER[\"standard_parallel_1\",0]"), "{wkt}");
+        // A method proj4rs can't read (here Natural Earth; in the browser the azimuthal
+        // equidistant) still has its ellipsoid and datum shift read, to name its datum.
+        assert!(proj4rs::Proj::from_proj_string("+proj=natearth +ellps=intl +towgs84=1,2,3").is_err());
+        let ((a, _), shift) = earth_of("+proj=natearth +ellps=intl +towgs84=1,2,3 +units=m").unwrap();
+        assert_eq!((a, shift), (6_378_388.0, [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0]));
+        // A definition it can't read for another reason isn't read as longitude/latitude.
+        assert!(earth_of("+proj=tmerc +k=abc +ellps=intl +towgs84=1,2,3").is_none());
         // Another projection proj4rs can't read still has none.
         assert_eq!(proj4_to_wkt("+proj=nosuch +datum=WGS84 +units=m +no_defs", "X"), None);
     }
@@ -2591,10 +2605,16 @@ pub(crate) mod tests {
             wkt1.replace(r#"PARAMETER["central_meridian",-60],"#, r#"PARAMETER["central_meridian",-60],PARAMETER["scale_factor",0.5],"#);
         assert!(crs_from_wkt(&scaled).unwrap_err().contains("scale factor other than 1"));
         assert!(crs_from_wkt(&scaled.replace("0.5]", "1]")).is_ok());
-        // A PROJ string's scale is ignored by Natural Earth, as in PROJ 9.8.1 (pyproj 3.8.0: 10°E
-        // 40°N is 894104.51, 4501295.58 with and without `+k=0.5`).
-        let scaled = Crs::parse("+proj=natearth +k=0.5 +datum=WGS84 +units=m +no_defs").unwrap().transformer().unwrap();
-        let at = scaled.from_lonlat(Coord::new(10.0, 40.0)).unwrap();
+        // PROJ 9.8.1 ignores a PROJ string's scale in Natural Earth (pyproj 3.8.0: 10°E 40°N is
+        // 894104.51, 4501295.58 with and without `+k=0.5`): refused rather than dropped, a scale
+        // of 1 is the projection itself.
+        for name in ["natearth", "wintri", "eck4"] {
+            let def = format!("+proj={name} +k=0.5 +datum=WGS84 +units=m +no_defs");
+            assert!(Crs::parse(&def).and_then(Crs::transformer).unwrap_err().contains("scale factor"), "{name}");
+            assert!(Crs::parse(&def.replace("+k=0.5", "+k_0=2")).and_then(Crs::transformer).is_err(), "{name}");
+        }
+        let one = Crs::parse("+proj=natearth +k=1 +datum=WGS84 +units=m +no_defs").unwrap().transformer().unwrap();
+        let at = one.from_lonlat(Coord::new(10.0, 40.0)).unwrap();
         assert!((at.x - 894_104.506_383_310_9).abs() < 1e-6 && (at.y - 4_501_295.579_974_174).abs() < 1e-6, "{at:?}");
         // Natural Earth and Eckert IV have no standard parallel: a `+lat_1` is ignored, as in PROJ,
         // where Winkel Tripel refuses one at a pole. `+geoc` changes nothing on their sphere (PROJ
@@ -3581,8 +3601,8 @@ pub(crate) mod tests {
         for wkt in [lone, twice, web_lone, south_twice] {
             assert_eq!(crs_from_wkt(&wkt), Err("axes pointing west or south aren't supported".into()), "{wkt}");
         }
-        // So does its equidistant cylindrical on an ellipsoid (`crs::ellipsoidal_eqc`); on a
-        // sphere, proj4rs computes it and reads `+axis`.
+        // So is equidistant cylindrical on an ellipsoid with axes pointing west; on a sphere,
+        // the WKT's `+axis` is kept.
         let eqc = sinusoidal.replace(r#"PROJECTION["Sinusoidal"]"#, r#"PROJECTION["Equidistant_Cylindrical"]"#);
         assert_eq!(crs_from_wkt(&eqc), Err("axes pointing west or south aren't supported".into()));
         let sphere = eqc.replace(

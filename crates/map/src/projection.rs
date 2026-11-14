@@ -432,7 +432,7 @@ impl Domain {
                 let lon0 = if proj == "utm" { param("zone").map(|z| z * 6.0 - 183.0 + pm).unwrap_or(lon0) } else { lon0 };
                 Domain::Band { lon0, half: 30.0 }
             }
-            "stere" | "sterea" | "somerc" | "krovak" | "cass" | "poly" | "omerc" => {
+            "stere" | "sterea" | "somerc" | "krovak" | "cass" | "poly" | "omerc" | "labrd" => {
                 Domain::Cap { center: Coord::new(lon0, lat0), radius: 60.0 }
             }
             "laea" | "aeqd" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 120.0 },
@@ -1150,6 +1150,11 @@ mod tests {
         let laborde = Projector::new("EPSG:8441").unwrap_or_else(|e| panic!("{e}"));
         let m = laborde.forward(Coord::new(47.0, -19.0)).unwrap();
         assert!((m.x - 459_248.289).abs() < 0.01 && (m.y - 788_988.914).abs() < 0.01, "{m:?}");
+        // A regional projection: places far from Madagascar aren't drawn, and its round trip is
+        // checked.
+        assert!(matches!(laborde.domain(), Domain::Cap { radius: 60.0, .. }), "{:?}", laborde.domain());
+        assert!(laborde.domain().contains(Coord::new(47.0, -19.0)));
+        assert!(!laborde.domain().contains(Coord::new(-120.0, 40.0)));
         // Cassini, the polyconic, Equal Earth and the oblique Mercator: their
         // codes are accepted (EPSG:5880's polyconic, whose refusal was #208), and draw where PROJ
         // does: 54°W 10°S lands at (5 000 000, 8 894 145.167) in pyproj 3.8.0's EPSG:5880. On the
