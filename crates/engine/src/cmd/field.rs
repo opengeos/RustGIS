@@ -112,7 +112,12 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         match crate::project::read_file(Path::new(&file), budget) {
             Ok(bytes) => {
                 budget = budget.saturating_sub(bytes.len() as u64);
-                let stem = Path::new(&file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "basemap".into());
+                // A name the package's folders can hold as one file, the same in the entry and the
+                // layer's address: `:` and `\` (fine in a Linux name) would be refused or split.
+                let stem: String = Path::new(&file).file_name().map_or_else(
+                    || "basemap".into(),
+                    |n| n.to_string_lossy().chars().map(|c| if matches!(c, ':' | '\\' | '/') { '_' } else { c }).collect(),
+                );
                 let mut name = stem.clone();
                 for n in 2.. {
                     if taken.insert(name.to_ascii_lowercase()) {
@@ -170,12 +175,13 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         }
         entries.extend(photos.entries);
     }
-    // A project of the one map: what else the project holds stays at home.
-    let mut project = s.project.clone();
-    project.name = area.clone();
+    // A project of the one map: what else the project holds (tables, notebooks, models, shared
+    // items and their paths…) stays at home. The custom colour ramps and styles go with it, as its
+    // layers may draw with them.
+    let mut project = crate::project::Project::new(area.clone());
     project.maps = vec![super::items::embedded_map(&map, &mut budget)];
-    project.active_map = 0;
-    project.offline_areas.clear();
+    project.ramps = s.project.ramps.clone();
+    project.styles = s.project.styles.clone();
     let readme = format!(
         "{area}: a RustGIS field package.\nOpen it with RustGIS on a phone or a computer (Open Project). Its basemaps are in {BASEMAPS}/.\n"
     );
@@ -207,12 +213,59 @@ fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> S
         let Some(fi) = photos_field(l) else { continue };
         for f in &mut l.dataset.features {
             let Some(rustgis_data::Value::Text(held)) = f.attrs.get(fi) else { continue };
-            let paths: Vec<String> = held.split(';').map(str::trim).filter(|p| !p.is_empty()).map(&mut rewrite).collect();
+            // Only the paths rewritten change: the rest of the text stays as it was written, so
+            // a feature isn't seen as edited for its spacing.
+            let (mut out, mut last) = (String::new(), 0);
+            for r in photo_paths(held) {
+                let (Some(before), Some(path)) = (held.get(last..r.start), held.get(r.clone())) else { continue };
+                let new = rewrite(path);
+                if new != path {
+                    out.push_str(before);
+                    out.push_str(&new);
+                    last = r.end;
+                }
+            }
+            if last == 0 {
+                continue;
+            }
+            out.push_str(held.get(last..).unwrap_or_default());
             if let Some(slot) = f.attrs.get_mut(fi) {
-                *slot = rustgis_data::Value::Text(paths.join(";"));
+                *slot = rustgis_data::Value::Text(out);
             }
         }
     }
+}
+
+/// Where the paths a photos field holds are in its text (`;` between them), trimmed, empty ones
+/// left out. A path with a `;` of its own is one path when, joined again, it names a file on this
+/// device.
+fn photo_paths(held: &str) -> Vec<std::ops::Range<usize>> {
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for (i, c) in held.char_indices() {
+        if c == ';' {
+            pieces.push(start..i);
+            start = i + 1;
+        }
+    }
+    pieces.push(start..held.len());
+    let names_file = |r: &std::ops::Range<usize>| held.get(r.clone()).is_some_and(|p| Path::new(p.trim()).is_file());
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(first) = pieces.get(i) {
+        // The longest run of pieces from here that names a file, or this one alone.
+        let last = (i + 1..pieces.len()).rev().find(|j| pieces.get(*j).is_some_and(|end| names_file(&(first.start..end.end)))).unwrap_or(i);
+        let end = pieces.get(last).map_or(first.end, |p| p.end);
+        if let Some(text) = held.get(first.start..end) {
+            let lead = text.len() - text.trim_start().len();
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                out.push(first.start + lead..first.start + lead + trimmed.len());
+            }
+        }
+        i = last + 1;
+    }
+    out
 }
 
 /// The photo files `map`'s features name that are on this device, as package entries under
@@ -226,9 +279,14 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> Photos {
     let mut index = String::new();
     let mut placed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut taken = std::collections::HashSet::new();
+    // The files already said (not pictures, or unread): each said once, however many name it.
+    let mut said = std::collections::HashSet::new();
     rewrite_photos(map, |path| {
         if let Some(entry) = placed.get(path) {
             return entry.clone();
+        }
+        if said.contains(path) {
+            return path.to_string();
         }
         let file = Path::new(path);
         // A picture only: a photos field is free text, and could name any file on the device.
@@ -237,6 +295,7 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> Photos {
             return path.to_string();
         }
         if !picture {
+            said.insert(path.to_string());
             not_pictures.push(path.to_string());
             return path.to_string();
         }
@@ -258,6 +317,7 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> Photos {
                 entry
             }
             Err(e) => {
+                said.insert(path.to_string());
                 unread.push(format!("{path} ({e})"));
                 path.to_string()
             }
@@ -288,11 +348,30 @@ const PICTURES: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "webp"];
 /// A file name with nothing a package's photo entry may not hold: no folder separator or drive
 /// colon, and not hidden (a leading dot).
 fn plain_name(name: &str) -> String {
-    let name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '_' } else { c }).collect();
+    let name: String = name.chars().map(|c| if c.is_control() || FORBIDDEN.contains(c) { '_' } else { c }).collect();
+    let name = name.trim_end_matches(['.', ' ']).to_string();
     match name.strip_prefix('.') {
         Some(rest) => format!("_{rest}"),
+        None if device_name(&name) => format!("_{name}"),
+        None if name.is_empty() => "photo".into(),
         None => name,
     }
+}
+
+/// What a file name can't hold on one of the systems a package goes to (Windows forbids the most).
+const FORBIDDEN: &str = "/\\:*?\"<>|";
+
+/// Whether a file name is a Windows device's (`CON`, `NUL.jpg`, `COM1`…), which can't be a file.
+fn device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.ends_with(|c: char| c.is_ascii_digit()))
+}
+
+/// Whether a photo entry's name is a plain file name on every system: nothing that would put it
+/// outside its folder or that a system refuses, so no photo is half written before another fails.
+fn plain_file(file: &str) -> bool {
+    !file.is_empty() && file == plain_name(file)
 }
 
 /// Brings a field package's edits back (`offline.bringBack`): the package (`path`, or `data` in
@@ -327,7 +406,7 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
             text = Some(String::from_utf8(data).map_err(|_| "the field package's project is damaged".to_string())?);
         } else if let Some(file) = name.strip_prefix(&format!("{PHOTOS}/")) {
             // A photo's own name only: nothing that would put it outside its folder.
-            if !file.is_empty() && !file.contains(['/', '\\', ':']) && file != ".." && !file.starts_with('.') {
+            if plain_file(file) {
                 photos.push((file.to_string(), data));
             } else {
                 strange += 1;
@@ -635,6 +714,31 @@ mod tests {
     }
 
     #[test]
+    fn a_field_package_holds_only_its_map_and_a_basemap_of_any_name_is_read() {
+        let temp = Temp::new("only");
+        // A name a Linux file can have, which a package's folders couldn't hold as it is.
+        let archive = temp.path().join("site:a\\b.mbtiles");
+        std::fs::write(&archive, b"stand-in archive bytes").unwrap();
+        let mut s = sample();
+        s.map_mut().tiles.push(TileLayer::new("Site", TileKind::MbTiles, archive.display().to_string()));
+        // What else the project holds stays at home.
+        s.project
+            .tables
+            .push(crate::project::Table::new(7, rustgis_data::Dataset::new("Inventory", rustgis_data::GeometryType::None, Vec::new())));
+        s.project.folders.push("/home/someone/data".into());
+        let (_, bytes) = package(&mut s, &json!({"name": "Survey", "extent": [-20.0, -40.0, 60.0, 40.0]})).unwrap();
+        let names: Vec<String> = rustgis_data::zip::read(&bytes).unwrap().into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"basemaps/site_a_b.mbtiles".to_string()), "{names:?}");
+        let into = temp.path().join("unpacked");
+        let project = project_in(&unpack_into(&bytes, &into).unwrap(), &into).unwrap();
+        assert!(project.tables.is_empty() && project.folders.is_empty() && project.offline_areas.is_empty());
+        assert_eq!(project.maps.len(), 1);
+        let base = project.maps[0].tiles.iter().find(|t| t.name == "Site").unwrap();
+        assert_eq!(Path::new(&base.url), into.join("basemaps/site_a_b.mbtiles"));
+        assert!(into.join("basemaps/site_a_b.mbtiles").is_file());
+    }
+
+    #[test]
     fn a_field_package_not_saved_leaves_no_offline_area() {
         let mut s = sample();
         let had = s.project.offline_areas.len();
@@ -884,6 +988,80 @@ mod tests {
         assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(0), Some(0)), "{done}");
         assert_eq!(value(&home, "Cities", 0, "photos"), photo.display().to_string());
         assert!(!temp.path().join("Here photos").join("a.jpg").exists());
+    }
+
+    #[test]
+    fn a_photo_in_a_folder_with_a_semicolon_goes_and_other_text_is_kept_as_written() {
+        let temp = Temp::new("semicolon");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let cities = layer(&home, "Cities");
+        home.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        let (_, out) = package(&mut home, &json!({"name": "Semi", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let cities = layer(&field, "Cities");
+        // A picture in a folder with a `;` in its name, and a gif named by two features.
+        let trips = temp.path().join("Trips;2024");
+        std::fs::create_dir_all(&trips).unwrap();
+        let photo = trips.join("IMG_1.jpg");
+        std::fs::write(&photo, b"jpeg").unwrap();
+        let gif = temp.path().join("b.gif");
+        std::fs::write(&gif, b"gif").unwrap();
+        let first = format!("{}; {}", photo.display(), gif.display());
+        let spaced = "notes.jpg ;  other.jpg";
+        for (row, value) in [(0, first.as_str()), (1, &*gif.display().to_string()), (2, spaced)] {
+            field.run("edit.setValue", &json!({"layer": cities, "row": row, "field": "photos", "value": value})).unwrap();
+        }
+        let mark = field.notice_mark();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let entries = rustgis_data::zip::read(&back).unwrap();
+        assert!(entries.iter().any(|(n, b)| n == "photos/IMG_1.jpg" && b == b"jpeg"));
+        // The gif is said once, however many name it.
+        let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 file(s)") && t.contains("b.gif")), "{said:?}");
+        // Text naming nothing here is kept as it was written, spaces and all.
+        let text = entries.iter().find(|(n, _)| n.ends_with(".rgis")).map(|(_, b)| String::from_utf8_lossy(b).into_owned()).unwrap();
+        assert!(text.contains(spaced), "{text}");
+    }
+
+    #[test]
+    fn photo_names_a_system_refuses_are_made_plain_and_left_out_coming_back() {
+        for (name, plain) in
+            [("a:b*?.jpg", "a_b__.jpg"), ("CON.jpg", "_CON.jpg"), ("com1", "_com1"), (".x.jpg", "_x.jpg"), ("x.jpg.", "x.jpg")]
+        {
+            assert_eq!(plain_name(name), plain);
+            assert!(!plain_file(name) && plain_file(plain), "{name}");
+        }
+        assert!(plain_file("IMG_1.jpg") && plain_file("COM10.jpg") && plain_file("console.jpg"));
+        // A package with photo entries of such names: they are left out and counted.
+        let temp = Temp::new("strange");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let (_, out) = package(&mut home, &json!({"name": "Odd", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let path = temp.path().join("back.rgisfield");
+        // Clean: nothing said of photos left out.
+        std::fs::write(&path, &back).unwrap();
+        let mark = home.notice_mark();
+        home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+        assert!(home.notices_since(mark).iter().all(|n| !n.text.contains("plain file names")));
+        let mut entries = rustgis_data::zip::read(&back).unwrap();
+        for odd in ["photos/.hidden.jpg", "photos/NUL.jpg", "photos/a*b.jpg"] {
+            entries.push((odd.into(), b"x".to_vec()));
+        }
+        std::fs::write(&path, rustgis_data::zip::write(&entries).unwrap()).unwrap();
+        let mark = home.notice_mark();
+        home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+        let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("3 photo(s)") && t.contains("plain file names")), "{said:?}");
+        assert!(!temp.path().join("Odd photos").exists());
     }
 
     #[test]
