@@ -402,6 +402,9 @@ fn after_uri_hosts(mut s: &str) -> Result<&str> {
             s = after_close;
         }
         let next = s.find([',', '/', '?', '[']).unwrap_or(s.len());
+        if s.get(..next).unwrap_or("").contains('@') {
+            return Err(DataError::Format("the connection: invalid connection string".into()));
+        }
         match s.as_bytes().get(next).copied() {
             Some(b'[') => {
                 return Err(DataError::Format("the connection: invalid connection string".into()));
@@ -425,17 +428,10 @@ fn check_postgres_attach(dsn: &str) -> Result<()> {
         let Some((_, rest)) = t.split_once("://") else {
             return Err(DataError::Format("the connection: invalid connection string".into()));
         };
-        if rest.starts_with('[') {
-            let tail = after_uri_hosts(rest)?;
-            if let Some((_, query)) = tail.split_once('?') {
-                check_pg_query(query, true)?;
-            }
-            return Ok(());
-        }
         let before_slash = rest.split('/').next().unwrap_or(rest);
         if let Some(at) = before_slash.find('@') {
             let user_part = before_slash.get(..at).unwrap_or("");
-            if user_part.contains(['[', ']']) {
+            if user_part.contains(['[', ']']) || before_slash.get(at + 1..).unwrap_or("").contains('@') {
                 return Err(DataError::Format("the connection: invalid connection string".into()));
             }
             let tail = after_uri_hosts(rest.get(at + 1..).unwrap_or(""))?;
@@ -1258,6 +1254,10 @@ mod tests {
             "postgresql://db.example?options=-c%20foo@bar?sslmode=require",
             "postgresql://me@db.example/gis?sslkeylogfile=/tmp/keys.log",
             "postgresql://[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://[::1]?x@db.example/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://[::1]?x=1@db.example/gis?sslkeylogfile=/tmp/keys.log",
+            "postgresql://[u]?x@db.example/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://u1@u2?x@db.example/gis?sslrootcert=/tmp/root.crt",
             "postgresql://u@[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
             "postgresql://h1,[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
             "postgresql://[::1]:5432/gis?sslrootcert=/tmp/root.crt",
