@@ -34,9 +34,9 @@ enum Asked {
     /// search as a GET in the address when it went as a POST and fits in one: asked if the server
     /// refuses the POST.
     Search(String, Option<String>),
-    /// A token for an asset that needs signing: the token service's address, the asset's and the
-    /// layer's name and saved connection, captured when Add was requested.
-    Token { token_url: String, href: String, name: String, connection: Option<String> },
+    /// A token for an asset that needs signing: the token service's address, the asset's, the
+    /// layer's name, saved connection and supplying document origin, captured when Add was requested.
+    Token { token_url: String, href: String, name: String, connection: Option<String>, from: String },
     /// An item's or a collection's document (a `?stac=` link), by its address.
     Link(String),
     /// A static catalog's document, for its children, by its address.
@@ -247,19 +247,25 @@ impl Default for State {
     }
 }
 
-fn fetch(url: &str) -> Answer {
+fn fetch(url: &str, from_document: bool) -> Answer {
     let slot: Answer = Slot::default();
     let land = slot.clone();
-    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+    let done = Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r));
+    if from_document {
+        cache::download_public(url, done);
+    } else {
+        cache::download(url, done);
+    }
     slot
 }
 
 /// Reads with the selected API's login only; a catalog's foreign links stay anonymous.
-fn fetch_service(app: &mut RustGisApp, url: &str) -> Answer {
+fn fetch_service(app: &mut RustGisApp, url: &str, from_document: bool) -> Answer {
+    let from_document = from_document || app.ui.stac.api_from_document;
     let connection = selected_connection(app);
     let base = app.ui.stac.api.clone();
     match crate::serviceui::request_from(app, connection.as_deref(), &base, url) {
-        Ok(url) => fetch(&url),
+        Ok(url) => fetch(&url, from_document),
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
     }
 }
@@ -367,7 +373,11 @@ fn want_thumbs(app: &mut RustGisApp) {
         let picture = address.map(|address| {
             let slot: Answer = Slot::default();
             let land = slot.clone();
-            cache::download_limited(&address, THUMB_BYTES, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            cache::download_public_limited(
+                &address,
+                THUMB_BYTES,
+                Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+            );
             Thumb::Loading(slot)
         });
         st.thumbs.insert(a.href.clone(), picture.unwrap_or(Thumb::Failed));
@@ -392,7 +402,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         && r.is_err()
     {
         let get = get.clone();
-        let slot = fetch_service(app, &get);
+        let slot = fetch_service(app, &get, false);
         app.ui.stac.waiting = Some((Asked::Search(get, None), slot));
         return;
     }
@@ -437,13 +447,18 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             Err(e) => st.error = Some(e),
         },
-        Asked::Token { token_url, href, name, connection } => match r.and_then(|b| stac::parse_sas(&b)) {
-            Ok(token) => {
+        Asked::Token { token_url, href, name, connection, from } => {
+            let signed = r.and_then(|b| stac::parse_sas(&b)).and_then(|token| {
                 stac::remember_token(&token_url, &token);
-                add_url_from(app, &stac::sign(&href, &token), &name, connection.as_deref());
+                let signed = stac::sign(&href, &token);
+                rustgis_engine::render::rustgis_tiles::address::check(&signed, Some(&from))?;
+                Ok(signed)
+            });
+            match signed {
+                Ok(signed) => add_url_from(app, &signed, &name, connection.as_deref(), &from),
+                Err(e) => app.ui.stac.error = Some(e),
             }
-            Err(e) => st.error = Some(e),
-        },
+        }
         Asked::Link(url) => landed_link(app, &url, r),
         Asked::Children(url) => match r.and_then(|b| catalog::parse_children(&b, &url)) {
             // A search's count (or a walk's progress), landed first, is kept.
@@ -488,9 +503,16 @@ fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
             None => i += 1,
         }
     }
+    let root_public = app.ui.stac.api_from_document
+        || rustgis_engine::render::rustgis_tiles::address::reach(app.ui.stac.api.trim())
+            == rustgis_engine::render::rustgis_tiles::address::Reach::Public;
     while fetching.len() < catalog::AT_ONCE {
         let Some(url) = walk.next_url() else { break };
-        let slot = fetch_service(app, &url);
+        let from_document = root_public
+            || ((walk.reads > 0 || !fetching.is_empty())
+                && rustgis_engine::render::rustgis_tiles::address::reach(&url)
+                    == rustgis_engine::render::rustgis_tiles::address::Reach::Public);
+        let slot = fetch_service(app, &url, from_document);
         fetching.push((url, slot));
     }
     if !walk.finished() {
@@ -604,27 +626,45 @@ fn days_ago(n: u64) -> String {
 
 /// Adds an asset by its address, signing it first when it needs it (a token in hand is used; one
 /// still to fetch is fetched off the frame, and the asset added when it lands).
-fn add_signed(app: &mut RustGisApp, href: &str, name: &str) {
+fn add_signed(app: &mut RustGisApp, href: &str, name: &str, from: &str) {
+    if let Err(e) = rustgis_engine::render::rustgis_tiles::address::check(href, Some(from)) {
+        app.ui.stac.error = Some(e);
+        return;
+    }
     if !stac::needs_signing(href) {
-        return add_url(app, href, name);
+        return add_url(app, href, name, from);
     }
     match stac::sas_token_url(href) {
         Ok(token_url) => match stac::cached_token(&token_url) {
-            Some(token) => add_url(app, &stac::sign(href, &token), name),
+            Some(token) => {
+                let signed = stac::sign(href, &token);
+                if let Err(e) = rustgis_engine::render::rustgis_tiles::address::check(&signed, Some(from)) {
+                    app.ui.stac.error = Some(e);
+                    return;
+                }
+                add_url(app, &signed, name, from);
+            }
             None => {
-                let slot = fetch(&token_url);
+                if let Err(e) = rustgis_engine::render::rustgis_tiles::address::check(&token_url, Some(from)) {
+                    app.ui.stac.error = Some(e);
+                    return;
+                }
+                let slot = fetch(&token_url, true);
                 app.ui.stac.info = Some(tl!("Signing the asset (Planetary Computer)…").to_string());
                 let connection = selected_connection(app);
-                app.ui.stac.waiting = Some((Asked::Token { token_url, href: href.to_string(), name: name.to_string(), connection }, slot));
+                app.ui.stac.waiting = Some((
+                    Asked::Token { token_url, href: href.to_string(), name: name.to_string(), connection, from: from.to_string() },
+                    slot,
+                ));
             }
         },
         Err(e) => app.ui.stac.error = Some(e),
     }
 }
 
-fn add_url(app: &mut RustGisApp, href: &str, name: &str) {
+fn add_url(app: &mut RustGisApp, href: &str, name: &str, from: &str) {
     let connection = selected_connection(app);
-    add_url_from(app, href, name, connection.as_deref());
+    add_url_from(app, href, name, connection.as_deref(), from);
 }
 
 fn selected_connection(app: &RustGisApp) -> Option<String> {
@@ -632,8 +672,8 @@ fn selected_connection(app: &RustGisApp) -> Option<String> {
         .map(|c| c.id.clone())
 }
 
-fn add_url_from(app: &mut RustGisApp, href: &str, name: &str, connection: Option<&str>) {
-    let mut p = json!({"url": href, "name": name, "zoom": true});
+fn add_url_from(app: &mut RustGisApp, href: &str, name: &str, connection: Option<&str>, from: &str) {
+    let mut p = json!({"url": href, "name": name, "zoom": true, "from": from});
     if let Some(connection) = connection {
         p["connection"] = json!(connection);
     }
@@ -642,10 +682,25 @@ fn add_url_from(app: &mut RustGisApp, href: &str, name: &str, connection: Option
     }
 }
 
+/// The web document an item's asset links were read from, taking observed document provenance over
+/// self-reported links.
+fn item_document_origin(app: &RustGisApp, item: &Item) -> String {
+    item.origin
+        .as_deref()
+        .or(item.url.as_deref())
+        .or_else(|| {
+            let api = app.ui.stac.api.trim();
+            (!api.is_empty()).then_some(api)
+        })
+        .unwrap_or("https://item.invalid/")
+        .to_string()
+}
+
 /// Adds an item's asset (the one named, else the default) under the item's name.
 fn add_item_asset(app: &mut RustGisApp, item: &Item, key: Option<&str>) {
+    let from = item_document_origin(app, item);
     match item.asset_href(key) {
-        Ok((key, href)) => add_signed(app, &href, &format!("{} {key}", item.id)),
+        Ok((key, href)) => add_signed(app, &href, &format!("{} {key}", item.id), &from),
         Err(e) => app.ui.stac.error = Some(e),
     }
 }
@@ -657,7 +712,7 @@ pub fn open_link(app: &mut RustGisApp, url: &str) -> Result<(), String> {
     rustgis_engine::render::rustgis_tiles::address::check(url, None)?;
     app.run("ui.dialog", serde_json::json!({"name": "stac"}))?;
     let address = rustgis_engine::service_logins::request(&mut app.session, None, url)?;
-    let slot = fetch(&address);
+    let slot = fetch(&address, false);
     app.ui.stac.error = None;
     app.ui.stac.info = Some(i18n::fmt("Opening {url}…", &[("url", url)]));
     app.ui.stac.waiting = Some((Asked::Link(url.to_string()), slot));
@@ -782,14 +837,22 @@ fn fetch_children(app: &mut RustGisApp) {
     let st = &mut app.ui.stac;
     st.children.clear();
     st.error = None;
-    let url = if st.node.is_empty() { st.api.trim().to_string() } else { st.node.clone() };
-    if let Err(e) = rustgis_engine::render::rustgis_tiles::address::check(&url, None) {
+    let is_root = st.node.is_empty();
+    let url = if is_root { st.api.trim().to_string() } else { st.node.clone() };
+    let parent =
+        (!is_root).then(|| st.trail.last().map(|(_, u)| u.as_str()).filter(|u| !u.is_empty()).unwrap_or_else(|| st.api.trim()).to_string());
+    let origin = if st.api_from_document { Some("https://document.invalid/") } else { parent.as_deref().filter(|u| !u.is_empty()) };
+    if let Err(e) = rustgis_engine::render::rustgis_tiles::address::check(&url, origin) {
         st.error = Some(e);
         return;
     }
+    let from_document = st.api_from_document
+        || parent.as_deref().is_some_and(|p| {
+            rustgis_engine::render::rustgis_tiles::address::reach(p) == rustgis_engine::render::rustgis_tiles::address::Reach::Public
+        });
     st.info = Some(tl!("Reading the catalog…").to_string());
     st.counted = false;
-    let slot = fetch_service(app, &url);
+    let slot = fetch_service(app, &url, from_document);
     app.ui.stac.waiting = Some((Asked::Children(url), slot));
 }
 
@@ -1102,7 +1165,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         match stac::api(Some(app.ui.stac.api.as_str())) {
             Ok(api) => {
                 let typed = app.ui.stac.api.trim().to_string();
-                let slot = fetch_service(app, &stac::collections_url(&api));
+                let slot = fetch_service(app, &stac::collections_url(&api), false);
                 app.ui.stac.waiting = Some((Asked::Collections(typed), slot));
             }
             Err(e) => app.ui.stac.error = Some(e),
@@ -1748,7 +1811,7 @@ fn send_search(app: &mut RustGisApp, p: serde_json::Value, is_static: bool) {
         Ok((url, body, get)) => {
             let slot = match body {
                 Some(body) => post_service(app, &url, body),
-                None => fetch_service(app, &url),
+                None => fetch_service(app, &url, false),
             };
             app.ui.stac.asked_sort = p["sortby"].as_str().map(str::to_string);
             app.ui.stac.waiting = Some((Asked::Search(url, get), slot));
@@ -1896,10 +1959,11 @@ mod tests {
         app.ui.stac.api = api.into();
         app.ui.stac.connection = one["id"].as_str().map(str::to_string);
         let asked = Asked::Token {
-            token_url: "https://snapshot-token.invalid/token".into(),
+            token_url: "http://127.0.0.1:9/token".into(),
             href: "http://127.0.0.1:9/points.geojson".into(),
             name: "Original asset".into(),
             connection: selected_connection(&app),
+            from: api.into(),
         };
         let slot = Slot::default();
         *slot.lock().unwrap() = Some(Ok(br#"{"token":"sig=snapshot"}"#.to_vec()));
@@ -2521,5 +2585,62 @@ mod tests {
         app.ui.stac.api_from_document = true;
         switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
         assert!(!app.ui.stac.api_from_document, "picking an API is the user's choice");
+    }
+
+    #[test]
+    fn stac_document_assets_and_links_enforce_public_reach() {
+        let _turn = crate::fetching::turn();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(String, rustgis_engine::render::rustgis_tiles::address::Reach)>>> =
+            std::sync::Arc::default();
+        let log = seen.clone();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let clean = cache::split_download_limit(&url).0.split("#rustgis-range=").next().unwrap_or(&url).to_string();
+            log.lock().unwrap().push((clean.clone(), ceiling));
+            let origin = rustgis_engine::render::rustgis_tiles::address::Origin::named(&clean);
+            done(Ok(cache::Fetched { bytes: br#"{"type":"FeatureCollection","features":[]}"#.to_vec(), origin }));
+        });
+
+        let mut app = RustGisApp::with_sample();
+        let doc = "https://example.com/stac/item.json";
+        for bad in [
+            "http://127.0.0.1:8080/internal.geojson",
+            "http://localhost:8080/internal.geojson",
+            "http://169.254.169.254/latest/meta-data",
+            "http://10.0.0.1/internal.tif",
+        ] {
+            let raw = json!({
+                "type": "Feature",
+                "id": "scene-1",
+                "bbox": [0.0, 0.0, 1.0, 1.0],
+                "properties": {"datetime": "2025-01-01T00:00:00Z"},
+                "links": [{"rel": "self", "href": "http://127.0.0.1:8080/spoofed-self.json"}],
+                "assets": {"data": {"href": bad, "type": "application/geo+json", "roles": ["data"]}}
+            });
+            app.ui.stac.error = None;
+            landed_link(&mut app, doc, Ok(raw.to_string().into_bytes()));
+            let err = app.ui.stac.error.as_deref().unwrap_or("");
+            assert!(
+                err.contains("local network") || err.contains("never fetched"),
+                "{bad} must be refused by address policy when linked from {doc}, got: {err:?}"
+            );
+            assert!(app.ui.downloads.is_empty() && app.ui.cog_probes.is_empty(), "{bad} must not start a download or probe");
+        }
+        assert!(seen.lock().unwrap().is_empty(), "refused private asset links must never reach the transport");
+
+        let public_item = json!({
+            "type": "Feature",
+            "id": "scene-ok",
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+            "properties": {"datetime": "2025-01-01T00:00:00Z"},
+            "assets": {"data": {"href": "https://example.com/data/places.geojson", "type": "application/geo+json", "roles": ["data"]}}
+        });
+        app.ui.stac.error = None;
+        landed_link(&mut app, doc, Ok(public_item.to_string().into_bytes()));
+        assert_eq!(app.ui.stac.error, None);
+        assert_eq!(app.ui.downloads.last().map(|d| d.params["from"].as_str()), Some(Some(doc)));
+        assert_eq!(
+            seen.lock().unwrap().last().cloned(),
+            Some(("https://example.com/data/places.geojson".into(), rustgis_engine::render::rustgis_tiles::address::Reach::Public))
+        );
     }
 }

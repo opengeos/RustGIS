@@ -57,9 +57,75 @@ pub fn parse(v: &Value) -> Option<Msg> {
     }
 }
 
-/// Whether the embedding page may run `command`: the interface's own commands only.
+/// Interface commands an embedding page may run: panes, tabs, the ribbon, look and language,
+/// and harmless view or chrome toggles. Commands that fetch web addresses, open or export files,
+/// print, open pages, touch the clipboard or change stored tasks and settings outside the
+/// embedded session stay out.
+const UI_EMBED: &[&str] = &[
+    "ui.about",
+    "ui.animationPlay",
+    "ui.backstage",
+    "ui.catalogView",
+    "ui.commandSearch",
+    "ui.coordinateFormat",
+    "ui.gp.open",
+    "ui.identify",
+    "ui.itemPopups",
+    "ui.language",
+    "ui.layoutSelect",
+    "ui.layoutTool",
+    "ui.linkCursors",
+    "ui.magnifier",
+    "ui.map.gpu",
+    "ui.measurementUnits",
+    "ui.moveSharedVertices",
+    "ui.pane.bookmarks",
+    "ui.pane.catalog",
+    "ui.pane.contents",
+    "ui.pane.design",
+    "ui.pane.details",
+    "ui.pane.diagnosticLog",
+    "ui.pane.diagnostics",
+    "ui.pane.editing",
+    "ui.pane.format",
+    "ui.pane.geoprocessing",
+    "ui.pane.history",
+    "ui.pane.infographics",
+    "ui.pane.jobs",
+    "ui.pane.labeling",
+    "ui.pane.layerProperties",
+    "ui.pane.notebook",
+    "ui.pane.presentation",
+    "ui.pane.profile",
+    "ui.pane.report",
+    "ui.pane.sources",
+    "ui.pane.symbology",
+    "ui.pane.tasks",
+    "ui.pane.timeSeries",
+    "ui.pane.workflows",
+    "ui.paneSet",
+    "ui.ribbon",
+    "ui.scale",
+    "ui.shortcuts",
+    "ui.splitView",
+    "ui.tab",
+    "ui.theme",
+    "ui.themeFile",
+    "ui.timePlay",
+    "ui.timeSlider",
+    "ui.traceEdges",
+];
+
+/// Whether the embedding page may run `command`: safe interface commands only.
 pub fn runnable(command: &str) -> bool {
-    command.strip_prefix("ui.").is_some_and(|rest| !rest.is_empty())
+    UI_EMBED.contains(&command)
+}
+
+/// Whether startup query links (`?project=`, `?data=`, `?stac=`, `?style=`, `?tiles=`, `?zarr=`,
+/// `?registry=`) run on page load: never in `?embed`, which starts blank and receives its
+/// project through `postMessage`.
+pub const fn startup_links_allowed(embedded: bool) -> bool {
+    !embedded
 }
 
 pub fn ready() -> Value {
@@ -154,11 +220,92 @@ mod tests {
     }
 
     #[test]
-    fn the_page_runs_only_interface_commands() {
-        assert!(runnable("ui.language"));
-        for other in ["ui.", "layer.addData", "project.open", "share.exportMap", "gp.run", "uix.language", ""] {
-            assert!(!runnable(other), "{other}");
+    fn the_page_runs_only_safe_interface_commands() {
+        for safe in [
+            "ui.language",
+            "ui.theme",
+            "ui.themeFile",
+            "ui.scale",
+            "ui.ribbon",
+            "ui.tab",
+            "ui.backstage",
+            "ui.pane.contents",
+            "ui.pane.symbology",
+            "ui.pane.geoprocessing",
+            "ui.map.gpu",
+            "ui.coordinateFormat",
+            "ui.measurementUnits",
+            "ui.timeSlider",
+            "ui.magnifier",
+            "ui.identify",
+        ] {
+            assert!(runnable(safe), "{safe}");
         }
+        for blocked in [
+            "ui.",
+            "ui.addUrl",
+            "ui.openUrl",
+            "ui.stacLink",
+            "ui.stac",
+            "ui.stac.sentinel2",
+            "ui.addZarr",
+            "ui.plugins",
+            "ui.extensions",
+            "ui.installPlugin",
+            "ui.searchOpenData",
+            "ui.connection",
+            "ui.s3Connections",
+            "ui.importService",
+            "ui.refreshService",
+            "ui.addService",
+            "ui.exportMap",
+            "ui.exportLayer",
+            "ui.exportRaster",
+            "ui.exportLayout",
+            "ui.exportReport",
+            "ui.exportPresentation",
+            "ui.exportAnimation",
+            "ui.timeExport",
+            "ui.printMap",
+            "ui.printLayout",
+            "ui.save",
+            "ui.saveAs",
+            "ui.saveLayout",
+            "ui.saveItem",
+            "ui.share",
+            "ui.open",
+            "ui.openItem",
+            "ui.addFile",
+            "ui.addData",
+            "ui.learn",
+            "ui.copy",
+            "ui.cut",
+            "ui.copyPath",
+            "ui.captureMap",
+            "ui.captureLayout",
+            "ui.taskRecord",
+            "ui.recover",
+            "ui.autosave",
+            "ui.startup",
+            "ui.mcpRelay",
+            "ui.dialog",
+            "ui.pane.assistant",
+            "ui.pane.directions",
+            "ui.pane.sql",
+            "ui.pane.webData",
+            "ui.pane.plugin",
+            "ui.pluginForm",
+            "layer.addData",
+            "project.open",
+            "share.exportMap",
+            "gp.run",
+            "uix.language",
+            "",
+        ] {
+            assert!(!runnable(blocked), "{blocked}");
+        }
+        assert!(startup_links_allowed(false));
+        assert!(!startup_links_allowed(true));
     }
 
     #[test]

@@ -1180,6 +1180,8 @@ pub struct RustGisApp {
 
     sent_title: String,
     pub quit_requested: bool,
+    /// Hosted inside an untrusted web frame (`?embed`): project imports stay peer-contained.
+    pub embedded: bool,
     logo: Option<egui::TextureHandle>,
     pub services: Services,
     /// Autosave's interval, its last copy, and the copy an earlier run left (#873).
@@ -1430,6 +1432,7 @@ impl RustGisApp {
 
             sent_title: String::new(),
             quit_requested: false,
+            embedded: false,
             logo: None,
             services: Services::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -3579,6 +3582,9 @@ impl RustGisApp {
             // A project by its web address (a `?project=` link): downloaded off the frame, opened
             // when it lands: native projects replace it; GeoLibre imports add a map (see `poll_downloads`).
             "ui.openUrl" => {
+                if self.embedded {
+                    return Err("embedded sessions receive projects from the host page".into());
+                }
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 let url = rustgis_engine::map::geolibre::download_url(url);
                 let url = url.as_str();
@@ -4739,6 +4745,17 @@ impl RustGisApp {
     /// keeping its own name when the address has none). Unlike [`Self::open_bytes`], it never takes
     /// a picker's pending item: the download isn't the file the user is picking.
     fn open_project_bytes(&mut self, file: Option<&str>, bytes: &[u8]) -> Result<Value, String> {
+        if self.embedded {
+            if file.is_some_and(rustgis_engine::map::geolibre::is_project_file)
+                || file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgispkg"))
+            {
+                return Err("embedded sessions open peer project JSON only".into());
+            }
+            let text = std::str::from_utf8(bytes).map_err(|_| "not a RustGIS project".to_string())?;
+            self.open_peer_text(text)?;
+            self.map.invalidate();
+            return Ok(Value::Null);
+        }
         if file.is_some_and(rustgis_engine::map::geolibre::is_project_file) {
             let text = std::str::from_utf8(bytes).map_err(|_| tl!("Not a GeoLibre project").to_string())?;
             let result = self.run("project.importGeolibre", json!({"text":text}));
@@ -4792,6 +4809,8 @@ impl RustGisApp {
                 return self.run("ui.dialog", json!({"name": "addUrl"}));
             };
             let url = raw_url.trim();
+            let (check_origin, public) = rustgis_engine::cmd::layer::request_origin(p)?;
+            rustgis_engine::render::rustgis_tiles::address::check(url, check_origin)?;
             // Claimed work keeps its exact admitted address and connection. Only direct native
             // UI ingress chooses a login here; a continuation never acquires a new default.
             let bound = if claim.is_some() {
@@ -4808,7 +4827,27 @@ impl RustGisApp {
                 )
             };
             let p = bound.as_ref();
-            let url = rustgis_engine::data::login_address::inner(p.get("url").and_then(Value::as_str).unwrap_or(url));
+            let (bound_origin, bound_public) = rustgis_engine::cmd::layer::request_origin(p)?;
+            let check_origin = bound_origin.or(check_origin);
+            let public = public || bound_public;
+            let bound_url = p.get("url").and_then(Value::as_str).unwrap_or(url);
+            rustgis_engine::render::rustgis_tiles::address::check(bound_url, check_origin)?;
+            let url = rustgis_engine::data::login_address::inner(bound_url);
+            if public {
+                rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(bound_url);
+                if let Some(parts) = rustgis_engine::data::io::shapefile_part_urls(bound_url) {
+                    for (_, part) in parts {
+                        rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(&part);
+                    }
+                }
+            } else if check_origin.is_none() {
+                rustgis_engine::render::rustgis_tiles::cache::allow_named(bound_url);
+                if let Some(parts) = rustgis_engine::data::io::shapefile_part_urls(bound_url) {
+                    for (_, part) in parts {
+                        rustgis_engine::render::rustgis_tiles::cache::allow_named(&part);
+                    }
+                }
+            }
             // A window of a cloud-optimised GeoTIFF is read off the frame (below), with no
             // probe: it is refused unless it is one. In the browser the command refuses it.
             let window = cfg!(not(target_arch = "wasm32")) && p.get("bbox").is_some_and(|v| !v.is_null());
@@ -4882,7 +4921,7 @@ impl RustGisApp {
             let url = address;
             // The request receipt is correlation only; its admitted claim stays outside JSON.
             let mut q = json!({"url": url});
-            for k in ["name", "layer", "crs", "connection"] {
+            for k in ["name", "layer", "crs", "connection", "from"] {
                 if let Some(v) = p.get(k).filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) {
                     q[k] = v.clone();
                 }
@@ -4907,7 +4946,7 @@ impl RustGisApp {
             if let Some(number) = p.get("request").filter(|v| v.is_u64()) {
                 q["request"] = number.clone();
             }
-            for k in ["service", "coverage", "anonymous"] {
+            for k in ["service", "coverage", "anonymous", "fromDocument"] {
                 if p.get(k).and_then(Value::as_bool) == Some(true) {
                     q[k] = json!(true);
                 }
@@ -4948,8 +4987,9 @@ impl RustGisApp {
             // A Shapefile address brings its companion parts under the same download owner.
             rustgis_engine::render::rustgis_tiles::cache::with_still(wanted, || {
                 rustgis_engine::render::rustgis_tiles::cache::with_progress(Some(progress.clone()), || {
-                    rustgis_engine::cmd::layer::download_data(
+                    rustgis_engine::cmd::layer::download_data_from(
                         &url,
+                        public,
                         if q.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
                             rustgis_engine::map::geolibre::MAX_TEXT
                         } else {
@@ -8109,5 +8149,60 @@ mod look_tests {
         assert!(written.contains(&("theme".to_string(), "Mine".to_string())), "{written:?}");
         assert!(written.contains(&("dark".to_string(), "true".to_string())), "{written:?}");
         assert!(app.use_theme("Gone").is_err(), "a name the list does not hold");
+    }
+
+    #[test]
+    fn ui_add_url_with_public_document_origin_blocks_private_targets_and_marks_public_reach() {
+        use rustgis_engine::render::rustgis_tiles::{address, cache};
+        use serde_json::json;
+        let _turn = crate::fetching::turn();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(String, address::Reach)>>> = std::sync::Arc::default();
+        let log = seen.clone();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let clean = cache::split_download_limit(&url).0.split("#rustgis-range=").next().unwrap_or(&url).to_string();
+            log.lock().unwrap().push((clean.clone(), ceiling));
+            let origin = address::Origin::named(&clean);
+            done(Ok(cache::Fetched { bytes: br#"{"type":"FeatureCollection","features":[]}"#.to_vec(), origin }));
+        });
+        cache::set_header(|_url, _ceiling, done| done(Ok(cache::Head::default())));
+
+        let mut app = RustGisApp::with_sample();
+        for bad in [
+            "http://127.0.0.1:8080/a.geojson",
+            "http://localhost:8080/a.geojson",
+            "http://169.254.169.254/latest/meta-data",
+            "http://172.16.0.1/a.geojson",
+        ] {
+            let r = app.run("ui.addUrl", json!({"url": bad, "from": "https://example.com/stac/item.json"}));
+            assert!(r.is_err(), "{bad} should be refused when supplied by a public document");
+        }
+        assert!(seen.lock().unwrap().is_empty());
+
+        app.run("ui.addUrl", json!({"url": "https://example.com/a.geojson", "from": "https://example.com/stac/item.json"}))
+            .expect("public HTTPS asset is accepted");
+        assert_eq!(seen.lock().unwrap().pop(), Some(("https://example.com/a.geojson".into(), address::Reach::Public)));
+
+        app.run("ui.addUrl", json!({"url": "https://example.com/scene.tif", "from": "https://example.com/stac/item.json"}))
+            .expect("public HTTPS COG probe is accepted");
+        assert_eq!(cache::ceiling_for("https://example.com/scene.tif"), address::Reach::Public);
+        assert!(seen.lock().unwrap().iter().all(|(u, r)| u == "https://example.com/scene.tif" && *r == address::Reach::Public));
+    }
+
+    #[test]
+    fn embedded_app_contains_project_imports_to_peer_policy() {
+        use serde_json::json;
+        let mut app = RustGisApp::with_sample();
+        app.embedded = true;
+        app.ui.web_file = Some("before.rgis".into());
+        assert!(app.run("ui.openUrl", json!({"url": "https://example.com/map.rgis"})).is_err());
+        assert!(app.open_project_bytes(Some("map.geolibre.json"), b"{}").is_err());
+        assert!(app.open_project_bytes(Some("map.rgispkg"), b"PK\x03\x04").is_err());
+
+        let mut donor = RustGisApp::with_sample();
+        donor.run("project.rename", json!({"name": "FromEmbedder"})).expect("rename donor");
+        let (text, _) = donor.session.peer_text(rustgis_engine::Peer::Embedder).expect("peer project text");
+        app.open_project_bytes(Some("peer.rgis"), text.as_bytes()).expect("peer JSON opens via open_peer_text");
+        assert_eq!(app.session.project.name, "FromEmbedder");
+        assert_eq!(app.ui.web_file, None, "open_peer_text clears web_file rather than running User project.openText");
     }
 }
