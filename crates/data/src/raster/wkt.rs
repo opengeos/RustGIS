@@ -2087,7 +2087,8 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
     // A figure other than the named ellipsoid isn't given its name, nor its datum's: a reader
     // would take the named one back. The authalic sphere isn't given EPSG's name either, whose
     // radius is rounded.
-    let changed = authalic || es != reported_es;
+    let named_axes = ellps.and_then(|e| earth_params(&format!("+proj=longlat +ellps={e}"))).map(|p| (p.a, p.b));
+    let changed = authalic || es != reported_es || named_axes.is_some_and(|(na, nb)| (na - a).abs() > 1e-6 || (nb - b).abs() > 1e-6);
     let ellps_name = match known {
         Some(r) if authalic => format!("Authalic sphere of {}", r.1),
         Some(r) if !changed => r.1.to_string(),
@@ -2519,9 +2520,13 @@ pub(crate) mod tests {
         // "EPSG:4326", def, always_xy=True).transform(-80, 30)`. PROJ's own WKT1 for `+R_A` gives
         // the ellipsoid instead, which places points elsewhere.
         assert!((b.x - 1_921_494.528).abs() < 0.001 && (b.y + 1_439_433.375).abs() < 0.001, "{b:?}");
-        // Switched off, it is the ellipsoid.
-        let off = proj4_to_wkt(&def.replace("+R_A", "+R_A=false"), "X").unwrap();
-        assert!(off.contains(r#"SPHEROID["Clarke 1866",6378206.4,294.978698213898]"#), "{off}");
+        // Switched off, it is the ellipsoid; with a radius given, the radius.
+        for off in ["+R_A=false", "+R_A=0", "+R_A=off"] {
+            let off = proj4_to_wkt(&def.replace("+R_A", off), "X").unwrap();
+            assert!(off.contains(r#"SPHEROID["Clarke 1866",6378206.4,294.978698213898]"#), "{off}");
+        }
+        let radius = proj4_to_wkt(&def.replace("+R_A", "+R_A +R=6371000"), "X").unwrap();
+        assert!(radius.contains(r#"SPHEROID["unnamed",6371000,0]"#), "{radius}");
         // On a named datum, and on a datum's ellipsoid reshaped to the sphere of its semi-major
         // axis (`+f=0`, Esri's spherical orthographic): each is placed where the definition
         // places it, not on the named datum's ellipsoid. PROJ 9.8.1 (pyproj 3.8.0) places
@@ -2530,6 +2535,8 @@ pub(crate) mod tests {
             ("+proj=laea +R_A +lat_0=45 +lon_0=-100 +datum=WGS84 +units=m +no_defs", (1_921_497.526, -1_439_435.621)),
             ("+proj=ortho +lat_0=45 +lon_0=-100 +datum=WGS84 +f=0 +units=m +no_defs", (1_889_192.270, -1_415_235.050)),
             ("+proj=ortho +lat_0=45 +lon_0=-100 +ellps=WGS84 +f=0 +units=m +no_defs", (1_889_192.270, -1_415_235.050)),
+            // Another flattening than the named datum's.
+            ("+proj=laea +lat_0=45 +lon_0=-100 +datum=WGS84 +rf=300 +units=m +no_defs", (1_924_738.550, -1_437_048.884)),
         ] {
             let wkt = proj4_to_wkt(def, "X").unwrap();
             assert!(!wkt.contains("WGS_1984") && !wkt.contains(r#"SPHEROID["WGS 84""#), "{def}: {wkt}");
