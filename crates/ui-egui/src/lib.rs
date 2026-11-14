@@ -1125,6 +1125,7 @@ impl RustGisApp {
         self.position = Some(fix);
         if self.fixes.len() >= FIXES_KEPT {
             self.fixes.pop_front();
+            self.fixes_dropped += 1;
         }
         self.fixes.push_back(fix);
     }
@@ -1166,6 +1167,9 @@ pub struct RustGisApp {
     /// or an average needs each, including those that arrived together after the app was out of
     /// sight.
     pub fixes: std::collections::VecDeque<rustgis_engine::platform::Fix>,
+    /// How many positions were dropped from [`RustGisApp::fixes`] past [`FIXES_KEPT`] since an
+    /// interface last took them: the interface says so when a track or an average missed them.
+    pub fixes_dropped: usize,
     /// Watches linked local files for changes made outside RustGIS and offers Reload Data
     /// (the desktop app; see [`diskwatch`]). Off for tests, unless one turns it on (as `ui_shot`'s
     /// `watchFiles` does).
@@ -1436,6 +1440,7 @@ impl RustGisApp {
             locate: false,
             position: None,
             fixes: std::collections::VecDeque::new(),
+            fixes_dropped: 0,
             #[cfg(not(target_arch = "wasm32"))]
             watch_files: false,
             #[cfg(not(target_arch = "wasm32"))]

@@ -36,6 +36,9 @@ const SHEET_SHARE: f32 = 0.55;
 /// The most a sheet takes while the soft keyboard is wanted: what is typed in matters more than
 /// the map then, and the keyboard has taken much of the window.
 const TYPING_SHARE: f32 = 0.9;
+/// Below this many rows of room for the Capture sheet's body while a field is typed in, the rows
+/// above its fields step aside so the field stays in sight.
+const CROWDED_ROWS: f32 = 7.0;
 /// The room above and below a sheet's rows.
 const SHEET_MARGIN: f32 = 4.0;
 /// The More sheet's rows with the position hidden.
@@ -112,7 +115,18 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         let rows = match shown {
             Sheet::Layers => (app.session.map().layers.len() + app.session.map().tiles.len()).max(1),
             // Go to My Position is there only while the position is shown.
-            Sheet::More => MORE_ROWS + if app.locate { MORE_POSITION_ROWS } else { 0 },
+            // The position rows while it is shown; the track's row alone while one is recorded
+            // with it off.
+            Sheet::More => {
+                MORE_ROWS
+                    + if app.locate {
+                        MORE_POSITION_ROWS
+                    } else if track::field(&ctx).track.is_some() {
+                        1
+                    } else {
+                        0
+                    }
+            }
             Sheet::Capture => capture_rows(app, &ctx),
             Sheet::None => 0,
         };
@@ -190,13 +204,19 @@ fn start_track(app: &mut RustGisApp, ctx: &egui::Context) {
     app.session.notify(tl!("Recording a track: its positions are drawn on the map. Stop adds it to the Tracks layer."), false);
 }
 
-/// Stops the track being recorded and adds it to the map.
-fn stop_track(app: &mut RustGisApp, ctx: &egui::Context) {
+/// Stops the track being recorded and adds it to the map. A track that couldn't be added is kept
+/// being recorded, and that is said, so its positions aren't lost: Stop tries again. Says whether
+/// no track is being recorded now.
+fn stop_track(app: &mut RustGisApp, ctx: &egui::Context) -> bool {
     let mut state = track::field(ctx);
-    if let Some(recorded) = state.track.take() {
-        track::set_field(ctx, state);
-        track::finish(app, recorded);
-    }
+    let Some(recorded) = state.track.take() else { return true };
+    track::set_field(ctx, state);
+    let Err(kept) = track::finish(app, recorded) else { return true };
+    let mut state = track::field(ctx);
+    state.track = Some(kept);
+    track::set_field(ctx, state);
+    app.session.notify(tl!("The track is kept and still recorded: Stop tries to add it again."), true);
+    false
 }
 
 /// Draws where the device is: a dot, in a ring as wide as the position is good to.
@@ -847,82 +867,92 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         state.snap_for = Some(wants);
     }
     let cross = state.snap.map(|s| (s.lon, s.lat)).or(at);
-    // The buttons stay in reach above the fields, however many the layer has.
-    let place = match (cross, state.snap) {
-        (Some((lon, lat)), Some(snapped)) => rustgis_ui_egui::i18n::fmt(
-            "At the cross, {snapped}: {lon}, {lat}",
-            &[("snapped", edit::snapped_to(snapped.kind)), ("lon", &format!("{lon:.6}")), ("lat", &format!("{lat:.6}"))],
-        ),
-        (Some((lon, lat)), None) => {
-            rustgis_ui_egui::i18n::fmt("At the cross: {lon}, {lat}", &[("lon", &format!("{lon:.6}")), ("lat", &format!("{lat:.6}"))])
-        }
-        (None, _) => tl!("The cross is off the map: move the map under it.").to_string(),
-    };
-    ui.label(RichText::new(place).size(13.0).color(t.text_dim));
-    let width = ui.available_width();
-    // With the device's position shown, one tap puts the cross on it; or the positions that come
-    // while Average runs are averaged, and Use Average puts the cross on their average.
-    if app.locate {
-        position_buttons(app, ui, t, &ctx, width);
-    }
-    // Add or Edit, and Snap.
-    ui.horizontal(|ui| {
-        ui.set_min_height(TARGET);
-        let gap = ui.spacing().item_spacing.x;
-        let third = (width - 2.0 * gap) / 3.0;
-        if toggle_chip(ui, t, tl!("Add"), third, !state.edit_mode) {
-            state.edit_mode = false;
-            state.editing = None;
-        }
-        // The vertices drawn so far are kept for Add to go on with.
-        if toggle_chip(ui, t, tl!("Edit"), third, state.edit_mode) {
-            state.edit_mode = true;
-        }
-        let snapping = app.session.map().editing.snapping.enabled;
-        if toggle_chip(ui, t, tl!("Snap"), third, snapping) {
-            run(app, "edit.snapping", json!({"on": !snapping}));
-        }
-    });
-    if state.edit_mode {
-        edit_sheet(app, ui, t, &target, &mut state, picked, cross, width);
-    } else if target.kind == GeometryType::Point {
-        if action(ui, t, tl!("Add Point Here"), width, true, true) && fresh && add_point(app, target.id, &state) {
-            state.values.clear();
-        }
+    // Typing in a window the soft keyboard leaves short (a phone held sideways), the rows above
+    // the fields would take all of it and hide the field: they step aside until the keyboard
+    // goes.
+    let crowded = ctx.egui_wants_keyboard_input() && ui.available_height() < CROWDED_ROWS * TARGET;
+    if crowded {
+        ui.label(RichText::new(tl!("Close the keyboard for the buttons.")).size(13.0).color(t.text_dim));
     } else {
-        let placed = state.vertices.len();
-        // Enough, once the vertices make the layer's kind of shape.
-        let enough = geometry(target.kind, &state.vertices).is_some();
-        if action(ui, t, tl!("Add Vertex Here"), width, !enough, true) {
-            match cross {
-                Some(at) if state.place(at) => {}
-                Some(_) => app.session.notify(tl!("No vertex was added: the cross is where the last one is. Move the map under it."), true),
-                None => app.session.notify(tl!("No vertex was added: the cross is off the map. Move the map under it."), true),
+        // The buttons stay in reach above the fields, however many the layer has.
+        let place = match (cross, state.snap) {
+            (Some((lon, lat)), Some(snapped)) => rustgis_ui_egui::i18n::fmt(
+                "At the cross, {snapped}: {lon}, {lat}",
+                &[("snapped", edit::snapped_to(snapped.kind)), ("lon", &format!("{lon:.6}")), ("lat", &format!("{lat:.6}"))],
+            ),
+            (Some((lon, lat)), None) => {
+                rustgis_ui_egui::i18n::fmt("At the cross: {lon}, {lat}", &[("lon", &format!("{lon:.6}")), ("lat", &format!("{lat:.6}"))])
             }
+            (None, _) => tl!("The cross is off the map: move the map under it.").to_string(),
+        };
+        ui.label(RichText::new(place).size(13.0).color(t.text_dim));
+        let width = ui.available_width();
+        // With the device's position shown, one tap puts the cross on it; or the positions that come
+        // while Average runs are averaged, and Use Average puts the cross on their average.
+        if app.locate {
+            position_buttons(app, ui, t, &ctx, width);
         }
+        // Add or Edit, and Snap.
         ui.horizontal(|ui| {
+            ui.set_min_height(TARGET);
             let gap = ui.spacing().item_spacing.x;
             let third = (width - 2.0 * gap) / 3.0;
-            if action(ui, t, tl!("Undo Vertex"), third, false, placed > 0) {
-                state.vertices.pop();
+            if toggle_chip(ui, t, tl!("Add"), third, !state.edit_mode) {
+                state.edit_mode = false;
+                state.editing = None;
             }
-            if action(ui, t, tl!("Start Over"), third, false, placed > 0) {
-                state.vertices.clear();
+            // The vertices drawn so far are kept for Add to go on with.
+            if toggle_chip(ui, t, tl!("Edit"), third, state.edit_mode) {
+                state.edit_mode = true;
             }
-            // Finish is the one to tap once the shape has enough vertices.
-            let finish = match target.kind {
-                GeometryType::Polygon => tl!("Finish Polygon"),
-                _ => tl!("Finish Line"),
-            };
-            if action(ui, t, finish, third, enough, enough)
-                && fresh
-                && let Some(shape) = geometry(target.kind, &state.vertices)
-                && add_feature(app, target.id, &state, shape)
-            {
-                state.values.clear();
-                state.vertices.clear();
+            let snapping = app.session.map().editing.snapping.enabled;
+            if toggle_chip(ui, t, tl!("Snap"), third, snapping) {
+                run(app, "edit.snapping", json!({"on": !snapping}));
             }
         });
+        if state.edit_mode {
+            edit_sheet(app, ui, t, &target, &mut state, picked, cross, width);
+        } else if target.kind == GeometryType::Point {
+            if action(ui, t, tl!("Add Point Here"), width, true, true) && fresh && add_point(app, target.id, &state) {
+                state.values.clear();
+            }
+        } else {
+            let placed = state.vertices.len();
+            // Enough, once the vertices make the layer's kind of shape.
+            let enough = geometry(target.kind, &state.vertices).is_some();
+            if action(ui, t, tl!("Add Vertex Here"), width, !enough, true) {
+                match cross {
+                    Some(at) if state.place(at) => {}
+                    Some(_) => {
+                        app.session.notify(tl!("No vertex was added: the cross is where the last one is. Move the map under it."), true)
+                    }
+                    None => app.session.notify(tl!("No vertex was added: the cross is off the map. Move the map under it."), true),
+                }
+            }
+            ui.horizontal(|ui| {
+                let gap = ui.spacing().item_spacing.x;
+                let third = (width - 2.0 * gap) / 3.0;
+                if action(ui, t, tl!("Undo Vertex"), third, false, placed > 0) {
+                    state.vertices.pop();
+                }
+                if action(ui, t, tl!("Start Over"), third, false, placed > 0) {
+                    state.vertices.clear();
+                }
+                // Finish is the one to tap once the shape has enough vertices.
+                let finish = match target.kind {
+                    GeometryType::Polygon => tl!("Finish Polygon"),
+                    _ => tl!("Finish Line"),
+                };
+                if action(ui, t, finish, third, enough, enough)
+                    && fresh
+                    && let Some(shape) = geometry(target.kind, &state.vertices)
+                    && add_feature(app, target.id, &state, shape)
+                {
+                    state.values.clear();
+                    state.vertices.clear();
+                }
+            });
+        }
     }
     let edit_mode = state.edit_mode;
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
@@ -1267,10 +1297,12 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // button for yet. The Project page's Start brings this interface back at the next start.
         if row(ui, t, "pane", tl!("Use the Desktop Interface")) {
             set_sheet(ui.ctx(), Sheet::None);
-            // A track being recorded is added before the bar that stops it goes away.
-            stop_track(app, &ctx);
-            app.chrome = None;
-            app.session.notify(tl!("The desktop interface is on until RustGIS is started again."), false);
+            // A track being recorded is added before the bar that stops it goes away; one that
+            // couldn't be keeps this interface, which can still stop it.
+            if stop_track(app, &ctx) {
+                app.chrome = None;
+                app.session.notify(tl!("The desktop interface is on until RustGIS is started again."), false);
+            }
         }
     });
 }
@@ -1843,6 +1875,42 @@ mod tests {
         assert!(!edit::move_point(&mut app, cities.id, row, (5.0, 5.0)));
         assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry, before);
         assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("multipoint")));
+    }
+
+    #[test]
+    fn a_track_that_cant_be_added_is_kept_being_recorded() {
+        use rustgis_ui_egui::rustgis_engine::platform::Fix;
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        start_track(&mut app, &ctx);
+        // A position the line can't hold makes the layer refuse the track.
+        for lon in [f64::NAN, 10.0, 10.01] {
+            app.report_position(Fix { lon, lat: 5.0, accuracy: Some(3.0), time: None });
+        }
+        frame(&mut app, &ctx, Sheet::None);
+        let mark = app.session.notice_mark();
+        assert!(!stop_track(&mut app, &ctx));
+        assert_eq!(track::field(&ctx).track.map(|t| t.points.len()), Some(3));
+        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("kept")));
+        // The More sheet has room for its row while positioning is off.
+        app.locate = false;
+        frame(&mut app, &ctx, Sheet::More);
+        assert!(track::field(&ctx).track.is_some());
+    }
+
+    #[test]
+    fn positions_dropped_past_the_cap_are_said_while_a_track_is_recorded() {
+        use rustgis_ui_egui::rustgis_engine::platform::Fix;
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        start_track(&mut app, &ctx);
+        for i in 0..rustgis_ui_egui::FIXES_KEPT + 5 {
+            app.report_position(Fix { lon: 10.0, lat: 5.0, accuracy: Some(3.0), time: i64::try_from(i).ok() });
+        }
+        let mark = app.session.notice_mark();
+        frame(&mut app, &ctx, Sheet::None);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text.starts_with("5 of the oldest positions")));
+        assert_eq!(app.fixes_dropped, 0);
     }
 
     #[test]
