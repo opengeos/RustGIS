@@ -118,13 +118,18 @@ fn decode(bytes: &[u8]) -> (Cow<'_, str>, Option<String>) {
 
 /// The code page a drawing's header gives (`$DWGCODEPAGE`, such as `ANSI_936`), read from the
 /// first megabyte: a header is small, and a file that isn't a drawing isn't searched further.
+/// Blank code lines are skipped without consuming a value, as in [`records`].
 fn code_page(bytes: &[u8]) -> Option<String> {
     let head = bytes.get(..bytes.len().min(1 << 20)).unwrap_or(bytes);
     let mut lines = head.split(|&b| b == b'\n');
     let (mut section, mut header, mut page) = (false, false, false);
-    while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
-        let code = std::str::from_utf8(trim_ascii(code)).ok().and_then(|s| s.parse::<u16>().ok());
-        let value = trim_ascii(value);
+    while let Some(code) = lines.next() {
+        let code = trim_ascii(code);
+        if code.is_empty() {
+            continue;
+        }
+        let value = trim_ascii(lines.next()?);
+        let code = std::str::from_utf8(code).ok().and_then(|s| s.parse::<u16>().ok());
         match code {
             Some(999) => continue, // Comments never name a section or header variable.
             Some(0) => {
@@ -2266,13 +2271,17 @@ mod tests {
         let (text, _, _) = encoding_rs::GBK.encode("中文");
         d.extend_from_slice(&text);
         d.extend_from_slice(b"\n  0\nENDSEC\n  0\nEOF\n");
-        assert_eq!(layers("gbk.dxf", &d).unwrap(), ["道路"]);
-        let l = read("gbk.dxf", &d, &Options::default()).unwrap();
-        let points = &l[0].0;
-        assert_eq!(points.value(0, 0), &Value::Text("道路".into()), "the layer's name");
-        assert_eq!(points.value(0, 4), &Value::Text("中文".into()), "its text");
-        // Nothing beyond the coordinate system had to be assumed.
-        assert!(!l[0].1.messages.iter().any(|m| m.contains("code page") || m.contains("Latin-1")), "{:?}", l[0].1.messages);
+        // Code-line whitespace is accepted by records(); empty comment values stay paired.
+        for prefix in ["", "\n", " \r\n\t\n999\n\n"] {
+            let d = [prefix.as_bytes(), d.as_slice()].concat();
+            assert_eq!(layers("gbk.dxf", &d).unwrap(), ["道路"]);
+            let l = read("gbk.dxf", &d, &Options::default()).unwrap();
+            let points = &l[0].0;
+            assert_eq!(points.value(0, 0), &Value::Text("道路".into()), "the layer's name");
+            assert_eq!(points.value(0, 4), &Value::Text("中文".into()), "its text");
+            // Nothing beyond the coordinate system had to be assumed.
+            assert!(!l[0].1.messages.iter().any(|m| m.contains("code page") || m.contains("Latin-1")), "{:?}", l[0].1.messages);
+        }
     }
 
     /// UTF-8 (2007 and later) needs no code page, and its Chinese text is kept as it is.
