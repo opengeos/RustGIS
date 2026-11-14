@@ -72,12 +72,15 @@ struct Queue {
     most: usize,
     positions: usize,
     dropped: usize,
+    /// Positions the system reported that weren't usable (no accuracy it vouches for, or not
+    /// on the Earth), left out since the last take.
+    rejected: usize,
 }
 
 #[cfg(any(target_os = "ios", test))]
 impl Queue {
     fn new(most: usize) -> Queue {
-        Queue { events: Default::default(), most: most.max(1), positions: 0, dropped: 0 }
+        Queue { events: Default::default(), most: most.max(1), positions: 0, dropped: 0, rejected: 0 }
     }
 
     fn add(&mut self, event: rustgis_engine::platform::Event) {
@@ -95,6 +98,11 @@ impl Queue {
         self.events.push_back(event);
     }
 
+    /// Counts a position the system reported that wasn't usable: said when the events are taken.
+    fn reject(&mut self) {
+        self.rejected += 1;
+    }
+
     fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -110,9 +118,17 @@ impl Queue {
             );
             taken.push(rustgis_engine::platform::Event::Failed(text));
         }
+        if self.rejected > 0 {
+            let text = rustgis_ui_egui::i18n::fmt(
+                "{count} positions the system reported weren't used: it gave them no accuracy, or they weren't on the Earth.",
+                &[("count", &self.rejected.to_string())],
+            );
+            taken.push(rustgis_engine::platform::Event::Failed(text));
+        }
         taken.extend(self.events.drain(..));
         self.positions = 0;
         self.dropped = 0;
+        self.rejected = 0;
         taken
     }
 }
@@ -159,6 +175,21 @@ mod tests {
         queue.add(at(4.0));
         assert_eq!(queue.take(), vec![at(4.0)]);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn unusable_positions_are_counted_and_said() {
+        use rustgis_engine::platform::Event;
+        let mut queue = super::Queue::new(10);
+        queue.reject();
+        queue.reject();
+        queue.add(Event::Cancelled);
+        let taken = queue.take();
+        assert!(matches!(&taken[0], Event::Failed(text) if text.starts_with("2 positions the system reported")), "{taken:?}");
+        assert_eq!(&taken[1..], &[Event::Cancelled]);
+        // None left out: nothing said.
+        queue.add(Event::Cancelled);
+        assert_eq!(queue.take(), vec![Event::Cancelled]);
     }
 
     #[test]

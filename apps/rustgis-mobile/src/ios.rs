@@ -167,9 +167,11 @@ impl PickerDelegate {
                 wake(self.mtm());
             }
             Some(Asked::Open { purpose }) => {
-                // Answered: the copies are work from now on.
+                // Answered: the copies are work from now on. The window is woken, so it looks
+                // again while they run.
                 count(&shared.showing, false);
                 count(&shared.working, true);
+                wake(self.mtm());
                 // The documents are the originals, wherever they are (iCloud Drive, another
                 // app's folder): each is read inside its security scope, held until its copy is
                 // made.
@@ -370,6 +372,7 @@ impl CameraDelegate {
             return;
         };
         count(&shared.working, true);
+        wake(self.mtm());
         let (photos, writer) = (ivars.photos.clone(), shared.clone());
         let writing = std::thread::Builder::new().name("photo".into()).spawn(move || {
             let name = format!("photo-{}.jpg", unique());
@@ -410,8 +413,10 @@ define_class!(
                 return;
             }
             for location in locations.iter() {
-                if let Some(fix) = fix(&location) {
-                    self.ivars().shared.add(Event::Position(fix));
+                match fix(&location) {
+                    Some(fix) => self.ivars().shared.add(Event::Position(fix)),
+                    // Counted, and said with the positions taken next.
+                    None => self.ivars().shared.events.lock().unwrap_or_else(|e| e.into_inner()).reject(),
                 }
             }
         }
@@ -514,7 +519,14 @@ define_class!(
             // screen in Stage Manager or Split View) says how much of the window it covers.
             let Some(window) = key_window(mtm).map(|window| window.frame()) else { return };
             let bottom = window.origin.y + window.size.height;
-            let height = frame.map(|f| (bottom - f.origin.y).clamp(0.0, window.size.height)).unwrap_or(0.0);
+            // Only a keyboard across the window takes room from it: a floating one beside a window
+            // in Split View or Stage Manager takes none.
+            let height = frame
+                .map(|f| {
+                    let across = f.origin.x < window.origin.x + window.size.width && f.origin.x + f.size.width > window.origin.x;
+                    if across { (bottom - f.origin.y).clamp(0.0, window.size.height) } else { 0.0 }
+                })
+                .unwrap_or(0.0);
             self.ivars().height.set(height);
         }
 

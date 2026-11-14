@@ -6,7 +6,8 @@
 # simulator: for the iOS Simulator on an Apple-silicon Mac (aarch64-apple-ios-sim), signed ad hoc.
 # device:    for iPhones and iPads (aarch64-apple-ios), signed with IOS_SIGN_IDENTITY and the
 #            provisioning profile IOS_PROFILE (a .mobileprovision for org.rustgis.mobile), and
-#            packed as target/ios/RustGIS.ipa for TestFlight. Without them it is built unsigned.
+#            packed as target/ios/RustGIS.ipa for TestFlight. Without them the app is built
+#            unsigned, with no .ipa, and the script exits 1.
 #
 # Needs: Xcode (xcrun, codesign, plutil) and the Rust iOS targets (see README.md). There is no
 # Xcode project: cargo builds the executable, and this script makes the bundle around it.
@@ -63,8 +64,9 @@ if [ "$kind" = simulator ]; then
 fi
 
 if [ -z "${IOS_SIGN_IDENTITY:-}" ] || [ -z "${IOS_PROFILE:-}" ]; then
-    echo "build-ios: IOS_SIGN_IDENTITY and IOS_PROFILE aren't both set: $app is unsigned, and won't install on a device." >&2
-    exit 0
+    # Not a success: there is no .ipa, and the app won't install on a device.
+    echo "build-ios: IOS_SIGN_IDENTITY and IOS_PROFILE aren't both set: $app is unsigned, and no .ipa was made." >&2
+    exit 1
 fi
 cp "$IOS_PROFILE" "$app/embedded.mobileprovision"
 # The entitlements are the profile's own (the team, the app id, background location needs none).

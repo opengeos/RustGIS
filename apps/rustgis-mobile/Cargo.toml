@@ -38,6 +38,8 @@ rustgis-ui-egui = { workspace = true }
 rustgis-engine = { workspace = true }
 rustgis-ui-egui = { workspace = true }
 rustgis-ui-touch = { workspace = true }
+# The front end's picker state, kept while a picker is up (`src/shell.rs`).
+serde_json = { workspace = true }
 # NativeActivity's soft keyboard support is poor: a real app moves to
 # GameActivity (`android-game-activity`), which also allows `accesskit`.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
@@ -57,6 +59,8 @@ android_logger = "0.15"
 rustgis-engine = { workspace = true }
 rustgis-ui-egui = { workspace = true }
 rustgis-ui-touch = { workspace = true }
+# The front end's picker state, kept while a picker is up (`src/shell.rs`).
+serde_json = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
 egui = { workspace = true }
 # The status bar's style (`WindowExtIOS`). Keep the version in step with eframe's.

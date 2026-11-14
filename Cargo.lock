@@ -5070,6 +5070,7 @@ dependencies = [
  "rustgis-engine",
  "rustgis-ui-egui",
  "rustgis-ui-touch",
+ "serde_json",
  "winit",
 ]
 

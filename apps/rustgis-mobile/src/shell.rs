@@ -43,6 +43,37 @@ type Refusals = Rc<RefCell<Vec<String>>>;
 /// The purpose the picker was last asked for.
 type Asked = Rc<RefCell<String>>;
 
+/// What the front end keeps for the picker that is up (Add Delimited Text's options, the command
+/// a picked project opens with, a picture's corners): a request the phone refuses while it is
+/// up resets these before it is refused, so they are put back after the frame.
+#[derive(Clone)]
+struct Kept {
+    csv: Option<serde_json::Value>,
+    open: Option<&'static str>,
+    picture: Option<Vec<rustgis_engine::geom::Coord>>,
+    layout_picture: bool,
+}
+
+impl Kept {
+    fn of(app: &RustGisApp) -> Kept {
+        let ui = &app.ui;
+        Kept {
+            csv: ui.pending_csv.clone(),
+            open: ui.pending_open,
+            picture: ui.pending_picture.clone(),
+            layout_picture: ui.pending_layout_picture,
+        }
+    }
+
+    fn restore(self, app: &mut RustGisApp) {
+        let ui = &mut app.ui;
+        ui.pending_csv = self.csv;
+        ui.pending_open = self.open;
+        ui.pending_picture = self.picture;
+        ui.pending_layout_picture = self.layout_picture;
+    }
+}
+
 /// The app: the desktop front end, with the files to open once the window runs.
 struct App<P: Phone> {
     app: RustGisApp,
@@ -73,6 +104,10 @@ struct App<P: Phone> {
     asked: Asked,
     /// Whether the phone was seen busy with that picker.
     asked_busy: bool,
+    /// What the front end kept for that picker, as the frame began ([`Kept`]).
+    kept: Option<Kept>,
+    /// Whether a picker was refused in this frame because one was up.
+    refused_picker: Rc<std::cell::Cell<bool>>,
     /// Files picked for a dialog (purpose, name, copy), until their picker has answered in
     /// full: a Shapefile's parts arrive one by one and are read together.
     waiting: Vec<(String, String, PathBuf)>,
@@ -313,8 +348,16 @@ fn remove_copy(path: &Path) {
 /// Gives the front end the phone's file picker, the way the browser's shell gives its own:
 /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
 /// through `download`.
-fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &Inbox, refusals: &Refusals, asked: &Asked) {
+fn use_picker<P: Phone + 'static>(
+    app: &mut RustGisApp,
+    phone: &Rc<P>,
+    inbox: &Inbox,
+    refusals: &Refusals,
+    asked: &Asked,
+    refused_picker: &Rc<std::cell::Cell<bool>>,
+) {
     let (picker, refused, asking, answers) = (phone.clone(), refusals.clone(), asked.clone(), inbox.clone());
+    let refused_while_up = refused_picker.clone();
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
         // Kept as the picker's request only when no other picker's is: a second one is refused
@@ -335,6 +378,11 @@ fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &I
                 true
             }
         };
+        // Refused because another was up: the shell puts back what the front end kept for that
+        // one ([`Kept`]).
+        if refused_here && !first {
+            refused_while_up.set(true);
+        }
         // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
         if refused_here && purpose.starts_with("dxf:") {
             answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
@@ -368,6 +416,13 @@ impl<P: Phone> eframe::App for App<P> {
         }
         ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
         ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
+        // A second picker asked for while one was up was refused: what the front end kept for
+        // the first is put back, so its file is read as it was asked for.
+        if self.refused_picker.replace(false)
+            && let Some(kept) = self.kept.clone()
+        {
+            kept.restore(&mut self.app);
+        }
         // Something of the phone's is still to arrive (a picked file, a position): look again.
         // A picker or a save asked for in this frame counts too: the poll was set before it.
         if self.poll.is_none() && self.phone.as_ref().is_some_and(|phone| phone.busy()) {
@@ -406,6 +461,7 @@ impl<P: Phone> eframe::App for App<P> {
             self.keyboard = keyboard;
         }
         self.take_phone_events(ctx, raw_input);
+        self.kept = (!self.asked.borrow().is_empty()).then(|| Kept::of(&self.app));
         // The pushed files open as files dropped on the desktop window do: once the window
         // runs, read off its thread with progress and Cancel, each failure said in the window.
         // Opened before the event loop, a large one would hold the app's start.
@@ -519,10 +575,11 @@ pub fn run<P: Phone + 'static>(
     options: eframe::NativeOptions,
 ) -> eframe::Result {
     let (inbox, refusals, asked) = (Inbox::default(), Refusals::default(), Asked::default());
+    let refused_picker = Rc::new(std::cell::Cell::new(false));
     let phone = match phone {
         Ok(phone) => {
             let phone = Rc::new(phone);
-            use_picker(&mut app, &phone, &inbox, &refusals, &asked);
+            use_picker(&mut app, &phone, &inbox, &refusals, &asked, &refused_picker);
             Some(phone)
         }
         Err(e) => {
@@ -551,6 +608,8 @@ pub fn run<P: Phone + 'static>(
                 refusals,
                 asked,
                 asked_busy: false,
+                kept: None,
+                refused_picker,
                 waiting: Vec::new(),
                 problems: Problems::default(),
                 reading: Arc::default(),
