@@ -47142,3 +47142,61 @@ fn a_command_says_once_that_it_couldnt_zoom() {
     assert_eq!(out["zoomed"], json!(false), "{out}");
     assert_eq!(s.map().camera.center, view.center);
 }
+
+/// A save never writes a file it couldn't open again (#1985): a feature with a coordinate that
+/// isn't a number would be held as null, so saving the project, packaging it and packaging the
+/// map are refused, saying where, and the files already there are kept as they were. With the
+/// geometry gone, each saves and opens again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_save_refuses_coordinates_that_arent_numbers_and_keeps_the_file() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-nan-save-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = |n: &str| dir.0.join(n).display().to_string();
+    let mut s = Session::new(Project::default());
+    let mut ds = Dataset::new("ways", GeometryType::Polyline, vec![]);
+    ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 20.0), Coord::new(1.0, 20.5)]])), vec![]);
+    let id = s.map_mut().add_dataset(ds);
+    // Saved clean first: these files must survive a refused save.
+    let saves = [("project.saveAs", "p.rgis"), ("project.package", "p.rgispkg"), ("map.package", "m.rgismpk")];
+    for (cmd, file) in saves {
+        s.run(cmd, &json!({"path": path(file)})).unwrap();
+    }
+    let before: Vec<Vec<u8>> = saves.iter().map(|(_, f)| std::fs::read(path(f)).unwrap()).collect();
+    let layer = s.map_mut().layer_mut(id).unwrap();
+    layer.dataset.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 10.0), Coord::new(f64::NAN, 10.5)]])), vec![]);
+    layer.dataset.push(Some(Geometry::Point(Coord::new(f64::INFINITY, 0.0))), vec![]);
+    layer.touch_geometry();
+    for ((cmd, file), was) in saves.iter().zip(&before) {
+        let e = s.run(cmd, &json!({"path": path(file)})).unwrap_err();
+        assert!(e.contains("2 feature(s) in 'ways' have a coordinate that isn't a number"), "{cmd}: {e}");
+        assert_eq!(&std::fs::read(path(file)).unwrap(), was, "{cmd} kept the file as it was");
+    }
+    // Their geometry gone, the features save and open again.
+    let layer = s.map_mut().layer_mut(id).unwrap();
+    layer.dataset.features = layer
+        .dataset
+        .features
+        .iter()
+        .map(|f| {
+            let mut f = f.clone();
+            f.geometry = f.geometry.filter(|g| g.is_finite());
+            f
+        })
+        .collect();
+    layer.touch_geometry();
+    for (cmd, file) in saves {
+        s.run(cmd, &json!({"path": path(file)})).unwrap();
+    }
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path("p.rgis")})).unwrap();
+    assert_eq!(t.map().layer_by_name("ways").unwrap().dataset.features.len(), 3);
+}

@@ -122,6 +122,14 @@ impl Geometry {
         }
     }
 
+    /// Whether every coordinate is a number: none is NaN (which some writers use for an empty
+    /// point) or infinite, which have no place and which a saved project can't hold (#1985).
+    pub fn is_finite(&self) -> bool {
+        let mut finite = true;
+        self.for_each_coord(|c| finite &= c.is_finite());
+        finite
+    }
+
     /// Rings whose polar winding encloses no single area, including holes.
     pub fn ambiguous_area_rings(&self) -> usize {
         match self {
