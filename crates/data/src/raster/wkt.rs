@@ -1661,9 +1661,9 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         flip = Some("wsu");
     }
     let axis = match flip {
-        // Sinusoidal, the world projections (Natural Earth, Winkel Tripel, Eckert IV) and equidistant cylindrical on an
-        // ellipsoid weren't read with other axes before terrio-crs computed them, and still
-        // aren't until WKT is read through it (opengeos/RustGIS#2032).
+        // Sinusoidal, the world projections (Natural Earth, Winkel Tripel, Eckert IV) and
+        // equidistant cylindrical on an ellipsoid weren't read with other axes before terrio-crs
+        // computed them, and still aren't until WKT is read through it (opengeos/RustGIS#2032).
         Some(_)
             if ["+proj=sinu", "+proj=natearth", "+proj=wintri", "+proj=eck4"].iter().any(|p| proj.starts_with(p))
                 || (proj.starts_with("+proj=eqc") && !sphere) =>
@@ -2054,11 +2054,12 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
     let datum = text("datum").and_then(|d| DATUMS.iter().find(|r| r.0.eq_ignore_ascii_case(d)));
     let ellps = text("ellps").or(datum.map(|d| d.2));
     let known = ellps.and_then(|e| ELLIPSOIDS.iter().find(|r| r.0.eq_ignore_ascii_case(e)));
-    // `+R_A`: the sphere of the ellipsoid's area the projection is computed on (EPSG's "Clarke
-    // 1866 Authalic Sphere" of EPSG:2163), not the ellipsoid.
-    let authalic = flag("R_A");
+    // `+R_A`: the sphere with the ellipsoid's area, which the projection is computed on
+    // (EPSG:9311's), not the ellipsoid. Its radius is computed, so it isn't given EPSG's name
+    // for the sphere, whose radius is rounded. A radius given (`+R`) wins, as in PROJ.
+    let authalic = flag("R_A") && text("R").is_none();
     let ellps_name = match known {
-        Some(r) if authalic => format!("{} Authalic Sphere", r.1),
+        Some(r) if authalic => format!("Authalic sphere of {}", r.1),
         Some(r) => r.1.to_string(),
         None => "unnamed".to_string(),
     };
@@ -2461,8 +2462,8 @@ pub(crate) mod tests {
             // An equidistant cylindrical system's latitude of origin, on an ellipsoid and a sphere.
             ("+proj=eqc +lat_ts=30 +lat_0=10 +lon_0=10 +x_0=1000 +y_0=2000 +datum=WGS84 +units=m +no_defs", (12.0, 40.0)),
             ("+proj=eqc +lat_ts=0 +lat_0=-20 +lon_0=0 +x_0=0 +y_0=0 +R=3396190 +units=m +no_defs", (30.0, 20.0)),
-            // An unnamed ellipsoid by its axes and flattening (Mars's IAU 2015 ellipsoid), which
-            // On an ellipsoid, the ellipsoid is the one written.
+            // An unnamed ellipsoid by its axes and flattening (Mars's IAU 2015 ellipsoid), and by
+            // its axes: the ellipsoid is the one written.
             ("+proj=eqc +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +a=3396190 +rf=169.894447223612 +units=m +no_defs", (12.0, 40.0)),
             ("+proj=eqc +lat_ts=20 +lon_0=0 +x_0=0 +y_0=0 +a=6378137 +b=6356752.314245 +units=m +no_defs", (12.0, 40.0)),
         ] {
@@ -2481,16 +2482,20 @@ pub(crate) mod tests {
     fn an_authalic_sphere_is_written_as_the_sphere() {
         let def = "+proj=laea +R_A +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +ellps=clrk66 +units=m +no_defs";
         let wkt = proj4_to_wkt(def, "US National Atlas").unwrap();
-        assert!(wkt.contains(r#"SPHEROID["Clarke 1866 Authalic Sphere",6370997.24"#) && wkt.contains(",0]"), "{wkt}");
+        assert!(wkt.contains(r#"SPHEROID["Authalic sphere of Clarke 1866",6370997.24"#) && wkt.contains(",0]"), "{wkt}");
         assert!((authalic_radius(6_378_206.4, 6_356_583.8) - 6_370_997.240_804).abs() < 1e-3);
         let (crs, back) = (Crs::parse(def).unwrap(), crs_from_wkt(&wkt).unwrap());
         let c = Coord::new(-80.0, 30.0);
         let (a, b) = (crs.transformer().unwrap().from_lonlat(c).unwrap(), back.transformer().unwrap().from_lonlat(c).unwrap());
         assert!((a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001, "{a:?} {b:?}\n{wkt}");
+        // PROJ 9.8.1 (pyproj 3.8.0) for the definition, and for this WKT: `Transformer.from_crs(
+        // "EPSG:4326", def, always_xy=True).transform(-80, 30)`. PROJ's own WKT1 for `+R_A` gives
+        // the ellipsoid instead, which places points elsewhere.
+        assert!((b.x - 1_921_494.528).abs() < 0.001 && (b.y + 1_439_433.375).abs() < 0.001, "{b:?}");
     }
 
-    /// The world projections (Natural Earth, Winkel Tripel, Eckert IV) are written as WKT, on their datum, with their centre and offsets
-    /// (#1191: a GeoPDF of a map drawn in one).
+    /// The world projections (Natural Earth, Winkel Tripel, Eckert IV) are written as WKT, on
+    /// their datum, with their centre and offsets (#1191: a GeoPDF of a map drawn in one).
     #[test]
     fn world_projections_are_written() {
         for (def, method) in [
