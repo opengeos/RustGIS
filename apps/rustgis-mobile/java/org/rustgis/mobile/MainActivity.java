@@ -31,7 +31,10 @@ public class MainActivity extends NativeActivity {
     private static final int SAVE = 2;
     private static final int LOCATION = 3;
     private static final int NOTIFY = 4;
-    /** The most events kept for the Rust side: two days of a position a second out of sight. */
+    /**
+     * The most events kept for the Rust side: two days of a position a second out of sight. The
+     * Rust side keeps as many positions between frames (FIXES_KEPT), so a batch goes whole into a track.
+     */
     private static final int MOST_EVENTS = 200_000;
     private static final int COPY_BUFFER = 1 << 16;
 
