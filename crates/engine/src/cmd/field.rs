@@ -52,7 +52,17 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         .map(str::to_string)
         .filter(|area| opened_field || s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(area)));
     let (area, mut map) = match returning {
-        Some(area) => (area, s.map().clone()),
+        Some(area) => {
+            // Its raster layers stay behind, as an offline area's do going out: said.
+            let mut m = s.map().clone();
+            let rasters: Vec<u32> = m.layers.iter().filter(|l| l.is_raster()).map(|l| l.id).collect();
+            if !rasters.is_empty() {
+                m.release_tiles(&rasters);
+                m.layers.retain(|l| !l.is_raster());
+                s.notify(format!("{} raster layer(s) were left out of the field package: it holds feature layers", rasters.len()), false);
+            }
+            (area, m)
+        }
         None => {
             let rasters = s.map().layers.iter().filter(|l| l.is_raster()).count();
             let made = super::workspace::offline_download(s, p)?;
@@ -77,11 +87,16 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut budget = MOST_UNPACKED as u64 / 2;
     // Each local archive goes in beside the project, its layer reading it from there.
-    let (mut online, mut unread) = (Vec::new(), Vec::new());
+    let (mut online, mut unread, mut uploaded) = (Vec::new(), Vec::new(), Vec::new());
     let mut taken = std::collections::HashSet::new();
     for t in &mut map.tiles {
         let Some(file) = t.archive_file().map(str::to_string) else {
-            online.push(t.name.clone());
+            // An archive added to the web app lives in its memory, not in a file to put in.
+            if t.url.starts_with(rustgis_map::tiles::UPLOAD) {
+                uploaded.push(t.name.clone());
+            } else {
+                online.push(t.name.clone());
+            }
             continue;
         };
         match crate::project::read_file(Path::new(&file), budget) {
@@ -109,6 +124,16 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
                 online.join(", ")
             ),
             false,
+        );
+    }
+    if !uploaded.is_empty() {
+        s.notify(
+            format!(
+                "{} tile archive(s) added to this browser couldn't be put in the field package, as they live only in its memory: {}. Add them to the field from the file",
+                uploaded.len(),
+                uploaded.join(", ")
+            ),
+            true,
         );
     }
     if !unread.is_empty() {
@@ -176,12 +201,17 @@ fn unpack_into(bytes: &[u8], dir: &Path) -> Result<String, String> {
             return Err(format!("the field package holds an entry outside its folder: {name}"));
         }
         if parts.len() == 1 && crate::project::is_project_file(&name) {
+            if project.is_some() {
+                return Err("the field package holds more than one project".into());
+            }
             project = Some(String::from_utf8(data).map_err(|_| "the field package's project is damaged".to_string())?);
         } else {
             files.push((parts.iter().collect::<PathBuf>(), data));
         }
     }
     let text = project.ok_or("the field package holds no project")?;
+    // Read before anything is written: a project that can't be read leaves no folder behind.
+    Project::from_import_json(&text, Some(dir))?;
     if dir.exists() {
         return Err(format!("{}: the folder is already there", dir.display()));
     }
@@ -343,6 +373,32 @@ mod tests {
     }
 
     #[test]
+    fn a_returning_maps_rasters_and_a_browsers_archives_are_said() {
+        let temp = Temp::new("returning");
+        let mut s = sample();
+        s.run("offline.download", &json!({"name": "Back", "extent": [-20.0, -40.0, 60.0, 40.0]})).unwrap();
+        s.run("offline.open", &json!({"name": "Back"})).unwrap();
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+        let gt = GeoTransform { origin_x: 10.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r =
+            Raster::new("relief", 2, 2, vec![vec![1.0; 4]], gt, Crs::from_epsg(4326).unwrap(), None, ColorHint::Gray, "Float32").unwrap();
+        let tif = temp.path().join("relief.tif");
+        std::fs::write(&tif, geotiff::write(&r, 0).unwrap()).unwrap();
+        s.run("layer.addData", &json!({"path": tif.display().to_string()})).unwrap();
+        s.map_mut().tiles.push(TileLayer::new("Uploaded", TileKind::MbTiles, format!("{}base.mbtiles", rustgis_map::tiles::UPLOAD)));
+        let mark = s.notice_mark();
+        let (_, bytes) = package(&mut s, &Value::Null).unwrap();
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("raster layer(s) were left out")), "{said:?}");
+        assert!(said.iter().any(|t| t.contains("Uploaded") && t.contains("memory")), "{said:?}");
+        assert!(!said.iter().any(|t| t.contains("from the web")), "{said:?}");
+        // The package holds no raster layer.
+        let text = rustgis_data::zip::read(&bytes).unwrap().into_iter().find(|(n, _)| n.ends_with(".rgis")).unwrap().1;
+        let project = Project::from_import_json(&String::from_utf8(text).unwrap(), None).unwrap();
+        assert!(project.maps[0].layers.iter().all(|l| !l.is_raster()));
+    }
+
+    #[test]
     fn a_map_only_named_offline_is_packaged_as_any_other() {
         let mut s = sample();
         s.run("map.rename", &json!({"name": "Plan (offline)"})).unwrap();
@@ -376,6 +432,13 @@ mod tests {
             let e = unpack_into(&bytes, &temp.path().join("in")).unwrap_err();
             assert!(e.contains("outside"), "{bad}: {e}");
         }
+        // Two projects: refused. One that can't be read: refused, with nothing written.
+        let two = rustgis_data::zip::write(&[("a.rgis".into(), b"{}".to_vec()), ("b.rgis".into(), b"{}".to_vec())]).unwrap();
+        assert!(unpack_into(&two, &temp.path().join("two")).unwrap_err().contains("more than one project"));
+        let damaged =
+            rustgis_data::zip::write(&[("a.rgis".into(), b"not json".to_vec()), ("basemaps/b.mbtiles".into(), b"x".to_vec())]).unwrap();
+        assert!(unpack_into(&damaged, &temp.path().join("damaged")).is_err());
+        assert!(!temp.path().join("damaged").exists());
         let none = rustgis_data::zip::write(&[("a.txt".into(), b"x".to_vec())]).unwrap();
         assert!(unpack_into(&none, &temp.path().join("in")).unwrap_err().contains("no project"));
         assert!(is_field_package("Site.RGISFIELD") && !is_field_package("site.rgis"));
