@@ -1033,8 +1033,7 @@ fn edit_sheet(
         if action(ui, t, tl!("Move Point Here"), width, true, true) {
             match cross {
                 Some(at) => {
-                    let first = VertexId::new(0, 0, 0);
-                    let _ = edit::vertex(app, target.id, row, first, "move", Some(at));
+                    edit::move_point(app, target.id, row, at);
                 }
                 None => app.session.notify(off(), true),
             }
@@ -1629,6 +1628,24 @@ mod tests {
         assert_eq!(last.checked(Some(&abc)).vertex, None);
         // A vertex the shape doesn't have isn't picked at all.
         assert_eq!(edit::Editing::feature(7).picking(Some(VertexId::new(0, 0, 9)), Some(&abc)).vertex, None);
+    }
+
+    #[test]
+    fn move_point_here_moves_a_point_and_refuses_a_multipoint() {
+        let mut app = RustGisApp::with_sample();
+        let cities = target(&mut app, GeometryType::Point);
+        assert!(edit::move_point(&mut app, cities.id, 0, (12.0, 34.0)));
+        let moved = app.session.map().layer(cities.id).unwrap().dataset.features[0].geometry.clone();
+        assert!(matches!(moved, Some(rustgis_ui_egui::rustgis_engine::data::Geometry::Point(c)) if c.x == 12.0 && c.y == 34.0));
+        // A multipoint in a point layer: nothing moves, and that is said.
+        let multi = json!({"layer": cities.id, "geometry": {"type": "MultiPoint", "coordinates": [[1.0, 1.0], [2.0, 2.0]]}});
+        run(&mut app, "edit.addFeature", multi);
+        let row = count(&app, cities.id) - 1;
+        let before = app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry.clone();
+        let mark = app.session.notice_mark();
+        assert!(!edit::move_point(&mut app, cities.id, row, (5.0, 5.0)));
+        assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry, before);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("multipoint")));
     }
 
     #[test]
