@@ -50,6 +50,8 @@ public class MainActivity extends NativeActivity {
     private int dropped;
     /** Why TrackService couldn't run, until takeEvents says so. */
     private static volatile String refusal;
+    /** The activity, while it is created: TrackService's refusal reaches it at once. */
+    private static volatile MainActivity current;
     /** The listener positions arrive on, while they are asked for. */
     private android.location.LocationListener positions;
     /** The user is being asked for leave to use the location, and hasn't answered. */
@@ -64,6 +66,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(android.os.Bundle saved) {
         super.onCreate(saved);
+        current = this;
         // The insets are read where Android hands them over, on the main thread, and kept for
         // the Rust side to ask for from its own.
         getWindow().getDecorView().setOnApplyWindowInsetsListener((view, given) -> {
@@ -231,9 +234,16 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** TrackService was refused by Android: takeEvents says why. */
+    /**
+     * TrackService was refused by Android: takeEvents says why, and the activity stops keeping
+     * positions out of sight now, not at the next frame (an app out of sight draws none).
+     */
     static void serviceRefused(String why) {
         refusal = why;
+        MainActivity activity = current;
+        if (activity != null) {
+            activity.keepLocatingRefused();
+        }
     }
 
     /** Back in sight: positions are asked for again, if they were wanted and are still allowed. */
@@ -324,6 +334,9 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        if (current == this) {
+            current = null;
+        }
         stopLocating();
         stopService(new Intent(this, TrackService.class));
         super.onDestroy();
@@ -393,9 +406,14 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** TrackService didn't start: positions stop out of sight again. */
+    /** TrackService didn't start: positions stop out of sight again, now if out of sight already. */
     private void keepLocatingRefused() {
-        runOnUiThread(() -> keepLocating = false);
+        runOnUiThread(() -> {
+            keepLocating = false;
+            if (!started) {
+                stopLocating();
+            }
+        });
     }
 
     /**

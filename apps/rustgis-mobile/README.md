@@ -132,7 +132,7 @@ listener then keeps receiving positions after the activity stops, and they wait 
 (at most 200,000; past that the oldest go, and the app says how many) until the app is back in
 sight and takes them all into the track. The first track asks for leave to show notifications
 (Android 13 and later); refused, the service still runs, its notice unseen. Stopping the track
-stops the service. Ending the app (swiping it away) ends the track with it.
+stops the service. Ending the app (swiping it away), or Android ending its activity, ends the track with it: the session goes with the process (see below).
 
 **Edit**, beside **Add** at the top of the Capture sheet, changes the shapes already on the
 map, the same way: the map is moved under the cross. **Pick Feature at Cross** picks the layer's
