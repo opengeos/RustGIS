@@ -1236,6 +1236,8 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // button for yet. The Project page's Start brings this interface back at the next start.
         if row(ui, t, "pane", tl!("Use the Desktop Interface")) {
             set_sheet(ui.ctx(), Sheet::None);
+            // A track being recorded is added before the bar that stops it goes away.
+            stop_track(app, &ctx);
             app.chrome = None;
             app.session.notify(tl!("The desktop interface is on until RustGIS is started again."), false);
         }
@@ -1786,6 +1788,25 @@ mod tests {
         assert!(!edit::move_point(&mut app, cities.id, row, (5.0, 5.0)));
         assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry, before);
         assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("multipoint")));
+    }
+
+    #[test]
+    fn the_desktop_interface_adds_the_track_being_recorded_first() {
+        use rustgis_ui_egui::rustgis_engine::platform::Fix;
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        start_track(&mut app, &ctx);
+        for i in 0..3 {
+            app.report_position(Fix { lon: 10.0 + f64::from(i) * 0.01, lat: 5.0, accuracy: Some(3.0), time: Some(i64::from(i) * 1000) });
+        }
+        frame(&mut app, &ctx, Sheet::None);
+        // As the More sheet's row does: the track is added, then the interface goes.
+        let mut state = track::field(&ctx);
+        assert_eq!(state.track.as_ref().map(|t| t.points.len()), Some(3));
+        stop_track(&mut app, &ctx);
+        state = track::field(&ctx);
+        assert!(state.track.is_none());
+        assert!(app.session.map().layers.iter().any(|l| l.name == track::TRACKS && l.dataset.features.len() == 1));
     }
 
     #[test]
