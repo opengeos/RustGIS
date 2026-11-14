@@ -187,10 +187,11 @@ offline basemap with no package.
 The edits come back the same way. With a field package's map open, **Send Field Package** in the
 More sheet saves the map as a field package again (through Android's picker), with the photos its
 features name, under `photos/`, each feature naming its photos there. Only picture files go in
-(`.jpg`, `.png`, `.heic`, `.webp`), under a plain file name, listed in `photos/index.tsv` with the
+(`.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`), under a plain file name, listed in `photos/index.tsv` with the
 path their feature named them by; other files a photos field names are said, not put in; a package
-going out to the field carries none. A photos field lists paths separated by `;`, so a path that
-holds a `;` can't be listed in it. On the computer, in the
+going out to the field carries none. A photos field lists paths separated by `;`: a path that
+holds a `;` is read as one where, joined again, it names a file here, and a photo's name in a
+package never holds one. On the computer, in the
 project the package was made from (saved after packaging, so it holds the offline area), **Data ›
 Offline › Bring Back** (`offline.bringBack`) reads it: the photos go in a `<area> photos` folder
 beside the project and the features name them there (a photo whose listed path holds the same
@@ -199,7 +200,14 @@ bytes, from an earlier package, gets a name of its own, and the summary says how
 photos field) is added to the layer at home; and the edits are copied back by feature, as Sync
 does for an offline area: changed and new features update the map, deleted ones are removed from
 it, and a feature changed at home too takes the field's version, said by name (Undo brings the
-home versions back). A package for an area the project doesn't have is refused, by name.
+home versions back). A package for an area the project doesn't have is refused, by name, and so
+is one whose layers aren't the area's (an area of the same name in another project).
+
+One field package goes to one phone at a time: Bring Back compares what comes back with the area
+as it was last brought back, so a second phone's edits to the same package, brought back after the
+first's, would undo the first's where they differ. Send a new package after each Bring Back. A
+feature added in the field keeps its id at home when the id is free; one that takes a new id (its
+own was used outside the area) is said, as a later package from the same phone replaces it.
 
 ## What differs from the desktop
 

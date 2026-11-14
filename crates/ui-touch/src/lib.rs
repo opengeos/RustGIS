@@ -936,13 +936,15 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let taken = std::mem::take(&mut app.photos);
         match picked.filter(|_| state.edit_mode) {
             Some((row, _)) => {
-                // Not attached (the refusal is said): where the photos are kept is said too.
+                // Not attached (the refusal is said): where the photos are kept is said too, and
+                // they stay in the form, for the next feature or to try again.
                 if !photos::attach(app, target.id, row, &taken) {
                     let kept = taken.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
                     app.session.notify(
                         rustgis_ui_egui::i18n::fmt("The photo wasn't attached to the feature. It is kept at {paths}.", &[("paths", &kept)]),
                         true,
                     );
+                    state.photos.extend(taken);
                 }
             }
             None => state.photos.extend(taken),
@@ -1450,6 +1452,9 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // couldn't be keeps this interface, which can still stop it.
             if stop_track(app, &ctx) {
                 app.chrome = None;
+                // Nothing to keep positions coming for out of sight now, and no interface that
+                // would say so.
+                app.keep_locating = false;
                 app.session.notify(tl!("The desktop interface is on until RustGIS is started again."), false);
             }
         }

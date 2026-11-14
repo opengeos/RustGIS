@@ -59,8 +59,9 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         .strip_suffix(OFFLINE)
         .map(str::to_string)
         .filter(|area| opened_field || s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(area)));
-    // Only a map coming back carries its photos: going out, the photos named are at home.
-    let coming_back = returning.is_some();
+    // Only a map coming back from the field (its project opened from a field package) carries its
+    // photos: going out, an area's map included, the photos named are at home.
+    let coming_back = returning.is_some() && opened_field;
     let (area, mut map) = match returning {
         Some(area) => {
             // Its raster layers stay behind, as an offline area's do going out: said.
@@ -273,6 +274,9 @@ fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> S
     }
 }
 
+/// The most pieces of a photos field (split at `;`) tried as one path with `;` in it.
+const JOINED: usize = 16;
+
 /// Where the paths a photos field holds are in its text (`;` between them), trimmed, empty ones
 /// left out. A path with a `;` of its own is one path when, joined again, it names a file on this
 /// device.
@@ -290,8 +294,12 @@ fn photo_paths(held: &str) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(first) = pieces.get(i) {
-        // The longest run of pieces from here that names a file, or this one alone.
-        let last = (i + 1..pieces.len()).rev().find(|j| pieces.get(*j).is_some_and(|end| names_file(&(first.start..end.end)))).unwrap_or(i);
+        // The longest run of pieces from here that names a file, or this one alone: tried only
+        // from a piece that is a whole path's start, and over a few pieces, so a long value costs
+        // a few looks at the disk for each piece, not one for each pair.
+        let absolute = held.get(first.clone()).is_some_and(|p| Path::new(p.trim()).is_absolute());
+        let reach = if absolute { pieces.len().min(i + JOINED) } else { i + 1 };
+        let last = (i + 1..reach).rev().find(|j| pieces.get(*j).is_some_and(|end| names_file(&(first.start..end.end)))).unwrap_or(i);
         let end = pieces.get(last).map_or(first.end, |p| p.end);
         if let Some(text) = held.get(first.start..end) {
             let lead = text.len() - text.trim_start().len();
@@ -328,8 +336,20 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64) -> Photos {
         let file = Path::new(path);
         // A picture only: a photos field is free text, and could name any file on the device.
         let picture = file.extension().is_some_and(|e| PICTURES.iter().any(|p| e.eq_ignore_ascii_case(p)));
-        if !file.is_absolute() || !file.is_file() {
+        if !file.is_absolute() {
             return path.to_string();
+        }
+        // Not on this device (a photo named at home): left as named. One there that can't be
+        // looked at is said, as one that can't be read is.
+        match std::fs::metadata(file) {
+            Ok(m) if m.is_file() => {}
+            Ok(_) => return path.to_string(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return path.to_string(),
+            Err(e) => {
+                said.insert(path.to_string());
+                unread.push(format!("{path} ({e})"));
+                return path.to_string();
+            }
         }
         if !picture {
             said.insert(path.to_string());
@@ -395,8 +415,9 @@ fn plain_name(name: &str) -> String {
     }
 }
 
-/// What a file name can't hold on one of the systems a package goes to (Windows forbids the most).
-const FORBIDDEN: &str = "/\\:*?\"<>|";
+/// What a file name can't hold on one of the systems a package goes to (Windows forbids the most),
+/// and `;`, which separates a photos field's paths.
+const FORBIDDEN: &str = "/\\:*?\"<>|;";
 
 /// Whether a file name is a Windows device's (`CON`, `NUL.jpg`, `COM1`…), which can't be a file.
 fn device_name(name: &str) -> bool {
@@ -463,6 +484,21 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
             "this project has no offline area '{area}': open the project the field package was made from, as it was saved after packaging"
         )
     })?;
+    // An area of that name in another project isn't this package's: its layers, matched by id,
+    // must be the area's own, of the same kind (a name may have changed in the field), or features
+    // of other layers would be changed.
+    let baseline = s.project.offline_areas.get(ai).map(|a| &a.data).ok_or("no such area")?;
+    let foreign = edited
+        .layers
+        .iter()
+        .filter(|l| !l.is_raster())
+        .any(|l| baseline.layers.iter().find(|b| b.id == l.id).is_some_and(|b| b.geometry_type() != l.geometry_type()))
+        || !edited.layers.iter().any(|l| baseline.layers.iter().any(|b| b.id == l.id));
+    if foreign {
+        return Err(format!(
+            "the field package's map isn't one made from this project's offline area '{area}': its layers aren't the area's. Open the project it was made from"
+        ));
+    }
     // The photos, beside the project, and the features naming them there.
     let mut put = 0usize;
     let mut renamed = 0usize;
@@ -475,36 +511,40 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
                 .join("field photos")
                 .join(super::items::safe(&area)),
         };
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let mut written = std::collections::HashMap::new();
         // The path each photo was named by where it was packaged.
         let before: std::collections::HashMap<&str, &str> = index.lines().filter_map(|l| l.split_once('\t')).collect();
-        for (name, data) in photos {
+        // Where each photo goes, decided before anything is written: the edits are brought back
+        // first, so one refused leaves no photo behind.
+        let mut placed = std::collections::HashMap::new();
+        for (name, data) in &photos {
             let entry = format!("{PHOTOS}/{name}");
             // Packaged from here (the same file, the same bytes): it keeps its own path.
-            if let Some(own) = before.get(entry.as_str()).filter(|p| std::fs::read(p).is_ok_and(|there| there == data)) {
-                written.insert(entry, own.to_string());
+            if let Some(own) = before.get(entry.as_str()).filter(|p| holds(Path::new(p), data)) {
+                placed.insert(entry, (PathBuf::from(own), false));
                 continue;
             }
             // A file of that name already there (an earlier package's) is kept: the same bytes
-            // are that photo, other bytes get a name of their own.
-            let mut path = dir.join(&name);
+            // are that photo, other bytes, or anything that can't be looked at, get a name of their
+            // own.
+            let mut path = dir.join(name);
+            let mut write = true;
             for n in 2.. {
-                match std::fs::read(&path) {
-                    Ok(there) if there == data => break,
-                    Ok(_) => path = dir.join(format!("{n}-{name}")),
-                    Err(_) => break,
+                match std::fs::metadata(&path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                    Ok(_) if holds(&path, data) => {
+                        write = false;
+                        break;
+                    }
+                    _ => path = dir.join(format!("{n}-{name}")),
                 }
             }
-            if path.file_name().is_some_and(|f| f.to_string_lossy() != name) {
+            if write && path.file_name().is_some_and(|f| f.to_string_lossy() != name.as_str()) {
                 renamed += 1;
             }
-            std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
-            written.insert(format!("{PHOTOS}/{name}"), path.display().to_string());
-            put += 1;
+            placed.insert(entry, (path, write));
         }
-        rewrite_photos(&mut edited, |path| written.get(path).cloned().unwrap_or_else(|| path.to_string()));
-        folder = Some(dir.display().to_string());
+        rewrite_photos(&mut edited, |path| placed.get(path).map_or_else(|| path.to_string(), |(to, _)| to.display().to_string()));
+        folder = Some((dir, photos, placed));
     }
     // Fields the field added (a layer's photos field, made with its first photo) come too.
     let added = take_new_fields(s, ai, &edited);
@@ -512,6 +552,36 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         s.notify(format!("Added the field(s) the field package's layers added: {}", added.join(", ")), false);
     }
     let mut done = super::workspace::sync_area(s, ai, &edited)?;
+    // The phone keeps its own ids: a feature it added whose id was taken here comes back next time
+    // under that id, and is replaced then.
+    if let Some(n) = done.get("renumbered").and_then(Value::as_u64).filter(|n| *n > 0) {
+        s.notify(
+            format!(
+                "{n} feature(s) added in the field took a new id here, theirs being used in this map already. A later field package from the same phone replaces them under another new id: send a new field package for more edits"
+            ),
+            false,
+        );
+    }
+    // The edits are back: now the photos are written. One that can't be takes those written before
+    // it away again, and the command fails (the project is put back as it was).
+    let folder = match folder {
+        Some((dir, photos, placed)) => {
+            let mut written: Vec<PathBuf> = Vec::new();
+            for (name, data) in &photos {
+                let Some((path, true)) = placed.get(&format!("{PHOTOS}/{name}")) else { continue };
+                if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(path, data)) {
+                    for done in &written {
+                        let _ = std::fs::remove_file(done);
+                    }
+                    return Err(format!("{}: {e}; no photo was brought back", path.display()));
+                }
+                written.push(path.clone());
+            }
+            put = written.len();
+            Some(dir.display().to_string())
+        }
+        None => None,
+    };
     let said = |k: &str| done.get(k).and_then(Value::as_u64).unwrap_or(0);
     let mut summary = format!(
         "Brought the field's edits back to offline area '{area}': {} feature(s) changed, {} added, {} deleted",
@@ -681,6 +751,18 @@ pub(crate) fn not_the_project(s: &Session, path: &Path) -> Result<(), String> {
         return Err("the field package can't go in the open project's own file: choose another".into());
     }
     Ok(())
+}
+
+/// Whether `path` is a file holding `data`: its size is looked at first, and no more than that is
+/// read, so a device or a pipe named in a package's index isn't read without end.
+fn holds(path: &Path, data: &[u8]) -> bool {
+    use std::io::Read;
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    if !meta.is_file() || meta.len() != data.len() as u64 {
+        return false;
+    }
+    let mut there = Vec::with_capacity(data.len());
+    std::fs::File::open(path).and_then(|f| f.take(data.len() as u64 + 1).read_to_end(&mut there)).is_ok() && there == data
 }
 
 /// What `offline.package` returns.
@@ -987,6 +1069,13 @@ mod tests {
         let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.contains("changed in the map") && t.contains("Cities")), "{said:?}");
         assert!(said.iter().any(|t| t.contains("Brought the field's edits back") && t.contains("1 photo(s)")), "{said:?}");
+        // The same package brought back again: no feature twice.
+        let again = home.run("offline.bringBack", &json!({"path": sent.display().to_string()})).unwrap();
+        assert_eq!(home.map().layer(home_cities).unwrap().dataset.features.len(), before, "{again}");
+        // The feature added in the field kept its id when it was free, and is found again as itself;
+        // one that took a new id was said the first time, and is replaced.
+        let renumbered = said.iter().any(|t| t.contains("took a new id"));
+        assert_eq!(again["added"].as_u64(), Some(u64::from(renumbered)), "{again}");
         // A package for an area this project doesn't have is refused, by name.
         let mut other = sample();
         let e = other.run("offline.bringBack", &json!({"path": sent.display().to_string()})).unwrap_err();
@@ -1110,9 +1199,14 @@ mod tests {
 
     #[test]
     fn photo_names_a_system_refuses_are_made_plain_and_left_out_coming_back() {
-        for (name, plain) in
-            [("a:b*?.jpg", "a_b__.jpg"), ("CON.jpg", "_CON.jpg"), ("com1", "_com1"), (".x.jpg", "_x.jpg"), ("x.jpg.", "x.jpg")]
-        {
+        for (name, plain) in [
+            ("a:b*?.jpg", "a_b__.jpg"),
+            ("CON.jpg", "_CON.jpg"),
+            ("com1", "_com1"),
+            (".x.jpg", "_x.jpg"),
+            ("x.jpg.", "x.jpg"),
+            ("IMG;1.jpg", "IMG_1.jpg"),
+        ] {
             assert_eq!(plain_name(name), plain);
             assert!(!plain_file(name) && plain_file(plain), "{name}");
         }
@@ -1143,6 +1237,96 @@ mod tests {
         let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.starts_with("3 photo(s)") && t.contains("plain file names")), "{said:?}");
         assert!(!temp.path().join("Odd photos").exists());
+    }
+
+    #[test]
+    fn a_feature_added_in_the_field_keeps_its_free_id_and_is_found_again() {
+        let temp = Temp::new("free-id");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        // The whole world: the area holds every feature, so the field's next id is free at home.
+        let (_, out) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let cities = layer(&field, "Cities");
+        field.run("edit.addFeature", &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10.0, 5.0]}})).unwrap();
+        let id = field.map().layer(cities).unwrap().dataset.features.last().unwrap().id;
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let path = temp.path().join("back.rgisfield");
+        std::fs::write(&path, &back).unwrap();
+        let mark = home.notice_mark();
+        let first = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+        assert_eq!(first["added"].as_u64(), Some(1), "{first}");
+        assert!(home.notices_since(mark).iter().all(|n| !n.text.contains("took a new id")));
+        let home_cities = layer(&home, "Cities");
+        assert!(home.map().layer(home_cities).unwrap().dataset.features.iter().any(|f| f.id == id));
+        // Again: found as the same feature, nothing added or deleted.
+        let again = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+        assert_eq!((again["added"].as_u64(), again["deleted"].as_u64()), (Some(0), Some(0)), "{again}");
+    }
+
+    #[test]
+    fn a_package_from_another_projects_area_of_the_same_name_is_refused() {
+        let temp = Temp::new("foreign");
+        // Elsewhere, an area named "Site" of another project's map: its own layers, its own ids.
+        let mut other = Session::new(crate::project::Project::new("Other"));
+        for (template, name) in [("polygons", "Parcels"), ("lines", "Roads"), ("points", "Wells")] {
+            other.run("layer.template", &json!({"template": template, "name": name})).unwrap();
+        }
+        let roads = layer(&other, "Roads");
+        other.run("edit.enable", &json!({"on": true})).unwrap();
+        other
+            .run("edit.addFeature", &json!({"layer": roads, "geometry": {"type": "LineString", "coordinates": [[0.0, 0.0], [1.0, 1.0]]}}))
+            .unwrap();
+        let (_, out) = package(&mut other, &json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        // Here, an area of that name made from this project's map.
+        let mut home = sample();
+        package(&mut home, &json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let ids: Vec<(u32, String)> = home.map().layers.iter().map(|l| (l.id, l.name.clone())).collect();
+        let theirs: Vec<(u32, String)> = field.map().layers.iter().map(|l| (l.id, l.name.clone())).collect();
+        let path = temp.path().join("back.rgisfield");
+        std::fs::write(&path, &back).unwrap();
+        let e = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap_err();
+        assert!(e.contains("layers aren't the area's"), "{e} {ids:?} {theirs:?}");
+    }
+
+    #[test]
+    fn a_bring_back_refused_leaves_no_photo_and_a_file_is_compared_by_its_size_first() {
+        let temp = Temp::new("refused-back");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let (_, out) = package(&mut home, &json!({"name": "Back", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let cities = layer(&field, "Cities");
+        let photo = temp.path().join("site.jpg");
+        std::fs::write(&photo, b"jpeg").unwrap();
+        field.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        std::fs::remove_file(&photo).unwrap();
+        // At home meanwhile, a field the field doesn't have: the sync is refused.
+        let home_cities = layer(&home, "Cities");
+        home.run("edit.addField", &json!({"layer": home_cities, "name": "extra", "type": "text"})).unwrap();
+        let path = temp.path().join("back.rgisfield");
+        std::fs::write(&path, &back).unwrap();
+        assert!(home.run("offline.bringBack", &json!({"path": path.display().to_string()})).is_err());
+        assert!(!temp.path().join("Back photos").exists());
+        // A file holds bytes only as a file of their size: a folder, or another size, doesn't.
+        let file = temp.path().join("same.jpg");
+        std::fs::write(&file, b"abc").unwrap();
+        assert!(holds(&file, b"abc"));
+        assert!(!holds(&file, b"abcd") && !holds(&file, b"abd") && !holds(temp.path(), b"abc"));
+        assert!(!holds(&temp.path().join("missing.jpg"), b"abc"));
     }
 
     #[test]
