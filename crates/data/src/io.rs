@@ -4908,7 +4908,9 @@ mod tests {
         let csv_text = to_csv(&ds).unwrap();
         let (reimported, _) = read_csv(&csv_text, "test").unwrap();
         assert_eq!(reimported.fields[0].ty, FieldType::Double);
+        assert_eq!(reimported.features[0].attrs[0], Value::Float(35.132946));
         assert_eq!(reimported.fields[1].ty, FieldType::Integer);
+        assert_eq!(reimported.features[0].attrs[1], Value::Int(447700900123));
         assert_eq!(reimported.fields[2].ty, FieldType::Text);
         assert_eq!(reimported.features[0].attrs[2], Value::Text("-007".into()));
         assert_eq!(reimported.fields[3].ty, FieldType::Text);
