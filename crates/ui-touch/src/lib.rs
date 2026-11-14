@@ -640,11 +640,13 @@ fn add_feature(app: &mut RustGisApp, id: u32, form: &Form, geometry: Value) -> b
         app.session.notify(tl!("Editing was turned on for this map."), false);
     }
     // The photos taken for it go in the layer's photos field, made when it has none.
+    let mut photos_in = None;
     if !form.photos.is_empty() {
         let Some(field) = photos::ensure_field(app, id) else { return false };
         // After what was typed in the field, if it was.
         let typed = attributes.get(&field).and_then(Value::as_str).unwrap_or_default().to_string();
-        attributes.insert(field, json!(photos::joined(&typed, &form.photos)));
+        attributes.insert(field.clone(), json!(photos::joined(&typed, &form.photos)));
+        photos_in = Some(field);
     }
     let mut feature = json!({"layer": id, "geometry": geometry, "attributes": attributes});
     // A template chosen while the layer still has it: one removed since is not asked for.
@@ -662,6 +664,14 @@ fn add_feature(app: &mut RustGisApp, id: u32, form: &Form, geometry: Value) -> b
         GeometryType::Polyline => rustgis_ui_egui::i18n::fmt("Added a line to {layer}.", &[("layer", &name)]),
         GeometryType::Polygon => rustgis_ui_egui::i18n::fmt("Added a polygon to {layer}.", &[("layer", &name)]),
         _ => rustgis_ui_egui::i18n::fmt("Added a point to {layer}.", &[("layer", &name)]),
+    };
+    // Where its photos went: the layer's own field of that name, maybe.
+    let added = match photos_in {
+        Some(field) => rustgis_ui_egui::i18n::fmt(
+            "{added} Its {n} photo(s) are named in its {field} field.",
+            &[("added", &added), ("n", &form.photos.len().to_string()), ("field", &field)],
+        ),
+        None => added,
     };
     app.session.notify(added, false);
     true
@@ -1910,7 +1920,10 @@ mod tests {
         // What is typed in it stays, the photo after it.
         let mut state = Form { photos: vec!["/data/photos/b.jpg".into()], ..Form::default() };
         state.values.insert("Photo".into(), "site.jpg".into());
+        let mark = app.session.notice_mark();
         assert!(add_point(&mut app, cities.id, &state));
+        // The field the photo went in, the layer's own, is named.
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text.ends_with("Its 1 photo(s) are named in its Photo field.")));
         let layer = app.session.map().layer(cities.id).unwrap();
         let column = layer.dataset.field_index("Photo").unwrap();
         assert_eq!(layer.dataset.value(layer.dataset.features.len() - 1, column).to_string(), "site.jpg;/data/photos/b.jpg");

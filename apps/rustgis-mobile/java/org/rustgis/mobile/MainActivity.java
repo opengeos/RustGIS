@@ -533,9 +533,12 @@ public class MainActivity extends NativeActivity {
             File file = photo;
             photo = null;
             // Kept only when the camera said it took it and wrote something: a cancelled
-            // camera leaves an empty file behind, which goes.
+            // camera leaves an empty file behind, which goes. One that wrote a photo and then
+            // said it was cancelled keeps it, unattached, and that is said.
             if (file != null && result == RESULT_OK && file.length() > 0) {
                 add("photo\t" + file.getName() + "\t" + file.getAbsolutePath());
+            } else if (file != null && file.length() > 0) {
+                add("failed\tThe camera app wrote a photo and then said it was cancelled: it wasn't attached, and is kept as " + file.getAbsolutePath());
             } else {
                 if (file != null) {
                     file.delete();

@@ -90,7 +90,7 @@ pub(crate) fn attach(app: &mut RustGisApp, id: u32, row: usize, more: &[PathBuf]
         return false;
     }
     let n = more.len().to_string();
-    app.session.notify(i18n::fmt("Attached {n} photo(s) to the feature.", &[("n", &n)]), false);
+    app.session.notify(i18n::fmt("Attached {n} photo(s) to the feature, in its {field} field.", &[("n", &n), ("field", &name)]), false);
     true
 }
 
