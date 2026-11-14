@@ -149,6 +149,10 @@ public class MainActivity extends NativeActivity {
             if (started) {
                 startLocating();
             }
+            // A track asked for positions out of sight before the leave was given.
+            if (keepLocating) {
+                startTrackService();
+            }
         } else {
             stopped("RustGIS wasn't given leave to use this device's location: its position can't be shown.");
         }
@@ -164,6 +168,11 @@ public class MainActivity extends NativeActivity {
      */
     private void stopped(String why) {
         locating = false;
+        // Out of sight too: nothing is kept now, so the service and its notice go.
+        if (keepLocating) {
+            keepLocating = false;
+            stopService(new Intent(this, TrackService.class));
+        }
         stopLocating();
         add("failed\t" + why);
         add("stopped");
@@ -200,16 +209,26 @@ public class MainActivity extends NativeActivity {
                 }
                 return;
             }
-            if (android.os.Build.VERSION.SDK_INT >= 33 && !allowed("android.permission.POST_NOTIFICATIONS")) {
-                requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, NOTIFY);
-            }
-            try {
-                startForegroundService(service);
-            } catch (RuntimeException e) {
-                keepLocating = false;
-                add("failed\tPositions can't be kept while RustGIS is out of sight: " + e.getMessage());
+            // A location service needs the location leave first (Android 10 and later refuse it
+            // otherwise): while the user is still being asked, the answer starts it.
+            if (allowed(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    || allowed(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                startTrackService();
             }
         });
+    }
+
+    /** Starts TrackService for keepLocating, asking for leave to show its notice where needed. */
+    private void startTrackService() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !allowed("android.permission.POST_NOTIFICATIONS")) {
+            requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, NOTIFY);
+        }
+        try {
+            startForegroundService(new Intent(this, TrackService.class));
+        } catch (RuntimeException e) {
+            keepLocating = false;
+            add("failed\tPositions can't be kept while RustGIS is out of sight: " + e.getMessage());
+        }
     }
 
     /** TrackService was refused by Android: takeEvents says why. */
