@@ -1150,6 +1150,14 @@ mod tests {
         // (opengeos/RustGIS#208), draws where PROJ does: pyproj 3.8.0 (PROJ 9.8.1) puts 47°E 19°S
         // at (459 248.289, 788 988.914).
         let laborde = Projector::new("EPSG:8441").unwrap_or_else(|e| panic!("{e}"));
+        // Noted as used on the thread that built it, as a background export's map is.
+        let used = std::thread::spawn(|| {
+            Projector::new("EPSG:26717").unwrap();
+            rustgis_data::raster::crs::take_used()
+        })
+        .join()
+        .unwrap();
+        assert!(used.iter().any(|(_, label)| label == "EPSG:26717"), "{used:?}");
         let m = laborde.forward(Coord::new(47.0, -19.0)).unwrap();
         assert!((m.x - 459_248.289).abs() < 0.01 && (m.y - 788_988.914).abs() < 0.01, "{m:?}");
         // A regional projection: places far from Madagascar aren't drawn, and its round trip is

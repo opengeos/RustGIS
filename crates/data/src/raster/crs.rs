@@ -433,6 +433,9 @@ pub fn transformer_of(def: &str) -> Result<Transformer, String> {
     if let Some(t) = built().lock().unwrap_or_else(|e| e.into_inner()).get(def) {
         return t.clone();
     }
+    // What a transformer built here says as it is dropped (one that fails its checks, or one
+    // another thread built first) is this definition's ([`record_warning`]).
+    let flushing = FLUSHING.try_with(|l| l.replace(Some(def.to_string()))).ok().flatten();
     let degrees = in_degrees(def);
     let param = |key: &str| degrees.split_whitespace().find_map(|t| t.strip_prefix(key));
     let world = param("+proj=").is_some_and(|m| WORLD_METHODS.contains(&m));
@@ -449,9 +452,10 @@ pub fn transformer_of(def: &str) -> Result<Transformer, String> {
         misread_parameter(def).and_then(|()| build(&degrees))
     };
     let mut map = built().lock().unwrap_or_else(|e| e.into_inner());
-    if map.len() < MAX_BUILT {
-        map.insert(def.to_string(), t.clone());
-    }
+    // The first one built is kept and shared: another thread may have built it meanwhile.
+    let t = if map.len() < MAX_BUILT || map.contains_key(def) { map.entry(def.to_string()).or_insert(t).clone() } else { t };
+    drop(map);
+    let _ = FLUSHING.try_with(|l| l.replace(flushing));
     t
 }
 
@@ -473,6 +477,24 @@ fn in_degrees(def: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+/// The prime meridians PROJ 9.8.1 knows by name (`proj -lm`), as terrio-crs reads them.
+const PRIME_MERIDIANS: [&str; 14] = [
+    "greenwich",
+    "lisbon",
+    "paris",
+    "bogota",
+    "madrid",
+    "rome",
+    "bern",
+    "jakarta",
+    "ferro",
+    "brussels",
+    "stockholm",
+    "athens",
+    "oslo",
+    "copenhagen",
+];
 
 /// The angle parameters of a PROJ definition.
 const ANGLES: [&str; 10] = ["lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc", "alpha", "gamma", "lon_1", "lon_2"];
@@ -533,6 +555,11 @@ fn misread_parameter(def: &str) -> Result<(), String> {
             continue;
         }
         let angle = angular(key, value);
+        // A prime meridian by name: one PROJ knows, as it spells it (terrio-crs would take
+        // another as Greenwich).
+        if key == "pm" && !angle && !PRIME_MERIDIANS.contains(&value) {
+            return Err(format!("+pm={value} isn't a prime meridian PROJ knows"));
+        }
         if !angle && !NUMERIC_PARAMETERS.contains(&key) {
             continue;
         }
@@ -892,7 +919,7 @@ thread_local! {
     /// The systems this thread has asked for a transformer for since [`take_used`] last looked
     /// (definition and label), so the app can check those a command used without keeping them
     /// in its project: an export's target system, a grid's, a calculation's.
-    static USED: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static USED: std::cell::RefCell<std::collections::HashMap<String, String>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Notes that this thread asked for a transformer for `def` (called `label`), for
@@ -901,8 +928,8 @@ thread_local! {
 pub fn note_used(def: &str, label: impl FnOnce() -> String) {
     let _ = USED.try_with(|u| {
         let mut u = u.borrow_mut();
-        if !u.iter().any(|(d, _)| d == def) {
-            u.push((def.to_string(), label()));
+        if !u.contains_key(def) {
+            u.insert(def.to_string(), label());
         }
     });
 }
@@ -916,7 +943,7 @@ pub fn take_used_notes() -> Vec<String> {
 /// The systems this thread asked for a transformer for since it last looked, as (definition,
 /// label): for a worker thread (a background export) to hand to the session that says them.
 pub fn take_used() -> Vec<(String, String)> {
-    USED.try_with(|u| std::mem::take(&mut *u.borrow_mut())).unwrap_or_default()
+    USED.try_with(|u| u.borrow_mut().drain().collect()).unwrap_or_default()
 }
 
 /// [`grid_note`] for a PROJ definition (a map's projection), called `label`.
@@ -1238,6 +1265,23 @@ mod tests {
         assert_eq!(area_centre(22300), None);
     }
 
+    /// A missing grid that only a transformer RustGIS doesn't keep met is said unnamed, once; one
+    /// met by a definition being built is that definition's.
+    #[test]
+    fn a_missing_grid_without_a_name_is_flagged_once() {
+        let message = || "best coordinate operation needs a missing grid (us_noaa_conus.tif)".to_string();
+        let _ = take_unnamed_grid_need();
+        record_warning(message());
+        assert!(take_unnamed_grid_need());
+        assert!(!take_unnamed_grid_need());
+        let def = "+proj=longlat +datum=NAD27 +no_defs +test=named";
+        let _ = FLUSHING.try_with(|l| l.replace(Some(def.to_string())));
+        record_warning(message());
+        let _ = FLUSHING.try_with(|l| l.replace(None));
+        assert!(!take_unnamed_grid_need());
+        assert!(needs_a_missing_grid(def));
+    }
+
     /// A definition's angle in radians, as PROJ reads it (an old project's typed definition), is
     /// read in degrees; one that isn't a number is refused.
     #[test]
@@ -1300,6 +1344,10 @@ mod tests {
         }
         assert!((pm("paris").x - (2.0 + 20.0 / 60.0 + 14.025 / 3600.0)).abs() < 1e-9);
         assert!(Crs::parse("+proj=longlat +datum=WGS84 +pm=2x").and_then(Crs::transformer).is_err());
+        // A name PROJ doesn't know, as it spells them, is refused, as PROJ 9.8.1 refuses it.
+        for v in ["Paris", "pariss"] {
+            assert!(Crs::parse(&format!("+proj=longlat +datum=WGS84 +pm={v}")).and_then(Crs::transformer).is_err(), "{v}");
+        }
         assert_eq!(marked.from_lonlat(Coord::new(9.5, 47.0)), plain.from_lonlat(Coord::new(9.5, 47.0)));
         let dms = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30d30 +lon_0=9").and_then(Crs::transformer).unwrap();
         let dec = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30.5 +lon_0=9").and_then(Crs::transformer).unwrap();
