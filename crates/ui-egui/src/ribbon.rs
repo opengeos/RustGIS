@@ -4126,6 +4126,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
     if gt == GeometryType::Polygon {
         let x = layer.extrusion.clone();
         let numeric: Vec<String> = layer.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+        let base_fields = numeric.clone();
         group(ui, "Extrusion", |ui| {
             let cur = x.clone();
             big_menu(ui, app, "polygon_layer", "Type", "Raise polygons by a height or a field.", move |ui, app| {
@@ -4152,7 +4153,41 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
             });
             if let Some(xx) = &x {
                 ui.vertical(|ui| {
-                    ui.add_space(8.0);
+                    // What the walls stand on: the ground, a constant (Base (m) below) or a numeric
+                    // field (the constant is used where the field holds no number). A small menu
+                    // over Factor, so the group stays narrow on a 1366 px window.
+                    let (on, fields) = (xx.clone(), base_fields);
+                    small_menu(
+                        ui,
+                        app,
+                        "up",
+                        "Base",
+                        "What the walls stand on: the ground, a field or the constant Base (m).",
+                        move |ui, app| {
+                            if ui.radio(on.base_field.is_none() && on.base == 0.0, tl!("Ground")).clicked() {
+                                let _ = app.run("layer.extrusionBase", json!({"field": null, "base": 0}));
+                                ui.close();
+                            }
+                            // A constant base is set with Base (m); once set, it can be chosen over a field.
+                            if on.base > 0.0 {
+                                let m = format!("{:.2}", on.base);
+                                let label = crate::i18n::fmt("Constant ({m} m)", &[("m", m.trim_end_matches('0').trim_end_matches('.'))]);
+                                if ui.radio(on.base_field.is_none(), label).clicked() {
+                                    let _ = app.run("layer.extrusionBase", json!({"field": null}));
+                                    ui.close();
+                                }
+                            }
+                            for f in &fields {
+                                if ui
+                                    .radio(on.base_field.as_deref() == Some(f.as_str()), crate::i18n::fmt("By {field}", &[("field", f)]))
+                                    .clicked()
+                                {
+                                    let _ = app.run("layer.extrusionBase", json!({"field": f}));
+                                    ui.close();
+                                }
+                            }
+                        },
+                    );
                     let mut k = xx.factor;
                     ui.horizontal(|ui| {
                         let input_label = ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
@@ -4169,6 +4204,18 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                         if drag.settled(ui, &r, &mut k) && k != xx.factor {
                             let t = if xx.field.is_some() { "field" } else { "height" };
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
+                        }
+                    });
+                    let mut b = xx.base;
+                    ui.horizontal(|ui| {
+                        let input_label = ui.label(egui::RichText::new(tl!("Base (m)")).size(11.5));
+                        // Kept across a drag until it is let go, as the factor is.
+                        let drag = Dragged::lend(ui, egui::Id::unique(("extrusion_base", layer.id)), &mut b);
+                        let r = ui
+                            .add(egui::DragValue::new(&mut b).update_while_editing(false).range(0.0..=1e7).speed(xx.base.max(10.0) * 0.02))
+                            .labelled_by(input_label.id);
+                        if drag.settled(ui, &r, &mut b) && b != xx.base {
+                            let _ = app.run("layer.extrusionBase", json!({"base": b}));
                         }
                     });
                 });
