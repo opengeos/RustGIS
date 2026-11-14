@@ -43,14 +43,31 @@ const MOST_POSITIONS: usize = 200_000;
 /// What the delegates report, until the next frame takes it.
 struct Shared {
     events: Mutex<crate::Queue>,
-    /// Pickers shown and not yet answered in full (a picked document is copied after its picker
-    /// has closed, a file to save is written before its picker shows).
-    asked: Mutex<usize>,
+    /// Pickers (and the camera) on the screen, not yet answered.
+    showing: Mutex<usize>,
+    /// Work on threads of its own whose answer is still to come: picked documents being
+    /// copied, a photo being written. The window looks again while there is any.
+    working: Mutex<usize>,
 }
 
 impl Default for Shared {
     fn default() -> Shared {
-        Shared { events: Mutex::new(crate::Queue::new(MOST_POSITIONS)), asked: Mutex::new(0) }
+        Shared { events: Mutex::new(crate::Queue::new(MOST_POSITIONS)), showing: Mutex::new(0), working: Mutex::new(0) }
+    }
+}
+
+/// One more (`up`) or one fewer of a count, never below zero: an answer UIKit gives twice
+/// counts once.
+fn count(counter: &Mutex<usize>, up: bool) {
+    let mut n = counter.lock().unwrap_or_else(|e| e.into_inner());
+    *n = if up { n.saturating_add(1) } else { n.saturating_sub(1) };
+}
+
+/// Draws the window again: a picker that answers on the main thread, with no work left to do,
+/// would otherwise wait for a touch to be taken (the window doesn't look while one is up).
+fn wake(mtm: MainThreadMarker) {
+    if let Some(view) = key_window(mtm).and_then(|window| window.rootViewController()).and_then(|controller| controller.view()) {
+        view.setNeedsDisplay();
     }
 }
 
@@ -63,18 +80,12 @@ impl Shared {
         self.add(Event::Failed(text));
     }
 
-    fn answered(&self) {
-        // Never below zero: an answer UIKit gives twice counts once.
-        let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
-        *asked = asked.saturating_sub(1);
+    fn showing(&self) -> bool {
+        *self.showing.lock().unwrap_or_else(|e| e.into_inner()) > 0
     }
 
-    fn ask(&self) {
-        *self.asked.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-    }
-
-    fn asking(&self) -> bool {
-        *self.asked.lock().unwrap_or_else(|e| e.into_inner()) > 0
+    fn working(&self) -> bool {
+        *self.working.lock().unwrap_or_else(|e| e.into_inner()) > 0
     }
 }
 
@@ -147,13 +158,18 @@ impl PickerDelegate {
                     shared.add(Event::Saved { name });
                 }
                 remove_with_folder(&temporary);
-                shared.answered();
+                count(&shared.showing, false);
+                wake(self.mtm());
             }
             Some(Asked::Open { .. }) if urls.is_empty() => {
                 shared.add(Event::Cancelled);
-                shared.answered();
+                count(&shared.showing, false);
+                wake(self.mtm());
             }
             Some(Asked::Open { purpose }) => {
+                // Answered: the copies are work from now on.
+                count(&shared.showing, false);
+                count(&shared.working, true);
                 // The documents are the originals, wherever they are (iCloud Drive, another
                 // app's folder): each is read inside its security scope, held until its copy is
                 // made.
@@ -180,11 +196,12 @@ impl PickerDelegate {
                     if copies == 0 {
                         copied.add(Event::Cancelled);
                     }
-                    copied.answered();
+                    count(&copied.working, false);
                 });
                 if let Err(e) = copying {
                     shared.failed(i18n::fmt("The files chosen weren't opened: {error}", &[("error", &e.to_string())]));
-                    shared.answered();
+                    shared.add(Event::Cancelled);
+                    count(&shared.working, false);
                 }
             }
         }
@@ -321,7 +338,8 @@ define_class!(
         fn did_cancel(&self, picker: &UIImagePickerController) {
             if !self.ivars().answered.replace(true) {
                 self.ivars().shared.add(Event::Cancelled);
-                self.ivars().shared.answered();
+                count(&self.ivars().shared.showing, false);
+                wake(self.mtm());
             }
             picker.dismissViewControllerAnimated_completion(true, None);
         }
@@ -343,13 +361,15 @@ impl CameraDelegate {
             return;
         }
         let shared = ivars.shared.clone();
+        count(&shared.showing, false);
         // Encoded here, on the main thread, as UIKit's images are read there (one step, no
         // Cancel); written off it.
         let Some(jpeg) = image.and_then(|image| image.jpeg_representation(0.9)).map(|data| data.to_vec()) else {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &i18n::fmt("the camera gave no picture", &[]))]));
-            shared.answered();
+            wake(self.mtm());
             return;
         };
+        count(&shared.working, true);
         let (photos, writer) = (ivars.photos.clone(), shared.clone());
         let writing = std::thread::Builder::new().name("photo".into()).spawn(move || {
             let name = format!("photo-{}.jpg", unique());
@@ -358,11 +378,11 @@ impl CameraDelegate {
                 Ok(()) => writer.add(Event::Photo { name, path }),
                 Err(e) => writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())])),
             }
-            writer.answered();
+            count(&writer.working, false);
         });
         if let Err(e) = writing {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
-            shared.answered();
+            count(&shared.working, false);
         }
     }
 }
@@ -736,7 +756,6 @@ impl Ios {
             Err(error) => {
                 remove_with_folder(&temporary);
                 self.shared.failed(i18n::fmt("{name} wasn't saved: {error}", &[("name", &name), ("error", &error)]));
-                self.shared.answered();
                 return;
             }
         };
@@ -747,6 +766,7 @@ impl Ios {
         let delegate = PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name, temporary });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
+        count(&self.shared.showing, true);
         presenter.presentViewController_animated_completion(&picker, true, None);
     }
 
@@ -760,13 +780,10 @@ impl Ios {
         Ok(top)
     }
 
-    /// Whether a picker of ours is up, said as `failed` when it is.
-    fn already_asking(&self, what: String) -> bool {
-        let busy = self.shared.asking();
-        if busy {
-            self.shared.failed(what);
-        }
-        busy
+    /// `Err(what)` while a picker of ours is up or a file to save waits for one: the caller is
+    /// told this one wasn't shown.
+    fn not_already_asking(&self, what: String) -> Result<(), String> {
+        if self.shared.showing() || self.saving.borrow().is_some() { Err(what) } else { Ok(()) }
     }
 }
 
@@ -782,9 +799,7 @@ fn key_window(mtm: MainThreadMarker) -> Option<Retained<UIWindow>> {
 
 impl Platform for Ios {
     fn pick_files(&self, purpose: &str) -> Result<(), String> {
-        if self.already_asking(i18n::fmt("Another file is already being chosen. Choose files again when it is done.", &[])) {
-            return Ok(());
-        }
+        self.not_already_asking(i18n::fmt("Another file is already being chosen. Choose files again when it is done.", &[]))?;
         let presenter = self.presenter()?;
         // Any document: what the front end can't open, it says.
         // SAFETY: a type UniformTypeIdentifiers defines.
@@ -802,15 +817,14 @@ impl Platform for Ios {
             PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Open { purpose: purpose.to_string() });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
-        self.shared.ask();
+        count(&self.shared.showing, true);
         presenter.presentViewController_animated_completion(&picker, true, None);
         Ok(())
     }
 
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
-        if self.already_asking(i18n::fmt("{name} wasn't saved: another file is waiting for its place to be chosen.", &[("name", name)])) {
-            return Ok(());
-        }
+        // Refused, not dropped: the caller is told the file wasn't saved.
+        self.not_already_asking(i18n::fmt("{name} wasn't saved: another file is waiting for its place to be chosen.", &[("name", name)]))?;
         // The export picker copies a file: it is written to the app's tmp folder first, under
         // the name offered (off the main thread: a project or an export can be large), and the
         // picker is shown by the frame after it is written ([`Ios::show_export`]). The file is
@@ -825,8 +839,7 @@ impl Platform for Ios {
         if let Err(e) = writing {
             return Err(i18n::fmt("{name} wasn't saved: {error}", &[("name", name), ("error", &e.to_string())]));
         }
-        // Asked from now: another save waits for this one.
-        self.shared.ask();
+        // Waiting from now: another save is refused until this one's picker has answered.
         self.saving.replace(Some(Saving { name: name.to_string(), temporary, done }));
         Ok(())
     }
@@ -873,9 +886,7 @@ impl Platform for Ios {
         if !UIImagePickerController::isSourceTypeAvailable(UIImagePickerControllerSourceType::Camera, self.mtm) {
             return Err(i18n::fmt("This device has no camera.", &[]));
         }
-        if self.already_asking(i18n::fmt("A photo is already being taken. Take another when it is done.", &[])) {
-            return Ok(());
-        }
+        self.not_already_asking(i18n::fmt("A photo is already being taken. Take another when it is done.", &[]))?;
         let presenter = self.presenter()?;
         let picker = UIImagePickerController::new(self.mtm);
         picker.setSourceType(UIImagePickerControllerSourceType::Camera);
@@ -883,7 +894,7 @@ impl Platform for Ios {
         // SAFETY: the delegate conforms to both protocols the picker asks of it.
         unsafe { picker.setDelegate(Some(&delegate)) };
         self.camera.replace(Some(delegate));
-        self.shared.ask();
+        count(&self.shared.showing, true);
         presenter.presentViewController_animated_completion(&picker, true, None);
         Ok(())
     }
@@ -921,7 +932,13 @@ impl shell::Phone for Ios {
     }
 
     fn busy(&self) -> bool {
-        self.shared.asking() || !self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+        // Not while a picker is merely up (the user may browse for minutes): its answer wakes
+        // the window ([`wake`]).
+        self.shared.working() || self.saving.borrow().is_some() || !self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
+    fn picking(&self) -> bool {
+        self.shared.showing()
     }
 }
 
