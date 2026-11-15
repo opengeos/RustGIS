@@ -110,6 +110,8 @@ mod desktop {
             })?;
             picked.push(band.clone());
         }
+        // A band the catalog gives unusable numbers for is refused before any file is read.
+        refuse_unusable(picked.iter(), wanted)?;
         let mut hrefs = Vec::with_capacity(picked.len());
         for band in &picked {
             hrefs.push(item.asset_href(Some(&band.asset))?.1);
@@ -439,18 +441,13 @@ mod desktop {
         Ok((raster, notes))
     }
 
-    /// The bands as one raster of as many bands on the finest grid among them, by nearest cell, with
-    /// the catalog's scale and offset applied. A cell with no value in any is no data in all. The rows
-    /// are worked one after another on this thread (about 4 million cell transforms a band at the
-    /// default window, which is brief), looking at Cancel and counting progress on each.
-    pub(super) fn stack(name: &str, channels: &[String], sources: &[(&Raster, &sb::Band)]) -> Result<(Raster, Vec<String>), String> {
-        let (Some((first, _)), true) = (sources.first(), sources.len() >= 2) else { return Err("a stack needs at least two bands".into()) };
-        if sources.iter().any(|(r, _)| r.crs != first.crs) {
-            return Err("the bands are in different coordinate systems: they can't be put on one grid".into());
-        }
-        // A scale of 0 (or one that isn't a number) would turn every value of a band into its
-        // offset: a catalog error to say, not a constant band to draw.
-        for ((_, band), who) in sources.iter().zip(channels) {
+    /// The bands whose catalog numbers can't be used, refused by name: a scale of 0 (or one that isn't
+    /// a number) would turn every value of a band into its offset, and numbers or failed-retrieval
+    /// codes the catalog gave but this couldn't read would leave the values unscaled or unmasked: a
+    /// catalog error to say, not a constant or wrong band to draw. They need only the bands' metadata,
+    /// so they are looked at before any file is read (`plan`), and again where the bands are stacked.
+    pub(super) fn refuse_unusable<'a>(bands: impl Iterator<Item = &'a sb::Band>, channels: &[String]) -> Result<(), String> {
+        for (band, who) in bands.zip(channels) {
             if band.unread {
                 return Err(format!(
                     "{who}: the catalog gives its scale, offset or no-data as something that is not a number (a string, say), so its values can't be scaled"
@@ -465,6 +462,19 @@ mod desktop {
                 return Err(format!("{who}: the catalog gives its values a scale of {}, so they can't be scaled", band.scale));
             }
         }
+        Ok(())
+    }
+
+    /// The bands as one raster of as many bands on the finest grid among them, by nearest cell, with
+    /// the catalog's scale and offset applied. A cell with no value in any is no data in all. The rows
+    /// are worked one after another on this thread (about 4 million cell transforms a band at the
+    /// default window, which is brief), looking at Cancel and counting progress on each.
+    pub(super) fn stack(name: &str, channels: &[String], sources: &[(&Raster, &sb::Band)]) -> Result<(Raster, Vec<String>), String> {
+        let (Some((first, _)), true) = (sources.first(), sources.len() >= 2) else { return Err("a stack needs at least two bands".into()) };
+        if sources.iter().any(|(r, _)| r.crs != first.crs) {
+            return Err("the bands are in different coordinate systems: they can't be put on one grid".into());
+        }
+        refuse_unusable(sources.iter().map(|(_, b)| *b), channels)?;
         let finest = sources
             .iter()
             .map(|(r, _)| *r)
@@ -924,6 +934,30 @@ mod tests {
         coded.invalid = vec![4_294_967_295.0];
         let (r, _) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &coded)]).unwrap();
         assert_eq!(r.bands[1].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1, "the rounded code is no data");
+    }
+
+    #[test]
+    fn a_band_the_catalog_gives_unusable_numbers_is_refused_before_any_file_is_read() {
+        let asset = |name: &str, extra: serde_json::Value| {
+            let mut band = json!({"common_name": name});
+            band.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"href": format!("https://example.org/{name}.tif"), "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                "eo:bands": [band]})
+        };
+        let item = |red: serde_json::Value| {
+            json!({"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+                "assets": {"red": asset("red", red), "green": asset("green", json!({})), "blue": asset("blue", json!({})), "nir": asset("nir", json!({}))}})
+        };
+        let s = crate::Session::new(crate::Project::default());
+        let bbox = json!([10.0, 45.0, 10.02, 45.02]);
+        // At the plan, not once the files are read: the work isn't made, the error is.
+        for (red, said) in [(json!({"raster:scale": 0}), "scale of 0"), (json!({"raster:scale": "0.0001"}), "not a number")] {
+            let err = super::bands_work(&s, &json!({"item": item(red.clone()), "bbox": bbox})).err();
+            assert!(err.is_some_and(|e| e.starts_with("red:") && e.contains(said)), "bands: {red}");
+            let err = super::index_work(&s, &json!({"item": item(red.clone()), "index": "ndvi", "bbox": bbox})).err();
+            assert!(err.is_some_and(|e| e.starts_with("red:") && e.contains(said)), "index: {red}");
+        }
+        assert!(super::bands_work(&s, &json!({"item": item(json!({"raster:scale": 0.0001})), "bbox": bbox})).is_ok());
     }
 
     #[test]
