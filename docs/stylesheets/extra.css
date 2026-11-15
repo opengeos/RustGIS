@@ -18,6 +18,13 @@
   width: auto;
 }
 
+/* Google's badge carries its own transparent margin: taller, with the margin cancelled, it
+   matches the other badges. */
+.hero-actions img.store-badge-play {
+  height: 2.95rem;
+  margin: -0.475rem -0.4rem;
+}
+
 /* Screenshot captions: right under their image (the figure's Markdown leaves a line break
    between them), as wide as it, at most two lines in the home page's two-column tour. */
 .md-typeset figure > br {
