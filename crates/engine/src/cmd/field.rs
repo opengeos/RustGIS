@@ -535,7 +535,8 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
                         write = false;
                         break;
                     }
-                    _ => path = dir.join(format!("{n}-{name}")),
+                    Err(e) => return Err(format!("{}: {e}; no photo was brought back", path.display())),
+                    Ok(_) => path = dir.join(format!("{n}-{name}")),
                 }
             }
             if write && path.file_name().is_some_and(|f| f.to_string_lossy() != name.as_str()) {
@@ -1240,6 +1241,38 @@ mod tests {
         let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.starts_with("3 photo(s)") && t.contains("plain file names")), "{said:?}");
         assert!(!temp.path().join("Odd photos").exists());
+    }
+
+    /// An unusable destination is refused before edits land, rather than trying numbered photo
+    /// names forever. Run it with a completion deadline so a regression fails instead of hanging.
+    #[test]
+    fn bringing_back_photos_refuses_a_file_where_their_folder_should_be() {
+        let temp = Temp::new("photo-folder-is-file");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let (_, bytes) = package(&mut home, &json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&bytes, &unpacked).unwrap();
+        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let mut entries = rustgis_data::zip::read(&back).unwrap();
+        entries.push(("photos/new.jpg".into(), b"photo".to_vec()));
+        let path = temp.path().join("back.rgisfield");
+        std::fs::write(&path, rustgis_data::zip::write(&entries).unwrap()).unwrap();
+        let blocked = temp.path().join("Site photos");
+        std::fs::write(&blocked, b"keep this file").unwrap();
+        let before = serde_json::to_string(&home.project).unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = home.run("offline.bringBack", &json!({"path": path.display().to_string()}));
+            let _ = send.send((result, serde_json::to_string(&home.project).unwrap()));
+        });
+        let (result, after) = receive.recv_timeout(std::time::Duration::from_secs(5)).unwrap(); // test-wait: a broken candidate loop must fail instead of hanging the suite
+        let error = result.unwrap_err();
+        assert!(error.contains("no photo was brought back") && error.contains("Site photos"), "{error}");
+        assert_eq!(after, before);
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"keep this file");
     }
 
     #[test]
