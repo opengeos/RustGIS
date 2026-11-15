@@ -1919,6 +1919,15 @@ impl RustGisApp {
     /// ZIP parsing.
     fn open_bytes_with(&mut self, name: &str, bytes: &[u8], opts: Option<Value>) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
+        // An embedded session takes a project file only as peer project JSON, however it was picked
+        // or dropped: the same gate as a downloaded project ([`Self::open_project_bytes`]).
+        if self.embedded
+            && (rustgis_engine::project::is_project_file(name)
+                || rustgis_engine::map::geolibre::is_project_file(name)
+                || lower.ends_with(".rgispkg"))
+        {
+            return self.open_project_bytes(Some(name), bytes);
+        }
         // A plugin package: ask before installing it.
         if lower.ends_with(".rgplugin") {
             pluginsui::received(self, bytes.to_vec(), None);
@@ -8420,6 +8429,9 @@ mod look_tests {
         assert!(app.run("ui.openUrl", json!({"url": "https://example.com/map.rgis"})).is_err());
         assert!(app.open_project_bytes(Some("map.geolibre.json"), b"{}").is_err());
         assert!(app.open_project_bytes(Some("map.rgispkg"), b"PK\x03\x04").is_err());
+        // Picked and dropped files take the same gate.
+        assert!(app.open_picked("map.rgispkg", b"PK\x03\x04").is_err());
+        assert!(app.open_picked("map.geolibre.json", b"{}").is_err());
         app.run("ui.theme", json!({"dark": true})).expect("in-memory theme toggle");
         assert!(app.ui.dark);
         assert!(saved.lock().expect("the log").is_empty(), "embedded UI commands must not persist preferences");
@@ -8430,5 +8442,12 @@ mod look_tests {
         app.open_project_bytes(Some("peer.rgis"), text.as_bytes()).expect("peer JSON opens via open_peer_text");
         assert_eq!(app.session.project.name, "FromEmbedder");
         assert_eq!(app.ui.web_file, None, "open_peer_text clears web_file rather than running User project.openText");
+
+        // A picked peer project opens the same way, not through User project.openText.
+        donor.run("project.rename", json!({"name": "PickedFromEmbedder"})).expect("rename donor");
+        let (text, _) = donor.session.peer_text(rustgis_engine::Peer::Embedder).expect("peer project text");
+        app.open_picked("picked.rgis", text.as_bytes()).expect("a picked peer project opens via open_peer_text");
+        assert_eq!(app.session.project.name, "PickedFromEmbedder");
+        assert_eq!(app.ui.web_file, None, "a picked project also goes through open_peer_text");
     }
 }

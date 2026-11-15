@@ -2,6 +2,7 @@
 //! eframe web runner.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustgis_ui_egui::rustgis_engine::{data::diagnostics::Capture, sources::message_with_address};

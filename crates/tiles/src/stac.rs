@@ -384,6 +384,12 @@ pub fn parse_items_from_origin(bytes: &[u8], origin: &crate::address::Origin) ->
     Ok((items, next))
 }
 
+/// Whether an answer's `next` link is one `origin`'s reach refuses. [`parse_items_from_origin`]
+/// drops such a link without saying so, so a caller that must say it asks here.
+pub fn next_refused(bytes: &[u8], origin: &crate::address::Origin) -> bool {
+    json(bytes).ok().and_then(|v| link(&v, "next", origin.url())).is_some_and(|u| origin.check(&u).is_err())
+}
+
 /// Whether a search's answer has a `next` link of any method. [`parse_items`] gives none for a
 /// POST link (it needs its body, which isn't an address), so this tells a POST search that more
 /// items match than the page holds.
@@ -946,6 +952,21 @@ mod tests {
             assert_eq!(resolve(&base, foreign).as_deref(), Some(foreign));
         }
         crate::logins::deactivate(&token);
+    }
+
+    #[test]
+    fn a_next_link_the_reach_refuses_is_reported_as_refused() {
+        let page = br#"{"type":"FeatureCollection","features":[],"links":[{"rel":"next","href":"http://10.0.0.5/v1/search?page=2"}]}"#;
+        // A public document's next page on the local network is refused: dropped, and said so.
+        let public = crate::address::Origin::named("https://x.org/v1/search");
+        assert!(next_refused(page, &public));
+        assert_eq!(parse_items_from_origin(page, &public).unwrap().1, None);
+        // The same link from a local API is followed, and nothing is refused.
+        let local = crate::address::Origin::named("http://10.0.0.5/v1/search");
+        assert!(!next_refused(page, &local));
+        assert!(parse_items_from_origin(page, &local).unwrap().1.is_some());
+        // No next link, nothing refused.
+        assert!(!next_refused(b"{\"features\":[]}", &public));
     }
 
     #[test]

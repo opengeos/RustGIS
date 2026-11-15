@@ -201,6 +201,10 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
             }
             None
         } else {
+            // `parse_items` drops a next link the reach refuses: said, so the missing page isn't taken for none.
+            if stac::next_refused(&bytes, &crate::render::rustgis_tiles::address::Origin::named(&url)) {
+                s.warn("the answer's next page link is refused (it points where this search may not read), so only this page is loaded");
+            }
             next
         };
         // An API without the sort extension may ignore a sort instead of refusing it.

@@ -4037,6 +4037,10 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
                 return add_cog(s, p, url, true);
             }
         }
+        // A URL a web document restricted to public addresses stays so: a request from a local
+        // origin (or none) doesn't lift the restriction its earlier request set.
+        let public =
+            public || crate::render::rustgis_tiles::cache::ceiling_for(url) == crate::render::rustgis_tiles::address::Reach::Public;
         let bytes = if rustgis_data::io::shapefile_part_urls(url).is_some() {
             download_shapefile_blocking_with(url, public)?
         } else if public {
@@ -6175,4 +6179,24 @@ pub(crate) fn external_dataset_selector(command: &str) -> bool {
             | "service.coverage"
             | "identify.featureInfo"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+    use serde_json::json;
+
+    /// A URL a web document restricted to public addresses stays restricted when a later request
+    /// comes from a local origin: its blocking download goes through the public agent, which
+    /// refuses a local address before connecting (#2055).
+    #[test]
+    fn a_public_restriction_holds_for_a_blocking_download_from_a_local_origin() {
+        let url = "http://127.0.0.1:1/rustgis-restricted-download.dat";
+        crate::render::rustgis_tiles::cache::restrict_to_public(url);
+        let mut s = Session::new(crate::sample::world_project());
+        let e = s
+            .run("layer.addUrl", &json!({"url": url, "from": "http://127.0.0.1:9/doc", "fromDocument": false}))
+            .expect_err("a public restriction must refuse the local address");
+        assert!(e.contains("local network"), "{e}");
+    }
 }

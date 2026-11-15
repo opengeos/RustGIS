@@ -865,10 +865,17 @@ fn request(
     if crate::warp::is_warp(url) {
         drop(c);
         drop(epochs);
-        // Made once its pictures are here; asked again (as the map draws) until then.
+        // Made once its pictures are here; asked again (as the map draws) until then. Its pictures
+        // are fetched at the reach this tile is asked for: a composite restricted to public
+        // addresses must not fetch its components from the local network, whoever asked.
+        let pictures_from = match from {
+            _ if ceiling != crate::address::Reach::Public => from.cloned(),
+            Some(o) => Some(crate::address::Origin { url: o.url.clone(), reach: crate::address::Reach::Public }),
+            None => Some(crate::address::Origin { url: url.into(), reach: crate::address::Reach::Public }),
+        };
         let mut note = None;
         return (
-            match crate::warp::make(url, from) {
+            match crate::warp::make(url, pictures_from.as_ref()) {
                 crate::warp::Made::Waiting => State::Pending,
                 crate::warp::Made::Done(payload) => {
                     let payload = Arc::new(payload);
@@ -1250,6 +1257,8 @@ struct Answer {
     epoch: u64,
     /// When the tile was asked for, for an MBTiles file forgotten since (`land`).
     asked_at: u64,
+    /// The reach the fetch was allowed, for a read begun before its resource was restricted (`land`).
+    ceiling: crate::address::Reach,
 }
 
 impl Answer {
@@ -1261,7 +1270,7 @@ impl Answer {
 
 impl Drop for Answer {
     fn drop(&mut self) {
-        if_archive_current(&self.key, self.epoch, || land(&self.key, self.entry.take(), self.asked_at));
+        if_archive_current(&self.key, self.epoch, || land(&self.key, self.entry.take(), self.asked_at, self.ceiling));
         release(&self.host);
         finished();
     }
@@ -1269,7 +1278,7 @@ impl Drop for Answer {
 
 /// Keeps what a fetch asked for at `asked_at` answered. A tile of an MBTiles file forgotten since may be
 /// of the old file, so it is dropped. Its slot went with the forget: one there now is a newer read's.
-fn land(key: &str, entry: Option<Entry>, asked_at: u64) {
+fn land(key: &str, entry: Option<Entry>, asked_at: u64, ceiling: crate::address::Reach) {
     if entry.is_some() && login_gone(key) {
         return;
     }
@@ -1279,8 +1288,12 @@ fn land(key: &str, entry: Option<Entry>, asked_at: u64) {
     if crate::mbtiles::forgotten_since(key, asked_at) {
         return;
     }
+    // A read begun before its resource was restricted to public addresses may have connected to a
+    // local one, so its answer is not kept. Checked under the lock: the restriction is recorded
+    // before its [`forget`] takes the lock, so a read that lands after it is seen here.
+    let restricted = ceiling != crate::address::Reach::Public && ceiling_for(key) == crate::address::Reach::Public;
     // Asked for before the record of forgotten files was emptied, so it can't be told: read again.
-    match entry.filter(|_| !crate::mbtiles::asked_before_emptied(key, asked_at)) {
+    match entry.filter(|_| !restricted && !crate::mbtiles::asked_before_emptied(key, asked_at)) {
         Some(entry) => keep(&mut c, key, entry),
         // Never answered (or dropped by the fetcher): forgotten, fetched again when asked for.
         None => {
@@ -1294,7 +1307,7 @@ fn land(key: &str, entry: Option<Entry>, asked_at: u64) {
 fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16], epoch: u64, asked_at: u64, ceiling: crate::address::Reach) {
     let owner = current_still();
     let local = crate::pmtiles::is_tile(&url) || crate::cog::is_tile(&url) || crate::mbtiles::is_tile(&url);
-    let answer = Answer { key: url.clone(), host, entry: None, epoch, asked_at };
+    let answer = Answer { key: url.clone(), host, entry: None, epoch, asked_at, ceiling };
     if archive_epoch(&url) != epoch {
         return;
     }
@@ -1802,7 +1815,7 @@ pub fn download_public_omitting_within(
     timeout: std::time::Duration,
     omit: &'static [u16],
 ) -> Result<Vec<u8>, String> {
-    crate::address::check(url, None)?;
+    crate::address::check_reach(url, crate::address::Reach::Public)?;
     native::get(&native::public_agent(timeout), &download_address(url, max), omit)
 }
 
@@ -3601,6 +3614,7 @@ mod tests {
                 epoch: old_epoch,
                 asked_at: crate::mbtiles::epoch(),
                 entry: Some(Entry::Ready(Arc::new(Payload::Image(old_picture)), 4, None)),
+                ceiling: crate::address::Reach::Local,
             };
             let unanswered = Answer {
                 key: key.clone(),
@@ -3608,6 +3622,7 @@ mod tests {
                 epoch: old_epoch,
                 asked_at: crate::mbtiles::epoch(),
                 entry: None,
+                ceiling: crate::address::Reach::Local,
             };
             reload_archive(&archive);
             let current = archive_epoch(&archive);
@@ -3651,6 +3666,7 @@ mod tests {
                 epoch: archive_epoch(&key),
                 asked_at: crate::mbtiles::epoch(),
                 entry: Some(Entry::Ready(old, 4, None)),
+                ceiling: crate::address::Reach::Local,
             };
             reload_archive(&archive);
             assert!(peek(&key).is_none(), "reload retained old pixels for {archive}");
@@ -3693,11 +3709,11 @@ mod tests {
         assert!(crate::mbtiles::forgotten_len() <= crate::mbtiles::MAX_FORGOTTEN);
         assert!(!crate::mbtiles::forgotten_since(&key, old), "the record no longer holds it");
 
-        land(&key, failed("old file"), old);
+        land(&key, failed("old file"), old, crate::address::Reach::Local);
         assert!(!lock().slots.contains_key(&key));
-        land(&key, failed("new file"), crate::mbtiles::epoch());
+        land(&key, failed("new file"), crate::mbtiles::epoch(), crate::address::Reach::Local);
         assert!(matches!(lock().slots.get(&key).map(|s| &s.entry), Some(Entry::Failed(why, _)) if why == "new file"));
-        land("test://not-mbtiles/forgotten.json", failed("kept"), old);
+        land("test://not-mbtiles/forgotten.json", failed("kept"), old, crate::address::Reach::Local);
         assert!(lock().slots.remove("test://not-mbtiles/forgotten.json").is_some());
         forget(&archive(0));
     }
@@ -3725,7 +3741,7 @@ mod tests {
         forget(archive);
         assert!(!lock().slots.contains_key(&key));
         assert!(crate::mbtiles::forgotten_since(&key, old), "the file is recorded under the path its tiles name");
-        land(&key, Some(Entry::Failed("old file".into(), Instant::now())), old);
+        land(&key, Some(Entry::Failed("old file".into(), Instant::now())), old, crate::address::Reach::Local);
         assert!(!lock().slots.contains_key(&key));
     }
 
@@ -3757,13 +3773,13 @@ mod tests {
             },
         );
         forget(archive);
-        land(&key, failed("old file"), old);
+        land(&key, failed("old file"), old, crate::address::Reach::Local);
         assert_eq!(kept(), None);
         assert!(!lock().slots.contains_key(&key));
 
         // Asked for again before the old read is over: the new read lands first, or last.
-        land(&key, failed("new file"), crate::mbtiles::epoch());
-        land(&key, failed("old file"), old);
+        land(&key, failed("new file"), crate::mbtiles::epoch(), crate::address::Reach::Local);
+        land(&key, failed("old file"), old, crate::address::Reach::Local);
         assert_eq!(kept().as_deref(), Some("new file"));
         forget(archive);
 
@@ -3780,11 +3796,11 @@ mod tests {
                 epoch: revision,
             },
         );
-        land(&key, failed("old file"), old);
+        land(&key, failed("old file"), old, crate::address::Reach::Local);
         assert!(matches!(lock().slots.get(&key), Some(Slot { entry: Entry::Pending, .. })), "the new read's slot stays");
-        land(&key, None, old);
+        land(&key, None, old, crate::address::Reach::Local);
         assert!(matches!(lock().slots.get(&key), Some(Slot { entry: Entry::Pending, .. })), "also if the old read went unanswered");
-        land(&key, failed("new file"), new);
+        land(&key, failed("new file"), new, crate::address::Reach::Local);
         assert_eq!(kept().as_deref(), Some("new file"));
         forget(archive);
     }
@@ -4214,13 +4230,17 @@ mod tests {
         assert_eq!((network.status, network.kind), (Some(200), NetworkKind::Timeout));
     }
 
-    /// A name for this computer passes the check as written but is refused where it resolves.
+    /// A name for this computer is refused for a public download: as written by the public check
+    /// (a document's address can't point into the local network), or where it resolves.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn public_downloads_refuse_names_that_resolve_locally() {
         let _turn = turn();
         let err = download_public_within("http://localhost:9/doc.json", 1024, std::time::Duration::from_secs(5)).unwrap_err();
-        assert!(err.contains("resolves to this computer or the local network"), "{err}");
+        assert!(
+            err.contains("resolves to this computer or the local network") || err.contains("can't point into the local network"),
+            "{err}"
+        );
     }
 
     /// The same off the frame ([`download_public_limited`] without a fetcher installed, called
@@ -6865,6 +6885,22 @@ mod tests {
 
         allow_named(tif);
         assert_eq!(ceiling_for(tif), crate::address::Reach::Local);
+    }
+
+    /// A read begun while its resource could reach the local network, and answered after a web
+    /// document restricted it to public addresses, is not kept for a public read (#2055).
+    #[test]
+    fn a_read_begun_before_its_resource_was_restricted_is_not_kept() {
+        let _turn = turn();
+        let key = "https://restricted-land.test/tile.png";
+        let asked = crate::mbtiles::epoch();
+        restrict_to_public(key);
+        land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
+        assert!(peek(key).is_none(), "a read begun before the restriction was kept");
+        // Begun under the restriction, its answer is kept as it always was.
+        land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Public);
+        assert!(peek(key).is_some(), "a read begun under the restriction wasn't kept");
+        forget(key);
     }
 
     #[test]
