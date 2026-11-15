@@ -17,6 +17,10 @@ use crate::completion::{GAP, List, Offered, Tip, Worked};
 /// the language's, a few dozen, and always all there.
 const MAX_FIELDS: usize = 50;
 
+/// How many lines a call's signature is first guessed to take (the signature, and the
+/// description on up to three): where it goes before it's drawn once.
+const TIP_ROWS: usize = 4;
+
 /// What an item stands for.
 #[derive(Clone, Debug, PartialEq)]
 enum Item {
@@ -226,7 +230,8 @@ pub(crate) fn expr_edit(
     let cursor = out.cursor_range.filter(|r| focused && r.is_empty()).map(|r| r.primary.index.0);
     let call = state.worked.as_ref().filter(|w| cursor.is_some() && w.at == cursor && w.text == hash).and_then(|w| w.value.1);
     let at = cursor.filter(|_| !state.list.is_open());
-    state.tip.show(ui, id.with("expr_tip"), &out, visible, at, call.map(|c| (c.open, c.open)), 4, |ui, width| {
+    // Kept by its `(`, and anchored there.
+    state.tip.show(ui, id.with("expr_tip"), &out, visible, at, call.map(|c| (c.open, c.open)), TIP_ROWS, |ui, width| {
         if let Some(call) = &call {
             draw_call(ui, call, width);
         }
@@ -621,6 +626,48 @@ mod tests {
         h.run();
         assert!(round(&h), "another call shows it again");
         assert_eq!(h.state(), "round(pop, 2) + round(");
+    }
+
+    /// The signature closed with Escape shows again in another call, and back in the first,
+    /// though the cursor went straight from one to the other; not after the window is left and
+    /// come back to with the cursor where it was.
+    #[test]
+    fn a_closed_signature_shows_again_in_another_call_only() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let data = ds();
+        let id = Id::unique("expr");
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, text: &mut String| {
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&data), |e| e).labelled_by(label.id);
+            },
+            "round(1) + abs(2)".to_string(),
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        let at = |h: &mut egui_kittest::Harness<'_, String>, i: usize| {
+            let mut state = TextEditState::load(&h.ctx, id).unwrap_or_default();
+            state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(i))));
+            state.store(&h.ctx, id);
+            h.run();
+        };
+        let shows = |h: &egui_kittest::Harness<'_, String>, sig: &str| h.query_by_role_and_label(Role::Label, sig).is_some();
+        let (round, abs) = ("round(x[, places])", "abs(x)");
+        at(&mut h, 6);
+        assert!(shows(&h, round));
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(!shows(&h, round), "closed");
+        h.input_mut().focused = false;
+        h.run();
+        h.input_mut().focused = true;
+        h.run();
+        assert!(!shows(&h, round), "still closed: the cursor didn't move");
+        at(&mut h, 15);
+        assert!(shows(&h, abs), "another call");
+        at(&mut h, 6);
+        assert!(shows(&h, round), "back in the first");
     }
 
     /// Many fields: at most `MAX_FIELDS` of them, and the language's items still after them.

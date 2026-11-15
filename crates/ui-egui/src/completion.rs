@@ -134,8 +134,11 @@ impl<K: Clone + PartialEq> Tip<K> {
         rows: usize,
         draw: impl FnOnce(&mut Ui, f32),
     ) {
-        // Out of it, what Escape closed may show again next time.
-        if found.is_none() {
+        // Out of what Escape closed (in nothing, or straight into something else), it may show
+        // again next time. Not while the window is left: nothing is found then, though the cursor
+        // hasn't moved.
+        let here = found.as_ref().map(|(k, _)| k);
+        if here != self.dismissed.as_ref() && (here.is_some() || ui.input(|i| i.focused)) {
             self.dismissed = None;
         }
         let galley_rect = |i: usize| out.galley.pos_from_cursor(CCursor::new(i)).translate(out.galley_pos.to_vec2());
