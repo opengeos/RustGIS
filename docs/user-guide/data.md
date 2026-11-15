@@ -94,8 +94,18 @@ A zipped File Geodatabase must be unzipped first: on the desktop, add the
 **Home › Add › Add Data › Delimited Text…** asks for a CSV or a spreadsheet first, then lists its columns to pick the x and y (or WKT)
 ones from, with the coordinate system (such as `EPSG:2263`) and the separator (changing it reads
 the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
-(columns named like longitude/latitude, easting/northing or geometry, and EWKT's `SRID=`) and
-says when coordinates aren't longitude/latitude. A CSV without coordinate columns, or a layer without geometry, opens as a
+(columns named like longitude/latitude, including GTFS `stop_lon`/`stop_lat`, easting/northing or
+geometry, and EWKT's `SRID=`). With no projected coordinate system or explicit column choices,
+if the first pair contains coordinates outside ±180° longitude or ±90° latitude and a more
+specific longitude/latitude pair gives in-range, non-0,0 positions on at least as many rows as
+the first pair gives finite positions, that pair is used for the whole file.
+The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
+`Longitutde`/`Lattitude` are recognised too. The dialog checks its first 1,000 rows to pick
+defaults, and recomputes unchanged defaults when you leave the coordinate-system box or press
+Enter; columns you picked stay picked. A projected system keeps the columns found by name.
+Add Data checks all rows. Coordinates still outside degree ranges are counted in a
+notice. Points placed at exactly 0,0 are also counted in a notice: these often mean missing
+coordinates, but the points are kept. A CSV without coordinate columns, or a layer without geometry, opens as a
 standalone table, listed under the map in Layers; right-click it to open or remove it. Tables
 can share a name: commands and tools take a table's id (`info.project` lists them) as well as its
 name, which stands for the first table of that name. An id given as a number is never taken for
@@ -268,14 +278,19 @@ and more. RustGIS doesn't link to GDAL: each layer is converted once, by `ogr2og
 FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cache folder
 (`~/.cache/rustgis/gdal` on Linux, `~/Library/Caches/RustGIS/gdal` on macOS,
 `%LOCALAPPDATA%\RustGIS\cache\gdal` on Windows, or `RUSTGIS_GDAL_CACHE`). Adding the file again
-reuses the conversion until the file changes, and large layers stream like any large FlatGeobuf
-(below). Every layer of the file is added; a layer mixing geometry types is added as one layer
-per type, its points on top and its polygons at the bottom. Curves become straight segments, and
+reuses the conversion and its layer listing until the file's path, size or modification time
+changes (for a File Geodatabase folder, RustGIS checks its files too). Missing or unreadable
+cached listings are rebuilt; **Reload** always reads the source afresh. The first listing skips
+spatial extents but keeps feature counts to check for conversion losses. Large layers stream
+like any large FlatGeobuf (below). Every layer of the file is added; a layer mixing geometry
+types is added as one layer per type, its points on top and its polygons at the bottom. Curves become straight segments, and
 3D surfaces (an Esri multipatch, such as the buildings of swissBUILDINGS3D, is read as a TIN)
 become flat polygons, one part per face, without their heights. The conversion leaves out a
 feature it can't index, such as a polygon with no coordinates; when GDAL gives the layer's feature
 count, adding the file says how many were left out, also when it reuses a conversion. Projects
-remember the original file and convert it again if the cached copy is gone.
+remember the original file and convert it again if the cached copy is gone. A listing that runs
+past five minutes, or a conversion past thirty minutes, stops with an error naming the source
+file and the operation that exceeded its limit.
 
 ## SQL queries and DuckDB databases
 
@@ -634,8 +649,16 @@ page of their own: [Web Data](web-data.md).
 layer's addresses into points: a CSV of addresses without coordinates is added as a standalone table, then each row's address
 fields (`"address"`: a field, or several such as street, city and country, joined with commas)
 are looked up, each distinct address once. The result is a new point layer holding every field
-plus `geocoded`, what the geocoder called the place; rows that weren't found stay in its table
-without a point.
+plus `geocoded`, what the geocoder called the place, and a text field `match_status`:
+
+- `matched`: the geocoder returned a usable point for the row's address.
+- `unmatched`: the row has no usable point, including an empty address or a failed lookup.
+
+Rows that weren't found stay in its table without a point, and a notice counts them; filter
+`match_status = 'unmatched'` to review them. A field of the same name in the input is kept, and
+the new one gets an underscore appended (`match_status_`; filter that one then). `matched` means the geocoder returned a point, not that
+it is the exact address: it may be placed along the street or at a broader place. The geocoders
+don't give a match score, so there is none in the output.
 
 The geocoder is OpenStreetMap's public [Nominatim](https://nominatim.org) by default, or
 [Photon](https://photon.komoot.io) (`"provider": "photon"`). Their usage policies allow light
