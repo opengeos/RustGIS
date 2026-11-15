@@ -132,18 +132,20 @@ pub fn bands(item: &Item) -> Vec<Band> {
 /// The band `wanted` names (`red`, `nir`…): the first of its stand-ins (see [`ALIASES`]) that some
 /// band has as its common name, else that an asset of exactly one band has as its key. A file of its
 /// own comes first, whether the catalog names its band or it is known by its key, over a band of a
-/// stack: Sentinel-2's `visual` and `preview` are colour images whose bands are named red, green
-/// and blue too, and they are not the band files (their values are 8-bit). A key of an asset with
-/// several bands says nothing of which one is meant, so it is not taken for one, nor is the key of
-/// an asset whose one band the catalog names something else (an asset `red` of `nir` is not red).
+/// stack, and under any of the stand-ins before a band of a stack under any of them: Sentinel-2's
+/// `visual` and `preview` are colour images whose bands are named red, green and blue too, and they
+/// are not the band files (their values are 8-bit), so a colour image's `nir` does not win over a
+/// file `nir08`. A key of an asset with several bands says nothing of which one is meant, so it is
+/// not taken for one, nor is the key of an asset whose one band the catalog names something else
+/// (an asset `red` of `nir` is not red).
 pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     let wanted = wanted.trim().to_ascii_lowercase();
     let names: Vec<&str> = match ALIASES.iter().find(|(name, _)| *name == wanted) {
         Some((_, stand_ins)) => stand_ins.to_vec(),
         None => vec![wanted.as_str()],
     };
-    names.iter().find_map(|name| {
-        let named = || bands.iter().filter(|b| b.common == *name);
+    // A file of its own, under the best stand-in that has one.
+    let of_its_own = names.iter().find_map(|name| {
         let key_only = || {
             let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(name));
             match (of_asset.next(), of_asset.next()) {
@@ -151,8 +153,10 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
                 _ => None,
             }
         };
-        named().find(|b| b.in_file == 1).or_else(key_only).or_else(|| named().next())
-    })
+        bands.iter().find(|b| b.common == *name && b.in_file == 1).or_else(key_only)
+    });
+    // Only then a band of a colour image.
+    of_its_own.or_else(|| names.iter().find_map(|name| bands.iter().find(|b| b.common == *name)))
 }
 
 /// A note for an error about a band not found, when the item describes more bands than are kept
@@ -280,6 +284,21 @@ mod tests {
         let b = bands(&item(&[("red", json!({})), ("visual", colour)]));
         let red = find(&b, "red").unwrap();
         assert_eq!((red.asset.as_str(), red.in_file), ("red", 1), "the file of its own, not visual's first band");
+    }
+
+    #[test]
+    fn a_file_of_its_own_under_any_stand_in_comes_before_a_colour_images_band() {
+        // A colour image has a band named `nir`, and the item's one band file is `nir08`.
+        let colour = json!({"eo:bands": [{"common_name": "nir"}, {"common_name": "red"}, {"common_name": "green"}]});
+        let b = bands(&item(&[("visual", colour.clone()), ("nir08", named("nir08"))]));
+        let nir = find(&b, "nir").unwrap();
+        assert_eq!((nir.asset.as_str(), nir.in_file), ("nir08", 1), "the file, not the colour image's band");
+        // With no file at all, the colour image's band is still found.
+        let only = bands(&item(&[("visual", colour)]));
+        assert_eq!(find(&only, "nir").unwrap().asset, "visual");
+        // The wanted name's own file still comes before a stand-in's.
+        let both = bands(&item(&[("nir08", named("nir08")), ("nir", named("nir"))]));
+        assert_eq!(find(&both, "nir").unwrap().asset, "nir");
     }
 
     #[test]

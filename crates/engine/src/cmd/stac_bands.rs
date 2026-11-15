@@ -131,6 +131,10 @@ mod desktop {
         let (item, all) = item_of(p)?;
         // The three bands: a combination, or the three named.
         let named = ["red", "green", "blue"].map(|k| ps(p, k).map(str::trim).filter(|v| !v.is_empty()));
+        // One or the other: a combination given with the three bands would be dropped without a word.
+        if named.iter().any(Option::is_some) && ps(p, "combination").is_some_and(|c| !c.trim().is_empty()) {
+            return Err("give a combination, or red, green and blue, not both".into());
+        }
         let (label, wanted): (String, [String; 3]) = if named.iter().any(Option::is_some) {
             let [Some(r), Some(g), Some(b)] = named else { return Err("give red, green and blue together, or a combination".into()) };
             (format!("{r}-{g}-{b}"), [r.to_string(), g.to_string(), b.to_string()])
@@ -458,6 +462,7 @@ mod tests {
     use super::desktop::{auto_cell, index_look, stack};
     use crate::render::rustgis_tiles::stac::bands::Band;
     use rustgis_data::raster::{ColorHint, GeoTransform, Raster, crs::Crs};
+    use serde_json::json;
 
     /// A raster of one band on a grid with these cells (`size` degrees), `w × h` from the corner.
     fn grid(w: u32, h: u32, size: f64, values: Vec<f32>) -> Raster {
@@ -478,6 +483,34 @@ mod tests {
             scaled: true,
             unread: false,
         }
+    }
+
+    #[test]
+    fn a_combination_given_with_red_green_and_blue_is_refused_not_dropped() {
+        let asset = |name: &str| {
+            json!({"href": format!("https://example.org/{name}.tif"), "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                "eo:bands": [{"common_name": name}]})
+        };
+        let item = json!({"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+            "assets": {"red": asset("red"), "green": asset("green"), "blue": asset("blue"), "nir": asset("nir")}});
+        let s = crate::Session::new(crate::Project::default());
+        let refused = |p: serde_json::Value| super::bands_work(&s, &p).err();
+        let both = refused(
+            json!({"item": item, "combination": "colorInfrared", "red": "nir", "green": "red", "blue": "green", "bbox": [10.0, 45.0, 10.02, 45.02]}),
+        );
+        assert!(both.is_some_and(|e| e.contains("not both")), "the pair is refused");
+        // Either alone is fine: the three bands, or a combination.
+        assert!(
+            refused(json!({"item": item, "red": "nir", "green": "red", "blue": "green", "bbox": [10.0, 45.0, 10.02, 45.02]})).is_none()
+        );
+        assert!(refused(json!({"item": item, "combination": "colorInfrared", "bbox": [10.0, 45.0, 10.02, 45.02]})).is_none());
+        // A blank combination is not one.
+        assert!(
+            refused(
+                json!({"item": item, "combination": " ", "red": "nir", "green": "red", "blue": "green", "bbox": [10.0, 45.0, 10.02, 45.02]})
+            )
+            .is_none()
+        );
     }
 
     #[test]
