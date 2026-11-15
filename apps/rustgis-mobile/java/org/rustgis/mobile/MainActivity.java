@@ -40,6 +40,11 @@ public class MainActivity extends NativeActivity {
      */
     private static final int MOST_EVENTS = 200_000;
     private static final int COPY_BUFFER = 1 << 16;
+    /** Shared by every activity/copy worker for this process, including activity recreation. */
+    private static final String COPY_OWNER = java.util.UUID.randomUUID().toString();
+
+    /** Rust installs this token before inspecting unused document copies. */
+    public String copyOwner() { return COPY_OWNER; }
 
     /** Oldest first; a deque, so the oldest goes at once when MOST_EVENTS wait. */
     private final EventBuffer events = new EventBuffer(MOST_EVENTS);
@@ -624,7 +629,9 @@ public class MainActivity extends NativeActivity {
                 try {
                     if (dir.mkdirs()) {
                         try {
-                            mark.createNewFile();
+                            try (FileOutputStream active = new FileOutputStream(mark)) {
+                                active.write(COPY_OWNER.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                            }
                         } catch (java.io.IOException e) {
                             // Unmarked, the pick is still kept while a copy's .part is in it.
                         }
