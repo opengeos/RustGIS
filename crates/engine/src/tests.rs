@@ -2553,6 +2553,11 @@ fn qgis_diagrams_import_on_the_fields_the_layer_has() {
     let r = s.run("style.importQgis", &json!({"layer": "Countries", "text": scaled(pair)})).unwrap();
     assert!(notes(&r).iter().any(|n| n == sized), "{:?}", notes(&r));
     assert!(!notes(&r).iter().any(|n| n.contains("not by")), "the sum QGIS sizes by is the categories': {:?}", notes(&r));
+    // A missing category excluded by QGIS's classification does not change the sizing sum.
+    let matching = scaled(pair).replace("&quot;pop_est&quot; + &quot;nosuch&quot;", "&quot;pop_est&quot;");
+    let r = s.run("style.importQgis", &json!({"layer": "Countries", "text": matching})).unwrap();
+    assert!(notes(&r).iter().any(|n| n.contains("fields the layer hasn't (nosuch)")), "{:?}", notes(&r));
+    assert!(!notes(&r).iter().any(|n| n.contains("not by") || n == sized), "the retained sum matches QGIS: {:?}", notes(&r));
     let r = s.run("style.importQgis", &json!({"layer": "Countries", "text": qml(pair)})).unwrap();
     assert!(!notes(&r).iter().any(|n| n == sized), "{:?}", notes(&r));
     let r = s
