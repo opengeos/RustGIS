@@ -1407,6 +1407,12 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         for (icon, label, command) in rows {
             if row(ui, t, icon, label) {
+                // While unused copies are being removed, nothing may bring back or open a layer
+                // reading one: the project was looked at once, as the removal began.
+                if copies::removing(ui.ctx()) && ["edit.undo", "edit.redo", "ui.open", "project.new"].contains(&command) {
+                    app.session.notify(tl!("Wait for the unused copies to be removed."), false);
+                    continue;
+                }
                 // Open and New ask first when the project has unsaved changes: the front end's
                 // own question, as for the ribbon's buttons.
                 set_sheet(ui.ctx(), Sheet::None);

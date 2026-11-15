@@ -29,6 +29,8 @@ pub(crate) struct Unused {
     pub bytes: u64,
     /// Entries that couldn't be read in full, kept: what isn't seen can't be judged unused.
     pub unreadable: usize,
+    /// The picks among them (an entry not even listed has no path).
+    pub unreadable_picks: Vec<PathBuf>,
 }
 
 /// What Remove Them did.
@@ -40,7 +42,7 @@ pub(crate) struct Removed {
     pub failed: Vec<String>,
     /// Picks found unused when asked that the project names now (it changed since), kept.
     pub now_named: usize,
-    /// Picks that couldn't be read in full when looked at again, kept.
+    /// Picks found unused when asked that couldn't be read in full when looked at again, kept.
     pub unreadable: usize,
 }
 
@@ -71,9 +73,12 @@ pub(crate) fn unused(picked: &Path, project: &str, cancelled: &AtomicBool) -> Re
         // A pick not read in full may hold a file the project names: kept.
         if !gather(&pick, DEPTH, &mut files) {
             found.unreadable += 1;
+            found.unreadable_picks.push(pick);
             continue;
         }
-        if files.iter().any(|(file, _)| named(project, file)) {
+        // A pick with no file has nothing to judge it by, and one being copied is so until its
+        // copy is written: kept.
+        if files.is_empty() || files.iter().any(|(file, _)| named(project, file)) {
             continue;
         }
         found.files += files.len();
@@ -122,9 +127,10 @@ fn remove_unused(picked: &Path, found: &Unused, project: &str, cancelled: &Atomi
     let now = unused(picked, project, cancelled)?;
     let still: Vec<PathBuf> = found.picks.iter().filter(|pick| now.picks.contains(pick)).cloned().collect();
     let mut removed = remove(&still, cancelled);
-    removed.unreadable = now.unreadable;
-    // Each pick asked about that isn't removable now: named, or not read in full.
-    removed.now_named = found.picks.len().saturating_sub(still.len());
+    // Each pick asked about that isn't removable now, counted once: not read in full, or named.
+    let kept: Vec<&PathBuf> = found.picks.iter().filter(|pick| !now.picks.contains(pick)).collect();
+    removed.unreadable = kept.iter().filter(|pick| now.unreadable_picks.contains(pick)).count();
+    removed.now_named = kept.len() - removed.unreadable;
     Ok(removed)
 }
 
@@ -218,6 +224,11 @@ pub(crate) fn confirm(app: &mut RustGisApp, ctx: &egui::Context, found: Unused) 
     }
 }
 
+/// Whether unused copies are being removed now.
+pub(crate) fn removing(ctx: &egui::Context) -> bool {
+    matches!(job(ctx), Job::Removing(..))
+}
+
 /// Lets go of what was found, or stops what is running.
 pub(crate) fn cancel(ctx: &egui::Context) {
     match job(ctx) {
@@ -284,7 +295,7 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
                 if removed.now_named > 0 {
                     let n = removed.now_named.to_string();
-                    said(i18n::fmt("{n} kept: the project names them now, or they couldn't be read.", &[("n", &n)]));
+                    said(i18n::fmt("{n} kept: the project names them now.", &[("n", &n)]));
                 }
                 if removed.unreadable > 0 {
                     said(unreadable_said(removed.unreadable));
@@ -354,6 +365,18 @@ mod tests {
         let removed = remove_unused(&picked, &found, &now, &AtomicBool::new(false)).unwrap();
         assert_eq!((removed.files, removed.now_named), (1, 1));
         assert!(picked.join("1/0/a.gpkg").exists() && !picked.join("2").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pick_with_no_file_is_kept() {
+        let root = std::env::temp_dir().join(format!("rustgis-copies-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        std::fs::create_dir_all(picked.join("3/0")).unwrap();
+        let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert!(found.picks.is_empty());
+        assert!(picked.join("3/0").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
