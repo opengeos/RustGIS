@@ -618,10 +618,21 @@ public class MainActivity extends NativeActivity {
                 // elsewhere, and a later pick can't replace a file the session has open.
                 File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
                 ArrayList<String> sources = new ArrayList<>();
+                // A provider whose ids name no folder for some of the documents (the Downloads
+                // provider gives a numeric id to a download and a path to other files, both in
+                // one folder) keeps all its documents together, as one folder.
+                java.util.HashSet<String> folderless = new java.util.HashSet<>();
+                for (Uri uri : uris) {
+                    if (sourceFolder(uri) == null) {
+                        folderless.add(String.valueOf(uri.getAuthority()));
+                    }
+                }
                 int copies = 0;
                 try {
                     for (Uri uri : uris) {
-                        String source = sourceFolder(uri);
+                        String folder = sourceFolder(uri);
+                        String authority = String.valueOf(uri.getAuthority());
+                        String source = authority + "|" + (folder == null || folderless.contains(authority) ? "" : folder);
                         int k = sources.indexOf(source);
                         if (k < 0) {
                             sources.add(source);
@@ -634,6 +645,9 @@ public class MainActivity extends NativeActivity {
                     // Nothing copied (each failure said): this request ends, by name, as another
                     // may have been asked for meanwhile (Import DXF stops waiting).
                     if (copies == 0) {
+                        // Every copy failed, each removing its own file and folder: this one is
+                        // empty too.
+                        dir.delete();
                         add("ended\t" + purpose);
                     }
                 } finally {
@@ -671,9 +685,9 @@ public class MainActivity extends NativeActivity {
     }
 
     /**
-     * The folder a picked document is in, as far as its provider says: the part of its document
-     * id before the last "/" (the device's storage gives "primary:Download/roads.shp"), with the
-     * provider. A provider whose ids name no folder gives the same answer for all its documents.
+     * The folder a picked document is in, as far as its provider's id says: the part of the
+     * document id before the last "/" (the device's storage gives "primary:Download/roads.shp"),
+     * or null when the id names no folder (a numeric id).
      */
     private static String sourceFolder(Uri uri) {
         String id;
@@ -683,7 +697,7 @@ public class MainActivity extends NativeActivity {
             id = uri.getPath() == null ? "" : uri.getPath();
         }
         int slash = id.lastIndexOf('/');
-        return uri.getAuthority() + "|" + (slash < 0 ? "" : id.substring(0, slash));
+        return slash < 0 ? null : id.substring(0, slash);
     }
 
     /**
