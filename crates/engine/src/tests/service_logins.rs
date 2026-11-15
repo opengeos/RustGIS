@@ -2720,7 +2720,9 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert_eq!(custom["address"], format!("{origin}/declared?layer=a"));
     assert!(custom.get("omittedPublicParameterCount").is_none(), "{custom}");
     assert!(custom.get("omittedPublicParameters").is_none(), "{custom}");
-    let edited_custom = s.run("connection.edit", &json!({"id":custom["id"],"address":format!("{origin}/declared?zqdeclared757=RGSYNTHedited757&layer=a")})).unwrap();
+    let edited_custom = s
+        .run("connection.edit", &json!({"id":custom["id"],"address":format!("{origin}/declared?zqdeclared757=RGSYNTHedited757&layer=a")}))
+        .unwrap();
     assert!(edited_custom.get("omittedPublicParameterCount").is_none(), "{edited_custom}");
     assert!(edited_custom.get("omittedPublicParameters").is_none(), "{edited_custom}");
     assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("public query component")));
