@@ -870,7 +870,8 @@ mod tests {
         let id = Id::unique("expr");
         let mut h = egui_kittest::Harness::new_ui_state(
             move |ui, text: &mut String| {
-                let _ = expr_edit(ui, id, text, Some(&data), |e| e);
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&data), |e| e).labelled_by(label.id);
             },
             String::new(),
         );
@@ -893,7 +894,8 @@ mod tests {
         assert_eq!(h.state(), "abs(pop + round(1))", "the function's brackets closed, the cursor inside");
         let mut h = egui_kittest::Harness::new_ui_state(
             move |ui, text: &mut String| {
-                let _ = expr_edit(ui, id, text, None, |e| e);
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, None, |e| e).labelled_by(label.id);
             },
             "x".to_string(),
         );
