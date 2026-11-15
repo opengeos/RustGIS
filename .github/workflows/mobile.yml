@@ -327,7 +327,7 @@ jobs:
           retention-days: 1
 
   ios-sign:
-    name: Sign the iOS app and upload it to TestFlight
+    name: Sign the iOS app
     if: github.event_name != 'pull_request'
     needs: ios-build
     runs-on: macos-latest
@@ -414,34 +414,12 @@ jobs:
           path: ipa/*
           if-no-files-found: error
 
-      - name: Upload to TestFlight
-        if: github.event_name == 'release' || inputs.testflight
-        env:
-          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
-        run: |
-          set -euo pipefail
-          missing=()
-          [ -n "$KEY_ID" ] || missing+=(APP_STORE_CONNECT_API_KEY_ID)
-          [ -n "$ISSUER_ID" ] || missing+=(APP_STORE_CONNECT_API_ISSUER_ID)
-          [ -n "$KEY" ] || missing+=(APP_STORE_CONNECT_API_KEY)
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::No upload: the secrets ${missing[*]} aren't set in the mobile-release environment."
-            exit 1
-          fi
-          umask 077
-          # Where altool looks for the key of an id.
-          mkdir -p "$HOME/.appstoreconnect/private_keys"
-          printf '%s\n' "$KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
-          xcrun altool --upload-app --type ios --file target/ios/RustGIS.ipa --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
-
       - name: Remove the keys and the keychain
         if: always()
         env:
           KEYCHAIN: ${{ steps.signing.outputs.keychain }}
         run: |
-          rm -rf "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/app.mobileprovision" "$HOME/.appstoreconnect/private_keys"
+          rm -rf "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/app.mobileprovision"
           if [ -n "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
 
   # Its own job, so only it holds a token that can write to the repository. The IPA is signed for
@@ -463,3 +441,51 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Its own job, after the signing: the IPA reaches the release and the artifacts whatever happens
+  # here, and only this job holds the App Store Connect key.
+  ios-testflight:
+    name: Upload the iOS app to TestFlight
+    if: github.event_name == 'release' || inputs.testflight
+    needs: [ios-build, ios-sign]
+    runs-on: macos-latest
+    timeout-minutes: 30
+    environment: mobile-release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rustgis-ios
+          path: ipa
+
+      - name: The newest Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)"
+          [ -n "$newest" ] || { echo "::error::No Xcode on the runner."; exit 1; }
+          sudo xcode-select -s "$newest/Contents/Developer"
+
+      - name: Upload
+        env:
+          VERSION: ${{ needs.ios-build.outputs.version }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$KEY_ID" ] || missing+=(APP_STORE_CONNECT_API_KEY_ID)
+          [ -n "$ISSUER_ID" ] || missing+=(APP_STORE_CONNECT_API_ISSUER_ID)
+          [ -n "$KEY" ] || missing+=(APP_STORE_CONNECT_API_KEY)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::No upload: the secrets ${missing[*]} aren't set in the mobile-release environment."
+            exit 1
+          fi
+          umask 077
+          # Where altool looks for the key of an id.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s\n' "$KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
+          xcrun altool --upload-app --type ios --file "ipa/RustGIS-$VERSION-ios.ipa" --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect/private_keys"
