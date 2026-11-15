@@ -28,9 +28,10 @@ pub trait Phone: Platform {
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
     fn busy(&self) -> bool;
 
-    /// Whether a picker (or the camera) is up and hasn't answered. A phone that wakes the window
-    /// when one answers leaves it out of [`Phone::busy`], so the window doesn't redraw behind it;
-    /// one that doesn't counts it there too, which is the default.
+    /// Whether a picker (or the camera) is on the screen and hasn't answered: a picker asked for
+    /// now is refused. A phone that wakes the window when one answers leaves it out of
+    /// [`Phone::busy`], so the window doesn't redraw behind it. The default, [`Phone::busy`],
+    /// is for a phone that can't tell.
     fn picking(&self) -> bool {
         self.busy()
     }
@@ -40,8 +41,39 @@ pub trait Phone: Platform {
 /// no session to tell).
 type Refusals = Rc<RefCell<Vec<String>>>;
 
-/// The purpose the picker was last asked for.
-type Asked = Rc<RefCell<String>>;
+/// The requests for files waited on ([`crate::Requests`]).
+type Asked = Rc<RefCell<crate::Requests>>;
+
+/// What the front end keeps for the picker that is up (Add Delimited Text's options, the command
+/// a picked project opens with, a picture's corners): a request the phone refuses while it is
+/// up resets these before it is refused, so they are put back after the frame.
+#[derive(Clone)]
+struct Kept {
+    csv: Option<serde_json::Value>,
+    open: Option<&'static str>,
+    picture: Option<Vec<rustgis_engine::geom::Coord>>,
+    layout_picture: bool,
+}
+
+impl Kept {
+    fn of(app: &RustGisApp) -> Kept {
+        let ui = &app.ui;
+        Kept {
+            csv: ui.pending_csv.clone(),
+            open: ui.pending_open,
+            picture: ui.pending_picture.clone(),
+            layout_picture: ui.pending_layout_picture,
+        }
+    }
+
+    fn restore(self, app: &mut RustGisApp) {
+        let ui = &mut app.ui;
+        ui.pending_csv = self.csv;
+        ui.pending_open = self.open;
+        ui.pending_picture = self.picture;
+        ui.pending_layout_picture = self.layout_picture;
+    }
+}
 
 /// The app: the desktop front end, with the files to open once the window runs.
 struct App<P: Phone> {
@@ -69,10 +101,12 @@ struct App<P: Phone> {
     /// Picked files the front end reads as bytes (`Services::inbox`).
     inbox: Inbox,
     refusals: Refusals,
-    /// What the picker showing was asked for (`Platform::pick_files`'s purpose), until it answers.
+    /// The requests for files waited on.
     asked: Asked,
-    /// Whether the phone was seen busy with that picker.
-    asked_busy: bool,
+    /// What the front end kept for that picker, as the frame began ([`Kept`]).
+    kept: Option<Kept>,
+    /// Whether a picker was refused in this frame because one was up.
+    refused_picker: Rc<std::cell::Cell<bool>>,
     /// Files picked for a dialog (purpose, name, copy), until their picker has answered in
     /// full: a Shapefile's parts arrive one by one and are read together.
     waiting: Vec<(String, String, PathBuf)>,
@@ -127,19 +161,25 @@ impl<P: Phone> App<P> {
         for event in phone.take_events() {
             match event {
                 Event::Picked { purpose, name, path } => {
-                    self.asked.borrow_mut().clear();
-                    self.asked_busy = false;
+                    // A file answers its own request; one of an earlier request (still being
+                    // copied when another was asked for) leaves the later one waiting.
+                    self.asked.borrow_mut().picked(&purpose);
                     self.waiting.push((purpose, name, path));
                 }
-                // A cancelled DXF request is ended, so Import DXF stops waiting for it.
+                // The picker on the screen closed with no choice: its request is ended.
                 Event::Cancelled => {
-                    let asked = std::mem::take(&mut *self.asked.borrow_mut());
-                    self.asked_busy = false;
-                    if asked.starts_with("dxf:") {
-                        self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
-                    }
+                    let ended = self.asked.borrow_mut().cancelled();
+                    self.end(ended);
                 }
-                Event::Photo { path, .. } => self.app.photos.push(path),
+                // A request whose every copy failed, by name.
+                Event::Ended { purpose } => {
+                    let ended = self.asked.borrow_mut().ended(&purpose);
+                    self.end(ended);
+                }
+                Event::Photo { path, .. } => {
+                    self.asked.borrow_mut().photo_taken();
+                    self.app.photos.push(path);
+                }
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
                 // A fix that was on its way when positioning was turned off.
@@ -176,20 +216,10 @@ impl<P: Phone> App<P> {
         }
         // A picked file is copied on a thread of the phone's: look again until it has arrived.
         let busy = phone.busy();
-        // The picker asked for has answered in full once the phone, busy with it, no longer is:
-        // with no file picked (each copy failed, said), its request ends as a cancelled one
-        // does. Looked at only after the phone was seen busy: Android shows its picker a moment
-        // after it is asked.
-        let pending = busy || phone.picking();
-        if pending && !self.asked.borrow().is_empty() {
-            self.asked_busy = true;
-        } else if !pending && self.asked_busy {
-            self.asked_busy = false;
-            let asked = std::mem::take(&mut *self.asked.borrow_mut());
-            if asked.starts_with("dxf:") {
-                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
-            }
-        }
+        // The request waited on has been answered in full once the phone, busy with it, no
+        // longer is: with no file picked (each copy failed, said), it is ended.
+        let ended = self.asked.borrow_mut().frame(busy || phone.picking());
+        self.end(ended);
         if !busy && !self.waiting.is_empty() {
             self.open_waiting(ctx, raw_input);
         }
@@ -204,6 +234,14 @@ impl<P: Phone> App<P> {
         } else {
             None
         };
+    }
+
+    /// Ends a request for files that got none (`purpose`): a dialog waiting for its answer
+    /// (Import DXF) is answered empty, and stops waiting.
+    fn end(&self, purpose: Option<String>) {
+        if let Some(purpose) = purpose.filter(|p| p.starts_with("dxf:")) {
+            self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
+        }
     }
 
     /// Opens the picked files, now that every picker has answered in full, what was picked
@@ -313,38 +351,51 @@ fn remove_copy(path: &Path) {
 /// Gives the front end the phone's file picker, the way the browser's shell gives its own:
 /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
 /// through `download`.
-fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &Inbox, refusals: &Refusals, asked: &Asked) {
+fn use_picker<P: Phone + 'static>(
+    app: &mut RustGisApp,
+    phone: &Rc<P>,
+    inbox: &Inbox,
+    refusals: &Refusals,
+    asked: &Asked,
+    refused_picker: &Rc<std::cell::Cell<bool>>,
+) {
     let (picker, refused, asking, answers) = (phone.clone(), refusals.clone(), asked.clone(), inbox.clone());
+    let refused_while_up = refused_picker.clone();
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
-        // Kept as the picker's request only when no other picker's is: a second one is refused
-        // by the phone, and the one showing keeps its own.
-        let first = asking.borrow().is_empty();
-        if first {
-            *asking.borrow_mut() = purpose.to_string();
-        }
-        let shown = picker.pick_files(purpose);
-        let refused_here = match shown {
-            Ok(()) => !first,
+        // Refused only where the phone refuses it: an error now (iOS), or a picker on the screen
+        // already (Android says why a moment later). Accepted, it is the request from now on,
+        // even while the files picked before it are still being copied.
+        let up = picker.picking();
+        let refused_here = match picker.pick_files(purpose) {
+            Ok(()) => up,
             Err(e) => {
                 log::warn!("{e}");
                 refused.borrow_mut().push(e);
-                if first {
-                    asking.borrow_mut().clear();
-                }
                 true
             }
         };
+        let ended = asking.borrow_mut().asked(purpose, refused_here);
+        // Refused because another picker was up: the shell puts back what the front end kept
+        // for that one ([`Kept`]).
+        if refused_here && up {
+            refused_while_up.set(true);
+        }
         // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
-        if refused_here && purpose.starts_with("dxf:") {
-            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
+        if let Some(purpose) = ended.filter(|p| p.starts_with("dxf:")) {
+            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
         }
     }));
     let saver = phone.clone();
     app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes)));
     app.services.inbox = Some(inbox.clone());
-    let camera = phone.clone();
-    app.services.take_photo = Some(Box::new(move || camera.take_photo()));
+    let (camera, photographing) = (phone.clone(), asked.clone());
+    app.services.take_photo = Some(Box::new(move || {
+        camera.take_photo()?;
+        // Its cancel, if it comes, is the camera's ([`crate::Requests::cancelled`]).
+        photographing.borrow_mut().photo_asked();
+        Ok(())
+    }));
 }
 
 impl<P: Phone> eframe::App for App<P> {
@@ -368,6 +419,13 @@ impl<P: Phone> eframe::App for App<P> {
         }
         ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
         ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
+        // A second picker asked for while one was up was refused: what the front end kept for
+        // the first is put back, so its file is read as it was asked for.
+        if self.refused_picker.replace(false)
+            && let Some(kept) = self.kept.clone()
+        {
+            kept.restore(&mut self.app);
+        }
         // Something of the phone's is still to arrive (a picked file, a position): look again.
         // A picker or a save asked for in this frame counts too: the poll was set before it.
         if self.poll.is_none() && self.phone.as_ref().is_some_and(|phone| phone.busy()) {
@@ -406,6 +464,7 @@ impl<P: Phone> eframe::App for App<P> {
             self.keyboard = keyboard;
         }
         self.take_phone_events(ctx, raw_input);
+        self.kept = self.phone.as_ref().is_some_and(|phone| phone.picking()).then(|| Kept::of(&self.app));
         // The pushed files open as files dropped on the desktop window do: once the window
         // runs, read off its thread with progress and Cancel, each failure said in the window.
         // Opened before the event loop, a large one would hold the app's start.
@@ -519,10 +578,11 @@ pub fn run<P: Phone + 'static>(
     options: eframe::NativeOptions,
 ) -> eframe::Result {
     let (inbox, refusals, asked) = (Inbox::default(), Refusals::default(), Asked::default());
+    let refused_picker = Rc::new(std::cell::Cell::new(false));
     let phone = match phone {
         Ok(phone) => {
             let phone = Rc::new(phone);
-            use_picker(&mut app, &phone, &inbox, &refusals, &asked);
+            use_picker(&mut app, &phone, &inbox, &refusals, &asked, &refused_picker);
             Some(phone)
         }
         Err(e) => {
@@ -550,7 +610,8 @@ pub fn run<P: Phone + 'static>(
                 inbox,
                 refusals,
                 asked,
-                asked_busy: false,
+                kept: None,
+                refused_picker,
                 waiting: Vec::new(),
                 problems: Problems::default(),
                 reading: Arc::default(),

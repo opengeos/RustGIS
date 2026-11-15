@@ -62,6 +62,90 @@ fn mark(purpose: &str) -> String {
     .to_string()
 }
 
+/// The request for files the front end is waiting on, as the shell follows it: which request
+/// each answer ends. A request ended with no file is answered empty by the shell, so a dialog
+/// waiting for it (Import DXF) stops waiting.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[derive(Default)]
+struct Requests {
+    /// What the picker asked for last, and accepted, was asked for (`Platform::pick_files`'s
+    /// purpose); empty when nothing is waited on.
+    current: String,
+    /// Whether the phone was seen busy with it (a picker up, its files being copied).
+    seen_busy: bool,
+    /// Whether the camera was asked for a photo and hasn't answered: a cancel then is the
+    /// camera's, and ends no request for files.
+    photo: bool,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+impl Requests {
+    /// A request for `purpose`, `refused` by the phone or not. Returns the request to end now:
+    /// a refused one. An accepted one is waited on from now, even while the files of the one
+    /// before it are still being copied.
+    fn asked(&mut self, purpose: &str, refused: bool) -> Option<String> {
+        if refused {
+            return Some(purpose.to_string());
+        }
+        self.current = purpose.to_string();
+        self.seen_busy = false;
+        None
+    }
+
+    /// A file picked for `purpose` arrived: it answers that request, and no other.
+    fn picked(&mut self, purpose: &str) {
+        if self.current == purpose {
+            self.current.clear();
+            self.seen_busy = false;
+        }
+    }
+
+    /// The camera was asked for a photo ([`Requests::cancelled`] is then the camera's).
+    fn photo_asked(&mut self) {
+        self.photo = true;
+    }
+
+    /// The camera answered with a photo.
+    fn photo_taken(&mut self) {
+        self.photo = false;
+    }
+
+    /// A picker or the camera closed with no choice. The camera's (asked for since, and not
+    /// answered) ends nothing; a picker's ends the request waited on.
+    fn cancelled(&mut self) -> Option<String> {
+        if std::mem::take(&mut self.photo) {
+            return None;
+        }
+        self.seen_busy = false;
+        Some(std::mem::take(&mut self.current)).filter(|purpose| !purpose.is_empty())
+    }
+
+    /// The request for `purpose` ended with no file (every copy failed): that one, whichever
+    /// is waited on now.
+    fn ended(&mut self, purpose: &str) -> Option<String> {
+        self.picked(purpose);
+        Some(purpose.to_string())
+    }
+
+    /// Each frame, whether the phone is busy with a picker or its files (`pending`). Returns
+    /// the request to end: the one waited on, once the phone, seen busy with it, no longer is
+    /// and nothing answered it (Android says no more when a copy fails).
+    fn frame(&mut self, pending: bool) -> Option<String> {
+        if self.current.is_empty() {
+            return None;
+        }
+        if pending {
+            self.seen_busy = true;
+            None
+        } else if self.seen_busy {
+            self.seen_busy = false;
+            Some(std::mem::take(&mut self.current))
+        } else {
+            None
+        }
+    }
+}
+
 /// What the phone reported, oldest first, until the front end takes it: at most `most`
 /// positions. Past that the oldest position goes, and how many went is said when they are
 /// taken; nothing else is dropped (a picked file, a failure), as positions are what pile up, out
@@ -72,12 +156,15 @@ struct Queue {
     most: usize,
     positions: usize,
     dropped: usize,
+    /// Positions the system reported that weren't usable (no accuracy it vouches for, or not
+    /// on the Earth), left out since the last take.
+    rejected: usize,
 }
 
 #[cfg(any(target_os = "ios", test))]
 impl Queue {
     fn new(most: usize) -> Queue {
-        Queue { events: Default::default(), most: most.max(1), positions: 0, dropped: 0 }
+        Queue { events: Default::default(), most: most.max(1), positions: 0, dropped: 0, rejected: 0 }
     }
 
     fn add(&mut self, event: rustgis_engine::platform::Event) {
@@ -95,6 +182,11 @@ impl Queue {
         self.events.push_back(event);
     }
 
+    /// Counts a position the system reported that wasn't usable: said when the events are taken.
+    fn reject(&mut self) {
+        self.rejected += 1;
+    }
+
     fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -110,9 +202,17 @@ impl Queue {
             );
             taken.push(rustgis_engine::platform::Event::Failed(text));
         }
+        if self.rejected > 0 {
+            let text = rustgis_ui_egui::i18n::fmt(
+                "{count} positions the system reported weren't used: it gave them no accuracy, or they weren't on the Earth.",
+                &[("count", &self.rejected.to_string())],
+            );
+            taken.push(rustgis_engine::platform::Event::Failed(text));
+        }
         taken.extend(self.events.drain(..));
         self.positions = 0;
         self.dropped = 0;
+        self.rejected = 0;
         taken
     }
 }
@@ -159,6 +259,81 @@ mod tests {
         queue.add(at(4.0));
         assert_eq!(queue.take(), vec![at(4.0)]);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn unusable_positions_are_counted_and_said() {
+        use rustgis_engine::platform::Event;
+        let mut queue = super::Queue::new(10);
+        queue.reject();
+        queue.reject();
+        queue.add(Event::Cancelled);
+        let taken = queue.take();
+        assert!(matches!(&taken[0], Event::Failed(text) if text.starts_with("2 positions the system reported")), "{taken:?}");
+        assert_eq!(&taken[1..], &[Event::Cancelled]);
+        // None left out: nothing said.
+        queue.add(Event::Cancelled);
+        assert_eq!(queue.take(), vec![Event::Cancelled]);
+    }
+
+    #[test]
+    fn each_answer_ends_its_own_request() {
+        let mut requests = super::Requests::default();
+        // A DXF request, accepted; its picker answers and its files are copied.
+        assert_eq!(requests.asked("dxf:1", false), None);
+        assert_eq!(requests.frame(true), None);
+        // While they are copied, another DXF request: accepted, its picker up.
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.frame(true), None);
+        // Every copy of the first fails: the first ends, the second stays waited on.
+        assert_eq!(requests.ended("dxf:1"), Some("dxf:1".into()));
+        assert_eq!(requests.frame(true), None);
+        // A file of the first, had one come, wouldn't answer the second either.
+        requests.picked("dxf:1");
+        // The second's picker is cancelled: it ends.
+        assert_eq!(requests.cancelled(), Some("dxf:2".into()));
+        assert_eq!(requests.frame(false), None);
+    }
+
+    #[test]
+    fn a_camera_cancel_ends_no_request_for_files() {
+        let mut requests = super::Requests::default();
+        // A DXF pick whose file is still being copied, then the camera, cancelled.
+        assert_eq!(requests.asked("dxf:1", false), None);
+        assert_eq!(requests.frame(true), None);
+        requests.photo_asked();
+        assert_eq!(requests.cancelled(), None);
+        // The copy arrives: it answers its request, still open.
+        requests.picked("dxf:1");
+        assert_eq!(requests.frame(false), None);
+        // A photo that wasn't kept: the camera's answer is a cancel too, and the next cancel is
+        // a picker's.
+        requests.photo_asked();
+        assert_eq!(requests.cancelled(), None);
+        assert_eq!(requests.asked("dxf:3", false), None);
+        assert_eq!(requests.cancelled(), Some("dxf:3".into()));
+        // A photo taken leaves the next cancel to a picker.
+        requests.photo_asked();
+        requests.photo_taken();
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.cancelled(), Some("dxf:2".into()));
+    }
+
+    #[test]
+    fn a_refused_request_ends_at_once_and_a_quiet_one_once_the_phone_is_done() {
+        let mut requests = super::Requests::default();
+        assert_eq!(requests.asked("dxf:1", true), Some("dxf:1".into()));
+        assert_eq!(requests.cancelled(), None);
+        // Accepted, then the phone busy, then idle with no answer (a copy failed on Android).
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.frame(false), None, "not seen busy yet: Android shows its picker a moment later");
+        assert_eq!(requests.frame(true), None);
+        assert_eq!(requests.frame(false), Some("dxf:2".into()));
+        // A file answers its request: nothing is left to end.
+        assert_eq!(requests.asked("data", false), None);
+        assert_eq!(requests.frame(true), None);
+        requests.picked("data");
+        assert_eq!(requests.frame(false), None);
     }
 
     #[test]

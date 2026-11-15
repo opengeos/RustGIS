@@ -167,9 +167,11 @@ impl PickerDelegate {
                 wake(self.mtm());
             }
             Some(Asked::Open { purpose }) => {
-                // Answered: the copies are work from now on.
+                // Answered: the copies are work from now on. The window is woken, so it looks
+                // again while they run.
                 count(&shared.showing, false);
                 count(&shared.working, true);
+                wake(self.mtm());
                 // The documents are the originals, wherever they are (iCloud Drive, another
                 // app's folder): each is read inside its security scope, held until its copy is
                 // made.
@@ -177,10 +179,16 @@ impl PickerDelegate {
                 // its own for each folder the documents came from: a file read with the one
                 // beside it (a .shp and its .dbf) finds that one, not one of the same name picked
                 // from elsewhere, and a later pick can't replace a file the session has open.
-                let picked = ivars.folders.support.join("picked").join(unique());
+                let root = ivars.folders.support.join("picked");
+                let picked = root.join(unique());
                 // Copied off the main thread: a document can be large, or come from the network.
-                let copied = shared.clone();
+                let (copied, unstarted) = (shared.clone(), purpose.clone());
                 let copying = std::thread::Builder::new().name("picked documents".into()).spawn(move || {
+                    // Copies of documents the user has elsewhere: left out of the device's
+                    // backups (iCloud, a computer's), as the app can be given them again.
+                    if std::fs::create_dir_all(&root).is_ok() {
+                        exclude_from_backup(&copied, &root);
+                    }
                     let mut copies = 0usize;
                     let mut sources: Vec<Option<String>> = Vec::new();
                     for url in urls {
@@ -191,20 +199,34 @@ impl PickerDelegate {
                         });
                         copies += usize::from(copy_in(&copied, &purpose, &url, &picked.join(k.to_string())));
                     }
-                    // Nothing copied (each failure said): the picker answered with nothing, so
-                    // the request ends as a cancelled one does (Import DXF stops waiting).
+                    // Nothing copied (each failure said): this request ends, by name, as
+                    // another may have been asked for meanwhile (Import DXF stops waiting).
                     if copies == 0 {
-                        copied.add(Event::Cancelled);
+                        copied.add(Event::Ended { purpose });
                     }
                     count(&copied.working, false);
                 });
                 if let Err(e) = copying {
                     shared.failed(i18n::fmt("The files chosen weren't opened: {error}", &[("error", &e.to_string())]));
-                    shared.add(Event::Cancelled);
+                    shared.add(Event::Ended { purpose: unstarted });
                     count(&shared.working, false);
                 }
             }
         }
+    }
+}
+
+/// Leaves `folder` (and what is in it) out of the device's backups, or says it couldn't.
+fn exclude_from_backup(shared: &Shared, folder: &Path) {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
+    let yes = objc2_foundation::NSNumber::numberWithBool(true);
+    // SAFETY: the key's documented value is an NSNumber holding a boolean.
+    let set = unsafe { url.setResourceValue_forKey_error(Some(&yes), objc2_foundation::NSURLIsExcludedFromBackupKey) };
+    if let Err(e) = set {
+        // Not data lost: the copies are then backed up with the app, which is said.
+        let error = e.localizedDescription().to_string();
+        log::warn!("{} is kept in the device's backups: {error}", folder.display());
+        shared.failed(i18n::fmt("The copies of picked files will be in this device's backups: {error}", &[("error", &error)]));
     }
 }
 
@@ -366,22 +388,30 @@ impl CameraDelegate {
         // Cancel); written off it.
         let Some(jpeg) = image.and_then(|image| image.jpeg_representation(0.9)).map(|data| data.to_vec()) else {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &i18n::fmt("the camera gave no picture", &[]))]));
+            // No photo: the camera's answer is none, as when it is cancelled.
+            shared.add(Event::Cancelled);
             wake(self.mtm());
             return;
         };
         count(&shared.working, true);
+        wake(self.mtm());
         let (photos, writer) = (ivars.photos.clone(), shared.clone());
         let writing = std::thread::Builder::new().name("photo".into()).spawn(move || {
             let name = format!("photo-{}.jpg", unique());
             let path = photos.join(&name);
             match std::fs::create_dir_all(&photos).and_then(|()| std::fs::write(&path, jpeg)) {
                 Ok(()) => writer.add(Event::Photo { name, path }),
-                Err(e) => writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())])),
+                Err(e) => {
+                    writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
+                    // No photo: the camera's answer is none, as when it is cancelled.
+                    writer.add(Event::Cancelled);
+                }
             }
             count(&writer.working, false);
         });
         if let Err(e) = writing {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
+            shared.add(Event::Cancelled);
             count(&shared.working, false);
         }
     }
@@ -410,8 +440,10 @@ define_class!(
                 return;
             }
             for location in locations.iter() {
-                if let Some(fix) = fix(&location) {
-                    self.ivars().shared.add(Event::Position(fix));
+                match fix(&location) {
+                    Some(fix) => self.ivars().shared.add(Event::Position(fix)),
+                    // Counted, and said with the positions taken next.
+                    None => self.ivars().shared.events.lock().unwrap_or_else(|e| e.into_inner()).reject(),
                 }
             }
         }
@@ -514,7 +546,14 @@ define_class!(
             // screen in Stage Manager or Split View) says how much of the window it covers.
             let Some(window) = key_window(mtm).map(|window| window.frame()) else { return };
             let bottom = window.origin.y + window.size.height;
-            let height = frame.map(|f| (bottom - f.origin.y).clamp(0.0, window.size.height)).unwrap_or(0.0);
+            // Only a keyboard across the window takes room from it: a floating one beside a window
+            // in Split View or Stage Manager takes none.
+            let height = frame
+                .map(|f| {
+                    let across = f.origin.x < window.origin.x + window.size.width && f.origin.x + f.size.width > window.origin.x;
+                    if across { (bottom - f.origin.y).clamp(0.0, window.size.height) } else { 0.0 }
+                })
+                .unwrap_or(0.0);
             self.ivars().height.set(height);
         }
 
@@ -665,8 +704,8 @@ impl WindowWatcher {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: NSObject's `init` on a freshly allocated object.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        // SAFETY: the selector is this class's own method, taking the notification; the
-        // watcher is never released, so it outlives the observation.
+        // SAFETY: the selector is this class's own method, taking the notification; `main`
+        // leaks the watcher, so it outlives the observation.
         unsafe {
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &this,
@@ -766,8 +805,29 @@ impl Ios {
         let delegate = PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name, temporary });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
+        if let Err(error) = self.present(&presenter, &picker) {
+            // Not shown: its delegate will never answer, so the file goes now.
+            if let Some(Asked::Save { name, temporary }) =
+                self.picker.borrow().as_ref().and_then(|delegate| delegate.ivars().asked.borrow_mut().take())
+            {
+                remove_with_folder(&temporary);
+                self.shared.failed(i18n::fmt("{name} wasn't saved: {error}", &[("name", &name), ("error", &error)]));
+            }
+        }
+    }
+
+    /// Shows `picker` over `presenter`, counted as showing until it answers; or says why it
+    /// couldn't be. UIKit declines a presentation (another under way, a presenter leaving the
+    /// window) with only a log line, and then no delegate ever answers: counted, it would hold
+    /// back every later picker until the app is started again.
+    fn present(&self, presenter: &UIViewController, picker: &UIViewController) -> Result<(), String> {
         count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
+        presenter.presentViewController_animated_completion(picker, true, None);
+        if picker.presentingViewController().is_none() {
+            count(&self.shared.showing, false);
+            return Err(i18n::fmt("The picker couldn't be shown just now: try again.", &[]));
+        }
+        Ok(())
     }
 
     /// The window's view controller on top, to show a picker over.
@@ -817,9 +877,7 @@ impl Platform for Ios {
             PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Open { purpose: purpose.to_string() });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
-        count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
-        Ok(())
+        self.present(&presenter, &picker)
     }
 
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
@@ -894,9 +952,7 @@ impl Platform for Ios {
         // SAFETY: the delegate conforms to both protocols the picker asks of it.
         unsafe { picker.setDelegate(Some(&delegate)) };
         self.camera.replace(Some(delegate));
-        count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
-        Ok(())
+        self.present(&presenter, &picker)
     }
 
     fn take_events(&self) -> Vec<Event> {
@@ -980,7 +1036,8 @@ pub fn main() {
     // iOS 27 refuses an app without scenes: `Info.plist` names this class as the scene's
     // delegate, which UIKit looks up by name, so it is made before UIKit starts.
     let _ = SceneDelegate::class();
-    let _watcher = WindowWatcher::start(mtm);
+    // Kept for the app's life: the notification center doesn't hold its observers.
+    std::mem::forget(WindowWatcher::start(mtm));
     let folders = folders();
     let made = std::fs::create_dir_all(&folders.support).is_ok() && rustgis_engine::data::dirs::set_root(folders.support.clone());
     let mut app = shell::front_end(made);

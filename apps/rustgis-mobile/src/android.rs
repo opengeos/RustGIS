@@ -22,6 +22,10 @@ impl shell::Phone for Phone {
     fn busy(&self) -> bool {
         Phone::busy(self)
     }
+
+    fn picking(&self) -> bool {
+        Phone::picking(self)
+    }
 }
 
 /// Points the app's folders (`rustgis_data::dirs`) at the app's own storage: Android has no
