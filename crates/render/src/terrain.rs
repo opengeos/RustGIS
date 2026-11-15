@@ -210,6 +210,19 @@ impl Ground {
         }
     }
 
+    /// A usable shore height and whether its requested detail was read. A ready ancestor can
+    /// supply the height after a detailed tile failed, but the shore must still be read again.
+    fn shore_height(&self, m: Coord) -> (Option<f64>, bool) {
+        let height = self.raw_height(m);
+        let detailed = match &self.heights {
+            Heights::Raster { .. } => true,
+            Heights::Tiles { zoom, read, .. } => tile_at(m, *zoom).is_some_and(|(id, _, _)| {
+                read.borrow().get(&id).and_then(Option::as_ref).is_some_and(|payload| matches!(&**payload, Payload::Image(_)))
+            }),
+        };
+        (height, detailed)
+    }
+
     /// How many polygons of the terrain's water layer have no level, so stay on the ground: no
     /// height known along their shore and no level given (#1915). 0 without water.
     pub fn water_unlevelled(&self) -> usize {
