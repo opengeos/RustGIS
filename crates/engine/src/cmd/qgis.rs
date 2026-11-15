@@ -1339,19 +1339,63 @@ fn note_json(n: &qgis::Note) -> Value {
 /// The returned report serves CLI and Python callers; the app also needs every coalesced
 /// approximation and omission in its Messages pane. Report bounds and groups these notes.
 fn notify_report(s: &mut Session, report: &Report) {
-    for note in &report.notes {
-        let template = match note.kind {
-            NoteKind::Approximated => "QGIS import, {layer}: {detail} (drawn differently; count {count})",
-            NoteKind::Skipped => "QGIS import, {layer}: {detail} (left out; count {count})",
+    let bounded = |text: &str, limit| {
+        let mut chars = text.chars();
+        let mut text: String = chars.by_ref().take(limit).collect();
+        if chars.next().is_some() {
+            text.push_str("… [truncated]");
+        }
+        text
+    };
+    for kind in [NoteKind::Approximated, NoteKind::Skipped] {
+        let notes: Vec<_> = report.notes.iter().filter(|note| note.kind == kind).collect();
+        let Some(first) = notes.first() else { continue };
+        if notes.len() == 1 {
+            let template = match kind {
+                NoteKind::Approximated => "QGIS import, {layer}: {detail} (drawn differently; count {count})",
+                NoteKind::Skipped => "QGIS import, {layer}: {detail} (left out; count {count})",
+            };
+            s.notify_text(
+                crate::notice_text::NoticeText::format(
+                    template,
+                    [
+                        ("layer", bounded(if first.layer.is_empty() { "project" } else { &first.layer }, 80).into()),
+                        ("detail", bounded(&first.text, 320).into()),
+                        ("count", first.count.to_string().into()),
+                    ],
+                ),
+                false,
+            );
+            continue;
+        }
+        // One notification per kind across layers. The command result retains the complete
+        // report; the app gets a bounded sample and the total, including notes beyond the sample.
+        let count = notes.iter().fold(0usize, |count, note| count.saturating_add(note.count));
+        let layers = notes.iter().map(|note| &note.layer).collect::<std::collections::HashSet<_>>().len();
+        let mut samples = notes
+            .iter()
+            .take(8)
+            .map(|note| {
+                format!(
+                    "{}: {} (count {})",
+                    bounded(if note.layer.is_empty() { "project" } else { &note.layer }, 80),
+                    bounded(&note.text, 320),
+                    note.count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        if notes.len() > 8 {
+            samples.push_str(&format!("; {} additional notes not listed here", notes.len() - 8));
+        }
+        let template = match kind {
+            NoteKind::Approximated => "QGIS import: {count} approximations; affected layers: {layers}. {samples}",
+            NoteKind::Skipped => "QGIS import: {count} omissions; affected layers: {layers}. {samples}",
         };
         s.notify_text(
             crate::notice_text::NoticeText::format(
                 template,
-                [
-                    ("layer", if note.layer.is_empty() { "project" } else { &note.layer }.to_string().into()),
-                    ("detail", note.text.clone().into()),
-                    ("count", note.count.to_string().into()),
-                ],
+                [("count", count.to_string().into()), ("layers", layers.to_string().into()), ("samples", samples.into())],
             ),
             false,
         );

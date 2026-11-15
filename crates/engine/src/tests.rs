@@ -2603,6 +2603,23 @@ fn qgis_import_reports_reach_session_notices_without_clean_import_noise() {
     }
 }
 
+#[test]
+fn qgis_import_notices_group_layers_and_bound_the_sample_without_dropping_returned_notes() {
+    let mut s = world();
+    let layers = (0..10).map(|i| format!(r#"<maplayer type="vector"><id>{i}</id><layername>Unsupported{i}</layername><provider>not-a-provider</provider><datasource>x</datasource></maplayer>"#)).collect::<String>();
+    let mark = s.notice_mark();
+    let result = s.run("project.importQgis", &json!({"text":format!("<qgis><projectlayers>{layers}</projectlayers></qgis>")})).unwrap();
+    let notes = result["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 10, "the returned report remains complete");
+    assert!(notes.iter().all(|note| note["kind"] == "skipped"));
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.starts_with("QGIS import")).collect();
+    assert_eq!(said.len(), 1, "one omission notice across all layers");
+    assert!(said[0].text.contains("10 omissions") && said[0].text.contains("affected layers: 10"));
+    assert!(said[0].text.contains("Unsupported0") && said[0].text.contains("2 additional notes not listed here"));
+    assert!(!said[0].text.contains("Unsupported9"));
+    assert!(said[0].text.len() < 4096);
+}
+
 /// A QGIS categorized renderer by an expression classes by it where the expression reads on the
 /// layer; where it doesn't, every feature draws with the first category's symbol, noted, as before.
 #[test]
