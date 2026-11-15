@@ -223,6 +223,8 @@ impl Ground {
             }),
         };
         (height, detailed)
+    }
+
     /// The terrain's water (#1915), when it names a water layer: what Shaded Relief draws with
     /// the even light of flat ground.
     pub(crate) fn water(&self) -> Option<&Arc<Water>> {
