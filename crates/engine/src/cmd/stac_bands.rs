@@ -395,7 +395,9 @@ mod desktop {
     }
 
     /// The bands as one raster of as many bands on the finest grid among them, by nearest cell, with
-    /// the catalog's scale and offset applied. A cell with no value in any is no data in all.
+    /// the catalog's scale and offset applied. A cell with no value in any is no data in all. The rows
+    /// are worked one after another on this thread (about 4 million cell transforms a band at the
+    /// default window, which is brief), looking at Cancel and counting progress on each.
     pub(super) fn stack(name: &str, channels: &[String], sources: &[(&Raster, &sb::Band)]) -> Result<(Raster, Vec<String>), String> {
         let (Some((first, _)), true) = (sources.first(), sources.len() >= 2) else { return Err("a stack needs at least two bands".into()) };
         if sources.iter().any(|(r, _)| r.crs != first.crs) {

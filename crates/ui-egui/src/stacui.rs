@@ -2066,6 +2066,11 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                     .response
                                     .on_hover_text(tl!("Add a spectral index of the item's bands, for the part of the map in view"));
                                 }
+                                // The item's bands were cut (too many to keep): a combination or index whose
+                                // band is past the cut is missing from the menus, so say why where it is looked for.
+                                if let Some(cut) = stac::bands::cut_note(item) {
+                                    ui.weak(tl!("Bands cut")).on_hover_text(cut);
+                                }
                             }
                             if ui.selectable_label(st.details == Some(i), tl!("Details")).clicked() {
                                 details = Some(i);
