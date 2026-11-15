@@ -381,6 +381,9 @@ pub fn commands() -> Vec<C> {
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_points)
         .params(r#"{"layer"?, "field": numeric field name|null (each point's marker turned by the angle in it, in degrees; null: not turned), "counterclockwise"?: bool (the angles run counterclockwise, as in mathematics; default clockwise, as on a compass)}"#),
+        C::new("layer.sizeBy", "Size by Field", "Style › Drawing", size_by).roles(&[]).effects(crate::policy::Effects::NONE)
+        .when(need_points)
+        .params(r#"{"layer"?, "field": numeric field name|null (each marker sized by its value, keeping its Unique Values or Graduated Colors class's colours; null: the classes' own sizes), "min"?: number (the value drawn smallest; default the field's smallest, or the mapping's), "max"?: number (the value drawn largest, above min; default the field's largest, or the mapping's), "minSize"?: points (default 4, or the mapping's), "maxSize"?: points (default 24, or the mapping's), "scaling"?: "area"|"radius" (area: the marker's area grows with the value, as Proportional Symbols; radius: its size grows in a straight line, as MapLibre's; default area, or the mapping's)} (values past min or max take the end's size; a null or non-numeric value keeps its class's size)"#),
         C::new("layer.symbolBy", "Symbol by Expression", "Style › Drawing", symbol_by).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "size"?: expression|null (a point's marker size in points), "fill"?: expression|null (the fill colour: '#RRGGBB', a CSS colour name or 'r,g,b[,a]' as color_rgb gives it), "stroke"?: expression|null (the outline colour, a line's colour), "strokeWidth"?: expression|null (the outline's width in points, a line's width), "angle"?: expression|null (point layers: each marker turned by it, in degrees clockwise, in place of layer.markerRotation's field)} (each expression in the language of queries, per feature, @map_scale the map's scale; a key left out keeps its expression, null or "" removes it; where an expression gives null the symbol's own value is drawn)"#),
@@ -723,6 +726,77 @@ fn need_lines(s: &Session) -> Option<&'static str> {
         Some(_) => Some("this works on line layers"),
         None => Some("select a layer in the Layers pane first"),
     }
+}
+
+/// `layer.sizeBy`: sets (or removes) a classified point layer's marker size from a numeric
+/// field ([`rustgis_map::Layer::size_by`]). What isn't given keeps the mapping's, else the
+/// field's range, 4 to 24 points and area scaling.
+fn size_by(s: &mut Session, p: &Value) -> CmdResult {
+    use rustgis_map::symbol_by::{MAX_SIZE, SizeBy, SizeScaling};
+    let field = match p.get("field") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(f)) if f.is_empty() => None,
+        Some(Value::String(f)) => Some(f.clone()),
+        Some(_) => return Err("field is a field's name, or null for none".into()),
+    };
+    let num = |k: &str| match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => f(p, k).map(Some).ok_or_else(|| format!("{k} is a number")),
+    };
+    let (min, max, min_size, max_size) = (num("min")?, num("max")?, num("minSize")?, num("maxSize")?);
+    let scaling = match p.get("scaling") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) => Some(SizeScaling::from_code(t).ok_or("scaling is \"area\" or \"radius\"")?),
+        Some(_) => return Err("scaling is \"area\" or \"radius\"".into()),
+    };
+    let id = s.layer_id(p)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if l.geometry_type() != GeometryType::Point || l.graphics {
+        return Err("this works on point layers".into());
+    }
+    let Some(field) = field else {
+        l.size_by = None;
+        return Ok(Value::Null);
+    };
+    if !matches!(l.renderer, rustgis_map::Renderer::Unique { .. } | rustgis_map::Renderer::Graduated { .. }) {
+        return Err(
+            "size by field goes with Unique Values or Graduated Colors; a single symbol sized by a field is Proportional Symbols".into()
+        );
+    }
+    let fi = l.dataset.field_index(&field).ok_or_else(|| format!("no field named '{field}'"))?;
+    if !l.dataset.fields.get(fi).is_some_and(|fd| fd.ty.is_numeric()) {
+        return Err(format!("'{field}' is not a numeric field"));
+    }
+    let field = l.dataset.fields.get(fi).map(|fd| fd.name.clone()).unwrap_or(field);
+    // The mapping's own where it is of the same field, else the field's range.
+    let had = l.size_by.as_ref().filter(|h| h.field == field);
+    let range = || l.dataset.numeric_range(fi, &[]);
+    let min = min
+        .or(had.map(|h| h.min))
+        .or_else(|| range().map(|r| r.0))
+        .ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    let max = max
+        .or(had.map(|h| h.max))
+        .or_else(|| range().map(|r| r.1))
+        .ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    if max <= min {
+        return Err(format!("max ({max}) must be above min ({min})"));
+    }
+    let size = |v: Option<f64>, had: Option<f32>, default: f32, k: &str| -> Result<f32, String> {
+        match v {
+            Some(v) if (0.0..=f64::from(MAX_SIZE)).contains(&v) => Ok(v as f32),
+            Some(_) => Err(format!("{k} is from 0 to {MAX_SIZE} points")),
+            None => Ok(had.unwrap_or(default)),
+        }
+    };
+    let prev = l.size_by.as_ref();
+    let min_size = size(min_size, prev.map(|h| h.min_size), 4.0, "minSize")?;
+    let max_size = size(max_size, prev.map(|h| h.max_size), 24.0, "maxSize")?;
+    let scaling = scaling.or(prev.map(|h| h.scaling)).unwrap_or_default();
+    let by = SizeBy { field, min, max, min_size, max_size, scaling };
+    let out = json!({"field": by.field, "min": by.min, "max": by.max, "minSize": by.min_size, "maxSize": by.max_size, "scaling": by.scaling.code()});
+    l.size_by = Some(by);
+    Ok(out)
 }
 
 /// `layer.symbolBy`: sets (or removes) the expressions a layer's symbol takes per feature, each

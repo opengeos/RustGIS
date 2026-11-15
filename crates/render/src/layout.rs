@@ -1809,7 +1809,7 @@ fn complete_shown_legends(map: &mut Map, scale: f64) -> Option<Vec<(u32, Vec<Leg
         }
         if any {
             // (A sample of the classes seen: classed again at this scale, by expression.)
-            out.push((layer.id, layer.renderer.legend_at(&sample, &[], Some(scale))));
+            out.push((layer.id, layer.with_size_legend(layer.renderer.legend_at(&sample, &[], Some(scale)))));
         }
     }
     Some(out)
@@ -2067,7 +2067,7 @@ fn legend_rows<'a>(map: &'a Map, drawn: Option<&[(u32, Vec<LegendEntry>)]>, opts
             },
             // A classified raster's every class (#1679).
             None if l.is_raster() => raster_classes(l, true).unwrap_or_default(),
-            None => l.renderer.legend(),
+            None => l.with_size_legend(l.renderer.legend()),
         };
         // The fallback row only (a class that happens to bear its name stays).
         if opts.hide_other && entries.iter().any(|e| e.fallback) {

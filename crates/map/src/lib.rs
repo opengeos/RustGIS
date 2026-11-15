@@ -240,6 +240,11 @@ pub struct Layer {
     /// expression (none set: the renderer's symbol alone); drawn through [`Layer::styler`].
     #[serde(default, skip_serializing_if = "symbol_by::SymbolBy::is_empty", deserialize_with = "symbol_by::de_symbol_by")]
     pub symbol_by: symbol_by::SymbolBy,
+    /// A point layer's marker size from a numeric field, beside the colours of its Unique Values
+    /// or Graduated Colors classes; drawn through [`Layer::styler`], before [`Layer::symbol_by`]'s
+    /// size expression (which wins where it gives a size). Kept, unused, under another renderer.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "symbol_by::de_size_by")]
+    pub size_by: Option<symbol_by::SizeBy>,
     /// The scale (1:N) its symbol and label sizes are set for: drawn at another scale they grow
     /// and shrink with the map, as on paper (QGIS's reference scale). `None`: they keep their
     /// size on screen.
@@ -497,6 +502,7 @@ impl Layer {
             marker_rotation: None,
             diagram: None,
             symbol_by: Default::default(),
+            size_by: None,
             reference_scale: None,
             priority: 0,
             design: design::Design::default(),
@@ -1250,10 +1256,21 @@ impl Layer {
         let query = self.definition_query.as_deref().is_some_and(|q| !q.trim().is_empty());
         let timed = self.time.as_ref().is_some_and(|t| t.window.is_some());
         if !query && !timed && self.display_filters.is_empty() {
-            return (!self.dataset.features.is_empty()).then(|| self.renderer.legend_at(&self.dataset, &[], Some(scale)));
+            return (!self.dataset.features.is_empty())
+                .then(|| self.with_size_legend(self.renderer.legend_at(&self.dataset, &[], Some(scale))));
         }
         let rows = self.drawn_rows(scale);
-        rows.contains(&true).then(|| self.renderer.legend_at(&self.dataset, &rows, Some(scale)))
+        rows.contains(&true).then(|| self.with_size_legend(self.renderer.legend_at(&self.dataset, &rows, Some(scale))))
+    }
+
+    /// A legend's colour classes with the sizes of [`Layer::size_by`] after them, where it applies:
+    /// the smallest, middle and largest value, drawn as the first class is.
+    pub fn with_size_legend(&self, mut entries: Vec<symbology::LegendEntry>) -> Vec<symbology::LegendEntry> {
+        if let Some(s) = self.size_by.as_ref().filter(|_| symbol_by::SizeBy::applies_to(self)) {
+            let like = entries.first().map_or_else(|| self.renderer.base_symbol(), |e| e.symbol);
+            entries.extend(s.legend(like));
+        }
+        entries
     }
 
     /// Rows passing the definition query (all rows when none or invalid).
@@ -3094,6 +3111,7 @@ impl Layer {
             stroke_levels: _,
             marker_rotation: _,
             symbol_by: _,
+            size_by: _,
             reference_scale: _,
             priority: _,
             design: _,

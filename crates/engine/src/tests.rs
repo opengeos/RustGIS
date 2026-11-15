@@ -1598,6 +1598,46 @@ fn a_point_takes_stacked_marks_and_turns_by_a_field() {
     assert!(s.map().layer_by_name("Cities").unwrap().marker_rotation.is_none());
 }
 
+/// `layer.sizeBy` sizes a classified point layer by a field, keeping what it isn't given, refusing
+/// what doesn't fit (without an undo step), and is undone and removed like any style.
+#[test]
+fn a_classified_point_layer_is_sized_by_a_field() {
+    let mut s = world();
+    let err = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max"})).unwrap_err();
+    assert!(err.contains("Unique Values or Graduated Colors"), "{err}");
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": "name"})).unwrap();
+    let r = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "max": 2e7, "scaling": "radius"})).unwrap();
+    let (lo, _) = {
+        let l = s.map().layer_by_name("Cities").unwrap();
+        l.dataset.numeric_range(l.dataset.field_index("pop_max").unwrap(), &[]).unwrap()
+    };
+    assert_eq!(r, json!({"field": "pop_max", "min": lo, "max": 2e7, "minSize": 4.0, "maxSize": 24.0, "scaling": "radius"}));
+    // What isn't given keeps the mapping's.
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "maxSize": 30})).unwrap();
+    let by = s.map().layer_by_name("Cities").unwrap().size_by.clone().unwrap();
+    assert_eq!((by.max, by.max_size, by.scaling), (2e7, 30.0, rustgis_map::symbol_by::SizeScaling::Radius));
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "field": "name"}), "not a numeric field"),
+        (json!({"layer": "Cities", "field": "pop_max", "min": 5, "max": 5}), "must be above min"),
+        (json!({"layer": "Cities", "field": "pop_max", "maxSize": 1e4}), "maxSize is from 0"),
+        (json!({"layer": "Cities", "field": "pop_max", "scaling": "cube"}), "scaling is"),
+        (json!({"layer": "Rivers", "field": "pop_max"}), "point layers"),
+    ] {
+        let err = s.run("layer.sizeBy", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().size_by.as_ref().map(|b| b.max_size), Some(24.0));
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "field": null})).unwrap();
+    assert!(s.map().layer_by_name("Cities").unwrap().size_by.is_none());
+    // A saved project's mapping is read back (the schema fixture `size_by.rgis`).
+    let saved = Project::from_json(include_str!("../../../schema/fixtures/size_by.rgis")).unwrap();
+    let by = saved.maps[0].layers[0].size_by.clone().unwrap();
+    assert_eq!((by.field.as_str(), by.min, by.max, by.max_size), ("mag", 2.5, 7.5, 36.0));
+}
+
 #[test]
 fn a_symbol_is_set_by_expressions() {
     let mut s = world();

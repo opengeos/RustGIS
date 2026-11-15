@@ -123,8 +123,33 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
             } else {
                 report.approximated(&name, format!("size field {field} is absent; using a fixed size"));
             }
+        } else if !matches!(layer.renderer, Renderer::Unique { .. } | Renderer::Graduated { .. }) {
+            report.approximated(&name, "proportional size of a style drawn with the base symbol: size fixed");
+        } else if !layer.dataset.field_index(field).and_then(|fi| layer.dataset.fields.get(fi)).is_some_and(|f| f.ty.is_numeric()) {
+            report.approximated(&name, format!("size field {field} is absent or not numeric; using a fixed size"));
         } else {
-            report.approximated(&name, "combined colour classification and proportional size: colour retained, size fixed");
+            // The colour classes keep their colours, sized as GeoLibre sizes them: the radius in
+            // a straight line with the value, a value missing at the smallest (its class's size).
+            let (min, max) = (number(st, "proportionalSizeMinValue", 0.0), number(st, "proportionalSizeMaxValue", 100.0));
+            let radius = |key, default| (2.0 * number(st, key, default).clamp(0.0, 128.0)) as f32;
+            let (min_size, max_size) = (radius("proportionalSizeMinRadius", 4.0), radius("proportionalSizeMaxRadius", 24.0));
+            if max <= min {
+                report.approximated(&name, "proportional size range is empty; using a fixed size");
+            } else {
+                layer.renderer.map_symbols(|sym| sym.size = min_size);
+                layer.size_by = Some(crate::symbol_by::SizeBy {
+                    field: layer
+                        .dataset
+                        .field_index(field)
+                        .and_then(|fi| layer.dataset.fields.get(fi))
+                        .map_or_else(|| field.to_string(), |f| f.name.clone()),
+                    min: min.clamp(-1e100, 1e100),
+                    max: max.clamp(-1e100, 1e100),
+                    min_size,
+                    max_size,
+                    scaling: crate::symbol_by::SizeScaling::Radius,
+                });
+            }
         }
     }
     let labels = &st["labels"];

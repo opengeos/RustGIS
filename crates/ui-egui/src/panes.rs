@@ -1993,7 +1993,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
         Some(_) => Vec::new(),
         None => l
             .shown_legend(scale)
-            .or_else(|| (!l.in_scale_range(scale)).then(|| l.renderer.legend_for(&l.dataset, &l.visible_rows())))
+            .or_else(|| (!l.in_scale_range(scale)).then(|| l.with_size_legend(l.renderer.legend_for(&l.dataset, &l.visible_rows()))))
             .unwrap_or_default(),
     };
     let has_legend = match &raster_legend {
@@ -4527,6 +4527,9 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if g == GeometryType::Point && !l.graphics {
         ui.add_space(8.0);
         marker_rotation_row(app, ui, &l);
+        if matches!(l.renderer, Renderer::Unique { .. } | Renderer::Graduated { .. }) {
+            size_by_rows(app, ui, &l);
+        }
     }
     if matches!(g, GeometryType::Polyline | GeometryType::Point) && !l.graphics {
         ui.add_space(8.0);
@@ -5788,6 +5791,86 @@ fn marker_rotation_row(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                 let _ = app.run("layer.markerRotation", json!({"field": r.field, "counterclockwise": ccw}));
             }
         }
+    });
+}
+
+/// The field a classified point layer's markers are sized by (`layer.sizeBy`), beside its classes'
+/// colours: none, or one of its number fields, with the values and sizes at the two ends and how
+/// the size grows between them.
+fn size_by_rows(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer) {
+    use rustgis_engine::map::symbol_by::{MAX_SIZE, SizeScaling};
+    let cur = l.size_by.as_ref();
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Size by"));
+        let shown = cur.map_or_else(|| tl!("None").to_string(), |s| s.field.clone());
+        egui::ComboBox::from_id_salt(("size_by", l.id))
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(cur.is_none(), tl!("None")).clicked() && cur.is_some() {
+                    let _ = app.run("layer.sizeBy", json!({"field": null}));
+                }
+                for f in l.dataset.fields.iter().filter(|f| f.ty.is_numeric()) {
+                    let on = cur.is_some_and(|s| s.field == f.name);
+                    if ui.selectable_label(on, &f.name).clicked() && !on {
+                        let _ = app.run("layer.sizeBy", json!({"field": f.name}));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tl!("Size each point by a number field, keeping its class's colours"))
+            .labelled_by(input_label.id);
+    });
+    let Some(by) = cur else { return };
+    let set = |app: &mut RustGisApp, resp: &egui::Response, p: Value| {
+        if crate::widgets::changed(resp) {
+            crate::widgets::one_step_per_press(app, resp);
+            let mut params = json!({"field": by.field});
+            if let (Some(params), Some(p)) = (params.as_object_mut(), p.as_object()) {
+                params.extend(p.clone());
+            }
+            let _ = app.run("layer.sizeBy", params);
+        }
+    };
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Values"));
+        let (mut lo, mut hi) = (by.min, by.max);
+        let resp = ui.add(egui::DragValue::new(&mut lo).update_while_editing(false).speed(0.1)).labelled_by(input_label.id);
+        set(app, &resp, json!({"min": lo}));
+        ui.label(tl!("to"));
+        let resp = ui.add(egui::DragValue::new(&mut hi).update_while_editing(false).speed(0.1)).labelled_by(input_label.id);
+        set(app, &resp, json!({"max": hi}));
+    });
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Sizes"));
+        let (mut lo, mut hi) = (by.min_size, by.max_size);
+        let resp = ui
+            .add(egui::DragValue::new(&mut lo).update_while_editing(false).range(0.0..=MAX_SIZE).suffix(" pt"))
+            .labelled_by(input_label.id);
+        set(app, &resp, json!({"minSize": lo}));
+        ui.label(tl!("to"));
+        let resp = ui
+            .add(egui::DragValue::new(&mut hi).update_while_editing(false).range(0.0..=MAX_SIZE).suffix(" pt"))
+            .labelled_by(input_label.id);
+        set(app, &resp, json!({"maxSize": hi}));
+    });
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Scaling"));
+        let name = |k: SizeScaling| match k {
+            SizeScaling::Area => tl!("By area"),
+            SizeScaling::Radius => tl!("By radius"),
+        };
+        egui::ComboBox::from_id_salt(("size_by_scaling", l.id))
+            .selected_text(name(by.scaling))
+            .show_ui(ui, |ui| {
+                for k in [SizeScaling::Area, SizeScaling::Radius] {
+                    if ui.selectable_label(by.scaling == k, name(k)).clicked() && by.scaling != k {
+                        let _ = app.run("layer.sizeBy", json!({"field": by.field, "scaling": k.code()}));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tl!("By area: a value twice another draws a marker of about twice the area. By radius: twice the size."))
+            .labelled_by(input_label.id);
     });
 }
 
