@@ -117,4 +117,10 @@ fn web_scene_says_per_layer_how_many_extrusions_it_holds_to_its_limit() {
     extrude(&mut clean, "Mesh", 20.0);
     scene(&mut clean, "held-clean");
     assert_eq!(held(&clean), 0, "{:?}", clean.notices);
+    // So does one whose fractional base and height sum to the top, though the top less the base
+    // rounds just below the height.
+    let mut fractional = mesh_session(json!([mesh_feature(square(0.0, false), 0.1)]));
+    extrude(&mut fractional, "Mesh", 999_999.9);
+    scene(&mut fractional, "held-fractional");
+    assert_eq!(held(&fractional), 0, "{:?}", fractional.notices);
 }

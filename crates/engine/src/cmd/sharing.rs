@@ -1096,7 +1096,9 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                 let (base, height) = (e.base_metres_at(&l.dataset, row, columns), e.metres_at(&l.dataset, row, columns));
                 let foot = base.clamp(0.0, SCENE_TOP);
                 let h = height.clamp(0.0, SCENE_TOP - foot);
-                (h as f32, foot as f32, base > foot || height > h)
+                // Held when the sum passes the top: `SCENE_TOP - foot` can round below a height
+                // that, added to the base, reaches the top exactly.
+                (h as f32, foot as f32, base > foot || base + height > SCENE_TOP)
             });
             // The walls stand from the base, the cap sits on them.
             let top = foot + h;
