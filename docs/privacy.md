@@ -25,9 +25,8 @@ the AI Assistant are reachable from them. On top of that:
   copying the photo file.
 - **Files you open**: copied into the app's storage, where they are opened and edited. Remove
   Unused Copies deletes the copies your project no longer uses. Android app storage is excluded
-  from device backups. On iPhone and iPad these copies
-  are left out of the device's backups; if the system refuses that, the app says the copies
-  will be backed up.
+  from device backups. On iPhone and iPad these copies are left out of the device's backups;
+  if the system refuses that, the app says the copies will be backed up.
 - **Notifications** (Android): used only for the notice Android requires while a track is
   recorded with the app out of sight.
 
