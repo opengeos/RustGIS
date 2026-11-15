@@ -18,11 +18,18 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![C::new("stac.addBands", "Add STAC Bands", "Home › Add › Web Data › STAC Search", add_bands).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).view().params(
         r#"{"item": a STAC item (from stac.search), "combination"?: "trueColor"|"colorInfrared"|"shortwaveInfrared"|"falseColorUrban"|"agriculture"|"geology"|"bathymetric" (default trueColor), "red"?, "green"?, "blue"?: band names (red, nir, swir16… or an asset's key) used instead of a combination, "bbox"?: [west, south, east, north] in degrees | "view" (default), "cellSize"?: the coarsest overview whose cells are at most this size is read (default: about 2,048 cells across the box), "name"?: text, "ran"?: (internal: a raster the app has worked out)}"#,
+    ),
+    C::new("stac.addIndex", "Add STAC Index", "Home › Add › Web Data › STAC Search", add_index).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).view().params(
+        r#"{"item": a STAC item (from stac.search), "index": "ndvi"|"ndwi"|"savi"|"nbr"|"ndbi"|"evi" (the Indices section's formulas, on the item's bands: NDVI nir and red, NDWI green and nir, SAVI nir and red, NBR nir and swir22, NDBI swir16 and nir, EVI nir, red and blue; their scale and offset applied), "bbox"?: [west, south, east, north] in degrees | "view" (default), "cellSize"?: the coarsest overview whose cells are at most this size is read (default: about 2,048 cells across the box), "name"?: text, "ran"?: (internal: a raster the app has worked out)} → a raster layer of one band"#,
     )]
 }
 
 fn add_bands(s: &mut Session, p: &Value) -> CmdResult {
     super::workflows::made_or_ran(s, p, "stac.addBands")
+}
+
+fn add_index(s: &mut Session, p: &Value) -> CmdResult {
+    super::workflows::made_or_ran(s, p, "stac.addIndex")
 }
 
 /// The browser has no thread to wait for several files on.
@@ -39,6 +46,18 @@ pub(crate) fn bands_work(s: &Session, p: &Value) -> Result<Work, String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     desktop::work(s, p)
+}
+
+/// What `stac.addIndex` reads of the session (the item given, the view), and the work that reads
+/// the bands' files and makes the index.
+pub(crate) fn index_work(s: &Session, p: &Value) -> Result<Work, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, p);
+        Err(IN_THE_BROWSER.replace("band combinations are", "indices are"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    desktop::index(s, p)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -62,7 +81,8 @@ mod desktop {
     /// A kilometre of a degree of latitude, in metres.
     const DEGREE_M: f64 = 111_320.0;
 
-    pub(super) fn work(s: &Session, p: &Value) -> Result<Work, String> {
+    /// The item given and the bands its GeoTIFF files offer.
+    fn item_of(p: &Value) -> Result<(stac::Item, Vec<sb::Band>), String> {
         let item = match p.get("item").filter(|v| v.is_object()) {
             Some(v) => stac::item_from_json(v, None).ok_or("item isn't a STAC item")?,
             None => return Err("give item: a STAC item, as stac.search answers".into()),
@@ -71,6 +91,41 @@ mod desktop {
         if all.is_empty() {
             return Err(format!("{}: it has no GeoTIFF asset to make a band combination from", item.id));
         }
+        Ok((item, all))
+    }
+
+    /// What reading the bands `wanted` takes: each band found (or an error naming what the item has),
+    /// each file's address (checked as `stac.addAsset` checks it), and the window and cell size.
+    fn plan(
+        s: &Session,
+        p: &Value,
+        item: &stac::Item,
+        all: &[sb::Band],
+        wanted: &[String],
+    ) -> Result<(Vec<sb::Band>, Vec<String>, [f64; 4], f64), String> {
+        let mut picked = Vec::with_capacity(wanted.len());
+        for name in wanted {
+            let band = sb::find(all, name).ok_or_else(|| format!("{}: no band '{name}' (it has {})", item.id, names_of(all)))?;
+            picked.push(band.clone());
+        }
+        let mut hrefs = Vec::with_capacity(picked.len());
+        for band in &picked {
+            hrefs.push(item.asset_href(Some(&band.asset))?.1);
+        }
+        let mut asked = p.clone();
+        if asked.get("bbox").is_none_or(Value::is_null) {
+            asked["bbox"] = json!("view");
+        }
+        let bbox = super::super::layer::window_box_of(s, &asked)?;
+        let cell = match p.get("cellSize").filter(|v| !v.is_null()) {
+            None => auto_cell(bbox),
+            Some(v) => v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?,
+        };
+        Ok((picked, hrefs, bbox, cell))
+    }
+
+    pub(super) fn work(s: &Session, p: &Value) -> Result<Work, String> {
+        let (item, all) = item_of(p)?;
         // The three bands: a combination, or the three named.
         let named = ["red", "green", "blue"].map(|k| ps(p, k).map(str::trim).filter(|v| !v.is_empty()));
         let (label, wanted): (String, [String; 3]) = if named.iter().any(Option::is_some) {
@@ -84,31 +139,55 @@ mod desktop {
             })?;
             (c.name.to_string(), c.channels.map(str::to_string))
         };
-        let mut picked = Vec::with_capacity(3);
-        for name in &wanted {
-            let band = sb::find(&all, name).ok_or_else(|| format!("{}: no band '{name}' (it has {})", item.id, names_of(&all)))?;
-            picked.push(band.clone());
-        }
-        // Each asset's address, checked as `stac.addAsset` checks it.
-        let mut hrefs = Vec::with_capacity(3);
-        for band in &picked {
-            hrefs.push(item.asset_href(Some(&band.asset))?.1);
-        }
-        let mut asked = p.clone();
-        if asked.get("bbox").is_none_or(Value::is_null) {
-            asked["bbox"] = json!("view");
-        }
-        let bbox = super::super::layer::window_box_of(s, &asked)?;
-        let cell = match p.get("cellSize").filter(|v| !v.is_null()) {
-            None => auto_cell(bbox),
-            Some(v) => v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?,
-        };
+        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted)?;
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| format!("{} {label}", item.id), str::to_string);
         let channels = [wanted[0].clone(), wanted[1].clone(), wanted[2].clone()];
         Ok(Box::new(move || {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let (made, notes) = read_and_stack(&name, &channels, &picked, &hrefs, bbox, cell)?;
             made_saying(made, notes, json!({"bands": channels, "bbox": bbox}))
+        }))
+    }
+
+    /// `stac.addIndex`: the bands an index reads, read as a combination's are (the item's files, by
+    /// range, over the window), and the index made from them as one band of numbers, by the
+    /// Indices section's formula. The band math is one pass over the window with no Cancel check
+    /// inside it (the window is bounded by the cell size); Cancel is looked at before each file.
+    pub(super) fn index(s: &Session, p: &Value) -> Result<Work, String> {
+        let (item, all) = item_of(p)?;
+        let id = ps(p, "index").map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| {
+            let ids: Vec<&str> = sb::INDICES.iter().map(|i| i.id).collect();
+            format!("give index: {}", ids.join(", "))
+        })?;
+        let ix = sb::INDICES.iter().find(|i| i.id.eq_ignore_ascii_case(id)).ok_or_else(|| {
+            let ids: Vec<&str> = sb::INDICES.iter().map(|i| i.id).collect();
+            format!("unknown index '{id}' (the indices are {})", ids.join(", "))
+        })?;
+        let wanted: Vec<String> = ix.channels.iter().map(|c| (*c).to_string()).collect();
+        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted)?;
+        // Where each input is in the bands read, for the formula (the ones it doesn't use are never named).
+        let at = |names: &[&str]| ix.channels.iter().position(|c| names.contains(c)).map_or(1, |i| i as u64 + 1);
+        let expr = super::super::imagery::index_expression(
+            ix.id,
+            at(&["blue"]),
+            at(&["green"]),
+            at(&["red"]),
+            at(&["nir"]),
+            at(&["swir16", "swir22"]),
+        )?;
+        let name = ps(p, "name")
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map_or_else(|| format!("{} {}", item.id, ix.id.to_ascii_uppercase()), str::to_string);
+        let id = ix.id;
+        Ok(Box::new(move || {
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            let (stacked, notes) = read_and_stack(&name, &wanted, &picked, &hrefs, bbox, cell)?;
+            let band = rustgis_analysis::rasterops::band_math(&stacked, &expr)?;
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            let raster = rustgis_analysis::rasterops::derive(&stacked, &name, vec![band])?;
+            let then = noted(raster.name.clone(), notes);
+            super::super::workflows::made_then(raster, Some(json!({"index": id, "bands": wanted, "bbox": bbox})), Some(then))
         }))
     }
 
@@ -159,7 +238,7 @@ mod desktop {
     /// The three windows, read, and put on one grid: the raster of three bands, and what to say.
     fn read_and_stack(
         name: &str,
-        channels: &[String; 3],
+        channels: &[String],
         picked: &[sb::Band],
         hrefs: &[String],
         bbox: [f64; 4],
@@ -175,7 +254,8 @@ mod desktop {
             }
             // A Planetary Computer file is signed as it is read, not when the item was found.
             let signed = stac::sign_blocking(href)?;
-            let w = read_window(&signed, bbox, cell, band.index as usize)?;
+            // Every band of the file is read, so the count asked is the file's, not the band's place.
+            let w = read_window(&signed, bbox, cell, band.in_file.max(band.index) as usize)?;
             let who = channels.get(i).map_or("band", String::as_str);
             notes.extend(w.notes().into_iter().map(|n| format!("{who}: {n}")));
             windows.push((href.clone(), w));
@@ -194,18 +274,18 @@ mod desktop {
         Ok((raster, notes))
     }
 
-    /// The bands as one raster of three bands on the finest grid among them, by nearest cell, with
+    /// The bands as one raster of as many bands on the finest grid among them, by nearest cell, with
     /// the catalog's scale and offset applied. A cell with no value in any is no data in all.
-    pub(super) fn stack(name: &str, channels: &[String; 3], sources: &[(&Raster, &sb::Band)]) -> Result<(Raster, Vec<String>), String> {
-        let [(a, _), (b, _), (c, _)] = sources else { return Err("a combination has three bands".into()) };
-        if a.crs != b.crs || a.crs != c.crs {
+    pub(super) fn stack(name: &str, channels: &[String], sources: &[(&Raster, &sb::Band)]) -> Result<(Raster, Vec<String>), String> {
+        let (Some((first, _)), true) = (sources.first(), sources.len() >= 2) else { return Err("a stack needs at least two bands".into()) };
+        if sources.iter().any(|(r, _)| r.crs != first.crs) {
             return Err("the bands are in different coordinate systems: they can't be put on one grid".into());
         }
         let finest = sources
             .iter()
             .map(|(r, _)| *r)
             .min_by(|x, y| x.transform.pixel_width.abs().total_cmp(&y.transform.pixel_width.abs()))
-            .ok_or("a combination has three bands")?;
+            .ok_or("a stack needs at least two bands")?;
         let (w, h) = (finest.width as usize, finest.height as usize);
         let mut bands: Vec<Vec<f32>> = Vec::with_capacity(3);
         for (raster, band) in sources {
@@ -249,6 +329,13 @@ mod desktop {
                 });
             }
         }
+        // Not one cell with a value in every band: an empty image is no result, so it is an error.
+        if w > 0 && h > 0 && left == w * h {
+            return Err(format!(
+                "no cell has a value in every band ({}): the item's data doesn't cover this part of the map, or its files are empty here",
+                channels.join(", ")
+            ));
+        }
         let mut notes = Vec::new();
         let size = finest.transform.pixel_width.abs();
         let resampled: Vec<&str> = sources
@@ -259,13 +346,13 @@ mod desktop {
             .collect();
         if !resampled.is_empty() {
             notes.push(format!(
-                "{} read on a coarser grid than the finest of the three, and put on it by nearest cell",
+                "{} read on a coarser grid than the finest of the bands, and put on it by nearest cell",
                 resampled.join(", ")
             ));
         }
         if left > 0 {
             let share = left as f64 * 100.0 / (w * h).max(1) as f64;
-            notes.push(format!("{left} cells ({share:.1}%) have no value in at least one band (no data, or outside a band's window) and are no data in all three"));
+            notes.push(format!("{left} cells ({share:.1}%) have no value in at least one band (no data, or outside a band's window) and are no data in every band"));
         }
         let mut raster = rustgis_analysis::rasterops::derive(finest, name, bands)?;
         for (b, c) in raster.bands.iter_mut().zip(channels) {
@@ -281,20 +368,24 @@ mod desktop {
         let name = raster.name.clone();
         let mut layer = RasterLayer::from_bytes(raster, format!("{name}.tif"), bytes);
         layer.style.renderer = RasterRenderer::Rgb { red: 0, green: 1, blue: 2 };
-        let said = name.clone();
-        let then: Then = Box::new(move |s: &mut Session, v: &mut Value| {
+        let then = noted(name.clone(), notes);
+        Ok(super::super::workflows::made_layer(name, layer, Some(extra), Some(then)))
+    }
+
+    /// What to say of a made layer once it is added: each note, by the layer's name on the map.
+    fn noted(name: String, notes: Vec<String>) -> Then {
+        Box::new(move |s: &mut Session, v: &mut Value| {
             let id = v.get("layer").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
-            let added = id.and_then(|id| s.map().layer(id)).map_or(said, |l| l.name.clone());
+            let added = id.and_then(|id| s.map().layer(id)).map_or(name, |l| l.name.clone());
             for note in notes {
                 s.notify(format!("{added}: {note}"), false);
             }
-        });
-        Ok(super::super::workflows::made_layer(name, layer, Some(extra), Some(then)))
+        })
     }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, reason = "a test module gated on more than `test`, which clippy's allow-unwrap-in-tests does not see")]
 mod tests {
     use super::desktop::{auto_cell, stack};
     use crate::render::rustgis_tiles::stac::bands::Band;
@@ -307,7 +398,46 @@ mod tests {
     }
 
     fn band(scale: f64, offset: f64) -> Band {
-        Band { asset: "x".into(), href: "https://x.org/x.tif".into(), index: 1, common: String::new(), scale, offset, nodata: None }
+        Band {
+            asset: "x".into(),
+            href: "https://x.org/x.tif".into(),
+            index: 1,
+            in_file: 1,
+            common: String::new(),
+            scale,
+            offset,
+            nodata: None,
+        }
+    }
+
+    #[test]
+    fn an_index_is_the_indices_formula_over_the_stacked_bands() {
+        use crate::render::rustgis_tiles::stac::bands::INDICES;
+        // Near infrared 0.5 and red 0.1 (stored 5000 and 1000, scaled 0.0001): NDVI = 0.4 / 0.6.
+        let nir = grid(2, 2, 0.0001, vec![5000.0; 4]);
+        let red = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        let ix = INDICES.iter().find(|i| i.id == "ndvi").unwrap();
+        let names: Vec<String> = ix.channels.iter().map(|c| (*c).to_string()).collect();
+        assert_eq!(names, ["nir", "red"]);
+        let (stacked, _) = stack("s", &names, &[(&nir, &band(0.0001, 0.0)), (&red, &band(0.0001, 0.0))]).unwrap();
+        assert_eq!(stacked.bands.len(), 2, "as many bands as the index reads");
+        let expr = crate::cmd::imagery::index_expression("ndvi", 1, 1, 2, 1, 1).unwrap();
+        let v = rustgis_analysis::rasterops::band_math(&stacked, &expr).unwrap();
+        assert!(v.iter().all(|x| (x - 0.6667).abs() < 1e-3), "{v:?}");
+        // EVI reads three bands (nir, red, blue): 2.5 · (0.5 − 0.1) / (0.5 + 6 · 0.1 − 7.5 · 0.05 + 1).
+        let blue = grid(2, 2, 0.0001, vec![500.0; 4]);
+        let evi = INDICES.iter().find(|i| i.id == "evi").unwrap();
+        let names: Vec<String> = evi.channels.iter().map(|c| (*c).to_string()).collect();
+        assert_eq!(names, ["nir", "red", "blue"]);
+        let (stacked, _) =
+            stack("s", &names, &[(&nir, &band(0.0001, 0.0)), (&red, &band(0.0001, 0.0)), (&blue, &band(0.0001, 0.0))]).unwrap();
+        let expr = crate::cmd::imagery::index_expression("evi", 3, 1, 2, 1, 1).unwrap();
+        assert_eq!(expr, "2.5 * (b1 - b2) / (b1 + 6 * b2 - 7.5 * b3 + 1)");
+        let v = rustgis_analysis::rasterops::band_math(&stacked, &expr).unwrap();
+        assert!(v.iter().all(|x| (x - 0.5797).abs() < 1e-3), "EVI of 0.5, 0.1, 0.05: {v:?}");
+        // One band is not a stack; an unknown index is refused.
+        assert!(stack("s", &names[..1], &[(&nir, &band(1.0, 0.0))]).is_err());
+        assert!(crate::cmd::imagery::index_expression("nope", 1, 1, 1, 1, 1).is_err());
     }
 
     fn names() -> [String; 3] {
@@ -352,6 +482,25 @@ mod tests {
         let none = rustgis_analysis::rasterops::NODATA;
         assert_eq!(r.bands[0].data.iter().filter(|v| **v == none).count(), 12);
         assert!(notes.iter().any(|n| n.contains("12 cells")), "{notes:?}");
+    }
+
+    #[test]
+    fn bands_with_no_cell_in_common_are_an_error_not_an_empty_image() {
+        // The first band has a value in the top-left cell only, the second in the bottom-right
+        // cell only (0 is the files' no data): no cell has a value in both.
+        let wide = grid(4, 4, 0.0001, vec![1000.0; 16]);
+        let mut values = vec![0.0; 16];
+        values[15] = 1000.0;
+        let corner = grid(4, 4, 0.0001, values);
+        let mut top = vec![0.0; 16];
+        top[0] = 1000.0;
+        let first = grid(4, 4, 0.0001, top);
+        let err = stack("s", &["a".into(), "b".into()], &[(&first, &band(1.0, 0.0)), (&corner, &band(1.0, 0.0))]).unwrap_err();
+        assert!(err.contains("no cell has a value in every band") && err.contains("a, b"), "{err}");
+        // One cell in common is a result, said as before.
+        let (r, notes) = stack("s", &["a".into(), "b".into()], &[(&wide, &band(1.0, 0.0)), (&corner, &band(1.0, 0.0))]).unwrap();
+        assert_eq!(r.bands[0].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1);
+        assert!(notes.iter().any(|n| n.contains("15 cells")), "{notes:?}");
     }
 
     #[test]

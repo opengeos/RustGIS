@@ -20,6 +20,8 @@ pub struct Band {
     pub href: String,
     /// Its place in the file, from 1.
     pub index: u32,
+    /// How many bands its file has, by the catalog (1 when it names none).
+    pub in_file: u32,
     /// Its common name, lower case; empty when the catalog names none.
     pub common: String,
     /// A stored value `v` means `v · scale + offset` (1 and 0 when the catalog gives none).
@@ -61,6 +63,33 @@ pub const COMBINATIONS: [Combination; 7] = [
     Combination { id: "bathymetric", name: "Bathymetric", channels: ["red", "green", "coastal"] },
 ];
 
+/// A spectral index: a ratio of the bands it names, made as one band of reflectance numbers. The
+/// formulas are the Indices section's (`raster.index`); this says which bands each one reads.
+#[derive(Debug, PartialEq)]
+pub struct Index {
+    /// A name for commands.
+    pub id: &'static str,
+    /// What a menu shows.
+    pub name: &'static str,
+    /// The band names it reads (see [`find`]), in the order they are read.
+    pub channels: &'static [&'static str],
+}
+
+/// The indices known, in the order they are offered.
+pub const INDICES: [Index; 6] = [
+    Index { id: "ndvi", name: "NDVI (vegetation)", channels: &["nir", "red"] },
+    Index { id: "ndwi", name: "NDWI (water)", channels: &["green", "nir"] },
+    Index { id: "savi", name: "SAVI (vegetation over soil)", channels: &["nir", "red"] },
+    Index { id: "nbr", name: "NBR (burn ratio)", channels: &["nir", "swir22"] },
+    Index { id: "ndbi", name: "NDBI (built-up)", channels: &["swir16", "nir"] },
+    Index { id: "evi", name: "EVI (enhanced vegetation)", channels: &["nir", "red", "blue"] },
+];
+
+/// The indices the item can make: those whose bands it has, in the order of [`INDICES`].
+pub fn available_indices(bands: &[Band]) -> Vec<&'static Index> {
+    INDICES.iter().filter(|i| i.channels.iter().all(|c| find(bands, c).is_some())).collect()
+}
+
 /// Every band of the item's GeoTIFF assets, asset by asset (as the item lists them) and in file
 /// order. An asset the catalog describes no bands for is one band.
 pub fn bands(item: &Item) -> Vec<Band> {
@@ -82,6 +111,7 @@ pub fn bands(item: &Item) -> Vec<Band> {
                 asset: asset.key.clone(),
                 href: asset.href.clone(),
                 index: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                in_file: u32::try_from(count).unwrap_or(u32::MAX),
                 common: info.map(|b| b.common.clone()).unwrap_or_default(),
                 scale: scale.unwrap_or(1.0),
                 offset: offset.unwrap_or(0.0),
@@ -93,8 +123,11 @@ pub fn bands(item: &Item) -> Vec<Band> {
 }
 
 /// The band `wanted` names (`red`, `nir`…): the first of its stand-ins (see [`ALIASES`]) that some
-/// band has as its common name, else that an asset of exactly one band has as its key. A key of an
-/// asset with several bands says nothing of which one is meant, so it is not taken for one.
+/// band has as its common name, else that an asset of exactly one band has as its key. Of several
+/// bands with the name, one in a file of its own is taken over one of a stack: Sentinel-2's
+/// `visual` and `preview` are colour images whose bands are named red, green and blue too, and
+/// they are not the band files. A key of an asset with several bands says nothing of which one is
+/// meant, so it is not taken for one.
 pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     let wanted = wanted.trim().to_ascii_lowercase();
     let names: Vec<&str> = match ALIASES.iter().find(|(name, _)| *name == wanted) {
@@ -102,7 +135,8 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
         None => vec![wanted.as_str()],
     };
     names.iter().find_map(|name| {
-        bands.iter().find(|b| b.common == *name).or_else(|| {
+        let named = || bands.iter().filter(|b| b.common == *name);
+        named().find(|b| b.in_file == 1).or_else(|| named().next()).or_else(|| {
             let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(name));
             match (of_asset.next(), of_asset.next()) {
                 (Some(only), None) => Some(only),
@@ -189,6 +223,32 @@ mod tests {
         let old = bands(&item(&[("swir1", named("swir1")), ("swir2", named("swir2"))]));
         assert_eq!((find(&old, "swir16").unwrap().asset.as_str(), find(&old, "swir22").unwrap().asset.as_str()), ("swir1", "swir2"));
         assert!(find(&b, "lwir").is_none());
+    }
+
+    /// Sentinel-2 items carry `visual` and `preview` colour images whose three bands are named red,
+    /// green and blue; `preview` sorts before `red`, and it is a file of three, not the red band.
+    #[test]
+    fn a_band_in_a_file_of_its_own_is_taken_over_one_in_a_colour_image() {
+        let colour = json!({"eo:bands": [{"common_name": "red"}, {"common_name": "green"}, {"common_name": "blue"}]});
+        let b = bands(&item(&[("red", named("red")), ("preview", colour.clone()), ("visual", colour.clone())]));
+        let red = find(&b, "red").unwrap();
+        assert_eq!((red.asset.as_str(), red.index, red.in_file), ("red", 1, 1), "not preview's first band");
+        // With no file of its own, the colour image's band is still found, by its place in it.
+        let only = bands(&item(&[("visual", colour)]));
+        let red = find(&only, "red").unwrap();
+        assert_eq!((red.asset.as_str(), red.index, red.in_file), ("visual", 1, 3));
+    }
+
+    #[test]
+    fn only_the_indices_an_item_can_make_are_offered() {
+        let ids = |i: &Item| available_indices(&bands(i)).iter().map(|x| x.id).collect::<Vec<_>>();
+        assert_eq!(ids(&sentinel()), ["ndvi", "ndwi", "savi", "nbr", "ndbi", "evi"]);
+        // Visible light only: no near infrared, so no index.
+        assert!(ids(&item(&[("red", named("red")), ("green", named("green")), ("blue", named("blue"))])).is_empty());
+        // Near infrared and red: the vegetation indices, not the ones that need green, blue or SWIR.
+        assert_eq!(ids(&item(&[("red", named("red")), ("nir", named("nir"))])), ["ndvi", "savi"]);
+        // Every index reads bands the combinations' vocabulary knows.
+        assert!(INDICES.iter().all(|i| i.channels.len() >= 2 && i.channels.iter().all(|c| !c.is_empty())));
     }
 
     #[test]

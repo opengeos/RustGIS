@@ -45857,6 +45857,15 @@ fn long_commands_stop_when_cancelled_while_they_run() {
                     "blue": {"href": "https://example.org/blue.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "blue"}]}}},
                 "bbox": [10.0, 45.0, 10.02, 45.02]}),
         ),
+        // The same: an index reads two files and nothing reaches the network.
+        (
+            "stac.addIndex",
+            json!({"item": {"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+                "assets": {
+                    "red": {"href": "https://example.org/red.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "red"}]},
+                    "nir": {"href": "https://example.org/nir.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "nir"}]}}},
+                "index": "ndvi", "bbox": [10.0, 45.0, 10.02, 45.02]}),
+        ),
     ];
     // Every command that runs in the background is here, and only those.
     fn listed<'a>(l: &[(&'a str, Value)]) -> std::collections::BTreeSet<&'a str> {
