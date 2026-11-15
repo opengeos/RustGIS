@@ -618,9 +618,9 @@ public class MainActivity extends NativeActivity {
                 // elsewhere, and a later pick can't replace a file the session has open.
                 File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
                 ArrayList<String> sources = new ArrayList<>();
-                // A provider whose ids name no folder for some of the documents (the Downloads
-                // provider gives a numeric id to a download and a path to other files, both in
-                // one folder) keeps all its documents together, as one folder.
+                // A provider whose ids name no folder for any of the documents picked (the
+                // Downloads provider gives a numeric id to a download and a path to other files,
+                // both in one folder) keeps all its documents of the pick together, as one folder.
                 java.util.HashSet<String> folderless = new java.util.HashSet<>();
                 for (Uri uri : uris) {
                     if (sourceFolder(uri) == null) {
@@ -687,7 +687,8 @@ public class MainActivity extends NativeActivity {
     /**
      * The folder a picked document is in, as far as its provider's id says: the part of the
      * document id before the last "/" (the device's storage gives "primary:Download/roads.shp"),
-     * or null when the id names no folder (a numeric id).
+     * the volume itself for a file at the root of the device's storage ("primary:roads.shp"), or
+     * null when the id names no folder (a numeric id, "msf:42").
      */
     private static String sourceFolder(Uri uri) {
         String id;
@@ -697,7 +698,14 @@ public class MainActivity extends NativeActivity {
             id = uri.getPath() == null ? "" : uri.getPath();
         }
         int slash = id.lastIndexOf('/');
-        return slash < 0 ? null : id.substring(0, slash);
+        if (slash >= 0) {
+            return id.substring(0, slash);
+        }
+        int colon = id.indexOf(':');
+        if ("com.android.externalstorage.documents".equals(uri.getAuthority()) && colon >= 0) {
+            return id.substring(0, colon + 1);
+        }
+        return null;
     }
 
     /**
