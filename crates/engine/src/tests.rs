@@ -19956,6 +19956,80 @@ fn arcgis_layer_read_in_protocol_buffer_pages() {
     );
 }
 
+/// An ArcGIS layer added through service.add is drawn as its description's `drawingInfo` says:
+/// its symbol and transparency, with a notice of what RustGIS draws otherwise; a layer whose
+/// description says nothing keeps RustGIS's own symbol (#2080).
+#[test]
+fn an_arcgis_layer_comes_in_with_its_services_symbology() {
+    use ogc_server::{Route, Server, arcgis_page};
+    let q = "where=1%3D1&outFields=*&returnGeometry=true&outSR=4326";
+    let layer = |id: u32| format!("/arcgis/rest/services/S/MapServer/{id}");
+    let page = |id: u32| format!("{}/query?{q}&f=geojson&resultOffset=0&resultRecordCount=2&orderByFields=OBJECTID", layer(id));
+    let described = |drawing: Value| {
+        json!({"currentVersion": 11.5, "maxRecordCount": 2, "advancedQueryCapabilities": {"supportsPagination": true},
+            "fields": [{"name": "OBJECTID", "type": "esriFieldTypeOID"}], "drawingInfo": drawing})
+        .to_string()
+    };
+    let schools = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "style": "esriSMSSquare", "color": [230, 0, 0, 255], "size": 10,
+        "outline": {"color": [0, 0, 0, 255], "width": 1}}, "visualVariables": [{"type": "sizeInfo", "field": "OBJECTID"}]}, "transparency": 25});
+    let server = Server::new(vec![
+        Route::new(&layer(0), &described(schools)),
+        Route::new(&page(0), &arcgis_page(&[0, 1], false)),
+        Route::new(&layer(1), &described(Value::Null)),
+        Route::new(&page(1), &arcgis_page(&[0, 1], false)),
+    ]);
+    let service = r#"{"currentVersion": 11.5, "layers": [{"id": 0, "name": "Schools"}, {"id": 1, "name": "Plain"}]}"#;
+    let url = format!("{}/arcgis/rest/services/S/MapServer", server.base);
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": url, "layer": "Schools", "text": service})).unwrap();
+    let schools = s.map().layer_by_name("Schools").unwrap();
+    let rustgis_map::Renderer::Single(sym) = schools.renderer else { panic!("{:?}", schools.renderer) };
+    assert_eq!((sym.marker, sym.fill, sym.size), (rustgis_map::symbology::Marker::Square, rustgis_map::Rgba::rgb(230, 0, 0), 10.0));
+    assert_eq!(schools.transparency, 25.0);
+    let texts: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
+    assert!(
+        texts.contains(
+            &"Schools: the service's symbology came in, except: sizes, colours or rotations by value (visual variables), left out"
+        ),
+        "{texts:?}"
+    );
+    s.run("service.add", &json!({"url": url, "layer": "Plain", "text": service})).unwrap();
+    let plain = s.map().layer_by_name("Plain").unwrap();
+    let rustgis_map::Renderer::Single(sym) = &plain.renderer else { panic!("{:?}", plain.renderer) };
+    assert!(sym.default_seed(plain.geometry_type()).is_some(), "RustGIS's own symbol: {sym:?}");
+    assert!(!s.notices.iter().any(|n| n.text.starts_with("Plain")));
+}
+
+/// A service download the app read off the frame is drawn as its ArcGIS description's
+/// `drawingInfo` says when it is added, given with it; without `service` it is left alone (#2080).
+#[test]
+fn a_service_download_is_added_with_the_drawing_info_given() {
+    let answer = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"A": 1},
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}}]}"#;
+    let drawing = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSFS", "style": "esriSFSDiagonalCross", "color": [0, 92, 230, 255],
+        "outline": {"type": "esriSLS", "style": "esriSLSSolid", "color": [255, 255, 255, 255], "width": 2}}}});
+    let mut s = Session::new(Project::default());
+    for (name, service) in [("Zones", true), ("Not a service", false)] {
+        let id = s.download_started();
+        assert!(s.download_landed(id, answer.as_bytes().to_vec()));
+        let url =
+            if service { "https://x.org/arcgis/rest/services/Z/FeatureServer/0/query?f=geojson" } else { "https://x.org/zones.geojson" };
+        let mut p = json!({"id": id, "url": url, "name": name, "drawingInfo": drawing});
+        if service {
+            p["service"] = json!(true);
+        }
+        s.run("layer.addDownload", &p).unwrap();
+    }
+    let zones = s.map().layer_by_name("Zones").unwrap();
+    let rustgis_map::Renderer::Single(sym) = zones.renderer else { panic!("{:?}", zones.renderer) };
+    assert_eq!((sym.fill, sym.stroke, sym.stroke_width), (rustgis_map::Rgba::rgb(0, 92, 230), rustgis_map::Rgba::rgb(255, 255, 255), 2.0));
+    let texts: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
+    assert!(texts.contains(&"Zones: the service's symbology came in, except: hatched fills, drawn solid"), "{texts:?}");
+    let other = s.map().layer_by_name("Not a service").unwrap();
+    let rustgis_map::Renderer::Single(sym) = &other.renderer else { panic!("{:?}", other.renderer) };
+    assert!(sym.default_seed(other.geometry_type()).is_some(), "RustGIS's own symbol: {sym:?}");
+}
+
 /// An ArcGIS layer's description, read before its features, doesn't count against their budget:
 /// features that fit it alone are read whole (#1326).
 #[test]
@@ -48301,6 +48375,119 @@ fn a_command_says_once_that_it_couldnt_zoom() {
     assert_eq!(beyond, 1, "{out}");
     assert_eq!(out["zoomed"], json!(false), "{out}");
     assert_eq!(s.map().camera.center, view.center);
+}
+
+/// A save never writes a file it couldn't open again (#1985): a feature with a coordinate that
+/// isn't a number would be held as null, so saving the project, packaging it and packaging the
+/// map are refused, saying where, and the files already there are kept as they were. With the
+/// geometry gone, each saves and opens again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_save_refuses_coordinates_that_arent_numbers_and_keeps_the_file() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-nan-save-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = |n: &str| dir.0.join(n).display().to_string();
+    let mut s = Session::new(Project::default());
+    let mut ds = Dataset::new("ways", GeometryType::Polyline, vec![]);
+    ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 20.0), Coord::new(1.0, 20.5)]])), vec![]);
+    let id = s.map_mut().add_dataset(ds);
+    // Saved clean first: these files must survive a refused save.
+    let saves = [("project.saveAs", "p.rgis"), ("project.package", "p.rgispkg"), ("map.package", "m.rgismpk")];
+    for (cmd, file) in saves {
+        s.run(cmd, &json!({"path": path(file)})).unwrap();
+    }
+    let before: Vec<Vec<u8>> = saves.iter().map(|(_, f)| std::fs::read(path(f)).unwrap()).collect();
+    let layer = s.map_mut().layer_mut(id).unwrap();
+    layer.dataset.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 10.0), Coord::new(f64::NAN, 10.5)]])), vec![]);
+    layer.dataset.push(Some(Geometry::Point(Coord::new(f64::INFINITY, 0.0))), vec![]);
+    layer.touch_geometry();
+    // Named by their ids, as the attribute table shows them.
+    let ids: Vec<String> = layer.dataset.features.iter().skip(1).map(|f| f.id.to_string()).collect();
+    let said = format!("2 feature(s) in 'ways' (ids {}) have a coordinate that isn't a number", ids.join(", "));
+    for ((cmd, file), was) in saves.iter().zip(&before) {
+        let e = s.run(cmd, &json!({"path": path(file)})).unwrap_err();
+        assert!(e.contains(&said), "{cmd}: {e}");
+        assert_eq!(&std::fs::read(path(file)).unwrap(), was, "{cmd} kept the file as it was");
+    }
+    // Their geometry gone, the features save and open again.
+    let layer = s.map_mut().layer_mut(id).unwrap();
+    layer.dataset.features = layer
+        .dataset
+        .features
+        .iter()
+        .map(|f| {
+            let mut f = f.clone();
+            f.geometry = f.geometry.filter(|g| g.is_finite());
+            f
+        })
+        .collect();
+    layer.touch_geometry();
+    for (cmd, file) in saves {
+        s.run(cmd, &json!({"path": path(file)})).unwrap();
+    }
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path("p.rgis")})).unwrap();
+    assert_eq!(t.map().layer_by_name("ways").unwrap().dataset.features.len(), 3);
+}
+
+/// A Shapefile read in place (streamed) leaves out a shape with a coordinate that isn't a number,
+/// counted, as one it can't convert (#1985): nothing NaN reaches the map. Read whole, the feature
+/// keeps its attributes without geometry. Either way the project saves and opens again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    // Removed however the test ends.
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let guard = Dir(std::env::temp_dir().join(format!("rustgis-nan-stream-{}-{nanos}", std::process::id())));
+    let dir = guard.0.clone();
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(10.0, 20.0))), vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(11.0, 21.0))), vec![]);
+    let id = s.map_mut().add_dataset(ds);
+    let shp = dir.join("pts.shp");
+    s.run("share.exportLayer", &json!({"layer": id, "path": shp})).unwrap();
+    // Header 100, record header 8, shape type 4: the first point's x at 112.
+    let mut b = std::fs::read(&shp).unwrap();
+    b[112..120].copy_from_slice(&f64::NAN.to_le_bytes());
+    std::fs::write(&shp, &b).unwrap();
+    for stream in [false, true] {
+        let mut t = Session::new(Project::default());
+        let mark = t.notice_mark();
+        let id = t.run("layer.addData", &json!({"path": shp, "stream": stream})).unwrap()["layer"].as_u64().unwrap() as u32;
+        if stream {
+            t.run("layer.loadAll", &json!({"layer": id})).unwrap();
+        }
+        let notices: Vec<String> = t.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let said = if stream {
+            "pts: 1 row couldn't be read and was left out"
+        } else {
+            "pts: 1 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
+        };
+        assert!(notices.iter().any(|n| n == said), "stream {stream}: {notices:?}");
+        let geometries: Vec<_> = t.map().layer(id).unwrap().dataset.features.iter().map(|f| f.geometry.clone()).collect();
+        let kept = Some(Geometry::Point(Coord::new(11.0, 21.0)));
+        assert_eq!(geometries, if stream { vec![kept] } else { vec![None, kept] }, "stream {stream}");
+        let saved = dir.join(format!("p-{stream}.rgis"));
+        t.run("project.saveAs", &json!({"path": saved})).unwrap();
+        Session::new(Project::default()).run("project.open", &json!({"path": saved})).unwrap();
+    }
 }
 
 #[test]
