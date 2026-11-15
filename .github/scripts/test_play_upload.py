@@ -1,6 +1,8 @@
 """Tests for play_upload.py: the signed token and the order of the Play Developer API calls."""
 
 import base64
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -75,6 +77,45 @@ class UploadTest(unittest.TestCase):
         self.assertEqual(track["releases"][0]["status"], "draft")
         self.assertEqual(track["releases"][0]["releaseNotes"][0]["language"], "en-US")
         self.assertTrue(calls[3][1][-1].endswith("E1:commit"))
+
+    def test_an_unpublished_app_gets_a_draft_and_says_so(self):
+        statuses = []
+
+        def request(method, url, headers, body):
+            if url.endswith("/edits"):
+                return {"id": "E1"}
+            if "/bundles" in url:
+                return {"versionCode": 7}
+            if method == "PUT":
+                status = json.loads(body)["releases"][0]["status"]
+                statuses.append(status)
+                if status != "draft":
+                    raise RuntimeError("PUT: HTTP 400: Only releases with status draft may be created on draft app.")
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"bundle")
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                play_upload.upload("org.rustgis.mobile", bundle, "production", "completed", "1", "", "T", request)
+        self.assertEqual(statuses, ["completed", "draft"])
+        self.assertIn("draft", said.getvalue())
+
+    def test_other_track_errors_are_not_retried(self):
+        def request(method, url, headers, body):
+            if url.endswith("/edits"):
+                return {"id": "E1"}
+            if "/bundles" in url:
+                return {"versionCode": 7}
+            if method == "PUT":
+                raise RuntimeError("PUT: HTTP 403: The caller does not have permission")
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"bundle")
+            with self.assertRaises(RuntimeError):
+                play_upload.upload("org.rustgis.mobile", bundle, "production", "completed", "1", "", "T", request)
 
     def test_long_notes_are_cut_at_a_word_within_the_limit(self):
         notes = play_upload.release_notes("word " * 200)

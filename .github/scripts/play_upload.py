@@ -10,8 +10,9 @@ third-party code handles the service account's key:
 3. the track given a release of that version code, as a draft (or the status asked for);
 4. the edit committed.
 
-A draft release appears in Play Console for someone to review and roll out: nothing reaches users
-from here unless `--status completed` is passed.
+A draft release appears in Play Console for someone to review and roll out. `--status completed`
+rolls the release out to everyone on the track (after Google's review, on production); an app
+never published yet takes only drafts, so there the release is made a draft and that is said.
 """
 
 from __future__ import annotations
@@ -176,12 +177,28 @@ def upload(
     release = {"name": name, "versionCodes": [str(version_code)], "status": status}
     if notes:
         release["releaseNotes"] = [{"language": "en-US", "text": release_notes(notes)}]
-    request(
-        "PUT",
-        f"{base}/{edit}/tracks/{urllib.parse.quote(track)}",
-        {**auth, "Content-Type": "application/json"},
-        json.dumps({"track": track, "releases": [release]}).encode(),
-    )
+
+    def put_track() -> None:
+        request(
+            "PUT",
+            f"{base}/{edit}/tracks/{urllib.parse.quote(track)}",
+            {**auth, "Content-Type": "application/json"},
+            json.dumps({"track": track, "releases": [release]}).encode(),
+        )
+
+    try:
+        put_track()
+    except RuntimeError as error:
+        # An app that has never been published takes only draft releases.
+        if status == "draft" or "draft app" not in str(error).lower():
+            raise
+        print(
+            f"play_upload: the app isn't published yet, so Play takes only drafts: the {track} release "
+            "is a draft, to roll out in Play Console",
+            file=sys.stderr,
+        )
+        release["status"] = "draft"
+        put_track()
     request("POST", f"{base}/{edit}:commit", auth, None)
     return version_code
 
@@ -231,7 +248,7 @@ def main(argv: list[str]) -> int:
         print(f"play_upload: PLAY_SERVICE_ACCOUNT_JSON isn't a JSON key: {error}", file=sys.stderr)
         return 1
     code = upload(args.package, args.bundle, args.track, args.status, args.name, args.notes, access_token(account))
-    print(f"play_upload: version code {code} is on the {args.track} track as a {args.status} release")
+    print(f"play_upload: version code {code} is on the {args.track} track")
     return 0
 
 
