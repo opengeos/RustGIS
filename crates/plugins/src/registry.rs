@@ -266,10 +266,8 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
     let (mut dropped, mut dropped_ids) = (0usize, Vec::new());
     let mut drop_entry = |id: &str| {
         dropped += 1;
-        if valid_id(id, false) {
-            if dropped_ids.len() < 5 {
-                dropped_ids.push(id.to_string());
-            }
+        if valid_id(id, false) && dropped_ids.len() < 5 {
+            dropped_ids.push(id.to_string());
         }
     };
     for v in list.into_iter().take(MAX_ENTRIES) {
