@@ -22,6 +22,9 @@ const MAX_SHORE_SAMPLES: usize = 1 << 22;
 
 /// The most cells along each side of the grid that finds the lakes near a point.
 const MAX_GRID: usize = 256;
+/// The most lake references duplicated into grid cells. A single-cell index needs one per lake,
+/// so an input with more lakes than this keeps that unavoidable minimum without duplication.
+const MAX_GRID_REFERENCES: usize = 1 << 20;
 
 /// The most references to its edges a polygon's strips hold, on average per edge.
 const EDGES_PER_STRIP_REF: usize = 16;
@@ -184,12 +187,28 @@ impl Water {
             extent = extent.union(&e);
             lakes.push(Lake { edges: Slabs::new(&rings, &e), extent: e, level });
         }
-        let side = ((lakes.len() as f64).sqrt().ceil() as usize * 2).clamp(1, MAX_GRID);
+        let mut side = ((lakes.len() as f64).sqrt().ceil() as usize * 2).clamp(1, MAX_GRID);
+        let (w, h) = (extent.width().max(f64::MIN_POSITIVE), extent.height().max(f64::MIN_POSITIVE));
+        let cell = |v: f64, lo: f64, size: f64, n: usize| (((v - lo) / size * n as f64).floor().max(0.0) as usize).min(n - 1);
+        let cap = MAX_GRID_REFERENCES.max(lakes.len());
+        // Overlapping boxes can each span every cell. Count before allocating references, and
+        // coarsen the index rather than making up to MAX_GRID² copies of every lake's index.
+        // Containment and first-row precedence still use the original polygons.
+        while side > 1
+            && lakes
+                .iter()
+                .try_fold(0usize, |total, l| {
+                    let cols = cell(l.extent.max_x, extent.min_x, w, side) - cell(l.extent.min_x, extent.min_x, w, side) + 1;
+                    let rows = cell(l.extent.max_y, extent.min_y, h, side) - cell(l.extent.min_y, extent.min_y, h, side) + 1;
+                    Some(total.saturating_add(cols.saturating_mul(rows))).filter(|n| *n <= cap)
+                })
+                .is_none()
+        {
+            side /= 2;
+        }
         let (cols, rows) = (side, side);
         let mut cells = vec![Vec::new(); cols * rows];
         if !extent.is_empty() {
-            let (w, h) = (extent.width().max(f64::MIN_POSITIVE), extent.height().max(f64::MIN_POSITIVE));
-            let cell = |v: f64, lo: f64, size: f64, n: usize| (((v - lo) / size * n as f64).floor().max(0.0) as usize).min(n - 1);
             for (i, l) in lakes.iter().enumerate() {
                 for r in cell(l.extent.min_y, extent.min_y, h, rows)..=cell(l.extent.max_y, extent.min_y, h, rows) {
                     for c in cell(l.extent.min_x, extent.min_x, w, cols)..=cell(l.extent.max_x, extent.min_x, w, cols) {
@@ -516,6 +535,29 @@ mod tests {
         // No water layer of that name: the ground as before.
         m.view.terrain.as_mut().unwrap().water.as_mut().unwrap().layer = "none".into();
         assert_eq!(Ground::of(&m, &camera).unwrap().water_unlevelled(), 0);
+    }
+
+    /// Every overlapping lake used to occupy every one of the 256² grid cells: 16,384 simple
+    /// polygons attempted a billion references. A coarser index bounds that expansion while
+    /// retaining the first overlapping polygon's level and ordinary containment.
+    #[test]
+    fn overlapping_lakes_do_not_expand_past_the_index_budget() {
+        let (map, camera) = hill_with_water(None);
+        let ground = Ground::of(&map, &camera).unwrap();
+        let polygons = (0..16_384).map(|i| (vec![square(0.0, 0.0, 10.0)], Some(i as f64 + 5.0))).collect();
+        let water = Water::build(polygons, &ground, MAX_SHORE_SAMPLES);
+        let references: usize = water.cells.iter().map(Vec::len).sum();
+        assert!(references <= MAX_GRID_REFERENCES, "{references} references");
+        assert_eq!(water.lakes.len(), 16_384, "the coarser index drops no lake");
+        assert_eq!(water.level(Coord::new(5.0, 5.0)), Some(5.0));
+        assert_eq!(water.level(Coord::new(11.0, 5.0)), None);
+        // Disjoint lakes keep a useful multi-cell index and their distinct levels.
+        let polygons = (0..100).map(|i| (vec![square(f64::from(i) * 20.0, 0.0, 10.0)], Some(f64::from(i)))).collect();
+        let water = Water::build(polygons, &ground, MAX_SHORE_SAMPLES);
+        assert!(water.cols > 1);
+        for i in 0..100 {
+            assert_eq!(water.level(Coord::new(f64::from(i) * 20.0 + 5.0, 5.0)), Some(f64::from(i)));
+        }
     }
 
     #[test]
