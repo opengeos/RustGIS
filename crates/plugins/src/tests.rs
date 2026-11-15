@@ -460,6 +460,28 @@ fn pinned_tool_schema_refuses_changed_defaults_display_and_stale_load() {
 
 /// Registry and blocklist parsing validates entries and resolves package addresses safely.
 #[test]
+fn registry_limits_and_unnamed_skips_are_counted_without_a_dangling_list() {
+    let entry = json!({"id":"kept", "name":"Kept", "version":"1.0.0", "package":"kept.rgplugin", "sha256":"a".repeat(64)});
+    let url = "https://plugins.rustgis.app/registry.json";
+    let (kept, notice) = registry::parse_with_notice(&json!([entry.clone()]).to_string(), url).unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(notice, None);
+    let (kept, notice) = registry::parse_with_notice("[7,8]", url).unwrap();
+    assert!(kept.is_empty());
+    let notice = notice.unwrap();
+    assert!(notice.starts_with("2 plugin(s)") && notice.ends_with("listed twice)"), "{notice}");
+    // Cheap malformed entries fill the inspected window; the valid tail is deliberately
+    // uninspected, rather than silently disappearing or being counted as malformed.
+    let mut entries = vec![Value::Null; registry::MAX_ENTRIES];
+    entries.push(entry);
+    let (kept, notice) = registry::parse_with_notice(&Value::Array(entries).to_string(), url).unwrap();
+    assert!(kept.is_empty());
+    let notice = notice.unwrap();
+    assert!(notice.starts_with(&format!("1 plugin registry entry past the first {} was not inspected", registry::MAX_ENTRIES)), "{notice}");
+    assert!(notice.contains(&format!("{} plugin(s) in the plugin registry were skipped", registry::MAX_ENTRIES)), "{notice}");
+}
+
+#[test]
 fn registries_and_blocklists_are_read_defensively() {
     let sha = "a".repeat(64);
     let text = json!({"version": 1, "plugins": [
@@ -480,7 +502,7 @@ fn registries_and_blocklists_are_read_defensively() {
     let (_, notice) = registry::parse_with_notice(&text, "https://plugins.rustgis.app/registry.json").unwrap();
     let notice = notice.unwrap_or_default();
     assert!(
-        notice.starts_with("6 plugin(s) in the plugin registry were skipped") && notice.ends_with(": bad, nohash, bad-min, a-plugin"),
+        notice.starts_with("6 plugin(s) in the plugin registry were skipped") && notice.ends_with(": bad, nohash, bad-min, a-plugin, …"),
         "{notice}"
     );
     assert_eq!(v[1].package, "https://plugins.rustgis.app/packages/b/b-1.2.0.rgplugin");

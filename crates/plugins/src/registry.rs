@@ -233,9 +233,8 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
     parse_for(text, url, this_platform())
 }
 
-/// [`parse`], with a notice when packages by platform were skipped: one that doesn't check out
-/// (no address, a bad SHA-256, an address that isn't allowed) costs its platform the plugin, so
-/// it is said, with how many and which. None for a registry read whole.
+/// [`parse`], with counted notices for skipped entries, invalid platform packages and entries
+/// beyond the inspection limit. Names are samples when only some skipped ids can be read.
 pub fn parse_with_notice(text: &str, url: &str) -> Result<(Vec<Entry>, Option<String>), String> {
     parse_noting(text, url, this_platform())
 }
@@ -262,13 +261,12 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
     let mut seen = std::collections::HashSet::new();
     // The packages by platform that were skipped: how many, and the first few by name.
     let (mut skipped, mut which) = (0usize, Vec::new());
-    // The plugins that were skipped whole (unreadable, or with no package that checks out): how
-    // many, how many of them have an id that can be shown, and the first few of those.
-    let (mut dropped, mut named, mut dropped_ids) = (0usize, 0usize, Vec::new());
+    let omitted = list.len().saturating_sub(MAX_ENTRIES);
+    // The plugins skipped whole and the first few readable ids, in input order.
+    let (mut dropped, mut dropped_ids) = (0usize, Vec::new());
     let mut drop_entry = |id: &str| {
         dropped += 1;
         if valid_id(id, false) {
-            named += 1;
             if dropped_ids.len() < 5 {
                 dropped_ids.push(id.to_string());
             }
@@ -352,11 +350,20 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
     }
     out.sort_by_key(|e| e.name.to_lowercase());
     let mut notices = Vec::new();
+    if omitted > 0 {
+        let entries = if omitted == 1 { "entry" } else { "entries" };
+        let were = if omitted == 1 { "was" } else { "were" };
+        notices.push(format!("{omitted} plugin registry {entries} past the first {MAX_ENTRIES} {were} not inspected"));
+    }
     if dropped > 0 {
-        let more = if named > dropped_ids.len() { ", …" } else { "" };
+        let names = if dropped_ids.is_empty() {
+            String::new()
+        } else {
+            let more = if dropped > dropped_ids.len() { ", …" } else { "" };
+            format!(": {}{more}", dropped_ids.join(", "))
+        };
         notices.push(format!(
-            "{dropped} plugin(s) in the plugin registry were skipped (an unreadable entry, id, version or minRustgisVersion, no package that checks out, or an id listed twice): {}{more}",
-            dropped_ids.join(", ")
+            "{dropped} plugin(s) in the plugin registry were skipped (an unreadable entry, id, version or minRustgisVersion, no package that checks out, or an id listed twice){names}"
         ));
     }
     if skipped > 0 {
