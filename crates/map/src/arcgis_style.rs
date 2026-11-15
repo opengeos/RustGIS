@@ -104,7 +104,7 @@ pub fn apply(layer: &mut Layer, drawing_info: &Value, notes: &mut Notes) {
 /// several fields or by an expression leaves the layer's own renderer, noted.
 fn unique(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes) {
     let Some((fi, field)) = class_field(layer, r, "field1", notes) else { return };
-    if r.get("field2").and_then(Value::as_str).is_some_and(|f| !f.trim().is_empty()) {
+    if ["field2", "field3"].iter().any(|k| r.get(k).and_then(Value::as_str).is_some_and(|f| !f.trim().is_empty())) {
         notes.add("its renderer by the values of several fields, drawn with RustGIS's single symbol");
         return;
     }
@@ -121,6 +121,7 @@ fn unique(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes) {
         };
         // A value listed again is drawn as its first class, as ArcGIS draws it.
         if seen.contains(&value) {
+            notes.add("values listed twice, drawn as their first class");
             continue;
         }
         if classes.len() >= MAX_CLASSES {
@@ -130,7 +131,7 @@ fn unique(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes) {
         seen.insert(value.clone());
         let color = ramp.pick(classes.len(), n);
         let (symbol, dash) = class_symbol(info.get("symbol"), g, Some(color), color, notes);
-        if let Some(label) = label(info, "label").filter(|l| *l != value) {
+        if let Some(label) = label(info, "label", notes).filter(|l| *l != value) {
             class_labels.insert(value.clone(), label);
         }
         if let Some(d) = dash {
@@ -168,7 +169,7 @@ fn unique(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes) {
         other,
         ramp,
         class_labels,
-        other_label: label(r, "defaultLabel"),
+        other_label: label(r, "defaultLabel", notes),
         class_strokes,
         other_strokes,
         class_fills: BTreeMap::new(),
@@ -207,6 +208,12 @@ fn class_breaks(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes
         return;
     };
     infos.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // A class whose upper bound one before has is never drawn: what it holds is in that one.
+    let listed = infos.len();
+    infos.dedup_by(|b, a| b.0 == a.0);
+    if infos.len() < listed {
+        notes.add("classes with the upper bound of one before, left out");
+    }
     let ds = &layer.dataset;
     let values = || (0..ds.features.len()).map(|row| ds.value(row, fi).as_f64());
     let lowest = |info: &Value| finite(info.get("classMinValue"));
@@ -215,8 +222,15 @@ fn class_breaks(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes
         .or_else(|| values().flatten().filter(|v| v.is_finite()).reduce(f64::min))
         .unwrap_or(last)
         .min(infos.first().map_or(last, |i| i.0));
-    if infos.windows(2).any(|w| w.get(1).and_then(|b| lowest(b.1)).is_some_and(|lo| Some(lo) != w.first().map(|a| a.0))) {
-        notes.add("gaps or overlaps between its classes, drawn as if each began where the one before ends");
+    // A value between one class's top and the next one's lowest is in none for ArcGIS; here, in
+    // the next. Where classes overlap, both draw a value in the first that holds it.
+    let tops: Vec<f64> = infos.iter().map(|i| i.0).collect();
+    let in_gap = |v: f64| {
+        let i = tops.partition_point(|t| *t < v);
+        i > 0 && infos.get(i).and_then(|b| lowest(b.1)).is_some_and(|lo| v < lo)
+    };
+    if values().flatten().any(in_gap) {
+        notes.add("values between its classes, drawn in the class above");
     }
     if values().flatten().any(|v| v < min || v > last) {
         notes.add("values below its first class or above its last, drawn in the first or last class");
@@ -232,7 +246,7 @@ fn class_breaks(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes
     for (i, (_, info)) in infos.iter().enumerate() {
         let color = ramp.pick(i, n);
         let (symbol, dash) = class_symbol(info.get("symbol"), g, Some(color), color, notes);
-        if let Some(label) = label(info, "label") {
+        if let Some(label) = label(info, "label", notes) {
             class_labels.insert(i, label);
         }
         if let Some(d) = dash {
@@ -297,9 +311,14 @@ fn class_value(v: &Value, ty: FieldType) -> Option<String> {
 }
 
 /// A legend label (`key`), when there is one, as one typed by hand is kept (one line, at most
-/// [`MAX_LABEL`](crate::symbology::MAX_LABEL) characters).
-fn label(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(normalize_label).filter(|l| !l.is_empty())
+/// [`MAX_LABEL`](crate::symbology::MAX_LABEL) characters); one that changes is noted.
+fn label(v: &Value, key: &str, notes: &mut Notes) -> Option<String> {
+    let text = v.get(key).and_then(Value::as_str)?;
+    let label = normalize_label(text);
+    if label != text.trim() {
+        notes.add("legend labels of several lines or over 200 characters, joined into one line and cut");
+    }
+    Some(label).filter(|l| !l.is_empty())
 }
 
 /// A class's symbol for a `g` layer and its line's dash pattern: its own; a picture marker as a
@@ -832,7 +851,10 @@ mod tests {
         let l = with_rows(GeometryType::Polygon, FieldType::Integer, &[("BOSA", V::Null), ("SUBA", V::Null), ("USME", V::Null)]);
         let (l, notes) = styled_rows(l, info);
         // USME, which it doesn't list, isn't drawn, and that is said.
-        assert_eq!(notes.text(), "features of values it doesn't list, not drawn, as ArcGIS draws them");
+        assert_eq!(
+            notes.text(),
+            "values listed twice, drawn as their first class; features of values it doesn't list, not drawn, as ArcGIS draws them"
+        );
         let Renderer::Unique { field, classes, class_labels, other, other_label, .. } = &l.renderer else { panic!("{:?}", l.renderer) };
         // The field as the layer names it; a value listed again is drawn as its first class.
         assert_eq!(field, "NAME");
@@ -918,6 +940,10 @@ mod tests {
                 "its renderer by the values of several fields, drawn with RustGIS's single symbol",
             ),
             (
+                json!({"type": "uniqueValue", "field1": "NAME", "field2": "", "field3": "KIND", "uniqueValueInfos": infos.clone()}),
+                "its renderer by the values of several fields, drawn with RustGIS's single symbol",
+            ),
+            (
                 json!({"type": "uniqueValue", "field1": "NAME", "valueExpression": "$feature.NAME", "uniqueValueInfos": infos.clone()}),
                 "its renderer by an expression (Arcade), drawn with RustGIS's single symbol",
             ),
@@ -967,21 +993,22 @@ mod tests {
         let fill = json!({"type": "esriSFS", "color": [1, 2, 3, 255]});
         let info = json!({"renderer": {"type": "classBreaks", "field": "CODE", "minValue": 10,
             "classBreakInfos": [{"classMinValue": 10, "classMaxValue": 20, "symbol": fill}, {"classMinValue": 25, "classMaxValue": 30, "symbol": fill},
-                {"classMaxValue": "x", "symbol": fill}],
+                {"classMaxValue": "x", "symbol": fill}, {"classMaxValue": 20, "symbol": fill}],
             "backgroundFillSymbol": {"type": "esriSFS", "color": [0, 0, 0, 255]}}});
-        let rows = [("a", V::Int(5)), ("b", V::Null), ("c", V::Int(40))];
+        let rows = [("a", V::Int(5)), ("b", V::Null), ("c", V::Int(40)), ("d", V::Int(22))];
         let (l, notes) = styled_rows(with_rows(GeometryType::Polygon, FieldType::Integer, &rows), info.clone());
-        assert!(matches!(l.renderer, Renderer::Graduated { .. }));
+        let Renderer::Graduated { breaks, .. } = &l.renderer else { panic!("{:?}", l.renderer) };
+        assert_eq!(breaks.as_slice(), [20.0, 30.0], "each bound once");
         assert_eq!(
             notes.text(),
-            "classes with no upper bound RustGIS can read, left out; \
-             gaps or overlaps between its classes, drawn as if each began where the one before ends; \
+            "classes with no upper bound RustGIS can read, left out; classes with the upper bound of one before, left out; \
+             values between its classes, drawn in the class above; \
              values below its first class or above its last, drawn in the first or last class; features with no value, drawn grey; \
              its background fill under the class symbols, left out"
         );
-        // Every value within the classes, and contiguous: nothing is said.
+        // Every value within the classes, none between them: nothing is said.
         let info = json!({"renderer": {"type": "classBreaks", "field": "CODE",
-            "classBreakInfos": [{"classMinValue": 10, "classMaxValue": 20, "symbol": fill}, {"classMinValue": 20, "classMaxValue": 30, "symbol": fill}]}});
+            "classBreakInfos": [{"classMinValue": 10, "classMaxValue": 20, "symbol": fill}, {"classMinValue": 25, "classMaxValue": 30, "symbol": fill}]}});
         let (l, notes) = styled_rows(with_rows(GeometryType::Polygon, FieldType::Integer, &[("a", V::Int(10)), ("b", V::Int(30))]), info);
         assert!(notes.is_empty(), "{}", notes.text());
         let Renderer::Graduated { min, .. } = l.renderer else { panic!() };
@@ -1010,8 +1037,10 @@ mod tests {
         let info = json!({"renderer": {"type": "uniqueValue", "field1": "NAME", "uniqueValueInfos": [
             {"value": "a", "label": "two\nlines ", "symbol": fill}, {"value": "b", "label": "x".repeat(MAX_LABEL + 50), "symbol": fill}],
             "defaultSymbol": fill, "defaultLabel": "  \t "}});
-        let (l, _) = styled(GeometryType::Polygon, info);
+        let (l, notes) = styled(GeometryType::Polygon, info);
         let Renderer::Unique { class_labels, other_label, .. } = &l.renderer else { panic!("{:?}", l.renderer) };
+        // Said once for both; a blank one isn't.
+        assert_eq!(notes.text(), "legend labels of several lines or over 200 characters, joined into one line and cut (2 symbols)");
         assert_eq!(class_labels.get("a").map(String::as_str), Some("two lines"));
         assert_eq!(class_labels.get("b").map(|l| l.chars().count()), Some(MAX_LABEL));
         assert_eq!(other_label, &None, "a blank label is none");
