@@ -74,6 +74,11 @@ pub(crate) fn after_command(session: &mut Session, id: &str) {
 }
 
 fn landed_impl(session: &mut Session, restoring: bool) {
+    // Like in-place overview maintenance, unrelated retained-view edits belong only to the
+    // native owner/frame, never to a named read-only or narrowed command ingress.
+    if !session.policy_ingress_idle() {
+        return;
+    }
     let mut checked = std::mem::take(&mut session.terrain_blocks_checked);
     let mut maps = HashSet::new();
     let mut dropped = Vec::new();
@@ -234,6 +239,33 @@ mod tests {
         session.notice_landed_rasters();
         assert!(session.map().view.terrain.as_ref().unwrap().block.is_some());
         assert!(session.notices.iter().any(|notice| notice.text.contains("check samples")));
+    }
+
+    #[test]
+    fn a_named_read_only_command_does_not_drop_unrelated_terrain_blocks() {
+        use crate::policy::{AgentAccess, Call, Effects, Revocation, Scope};
+        struct ReadOnly;
+        impl Revocation for ReadOnly {
+            fn allows(&self, effects: Effects) -> bool {
+                effects == Effects::NONE
+            }
+        }
+        let mut session = pending([2000.0, 2000.0, 2200.0, 2200.0]);
+        load(&mut session, pixels(false));
+        session.clear_history();
+        let before = serde_json::to_value(&session.project).unwrap();
+        let state = session.state();
+        let scope = Scope::agent(AgentAccess::Allow, false, "terrain-read", None, Arc::new(ReadOnly));
+        session.run_scoped(scope, &Call::command("info.diagnostics", serde_json::Value::Null)).unwrap();
+        assert_eq!(serde_json::to_value(&session.project).unwrap(), before);
+        assert_eq!(session.state(), state);
+        assert_eq!(session.undo_depth(), 0);
+        assert!(!session.dirty());
+        // The actual native frame can perform that maintenance with an undoable edit.
+        session.notice_landed_rasters();
+        assert!(session.map().view.terrain.as_ref().unwrap().block.is_none());
+        assert!(session.dirty());
+        assert_eq!(session.undo_depth(), 1);
     }
 
     #[test]

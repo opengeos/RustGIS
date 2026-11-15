@@ -97,14 +97,14 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         return Err("legacyReturn cannot override a present field or home identity".into());
     }
 
-    if (s.project.field_origin.is_some() || legacy_return) && s.project.maps.len() != 1 {
+    let opened_field = legacy_return
+        || s.project.field_origin.is_some()
+        || s.opened_package.as_deref().is_some_and(|p| is_field_package(&p.to_string_lossy()));
+    if opened_field && s.project.maps.len() != 1 {
         return Err("a returning field project must hold only its original field map: remove added maps before sending it back".into());
     }
     // An offline area's map: named for one of this project's areas, or opened from a field
     // package (the phone's project holds no areas). A map only named so is packaged as any other.
-    let opened_field = legacy_return
-        || s.project.field_origin.is_some()
-        || s.opened_package.as_deref().is_some_and(|p| is_field_package(&p.to_string_lossy()));
     let returning = s
         .map()
         .name
@@ -1511,6 +1511,23 @@ mod tests {
         let text = super::super::items::package_text(&returned).unwrap();
         assert!(Project::from_json(&text).unwrap().field_origin.is_none());
         assert!(old.project.offline_areas.is_empty());
+    }
+
+    #[test]
+    fn an_opened_legacy_field_copy_refuses_an_added_map_before_packaging() {
+        let mut field = Session::new(Project::new("Old field"));
+        field.opened_package = Some(PathBuf::from("old.rgisfield"));
+        field.project.maps.push(rustgis_map::Map::new("Added"));
+        field.project.active_map = 1;
+        field.clear_history();
+        let before = serde_json::to_value(&field.project).unwrap();
+        let state = field.state();
+        let error = package_output(&mut field, &Value::Null).unwrap_err();
+        assert!(error.contains("remove added maps"), "{error}");
+        assert_eq!(serde_json::to_value(&field.project).unwrap(), before);
+        assert_eq!(field.state(), state);
+        assert_eq!(field.undo_depth(), 0);
+        assert!(!field.dirty());
     }
 
     #[test]
