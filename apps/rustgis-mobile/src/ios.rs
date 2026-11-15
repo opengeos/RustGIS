@@ -633,7 +633,11 @@ fn take_return(view: &objc2_ui_kit::UIView) {
             }
             return;
         }
-        let Some(winit) = this.class().superclass() else { return };
+        let Some(winit) = this.class().superclass() else {
+            // A subclass always has one: said in the log should it not, as the text is dropped.
+            log::warn!("typed text was dropped: winit's view has no superclass");
+            return;
+        };
         // SAFETY: `this` is winit's view (the class is only given to it), whose class is the
         // superclass here; its `insertText:` takes the text.
         unsafe { msg_send![super(this, winit), insertText: text] }
