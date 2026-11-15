@@ -628,6 +628,10 @@ mod tests {
         let rows = l.with_size_legend(l.renderer.legend());
         let sized: Vec<_> = rows.iter().skip(6).map(|e| (e.label.as_str(), e.symbol.size)).collect();
         assert_eq!(sized, [("pop 0", 2.0), ("pop 2.0M", 12.0), ("pop 4.0M", 22.0)]);
+        // A field the layer doesn't have sizes nothing, on the map or in the legend.
+        l.size_by = Some(SizeBy { field: "gone".into(), ..by.clone() });
+        assert_eq!(l.with_size_legend(l.renderer.legend()).len(), 6);
+        l.size_by = Some(by.clone());
         // Size samples use the first class's own marks, scaled just as on the map.
         let mark = LineStroke {
             markers: Some(crate::symbology::LineMarkers { size: 14.0, offset_along: 3.5, ..Default::default() }),

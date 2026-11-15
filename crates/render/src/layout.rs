@@ -1911,9 +1911,9 @@ fn complete_shown_legends(map: &mut Map, scale: f64, show_no_data: bool) -> Opti
         }
         if any {
             // (A sample of the classes seen: classed again at this scale, by expression.)
-            let mut entries = layer.renderer.legend_at(&sample, &[], Some(scale));
+            let mut entries = layer.with_size_legend(layer.renderer.legend_at(&sample, &[], Some(scale)));
             entries.extend(no_data);
-            out.push((layer.id, layer.with_size_legend(entries)));
+            out.push((layer.id, entries));
         }
     }
     Some(out)
