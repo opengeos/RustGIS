@@ -223,6 +223,8 @@ pub fn checked_legends(legends: impl IntoIterator<Item = rustgis_data::ogc::Lege
         .into_iter()
         .map(|l| rustgis_data::ogc::Legend { url: l.url.trim().to_string(), min_scale: scale(l.min_scale), max_scale: scale(l.max_scale) })
         .filter(|l| {
+            // Percent-escaping can use three bytes per original byte; advertised_len below
+            // still enforces the original 4,096-byte budget after recognized escapes normalize.
             is_web(&l.url)
                 && rustgis_data::login_address::inner(&l.url).len() <= MAX_LEGEND_URL * 3
                 && rustgis_data::login_address::advertised_len(&l.url) <= MAX_LEGEND_URL

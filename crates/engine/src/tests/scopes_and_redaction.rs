@@ -736,6 +736,39 @@ fn outputs_redact_urls_capabilities_and_local_paths_across_scopes() {
     rustgis_plugins::unload("plug");
 }
 
+/// Legacy field recovery is reserved to direct native User dispatch.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn legacy_field_recovery_cannot_be_requested_by_restricted_ingress() {
+    use base64::Engine;
+    let mut s = world();
+    let (_, bytes) = crate::cmd::field::package(&mut s, &json!({"name":"Site","extent":[-180,-85,180,85]})).unwrap();
+    let entries = rustgis_data::zip::read(&bytes).unwrap();
+    let (_, project) = entries.iter().find(|(name, _)| name.ends_with(".rgis")).unwrap();
+    let mut project: Value = serde_json::from_slice(project).unwrap();
+    project["format"] = json!(1);
+    project.as_object_mut().unwrap().remove("field_origin");
+    project.as_object_mut().unwrap().remove("requires");
+    let bytes = rustgis_data::zip::write(&[("Site.rgis".into(), serde_json::to_vec(&project).unwrap())]).unwrap();
+    let params = json!({"data":base64::engine::general_purpose::STANDARD.encode(bytes),"legacyArea":"Site"});
+    let (before, state, depth) = (serde_json::to_value(&s.project).unwrap(), s.state(), s.undo_depth());
+    let error =
+        s.run_scoped(agent_scope(AgentAccess::Allow, "legacy-recovery"), &Call::command("offline.bringBack", params.clone())).unwrap_err();
+    assert!(error.contains("native User"), "{error}");
+    let (scope, _) = assistant_scope(7117);
+    assert!(s.run_scoped(scope, &Call::command("offline.bringBack", params.clone())).is_err());
+    isolate_plugins();
+    plugin("legacy-recovery-files", &["edit", "files"]);
+    let error = forward(&mut s, "legacy-recovery-files", "offline.bringBack", params.clone()).unwrap_err();
+    assert!(error.contains("native User"), "{error}");
+    rustgis_plugins::unload("legacy-recovery-files");
+    let result =
+        s.narrowed(Narrow::Item { kind: "task", name: "legacy recovery".into() }, |s| s.run("offline.bringBack", &params)).unwrap();
+    assert!(result.is_err());
+    assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+    assert_eq!((s.state(), s.undo_depth()), (state, depth));
+}
+
 /// Protocol document selectors are URLs in actual command results, including restricted ones.
 #[test]
 fn service_result_document_fields_are_addresses_and_keep_public_query_values() {

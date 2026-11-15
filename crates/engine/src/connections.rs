@@ -347,6 +347,36 @@ pub(crate) fn reserve_query_name(c: &Connection) -> Result<Option<rustgis_data::
         .ok_or_else(|| crate::render::rustgis_tiles::logins::TOO_MANY_QUERY_NAMES.into())
 }
 
+/// Query text after the same userinfo boundary the address redactor uses. A password may
+/// contain `?` or `#`; neither starts a public component until its authority is removed.
+fn public_query(address: &str) -> &str {
+    let rest = match address.split_once("://") {
+        Some((_, rest)) => rustgis_data::source::pgconn::userinfo_end(rest).and_then(|i| rest.get(i + 1..)).unwrap_or(rest),
+        None => address,
+    };
+    rest.split('#').next().and_then(|rest| rest.split_once('?')).map_or("", |(_, query)| query)
+}
+
+/// Legacy semicolon pairs are ambiguous after a credential-bearing pair: their text may be
+/// part of its secret value. Retain public prefixes and the first key, withholding its suffix.
+fn public_query_pairs<'a>(address: &'a str, hint: Option<&str>) -> Vec<&'a str> {
+    let query = public_query(address);
+    let context = rustgis_data::address::QueryNames::of(query);
+    let mut pairs = Vec::new();
+    for segment in query.split('&') {
+        for pair in segment.split(';').filter(|pair| !pair.is_empty()) {
+            pairs.push(pair);
+            let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+            if rustgis_data::address::name_class(name, &context) != rustgis_data::address::NameClass::Plain
+                || hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+            {
+                break;
+            }
+        }
+    }
+    pairs
+}
+
 /// The names (never the values) of the query parameters `given` had that `saved` lacks, which a
 /// query login can carry: the keys an address held and saving left out, to offer as the login's
 /// parameter. At most four, each once. Only `name=value` pairs count: a bare segment can't be a
@@ -359,15 +389,17 @@ pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
 /// The hint is per call: merely previewing a definition must not register a login name.
 pub(crate) fn stripped_parameters_with_hint(given: &str, saved: &str, hint: Option<&str>) -> Vec<String> {
     use crate::render::rustgis_tiles::logins;
-    fn names(address: &str) -> Vec<&str> {
-        let query = address.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
-        query.split(['&', ';']).filter_map(|pair| pair.split_once('=').map(|(name, _)| name)).filter(|name| !name.is_empty()).collect()
+    fn names<'a>(address: &'a str, hint: Option<&str>) -> Vec<&'a str> {
+        public_query_pairs(address, hint)
+            .into_iter()
+            .filter_map(|pair| pair.split_once('=').map(|(name, _)| name))
+            .filter(|name| !name.is_empty())
+            .collect()
     }
-    let query = given.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
-    let context = rustgis_data::address::QueryNames::of(query);
-    let kept = names(saved);
+    let context = rustgis_data::address::QueryNames::of(public_query(given));
+    let kept = names(saved, None);
     let mut left_out: Vec<String> = Vec::new();
-    for name in names(given) {
+    for name in names(given, hint) {
         if left_out.len() < 4
             && logins::valid_query_name(name)
             && (hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
@@ -385,17 +417,13 @@ pub(crate) fn stripped_parameters_with_hint(given: &str, saved: &str, hint: Opti
 /// lost component, including repeated names; report at most four safe names, never bare text or
 /// values. These are diagnostics, not query-login suggestions.
 pub(crate) fn collateral_parameters(given: &str, saved: &str, hint: Option<&str>) -> (usize, Vec<String>) {
-    fn query(address: &str) -> &str {
-        address.split('#').next().and_then(|address| address.split_once('?')).map_or("", |(_, query)| query)
-    }
-    let given = query(given);
-    let context = rustgis_data::address::QueryNames::of(given);
+    let context = rustgis_data::address::QueryNames::of(public_query(given));
     let mut kept = std::collections::HashMap::<&str, usize>::new();
-    for pair in query(saved).split(['&', ';']).filter(|pair| !pair.is_empty()) {
+    for pair in public_query_pairs(saved, None) {
         *kept.entry(pair).or_default() += 1;
     }
     let (mut count, mut names) = (0usize, Vec::<String>::new());
-    for pair in given.split(['&', ';']).filter(|pair| !pair.is_empty()) {
+    for pair in public_query_pairs(given, hint) {
         let name = pair.split_once('=').map_or(pair, |(name, _)| name);
         if rustgis_data::address::name_class(name, &context) != rustgis_data::address::NameClass::Plain
             || hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))

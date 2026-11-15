@@ -47,7 +47,16 @@ pub(super) fn check(name: &str, raster: &Raster, extent: Option<[f64; 4]>) -> Re
     }
     let total = (CHECK_CELLS + 1) * (CHECK_CELLS + 1);
     if missing == total {
-        return Err(format!("the block has no height from '{name}' at any of its {total} check samples"));
+        // A coarse grid can step over a small valid DEM. Only refuse when a bounded scan
+        // proves the entire first band has no height; otherwise retain the block and report
+        // the sampled missing locations. Never scan an unbounded raster on a frame.
+        let empty = raster.width.checked_mul(raster.height).is_some_and(|cells| cells <= (CHECK_CELLS * CHECK_CELLS) as u32)
+            && (0..raster.height).all(|row| {
+                (0..raster.width).all(|col| raster.value(0, i64::from(col), i64::from(row)).is_none_or(|height| !height.is_finite()))
+            });
+        if empty {
+            return Err(format!("the block has no height from '{name}': its bounded first band has no usable cells"));
+        }
     }
     Ok(Coverage { extent, missing, total })
 }
@@ -55,11 +64,22 @@ pub(super) fn check(name: &str, raster: &Raster, extent: Option<[f64; 4]>) -> Re
 /// Called after a command commits and when the frame reports newly landed raster pixels.
 /// A Weak retains allocation identity without retaining the DEM's pixel buffers.
 pub(crate) fn landed(session: &mut Session) {
+    landed_impl(session, false);
+}
+
+/// Undo/redo restores the recorded view exactly; report unusable restored bounds without
+/// immediately deleting them again. Remembering the checked allocation also keeps later frames.
+pub(crate) fn after_command(session: &mut Session, id: &str) {
+    landed_impl(session, matches!(id, "edit.undo" | "edit.redo"));
+}
+
+fn landed_impl(session: &mut Session, restoring: bool) {
     let mut checked = std::mem::take(&mut session.terrain_blocks_checked);
     let mut maps = HashSet::new();
     let mut dropped = Vec::new();
+    let mut restored = Vec::new();
     let mut partial = Vec::new();
-    for map in &mut session.project.maps {
+    for map in &session.project.maps {
         let map_id = map.instance_id();
         maps.insert(map_id);
         let Some(terrain) = &map.view.terrain else {
@@ -89,11 +109,13 @@ pub(crate) fn landed(session: &mut Session) {
         let name = crate::project::short_name(name);
         match check(&name, raster, block.extent) {
             Err(reason) => {
-                dropped.push(format!("{} ({reason})", crate::project::short_name(&map.name)));
-                if let Some(terrain) = &mut map.view.terrain {
-                    terrain.block = None;
+                let detail = format!("{} ({reason})", crate::project::short_name(&map.name));
+                if restoring {
+                    restored.push(detail);
+                } else {
+                    dropped.push((map_id, detail));
+                    checked.remove(&map_id);
                 }
-                checked.remove(&map_id);
             }
             Ok(coverage) if coverage.missing > 0 => partial.push((crate::project::short_name(&map.name), name, coverage)),
             Ok(_) => {}
@@ -109,16 +131,39 @@ pub(crate) fn landed(session: &mut Session) {
         text
     };
     if !dropped.is_empty() {
-        session.notify_text(
-            NoticeText::format(
-                "Terrain: {count} block diagram(s) dropped after their DEM loaded: {details}; the terrain draws the whole map",
-                [
-                    ("count", dropped.len().to_string().into()),
-                    ("details", details(dropped.iter().take(3).cloned().collect(), dropped.len()).into()),
-                ],
-            ),
-            false,
-        );
+        let ids: HashSet<_> = dropped.iter().map(|(id, _)| *id).collect();
+        // Pixel loading is not itself an edit transaction. Record its durable view adjustment
+        // explicitly, including when this is called from a frame rather than a command.
+        let changed = session.guarded("Update loaded terrain blocks", true, |session| {
+            for map in &mut session.project.maps {
+                if ids.contains(&map.instance_id())
+                    && let Some(terrain) = &mut map.view.terrain
+                {
+                    terrain.block = None;
+                }
+            }
+            Ok(serde_json::Value::Null)
+        });
+        if let Err(error) = changed {
+            session.notify(error, true);
+        } else {
+            session.notify_text(
+                NoticeText::format(
+                    "Terrain: {count} block diagram(s) dropped after their DEM loaded: {details}; the terrain draws the whole map",
+                    [
+                        ("count", dropped.len().to_string().into()),
+                        ("details", details(dropped.iter().take(3).map(|(_, detail)| detail.clone()).collect(), dropped.len()).into()),
+                    ],
+                ),
+                false,
+            );
+        }
+    }
+    if !restored.is_empty() {
+        session.notify_text(NoticeText::format(
+            "Terrain: {count} restored block diagram(s) kept without usable DEM heights: {details}; change their bounds or remove the blocks to use the DEM",
+            [("count", restored.len().to_string().into()), ("details", details(restored.iter().take(3).cloned().collect(), restored.len()).into())],
+        ), false);
     }
     if !partial.is_empty() {
         let missing = partial.iter().map(|(_, _, coverage)| coverage.missing).sum::<usize>();
@@ -178,6 +223,20 @@ mod tests {
         s.map_mut().layers.iter_mut().find(|l| l.name == "DEM").unwrap().raster.as_mut().unwrap().data = Some(Arc::new(r));
     }
     #[test]
+    fn a_small_valid_dem_between_grid_samples_keeps_its_block() {
+        let extent = [900.0, 900.0, 64900.0, 64900.0];
+        let raster = pixels(false);
+        assert!(rustgis_render::terrain::dem_height(&raster, Coord::new(1200.0, 1200.0)).is_some());
+        let coverage = check("DEM", &raster, Some(extent)).unwrap();
+        assert_eq!(coverage.missing, coverage.total);
+        let mut session = pending(extent);
+        load(&mut session, raster);
+        session.notice_landed_rasters();
+        assert!(session.map().view.terrain.as_ref().unwrap().block.is_some());
+        assert!(session.notices.iter().any(|notice| notice.text.contains("check samples")));
+    }
+
+    #[test]
     fn deferred_dem_revalidates_disjoint_block_once_without_removing_terrain() {
         let mut s = pending([2000.0, 2000.0, 2200.0, 2200.0]);
         s.notice_landed_rasters();
@@ -190,6 +249,17 @@ mod tests {
         assert_eq!(count, 1);
         s.notice_landed_rasters();
         assert_eq!(s.notices.iter().filter(|n| n.text.contains("block diagram(s) dropped")).count(), 1);
+        assert!(s.dirty());
+        assert_eq!(s.undo_depth(), 1);
+        s.run("edit.undo", &serde_json::Value::Null).unwrap();
+        assert!(s.map().view.terrain.as_ref().unwrap().block.is_some());
+        assert!(!s.dirty());
+        s.notice_landed_rasters();
+        assert!(s.map().view.terrain.as_ref().unwrap().block.is_some(), "a frame must not undo the user's Undo");
+        assert_eq!(s.undo_depth(), 0);
+        s.run("edit.redo", &serde_json::Value::Null).unwrap();
+        assert!(s.map().view.terrain.as_ref().unwrap().block.is_none());
+        assert!(s.dirty());
     }
     #[test]
     fn loaded_dem_without_heights_is_refused_before_terrain_changes() {

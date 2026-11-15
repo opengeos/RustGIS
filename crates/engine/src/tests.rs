@@ -21800,7 +21800,8 @@ fn deleting_a_field_clears_the_label_expressions_reading_it() {
         ["Countries: its label expressions read the deleted field tag, so they are removed: Default's size; Big's text, size and angle"]
     );
     let saved = serde_json::to_string(&got).unwrap();
-    assert!(!saved.contains("tag"), "{saved}");
+    let reopened: rustgis_map::Labeling = serde_json::from_str(&saved).unwrap();
+    assert_eq!(reopened, got, "the saved label expressions stay cleared");
     // Undo brings the field and the expressions back.
     s.run("edit.undo", &Value::Null).unwrap();
     let got = labels(&s);
@@ -21858,6 +21859,16 @@ fn deleting_a_field_is_refused_while_the_time_slider_reads_it() {
     assert_eq!(s.undo_depth(), depth);
     assert!(s.map().layer_by_name("Events").and_then(|l| l.dataset.field_index("when")).is_some());
     assert_eq!(shown(&s), ["e0"]);
+    // Turning off the map slider retains its layer binding; deletion still refuses without
+    // an undo step, even though every row is now shown.
+    s.run("time.set", &json!({"off": true})).unwrap();
+    let off_depth = s.undo_depth();
+    assert!(s.map().time.is_none());
+    assert!(s.map().layer_by_name("Events").and_then(|layer| layer.time.as_ref()).is_some());
+    let error = s.run("edit.deleteField", &json!({"layer": "Events", "field": "when"})).unwrap_err();
+    assert!(error.contains("unbind it first"), "{error}");
+    assert_eq!(s.undo_depth(), off_depth);
+    assert!(s.map().layer_by_name("Events").and_then(|layer| layer.dataset.field_index("when")).is_some());
     // Another field goes; once unbound, the slider's field goes too.
     s.run("edit.deleteField", &json!({"layer": "Events", "field": "ms"})).unwrap();
     s.run("time.unbind", &Value::Null).unwrap();

@@ -1639,7 +1639,7 @@ impl Session {
             }
             // Pixels the command read in place (a project, an import) say what they lost.
             if res.is_ok() {
-                cmd::terrain_blocks::landed(self);
+                cmd::terrain_blocks::after_command(self, id);
             }
             self.notice_landed_pixels();
             // And the coordinate systems that needed a missing datum grid, after every command.

@@ -2750,6 +2750,31 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert_eq!(repeated["omittedPublicParameterCount"], 1);
     assert_eq!(repeated["omittedPublicParameters"], json!(["x"]));
 
+    // Semicolon suffixes after a key may be its value, never public names or login hints.
+    for (i, suffix) in ["RGSYNTHopaque757=x", "tokenRGSYNTHopaque757=x"].iter().enumerate() {
+        let mark = s.notice_mark();
+        let result = s
+            .run(
+                "connection.new",
+                &json!({"kind":"wmts","name":format!("Private suffix {i}"),"address":format!("{origin}/private?token=p;{suffix}")}),
+            )
+            .unwrap();
+        let shown = format!("{result}{:?}", s.notices_since(mark));
+        assert!(!shown.contains("RGSYNTHopaque757"), "{shown}");
+        assert!(result.get("omittedPublicParameters").is_none(), "{result}");
+        assert_eq!(result["strippedParameters"], json!(["token"]));
+    }
+    let mark = s.notice_mark();
+    let userinfo = s
+        .run(
+            "connection.new",
+            &json!({"kind":"wmts","name":"Private authority","address":"https://u:p?RGSYNTHopaque757=x@host.example/wmts"}),
+        )
+        .unwrap();
+    let shown = format!("{userinfo}{:?}", s.notices_since(mark));
+    assert!(!shown.contains("RGSYNTHopaque757"), "{shown}");
+    assert!(userinfo.get("omittedPublicParameters").is_none() && userinfo.get("strippedParameters").is_none(), "{userinfo}");
+
     // A custom key name is a redaction hint even before a method is chosen; the saved definition
     // must be as safe as its replay log. An explicit no-login method leaves ordinary data alone.
     let no_method = s

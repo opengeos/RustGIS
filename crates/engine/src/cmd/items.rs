@@ -1723,7 +1723,11 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
             (name, bytes)
         }
         "projectPackage" => (s.project.name.clone(), package_project(s)?),
-        "fieldPackage" => super::field::package(s, p)?,
+        "fieldPackage" => {
+            let (name, bytes, notes) = super::field::package_output(s, p)?;
+            construction_notes.extend(notes);
+            (name, bytes)
+        }
         "mapPackage" | "mobilePackage" => {
             let tol = f(p, "tolerance").unwrap_or(0.001).clamp(0.0, 1.0);
             (s.map().name.clone(), package_map(s, kind == "mobilePackage", tol)?)
@@ -1794,8 +1798,11 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
 pub(crate) fn save_item(s: &mut Session, kind: &str, p: &Value) -> CmdResult {
     let written = s.notice_mark();
     let path = ps(p, "path").ok_or("path is required")?.to_string();
-    let (_, bytes) = item_bytes(s, kind, p)?;
+    let (_, bytes, notes) = item_output(s, kind, p)?;
     rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+    for note in notes {
+        s.notify(note, false);
+    }
     s.retain_written_notices(written);
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
