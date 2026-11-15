@@ -34,6 +34,7 @@ nav = [
   { "Comparison" = [
     "comparison/index.md",
     "comparison/geolibre.md",
+    { "GeoLibre parity checklist" = "geolibre-parity.md" },
     "comparison/qgis.md",
   ] },
   { "Command Line" = "cli.md" },
