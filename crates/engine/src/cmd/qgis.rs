@@ -1345,7 +1345,7 @@ fn notify_report(s: &mut Session, report: &Report) {
             NoteKind::Skipped => "QGIS import, {layer}: {detail} (left out; count {count})",
         };
         s.notify_text(
-            crate::NoticeText::format(
+            crate::notice_text::NoticeText::format(
                 template,
                 [
                     ("layer", if note.layer.is_empty() { "project" } else { &note.layer }.to_string().into()),
