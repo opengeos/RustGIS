@@ -564,8 +564,9 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
                 if describing
                     && let Step::Fetch(pages) = &mut step
                     && let Some(drawing) = pages.take_drawing_info()
+                    && let Some(params) = landed.params.as_object_mut()
                 {
-                    landed.params["drawingInfo"] = drawing;
+                    params.insert("drawingInfo".to_string(), drawing);
                 }
                 go_on(app, landed, left, step);
             }

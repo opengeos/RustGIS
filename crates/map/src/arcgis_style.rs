@@ -29,11 +29,6 @@ impl Notes {
         self.0.is_empty()
     }
 
-    /// Each note with how many times it came up.
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, usize)> + '_ {
-        self.0.iter().copied()
-    }
-
     /// The notes as one sentence's list: `"hatched fills, drawn solid (3 symbols); …"`.
     pub fn text(&self) -> String {
         self.0.iter().map(|(t, n)| if *n > 1 { format!("{t} ({n} symbols)") } else { (*t).to_string() }).collect::<Vec<_>>().join("; ")
@@ -42,14 +37,19 @@ impl Notes {
 
 /// Gives `layer`, a feature layer just added from an ArcGIS service, the symbology its
 /// description's `drawingInfo` sets: its renderer, when RustGIS draws its kind, and its
-/// transparency. What can't be drawn as the service draws it is noted; a renderer of a kind
-/// RustGIS doesn't read leaves the layer's own. Anything but an object changes nothing.
+/// transparency. What can't be drawn as the service draws it is noted, its labels too; a renderer
+/// of a kind RustGIS doesn't read leaves the layer's own. Anything but an object changes nothing.
 pub fn apply(layer: &mut Layer, drawing_info: &Value, notes: &mut Notes) {
     if !drawing_info.is_object() || layer.is_raster() {
         return;
     }
     if let Some(t) = drawing_info.get("transparency").and_then(Value::as_f64).filter(|t| t.is_finite()) {
         layer.transparency = t.clamp(0.0, 100.0) as f32;
+    }
+    // The service's labels aren't carried over (#2080), unless it shows none.
+    let labelled = drawing_info.get("labelingInfo").and_then(Value::as_array).is_some_and(|l| !l.is_empty());
+    if labelled && drawing_info.get("showLabels").and_then(Value::as_bool) != Some(false) {
+        notes.add("its labels, left out");
     }
     let Some(renderer) = drawing_info.get("renderer").filter(|r| r.is_object()) else { return };
     let g = layer.geometry_type();
@@ -86,19 +86,28 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
             let fill = match style {
                 "esriSFSNull" | "esriSFSHollow" => Rgba::TRANSPARENT,
                 "esriSFSSolid" => color(s.get("color")),
-                _ => {
+                "esriSFSBackwardDiagonal"
+                | "esriSFSCross"
+                | "esriSFSDiagonalCross"
+                | "esriSFSForwardDiagonal"
+                | "esriSFSHorizontal"
+                | "esriSFSVertical" => {
                     notes.add("hatched fills, drawn solid");
                     color(s.get("color"))
                 }
+                _ => {
+                    notes.add("fill styles RustGIS doesn't draw, drawn solid");
+                    color(s.get("color"))
+                }
             };
-            let (stroke, stroke_width, dash) = line(s.get("outline"), 0.0);
+            let (stroke, stroke_width, dash) = line(s.get("outline"), 0.0, notes);
             if dash.is_some() {
                 notes.add("dashed polygon outlines, drawn solid");
             }
             Some((Symbol { fill, stroke, stroke_width, ..base }, None))
         }
         ("esriSLS", GeometryType::Polyline) => {
-            let (c, width, dash) = line(Some(s), base.stroke_width);
+            let (c, width, dash) = line(Some(s), base.stroke_width, notes);
             Some((Symbol { fill: c, stroke: c, stroke_width: width, ..base }, dash))
         }
         ("esriSMS", GeometryType::Point) => {
@@ -108,9 +117,13 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
                 Some("esriSMSTriangle") => Marker::Triangle,
                 Some("esriSMSCross") => Marker::Char(crate::symbology::Glyph::new('+', "")),
                 Some("esriSMSX") => Marker::Char(crate::symbology::Glyph::new('×', "")),
-                _ => Marker::Circle,
+                None | Some("esriSMSCircle") => Marker::Circle,
+                Some(_) => {
+                    notes.add("marker shapes RustGIS doesn't draw, drawn as circles");
+                    Marker::Circle
+                }
             };
-            let (stroke, stroke_width, _) = line(s.get("outline"), 0.0);
+            let (stroke, stroke_width, _) = line(s.get("outline"), 0.0, notes);
             if offset_or_angle(s) {
                 notes.add("markers' angles and offsets, left out");
             }
@@ -123,7 +136,7 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
         }
         ("esriPFS", GeometryType::Polygon) => {
             notes.add("picture fills, drawn with their outline only");
-            let (stroke, stroke_width, _) = line(s.get("outline"), 0.0);
+            let (stroke, stroke_width, _) = line(s.get("outline"), 0.0, notes);
             Some((Symbol { fill: Rgba::TRANSPARENT, stroke, stroke_width, ..base }, None))
         }
         ("esriSFS" | "esriSLS" | "esriSMS" | "esriPMS" | "esriPFS", _) => {
@@ -138,8 +151,9 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
 }
 
 /// A simple line symbol's (`esriSLS`) colour, width in points and dash pattern: none at all
-/// (transparent, `0`) when absent or of style `esriSLSNull`, `width` when it names none.
-fn line(s: Option<&Value>, width: f32) -> (Rgba, f32, Option<Dash>) {
+/// (transparent, `0`) when absent or of style `esriSLSNull`, `width` when it names none. A style
+/// RustGIS doesn't know is drawn solid, noted.
+fn line(s: Option<&Value>, width: f32, notes: &mut Notes) -> (Rgba, f32, Option<Dash>) {
     let Some(s) = s.filter(|s| s.is_object()) else { return (Rgba::TRANSPARENT, 0.0, None) };
     let style = s.get("style").and_then(Value::as_str).unwrap_or("esriSLSSolid");
     if style == "esriSLSNull" {
@@ -150,13 +164,19 @@ fn line(s: Option<&Value>, width: f32) -> (Rgba, f32, Option<Dash>) {
         .and_then(Value::as_f64)
         .filter(|w| w.is_finite())
         .map_or(width, |w| w.clamp(0.0, f64::from(MAX_STROKE_WIDTH)) as f32);
-    (color(s.get("color")), w, dash(style, w))
+    let dash = dash(style, w).unwrap_or_else(|| {
+        notes.add("line styles RustGIS doesn't draw, drawn solid");
+        None
+    });
+    (color(s.get("color")), w, dash)
 }
 
 /// The dash pattern of a simple line style, in points: ArcGIS's, in line widths (as the ArcGIS
-/// Maps SDK for JavaScript draws them), at least a point wide. `None` for a solid line.
-fn dash(style: &str, width: f32) -> Option<Dash> {
+/// Maps SDK for JavaScript draws them), at least a point wide; `Some(None)` for a solid line, and
+/// `None` for a style RustGIS doesn't know.
+fn dash(style: &str, width: f32) -> Option<Option<Dash>> {
     let steps: &[f32] = match style {
+        "esriSLSSolid" | "esriSLSInsideFrame" => return Some(None),
         "esriSLSDash" => &[4.0, 3.0],
         "esriSLSDot" => &[1.0, 3.0],
         "esriSLSDashDot" => &[4.0, 3.0, 1.0, 3.0],
@@ -170,7 +190,7 @@ fn dash(style: &str, width: f32) -> Option<Dash> {
         _ => return None,
     };
     let unit = width.max(1.0);
-    Dash::new(&steps.iter().map(|s| s * unit).collect::<Vec<_>>())
+    Some(Dash::new(&steps.iter().map(|s| s * unit).collect::<Vec<_>>()))
 }
 
 /// An ArcGIS colour, `[r, g, b, a]` from 0 to 255 (`[r, g, b]` opaque); `null`, or anything else,
@@ -329,6 +349,43 @@ mod tests {
             notes.text(),
             "sizes, colours or rotations by value (visual variables), left out; markers rotated by a field, drawn upright"
         );
+    }
+
+    #[test]
+    fn the_services_labels_are_said_left_out_unless_it_shows_none() {
+        let symbol = json!({"type": "simple", "symbol": {"type": "esriSFS", "color": [1, 2, 3, 255]}});
+        let labels = json!([{"labelExpression": "[NAME]", "symbol": {"type": "esriTS"}}]);
+        for (info, said) in [
+            (json!({"renderer": symbol.clone(), "labelingInfo": labels.clone()}), "its labels, left out"),
+            (json!({"renderer": symbol.clone(), "labelingInfo": labels, "showLabels": false}), ""),
+            (json!({"renderer": symbol.clone(), "labelingInfo": []}), ""),
+            (json!({"renderer": symbol, "labelingInfo": null}), ""),
+        ] {
+            assert_eq!(styled(GeometryType::Polygon, info).1.text(), said);
+        }
+    }
+
+    #[test]
+    fn styles_rustgis_doesnt_know_are_drawn_near_and_said() {
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "style": "esriSMSPath", "color": [0, 0, 0, 255]}}});
+        let (l, notes) = styled(GeometryType::Point, info);
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        assert_eq!((s.marker, notes.text().as_str()), (Marker::Circle, "marker shapes RustGIS doesn't draw, drawn as circles"));
+        // No style is a circle, as ArcGIS draws it.
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "color": [0, 0, 0, 255]}}});
+        assert!(styled(GeometryType::Point, info).1.is_empty());
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSLS", "style": "esriSLSWavy", "color": [0, 0, 0, 255], "width": 1}}});
+        let (l, notes) = styled(GeometryType::Polyline, info);
+        assert!(l.line_strokes.is_empty(), "solid");
+        assert_eq!(notes.text(), "line styles RustGIS doesn't draw, drawn solid");
+        let info =
+            json!({"renderer": {"type": "simple", "symbol": {"type": "esriSLS", "style": "esriSLSInsideFrame", "color": [0, 0, 0, 255]}}});
+        assert!(styled(GeometryType::Polyline, info).1.is_empty(), "drawn solid, as ArcGIS draws it");
+        let info =
+            json!({"renderer": {"type": "simple", "symbol": {"type": "esriSFS", "style": "esriSFSDotted", "color": [9, 9, 9, 255]}}});
+        let (l, notes) = styled(GeometryType::Polygon, info);
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        assert_eq!((s.fill, notes.text().as_str()), (Rgba::rgb(9, 9, 9), "fill styles RustGIS doesn't draw, drawn solid"));
     }
 
     #[test]
