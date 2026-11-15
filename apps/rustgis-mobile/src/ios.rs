@@ -155,7 +155,11 @@ impl PickerDelegate {
             // Answered already, or taken for declined (`check_presented`) and shown after all: files
             // chosen then aren't opened, which is said.
             None if !urls.is_empty() => {
-                shared.failed(i18n::fmt("The files chosen weren't opened: the picker was taken for not shown. Choose them again.", &[]))
+                shared.failed(i18n::fmt(
+                    "The picker answered after it was taken for not shown: nothing was opened or saved. Try again.",
+                    &[],
+                ));
+                wake(self.mtm());
             }
             None => {}
             Some(Asked::Save { name, temporary }) => {

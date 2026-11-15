@@ -91,8 +91,10 @@ fn gather(path: &Path, depth: usize, files: &mut Vec<(PathBuf, u64)>) -> bool {
         files.push((path.to_path_buf(), meta.len()));
         return true;
     }
+    // A link, or another entry that is neither file nor folder, isn't looked through, and a
+    // folder too deep isn't looked into: not read in full, so its pick is kept.
     if !meta.is_dir() || depth == 0 {
-        return true;
+        return false;
     }
     let Ok(entries) = std::fs::read_dir(path) else { return false };
     let mut complete = true;
@@ -352,6 +354,19 @@ mod tests {
         let removed = remove_unused(&picked, &found, &now, &AtomicBool::new(false)).unwrap();
         assert_eq!((removed.files, removed.now_named), (1, 1));
         assert!(picked.join("1/0/a.gpkg").exists() && !picked.join("2").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pick_deeper_than_looked_at_is_kept() {
+        let root = std::env::temp_dir().join(format!("rustgis-copies-deep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        let deep = picked.join("1/0/x/y");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("z.gpkg"), b"z").unwrap();
+        let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert_eq!((found.picks.len(), found.unreadable), (0, 1));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

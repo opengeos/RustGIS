@@ -1509,9 +1509,9 @@ fn copies_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context
         copies::Job::Asking(found) => {
             let (count, size) = (found.files.to_string(), copies::size(found.bytes));
             let template = if found.files == 1 {
-                "1 copy of a picked file ({size}) isn't named by this project. A project saved on this phone that names it won't find it."
+                "1 copy of a picked file ({size}) isn't named by this project. A project saved on this phone that names it won't find it, nor will Undo bring back a layer that reads from it."
             } else {
-                "{count} copies of picked files ({size}) aren't named by this project. A project saved on this phone that names one won't find it."
+                "{count} copies of picked files ({size}) aren't named by this project. A project saved on this phone that names one won't find it, nor will Undo bring back a layer that reads from one."
             };
             let text = i18n::fmt(template, &[("count", &count), ("size", &size)]);
             ui.label(RichText::new(text).size(14.0).color(t.text));
