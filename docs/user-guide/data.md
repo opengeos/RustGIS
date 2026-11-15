@@ -103,13 +103,15 @@ ones from, with the coordinate system (such as `EPSG:2263`) and the separator (c
 the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
 (columns named like longitude/latitude, including GTFS `stop_lon`/`stop_lat`, easting/northing or
 geometry, and EWKT's `SRID=`). With no projected coordinate system or explicit column choices,
-if the first pair contains coordinates outside ±180° longitude or ±90° latitude and a more
-specific longitude/latitude pair gives in-range, non-0,0 positions on at least as many rows as
-the first pair gives finite positions, that pair is used for the whole file.
+a specific longitude/latitude pair is preferred over generic X/Y when it gives in-range,
+non-0,0 positions on at least as many rows as the first pair gives finite positions.
+That pair is used for the whole file.
 The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
 `Longitutde`/`Lattitude` are recognised too. The dialog checks the first 1,000 rows of delimited
 text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you
-leave the coordinate-system box or press Enter; columns you picked stay picked.
+leave the coordinate-system box or press Enter; columns you picked stay picked. With a projected
+coordinate system, defaults prefer X/Y or easting/northing columns when the file also has
+longitude/latitude columns.
 Add Data checks all rows. Coordinates still outside degree ranges are counted in a
 notice. Points placed at exactly 0,0 are also counted in a notice: these often mean missing
 coordinates, but the points are kept. A CSV without coordinate columns, or a layer without geometry, opens as a
@@ -122,13 +124,13 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
 
-Excel `.xls` records, formula operands and sheet bounds are checked before opening, including sheets
-that were not selected. The workbook shares a memory budget across its sheets and retained metadata.
-Value and formula grids are counted separately, with allocation estimates for formula strings,
-defined names and sheet state. Formula-heavy workbooks can reach this budget before their value-grid
-limit. A file with damaged records or excessive allocations is refused with the reason. Normal
-cached formula values are read. A formula's direct cell reference to row 65,536 is currently refused
-because the XLS reader cannot handle that reference safely.
+Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
+sheets that were not selected. The workbook shares a memory budget across its sheets and retained
+metadata. Value and formula grids are counted separately, with conservative allocation estimates
+for formula strings, defined names and sheet state. Formula-heavy workbooks can reach this budget
+before their value-grid limit. A file with damaged records or excessive allocations is refused
+with the reason. Normal cached formula values are read. A formula's direct cell reference to
+row 65,536 is currently refused because the XLS reader cannot handle that reference safely.
 
 **Home › Add › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
 and **Data › Layer Templates** adds empty layers with ready-made schemas to draw into.
