@@ -381,11 +381,11 @@ pub fn cjk_font(region: CjkRegion) -> Option<&'static (Vec<u8>, u32)> {
     };
     let found = slot.get_or_init(|| {
         let indexed =
-            cjk_paths(region).iter().find_map(|(path, index)| read_cjk(path).filter(|b| valid_font(b, *index)).map(|b| (b, *index)));
+            cjk_paths(region).iter().find_map(|(path, index)| read_cjk(path).filter(|b| draws_cjk(b, *index, region)).map(|b| (b, *index)));
         indexed.or_else(|| {
             cjk_named_candidates(region).iter().find_map(|(path, family)| {
                 let bytes = read_cjk(path)?;
-                let index = regular_face(&bytes, family).filter(|i| valid_font(&bytes, *i))?;
+                let index = regular_face(&bytes, family).filter(|i| draws_cjk(&bytes, *i, region))?;
                 Some((bytes, index))
             })
         })
@@ -394,6 +394,23 @@ pub fn cjk_font(region: CjkRegion) -> Option<&'static (Vec<u8>, u32)> {
         (None, CjkRegion::TraditionalChinese) => cjk_font(CjkRegion::SimplifiedChinese),
         (found, _) => found.as_ref(),
     }
+}
+
+/// Whether face `index` of `bytes` draws an outline for a character of `region`'s script. A face
+/// that parses but whose outlines the parser can't read (iOS's PingFangUI keeps them in an `hvgl`
+/// table) would draw blanks and hide the candidates after it.
+fn draws_cjk(bytes: &[u8], index: u32, region: CjkRegion) -> bool {
+    use ab_glyph::Font;
+    let c = match region {
+        CjkRegion::SimplifiedChinese => '\u{4E2D}',  // 中
+        CjkRegion::TraditionalChinese => '\u{9AD4}', // 體
+        CjkRegion::Japanese => '\u{3042}',           // あ
+        CjkRegion::Korean => '\u{D55C}',             // 한
+    };
+    ab_glyph::FontRef::try_from_slice_and_index(bytes, index).is_ok_and(|f| {
+        let id = f.glyph_id(c);
+        id.0 != 0 && f.outline(id).is_some()
+    })
 }
 
 /// Whether `bytes` hold a font with face `index` that the font parser accepts. Fonts handed to the
@@ -606,6 +623,23 @@ mod tests {
         assert!(korean.iter().any(|(p, i)| p == "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc" && *i == 0));
         let japanese = cjk_paths(CjkRegion::Japanese);
         assert!(japanese.iter().any(|(p, _)| p == "/System/Library/Fonts/Core/HiraginoKakuGothic.ttc"));
+    }
+
+    /// A CJK candidate is taken only when it outlines its region's script: not a face without
+    /// the characters, nor junk.
+    #[test]
+    fn a_cjk_face_must_draw_its_script() {
+        use super::{CjkRegion, draws_cjk};
+        for region in [CjkRegion::SimplifiedChinese, CjkRegion::TraditionalChinese, CjkRegion::Japanese, CjkRegion::Korean] {
+            assert!(!draws_cjk(epaint_default_fonts::HACK_REGULAR, 0, region), "{region:?}");
+            assert!(!draws_cjk(b"not a font", 0, region), "{region:?}");
+        }
+        // Noto Sans CJK draws them all, where it is installed.
+        for (p, i) in super::cjk_paths(CjkRegion::Korean).iter().filter(|(p, _)| p.ends_with("NotoSansCJK-Regular.ttc")) {
+            if let Ok(b) = std::fs::read(p) {
+                assert!(draws_cjk(&b, *i, CjkRegion::Korean), "{p}");
+            }
+        }
     }
 
     /// Traditional Chinese has a web face of its own, not the Simplified one.

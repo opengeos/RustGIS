@@ -195,7 +195,8 @@ fn font_dirs() -> Vec<PathBuf> {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(PathBuf::from));
         dirs.extend(home.iter().map(|h| h.join("Library").join("Fonts")));
     } else if cfg!(target_os = "ios") {
-        // iOS keeps its fonts in subfolders (Core, CoreAddition, ...), which the walk reaches.
+        // iOS keeps its fonts in subfolders (Core, CoreAddition, ...), which the walk reaches. An
+        // app's home is its sandbox container, which holds no fonts, so no home folder is walked.
         dirs.push(PathBuf::from("/System/Library/Fonts"));
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(PathBuf::from));
