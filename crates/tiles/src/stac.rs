@@ -157,7 +157,7 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                     .unwrap_or_default(),
                 scale: pick(&["scale", "raster:scale"]),
                 offset: pick(&["offset", "raster:offset"]),
-                nodata: pick(&["nodata"]),
+                nodata: pick(&["nodata", "raster:nodata"]),
                 unread: odd_numbers(raster) || odd_numbers(named),
             }
         })
