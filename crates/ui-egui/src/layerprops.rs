@@ -743,6 +743,11 @@ mod tests {
         h.get_by_role_and_label(Role::RadioButton, "By pop_est").click();
         h.run();
         assert_eq!(x(&h).unwrap().base_field.as_deref(), Some("pop_est"));
+        h.get_by_role_and_label(Role::ComboBox, "Base").click();
+        h.run();
+        h.get_by_role_and_label(Role::RadioButton, "By pop_est").click();
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), steps + 3, "choosing the base it has changes nothing");
         h.get_by_role_and_label(Role::CheckBox, "Cast Shadow").click();
         h.run();
         h.get_by_role_and_label(Role::CheckBox, "Lighting").click();
@@ -758,14 +763,21 @@ mod tests {
         assert!(h.query_by_role_and_label(Role::CheckBox, "Cast Shadow").is_none(), "nothing more once flat");
     }
 
-    /// Changing the Factor keeps a constant height below 1,000 m as it is: left out of the
-    /// command, the height would be raised to 1,000 m.
+    /// Changing the Factor keeps a height below 1,000 m as it is, constant or the fallback of a
+    /// field extrusion (used where the field holds no number): left out of the command, the
+    /// height would be raised to 1,000 m.
     #[test]
     fn the_factor_keeps_a_low_constant_height() {
+        for kind in [json!({"type": "height", "height": 200}), json!({"type": "field", "field": "pop_est", "height": 200})] {
+            factor_keeps_the_height(kind);
+        }
+    }
+
+    fn factor_keeps_the_height(kind: serde_json::Value) {
         let mut app = with_cities();
         let countries = layer_id(&app, "Countries");
         app.session.run("layer.select", &json!({"layer": countries})).unwrap();
-        app.session.run("layer.extrusion", &json!({"type": "height", "height": 200})).unwrap();
+        app.session.run("layer.extrusion", &kind).unwrap();
         let mut h = harness(app);
         h.run();
         open_tab(&mut h, "Display");
@@ -789,7 +801,7 @@ mod tests {
         h.run();
         let x = h.state().session.map().layer(countries).unwrap().extrusion.clone().unwrap();
         assert!(x.factor > 1.0, "the factor changed: {x:?}");
-        assert_eq!(x.height, 200.0, "the height is kept: {x:?}");
+        assert_eq!(x.height, 200.0, "the height is kept: {kind} {x:?}");
     }
 
     /// Each tab's inputs are reachable by their row labels.

@@ -4273,7 +4273,8 @@ pub(crate) fn extrusion_type_choices(
 
 /// What layer `id`'s walls stand on, as radio buttons shared by the ribbon's Base menu and the
 /// Layer Properties pane: the ground, the constant Base (m) once it is set, or By <field> for each
-/// of `fields`. Whether one was clicked, so a menu can close.
+/// of `fields`. As with the type, choosing the base the layer has changes nothing. Whether one was
+/// clicked, so a menu can close.
 pub(crate) fn extrusion_base_choices(
     ui: &mut Ui,
     app: &mut RustGisApp,
@@ -4282,22 +4283,31 @@ pub(crate) fn extrusion_base_choices(
     fields: &[String],
 ) -> bool {
     let mut clicked = false;
-    if ui.radio(x.base_field.is_none() && (x.base <= 0.0 || x.base.is_nan()), tl!("Ground")).clicked() {
+    let on = x.base_field.is_none() && (x.base <= 0.0 || x.base.is_nan());
+    if ui.radio(on, tl!("Ground")).clicked() {
         clicked = true;
-        let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": null, "base": 0}));
+        if !on {
+            let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": null, "base": 0}));
+        }
     }
     // A constant base is set with Base (m); once set, it can be chosen over a field.
     if x.base > 0.0 {
         let label = crate::i18n::fmt("Constant ({m} m)", &[("m", &x.base.to_string())]);
-        if ui.radio(x.base_field.is_none(), label).clicked() {
+        let on = x.base_field.is_none();
+        if ui.radio(on, label).clicked() {
             clicked = true;
-            let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": null}));
+            if !on {
+                let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": null}));
+            }
         }
     }
     for f in fields {
-        if ui.radio(x.base_field.as_deref() == Some(f.as_str()), crate::i18n::fmt("By {field}", &[("field", f)])).clicked() {
+        let on = x.base_field.as_deref() == Some(f.as_str());
+        if ui.radio(on, crate::i18n::fmt("By {field}", &[("field", f)])).clicked() {
             clicked = true;
-            let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": f}));
+            if !on {
+                let _ = app.run("layer.extrusionBase", json!({"layer": id, "field": f}));
+            }
         }
     }
     clicked
@@ -4328,10 +4338,10 @@ pub(crate) fn extrusion_factor_row(
             )
             .labelled_by(input_label.id);
         if drag.settled(ui, &r, &mut k) && k != x.factor {
-            // A constant height is sent with the factor: left out, `layer.extrusion` would raise
-            // one below 1,000 m to 1,000 m.
+            // The height is sent with the factor, constant or the field's fallback where it holds
+            // no number: left out, `layer.extrusion` would raise one below 1,000 m to 1,000 m.
             let p = match &x.field {
-                Some(f) => json!({"layer": id, "type": "field", "field": f, "factor": k}),
+                Some(f) => json!({"layer": id, "type": "field", "field": f, "height": x.height, "factor": k}),
                 None => json!({"layer": id, "type": "height", "height": x.height, "factor": k}),
             };
             let _ = app.run("layer.extrusion", p);
