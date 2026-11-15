@@ -326,11 +326,15 @@ fn node_origin(s: &Session, c: &Connection, node: &str) -> Option<address::Origi
     if s.browse_origins.0 != s.opened {
         return None;
     }
-    let mut origin = s.browse_origins.1.get(&(c.id.clone(), c.address.clone(), node.to_string()))?.clone();
-    if let Some(root) = s.browse_origins.1.get(&(c.id.clone(), c.address.clone(), String::new())) {
-        origin = origin.narrow_reach(root.reach());
-    }
-    Some(origin)
+    let root = s.browse_origins.1.get(&(c.id.clone(), c.address.clone(), String::new()));
+    let origin = match s.browse_origins.1.get(&(c.id.clone(), c.address.clone(), node.to_string())) {
+        Some(origin) => origin.clone(),
+        None => root.map(|_| address::Origin::named(&c.address))?,
+    };
+    Some(match root {
+        Some(root) => origin.narrow_reach(root.reach()),
+        None => origin,
+    })
 }
 
 /// Retains only nodes actually admitted by a fetched or conservatively named document origin.
@@ -611,6 +615,7 @@ fn collections(bytes: &[u8]) -> Result<Found, String> {
 fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
     let mut dropped = 0usize;
     let mut omitted = 0usize;
+    let mut skipped = 0usize;
     let mut refused = 0usize;
     let mut children = Vec::new();
     for (prefix, what, list) in [
@@ -619,6 +624,7 @@ fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<F
     ] {
         refused += list.refused;
         omitted += list.omitted;
+        skipped += list.skipped;
         for c in list.links {
             let node = format!("{prefix}:{}", c.url);
             if node_ok(&node) {
@@ -631,6 +637,9 @@ fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<F
     if refused > 0 {
         s.notify(format!("{refused} catalog links were refused by the document's network reach"), false);
     }
+    if skipped > 0 {
+        s.notify(format!("{skipped} catalog links were left out because their addresses are missing, invalid or not HTTP(S)"), false);
+    }
     omitted += children.len().saturating_sub(MAX_CHILDREN);
     if omitted > 0 {
         s.notify(format!("{omitted} catalog links were left out because the listing limit was reached"), false);
@@ -642,7 +651,7 @@ fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<F
         );
     }
     let mut found = Found::new(children);
-    found.truncated |= dropped > 0 || refused > 0 || omitted > 0;
+    found.truncated |= dropped > 0 || refused > 0 || omitted > 0 || skipped > 0;
     Ok(found)
 }
 
@@ -664,6 +673,7 @@ fn assets_of(item: &stac::Item) -> Vec<Value> {
                 "what": "asset",
                 "detail": a.media_type,
                 "href": href,
+                "fromDocument": item.origin_reach == address::Reach::Public,
                 "add": {"command": "stac.addAsset", "params": params},
             }))
         })
@@ -912,6 +922,24 @@ mod tests {
     }
 
     #[test]
+    fn invalid_catalog_children_are_counted_in_connection_notices() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let mut session = crate::Session::new(crate::Project::default());
+        let origin = Origin::named("https://public.example/catalog.json");
+        let body = json!({"type":"Catalog","id":"test","links":[
+            {"rel":"child","href":"ftp://files.example/catalog.json"}, {"rel":"item","href":""}
+        ]})
+        .to_string();
+        let mark = session.notice_mark();
+        let found = super::catalogs(&mut session, body.as_bytes(), &origin).unwrap();
+        assert!(found.children.is_empty());
+        assert!(found.truncated);
+        let notices = session.notices_since(mark);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].text.contains("2 catalog links were left out because their addresses"));
+    }
+
+    #[test]
     fn ui_browse_origin_is_scoped_to_the_current_request_and_project() {
         use crate::render::rustgis_tiles::address::Origin;
         let mut session = crate::Session::new(crate::Project::default());
@@ -939,6 +967,23 @@ mod tests {
     }
 
     #[test]
+    fn listed_assets_carry_the_observed_items_public_download_ceiling() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let requested = "https://catalog.corp.example/item.json";
+        for (peer, href, public) in
+            [("10.0.0.5", "http://10.0.0.5/scene.geojson", false), ("93.184.216.34", "https://public.example/scene.geojson", true)]
+        {
+            let body = json!({"type":"Feature","id":"scene","geometry":null,"properties":{},
+                "assets":{"data":{"href":href,"roles":["data"]}},"links":[]})
+            .to_string();
+            let origin = Origin::connected(requested, peer.parse().unwrap()).unwrap();
+            let found = super::item_file(body.as_bytes(), &origin).unwrap();
+            assert_eq!(found.children[0]["href"], href);
+            assert_eq!(found.children[0]["fromDocument"], public);
+        }
+    }
+
+    #[test]
     fn public_catalog_nodes_keep_a_public_transport_ceiling_after_a_local_entrypoint() {
         use crate::render::rustgis_tiles::address::{Origin, Reach};
         let mut session = crate::Session::new(crate::Project::default());
@@ -950,6 +995,15 @@ mod tests {
         let found = super::catalogs(&mut session, body.as_bytes(), &origin).unwrap();
         super::remember_node_origins(&mut session, &connection, &found.children, &origin, true).unwrap();
         let probe = super::browse(&mut session, &json!({"id":connection.id,"node":found.children[0]["node"],"probe":true})).unwrap();
+        assert!(
+            super::browse(&mut session, &json!({"id":connection.id,"node":"catalog:http://10.0.0.8/private.json","probe":true})).is_err()
+        );
+        let unlisted = super::browse(
+            &mut session,
+            &json!({"id":connection.id,"node":"catalog:https://unlisted-public-node.example/catalog.json","probe":true}),
+        )
+        .unwrap();
+        assert_eq!(unlisted["fromDocument"], true);
         assert_eq!(probe["fromDocument"], true);
         assert_eq!(crate::render::rustgis_tiles::cache::ceiling_for(url), Reach::Public);
     }

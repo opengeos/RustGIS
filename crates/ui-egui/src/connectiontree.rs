@@ -44,6 +44,7 @@ struct Signing {
     name: String,
     origin: Option<String>,
     connection: Option<String>,
+    public: bool,
     slot: Slot<Result<Vec<u8>, String>>,
 }
 
@@ -275,6 +276,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Ok(token) => {
                 stac::remember_token(&signing.token_url, &token);
                 let mut p = json!({"url": stac::sign(&signing.href, &token), "name": signing.name, "zoom": true});
+                if signing.public {
+                    p["fromDocument"] = json!(true);
+                }
                 if let Some(connection) = signing.connection {
                     p["connection"] = json!(connection);
                 }
@@ -323,7 +327,14 @@ fn add_from(
                 run_add_url(app, params, origin)?;
             }
             "stac.addAsset" => {
-                add_asset(app, child["href"].as_str().unwrap_or(""), params["name"].as_str().unwrap_or(""), origin, connection)?;
+                add_asset(
+                    app,
+                    child["href"].as_str().unwrap_or(""),
+                    params["name"].as_str().unwrap_or(""),
+                    origin,
+                    connection,
+                    child["fromDocument"] == true,
+                )?;
             }
             _ => {
                 run_named(app, command, params, origin)?;
@@ -336,8 +347,18 @@ fn add_from(
 
 /// A STAC asset by its address, signed first when it needs a token (one in hand is used; one to
 /// fetch is fetched off the frame and the asset added when it lands).
-fn add_asset(app: &mut RustGisApp, href: &str, name: &str, origin: Option<&str>, connection: Option<&str>) -> Result<(), String> {
+fn add_asset(
+    app: &mut RustGisApp,
+    href: &str,
+    name: &str,
+    origin: Option<&str>,
+    connection: Option<&str>,
+    public: bool,
+) -> Result<(), String> {
     let mut p = json!({"url": href, "name": name, "zoom": true});
+    if public {
+        p["fromDocument"] = json!(true);
+    }
     if let Some(connection) = connection {
         p["connection"] = json!(connection);
     }
@@ -353,7 +374,7 @@ fn add_asset(app: &mut RustGisApp, href: &str, name: &str, origin: Option<&str>,
         let slot = crate::fetch_into(&token_url);
         let (href, name, origin) = (href.to_string(), name.to_string(), origin.map(str::to_string));
         let connection = connection.map(str::to_string);
-        app.ui.connection_tree.tokens.push(Signing { opened: app.session.opened, token_url, href, name, origin, connection, slot });
+        app.ui.connection_tree.tokens.push(Signing { opened: app.session.opened, token_url, href, name, origin, connection, public, slot });
     }
     Ok(())
 }
@@ -1195,8 +1216,9 @@ mod tests {
             });
             let mut app = RustGisApp::with_sample();
             let (text, _) = app.session.project.saved_text(None).unwrap();
-            add_asset(&mut app, &href, "Old asset", None, None).unwrap();
+            add_asset(&mut app, &href, "Old asset", None, None, true).unwrap();
             assert_eq!(app.ui.connection_tree.tokens.len(), 1);
+            assert!(app.ui.connection_tree.tokens[0].public);
             assert_eq!(sent.lock().unwrap().as_slice(), std::slice::from_ref(&token_url));
             let finish = || {
                 for done in std::mem::take(&mut *held.lock().unwrap()) {
@@ -1236,6 +1258,7 @@ mod tests {
                     "a current signing response starts exactly its asset download"
                 );
                 assert_eq!(app.ui.downloads.len(), 1);
+                assert_eq!(app.ui.downloads[0].params["fromDocument"], true);
                 assert!(stac::cached_token(&token_url).is_some());
             }
         }

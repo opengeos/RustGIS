@@ -72,6 +72,8 @@ pub struct LinkListing {
     pub links: Vec<Child>,
     /// Unique links inspected but refused by the document's network reach.
     pub refused: usize,
+    /// Inspected links with missing, invalid or non-HTTP(S) addresses.
+    pub skipped: usize,
     /// Accepted links beyond the output cap, plus raw links beyond the inspection cap.
     pub omitted: usize,
 }
@@ -103,10 +105,16 @@ fn parse_links_noted(bytes: &[u8], origin: &crate::address::Origin, rel: &str) -
     let mut listing = LinkListing { omitted: of_rel(&v, rel).count().saturating_sub(MAX_LINKS), ..Default::default() };
     let mut seen = HashSet::new();
     let mut refused = HashSet::new();
-    for (url, title) in links(&v, rel, origin.url()) {
+    for link in of_rel(&v, rel).take(MAX_LINKS) {
+        let Some(url) = link.get("href").and_then(Value::as_str).and_then(|href| resolve(origin.url(), href)) else {
+            listing.skipped += 1;
+            continue;
+        };
         if !is_web(&url) {
+            listing.skipped += 1;
             continue;
         }
+        let title = text(link.get("title"));
         if origin.check(&url).is_err() {
             refused.insert(url);
             continue;
@@ -842,6 +850,27 @@ mod tests {
         assert!(walk.complete());
         assert_eq!(walk.refused(), 0);
     }
+    #[test]
+    fn listings_count_invalid_and_non_web_links_but_clean_input_stays_quiet() {
+        let origin = crate::address::Origin::named("https://public.example/catalog.json");
+        for rel in ["child", "item"] {
+            let mut links = vec![json!({"rel":rel,"href":"./good.json"})];
+            let clean = json!({"type":"Catalog","id":"test","links":links}).to_string();
+            let listing = parse_links_noted(clean.as_bytes(), &origin, rel).unwrap();
+            assert_eq!((listing.links.len(), listing.refused, listing.skipped, listing.omitted), (1, 0, 0, 0));
+            links.extend([
+                json!({"rel":rel,"href":"ftp://files.example/catalog.json"}),
+                json!({"rel":rel,"href":""}),
+                json!({"rel":rel,"href":42}),
+                json!({"rel":rel}),
+                json!({"rel":rel,"href":"bad\naddress"}),
+            ]);
+            let lossy = json!({"type":"Catalog","id":"test","links":links}).to_string();
+            let listing = parse_links_noted(lossy.as_bytes(), &origin, rel).unwrap();
+            assert_eq!((listing.links.len(), listing.refused, listing.skipped, listing.omitted), (1, 0, 5, 0));
+        }
+    }
+
     #[test]
     fn listing_limits_keep_unique_links_and_count_every_omission() {
         let origin = crate::address::Origin::named("https://public.example/catalog.json");

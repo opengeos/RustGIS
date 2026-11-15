@@ -521,6 +521,15 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                         false,
                     );
                 }
+                if listing.skipped > 0 {
+                    app.session.notify(
+                        i18n::fmt(
+                            "{n} catalog links were left out because their addresses are missing, invalid or not HTTP(S)",
+                            &[("n", &listing.skipped.to_string())],
+                        ),
+                        false,
+                    );
+                }
                 if listing.omitted > 0 {
                     app.session.notify(
                         i18n::fmt(
@@ -3117,6 +3126,7 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         let mut links: Vec<_> = (0..2001).map(|i| json!({"rel":"child","href":format!("https://public.example/{i}.json")})).collect();
         links.push(json!({"rel":"child","href":"http://10.0.0.5/private.json"}));
+        links.push(json!({"rel":"child","href":"ftp://files.example/catalog.json"}));
         let text = json!({"type":"Catalog","id":"test","links":links}).to_string();
         let from = "https://public.example/catalog.json";
         let answer = Slot::new(std::sync::Mutex::new(Some(Ok(cache::Fetched { bytes: text.into_bytes(), origin: Origin::named(from) }))));
@@ -3126,8 +3136,8 @@ mod tests {
         assert!(app.ui.stac.error.is_none());
         assert_eq!(app.ui.stac.children.len(), 2000);
         let notices = app.session.notices_since(mark);
-        assert_eq!(notices.len(), 2);
+        assert_eq!(notices.len(), 3);
         assert!(notices.iter().any(|n| n.text.contains("1 catalog links were refused")));
-        assert!(notices.iter().any(|n| n.text.contains("1 catalog links were left out")));
+        assert!(notices.iter().any(|n| n.text.contains("1 catalog links were left out because their addresses")));
     }
 }

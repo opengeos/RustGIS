@@ -1134,6 +1134,14 @@ fn get_tile_at(
     if len == 0 {
         let key = (url.clone(), level, idx);
         let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(TileState::Loading(waiting, reach)) = t.map.get_mut(&key) {
+            if *reach == started_reach {
+                waiting.push(then);
+            } else {
+                waiting.push(crate::cache::caller_retry(Box::new(move |_| get_tile_at(info, url, level, idx, started_reach, then))));
+            }
+            return;
+        }
         let empty = match t.used(&key, started_reach) {
             Some(b) => b,
             None => {
@@ -2387,6 +2395,58 @@ mod tests {
         assert!(t.used(&key, crate::address::Reach::Public).is_none(), "a Public reader never reuses a Local tile");
         assert!(t.used(&key, crate::address::Reach::Local).is_some(), "a Local reader can still reuse it");
     }
+    #[test]
+    fn sparse_tiles_preserve_pending_callbacks_and_retry_under_their_own_reach() {
+        use crate::address::Reach;
+        let _turn = crate::cache::turn();
+        for reader in [Reach::Local, Reach::Public] {
+            let cog::Parse::Done(mut layout) = cog::layout(&Sparse::default().with(0, cog::example(32, 16))).unwrap() else {
+                panic!("fixture")
+            };
+            layout.levels[0].counts[0] = 0;
+            let transformer = layout.crs.transformer().unwrap();
+            let info = Arc::new(Info {
+                layout: *layout,
+                header: Sparse::default(),
+                reach: reader,
+                transformer,
+                bounds: [0.0; 4],
+                merc: [0.0; 4],
+                min_zoom: 0,
+                max_zoom: 0,
+                stretch: Mutex::default(),
+                stretching: Mutex::default(),
+                stretch_failed: Mutex::default(),
+                alpha: None,
+            });
+            let url = format!("https://sparse-pending.example/{reader:?}.tif");
+            let key = (url.clone(), 0, 0);
+            let (old_tx, old_rx) = std::sync::mpsc::channel();
+            tiles()
+                .lock()
+                .unwrap()
+                .map
+                .insert(key.clone(), TileState::Loading(vec![Box::new(move |r| old_tx.send(r).unwrap())], Reach::Local));
+            let (new_tx, new_rx) = std::sync::mpsc::channel();
+            get_tile(info, url.clone(), 0, 0, Box::new(move |r| new_tx.send(r).unwrap()));
+            let Some(TileState::Loading(waiting, _)) = tiles().lock().unwrap().map.remove(&key) else {
+                panic!("the old loader must remain")
+            };
+            assert_eq!(waiting.len(), 2);
+            for then in waiting {
+                then(Err("old read stopped".into()));
+            }
+            assert!(old_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().is_err());
+            let new = new_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            if reader == Reach::Public {
+                assert!(new.unwrap().iter().flatten().all(|v| v.is_nan()));
+            } else {
+                assert!(new.is_err());
+            }
+            forget_file(&url);
+        }
+    }
+
     #[test]
     fn readers_with_different_ceilings_retry_headers_and_tiles_under_their_own_scope() {
         use crate::address::{Origin, Reach};

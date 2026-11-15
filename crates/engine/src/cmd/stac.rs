@@ -149,12 +149,15 @@ fn collections_json_from_origin(
         if listing.refused > 0 {
             s.warn(format!("{} catalog links were refused by the document's network reach", listing.refused));
         }
+        if listing.skipped > 0 {
+            s.warn(format!("{} catalog links were left out because their addresses are missing, invalid or not HTTP(S)", listing.skipped));
+        }
         if listing.omitted > 0 {
             s.warn(format!("{} catalog links were left out because the listing limit was reached", listing.omitted));
         }
         let c = listing.links;
         let mut out = json!({"count": c.len(), "static": true, "collections": c.iter().map(|c| json!({"id": c.url, "title": c.title})).collect::<Vec<_>>()});
-        if listing.refused > 0 || listing.omitted > 0 {
+        if listing.refused > 0 || listing.omitted > 0 || listing.skipped > 0 {
             out["truncated"] = json!(true);
         }
         return Ok(out);
@@ -347,11 +350,16 @@ fn item(p: &Value) -> Result<Item, String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bytes = crate::render::rustgis_tiles::cache::download_blocking(url)?;
-        let mut i = stac::parse_item(&bytes, url)?;
-        i.url.get_or_insert_with(|| url.to_string());
-        Ok(i)
+        item_downloaded(crate::render::rustgis_tiles::cache::download_blocking_fetched(url)?, url)
     }
+}
+
+/// Revalidates the item at its fresh transport-observed origin, including any redirects.
+#[cfg(not(target_arch = "wasm32"))]
+fn item_downloaded(fetched: crate::render::rustgis_tiles::cache::Fetched, requested: &str) -> Result<Item, String> {
+    let mut item = stac::parse_item_from_origin(&fetched.bytes, &fetched.origin)?;
+    item.url.get_or_insert_with(|| requested.to_string());
+    Ok(item)
 }
 
 fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
@@ -367,6 +375,10 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     let href = stac::sign_blocking(&href)?;
     let mut add = json!({"url": href, "name": name});
+    // This value comes from the freshly fetched item (or a conservative JSON parser), never a caller's reach claim.
+    if i.origin_reach == crate::render::rustgis_tiles::address::Reach::Public {
+        add["fromDocument"] = json!(true);
+    }
     if let Some(connection) = p.get("connection") {
         add["connection"] = connection.clone();
     }
@@ -1518,6 +1530,7 @@ mod deferred_asset_tests {
         assert_eq!(requests.len(), 1);
         let request = requests.remove(0);
         let mut params = request.params().clone();
+        assert_eq!(params["fromDocument"], true);
         let download = s.download_started_for(&request).unwrap();
         assert!(
             s.download_landed(
@@ -1540,6 +1553,22 @@ mod deferred_asset_tests {
         assert_eq!(layer.dataset.features.len(), 1);
     }
     #[test]
+    fn refetched_assets_use_the_observed_item_origin_instead_of_its_hostname() {
+        use crate::render::rustgis_tiles::{address::Origin, cache::Fetched};
+        let requested = "https://catalog.corp.example/item.json";
+        let bytes = json!({"type":"Feature","id":"scene","geometry":null,"properties":{},
+            "assets":{"data":{"href":"http://10.0.0.5/scene.geojson","roles":["data"]}},"links":[]})
+        .to_string()
+        .into_bytes();
+        let local = Origin::connected(requested, "10.0.0.5".parse().unwrap()).unwrap();
+        let item = item_downloaded(Fetched { bytes: bytes.clone(), origin: local }, requested).unwrap();
+        assert_eq!(item.asset_href(Some("data")).unwrap().1, "http://10.0.0.5/scene.geojson");
+        let public = Origin::connected("https://redirected.example/item.json", "93.184.216.34".parse().unwrap()).unwrap();
+        let item = item_downloaded(Fetched { bytes, origin: public }, requested).unwrap();
+        assert!(item.asset_href(Some("data")).is_err());
+    }
+
+    #[test]
     fn partial_collection_listings_report_omissions_and_duplicates_stay_quiet() {
         let api = "https://public.example/catalog.json";
         let mut session = Session::new(crate::Project::default());
@@ -1549,6 +1578,7 @@ mod deferred_asset_tests {
             links.extend([links[0].clone(), links[1].clone()]);
             if refused {
                 links.push(json!({"rel":"child","href":"http://10.0.0.5/private.json"}));
+                links.push(json!({"rel":"child","href":"ftp://files.example/catalog.json"}));
             }
             let text = json!({"type":"Catalog","id":"test","links":links}).to_string();
             let mark = session.notice_mark();
@@ -1556,10 +1586,10 @@ mod deferred_asset_tests {
             assert_eq!(result["count"], count.min(2000));
             assert_eq!(result.get("truncated").and_then(Value::as_bool).unwrap_or(false), refused);
             let notices = session.notices_since(mark);
-            assert_eq!(notices.len(), if refused { 2 } else { 0 });
+            assert_eq!(notices.len(), if refused { 3 } else { 0 });
             if refused {
                 assert!(notices.iter().any(|n| n.text.contains("1 catalog links were refused")));
-                assert!(notices.iter().any(|n| n.text.contains("1 catalog links were left out")));
+                assert!(notices.iter().any(|n| n.text.contains("1 catalog links were left out because their addresses")));
             }
         }
     }
