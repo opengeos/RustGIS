@@ -120,7 +120,8 @@ impl<K: Clone + PartialEq> Tip<K> {
     }
 
     /// After the box (`out`): the help `found` for the cursor at char `at` (None: no cursor, or
-    /// none to show it by), as what it's about and the char where that starts, drawn by `draw`
+    /// none to show it by, such as a list open over it), as what it's about and the char where
+    /// that starts, drawn by `draw`
     /// (given the width it takes), `rows` monospace lines high at first guess. Not with the
     /// cursor out of the box's view (`visible`) or what Escape closed.
     pub fn show(
@@ -135,10 +136,10 @@ impl<K: Clone + PartialEq> Tip<K> {
         draw: impl FnOnce(&mut Ui, f32),
     ) {
         // Out of what Escape closed (in nothing, or straight into something else), it may show
-        // again next time. Not while the window is left: nothing is found then, though the cursor
-        // hasn't moved.
+        // again next time. Only with a cursor to show it by: with none (the window left, text
+        // selected, a list open over it) where the cursor is isn't known, and it stays closed.
         let here = found.as_ref().map(|(k, _)| k);
-        if here != self.dismissed.as_ref() && (here.is_some() || ui.input(|i| i.focused)) {
+        if at.is_some() && here != self.dismissed.as_ref() {
             self.dismissed = None;
         }
         let galley_rect = |i: usize| out.galley.pos_from_cursor(CCursor::new(i)).translate(out.galley_pos.to_vec2());

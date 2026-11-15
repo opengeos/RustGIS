@@ -630,7 +630,7 @@ mod tests {
 
     /// The signature closed with Escape shows again in another call, and back in the first,
     /// though the cursor went straight from one to the other; not after the window is left and
-    /// come back to with the cursor where it was.
+    /// come back to with the cursor where it was, nor after text selected in the call.
     #[test]
     fn a_closed_signature_shows_again_in_another_call_only() {
         use egui::accesskit::Role;
@@ -668,6 +668,15 @@ mod tests {
         assert!(shows(&h, abs), "another call");
         at(&mut h, 6);
         assert!(shows(&h, round), "back in the first");
+        // Text selected in the call, then the cursor back in it: still closed.
+        h.key_press(Key::Escape);
+        h.run();
+        let mut state = TextEditState::load(&h.ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(6), CCursor::new(7))));
+        state.store(&h.ctx, id);
+        h.run();
+        at(&mut h, 7);
+        assert!(!shows(&h, round), "a selection in the call keeps it closed");
     }
 
     /// Many fields: at most `MAX_FIELDS` of them, and the language's items still after them.

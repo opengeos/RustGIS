@@ -2198,7 +2198,8 @@ mod tests {
     }
 
     /// Typing a command's parameters keeps its help by the cursor; past the closing brace it's
-    /// gone, and Escape closes it until the cursor leaves the braces.
+    /// gone, and Escape closes it until the cursor leaves the braces (a list opening over it
+    /// doesn't).
     #[test]
     fn the_help_stays_by_the_cursor_in_the_braces() {
         use egui_kittest::kittest::Queryable;
@@ -2215,6 +2216,14 @@ mod tests {
         assert!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).is_focused(), "and the box keeps the focus");
         type_in(&mut h, ", ");
         assert!(h.query_by_label(&sig).is_none(), "not again in the same braces");
+        // A list opening over it, and Escape closing the list: still closed.
+        type_in(&mut h, "\"");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "layer");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "layer").is_none(), "the list closed");
+        assert!(h.query_by_label(&sig).is_none(), "not again once the list closes");
+        type_in(&mut h, "x\": 1");
         type_in(&mut h, "}");
         assert!(h.query_by_label(&sig).is_none(), "past the closing brace");
         type_in(&mut h, "\nlabels.style {");
