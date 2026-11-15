@@ -279,6 +279,8 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) -> bool {
 }
 
 /// Copies the document at `url` to `file` (in `folder`, made first) inside a coordinated read.
+/// It is written under a name of its own (`.part`) and renamed once whole: Remove Unused Copies
+/// keeps a pick holding one, so a copy being written is never taken for unused.
 fn coordinated_copy(url: &NSURL, folder: &Path, file: &Path) -> Result<(), String> {
     use objc2::AnyThread as _;
     std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
@@ -286,11 +288,19 @@ fn coordinated_copy(url: &NSURL, folder: &Path, file: &Path) -> Result<(), Strin
     let reader = block2::RcBlock::new(|read: std::ptr::NonNull<NSURL>| {
         // SAFETY: the URL the coordinator hands its reader, alive while the reader runs.
         let read = unsafe { read.as_ref() };
-        let copied = read
-            .path()
-            .map(|p| PathBuf::from(p.to_string()))
-            .ok_or_else(|| i18n::fmt("the system gave no path for it", &[]))
-            .and_then(|path| std::fs::copy(path, file).map(|_| ()).map_err(|e| e.to_string()));
+        let copied =
+            read.path().map(|p| PathBuf::from(p.to_string())).ok_or_else(|| i18n::fmt("the system gave no path for it", &[])).and_then(
+                |path| {
+                    let mut part = file.as_os_str().to_owned();
+                    part.push(".part");
+                    let part = PathBuf::from(part);
+                    let copied = std::fs::copy(path, &part).and_then(|_| std::fs::rename(&part, file));
+                    if copied.is_err() {
+                        let _ = std::fs::remove_file(&part);
+                    }
+                    copied.map_err(|e| e.to_string())
+                },
+            );
         result.replace(Some(copied));
     });
     let coordinator = objc2_foundation::NSFileCoordinator::initWithFilePresenter(objc2_foundation::NSFileCoordinator::alloc(), None);

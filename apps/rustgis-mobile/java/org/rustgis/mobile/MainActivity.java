@@ -719,12 +719,15 @@ public class MainActivity extends NativeActivity {
         for (int n = 2; file.exists(); n++) {
             file = new File(dir, n + "-" + name);
         }
+        // Written under a name of its own (".part") and renamed once whole: Remove Unused Copies
+        // keeps a pick holding one, so a copy being written is never taken for unused.
+        File part = new File(dir, file.getName() + ".part");
         try {
             if (!dir.isDirectory() && !dir.mkdirs()) {
                 throw new java.io.IOException("the app's storage can't be written to");
             }
             try (InputStream in = getContentResolver().openInputStream(uri);
-                    OutputStream out = new FileOutputStream(file)) {
+                    OutputStream out = new FileOutputStream(part)) {
                 if (in == null) {
                     throw new java.io.IOException("it can't be read");
                 }
@@ -733,12 +736,16 @@ public class MainActivity extends NativeActivity {
                     out.write(buffer, 0, n);
                 }
             }
+            if (!part.renameTo(file)) {
+                throw new java.io.IOException("the copy couldn't be given its name");
+            }
             // The copy's own name: a second document of one name is told from the first.
             add("picked\t" + purpose + "\t" + file.getName() + "\t" + file.getAbsolutePath());
             return true;
         } catch (Throwable e) {
             // Half a copy would only fill the storage: nothing reports its path to remove it later.
             // (The folder goes only once it is empty.)
+            part.delete();
             file.delete();
             dir.delete();
             add("failed\t" + name + " wasn't opened: " + e.getMessage());

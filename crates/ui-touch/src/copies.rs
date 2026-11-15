@@ -40,7 +40,8 @@ pub(crate) struct Removed {
     pub bytes: u64,
     /// What couldn't be removed, each in its own words.
     pub failed: Vec<String>,
-    /// Picks found unused when asked that the project names now (it changed since), kept.
+    /// Picks found unused when asked that still exist and the project names now (it changed
+    /// since), kept.
     pub now_named: usize,
     /// Picks found unused when asked that couldn't be read in full when looked at again, kept.
     pub unreadable: usize,
@@ -76,9 +77,9 @@ pub(crate) fn unused(picked: &Path, project: &str, cancelled: &AtomicBool) -> Re
             found.unreadable_picks.push(pick);
             continue;
         }
-        // A pick with no file has nothing to judge it by, and one being copied is so until its
-        // copy is written: kept.
-        if files.is_empty() || files.iter().any(|(file, _)| named(project, file)) {
+        // A pick with no file has nothing to judge it by, and one holding a copy still being
+        // written (`.part`, renamed once whole) isn't done: kept.
+        if files.is_empty() || files.iter().any(|(file, _)| named(project, file) || in_flight(file)) {
             continue;
         }
         found.files += files.len();
@@ -112,6 +113,12 @@ fn gather(path: &Path, depth: usize, files: &mut Vec<(PathBuf, u64)>) -> bool {
     complete
 }
 
+/// Whether `file` is a copy still being written: the phones write a picked copy as `<name>.part`
+/// and rename it once whole.
+fn in_flight(file: &Path) -> bool {
+    file.extension().is_some_and(|e| e == "part")
+}
+
 /// Whether the project's JSON names `file`, written as JSON writes it.
 fn named(project: &str, file: &Path) -> bool {
     let text = file.to_string_lossy();
@@ -130,7 +137,8 @@ fn remove_unused(picked: &Path, found: &Unused, project: &str, cancelled: &Atomi
     // Each pick asked about that isn't removable now, counted once: not read in full, or named.
     let kept: Vec<&PathBuf> = found.picks.iter().filter(|pick| !now.picks.contains(pick)).collect();
     removed.unreadable = kept.iter().filter(|pick| now.unreadable_picks.contains(pick)).count();
-    removed.now_named = kept.len() - removed.unreadable;
+    // A pick that is gone since (removed elsewhere) isn't kept for being named.
+    removed.now_named = kept.iter().filter(|pick| pick.exists() && !now.unreadable_picks.contains(pick)).count();
     Ok(removed)
 }
 
@@ -144,12 +152,13 @@ fn remove(picks: &[PathBuf], cancelled: &AtomicBool) -> Removed {
         let mut held = Vec::new();
         gather(pick, DEPTH, &mut held);
         let gone = if pick.is_dir() { std::fs::remove_dir_all(pick) } else { std::fs::remove_file(pick) };
-        match gone {
-            Ok(()) => {
-                files += held.len();
-                bytes += held.iter().map(|(_, size)| size).sum::<u64>();
-            }
-            Err(e) => failed.push(format!("{}: {e}", pick.display())),
+        // What is gone is counted, also when the removal stopped partway through a pick.
+        let removed: Vec<&(PathBuf, u64)> =
+            if gone.is_ok() { held.iter().collect() } else { held.iter().filter(|(file, _)| !file.exists()).collect() };
+        files += removed.len();
+        bytes += removed.iter().map(|(_, size)| size).sum::<u64>();
+        if let Err(e) = gone {
+            failed.push(format!("{}: {e}", pick.display()));
         }
     }
     Removed { files, bytes, failed, ..Removed::default() }
@@ -365,6 +374,18 @@ mod tests {
         let removed = remove_unused(&picked, &found, &now, &AtomicBool::new(false)).unwrap();
         assert_eq!((removed.files, removed.now_named), (1, 1));
         assert!(picked.join("1/0/a.gpkg").exists() && !picked.join("2").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pick_with_a_copy_being_written_is_kept() {
+        let root = std::env::temp_dir().join(format!("rustgis-copies-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        std::fs::create_dir_all(picked.join("4/0")).unwrap();
+        std::fs::write(picked.join("4/0/big.gpkg.part"), b"half").unwrap();
+        let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert!(found.picks.is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
