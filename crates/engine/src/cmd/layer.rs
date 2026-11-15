@@ -3819,10 +3819,13 @@ pub fn request_origin(p: &Value) -> Result<(Option<&str>, bool), String> {
 /// JSON alone cannot grant that provenance; unregistered requests keep the conservative parser.
 pub fn request_origin_for<'a>(s: &Session, p: &'a Value) -> Result<(Option<&'a str>, bool), String> {
     let parsed = request_origin(p)?;
+    if s.document_assets.0 != s.opened {
+        return Ok(parsed);
+    }
     let Some(from) = p.get("from").and_then(Value::as_str).map(str::trim) else { return Ok(parsed) };
     let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim) else { return Ok(parsed) };
     let key = (crate::render::rustgis_tiles::logins::inner(url.trim()).to_string(), from.to_string());
-    let Some(origin) = s.document_assets.get(&key) else { return Ok(parsed) };
+    let Some(origin) = s.document_assets.1.get(&key) else { return Ok(parsed) };
     let plain = crate::render::rustgis_tiles::logins::inner(url);
     let selected = if s.policy_user() && plain != url {
         p.get("connection")
@@ -3853,7 +3856,7 @@ pub fn asset_request_params<'a>(s: &mut Session, p: &'a Value) -> Result<std::bo
     let selected = p.get("connection").and_then(Value::as_str).is_some_and(|id| !id.trim().is_empty());
     let registered_plain = url.zip(from).is_some_and(|(url, from)| {
         let plain = crate::render::rustgis_tiles::logins::inner(url);
-        plain == url && s.document_assets.contains_key(&(plain.to_string(), from.to_string()))
+        s.document_assets.0 == s.opened && plain == url && s.document_assets.1.contains_key(&(plain.to_string(), from.to_string()))
     });
     if registered_plain && !selected {
         let mut anonymous = p.clone();
@@ -3871,11 +3874,14 @@ impl Session {
             return Err("only native UI dispatch records document provenance".into());
         }
         origin.check(url)?;
-        let key = (crate::render::rustgis_tiles::logins::inner(url.trim()).to_string(), origin.url().to_string());
-        if self.document_assets.len() >= 16_384 && !self.document_assets.contains_key(&key) {
-            return Err("too many document assets are open in this session".into());
+        if self.document_assets.0 != self.opened {
+            self.document_assets = (self.opened, Default::default());
         }
-        self.document_assets.insert(key, origin);
+        let key = (crate::render::rustgis_tiles::logins::inner(url.trim()).to_string(), origin.url().to_string());
+        if self.document_assets.1.len() >= 16_384 && !self.document_assets.1.contains_key(&key) {
+            return Err("too many document assets are open; reopen the project to register more".into());
+        }
+        self.document_assets.1.insert(key, origin);
         Ok(())
     }
 }
@@ -6313,6 +6319,29 @@ mod tests {
         let public = json!({"url":asset,"from":from,"fromDocument":true});
         assert!(super::request_origin_for(&s, &public).unwrap().1);
     }
+    #[test]
+    fn observed_asset_allowances_do_not_cross_project_generations() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let mut s = Session::new(crate::Project::default());
+        let from = "https://project-scoped.corp.example/item.json";
+        let asset = "http://10.0.0.5/project-scoped.geojson";
+        let p = json!({"url":asset,"from":from,"fromDocument":false});
+        let origin = Origin::connected(from, "10.0.0.5".parse().unwrap()).unwrap();
+        s.remember_document_asset(asset, origin.clone()).unwrap();
+        s.remember_document_asset("http://10.0.0.5/another.geojson", origin.clone()).unwrap();
+        assert!(!super::request_origin_for(&s, &p).unwrap().1);
+        s.run("project.new", &json!({})).unwrap();
+        assert!(super::request_origin_for(&s, &p).unwrap().1);
+        let normalized = super::asset_request_params(&mut s, &p).unwrap().into_owned();
+        assert!(normalized.get("anonymous").is_none(), "stale registrations must not change normalization");
+        assert!(s.run_leaving_downloads("layer.addUrl", &p).unwrap_err().contains("local network"));
+        assert!(s.take_url_requests().is_empty());
+        s.remember_document_asset(asset, origin).unwrap();
+        assert_eq!(s.document_assets.0, s.opened);
+        assert_eq!(s.document_assets.1.len(), 1, "a new project's registration releases the previous project's table and budget");
+        assert!(!super::request_origin_for(&s, &p).unwrap().1);
+    }
+
     #[test]
     fn registered_assets_accept_only_an_explicit_live_native_login() {
         use crate::render::rustgis_tiles::address::Origin;

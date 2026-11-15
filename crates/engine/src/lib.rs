@@ -676,8 +676,8 @@ struct PutAside {
 pub struct Session {
     pub(crate) boxes: box_edit::Cache,
     policy: policy::State,
-    /// Trusted transport provenance for exact assets selected by the native UI, never serialized.
-    pub(crate) document_assets: std::collections::BTreeMap<(String, String), crate::render::rustgis_tiles::address::Origin>,
+    /// Project generation and trusted exact asset provenance, never serialized.
+    pub(crate) document_assets: (u64, std::collections::BTreeMap<(String, String), crate::render::rustgis_tiles::address::Origin>),
     /// Project generation and admitted catalog-node provenance, scoped by connection definition.
     pub(crate) browse_origins: (u64, std::collections::BTreeMap<(String, String, String), crate::render::rustgis_tiles::address::Origin>),
     /// A native transport answer scoped over one synchronous connection.browse dispatch.
