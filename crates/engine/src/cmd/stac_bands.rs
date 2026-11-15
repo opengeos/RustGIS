@@ -265,7 +265,10 @@ mod desktop {
     /// while this one looks at the run's Cancel and stops the reads once it is set. The same windows
     /// as reading them one by one. A thread the system refuses costs only that: the file is read
     /// here, Cancel looked at once it is in.
-    fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: f64) -> Result<Vec<WindowRaster>, String> {
+    pub(super) fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: f64) -> Result<Vec<WindowRaster>, String> {
+        // The run's request predicate is of this thread: each reader thread is given it, as the shared
+        // helpers give their workers, so a request whose claim has gone is not sent.
+        let still = rustgis_data::source::remote::current_still();
         let stop = AtomicBool::new(false);
         let mut out = Vec::with_capacity(files.len());
         for chunk in files.chunks(rustgis_data::threads::max().max(1)) {
@@ -273,9 +276,9 @@ mod desktop {
                 let started: Vec<_> = chunk
                     .iter()
                     .map(|(href, bands)| {
-                        let reader = std::thread::Builder::new()
-                            .name("STAC band window".into())
-                            .spawn_scoped(scope, || read_one(href, bbox, cell, *bands, &stop));
+                        let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, || {
+                            rustgis_data::source::remote::with_optional_still(still.clone(), || read_one(href, bbox, cell, *bands, &stop))
+                        });
                         (href, *bands, reader)
                     })
                     .collect();
@@ -533,7 +536,7 @@ mod desktop {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[expect(clippy::unwrap_used, reason = "a test module gated on more than `test`, which clippy's allow-unwrap-in-tests does not see")]
 mod tests {
-    use super::desktop::{auto_cell, index_look, note_kind, stack};
+    use super::desktop::{auto_cell, index_look, note_kind, read_windows, stack};
     use crate::render::rustgis_tiles::stac::bands::Band;
     use rustgis_data::raster::{ColorHint, GeoTransform, Raster, crs::Crs};
     use serde_json::json;
@@ -780,6 +783,15 @@ mod tests {
         b.crs = Crs::from_epsg(3857).unwrap();
         let err = stack("s", &names(), &[(&a, &band(1.0, 0.0)), (&b, &band(1.0, 0.0)), (&a, &band(1.0, 0.0))]).unwrap_err();
         assert!(err.contains("different coordinate systems"), "{err}");
+    }
+
+    #[test]
+    fn the_reader_threads_keep_the_runs_request_predicate() {
+        // A claim that has gone: the reads stop before any request is sent, on the reader threads too.
+        let gone: rustgis_data::source::remote::Still = std::sync::Arc::new(|| false);
+        let files = vec![("https://127.0.0.1:9/a.tif".to_string(), 1), ("https://127.0.0.1:9/b.tif".to_string(), 1)];
+        let err = rustgis_data::source::remote::with_still(gone, || read_windows(&files, [10.0, 45.0, 10.1, 45.1], 10.0)).err();
+        assert!(err.is_some_and(|e| e.contains("cancelled before it was sent")), "the predicate reached the reads");
     }
 
     #[test]
