@@ -1742,6 +1742,12 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     let r = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "max": 2e7, "scaling": "radius"})).unwrap();
     let err = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "min": -1e308, "max": 1e308})).unwrap_err();
     assert!(err.contains("too wide"), "{err}");
+    // Without a field, the mapping keeps its field and takes the new settings; with none to
+    // change, it's refused.
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 30})).unwrap();
+    let by = s.map().layer_by_name("Cities").and_then(|l| l.size_by.clone()).unwrap();
+    assert_eq!((by.field.as_str(), by.max_size), ("pop_max", 30.0));
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 24})).unwrap();
     let (lo, _) = {
         let l = s.map().layer_by_name("Cities").unwrap();
         l.dataset.numeric_range(l.dataset.field_index("pop_max").unwrap(), &[]).unwrap()
@@ -1767,6 +1773,8 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     assert_eq!(s.map().layer_by_name("Cities").unwrap().size_by.as_ref().map(|b| b.max_size), Some(24.0));
     s.run("layer.sizeBy", &json!({"layer": "Cities", "field": null})).unwrap();
     assert!(s.map().layer_by_name("Cities").unwrap().size_by.is_none());
+    let err = s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 30})).unwrap_err();
+    assert!(err.contains("no size mapping"), "{err}");
     // A saved project's mapping is read back (the schema fixture `size_by.rgis`).
     let saved = Project::from_json(include_str!("../../../schema/fixtures/size_by.rgis")).unwrap();
     let by = saved.maps[0].layers[0].size_by.clone().unwrap();

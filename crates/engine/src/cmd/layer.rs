@@ -383,7 +383,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"layer"?, "field": numeric field name|null (each point's marker turned by the angle in it, in degrees; null: not turned), "counterclockwise"?: bool (the angles run counterclockwise, as in mathematics; default clockwise, as on a compass)}"#),
         C::new("layer.sizeBy", "Size by Field", "Style › Drawing", size_by).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_points)
-        .params(r#"{"layer"?, "field": numeric field name|null (each marker sized by its value, keeping its Unique Values or Graduated Colors class's colours; null: the classes' own sizes), "min"?: number (the value drawn smallest; default the field's smallest, or the mapping's), "max"?: number (the value drawn largest, above min; default the field's largest, or the mapping's), "minSize"?: points (default 4, or the mapping's), "maxSize"?: points (default 24, or the mapping's), "scaling"?: "area"|"radius" (area: the marker's area grows with the value, as Proportional Symbols; radius: its size grows in a straight line, as MapLibre's; default area, or the mapping's)} (values past min or max take the end's size; a null or non-numeric value keeps its class's size)"#),
+        .params(r#"{"layer"?, "field"?: numeric field name|null (each marker sized by its value, keeping its Unique Values or Graduated Colors class's colours; null: the classes' own sizes; left out: the mapping's field, to change its other settings), "min"?: number (the value drawn smallest; default the field's smallest, or the mapping's), "max"?: number (the value drawn largest, above min; default the field's largest, or the mapping's), "minSize"?: points (default 4, or the mapping's), "maxSize"?: points (default 24, or the mapping's), "scaling"?: "area"|"radius" (area: the marker's area grows with the value, as Proportional Symbols; radius: its size grows in a straight line, as MapLibre's; default area, or the mapping's)} (values past min or max take the end's size; a null or non-numeric value keeps its class's size)"#),
         C::new("layer.symbolBy", "Symbol by Expression", "Style › Drawing", symbol_by).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "size"?: expression|null (a point's marker size in points), "fill"?: expression|null (the fill colour: '#RRGGBB', a CSS colour name or 'r,g,b[,a]' as color_rgb gives it), "stroke"?: expression|null (the outline colour, a line's colour), "strokeWidth"?: expression|null (the outline's width in points, a line's width), "angle"?: expression|null (point layers: each marker turned by it, in degrees clockwise, in place of layer.markerRotation's field)} (each expression in the language of queries, per feature, @map_scale the map's scale; a key left out keeps its expression, null or "" removes it; where an expression gives null the symbol's own value is drawn)"#),
@@ -734,10 +734,12 @@ fn need_lines(s: &Session) -> Option<&'static str> {
 /// queue with progress and Cancel; synchronous adapters must dispatch off their window thread.
 fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     use rustgis_map::symbol_by::{MAX_SIZE, SizeBy, SizeScaling};
+    // Left out, the mapping's own field (to change its other settings); null or "" removes it.
     let field = match p.get("field") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(f)) if f.is_empty() => None,
-        Some(Value::String(f)) => Some(f.clone()),
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(f)) if f.is_empty() => Some(None),
+        Some(Value::String(f)) => Some(Some(f.clone())),
         Some(_) => return Err("field is a field's name, or null for none".into()),
     };
     let num = |k: &str| match p.get(k) {
@@ -758,6 +760,10 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     if l.geometry_type() != GeometryType::Point || l.graphics {
         return Err("this works on point layers".into());
     }
+    let field = match field {
+        Some(field) => field,
+        None => Some(l.size_by.as_ref().map(|b| b.field.clone()).ok_or("give a field: the layer has no size mapping to change")?),
+    };
     let Some(field) = field else {
         l.size_by = None;
         return Ok(Value::Null);
