@@ -257,6 +257,9 @@ fn closes(c: char) -> bool {
     c.is_whitespace() || matches!(c, ')' | ',')
 }
 
+/// What may come before a quote that closes itself, a space aside: where a value can start.
+const OPENS: &[char] = &['(', ',', '=', '<', '>', '+', '-', '*', '/', '%', '^', '|'];
+
 /// The quote char `at` of `text` is inside of: `'` a text's, `"` or `!` a field name's; None
 /// in the code. A doubled `'` or `"` in one is part of it, as the expression reads it (it ends
 /// and starts again), and `!=` is an operator, not a name's `!`.
@@ -291,8 +294,7 @@ fn pair(text: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> 
     let one_deleted = keyed == Keyed::Backspace && text.len() + 1 == len && now + 1 == at && plain(now);
     let cut = byte_at(text, if one_deleted { now } else { at })?;
     let (b, rest) = (text.get(..cut)?, text.get(cut..)?);
-    // What may come before a quote that closes itself.
-    let opens = |c: char| c.is_whitespace() || matches!(c, '(' | ',' | '=' | '<' | '>' | '+' | '-' | '*' | '/' | '%' | '^' | '|');
+    let opens = |c: char| c.is_whitespace() || OPENS.contains(&c);
     let new = match (typed, next) {
         (Some('('), next) if typed_one && plain(at) && next.is_none_or(closes) => Some(format!("{b}(){}", rest.get(1..)?)),
         (Some(q @ ('\'' | '"')), next) if typed_one && plain(at) && next.is_none_or(closes) && prev.is_none_or(opens) => {
@@ -434,8 +436,9 @@ fn draw_help(ui: &mut Ui, item: &Item, ds: Option<&Dataset>, width: f32) {
 /// `!` in double quotes, as `!` has no escape), a function with its brackets, the cursor inside
 /// them as a `(` typed closes itself (`pair`), after them when it takes no arguments (before
 /// other text, the bracket only open; a `(` already there is used, not doubled), a variable or
-/// keyword as it is; as one undo step of the box, the cursor after it, and the box keeps the focus. Returns
-/// where it was put: the new text's hash and the cursor.
+/// keyword as it is; as one undo step of the box, the cursor after it, and the box keeps the
+/// focus. Not past the longest expression read (`written`). Returns where it was put: the new
+/// text's hash and the cursor; None when nothing was.
 fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) -> Option<(u64, usize)> {
     let (new, at) = written(text, offer, item)?;
     let mut state = TextEditState::load(ui.ctx(), id).unwrap_or_default();
@@ -468,15 +471,17 @@ fn word_rest(rest: &[char], quote: Option<char>) -> usize {
     0
 }
 
-/// `text` with `item` of `offer` accepted (`accept`), and where the cursor goes (chars).
+/// `text` with `item` of `offer` accepted (`accept`), and where the cursor goes (chars). Past
+/// the longest expression read (`MAX_LEN`, as the box takes no more), a function's `)` put for it
+/// is left out (`round(`); None when even that is too long.
 fn written(text: &str, offer: &Offer, item: &str) -> Option<(String, usize)> {
     let of = find(offer, item)?;
     let chars: Vec<char> = text.chars().collect();
     let (before, rest) = (chars.get(..offer.start)?, chars.get(offer.end..)?);
     let mut after = rest.get(word_rest(rest, offer.quote)..).unwrap_or_default();
     // Chars of what's put the cursor goes back over: into a function's brackets.
-    let mut back = 0;
-    let put = match of {
+    let mut into_brackets = 0;
+    let mut put = match of {
         Item::Field(name) => match offer.quote.filter(|q| *q != '!' || !name.contains('!')) {
             Some(q) => {
                 let name = if q == '"' { name.replace('"', "\"\"") } else { name.to_string() };
@@ -490,17 +495,25 @@ fn written(text: &str, offer: &Offer, item: &str) -> Option<(String, usize)> {
         }
         Item::Function(f) if f.max == 0 => format!("{}()", f.name),
         Item::Function(f) if after.first().is_none_or(|c| closes(*c)) => {
-            back = 1;
+            into_brackets = 1;
             format!("{}()", f.name)
         }
         Item::Function(f) => format!("{}(", f.name),
         Item::Variable(_, name) => name.to_string(),
         Item::Keyword(k) => k.word().to_string(),
     };
+    let len = |put: &str| before.len() + put.chars().count() + after.len();
+    if len(&put) > query::MAX_LEN && matches!(of, Item::Function(_)) && put.ends_with(')') {
+        put.pop();
+        into_brackets = 0;
+    }
+    if len(&put) > query::MAX_LEN {
+        return None;
+    }
     let mut new: String = before.iter().collect();
     new.push_str(&put);
     new.extend(after);
-    Some((new, (offer.start + put.chars().count()).saturating_sub(back)))
+    Some((new, (offer.start + put.chars().count()).saturating_sub(into_brackets)))
 }
 
 #[cfg(test)]
@@ -799,6 +812,56 @@ mod tests {
             got.insert(cursor, '▮');
             assert_eq!(got.into_iter().collect::<String>(), want, "{text}");
         }
+    }
+
+    /// At the longest expression read, accepting a function leaves out the `)` put for it, and
+    /// writes nothing when even its `(` doesn't fit.
+    #[test]
+    fn accepting_stays_within_the_longest_expression() {
+        let accepted = |pad: usize, typed: &str| {
+            let text = format!("{}{typed}", "x".repeat(pad));
+            let at = text.chars().count();
+            let offer = offer_at(&text, at, &ds(), false).unwrap();
+            written(&text, &offer, "round()").map(|(new, cursor)| (new.chars().skip(pad).collect::<String>(), cursor - pad))
+        };
+        // "x…x + ro": `round()` takes 5 more than `ro`, `round(` 4.
+        let pad = query::MAX_LEN - " + ro".len() - 5;
+        assert_eq!(accepted(pad, " + ro"), Some((" + round()".to_string(), 9)), "it fits whole");
+        assert_eq!(accepted(pad + 1, " + ro"), Some((" + round(".to_string(), 9)), "the `(` alone");
+        assert_eq!(accepted(pad + 2, " + ro"), None, "not even that");
+    }
+
+    /// In the box, at the longest expression read: Enter on a function that doesn't fit writes
+    /// nothing, and the list stays open.
+    #[test]
+    fn accepting_what_does_not_fit_leaves_the_list_open() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let data = ds();
+        let id = Id::unique("expr");
+        // `ro` typed ends it at the longest: not even `round(` fits.
+        let start = format!("{} + r", "x".repeat(query::MAX_LEN - 5));
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, text: &mut String| {
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&data), |e| e).labelled_by(label.id);
+            },
+            start.clone(),
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        let mut state = TextEditState::load(&h.ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(start.chars().count()))));
+        state.store(&h.ctx, id);
+        h.run();
+        h.event(egui::Event::Text("o".into()));
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "round()").is_some(), "offered");
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(h.state().chars().count(), query::MAX_LEN, "nothing written");
+        assert!(h.state().ends_with(" + ro"));
+        assert!(h.query_by_role_and_label(Role::Button, "round()").is_some(), "the list still open");
     }
 
     /// What `pair` makes of `ins` typed at char `at` of `old` (`▮` there in the messages).

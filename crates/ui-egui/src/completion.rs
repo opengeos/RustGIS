@@ -456,7 +456,8 @@ pub(crate) fn pairs(
     // One edit, made by one of those keys: the character typed alone (Shift, AltGr or Option as
     // it takes), or Backspace alone. Typed as text, or committed by an input method: with one
     // running (ibus, fcitx) on Wayland, every key comes that way, a `(` included, between empty
-    // compositions that edit nothing.
+    // compositions that edit nothing. A composition under way (a non-empty `Preedit`) is no key
+    // typed: what it holds isn't written yet.
     let keyed = ui.input(|i| {
         use egui::ImeEvent;
         let edits: Vec<&egui::Event> = i
