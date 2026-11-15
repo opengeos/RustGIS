@@ -23002,7 +23002,13 @@ fn dropped_z_values_are_said_on_import_and_export() {
         let out = dir.join(format!("out-{stream}.geojson"));
         let mark = s.notice_mark();
         s.run("share.exportLayer", &json!({"layer": id, "path": out})).unwrap();
-        let said = |s: &Session, mark| s.notices_since(mark).iter().any(|n| n.text.contains("its geometry has no Z or M values"));
+        // A layer read whole gives the export's own warning; one read in place reads its file
+        // again for the export, and that read's counted note stands in for it (`coalesce_read_zm`).
+        let said = |s: &Session, mark| {
+            s.notices_since(mark).iter().any(|n| {
+                n.text.contains("its geometry has no Z or M values") || (stream && n.text.contains(&rustgis_data::zm_note(Some(1))))
+            })
+        };
         assert!(said(&s, mark), "stream {stream}: {:?}", s.notices_since(mark));
         assert!(std::fs::read_to_string(&out).unwrap().contains("[1.0,2.0]"));
         let mark = s.notice_mark();
