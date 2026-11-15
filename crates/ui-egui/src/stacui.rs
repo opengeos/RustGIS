@@ -2077,7 +2077,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                 // The item's bands were cut (too many to keep): a combination or index whose
                                 // band is past the cut is missing from the menus, so say why where it is looked for.
                                 if let Some(cut) = stac::bands::cut_note(item) {
-                                    ui.weak(tl!("Bands cut")).on_hover_text(cut);
+                                    ui.weak(tl!("Bands left out")).on_hover_text(cut);
                                 }
                             }
                             if ui.selectable_label(st.details == Some(i), tl!("Details")).clicked() {

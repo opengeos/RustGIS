@@ -165,6 +165,18 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     of_its_own.or_else(|| names.iter().find_map(|name| bands.iter().find(|b| b.common == *name)))
 }
 
+/// The band of the asset whose key is exactly `wanted` (any case), when that asset is a file of one
+/// band and no other asset has that key: an explicit choice of a file, ahead of any name, for the
+/// user who gives red, green and blue themselves (`B8A`, where `B08` and `B8A` are both `nir`).
+pub fn find_key<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
+    let wanted = wanted.trim();
+    let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(wanted));
+    match (of_asset.next(), of_asset.next()) {
+        (Some(only), None) if only.in_file == 1 => Some(only),
+        _ => None,
+    }
+}
+
 /// A note for an error about a band not found, when the item describes more bands than are kept
 /// (an asset's past [`super::MAX_BANDS`], or the item's past this list's cap): the band may be one
 /// of those left out. None when nothing was cut.
@@ -179,7 +191,33 @@ pub fn cut_note(item: &Item) -> Option<String> {
         ));
     }
     let total: usize = item.assets.iter().filter(|a| a.is_geotiff()).map(|a| a.bands.len().max(1)).sum();
-    (total > MAX_BANDS).then(|| format!("the item has more than {MAX_BANDS} bands and only the first {MAX_BANDS} are listed"))
+    if total > MAX_BANDS {
+        return Some(format!("the item has more than {MAX_BANDS} bands and only the first {MAX_BANDS} are listed"));
+    }
+    let jp2 = jp2_only(item);
+    (!jp2.is_empty())
+        .then(|| format!("JPEG 2000 files hold bands no GeoTIFF of the item has ({}), and only GeoTIFF files are read", jp2.join(", ")))
+}
+
+/// The common names of bands that only a JPEG 2000 file of the item holds: files of other formats
+/// are not read, so an item that mixes them with GeoTIFFs offers no combination or index that needs
+/// one of these. A JPEG 2000 file whose band a GeoTIFF has too (Sentinel-2's `red-jp2` beside `red`)
+/// costs nothing and is not named.
+fn jp2_only(item: &Item) -> Vec<String> {
+    let is_jp2 = |a: &super::Asset| {
+        let path = crate::logins::inner(&a.href).split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+        let t = a.media_type.to_ascii_lowercase();
+        !a.is_geotiff() && (t.contains("jp2") || t.contains("jpeg2000") || path.ends_with(".jp2"))
+    };
+    let read: std::collections::BTreeSet<&str> =
+        item.assets.iter().filter(|a| a.is_geotiff()).flat_map(|a| a.bands.iter().map(|b| b.common.as_str())).collect();
+    let mut names: Vec<String> = Vec::new();
+    for b in item.assets.iter().filter(|a| is_jp2(a)).flat_map(|a| a.bands.iter()) {
+        if !b.common.is_empty() && !read.contains(b.common.as_str()) && !names.contains(&b.common) {
+            names.push(b.common.clone());
+        }
+    }
+    names
 }
 
 /// The combinations the item can make, each with the bands found for its red, green and blue:
@@ -467,6 +505,23 @@ mod tests {
             assert!(bands(&again)[0].unread, "it goes through the command's copy (named: {named})");
             assert!(!bands(&jaxa(named, json!(0.0001)))[0].unread, "a number is read");
         }
+    }
+
+    #[test]
+    fn an_exact_asset_key_picks_its_file_and_a_jpeg_2000_only_band_is_said() {
+        // B08 and B8A are both near infrared: the key B8A is that file, though `nir` is B08.
+        let b = bands(&item(&[("B08", named("nir")), ("B8A", named("nir")), ("visual", json!({"eo:bands": [{}, {}, {}]}))]));
+        assert_eq!(find_key(&b, "b8a").map(|b| b.asset.as_str()), Some("B8A"));
+        assert_eq!(find_key(&b, "visual").map(|b| b.asset.as_str()), None, "a file of several bands is not chosen by its key");
+        assert_eq!(find_key(&b, "nir").map(|b| b.asset.as_str()), None, "a name is not a key");
+        // A JPEG 2000 file holding a band no GeoTIFF has is said; one that repeats a GeoTIFF's is not.
+        let jp2 =
+            |name: &str| json!({"href": format!("https://x.org/{name}.jp2"), "type": "image/jp2", "eo:bands": [{"common_name": name}]});
+        let tiff = |name: &str| json!({"href": format!("https://x.org/{name}.tif"), "type": "image/tiff; application=geotiff", "eo:bands": [{"common_name": name}]});
+        let mixed = item(&[("red", tiff("red")), ("nir-jp2", jp2("nir"))]);
+        assert!(cut_note(&mixed).is_some_and(|n| n.contains("JPEG 2000") && n.contains("nir")), "{:?}", cut_note(&mixed));
+        assert_eq!(cut_note(&item(&[("red", tiff("red")), ("red-jp2", jp2("red"))])), None);
+        assert_eq!(cut_note(&item(&[("red", tiff("red")), ("nir", tiff("nir"))])), None);
     }
 
     #[test]

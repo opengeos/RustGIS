@@ -101,10 +101,13 @@ mod desktop {
         item: &stac::Item,
         all: &[sb::Band],
         wanted: &[String],
+        keys_first: bool,
     ) -> Result<(Vec<sb::Band>, Vec<String>, [f64; 4], (f64, bool)), String> {
         let mut picked = Vec::with_capacity(wanted.len());
         for name in wanted {
-            let band = sb::find(all, name).ok_or_else(|| {
+            // A band asked for by name by the user (not a preset's) may be an exact asset key: it comes first.
+            let found = if keys_first { sb::find_key(all, name).or_else(|| sb::find(all, name)) } else { sb::find(all, name) };
+            let band = found.ok_or_else(|| {
                 let cut = sb::cut_note(item).map(|n| format!("; {n}")).unwrap_or_default();
                 format!("{}: no band '{name}' (it has {}){cut}", item.id, names_of(all))
             })?;
@@ -154,7 +157,8 @@ mod desktop {
             })?;
             (c.name.to_string(), c.channels.map(str::to_string))
         };
-        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted)?;
+        let custom = named.iter().any(Option::is_some);
+        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted, custom)?;
         let name = text(p, "name")?.map_or_else(|| format!("{} {label}", item.id), str::to_string);
         let channels = [wanted[0].clone(), wanted[1].clone(), wanted[2].clone()];
         Ok(Box::new(move || {
@@ -182,7 +186,7 @@ mod desktop {
             format!("unknown index '{id}' (the indices are {})", ids.join(", "))
         })?;
         let wanted: Vec<String> = ix.channels.iter().map(|c| (*c).to_string()).collect();
-        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted)?;
+        let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted, false)?;
         // Where each input is in the bands read, for the formula (the ones it doesn't use are never named).
         let at = |names: &[&str]| ix.channels.iter().position(|c| names.contains(c)).map_or(1, |i| i as u64 + 1);
         let expr = super::super::imagery::index_expression(
@@ -279,6 +283,11 @@ mod desktop {
     /// while this one looks at the run's Cancel and stops the reads once it is set. The same windows
     /// as reading them one by one. A thread the system refuses costs only that: the file is read
     /// here, Cancel looked at before it starts (a read here, once started, runs to its end).
+    ///
+    /// Memory: up to the thread count of windows are held at once (at most a combination's three, an
+    /// index's two to three), each bounded by the window reader's own limit on values. An ordinary
+    /// window (one band, about 4 million values) is far below it; files of many bands can take up to
+    /// about that many times one window's peak, where reading them one at a time took one.
     pub(super) fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: (f64, bool)) -> Result<Vec<WindowRaster>, String> {
         // The run's request predicate is of this thread: each reader thread is given it, as the shared
         // helpers give their workers, so a request whose claim has gone is not sent.
@@ -493,6 +502,8 @@ mod desktop {
                 for col in 0..w {
                     let world = finest.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
                     let (sc, sr) = raster.transform.to_pixel(world);
+                    // A geographic grid stored in another turn of longitude (-10° and 350°) is the same place.
+                    let sc = raster.wrap_col(sc);
                     let (sc, sr) = (sc.floor(), sr.floor());
                     if sc < 0.0 || sr < 0.0 || sc >= f64::from(raster.width) || sr >= f64::from(raster.height) {
                         continue;
@@ -958,6 +969,46 @@ mod tests {
             assert!(err.is_some_and(|e| e.starts_with("red:") && e.contains(said)), "index: {red}");
         }
         assert!(super::bands_work(&s, &json!({"item": item(json!({"raster:scale": 0.0001})), "bbox": bbox})).is_ok());
+    }
+
+    #[test]
+    fn a_users_band_may_be_an_exact_asset_key_and_a_presets_goes_by_name() {
+        let asset = |common: &str| {
+            json!({"href": format!("https://example.org/{common}.tif"), "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                "eo:bands": [{"common_name": common}]})
+        };
+        // B08 and B8A are both near infrared.
+        let item = json!({"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+            "assets": {"B08": asset("nir"), "B8A": asset("nir"), "red": asset("red"), "green": asset("green")}});
+        let s = crate::Session::new(crate::Project::default());
+        let bbox = json!([10.0, 45.0, 10.02, 45.02]);
+        let run = |extra: serde_json::Value| {
+            let mut p = json!({"item": item, "bbox": bbox});
+            for (k, v) in extra.as_object().unwrap() {
+                p[k] = v.clone();
+            }
+            super::bands_work(&s, &p)
+        };
+        assert!(run(json!({"red": "B8A", "green": "red", "blue": "green"})).is_ok(), "the key picks its file");
+        assert!(run(json!({"red": "B08", "green": "red", "blue": "green"})).is_ok());
+        assert!(run(json!({"red": "nir", "green": "red", "blue": "green"})).is_ok(), "a name still goes by name");
+        assert!(run(json!({"red": "nope", "green": "red", "blue": "green"})).is_err());
+    }
+
+    #[test]
+    fn grids_stored_in_other_turns_of_longitude_are_the_same_place() {
+        // Two windows of the same place: one stored at -10°..-9°, the other at 350°..351°.
+        let at = |origin_x: f64, values: Vec<f32>| {
+            let t = GeoTransform { origin_x, origin_y: 45.0, pixel_width: 0.5, pixel_height: -0.5 };
+            Raster::new("b", 2, 2, vec![values], t, Crs::from_epsg(4326).unwrap(), Some(0.0), ColorHint::Gray, "UInt16").unwrap()
+        };
+        let west = at(-10.0, vec![1000.0; 4]);
+        let east = at(350.0, vec![2000.0; 4]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let (r, notes) = stack("s", &names, &[(&west, &band(1.0, 0.0)), (&east, &band(1.0, 0.0))]).unwrap();
+        let none = rustgis_analysis::rasterops::NODATA;
+        assert!(r.bands.iter().all(|b| b.data.iter().all(|v| *v != none)), "every cell has both bands: {notes:?}");
+        assert_eq!((r.bands[0].data[0], r.bands[1].data[0]), (1000.0, 2000.0));
     }
 
     #[test]
