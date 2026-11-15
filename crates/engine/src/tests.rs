@@ -12660,6 +12660,17 @@ fn a_link_chart_says_what_its_limits_leave_out() {
     let shows = "300 of the 301 related features and 20000 of the 20200 links";
     assert_eq!(said(&s, mark, "Mesh"), [format!("Mesh: the link chart shows {shows}; {limits}")]);
     assert!(html.contains(&format!("Shows {shows}.")));
+    // A self-link needs one node, including the last available slot. Counting its endpoints
+    // twice would stop at 2,999 even though all 3,000 features and links fit.
+    let keys: Vec<String> = (0..3000).map(|i| format!("self{i}")).collect();
+    add(&mut s, "self.csv", &keys);
+    s.run("data.relate", &json!({"name": "Self", "origin": "self", "originKey": "key", "destination": "self", "destinationKey": "key"}))
+        .unwrap();
+    let mark = s.notice_mark();
+    s.run("share.linkChart", &json!({"relationship": "Self"})).unwrap();
+    let (links, nodes, html) = drawn("Self");
+    assert_eq!((links, nodes), (3000, 3000));
+    assert!(said(&s, mark, "Self").is_empty() && !html.contains("Shows "));
     let _ = std::fs::remove_dir_all(dir);
 }
 
