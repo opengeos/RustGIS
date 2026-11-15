@@ -470,6 +470,7 @@ fn registries_and_blocklists_are_read_defensively() {
         {"id": "nohash", "name": "No hash", "version": "1.0.0", "package": "x.rgplugin", "sha256": "abc"},
         {"id": "Bad Id", "name": "X", "version": "1.0.0", "package": "x.rgplugin", "sha256": sha},
         {"id": "bad-min", "name": "X", "version": "1.0.0", "minRustgisVersion": "0.6.x", "package": "x.rgplugin", "sha256": sha},
+        {"id": "a-plugin", "name": "A again", "version": "0.2.0", "package": "https://example.com/a2.rgplugin", "sha256": sha},
         7
     ]})
     .to_string();
@@ -479,7 +480,7 @@ fn registries_and_blocklists_are_read_defensively() {
     let (_, notice) = registry::parse_with_notice(&text, "https://plugins.rustgis.app/registry.json").unwrap();
     let notice = notice.unwrap_or_default();
     assert!(
-        notice.starts_with("5 plugin(s) in the plugin registry were skipped") && notice.ends_with(": bad, nohash, bad-min"),
+        notice.starts_with("6 plugin(s) in the plugin registry were skipped") && notice.ends_with(": bad, nohash, bad-min, a-plugin"),
         "{notice}"
     );
     assert_eq!(v[1].package, "https://plugins.rustgis.app/packages/b/b-1.2.0.rgplugin");

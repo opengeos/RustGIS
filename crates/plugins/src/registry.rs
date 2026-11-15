@@ -322,7 +322,9 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
                 continue;
             }
         }
+        // A second entry for an id is skipped (the first is listed), and said.
         if !seen.insert(e.id.clone()) {
+            drop_entry(&e.id);
             continue;
         }
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {
@@ -353,7 +355,7 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
     if dropped > 0 {
         let more = if named > dropped_ids.len() { ", …" } else { "" };
         notices.push(format!(
-            "{dropped} plugin(s) in the plugin registry were skipped (an unreadable entry, id, version or minRustgisVersion, or no package that checks out): {}{more}",
+            "{dropped} plugin(s) in the plugin registry were skipped (an unreadable entry, id, version or minRustgisVersion, no package that checks out, or an id listed twice): {}{more}",
             dropped_ids.join(", ")
         ));
     }
