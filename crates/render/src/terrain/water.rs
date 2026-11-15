@@ -22,7 +22,7 @@ const MAX_SHORE_SAMPLES: usize = 1 << 22;
 
 /// The most cells along each side of the grid that finds the lakes near a point.
 const MAX_GRID: usize = 256;
-/// The most lake references held by the grid and its list of broad boxes. An input with more
+/// The most lake references held by both grids. An input with more
 /// lakes keeps the unavoidable one reference per lake without duplication.
 const MAX_GRID_REFERENCES: usize = 1 << 20;
 
@@ -54,8 +54,8 @@ pub(super) struct Water {
     cols: usize,
     rows: usize,
     cells: Vec<Vec<u32>>,
-    /// Boxes spanning too many cells, held once and merged with a cell in original row order.
-    broad: Vec<u32>,
+    /// Broad polygons in a separately budgeted coarse grid, merged in original row order.
+    broad: BroadGrid,
     /// Polygons left on the ground: no height read along their shore and no level given.
     pub(super) unlevelled: usize,
     /// Polygons whose shore was read at wider steps than half a cell of the ground, to keep
@@ -80,6 +80,71 @@ struct Slabs {
     y0: f64,
     step: f64,
     strips: Vec<Vec<(Coord, Coord)>>,
+}
+
+/// Large polygons have their own coarse grid, so their reference budget cannot coarsen the
+/// small lakes. Each horizontal band's x range follows polygon edges rather than its whole
+/// box: a wide diagonal polygon need not become a candidate everywhere inside its box.
+struct BroadGrid {
+    extent: Extent,
+    side: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+impl BroadGrid {
+    fn new(ids: &[u32], lakes: &[Lake], budget: usize) -> Self {
+        let extent = ids.iter().filter_map(|&i| lakes.get(i as usize)).fold(Extent::EMPTY, |e, l| e.union(&l.extent));
+        if extent.is_empty() {
+            return Self { extent, side: 1, cells: vec![Vec::new()] };
+        }
+        let (w, h) = (extent.width().max(f64::MIN_POSITIVE), extent.height().max(f64::MIN_POSITIVE));
+        let visit = |side, put: &mut dyn FnMut(usize, usize, usize, u32) -> bool| {
+            for &id in ids {
+                let Some(lake) = lakes.get(id as usize) else { continue };
+                let (first, last) = (cell(lake.extent.min_y, extent.min_y, h, side), cell(lake.extent.max_y, extent.min_y, h, side));
+                for row in first..=last {
+                    let y0 = extent.min_y + h * row as f64 / side as f64;
+                    let y1 = extent.min_y + h * (row + 1) as f64 / side as f64;
+                    if let Some((lo, hi)) = lake.edges.x_range(y0, y1) {
+                        // Rounding at a cell edge may add candidates, never omit a touching lake.
+                        let pad = lo.abs().max(hi.abs()).max(1.0) * f64::EPSILON * 8.0;
+                        if !put(row, cell(lo - pad, extent.min_x, w, side), cell(hi + pad, extent.min_x, w, side), id) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        };
+        let mut side = 32;
+        while side > 1 {
+            let mut count = 0usize;
+            if visit(side, &mut |_, first, last, _| {
+                count = count.saturating_add(last - first + 1);
+                count <= budget
+            }) {
+                break;
+            }
+            side /= 2;
+        }
+        let mut cells = vec![Vec::new(); side * side];
+        visit(side, &mut |row, first, last, id| {
+            for col in first..=last {
+                cells[row * side + col].push(id);
+            }
+            true
+        });
+        Self { extent, side, cells }
+    }
+
+    fn near(&self, m: Coord) -> &[u32] {
+        if !self.extent.contains(m) {
+            return &[];
+        }
+        let col = cell(m.x, self.extent.min_x, self.extent.width().max(f64::MIN_POSITIVE), self.side);
+        let row = cell(m.y, self.extent.min_y, self.extent.height().max(f64::MIN_POSITIVE), self.side);
+        self.cells.get(row * self.side + col).map_or(&[], Vec::as_slice)
+    }
 }
 
 impl Slabs {
@@ -133,6 +198,25 @@ impl Slabs {
         }
         inside
     }
+
+    /// Conservative horizontal bounds inside a y band, including holes and separate rings.
+    fn x_range(&self, y0: f64, y1: f64) -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (first, last) = (strip(y0, self.y0, self.step, self.strips.len()), strip(y1, self.y0, self.step, self.strips.len()));
+        for edges in &self.strips[first..=last] {
+            for &(a, b) in edges {
+                let (bottom, top) = (a.y.min(b.y).max(y0), a.y.max(b.y).min(y1));
+                if bottom <= top {
+                    for y in [bottom, top] {
+                        let x = a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x);
+                        lo = lo.min(x);
+                        hi = hi.max(x);
+                    }
+                }
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
+    }
 }
 
 impl Water {
@@ -155,7 +239,7 @@ impl Water {
             cell(m.y, self.extent.min_y, self.extent.height().max(f64::MIN_POSITIVE), self.rows),
         );
         let mut nearby = self.cells.get(r * self.cols + c)?.iter().peekable();
-        let mut broad = self.broad.iter().peekable();
+        let mut broad = self.broad.near(m).iter().peekable();
         loop {
             let local_first = match (nearby.peek(), broad.peek()) {
                 (Some(a), Some(b)) => a <= b,
@@ -245,6 +329,8 @@ impl Water {
                 }
             }
         }
+        let remaining = cap.saturating_sub(cells.iter().map(Vec::len).sum::<usize>());
+        let broad = BroadGrid::new(&broad, &lakes, remaining);
         // Tiles still on their way give more shore soon; one that failed may come once the tile
         // cache asks for it again.
         let retry = if ground.pending() {
@@ -568,15 +654,15 @@ mod tests {
     }
 
     /// Every overlapping lake used to occupy every one of the 256² grid cells: 16,384 simple
-    /// polygons attempted a billion references. Broad boxes held once bound that expansion
-    /// while retaining the first overlapping polygon's level and ordinary containment.
+    /// polygons attempted a billion references. The grids share a budget while retaining the
+    /// first overlapping polygon's level and ordinary containment.
     #[test]
     fn overlapping_lakes_do_not_expand_past_the_index_budget() {
         let (map, camera) = hill_with_water(None);
         let ground = Ground::of(&map, &camera).unwrap();
         let polygons = (0..16_384).map(|i| (vec![square(0.0, 0.0, 10.0)], Some(i as f64 + 5.0))).collect();
         let water = Water::build(polygons, &ground, MAX_SHORE_SAMPLES);
-        let references: usize = water.cells.iter().map(Vec::len).sum::<usize>() + water.broad.len();
+        let references: usize = water.cells.iter().map(Vec::len).sum::<usize>() + water.broad.cells.iter().map(Vec::len).sum::<usize>();
         assert!(references <= MAX_GRID_REFERENCES, "{references} references");
         assert_eq!(water.lakes.len(), 16_384, "the index drops no lake");
         assert_eq!(water.level(Coord::new(5.0, 5.0)), Some(5.0));
@@ -605,15 +691,75 @@ mod tests {
         }));
         let water = Water::build(polygons, &ground, MAX_SHORE_SAMPLES);
         assert_eq!(water.cols, MAX_GRID);
-        assert_eq!(water.broad.len(), 2000);
+        assert_eq!(water.broad.cells.iter().flatten().collect::<std::collections::HashSet<_>>().len(), 2000);
         assert!(water.cells.iter().map(Vec::len).max().unwrap_or(0) <= 25);
-        assert!(water.cells.iter().map(Vec::len).sum::<usize>() + water.broad.len() <= MAX_GRID_REFERENCES);
+        assert!(
+            water.cells.iter().map(Vec::len).sum::<usize>() + water.broad.cells.iter().map(Vec::len).sum::<usize>() <= MAX_GRID_REFERENCES
+        );
         assert_eq!(water.lakes.len(), 102_001);
         assert_eq!(water.level(Coord::new(0.5, 9998.5)), Some(-7.0), "the earlier local lake precedes broad candidates");
         assert_eq!(water.level(Coord::new(1.0, 9000.0)), Some(50.0), "the first broad lake precedes later ones");
         assert_eq!(water.level(Coord::new(6000.5, 0.5)), Some(100.0));
         assert_eq!(water.level(Coord::new(9990.5, 2490.5)), Some(100_099.0));
-        assert_eq!(water.level(Coord::new(6005.0, 5.0)), None);
+        let miss = Coord::new(6005.0, 5.0);
+        assert_eq!(water.level(miss), None);
+        let (col, row) = (
+            cell(miss.x, water.extent.min_x, water.extent.width(), water.cols),
+            cell(miss.y, water.extent.min_y, water.extent.height(), water.rows),
+        );
+        let candidates = water.cells[row * water.cols + col].len() + water.broad.near(miss).len();
+        assert!(candidates <= 25, "the miss visits {candidates} candidates, not every broad polygon");
+        // Conservative band bounds preserve every sampled interior and the original first row.
+        for x in [0.1, 100.0, 3000.0, 9999.0] {
+            for y in [0.1, 100.0, 3000.0, 9999.0] {
+                let at = Coord::new(x, y);
+                if water.lakes[1].edges.contains(at) {
+                    assert!(water.broad.near(at).contains(&1), "{at:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn broad_grid_candidates_preserve_concavities_holes_and_boundary_points() {
+        let shapes = [
+            vec![square(-10.0, -10.0, 20.0), square(-5.0, -5.0, 10.0)],
+            vec![vec![
+                Coord::new(-20.0, -20.0),
+                Coord::new(-10.0, -20.0),
+                Coord::new(-10.0, -10.0),
+                Coord::new(0.0, -10.0),
+                Coord::new(0.0, 0.0),
+                Coord::new(-20.0, 0.0),
+            ]],
+            vec![vec![Coord::new(-20.0, -20.0), Coord::new(20.0, 20.0), Coord::new(-20.0, 20.0)]],
+        ];
+        let lakes: Vec<_> = shapes
+            .iter()
+            .enumerate()
+            .map(|(i, rings)| {
+                let mut extent = Extent::EMPTY;
+                rings.iter().flatten().for_each(|p| extent.expand(*p));
+                Lake { extent, level: i as f64, edges: Slabs::new(rings, &extent) }
+            })
+            .collect();
+        for budget in [3, 32, 512] {
+            let grid = BroadGrid::new(&[0, 1, 2], &lakes, budget);
+            assert!(grid.cells.iter().map(Vec::len).sum::<usize>() <= budget);
+            for x in -41..=41 {
+                for y in -41..=41 {
+                    let at = Coord::new(f64::from(x) / 2.0, f64::from(y) / 2.0);
+                    let expected = lakes.iter().find(|lake| lake.extent.contains(at) && lake.edges.contains(at)).map(|lake| lake.level);
+                    let found = grid
+                        .near(at)
+                        .iter()
+                        .filter_map(|&i| lakes.get(i as usize))
+                        .find(|lake| lake.extent.contains(at) && lake.edges.contains(at))
+                        .map(|lake| lake.level);
+                    assert_eq!(found, expected, "budget {budget}, {at:?}");
+                }
+            }
+        }
     }
 
     #[test]

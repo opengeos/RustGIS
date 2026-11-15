@@ -384,8 +384,9 @@ pub fn thickening(l: &PlacedLabel, px: f32) -> f32 {
     if !l.bold || !crate::fonts::bold_is_synthetic() {
         return 0.0;
     }
-    // A requested family whose face cannot be resolved uses the interface font, just like a
-    // label without a family. Read the already indexed families so the UI never waits on it.
+    // An export resolves the same named face that it draws. An unreadable face uses the
+    // interface fallback, just like a label without a family. The UI uses its own font readiness
+    // instead, so deciding an additional strike never asks it to read or parse a font file.
     let named =
         l.font.and_then(|i| crate::families::installed_now()?.get(usize::from(i))).and_then(|family| family_font(family, label_face(l)));
     if named.is_none() { crate::fonts::bold_thickening(px) } else { 0.0 }

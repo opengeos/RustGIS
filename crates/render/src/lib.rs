@@ -37,7 +37,7 @@ mod stroke_paths;
 pub mod svg;
 pub mod terrain;
 mod text;
-pub use text::{CALLOUT_WIDTH, thickening as label_thickening};
+pub use text::CALLOUT_WIDTH;
 pub mod tile_mesh;
 mod tiles;
 pub mod vector;

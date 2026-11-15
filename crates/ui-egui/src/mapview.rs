@@ -2087,11 +2087,18 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
 }
 
 /// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
+/// The UI draws in its interface font until a named face is actually installed in egui. This
+/// decision uses only readiness, never font-file reads or the renderer's parsed face cache.
+fn fallback_bold_width(bold: bool, named_ready: bool, px: f32) -> f32 {
+    use rustgis_engine::render::fonts;
+    if bold && !named_ready && fonts::bold_is_synthetic() { fonts::bold_thickening(px) } else { 0.0 }
+}
+
 fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
     let family = crate::labelfonts::family(p.ctx(), l.font, l.bold, l.italic);
     // Bold with no heavier face to draw it in: drawn again a little to its right, as exports do.
     // (In the interface fonts: those of a named family not loaded yet too.)
-    let thick = rustgis_engine::render::label_thickening(l, l.size * 1.33);
+    let thick = fallback_bold_width(l.bold, family.is_some(), l.size * 1.33);
     let angle = l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3);
     let shift = angle.map_or(vec2(thick, 0.0), |a| vec2(thick * a.cos(), thick * a.sin()));
     let strikes = std::iter::once(egui::Vec2::ZERO).chain((thick > 0.0).then_some(shift));
@@ -5029,7 +5036,7 @@ mod halo_tests {
             assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
             return;
         }
-        use rustgis_engine::render::{LabelGlyph, label_thickening};
+        use rustgis_engine::render::LabelGlyph;
         assert!(rustgis_engine::render::fonts::bold_is_synthetic());
         for curved in [false, true] {
             for angle in [0.0, std::f32::consts::FRAC_PI_2] {
@@ -5037,10 +5044,15 @@ mod halo_tests {
                 (l.x, l.y, l.size, l.bold, l.halo) = (100.0, 100.0, 30.0, true, None);
                 // An unavailable explicit family must use the same fallback as no family.
                 l.font = Some(u16::MAX);
-                let thick = label_thickening(&l, l.size * 1.33);
+                let thick = fallback_bold_width(l.bold, false, l.size * 1.33);
                 assert!(thick > 0.0);
                 l.font = None;
-                assert_eq!(label_thickening(&l, l.size * 1.33), thick);
+                assert_eq!(fallback_bold_width(l.bold, false, l.size * 1.33), thick);
+                assert_eq!(fallback_bold_width(l.bold, true, l.size * 1.33), 0.0, "a ready named family draws its own face");
+                // The named family may already be indexed for exports while egui is still loading
+                // it: its fallback stays bold until the readiness flag becomes true.
+                l.font = Some(0);
+                assert_eq!(fallback_bold_width(l.bold, false, l.size * 1.33), thick);
                 l.font = Some(u16::MAX);
                 if curved {
                     l.glyphs = vec![LabelGlyph { text: "A".into(), dx: 0.0, dy: 0.0, angle }];
