@@ -4187,7 +4187,8 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                             }
                         },
                     );
-                    let mut k = xx.factor;
+                    // As Base (m) below: a saved factor out of range is shown, not written back.
+                    let mut k = if xx.factor.is_finite() { xx.factor } else { 1.0 };
                     ui.horizontal(|ui| {
                         let input_label = ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
                         // Kept across a drag until it is let go (#607).
@@ -4197,6 +4198,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                                 egui::DragValue::new(&mut k)
                                     .update_while_editing(false)
                                     .range(0.0..=1e6)
+                                    .clamp_existing_to_range(false)
                                     .speed(xx.factor.max(0.0001) * 0.02),
                             )
                             .labelled_by(input_label.id);
@@ -4205,13 +4207,21 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
                         }
                     });
-                    let mut b = xx.base;
+                    // A saved base outside the range (below 0, or no number) is shown as it is, never
+                    // written back just by being shown: only a drag or an edit sends the command.
+                    let mut b = if xx.base.is_finite() { xx.base } else { 0.0 };
                     ui.horizontal(|ui| {
                         let input_label = ui.label(egui::RichText::new(tl!("Base (m)")).size(11.5));
                         // Kept across a drag until it is let go, as the factor is.
                         let drag = Dragged::lend(ui, egui::Id::unique(("extrusion_base", layer.id)), &mut b);
                         let r = ui
-                            .add(egui::DragValue::new(&mut b).update_while_editing(false).range(0.0..=1e7).speed(xx.base.max(10.0) * 0.02))
+                            .add(
+                                egui::DragValue::new(&mut b)
+                                    .update_while_editing(false)
+                                    .range(0.0..=1e7)
+                                    .clamp_existing_to_range(false)
+                                    .speed(xx.base.max(10.0) * 0.02),
+                            )
                             .labelled_by(input_label.id)
                             .on_hover_text(tl!("The constant base: used where no field is chosen, or the field holds no number."));
                         if drag.settled(ui, &r, &mut b) && b != xx.base {
