@@ -159,16 +159,17 @@ impl Kept {
     /// keeps apart from them): a bare `key` is a secret beside a web address, and an address
     /// holding a secret doesn't stop being one. Only then are the classified entries removed.
     fn without_secrets(&mut self, mut o: Map<String, Value>, address: &str) -> Map<String, Value> {
-        let secret: Vec<String> = o
+        // Count address-bearing siblings once; unknown preference fields are not capped.
+        let addresses =
+            o.iter().filter(|(k, v)| !k.eq_ignore_ascii_case("data") && !k.eq_ignore_ascii_case("text") && web_address(v, 0)).count();
+        let beside = web_address(&Value::String(address.into()), 0);
+        let secret: BTreeSet<String> = o
             .iter()
             .filter(|(k, v)| {
                 let mut probe = Map::new();
                 probe.insert((*k).clone(), (*v).clone());
-                if web_address(&Value::String(address.into()), 0)
-                    || o.iter().any(|(other, v)| {
-                        other != *k && !other.eq_ignore_ascii_case("data") && !other.eq_ignore_ascii_case("text") && web_address(v, 0)
-                    })
-                {
+                let own_address = !k.eq_ignore_ascii_case("data") && !k.eq_ignore_ascii_case("text") && web_address(v, 0);
+                if beside || addresses > usize::from(own_address) {
                     probe.insert("\u{1}beside".into(), "https://a".into());
                 }
                 sources::holds_secret(&Value::Object(probe))
