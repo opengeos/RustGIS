@@ -630,7 +630,8 @@ fn tile_of(p: &Value) -> Option<String> {
 }
 
 /// An asset's first band's number `key` (`scale`, `offset`, `nodata`): from `raster:bands`, else from
-/// `eo:bands`, where some catalogs (Brazil Data Cube's) put it, else from JAXA Earth's `je:rasters`.
+/// `eo:bands`, where some catalogs (Brazil Data Cube's) put it, else from STAC 1.1's unified `bands`
+/// (where it may be `raster:scale`, as [`item_json`] writes it), else from JAXA Earth's `je:rasters`.
 fn band_number(asset: &Value, key: &str) -> Option<f64> {
     let je = || {
         let (group, name) = match key {
@@ -641,9 +642,12 @@ fn band_number(asset: &Value, key: &str) -> Option<f64> {
         };
         asset.get("je:rasters")?.get(group)?.get(name)?.as_f64()
     };
-    ["raster:bands", "eo:bands"]
+    ["raster:bands", "eo:bands", "bands"]
         .iter()
-        .find_map(|b| asset.get(*b)?.as_array()?.first()?.get(key)?.as_f64())
+        .find_map(|b| {
+            let first = asset.get(*b)?.as_array()?.first()?;
+            first.get(key).or_else(|| first.get(format!("raster:{key}")))?.as_f64()
+        })
         .or_else(je)
         .filter(|v| v.is_finite())
 }
@@ -894,8 +898,12 @@ pub fn sign_blocking(href: &str) -> Result<String, String> {
     Ok(sign(href, &token))
 }
 
-/// An item as the commands return it (and read back in `stac.addAsset`), with its date and
-/// cloud cover as its properties: small, for the command line and the AI Assistant.
+/// An item as the commands return it (and read back in `stac.addAsset`, `stac.addBands` and
+/// `stac.addIndex`), with its date and cloud cover as its properties: small, for the command line
+/// and the AI Assistant, except that it keeps each band's description (name, scale, offset,
+/// no-data) that the last two need to find and scale the bands: without the catalog's scale and
+/// offset a Sentinel-2 band's values would come out wrong. That is about 1.5 KB more for a Sentinel-2
+/// scene (about 15 KB for `stac.search`'s default 10 items, 290 KB for its most, 200).
 pub fn item_json(i: &Item) -> Value {
     item_json_with(i, false)
 }

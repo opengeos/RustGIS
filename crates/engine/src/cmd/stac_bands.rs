@@ -226,9 +226,10 @@ mod desktop {
             .iter()
             .map(|b| if b.common.is_empty() { b.asset.as_str() } else { b.common.as_str() })
             .filter(|n| seen.insert(*n))
-            .take(24)
             .collect();
-        names.join(", ")
+        // At most 24 are listed, and the list says when there are more.
+        let more = if names.len() > 24 { ", …" } else { "" };
+        format!("{}{more}", names.iter().take(24).copied().collect::<Vec<_>>().join(", "))
     }
 
     /// The cell size that reads a box about [`ACROSS`] cells across: the overview at least that
@@ -375,6 +376,16 @@ mod desktop {
             ));
         }
         let mut notes = Vec::new();
+        // A band taken from a colour image (the item has no file of its own for it) is not in the
+        // units of the bands that come from band files: the catalog's scale and offset are for those.
+        for ((_, band), who) in sources.iter().zip(channels) {
+            if band.in_file > 1 {
+                notes.push(format!(
+                    "{who} is band {} of {}, a file of {} bands, as the item has no file of its own for it: its values may not be in the units of the other bands (a colour image's are 8-bit)",
+                    band.index, band.asset, band.in_file
+                ));
+            }
+        }
         let size = finest.transform.pixel_width.abs();
         let resampled: Vec<&str> = sources
             .iter()
@@ -552,6 +563,18 @@ mod tests {
         let (r, notes) = stack("s", &["a".into(), "b".into()], &[(&wide, &band(1.0, 0.0)), (&corner, &band(1.0, 0.0))]).unwrap();
         assert_eq!(r.bands[0].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1);
         assert!(notes.iter().any(|n| n.contains("15 cells")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_band_taken_from_a_colour_image_is_said_and_a_band_file_is_not() {
+        let a = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let mut from_colour = band(1.0, 0.0);
+        (from_colour.asset, from_colour.in_file) = ("visual".into(), 3);
+        let (_, notes) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &from_colour)]).unwrap();
+        assert!(notes.iter().any(|n| n.starts_with("red is band 1 of visual, a file of 3 bands")), "{notes:?}");
+        let (_, none) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &band(1.0, 0.0))]).unwrap();
+        assert!(!none.iter().any(|n| n.contains("a file of")), "files of their own say nothing: {none:?}");
     }
 
     #[test]

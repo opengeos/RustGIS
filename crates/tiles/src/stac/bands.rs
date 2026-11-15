@@ -337,6 +337,9 @@ mod tests {
         let (red, green) = (find(&bands(&again), "red").unwrap().clone(), find(&bands(&again), "green").unwrap().clone());
         assert_eq!((red.scale, red.offset), (0.5, 1.0));
         assert_eq!((green.scale, green.offset), (1.0, 0.0));
+        // The asset's own numbers survive the round trip too, not only its bands'.
+        let asset = again.assets.iter().find(|a| a.key == "red").unwrap();
+        assert_eq!((asset.scale, asset.offset), (Some(0.5), Some(1.0)));
         let written = crate::stac::item_json(&scaled);
         assert!(written["assets"]["green"].get("bands").is_none(), "nothing to say of a band the catalog describes none of");
     }
