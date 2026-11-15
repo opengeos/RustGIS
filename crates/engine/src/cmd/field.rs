@@ -578,7 +578,8 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         let raw: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         // Only entirely absent identities qualify. Null/empty/malformed metadata is not a
         // reason to discard a present association; typed parsing already rejects bad IDs.
-        if raw.get("field_origin").is_some()
+        if raw.get("requires").and_then(Value::as_array).is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some("field-origin")))
+            || raw.get("field_origin").is_some()
             || raw.get("origin_id").is_some()
             || project.field_origin.is_some()
             || !project.origin_id.is_empty()
@@ -1492,6 +1493,12 @@ mod tests {
         let mark = home.notice_mark();
         home.run("offline.bringBack", &json!({"path": path, "legacyArea":"Site"})).unwrap();
         assert!(home.notices_since(mark).iter().any(|notice| notice.text.contains("unverified origin")));
+        let mut incomplete = serde_json::to_value(&legacy).unwrap();
+        incomplete["requires"] = json!(["field-origin"]);
+        let incomplete = rustgis_data::zip::write(&[("Site.rgis".into(), serde_json::to_vec(&incomplete).unwrap())]).unwrap();
+        std::fs::write(&path, incomplete).unwrap();
+        let err = home.run("offline.bringBack", &json!({"path":path,"legacyArea":"Site"})).unwrap_err();
+        assert!(err.contains("cannot override"), "{err}");
         std::fs::write(&path, &back).unwrap();
         let before = serde_json::to_value(&home.project).unwrap();
         let err = home.run("offline.bringBack", &json!({"path":path,"legacyArea":"Site"})).unwrap_err();
