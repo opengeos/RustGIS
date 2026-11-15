@@ -149,6 +149,9 @@ jobs:
       - name: Check and name the APK
         env:
           VERSION: ${{ needs.android-build.outputs.version }}
+          # The release key's certificate (CN=RustGIS, O=OpenGeos), as `apksigner verify
+          # --print-certs` prints it.
+          RELEASE_CERT_SHA256: c8ba985148386fae4ccbc4e1256d3234dd35f85e7eb921d74a593d7a73d93d89
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -158,9 +161,10 @@ jobs:
           tools="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
           signer="$("$tools/apksigner" verify --print-certs "dist/$apk")"
           printf '%s\n' "$signer" | grep -E 'DN|SHA-256'
-          # A release APK signed with anything but the release key couldn't update an installed one.
-          if printf '%s\n' "$signer" | grep -q 'CN=RustGIS debug'; then
-            echo "::error::The APK is signed with the debug key, not the release key."
+          # A release APK signed with anything but the release key couldn't update an installed one:
+          # its certificate is pinned (a key replaced by mistake fails here, before a release).
+          if ! printf '%s\n' "$signer" | grep -q "certificate SHA-256 digest: $RELEASE_CERT_SHA256"; then
+            echo "::error::The APK isn't signed with the release key (certificate SHA-256 $RELEASE_CERT_SHA256)."
             exit 1
           fi
 
