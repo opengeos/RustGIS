@@ -233,8 +233,17 @@ jobs:
               exit 1
             fi
             # Only its own architecture's library.
-            # (`unzip` fails on an APK with no libraries: the check below then names none.)
-            libs="$(unzip -Z1 "dist/$apk" 'lib/*' 2>/dev/null | cut -d/ -f2 | sort -u | tr '\n' ' ' || true)"
+            # `unzip` exits 11 for an APK with no libraries (the check below then names none); any
+            # other failure (a damaged APK) is said with unzip's own message.
+            status=0
+            listing="$(unzip -Z1 "dist/$apk" 'lib/*' 2>&1)" || status=$?
+            if [ "$status" -eq 11 ]; then
+              listing=""
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::unzip couldn't read $apk: $listing"
+              exit 1
+            fi
+            libs="$(printf '%s\n' "$listing" | grep . | cut -d/ -f2 | sort -u | tr '\n' ' ' || true)"
             if [ "$libs" != "$abi " ]; then
               echo "::error::$apk holds libraries for: $libs"
               exit 1
@@ -302,6 +311,8 @@ jobs:
     timeout-minutes: 30
     environment: mobile-release
     # One upload at a time across runs: Play drops an open edit when the same account starts another.
+    # GitHub keeps one waiting job per group, so a third upload queued while one runs and one waits
+    # cancels the waiting one: that run shows the upload cancelled, and it is re-run from there.
     concurrency:
       group: google-play-upload
       cancel-in-progress: false

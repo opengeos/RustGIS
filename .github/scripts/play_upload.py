@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -192,7 +193,7 @@ def upload_once(
         name: The release's name in Play Console.
         notes: The release notes, in English (US).
         token: An access token for the Play Developer API.
-        version_code: The bundle's version code, used when Play already has the bundle.
+        version_code: The bundle's version code, released when Play already has the same bundle.
         request: Sends a request.
 
     Returns:
@@ -213,11 +214,19 @@ def upload_once(
         )
         code = int(uploaded["versionCode"])
     except RuntimeError as error:
-        # A manual run may have uploaded this commit's build already: release that one.
+        # A manual run may have uploaded this very bundle already: release that one, once Play's
+        # copy is shown to be the same bytes (another commit can have the same commit count).
         if version_code is None or not is_used_version_code(error):
             raise
+        held = request("GET", f"{base}/{edit}/bundles", auth, None).get("bundles", [])
+        sha256 = next((b.get("sha256") for b in held if int(b.get("versionCode", -1)) == version_code), None)
+        if sha256 != hashlib.sha256(bundle.read_bytes()).hexdigest():
+            raise RuntimeError(
+                f"Play already has version code {version_code}, from another build than this bundle: "
+                "release that build in Play Console, or build a later commit"
+            ) from None
         print(
-            f"play_upload: Play already has version code {version_code}, so that upload is released",
+            f"play_upload: Play already has this bundle (version code {version_code}), so that upload is released",
             file=sys.stderr,
         )
         code = version_code
@@ -258,7 +267,7 @@ def upload(
         name: The release's name in Play Console.
         notes: The release notes, in English (US).
         token: An access token for the Play Developer API.
-        version_code: The bundle's version code, used when Play already has the bundle.
+        version_code: The bundle's version code, released when Play already has the same bundle.
         request: Sends a request (replaced in tests).
 
     Returns:
@@ -335,7 +344,8 @@ def main(argv: list[str]) -> int:
             access_token(account),
             args.version_code,
         )
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        # OSError: openssl missing, or the network failing before an HTTP answer (URLError).
         print(f"play_upload: {error}", file=sys.stderr)
         return 1
     print(f"play_upload: version code {code} is on the {args.track} track as a {status} release")

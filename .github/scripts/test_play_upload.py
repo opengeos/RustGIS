@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import subprocess
@@ -146,10 +147,13 @@ class UploadTest(unittest.TestCase):
 
     def test_a_bundle_play_already_has_is_released_by_its_version_code(self):
         tracks = []
+        held = {"sha256": hashlib.sha256(b"bundle").hexdigest()}
 
         def request(method, url, headers, body):
             if url.endswith("/edits"):
                 return {"id": "E1"}
+            if method == "GET" and url.endswith("/bundles"):
+                return {"bundles": [{"versionCode": 1505, "sha256": "0"}, {"versionCode": 1506, **held}]}
             if "/bundles" in url:
                 raise RuntimeError("POST: HTTP 403: APK specified version code 1506 has already been used.")
             if method == "PUT":
@@ -167,6 +171,12 @@ class UploadTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 play_upload.upload("org.rustgis.mobile", bundle_file(directory), "production", "completed", "1", "",
                                    "T", request=request)
+            # Play's bundle with that code is another build (another commit with the same count).
+            held["sha256"] = hashlib.sha256(b"another build").hexdigest()
+            with self.assertRaisesRegex(RuntimeError, "another build"):
+                play_upload.upload("org.rustgis.mobile", bundle_file(directory), "production", "completed", "1", "",
+                                   "T", 1506, request=request)
+            self.assertEqual(len(tracks), 1)
 
     def test_a_key_openssl_cannot_read_is_named(self):
         with self.assertRaisesRegex(RuntimeError, "openssl couldn't sign"):

@@ -357,8 +357,9 @@ it reaches users once Google's review passes. Until the app's first release is p
 Console, Play takes only drafts, so the release is made a draft there (and the run says so) for
 someone to roll out by hand. A pre-release goes to internal testing as a draft, never to
 production. A manual run with `play` uploads to the track and status it is given, by default an
-internal testing draft; a release of the same commit then releases that upload, which Play already
-has, by its version code. It needs a Google Cloud service account Play Console lets release, its
+internal testing draft. Play refuses a version code it has, so a release of a commit a manual run
+uploaded fails, saying so, unless Play's bundle is the same file: release that build in Play
+Console instead. It needs a Google Cloud service account Play Console lets release, its
 JSON key in the `mobile-release` environment as `PLAY_SERVICE_ACCOUNT_JSON`:
 
 0. A new app's first bundle is uploaded in Play Console by hand (Test and release › Internal
