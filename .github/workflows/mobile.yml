@@ -1,11 +1,10 @@
 name: Mobile release
 
-# The phone apps (apps/rustgis-mobile, #1902) for a published release: a signed Android APK
-# attached to the release, the Android App Bundle for Google Play signed with the same key (see
-# the README for its role in Play App Signing) kept as a workflow artifact, and a signed iOS build
-# uploaded to TestFlight. A manual run (from main)
-# builds and signs both and keeps them as workflow artifacts; it uploads to TestFlight only when
-# asked. A pull request that changes apps/rustgis-mobile or this workflow builds both with no
+# The phone apps (apps/rustgis-mobile, #1902) for a published release: the signed Android APK,
+# the Android App Bundle for Google Play signed with the same key (see the README for its role in
+# Play App Signing) and the signed iOS app (an IPA for the App Store), each attached to the release
+# with its .sha256, and the iOS build uploaded to TestFlight. A manual run (from main) builds and
+# signs them all and keeps them as workflow artifacts; it uploads to TestFlight only when asked. A pull request that changes apps/rustgis-mobile or this workflow builds both with no
 # secrets: the Android APK signed with a throwaway debug key, the iOS app unsigned.
 #
 # Building and signing are separate jobs. A build job runs every crate's build script and holds no
@@ -198,6 +197,7 @@ jobs:
             echo "::error::The App Bundle isn't signed with the release key."
             exit 1
           fi
+          (cd bundle && sha256sum "$aab" > "$aab.sha256")
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -205,8 +205,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # For Google Play, uploaded by hand in the Play Console: not attached to the release, as a
-      # bundle installs only through Play.
+      # For Google Play, uploaded in the Play Console; attached to the release too, beside the APK.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rustgis-android-bundle
@@ -215,7 +214,7 @@ jobs:
 
   # Its own job, so only it holds a token that can write to the repository.
   android-release:
-    name: Attach the APK to the release
+    name: Attach the APK and the App Bundle to the release
     if: github.event_name == 'release'
     needs: android-sign
     runs-on: ubuntu-latest
@@ -225,6 +224,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: rustgis-android
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rustgis-android-bundle
           path: dist
       - name: Upload
         env:
@@ -236,6 +239,8 @@ jobs:
     name: iOS app
     runs-on: macos-latest
     timeout-minutes: 90
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -250,6 +255,7 @@ jobs:
           save-if: false
 
       - name: Version
+        id: version
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -258,6 +264,7 @@ jobs:
             echo "::error::Tag $TAG does not match the workspace version $crate in Cargo.toml."
             exit 1
           fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
 
       - name: The newest Xcode
         # App Store Connect refuses an upload built with an SDK below its current floor, and the
@@ -359,10 +366,20 @@ jobs:
           IOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
         run: IOS_PROFILE="$RUNNER_TEMP/app.mobileprovision" apps/rustgis-mobile/build-ios.sh --sign-only
 
+      - name: Name the IPA
+        env:
+          VERSION: ${{ needs.ios-build.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p ipa
+          ipa="RustGIS-$VERSION-ios.ipa"
+          cp target/ios/RustGIS.ipa "ipa/$ipa"
+          (cd ipa && shasum -a 256 "$ipa" > "$ipa.sha256")
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rustgis-ios
-          path: target/ios/RustGIS.ipa
+          path: ipa/*
           if-no-files-found: error
 
       - name: Upload to TestFlight
@@ -394,3 +411,23 @@ jobs:
         run: |
           rm -rf "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/app.mobileprovision" "$HOME/.appstoreconnect/private_keys"
           if [ -n "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+
+  # Its own job, so only it holds a token that can write to the repository. The IPA is signed for
+  # the App Store: it installs through TestFlight and the App Store, not on its own.
+  ios-release:
+    name: Attach the IPA to the release
+    if: github.event_name == 'release'
+    needs: ios-sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rustgis-ios
+          path: dist
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
