@@ -682,6 +682,16 @@ pub fn read_notes(file: &str, layer: &str, lost: &rustgis_map::Unreadable) -> Ve
     read_date_notes(file, layer, lost).into_iter().chain(lost.messages.iter().map(|n| format!("{file}: {n}"))).collect()
 }
 
+/// A counted source Z/M diagnostic replaces only the equivalent generic export warning.
+/// Resident/older layers and custom providers without that diagnostic keep their warning.
+pub fn coalesce_read_zm(notes: &mut Vec<String>, file: &str, ds: &rustgis_data::Dataset, lost: &rustgis_map::Unreadable) {
+    if lost.zm_noted
+        && let Some(generic) = rustgis_data::zm_export_note([ds], file)
+    {
+        notes.retain(|note| note != &generic);
+    }
+}
+
 /// What a GeoPackage export of `ds` says of its dates: date-times written in UTC, and text in
 /// date fields that isn't a date, and rounded to the millisecond; for a FlatGeobuf, its date fields with no values. Nothing for
 /// another format, or when there was none.
@@ -765,6 +775,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
     // raster layer's extent is its raster's, which the file doesn't hold.
     let extent = if chunks.is_some() { l.extent() } else { ds.extent() };
     let mut notes = rustgis_data::export_notes([(ds, extent)], path, crs);
+    coalesce_read_zm(&mut notes, path, ds, &unreadable);
     if asked.is_none() {
         notes.extend(rustgis_data::io::default_export_note(ds, path));
     }

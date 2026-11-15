@@ -244,4 +244,45 @@ mod tests {
         assert_eq!(unread.lines().iter().filter(|n| n.contains("conversion left out 2")).count(), 1);
         assert!(Unread::of("clean".into(), Unreadable::default()).lines().is_empty());
     }
+
+    /// A fresh counted Z/M report replaces the export's generic loss notice, while a resident
+    /// layer that lost its heights earlier still needs that generic export warning.
+    #[test]
+    fn whole_exports_report_dimension_loss_once_and_keep_resident_warnings() {
+        let root = std::env::temp_dir().join(format!("rustgis-whole-export-notices-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for (tag, coordinates, old_loss, expected) in [
+            ("3d", Some(serde_json::json!([1, 2, 3])), false, 1),
+            ("xy", Some(serde_json::json!([1, 2])), false, 0),
+            ("resident", None, true, 1),
+        ] {
+            let mut ds = Dataset::new("sites", rustgis_data::GeometryType::Point, Vec::new());
+            ds.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(1.0, 2.0))), Vec::new());
+            ds.zm_dropped = old_loss;
+            let mut layer = Layer::new(1, ds);
+            if let Some(coordinates) = coordinates {
+                let input = root.join(format!("{tag}.geojson"));
+                let text = serde_json::json!({"type":"FeatureCollection","features":[{
+                    "type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":coordinates}
+                }]})
+                .to_string();
+                std::fs::write(&input, text).unwrap();
+                let mut source = rustgis_map::source::SourceLayer::default();
+                source.path = Some(input.display().to_string());
+                layer.source = Some(source);
+            }
+            let mut session = Session::new(crate::Project::new("notices"));
+            let id = session.map_mut().add_layer(layer);
+            let output = root.join(format!("{tag}.kml"));
+            session.run("share.exportLayer", &serde_json::json!({"layer":id,"path":output})).unwrap();
+            let notes: Vec<_> = session.notices.iter().filter(|n| n.text.contains("Z or M")).collect();
+            assert_eq!(notes.len(), expected, "{tag}: {notes:?}");
+            if tag == "3d" {
+                assert!(notes[0].text.contains("1 feature had Z or M"), "the counted reader report survives");
+            } else if old_loss {
+                assert!(notes[0].text.contains("its geometry has no Z or M"), "the older loss is still reported");
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
