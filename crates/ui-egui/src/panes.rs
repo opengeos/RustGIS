@@ -492,9 +492,15 @@ fn glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, px: f32, c: egui::Color32)
 
 /// Paints a symbol patch for a layer of geometry type `g`.
 pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
+    patch_sized(p, r, s, g, s.size.clamp(4.0, 14.0));
+}
+
+/// [`patch`] with a point drawn `size` across as given, for rows whose sizes compare (size
+/// legends).
+fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f32) {
     match g {
         GeometryType::Point => {
-            let rad = (s.size.clamp(4.0, 14.0)) / 2.0;
+            let rad = size / 2.0;
             let c = r.center();
             match s.marker {
                 Marker::Square => {
@@ -2155,11 +2161,14 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
         // The size rows share one scale, so the patch's box keeps them apart.
         let top = sized.iter().map(|e| e.symbol.size).fold(0.0, f32::max);
         let k = if top > 14.0 { 14.0 / top } else { 1.0 };
-        for (e, scale) in classes.iter().take(40).map(|e| (e, 1.0)).chain(sized.iter().map(|e| (e, k))) {
+        for (e, scale) in classes.iter().take(40).map(|e| (e, None)).chain(sized.iter().map(|e| (e, Some(k)))) {
             let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &e.label));
             let pr = Rect::from_center_size(pos2(r.min.x + 84.0, r.center().y), vec2(18.0, 14.0));
-            patch(ui.painter(), pr, &Symbol { size: e.symbol.size * scale, ..e.symbol }, l.geometry_type());
+            match scale {
+                Some(k) => patch_sized(ui.painter(), pr, &e.symbol, l.geometry_type(), e.symbol.size * k),
+                None => patch(ui.painter(), pr, &e.symbol, l.geometry_type()),
+            }
             ui.painter().text(pos2(r.min.x + 100.0, r.center().y), Align2::LEFT_CENTER, &e.label, regular(11.5), t.text);
         }
     }
