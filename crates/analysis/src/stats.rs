@@ -518,7 +518,7 @@ fn read_column<E>(
 
 /// A stable sort with Cancel between small sorts, merge runs and final copies. Indices are
 /// merged instead of cloned strings, so each output value is copied only once.
-pub(crate) fn checked_sorted<T: Clone>(values: &[T], compare: impl Fn(&T, &T) -> Ordering) -> Result<Vec<T>, String> {
+fn checked_sorted<T: Clone>(values: &[T], compare: impl Fn(&T, &T) -> Ordering) -> Result<Vec<T>, String> {
     const BLOCK: usize = 4096;
     let mut order = Vec::with_capacity(values.len());
     for position in 0..values.len() {
@@ -613,7 +613,8 @@ pub(crate) fn checked_compute(stat: Stat, column: &Column, separator: &str) -> R
         }
         let _ = column.exact.set(checked_sorted(&exact, cmp_number)?);
     }
-    if ordered && column.sorted.get().is_none() {
+    let sorted_needed = !matches!(stat, Stat::Unique | Stat::Mode | Stat::Minority) || column.exact.get().is_none();
+    if ordered && sorted_needed && column.sorted.get().is_none() {
         let sorted = match &column.values {
             Values::Numbers(values) => Values::Numbers(checked_sorted(values, f64::total_cmp)?),
             Values::Texts(values) => Values::Texts(checked_sorted(values, Ord::cmp)?),

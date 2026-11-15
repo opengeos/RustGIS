@@ -2513,7 +2513,8 @@ const SPLIT_PART_CHUNK: usize = if cfg!(test) { 64 } else { 65_536 };
 /// as the other half holds of twice the largest input feature's and area's coordinates. Cancel
 /// is looked at, and progress counted, item by item in each step; one feature made ready, one
 /// area's union and one part are each a step without a look, which can be long for an area of
-/// many large polygons.
+/// many large polygons. Candidate ordering is another unchecked step, bounded by the
+/// layer's feature count when adding pole candidates; its reused buffer is sorted in place.
 fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -2608,7 +2609,8 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
             }
         }
         if reached.0 || reached.1 {
-            *cand_buf = crate::stats::checked_sorted(cand_buf, Ord::cmp)?;
+            cand_buf.sort_unstable();
+            crate::control::check()?;
             cand_buf.dedup();
         }
         let mut kept = 0;
@@ -6695,7 +6697,8 @@ impl ExtentIndex {
         out.dedup();
     }
 
-    /// Split's potentially layer-wide preparation lookup, with Cancel during collection and sort.
+    /// Split's potentially layer-wide preparation lookup, with Cancel during collection.
+    /// The single in-place sort is an unchecked step, bounded by MAX_REFERENCES (one million).
     fn checked_candidates_into(&self, ext: &Extent, out: &mut Vec<usize>) -> Result<(), String> {
         out.clear();
         let Some(grid) = &self.grid else {
@@ -6719,7 +6722,8 @@ impl ExtentIndex {
                 }
             }
         }
-        *out = crate::stats::checked_sorted(out, Ord::cmp)?;
+        out.sort_unstable();
+        crate::control::check()?;
         out.dedup();
         Ok(())
     }
