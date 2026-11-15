@@ -1268,7 +1268,8 @@ impl Layer {
     pub fn with_size_legend(&self, mut entries: Vec<symbology::LegendEntry>) -> Vec<symbology::LegendEntry> {
         if let Some(s) = self.size_by.as_ref().filter(|_| symbol_by::SizeBy::applies_to(self)) {
             let like = entries.first().map_or_else(|| self.renderer.base_symbol(), |e| e.symbol);
-            entries.extend(s.legend(like));
+            let strokes = entries.first().map(|e| e.strokes.as_slice()).filter(|s| !s.is_empty()).unwrap_or(&self.line_strokes);
+            entries.extend(s.legend(like, strokes));
         }
         entries
     }

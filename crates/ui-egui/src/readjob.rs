@@ -114,7 +114,13 @@ fn run_presented(
     }
     let layer = matches!(
         command,
-        "layer.loadAll" | "layer.reloadData" | "layer.repairSource" | "labels.convert" | "source.syncState" | "table.statistics"
+        "layer.loadAll"
+            | "layer.reloadData"
+            | "layer.repairSource"
+            | "labels.convert"
+            | "source.syncState"
+            | "table.statistics"
+            | "layer.sizeBy"
     )
     .then(|| app.session.layer_id(&p).ok().and_then(|id| app.session.map().layer(id)).map(|l| (l.instance_id(), l.name.clone())))
     .flatten();
@@ -312,6 +318,7 @@ fn called<'a>(command: &str, what: &'a str) -> &'a str {
         (true, "script.run") => tl_raw!("Run Script"),
         (true, "topology.validate") => tl_raw!("Error Inspector"),
         (true, "table.statistics") => tl_raw!("Column Statistics"),
+        (true, "layer.sizeBy") => tl_raw!("Size by Field"),
         (true, "service.add") => tl_raw!("Add Service Layer"),
         (true, _) => tl_raw!("Run Model"),
     }

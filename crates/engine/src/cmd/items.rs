@@ -825,7 +825,10 @@ fn package_map(s: &mut Session, mobile: bool, tol: f64) -> Result<Vec<u8>, Strin
     }
     crate::project::ensure_map_imports_complete(&m)?;
     let name = m.name.clone();
-    let (text, report) = crate::durable::output_owned(m, |m| serde_json::to_string(m).map_err(|e| e.to_string()))?;
+    let sized = m.layers.iter().any(|l| l.size_by.is_some());
+    let (text, report) = crate::durable::output_owned(m, |m| {
+        serde_json::to_string(&crate::project::SizedDocument::new(m, sized)).map_err(|e| e.to_string())
+    })?;
     crate::durable::notify(s, &report);
     let kind = if mobile { "mobile map package" } else { "map package" };
     let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Data › Import.\n", name);
@@ -1625,7 +1628,8 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             crate::project::ensure_map_imports_complete(map)?;
             let map = embedded_map(map, &mut MAX_EMBED.clone());
             let name = map.name.clone();
-            (name, durable_bytes(s, map)?)
+            let sized = map.layers.iter().any(|l| l.size_by.is_some());
+            (name, durable_sized_bytes(s, map, sized)?)
         }
         "layer" => {
             let id = s.layer_id(p)?;
@@ -1635,7 +1639,8 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             }
             let layer = embed_layer(l, &mut MAX_EMBED.clone());
             let name = layer.name.clone();
-            (name, durable_bytes(s, layer)?)
+            let sized = layer.size_by.is_some();
+            (name, durable_sized_bytes(s, layer, sized)?)
         }
         "styles" => {
             if s.project.styles.is_empty() {
@@ -1745,6 +1750,13 @@ pub(crate) fn save_item(s: &mut Session, kind: &str, p: &Value) -> CmdResult {
 /// Consumes the existing item draft, emitting losses after serialization has completed.
 fn durable_bytes<T: crate::durable::Durable + serde::Serialize>(s: &mut Session, value: T) -> Result<Vec<u8>, String> {
     let (bytes, report) = crate::durable::output_owned(value, to_json)?;
+    crate::durable::notify(s, &report);
+    Ok(bytes)
+}
+
+/// Versioned map/layer items retain the ordinary shape unless they use independent point sizes.
+fn durable_sized_bytes<T: crate::durable::Durable + serde::Serialize>(s: &mut Session, value: T, sized: bool) -> Result<Vec<u8>, String> {
+    let (bytes, report) = crate::durable::output_owned(value, |item| to_json(&crate::project::SizedDocument::new(item, sized)))?;
     crate::durable::notify(s, &report);
     Ok(bytes)
 }

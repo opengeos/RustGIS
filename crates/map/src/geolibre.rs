@@ -279,6 +279,16 @@ mod style_tests {
             assert!(l.size_by.is_none() && matches!(l.renderer, crate::Renderer::Graduated { .. }));
             assert!(report.notes.iter().any(|n| n.text.contains("fixed size")), "{field}");
         }
+        // Both renderer paths report when either radii or value bounds are clamped.
+        for mode in ["single", "graduated"] {
+            let (mut l, mut report) = (layer(), Report::default());
+            let mut oversized = style("value", 1e200);
+            oversized["style"]["vectorStyleMode"] = json!(mode);
+            oversized["style"]["proportionalSizeMaxRadius"] = json!(200);
+            style::apply(&mut l, &oversized, &mut report);
+            assert!(report.notes.iter().any(|n| n.text.contains("radii clamped")), "{mode}");
+            assert!(report.notes.iter().any(|n| n.text.contains("value bounds clamped")), "{mode}");
+        }
     }
 }
 

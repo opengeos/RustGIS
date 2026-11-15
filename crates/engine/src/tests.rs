@@ -1636,6 +1636,70 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     let saved = Project::from_json(include_str!("../../../schema/fixtures/size_by.rgis")).unwrap();
     let by = saved.maps[0].layers[0].size_by.clone().unwrap();
     assert_eq!((by.field.as_str(), by.min, by.max, by.max_size), ("mag", 2.5, 7.5, 36.0));
+    let invalid = include_str!("../../../schema/fixtures/size_by.rgis").replace("\"radius\"", "\"unknown-scaling\"");
+    assert!(Project::from_json(&invalid).is_err(), "unreadable mapping must not be silently discarded");
+}
+
+/// Desktop range detection lands a worker result without scanning on the window thread, and
+/// rejects a stale result after an edit rather than rescanning on that thread.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_size_field_range_is_prepared_off_the_window_thread() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use rustgis_analysis::control::Control;
+    let mut s = world();
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": "name"})).unwrap();
+    s.statistics_need_read_ahead(true);
+    let params = json!({"layer": "Cities", "field": "pop_max"});
+    assert!(s.run("layer.sizeBy", &params).unwrap_err().contains("background read queue"));
+    let read = read_ahead(&mut s, "layer.sizeBy", &params).unwrap();
+    assert!(read.reads());
+    let read = read.run(&Control::new()).unwrap();
+    assert!(read_land(&mut s, read).unwrap()["max"].as_f64().unwrap() > 0.0);
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "field": null})).unwrap();
+    let read = read_ahead(&mut s, "layer.sizeBy", &params).unwrap().run(&Control::new()).unwrap();
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap().dataset.features.get_mut(0).unwrap().attrs.clear();
+    assert!(read_land(&mut s, read).unwrap_err().contains("layer changed"));
+}
+
+/// New mappings name their required reader capability in projects and map/layer items. Removing
+/// the last mapping restores the legacy header, so plain projects do not advance their format.
+#[test]
+fn size_mappings_require_a_reader_that_keeps_them() {
+    let project = Project::from_json(include_str!("../../../schema/fixtures/size_by.rgis")).unwrap();
+    let mut s = Session::new(project);
+    let (text, _) = s.project.saved_text(None).unwrap();
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(saved["format"], 2);
+    assert_eq!(saved["requires"], json!([crate::project::SIZE_BY_CAPABILITY]));
+    assert!(Project::from_json(&text).unwrap().maps[0].layers[0].size_by.is_some());
+    for kind in ["map", "layer"] {
+        let (_, bytes) = crate::cmd::items::item_bytes(&mut s, kind, &json!({"layer": "Earthquakes"})).unwrap();
+        let mut item: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(item["format"], 2);
+        assert_eq!(item["requires"], saved["requires"]);
+        crate::project::check_format(&item.to_string(), kind).unwrap();
+        item["requires"] = json!(["future-point-size"]);
+        assert!(crate::project::check_format(&item.to_string(), kind).unwrap_err().contains("future-point-size"));
+    }
+    for kind in ["mapPackage", "mobilePackage"] {
+        let (_, bytes) = crate::cmd::items::item_bytes(&mut s, kind, &json!({"tolerance": 0})).unwrap();
+        let entries = rustgis_data::zip::read(&bytes).unwrap();
+        let (_, map) = entries.iter().find(|(name, _)| name.ends_with(".rgismap")).unwrap();
+        let map: Value = serde_json::from_slice(map).unwrap();
+        assert_eq!(map["requires"], saved["requires"]);
+        assert_eq!(map["format"], 2);
+    }
+    s.map_mut().layers[0].size_by = None;
+    let (text, _) = s.project.saved_text(None).unwrap();
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(saved["format"], 1);
+    assert!(saved.get("requires").is_none());
+    for kind in ["map", "layer"] {
+        let (_, bytes) = crate::cmd::items::item_bytes(&mut s, kind, &json!({"layer": "Earthquakes"})).unwrap();
+        let item: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(item.get("format").is_none() && item.get("requires").is_none());
+    }
 }
 
 #[test]
@@ -46380,6 +46444,14 @@ fn long_commands_stop_when_cancelled_while_they_run() {
         assert!(read.reads());
         let control = Control::cancelled_once_started();
         note("table.statistics", read.run(&control).map(|_| ()), &control);
+    }
+    // Automatic size bounds scan the numeric field on that queue too.
+    {
+        s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": "name"})).unwrap();
+        let read = crate::cmd::reads::read_ahead(&mut s, "layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
+        assert!(read.reads());
+        let control = Control::cancelled_once_started();
+        note("layer.sizeBy", read.run(&control).map(|_| ()), &control);
     }
 
     s.run("layer.addDataText", &json!({"fileName": "calc.csv", "text": "n,day\n1,x\n2,y\n"})).unwrap();

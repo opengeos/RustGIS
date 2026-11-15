@@ -2654,6 +2654,9 @@ impl RustGisApp {
             if id == "table.statistics" {
                 return readjob::run_then(self, "table.statistics", params, Some(table::statistics_landed));
             }
+            if id == "layer.sizeBy" {
+                return readjob::run(self, "layer.sizeBy", params);
+            }
             // Publishing hashes, reads and writes the whole file: on a thread of its own, with
             // progress and Cancel, as an export is.
             if id == "source.publish" {

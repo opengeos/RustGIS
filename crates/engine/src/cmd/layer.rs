@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rustgis_data::{GeometryType, photo};
+use rustgis_data::{Dataset, GeometryType, photo};
 use rustgis_map::symbology::{ClassRef, ClassStyle, LABEL_SIZE, MAX_STROKES};
 use rustgis_map::{
     ClassMethod, Glyph, HiddenFills, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, NoFill, Placements, Ramp, Renderer, Rgba,
@@ -730,7 +730,8 @@ fn need_lines(s: &Session) -> Option<&'static str> {
 
 /// `layer.sizeBy`: sets (or removes) a classified point layer's marker size from a numeric
 /// field ([`rustgis_map::Layer::size_by`]). What isn't given keeps the mapping's, else the
-/// field's range, 4 to 24 points and area scaling.
+/// field's range, 4 to 24 points and area scaling. Desktop range scans use the background read
+/// queue with progress and Cancel; synchronous adapters must dispatch off their window thread.
 fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     use rustgis_map::symbol_by::{MAX_SIZE, SizeBy, SizeScaling};
     let field = match p.get("field") {
@@ -750,6 +751,9 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => return Err("scaling is \"area\" or \"radius\"".into()),
     };
     let id = s.layer_id(p)?;
+    let ahead = super::reads::take::<SizeRangeAhead>(s, &format!("layer.sizeBy:{id}"));
+    #[cfg(not(target_arch = "wasm32"))]
+    let on_window = s.statistics_window_thread == Some(std::thread::current().id());
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if l.geometry_type() != GeometryType::Point || l.graphics {
         return Err("this works on point layers".into());
@@ -770,15 +774,25 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     let field = l.dataset.fields.get(fi).map(|fd| fd.name.clone()).unwrap_or(field);
     // The mapping's own where it is of the same field, else the field's range.
     let had = l.size_by.as_ref().filter(|h| h.field == field);
-    let range = || l.dataset.numeric_range(fi, &[]);
-    let min = min
-        .or(had.map(|h| h.min))
-        .or_else(|| range().map(|r| r.0))
-        .ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
-    let max = max
-        .or(had.map(|h| h.max))
-        .or_else(|| range().map(|r| r.1))
-        .ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    let (min, max) = (min.or(had.map(|h| h.min)), max.or(had.map(|h| h.max)));
+    let range = if min.is_none() || max.is_none() {
+        #[cfg(not(target_arch = "wasm32"))]
+        if ahead.is_none() && on_window {
+            return Err(
+                "size range detection needs the desktop background read queue; give min and max or run layer.sizeBy in the background"
+                    .into(),
+            );
+        }
+        match ahead {
+            Some(a) if a.field == fi && a.dataset.fields == l.dataset.fields && a.dataset.features.shares(&l.dataset.features) => a.range?,
+            Some(_) => return Err("the layer changed while its size range was read: ask again".into()),
+            None => size_range(&l.dataset, fi)?,
+        }
+    } else {
+        None
+    };
+    let min = min.or(range.map(|r| r.0)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    let max = max.or(range.map(|r| r.1)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
     if max <= min {
         return Err(format!("max ({max}) must be above min ({min})"));
     }
@@ -797,6 +811,50 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     let out = json!({"field": by.field, "min": by.min, "max": by.max, "minSize": by.min_size, "maxSize": by.max_size, "scaling": by.scaling.code()});
     l.size_by = Some(by);
     Ok(out)
+}
+
+/// A size range prepared on shared rows; landing refuses edits to those rows or their fields.
+struct SizeRangeAhead {
+    dataset: Dataset,
+    field: usize,
+    range: Result<Option<(f64, f64)>, String>,
+}
+
+/// Scans one numeric field once, checking Cancel and advancing progress every 1024 rows.
+fn size_range(dataset: &Dataset, field: usize) -> Result<Option<(f64, f64)>, String> {
+    let count = dataset.features.len();
+    rustgis_data::progress::begin(count);
+    let mut range: Option<(f64, f64)> = None;
+    for (row, feature) in dataset.features.iter().enumerate() {
+        if row % 1024 == 0 {
+            rustgis_data::progress::step((count - row).min(1024)).map_err(|e| e.to_string())?;
+        }
+        if let Some(value) = feature.attrs.get(field).and_then(rustgis_data::Value::as_f64).filter(|v| v.is_finite()) {
+            range = Some(range.map_or((value, value), |(lo, hi)| (lo.min(value), hi.max(value))));
+        }
+    }
+    Ok(range)
+}
+
+/// Prepares range detection off the desktop frame only when the mapping needs bounds. Invalid
+/// requests are left to the command to explain without scanning their data.
+pub(crate) fn size_by_ahead(s: &Session, p: &Value) -> Option<super::reads::ReadWork> {
+    let id = s.layer_id(p).ok()?;
+    let layer = s.map().layer(id)?;
+    let field = layer.dataset.field_index(ps(p, "field")?)?;
+    if !rustgis_map::symbol_by::SizeBy::applies_to(layer) || !layer.dataset.fields.get(field)?.ty.is_numeric() {
+        return None;
+    }
+    if (f(p, "min").is_some() && f(p, "max").is_some())
+        || layer.size_by.as_ref().is_some_and(|by| layer.dataset.field_index(&by.field) == Some(field))
+    {
+        return None;
+    }
+    let dataset = layer.dataset.clone();
+    Some(super::reads::ahead("Size by Field", format!("layer.sizeBy:{id}"), move || {
+        let range = size_range(&dataset, field);
+        SizeRangeAhead { dataset, field, range }
+    }))
 }
 
 /// `layer.symbolBy`: sets (or removes) the expressions a layer's symbol takes per feature, each

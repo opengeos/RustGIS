@@ -110,29 +110,65 @@ impl SizeBy {
     }
 
     /// Legend rows for the sizes: the smallest, middle and largest value, each drawn with `like`
-    /// (a class's symbol) at its size and labelled with the field.
-    pub fn legend(&self, like: Symbol) -> Vec<crate::symbology::LegendEntry> {
+    /// and its mark stack at the mapped size and labelled with the field.
+    pub fn legend(&self, like: Symbol, strokes: &[LineStroke]) -> Vec<crate::symbology::LegendEntry> {
         let like = Symbol { fill: crate::symbology::OTHER_FILL, ..like };
         let (lo, hi) = if self.max > self.min { (self.min, self.max) } else { (self.min, self.min) };
-        let mut values = vec![lo, (lo + hi) / 2.0, hi];
+        let mut values = vec![lo, lo / 2.0 + hi / 2.0, hi];
         values.dedup();
         values
             .into_iter()
-            .map(|v| crate::symbology::LegendEntry {
-                label: format!("{} {}", self.field, crate::symbology::fmt_num(v)),
-                symbol: Symbol { size: self.size(v), ..like },
-                strokes: Vec::new(),
-                fallback: false,
+            .map(|v| {
+                let size = self.size(v);
+                let k = if size == 0.0 {
+                    0.0
+                } else if like.size.is_finite() && like.size > 0.0 {
+                    size / like.size
+                } else {
+                    1.0
+                };
+                crate::symbology::LegendEntry {
+                    label: format!("{} {}", self.field, crate::symbology::fmt_num(v)),
+                    symbol: hide_zero(Symbol { size, ..like }),
+                    strokes: scaled_marks(strokes, k),
+                    fallback: false,
+                }
             })
             .collect()
     }
+}
+
+/// A point sized zero has no ink, even in render paths that clamp its geometry to one pixel.
+fn hide_zero(sym: Symbol) -> Symbol {
+    if sym.size == 0.0 { Symbol { fill: Rgba([0, 0, 0, 0]), stroke: Rgba([0, 0, 0, 0]), stroke_width: 0.0, ..sym } } else { sym }
+}
+
+/// Scales point marks and their offsets together, for both map drawing and size legends.
+fn scaled_marks(strokes: &[LineStroke], k: f32) -> Vec<LineStroke> {
+    strokes
+        .iter()
+        .map(|st| {
+            let mut st = *st;
+            st.offset *= k;
+            if let Some(m) = &mut st.markers {
+                m.size *= k;
+                m.offset_along *= k;
+            }
+            if k == 0.0 {
+                st.color = Some(Rgba([0, 0, 0, 0]));
+                st.width = Some(0.0);
+            }
+            st.clamped()
+        })
+        .collect()
 }
 
 /// A size for `v` between `min_size` and `max_size` as it falls between `min` and `max`, by
 /// `scaling`; values past an end take that end's size, and with no range (`max` not above `min`,
 /// or one too wide to divide) the size halfway.
 pub fn scaled_size(v: f64, min: f64, max: f64, min_size: f32, max_size: f32, scaling: SizeScaling) -> f32 {
-    let t = if max > min { (v - min) / (max - min) } else { 0.5 };
+    let width = max - min;
+    let t = if max > min && width.is_finite() { (v - min) / width } else { 0.5 };
     let t = if t.is_nan() { 0.5 } else { t.clamp(0.0, 1.0) };
     let k = match scaling {
         SizeScaling::Area => t.sqrt(),
@@ -141,18 +177,20 @@ pub fn scaled_size(v: f64, min: f64, max: f64, min_size: f32, max_size: f32, sca
     min_size + (max_size - min_size) * k as f32
 }
 
-/// Reads a layer's size mapping leniently: one that isn't (a crafted file's: no field, a value
-/// that isn't a finite number) is none, and the rest of the layer still reads.
+/// Reads an optional size mapping, refusing malformed settings instead of discarding them:
+/// an unknown scaling mode may come from a newer writer and must not be lost on save.
 pub fn de_size_by<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<SizeBy>, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value::<SizeBy>(v).ok().filter(|s| {
-        !s.field.is_empty()
-            && s.field.chars().count() <= 2 * crate::symbology::MAX_FONT_NAME
-            && s.min.is_finite()
-            && s.max.is_finite()
-            && (0.0..=MAX_SIZE).contains(&s.min_size)
-            && (0.0..=MAX_SIZE).contains(&s.max_size)
-    }))
+    let by = Option::<SizeBy>::deserialize(d)?;
+    if by.as_ref().is_some_and(|s| {
+        s.field.is_empty()
+            || !s.min.is_finite()
+            || !s.max.is_finite()
+            || !(0.0..=MAX_SIZE).contains(&s.min_size)
+            || !(0.0..=MAX_SIZE).contains(&s.max_size)
+    }) {
+        return Err(serde::de::Error::custom("invalid size_by field, value bounds or marker sizes"));
+    }
+    Ok(by)
 }
 
 /// Reads one expression leniently: text up to [`query::MAX_LEN`], blank or anything else none.
@@ -313,10 +351,11 @@ impl<'a> Styler<'a> {
         if let Some(size) = self.mapped_size(row) {
             sym.size = size;
         }
-        match &self.by {
+        let sym = match &self.by {
             Some(b) => b.apply(&self.layer.dataset, row, sym),
             None => sym,
-        }
+        };
+        if self.sized.is_some() { hide_zero(sym) } else { sym }
     }
 
     pub fn symbol(&self, row: usize) -> Symbol {
@@ -365,21 +404,7 @@ impl<'a> Styler<'a> {
         if base.is_nan() || base <= 0.0 {
             return Cow::Borrowed(strokes);
         }
-        let k = size / base;
-        Cow::Owned(
-            strokes
-                .iter()
-                .map(|st| {
-                    let mut st = *st;
-                    st.offset *= k;
-                    if let Some(m) = &mut st.markers {
-                        m.size *= k;
-                        m.offset_along *= k;
-                    }
-                    st.clamped()
-                })
-                .collect(),
-        )
+        Cow::Owned(scaled_marks(strokes, size / base))
     }
 
     pub fn marker_turn(&self, row: usize) -> f32 {
@@ -597,21 +622,48 @@ mod tests {
         // No range: every value takes the size halfway, as Proportional Symbols do.
         assert_eq!(SizeBy { max: 0.0, ..by.clone() }.size(5.0), 12.0);
         assert_eq!(SizeBy { min: 1.0, max: 0.0, ..by.clone() }.size(-3.0), 12.0);
+        assert_eq!(SizeBy { max: 0.0, scaling: SizeScaling::Area, ..by.clone() }.size(5.0), 2.0 + 20.0 * 0.5f32.sqrt());
         // The legend lists the classes, then three sizes.
         l.size_by = Some(by.clone());
         let rows = l.with_size_legend(l.renderer.legend());
         let sized: Vec<_> = rows.iter().skip(6).map(|e| (e.label.as_str(), e.symbol.size)).collect();
         assert_eq!(sized, [("pop 0", 2.0), ("pop 2.0M", 12.0), ("pop 4.0M", 22.0)]);
+        // Size samples use the first class's own marks, scaled just as on the map.
+        let mark = LineStroke {
+            markers: Some(crate::symbology::LineMarkers { size: 14.0, offset_along: 3.5, ..Default::default() }),
+            offset: 3.5,
+            ..Default::default()
+        };
+        l.line_strokes = vec![LineStroke { markers: Some(crate::symbology::LineMarkers::default()), ..Default::default() }];
+        if let crate::Renderer::Unique { class_strokes, .. } = &mut l.renderer {
+            class_strokes.insert("a".into(), vec![mark]);
+        }
+        let rows = l.with_size_legend(l.renderer.legend());
+        for (entry, size) in rows.iter().skip(6).zip([2.0, 12.0, 22.0]) {
+            let stroke = entry.strokes.first().unwrap();
+            assert!((stroke.markers.unwrap().size - 2.0 * size).abs() < 1e-4);
+            assert!((stroke.offset - size / 2.0).abs() < 1e-4);
+        }
+        // A final mapped zero leaves no ink; a positive expression still wins over that zero.
+        l.size_by = Some(SizeBy { min: 2e6, min_size: 0.0, ..by.clone() });
+        let gone = l.styler(None).symbol(0);
+        assert_eq!((gone.size, gone.fill.a(), gone.stroke.a(), gone.stroke_width), (0.0, 0, 0, 0.0));
+        let zero_sample = l.size_by.as_ref().unwrap().legend(Symbol { size: 0.0, ..base }, &[mark]);
+        assert_eq!(zero_sample[0].strokes[0].color.unwrap().a(), 0, "a zero legend mark has no ink even with a zero class base");
+        l.symbol_by.size = Some("6".into());
+        let back = l.styler(None).symbol(0);
+        assert_eq!((back.size, back.fill), (6.0, Rgba::rgb(1, 2, 3)));
+        l.symbol_by.size = None;
         // A single symbol doesn't take it: kept, unused.
         l.renderer = crate::Renderer::Single(base);
         assert!(l.styler(None).is_plain());
         assert_eq!(l.with_size_legend(Vec::new()), Vec::new());
     }
 
-    /// Saved only when set, so an older project reads and writes as before; a crafted one reads as
-    /// none and the rest of the layer still reads.
+    /// Saved only when set, so an older project reads and writes as before; malformed mappings
+    /// are refused instead of silently losing their settings on the next save.
     #[test]
-    fn a_size_mapping_is_kept_in_a_project_and_read_leniently() {
+    fn a_size_mapping_is_saved_only_when_set_and_refused_when_malformed() {
         let mut l = points();
         assert!(serde_json::to_value(&l).unwrap().get("size_by").is_none());
         l.size_by = Some(SizeBy { field: "pop".into(), min: 1.0, max: 9.0, min_size: 4.0, max_size: 30.0, scaling: SizeScaling::Radius });
@@ -622,8 +674,10 @@ mod tests {
         );
         let back: Layer = serde_json::from_value(v.clone()).unwrap();
         assert_eq!(back.size_by, l.size_by);
+        let mut empty = v.clone();
+        empty["size_by"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<Layer>(empty).unwrap().size_by.is_none());
         for junk in [
-            serde_json::json!(null),
             serde_json::json!("pop"),
             serde_json::json!({"field": "", "min": 1, "max": 2, "min_size": 1, "max_size": 2}),
             serde_json::json!({"field": "pop", "min": 1, "max": 2, "min_size": -1, "max_size": 2}),
@@ -631,8 +685,23 @@ mod tests {
         ] {
             let mut v = v.clone();
             v["size_by"] = junk.clone();
-            let read: Layer = serde_json::from_value(v).unwrap();
-            assert!(read.size_by.is_none(), "{junk}");
+            assert!(serde_json::from_value::<Layer>(v).is_err(), "{junk}");
+        }
+        // Field names come from the dataset; a valid long name must not make our own saved
+        // project unreadable. The project reader bounds the document as a whole.
+        let field = "x".repeat(2 * crate::symbology::MAX_FONT_NAME + 1);
+        l.dataset.fields[0].name = field.clone();
+        l.size_by.as_mut().unwrap().field = field;
+        let back: Layer = serde_json::from_value(serde_json::to_value(&l).unwrap()).unwrap();
+        assert_eq!(back.size_by, l.size_by);
+    }
+
+    /// A finite range whose subtraction overflows uses the documented midpoint fallback,
+    /// consistently for every value rather than jumping backwards at the high end.
+    #[test]
+    fn a_size_range_too_wide_to_divide_uses_the_midpoint() {
+        for value in [-1e308, 0.0, 1e308] {
+            assert_eq!(scaled_size(value, -1e308, 1e308, 2.0, 22.0, SizeScaling::Radius), 12.0);
         }
     }
 }

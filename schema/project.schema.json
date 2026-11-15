@@ -875,7 +875,7 @@
   },
   "$id": "https://raw.githubusercontent.com/opengeos/RustGIS/main/schema/project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format 1 and reads formats up to 2.",
+  "description": "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format 1, or format 2 with `requires` naming what an older reader would lose, and reads formats up to 2.",
   "properties": {
     "active_map": {
       "format": "uint",
@@ -908,7 +908,7 @@
     },
     "format": {
       "default": 1,
-      "description": "The format read from disk; serialization always declares the current writer's format.",
+      "description": "The format read from disk; serialization declares the minimum needed by this content.",
       "format": "uint32",
       "maximum": 2,
       "minimum": 0,
@@ -1017,7 +1017,9 @@
     "requires": {
       "description": "The capabilities this file needs past its format, each one this RustGIS knows.",
       "items": {
-        "enum": [],
+        "enum": [
+          "classified-point-size"
+        ],
         "type": "string"
       },
       "maxItems": 256,
@@ -1080,7 +1082,9 @@
   ],
   "title": "RustGIS project (.rgis)",
   "type": "object",
-  "x-rustgis-capabilities": [],
+  "x-rustgis-capabilities": [
+    "classified-point-size"
+  ],
   "x-rustgis-reads-format": 2,
-  "x-rustgis-writes-format": 1
+  "x-rustgis-writes-format": 2
 }

@@ -55,19 +55,18 @@ pub fn open_command(path: &str) -> &'static str {
         "layer.addData"
     }
 }
-/// The format this RustGIS writes: the saved-document compatibility version, independent of the
-/// RustGIS release version. Advance it when an older reader would lose meaningful saved
-/// information on resaving; within format 2, such an addition is named in `requires` instead
-/// (see [`READ_FORMAT`] and [`CAPABILITIES`]).
+/// The baseline saved-document format. Files using a new capability declare format 2 and
+/// name it in `requires`; files without one keep format 1 and their existing appearance.
 pub const FORMAT: u32 = 1;
-/// The newest format this RustGIS reads. Format 2 is read a release before anything writes it
-/// (#1853): a document of format 2 opens when this RustGIS knows every capability it `requires`,
-/// so what a later RustGIS adds to format 2, and an older one would lose, is listed there and
-/// refused by name instead.
+/// The newest format this RustGIS reads. A format 2 document opens only when this RustGIS knows
+/// every capability it `requires`, so an older reader refuses rather than losing saved settings.
 pub const READ_FORMAT: u32 = 2;
-/// The capabilities a saved document may require that this RustGIS reads. None yet: format 2 is
-/// format 1's content, and each later addition an older reader would lose comes with its name.
-pub const CAPABILITIES: &[&str] = &[];
+/// The first format carrying named requirements, independent of later reader versions.
+pub(crate) const CAPABILITY_FORMAT: u32 = 2;
+/// Independent marker sizes alongside classified point colours.
+pub(crate) const SIZE_BY_CAPABILITY: &str = "classified-point-size";
+/// The capabilities a saved document may require that this RustGIS reads.
+pub const CAPABILITIES: &[&str] = &[SIZE_BY_CAPABILITY];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 pub(crate) const MAX_REQUIRES: usize = 256;
@@ -338,14 +337,20 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Project {
     /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.
     #[serde(skip)]
     pub(crate) read_notices: Vec<(ReadPart, NoticeText)>,
-    /// The format read from disk; serialization always declares the current writer's format.
-    #[serde(default = "format", serialize_with = "write_format")]
+    /// The format read from disk; serialization declares the minimum needed by this content.
+    #[serde(default = "format", getter = "Project::saved_format")]
     pub format: u32,
+    /// The read header, recomputed from the content on save so removing a capability also
+    /// removes its requirement. The bounded schema property is supplied by `schema.rs`.
+    #[serde(default, getter = "Project::saved_requires", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub requires: Option<Vec<String>>,
     pub name: String,
     #[cfg_attr(feature = "schema", schemars(with = "Vec<crate::schema::Open>"))]
     pub maps: Vec<Map>,
@@ -742,8 +747,41 @@ fn format() -> u32 {
 
 /// Every project serialization, including templates and packages, describes the current
 /// writer's payload rather than retaining the version of the file originally opened.
-fn write_format<S: serde::Serializer>(_: &u32, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_u32(FORMAT)
+// The remote derive supplies field-wise codecs with computed header getters, avoiding a
+// second project copy or a JSON tree just to choose its version.
+impl Serialize for Project {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Project {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::deserialize(deserializer)
+    }
+}
+
+/// A map/layer item has no header in format 1. Add one only when its content needs an older
+/// reader to refuse it; flattening retains the original item shape without copying its data.
+#[derive(Serialize)]
+pub(crate) struct SizedDocument<'a, T> {
+    #[serde(flatten)]
+    header: Option<SizeHeader>,
+    #[serde(flatten)]
+    item: &'a T,
+}
+
+#[derive(Serialize)]
+struct SizeHeader {
+    format: u32,
+    requires: [&'static str; 1],
+}
+
+impl<'a, T> SizedDocument<'a, T> {
+    /// Keeps a plain item headerless; only a size mapping adds format 2 and its requirement.
+    pub(crate) fn new(item: &'a T, sized: bool) -> Self {
+        Self { header: sized.then_some(SizeHeader { format: CAPABILITY_FORMAT, requires: [SIZE_BY_CAPABILITY] }), item }
+    }
 }
 
 impl Default for Project {
@@ -996,6 +1034,21 @@ pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
 }
 
 impl Project {
+    /// Includes offline copies as well as live maps: both retain their size mappings on save.
+    fn has_size_mapping(&self) -> bool {
+        self.maps.iter().chain(self.offline_areas.iter().map(|a| &a.data)).any(|m| m.layers.iter().any(|l| l.size_by.is_some()))
+    }
+
+    /// Plain projects retain format 1; a new size mapping needs capability-aware readers.
+    fn saved_format(&self) -> u32 {
+        if self.has_size_mapping() { CAPABILITY_FORMAT } else { FORMAT }
+    }
+
+    /// Recomputes the capability list rather than copying a read header that may now be stale.
+    fn saved_requires(&self) -> Option<Vec<String>> {
+        self.has_size_mapping().then(|| vec![SIZE_BY_CAPABILITY.to_string()])
+    }
+
     fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
         let mut paths = Vec::new();
         for map in &mut self.maps {
@@ -1022,6 +1075,7 @@ impl Project {
         Project {
             read_notices: Vec::new(),
             format: FORMAT,
+            requires: None,
             name: name.into(),
             maps: vec![Map::new("Map")],
             active_map: 0,
@@ -2188,6 +2242,7 @@ impl Durable for Project {
         let Self {
             read_notices: _,
             format: _,
+            requires: _,
             name: _,
             maps,
             active_map: _,
