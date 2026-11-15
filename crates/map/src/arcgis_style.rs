@@ -44,6 +44,9 @@ pub fn apply(layer: &mut Layer, drawing_info: &Value, notes: &mut Notes) {
         return;
     }
     if let Some(t) = drawing_info.get("transparency").and_then(Value::as_f64).filter(|t| t.is_finite()) {
+        if !(0.0..=100.0).contains(&t) {
+            notes.add("transparency past 0 to 100, brought into it");
+        }
         layer.transparency = t.clamp(0.0, 100.0) as f32;
     }
     // The service's labels aren't carried over (#2080), unless it shows none.
@@ -138,7 +141,10 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
         }
         ("esriPMS", GeometryType::Point) => {
             notes.add("picture markers, drawn as grey circles");
-            let size = size(s.get("width"), base.size, notes).max(size(s.get("height"), 0.0, notes));
+            // The larger of its width and height, so that one past the largest is said once.
+            let points = |k: &str| s.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(f64::NEG_INFINITY);
+            let larger = if points("height") > points("width") { s.get("height") } else { s.get("width") };
+            let size = size(larger, base.size, notes);
             Some((Symbol { fill: PICTURE_FILL, size, ..base }, None))
         }
         ("esriPFS", GeometryType::Polygon) => {
@@ -179,6 +185,8 @@ fn line(s: Option<&Value>, width: f32, notes: &mut Notes) -> (Rgba, f32, Option<
     let w = s.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).map_or(width, |w| {
         if w > f64::from(MAX_STROKE_WIDTH) {
             notes.add("line widths past RustGIS's widest (50 points), drawn at it");
+        } else if w < 0.0 {
+            notes.add("line widths below 0, drawn at 0");
         }
         w.clamp(0.0, f64::from(MAX_STROKE_WIDTH)) as f32
     });
@@ -213,7 +221,7 @@ fn dash(style: &str, width: f32) -> Option<Option<Dash>> {
 
 /// An ArcGIS colour, `[r, g, b, a]` from 0 to 255 (`[r, g, b]` opaque); none or `null` is no
 /// colour (transparent), as ArcGIS draws it. Anything else is transparent too, and said; a part
-/// past 0 to 255 is brought into it.
+/// past 0 to 255 is brought into it, said.
 fn color(v: Option<&Value>, notes: &mut Notes) -> Rgba {
     let Some(v) = v.filter(|v| !v.is_null()) else { return Rgba::TRANSPARENT };
     let parts = v.as_array().filter(|a| a.len() == 3 || a.len() == 4);
@@ -223,18 +231,25 @@ fn color(v: Option<&Value>, notes: &mut Notes) -> Rgba {
         return Rgba::TRANSPARENT;
     };
     let mut c = [0u8, 0, 0, 255];
+    let mut brought_in = false;
     for (slot, n) in c.iter_mut().zip(read) {
+        brought_in |= !(0.0..=255.0).contains(&n.round());
         *slot = n.round().clamp(0.0, 255.0) as u8;
+    }
+    if brought_in {
+        notes.add("colour parts past 0 to 255, brought into it");
     }
     Rgba(c)
 }
 
 /// A marker's size in points, `default` when it names none, within Style › Marker's range; one
-/// past it is said.
+/// past it, or below 0, is said.
 fn size(v: Option<&Value>, default: f32, notes: &mut Notes) -> f32 {
     v.and_then(Value::as_f64).filter(|s| s.is_finite()).map_or(default, |s| {
         if s > f64::from(MAX_MARKER_SIZE) {
             notes.add("marker sizes past RustGIS's largest (80 points), drawn at it");
+        } else if s < 0.0 {
+            notes.add("marker sizes below 0, drawn at 0");
         }
         (s as f32).clamp(0.0, MAX_MARKER_SIZE)
     })
@@ -462,10 +477,35 @@ mod tests {
     fn hostile_values_are_brought_into_range_or_ignored() {
         let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "color": [999, -5, "x", 1], "size": 1e9,
             "outline": {"color": [0, 0, 0], "width": -3}}}, "transparency": 1e9});
-        let (l, _) = styled(GeometryType::Point, info);
+        let (l, notes) = styled(GeometryType::Point, info);
         let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
         assert_eq!((s.fill, s.stroke, s.stroke_width, s.size), (Rgba::TRANSPARENT, Rgba::rgb(0, 0, 0), 0.0, MAX_MARKER_SIZE));
         assert_eq!(l.transparency, 100.0);
+        assert_eq!(
+            notes.text(),
+            "transparency past 0 to 100, brought into it; line widths below 0, drawn at 0; \
+             colours RustGIS can't read, drawn transparent; marker sizes past RustGIS's largest (80 points), drawn at it"
+        );
+        // Parts past 0 to 255, a negative size and a transparency below 0 are brought in, said.
+        let info =
+            json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "color": [999, -5, 0], "size": -4}}, "transparency": -1});
+        let (l, notes) = styled(GeometryType::Point, info);
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        assert_eq!((s.fill, s.size, l.transparency), (Rgba::rgb(255, 0, 0), 0.0, 0.0));
+        assert_eq!(
+            notes.text(),
+            "transparency past 0 to 100, brought into it; colour parts past 0 to 255, brought into it; marker sizes below 0, drawn at 0"
+        );
+        // At the ends of each range, nothing is said.
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "color": [255, 0, 0, 0], "size": 0,
+            "outline": {"color": [0, 0, 0], "width": 0}}}, "transparency": 100});
+        assert!(styled(GeometryType::Point, info).1.is_empty());
+        // A picture marker larger than the largest both ways is said once.
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "width": 100, "height": 120}}});
+        let (l, notes) = styled(GeometryType::Point, info);
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        assert_eq!(s.size, MAX_MARKER_SIZE);
+        assert_eq!(notes.text(), "picture markers, drawn as grey circles; marker sizes past RustGIS's largest (80 points), drawn at it");
         // Not an object: nothing changes.
         for info in [json!(null), json!([]), json!("simple"), json!({"renderer": "simple"})] {
             let (l, notes) = styled(GeometryType::Point, info);
