@@ -985,7 +985,7 @@ fn class_symbol<'a>(r: &'a mut Renderer, class: &ClassRef) -> Option<&'a mut rus
 }
 
 /// A symbol's fill No Fill made transparent, shown again in its own colour.
-fn show_fill(sym: &mut rustgis_map::Symbol) {
+pub(super) fn show_fill(sym: &mut rustgis_map::Symbol) {
     if sym.fill.a() == 0 {
         sym.fill = sym.fill.with_alpha(shown_fill_alpha());
     }
@@ -3331,7 +3331,8 @@ enum ConvertedOrigin {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &str, converted: Vec<Converted>) -> CmdResult {
     let empty_before = super::map_is_empty(s);
-    let single = converted.len() == 1;
+    let parts = converted.len();
+    let single = parts == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
     for c in converted {
         let mut q = json!({"name": c.name});
@@ -3384,6 +3385,15 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
     }
     if ids.is_empty() {
         return Err(format!("{label}: none of its layers could be added"));
+    }
+    if !single && let Some(name) = ps(p, "name") {
+        s.notify_text(
+            crate::notice_text::NoticeText::format(
+                "Name '{name}' was not used: {parts} converted layer parts keep their generated names",
+                [("name", crate::project::short_name(name).into()), ("parts", parts.to_string().into())],
+            ),
+            false,
+        );
     }
     Ok(json!({"layer": ids.first(), "layers": ids, "features": features, "streamed": streamed}))
 }
@@ -5698,6 +5708,10 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     if let Some(water) = s.map_mut().view.terrain.as_mut().and_then(|t| t.water.as_mut()) {
         replace(&mut water.layer);
     }
+    // And its block's walls layer (#1914).
+    if let Some(walls) = s.map_mut().view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.walls_layer.as_mut()) {
+        replace(walls);
+    }
     // Elevation and Map Series selectors compare spellings exactly, even though lookup does not.
     if case_only {
         if s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(old)).count() == 1 {
@@ -5846,7 +5860,8 @@ pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
 /// After layers called `names` are removed: a terrain drawn from one of them would lose its
 /// relief, or take another layer's heights by that name, so it is turned off, and said. Its water
 /// layer removed (#1915), the water keeps the name, so a layer of that name brings it back, and
-/// its lakes lie on the ground meanwhile: said.
+/// its lakes lie on the ground meanwhile: said. So for its block's walls layer (#1914), the walls
+/// one colour meanwhile.
 fn terrain_follows_removal(s: &mut Session, names: &[String]) {
     let water = s.map().view.terrain.as_ref().and_then(|t| t.water.as_ref()).map(|w| w.layer.clone());
     if let Some(w) = water.filter(|w| names.iter().any(|n| n.eq_ignore_ascii_case(w)) && named_layers(s, w) == 0) {
@@ -5855,7 +5870,19 @@ fn terrain_follows_removal(s: &mut Session, names: &[String]) {
             false,
         );
     }
-    let Some(dem) = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d))) else { return };
+    let dem = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d)));
+    // So does the block's walls layer (#1914): its walls are their own colour meanwhile. Not when
+    // the DEM goes too: the terrain, its block with it, is turned off below.
+    let walls = s.map().view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|b| b.walls_layer.clone());
+    if let Some(w) = walls.filter(|w| dem.is_none() && names.iter().any(|n| n.eq_ignore_ascii_case(w)) && named_layers(s, w) == 0) {
+        s.notify(
+            format!(
+                "Terrain: the block's walls layer '{w}' was removed, so the walls are one colour until a layer of that name comes back"
+            ),
+            false,
+        );
+    }
+    let Some(dem) = dem else { return };
     s.map_mut().view.terrain = None;
     let said = if named_layers(s, &dem) > 0 {
         format!(
