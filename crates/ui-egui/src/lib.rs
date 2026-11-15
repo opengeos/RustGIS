@@ -1926,7 +1926,12 @@ impl RustGisApp {
                 || rustgis_engine::map::geolibre::is_project_file(name)
                 || lower.ends_with(".rgispkg"))
         {
-            return self.open_project_bytes(Some(name), bytes);
+            self.ui.pending_open.take();
+            let result = self.open_project_bytes(Some(name), bytes);
+            if let Err(error) = &result {
+                self.session.notify(error.clone(), true);
+            }
+            return result;
         }
         // A plugin package: ask before installing it.
         if lower.ends_with(".rgplugin") {
@@ -5063,7 +5068,9 @@ impl RustGisApp {
                 )?;
             }
             let url = rustgis_engine::data::login_address::inner(bound_url);
-            rustgis_engine::cmd::layer::mark_url_reach(bound_url, check_origin, public);
+            if public || check_origin.is_some() || claim.is_none() {
+                rustgis_engine::cmd::layer::mark_url_reach(bound_url, check_origin, public);
+            }
             // A window of a cloud-optimised GeoTIFF is read off the frame (below), with no
             // probe: it is refused unless it is one. In the browser the command refuses it.
             let window = cfg!(not(target_arch = "wasm32")) && p.get("bbox").is_some_and(|v| !v.is_null());
@@ -8430,7 +8437,11 @@ mod look_tests {
         assert!(app.open_project_bytes(Some("map.geolibre.json"), b"{}").is_err());
         assert!(app.open_project_bytes(Some("map.rgispkg"), b"PK\x03\x04").is_err());
         // Picked and dropped files take the same gate.
+        let before = app.session.notices.len();
+        app.ui.pending_open = Some("project.importGeolibre");
         assert!(app.open_picked("map.rgispkg", b"PK\x03\x04").is_err());
+        assert!(app.ui.pending_open.is_none());
+        assert_eq!(app.session.notices.len(), before + 1);
         assert!(app.open_picked("map.geolibre.json", b"{}").is_err());
         app.run("ui.theme", json!({"dark": true})).expect("in-memory theme toggle");
         assert!(app.ui.dark);

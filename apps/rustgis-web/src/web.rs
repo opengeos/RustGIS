@@ -863,7 +863,7 @@ async fn post_json(
     body: &str,
     capture: Capture,
     still: Option<rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::Still>,
-) -> Result<Vec<u8>, String> {
+) -> Result<rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::Fetched, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache::RequestDiagnostics, failure::Failure};
     let mut diagnostics = RequestDiagnostics::with_capture(url, "POST", capture);
     let answer = async {
@@ -930,7 +930,14 @@ async fn post_json(
             if bytes.length() as usize > cache::MAX_BYTES {
                 return Err(format!("{} bytes is too large", bytes.length()));
             }
-            Ok(bytes.to_vec())
+            let destination = check_destination(&resp.url(), ceiling)?;
+            let origin = cache::Fetched {
+                bytes: bytes.to_vec(),
+                origin: rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::address::Origin::named(&destination)
+                    .retain_binding(url)?
+                    .narrow_reach(ceiling),
+            };
+            Ok(origin)
         }
         .await;
         cache::check_still(&still)?;
@@ -1150,7 +1157,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
         ));
     });
     // So are JSON documents POSTed (the NLDI's flowtrace).
-    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_poster(|url, ceiling, body, done| {
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_poster_with_origin(|url, ceiling, body, done| {
         wasm_bindgen_futures::spawn_local(crate::request::handoff(
             move |capture, still| async move { post_json(&url, ceiling, &body, capture, still).await },
             done,

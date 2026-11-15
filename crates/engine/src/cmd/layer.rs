@@ -3800,13 +3800,11 @@ pub fn request_origin(p: &Value) -> Result<(Option<&str>, bool), String> {
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err("\"fromDocument\" must be true or false".into()),
     };
-    let public = match from_document {
-        Some(b) => b,
-        None => from.is_some_and(|u| {
-            crate::render::rustgis_tiles::address::reach(crate::render::rustgis_tiles::logins::inner(u))
-                == crate::render::rustgis_tiles::address::Reach::Public
-        }),
-    };
+    let from_public = from.is_some_and(|u| {
+        crate::render::rustgis_tiles::address::reach(crate::render::rustgis_tiles::logins::inner(u))
+            == crate::render::rustgis_tiles::address::Reach::Public
+    });
+    let public = from_document.unwrap_or(false) || from_public;
     let origin = if public && from.is_none() { Some("https://document.invalid/") } else { from };
     Ok((origin, public))
 }
@@ -3919,7 +3917,9 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     if origin.is_some() || public {
         crate::render::rustgis_tiles::address::check_reach(url, origin_ceiling(origin, public))?;
     }
-    mark_url_reach(url, origin, public);
+    if public || origin.is_some() || s.policy_user() {
+        mark_url_reach(url, origin, public);
+    }
     // A scan (`"as"`) keeps the pixels and none of the coordinates: the file is downloaded whole and
     // read as one (`add_named_bytes` checks it is an image), never read in place.
     let scan = super::raster::as_scan(p)?;
@@ -6198,5 +6198,12 @@ mod tests {
             .run("layer.addUrl", &json!({"url": url, "from": "http://127.0.0.1:9/doc", "fromDocument": false}))
             .expect_err("a public restriction must refuse the local address");
         assert!(e.contains("local network"), "{e}");
+    }
+    #[test]
+    fn false_document_flag_cannot_widen_a_public_origin() {
+        let params = json!({"from": "https://catalog.example/item", "fromDocument": false});
+        let (origin, public) = super::request_origin(&params).unwrap();
+        assert!(public);
+        assert_eq!(super::origin_ceiling(origin, public), crate::render::rustgis_tiles::address::Reach::Public);
     }
 }

@@ -433,6 +433,7 @@ fn public_only() -> &'static Mutex<PublicOnly> {
 
 fn canonical_resource(url: &str) -> &str {
     let url = crate::logins::inner(crate::s3::split_anonymous(resource_of(url)).0);
+    let url = crate::warp::direct(url).unwrap_or(url);
     let pmtiles = url.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("pmtiles"));
     if pmtiles || crate::mbtiles::check(url).is_ok() { url } else { crate::cog::split(url).0 }
 }
@@ -474,7 +475,15 @@ pub fn restrict_to_public(url: &str) {
         changed
     };
     if added {
-        forget(url);
+        let aliases: Vec<String> =
+            lock().slots.keys().filter(|key| canonical_resource(key) == base).map(|key| resource_of(key).to_string()).collect();
+        forget(base);
+        if base != url {
+            forget(url);
+        }
+        for alias in aliases {
+            forget(&alias);
+        }
     }
 }
 
@@ -838,7 +847,7 @@ fn request(
         let (entry, stored_ceiling) = slot.for_reach(ceiling);
         match entry {
             Entry::Ready(p, _, origin) => {
-                if origin.as_ref().is_none_or(|o| o.reach <= ceiling) {
+                if origin.as_ref().map_or(stored_ceiling <= ceiling, |o| o.reach <= ceiling) {
                     return (State::Ready(p.clone()), origin.clone(), None);
                 }
                 // The same name can resolve both locally and publicly. Retry through the
@@ -953,9 +962,10 @@ pub(crate) fn peek_from(url: &str, from: Option<&crate::address::Origin>) -> Opt
     let tick = c.tick;
     let slot = c.slots.get_mut(url)?;
     let ceiling = from.map_or(crate::address::Reach::Local, |o| o.reach).min(ceiling_for(url));
-    match slot.for_reach(ceiling).0 {
+    let (entry, stored_ceiling) = slot.for_reach(ceiling);
+    match entry {
         Entry::Ready(p, _, origin) => {
-            if origin.as_ref().is_some_and(|o| o.reach > ceiling) || from.is_some_and(|f| f.check(url).is_err()) {
+            if origin.as_ref().map_or(stored_ceiling > ceiling, |o| o.reach > ceiling) || from.is_some_and(|f| f.check(url).is_err()) {
                 return None;
             }
             let payload = p.clone();
@@ -1294,7 +1304,7 @@ fn land(key: &str, entry: Option<Entry>, asked_at: u64, ceiling: crate::address:
     let restricted = ceiling != crate::address::Reach::Public && ceiling_for(key) == crate::address::Reach::Public;
     // Asked for before the record of forgotten files was emptied, so it can't be told: read again.
     match entry.filter(|_| !restricted && !crate::mbtiles::asked_before_emptied(key, asked_at)) {
-        Some(entry) => keep(&mut c, key, entry),
+        Some(entry) => keep_for(&mut c, key, entry, ceiling),
         // Never answered (or dropped by the fetcher): forgotten, fetched again when asked for.
         None => {
             forget_pending(&mut c, key);
@@ -1795,8 +1805,28 @@ pub fn download_blocking_omitting_within(
     timeout: std::time::Duration,
     omit: &'static [u16],
 ) -> Result<Vec<u8>, String> {
-    crate::address::check(url, None)?;
-    native::get(&native::download_agent(timeout), &download_address(url, max), omit)
+    download_blocking_with_origin_within(url, max, timeout, omit, ceiling_for(url)).map(|f| f.bytes)
+}
+
+/// Downloads while preserving the final address and transport-observed reach.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_with_origin(url: &str) -> Result<Fetched, String> {
+    download_blocking_with_origin_within(url, MAX_DOWNLOAD, BLOCKING_TIMEOUT, &[], ceiling_for(url))
+}
+
+/// Downloads with an explicit reach ceiling, budget and timeout, retaining provenance.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_with_origin_within(
+    url: &str,
+    max: usize,
+    timeout: std::time::Duration,
+    omit: &'static [u16],
+    ceiling: crate::address::Reach,
+) -> Result<Fetched, String> {
+    let ceiling = ceiling.min(ceiling_for(url));
+    crate::address::check_reach(url, ceiling)?;
+    let agent = if ceiling == crate::address::Reach::Public { native::public_agent(timeout) } else { native::download_agent(timeout) };
+    native::fetch_answer(&agent, &download_address(url, max), ceiling, false, omit).map_err(|f| f.message)
 }
 
 /// Like [`download_blocking_within`], connecting only to internet addresses: a name, or a
@@ -1815,8 +1845,7 @@ pub fn download_public_omitting_within(
     timeout: std::time::Duration,
     omit: &'static [u16],
 ) -> Result<Vec<u8>, String> {
-    crate::address::check_reach(url, crate::address::Reach::Public)?;
-    native::get(&native::public_agent(timeout), &download_address(url, max), omit)
+    download_blocking_with_origin_within(url, max, timeout, omit, crate::address::Reach::Public).map(|f| f.bytes)
 }
 
 /// Reads an address's first byte, connecting only to internet addresses (as
@@ -1831,7 +1860,7 @@ pub fn probe_blocking(url: &str) -> Result<(), Failure> {
 
 /// How a JSON document is POSTed and its answer read (the browser's `fetch`): the address, its
 /// network reach ceiling, the body and what to call once, as [`set_poster`] installs it.
-pub type Poster = Box<dyn Fn(String, crate::address::Reach, String, Done) + Send + Sync>;
+pub type Poster = Box<dyn Fn(String, crate::address::Reach, String, FetchedDone) + Send + Sync>;
 
 fn poster() -> &'static Mutex<Option<Arc<Poster>>> {
     static P: OnceLock<Mutex<Option<Arc<Poster>>>> = OnceLock::new();
@@ -1841,6 +1870,14 @@ fn poster() -> &'static Mutex<Option<Arc<Poster>>> {
 /// Replaces how JSON documents are POSTed (the browser's `fetch`). `done` must be called once,
 /// with at most [`MAX_BYTES`] of the answer, and an error status as `HTTP <status>`.
 pub fn set_poster(f: impl Fn(String, crate::address::Reach, String, Done) + Send + Sync + 'static) {
+    set_poster_with_origin(move |url, ceiling, body, done| {
+        let origin = crate::address::Origin::named(&url).narrow_reach(ceiling);
+        f(url, ceiling, body, Box::new(move |r| done(r.map(|bytes| Fetched { bytes, origin }))));
+    });
+}
+
+/// Installs a POST transport that reports its effective origin and observed reach.
+pub fn set_poster_with_origin(f: impl Fn(String, crate::address::Reach, String, FetchedDone) + Send + Sync + 'static) {
     *poster().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
 }
 
@@ -1848,43 +1885,37 @@ pub fn set_poster(f: impl Fn(String, crate::address::Reach, String, Done) + Send
 /// flowtrace) and hands over the answer, off the frame (a thread natively, the browser's fetch
 /// on the web), counted as a fetch under way. Redirects aren't followed.
 pub fn post_json(url: &str, body: String, done: Done) {
-    if let Err(e) = crate::address::check_reach(url, crate::address::Reach::Public) {
-        done(Err(e));
-        return;
-    }
-    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
-    let key = url.to_string();
-    let done: Done = Box::new(move |r| {
-        done(crate::logins::check(&key).map_err(str::to_string).and(r));
-        finished();
-    });
-    let p = poster().lock().unwrap_or_else(|e| e.into_inner()).clone();
-    match p {
-        Some(p) => p(url.to_string(), crate::address::Reach::Public, body, done),
-        None => native::post(url.to_string(), body, done),
-    }
+    post_json_with_origin(url, body, true, Box::new(move |r| done(r.map(|f| f.bytes))));
 }
 
-/// Like [`post_json`], to an address the user named, which may be on their own network (as
-/// [`download`] is; see [`post_json_named_blocking`]). Not for addresses a document pointed to.
-/// The browser's poster is used as for [`post_json`], with the local-network allowance.
+/// Like [`post_json`], to an address the user named, which may be on their own network.
 pub fn post_json_named(url: &str, body: String, done: Done) {
-    let ceiling = ceiling_for(url);
+    post_json_with_origin(url, body, false, Box::new(move |r| done(r.map(|f| f.bytes))));
+}
+
+/// POSTs with transport provenance; document-supplied addresses retain public-only reach.
+pub fn post_json_with_origin(url: &str, body: String, public: bool, done: FetchedDone) {
+    let ceiling = if public { crate::address::Reach::Public } else { ceiling_for(url) };
     if let Err(e) = crate::address::check_reach(url, ceiling) {
         done(Err(e));
         return;
     }
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
     let key = url.to_string();
-    let done: Done = Box::new(move |r| {
-        done(crate::logins::check(&key).map_err(str::to_string).and(r));
+    let done: FetchedDone = Box::new(move |r| {
+        done(crate::logins::check(&key).map_err(str::to_string).and(r).and_then(|f| {
+            crate::address::check_reach(f.origin.url(), ceiling)?;
+            if f.origin.reach() > ceiling {
+                return Err("the fetched answer exceeds its request's network reach".into());
+            }
+            Ok(f)
+        }));
         finished();
     });
     let p = poster().lock().unwrap_or_else(|e| e.into_inner()).clone();
-    match (p, ceiling) {
-        (Some(p), ceiling) => p(url.to_string(), ceiling, body, done),
-        (None, crate::address::Reach::Public) => native::post(url.to_string(), body, done),
-        (None, _) => native::post_named(url.to_string(), body, done),
+    match p {
+        Some(p) => p(url.to_string(), ceiling, body, done),
+        None => native::post_fetched(url.to_string(), body, ceiling, done),
     }
 }
 
@@ -1899,8 +1930,20 @@ pub fn post_json_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
 /// a download from one is ([`download_blocking`]). Not for addresses a document pointed to.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn post_json_named_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
-    crate::address::check(url, None)?;
-    native::post_with(&native::download_agent(BLOCKING_TIMEOUT), url, body)
+    post_json_named_blocking_with_origin(url, body).map(|f| f.bytes)
+}
+
+/// Like [`post_json_named_blocking`], preserving transport-observed provenance.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn post_json_named_blocking_with_origin(url: &str, body: &str) -> Result<Fetched, String> {
+    let ceiling = ceiling_for(url);
+    crate::address::check_reach(url, ceiling)?;
+    let agent = if ceiling == crate::address::Reach::Public {
+        native::public_agent(BLOCKING_TIMEOUT)
+    } else {
+        native::download_agent(BLOCKING_TIMEOUT)
+    };
+    native::post_fetched_with(&agent, url, body, ceiling)
 }
 
 /// What a `HEAD` request says of a file before any of it is read: the length of its TIFF header
@@ -2137,6 +2180,7 @@ fn login_gone(url: &str) -> bool {
 }
 
 /// Keeps a transport completion under the ceiling of its still-pending slot.
+#[cfg(test)]
 fn keep(c: &mut Cache, url: &str, entry: Entry) {
     let ceiling = c.slots.get(url).map_or(crate::address::Reach::Local, |s| s.ceiling);
     keep_for(c, url, entry, ceiling);
@@ -2890,44 +2934,35 @@ mod native {
     }
 
     /// POSTs a JSON document on a thread of its own.
-    pub(super) fn post(url: String, body: String, done: Done) {
-        // Internet addresses only: a name that resolves into the local network gets no body.
+    pub(super) fn post_fetched(url: String, body: String, ceiling: Reach, done: FetchedDone) {
         let capture = Capture::current();
         let still = super::current_still();
         std::thread::spawn(move || {
             super::with_optional_still(still, || {
                 let _scope = capture.enter();
-                done(
-                    super::check_current()
-                        .and_then(|_| post_reached_with(&public_agent(std::time::Duration::from_secs(60)), &url, &body, Reach::Public)),
-                );
-            });
-        });
-    }
-
-    /// Like [`post`], to an address the user named: any address its name resolves to.
-    pub(super) fn post_named(url: String, body: String, done: Done) {
-        let capture = Capture::current();
-        let still = super::current_still();
-        std::thread::spawn(move || {
-            super::with_optional_still(still, || {
-                let _scope = capture.enter();
-                done(super::check_current().and_then(|_| post_with(&download_agent(std::time::Duration::from_secs(60)), &url, &body)));
+                let timeout = std::time::Duration::from_secs(60);
+                let agent = if ceiling == Reach::Public { public_agent(timeout) } else { download_agent(timeout) };
+                done(super::check_current().and_then(|_| post_fetched_with(&agent, &url, &body, ceiling)));
             });
         });
     }
 
     /// POSTs a JSON document and reads the answer (at most [`MAX_BYTES`]); an error status is
     /// `http status: <status>`, and a redirect isn't followed.
+    #[cfg(test)]
     pub(super) fn post_with(agent: &ureq::Agent, url: &str, body: &str) -> Result<Vec<u8>, String> {
         post_reached_with(agent, url, body, Reach::Local)
     }
 
     pub(super) fn post_reached_with(agent: &ureq::Agent, url: &str, body: &str, ceiling: Reach) -> Result<Vec<u8>, String> {
+        post_fetched_with(agent, url, body, ceiling).map(|f| f.bytes)
+    }
+
+    pub(super) fn post_fetched_with(agent: &ureq::Agent, url: &str, body: &str, ceiling: Reach) -> Result<Fetched, String> {
         use std::io::Read;
         let mut diagnostics = super::RequestDiagnostics::new(url, "POST");
         let mut carried_login = false;
-        let answer = (|| -> Result<Vec<u8>, Failure> {
+        let answer = (|| -> Result<Fetched, Failure> {
             crate::logins::check(url).map_err(str::to_string)?;
             let prepared = crate::s3::prepare(crate::logins::inner(url))?;
             crate::address::check_reach(&prepared.url, ceiling)?;
@@ -2944,7 +2979,7 @@ mod native {
                 req = req.header(name.as_str(), value.as_str());
             }
             super::check_current()?;
-            let mut resp = req.send(body).map_err(unanswered)?;
+            let (mut resp, reached) = connected(|| req.send(body)).map_err(unanswered)?;
             let status = resp.status().as_u16();
             diagnostics.answered(status);
             if !(200..300).contains(&status) {
@@ -2966,7 +3001,8 @@ mod native {
                 return Err(format!("larger than {MAX_BYTES} bytes").into());
             }
             crate::logins::check(url).map_err(str::to_string)?;
-            Ok(buf)
+            let origin = Origin { url: bound, reach: reached.min(ceiling) };
+            Ok(Fetched { bytes: buf, origin })
         })();
         diagnostics
             .record(answer)
@@ -3078,6 +3114,7 @@ mod native {
     /// Fetches `url`, following up to 5 redirects. Checks the final network destination here,
     /// even when the address was already checked before expansion or signing; every redirect
     /// and every resolved connection is checked too.
+    #[cfg(test)]
     pub(super) fn get(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Vec<u8>, String> {
         fetch_answer(agent, url, Reach::Local, false, omit).map(|f| f.bytes).map_err(|f| f.message)
     }
@@ -3446,7 +3483,7 @@ mod native {
 
 #[cfg(target_arch = "wasm32")]
 mod native {
-    use super::{Done, DoneFetchedDetailed};
+    use super::{Done, DoneFetchedDetailed, FetchedDone};
 
     /// Keeps the destination ceiling with queued work; the web build requires its own fetcher.
     pub(super) fn fetch_reached(url: String, _ceiling: crate::address::Reach, done: super::FetchedDone, _omit: &'static [u16]) {
@@ -3471,12 +3508,8 @@ mod native {
         download_fetched_within(url, timeout, omit, done);
     }
 
-    pub(super) fn post(url: String, _body: String, done: Done) {
-        done(Err(rustgis_data::diagnostics::message_with_address(&url, "this build has no way to send requests")));
-    }
-
-    pub(super) fn post_named(url: String, body: String, done: Done) {
-        post(url, body, done);
+    pub(super) fn post_fetched(url: String, _body: String, _ceiling: crate::address::Reach, done: FetchedDone) {
+        done(Err(format!("no browser POST transport for {url}")));
     }
 
     pub(super) fn head(url: String, _ceiling: crate::address::Reach, done: super::HeadDone) {
@@ -6929,5 +6962,65 @@ mod tests {
         assert_eq!(ceiling_for("https://unseen.example/other.tif"), crate::address::Reach::Public, "saturated table fails closed");
         allow_named("https://192.168.1.5/logo.png");
         assert_eq!(ceiling_for("https://192.168.1.5/logo.png"), crate::address::Reach::Local);
+    }
+    #[test]
+    fn direct_warp_and_authority_changing_expansions_keep_public_reach() {
+        let _turn = turn();
+        let base = "https://direct.example/wms";
+        restrict_to_public(&format!("{base}#rustgis-warp=0/0/0;crs=3857"));
+        assert_eq!(ceiling_for(base), crate::address::Reach::Public);
+        let template = "https://{s}.tiles.example/{z}/{x}/{y}.png";
+        restrict_to_public(template);
+        for sub in ["192.168.1.5/x?", "127.0.0.1/path#", "user@10.0.0.1/?"] {
+            let expanded = crate::template::expand(template, crate::template::TileId { z: 0, x: 0, y: 0 }, 256, false, &[sub.into()]);
+            assert_eq!(ceiling_for(&expanded), crate::address::Reach::Public, "{expanded}");
+        }
+    }
+
+    #[test]
+    fn restricting_an_alias_forgets_completed_local_tiles() {
+        let _turn = turn();
+        let base = "https://alias.example/scene.tif";
+        let tile = format!("cog:0/0/0@{base}");
+        land(&tile, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), crate::mbtiles::epoch(), crate::address::Reach::Local);
+        assert!(peek(&tile).is_some());
+        restrict_to_public(&crate::s3::anonymous(base));
+        assert!(peek(&tile).is_none());
+        assert!(!lock().slots.contains_key(&tile));
+    }
+
+    #[test]
+    fn originless_local_cache_entries_are_not_reused_by_public_documents() {
+        let _turn = turn();
+        let url = "https://cache.example/scene.tif";
+        land(url, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), crate::mbtiles::epoch(), crate::address::Reach::Local);
+        let origin = crate::address::Origin::named("https://catalog.example/item.json");
+        assert!(peek_from(url, Some(&origin)).is_none());
+        set_fetcher_with_origin(|_, ceiling, done, _| {
+            assert_eq!(ceiling, crate::address::Reach::Public);
+            done(Err("public retry".into()));
+        });
+        assert!(!matches!(request(url, Want::Json, &[], Some(&origin)).0, State::Ready(_)));
+        forget(url);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn blocking_get_and_post_keep_observed_local_origin() {
+        let _turn = turn();
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
+        let (base, _) = serve_recorded(vec![answer.clone(), answer]);
+        let url = base.replace("127.0.0.1", "localhost");
+        let get = download_blocking_with_origin(&url).unwrap();
+        assert_eq!(get.origin.reach(), crate::address::Reach::Local);
+        let post = post_json_named_blocking_with_origin(&url, "{}").unwrap();
+        assert_eq!(post.origin.reach(), crate::address::Reach::Local);
+        assert_eq!(post.bytes, b"{}");
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
+        let (base, _) = serve_recorded(vec![answer]);
+        let listener = base.trim_start_matches("http://").parse().unwrap();
+        let agent = native::fixture_agent(listener, listener, false);
+        let fetched = native::post_fetched_with(&agent, "http://internal.example/search", "{}", crate::address::Reach::Local).unwrap();
+        assert_eq!(fetched.origin.reach(), crate::address::Reach::Local);
     }
 }

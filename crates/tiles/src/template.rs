@@ -195,6 +195,11 @@ pub fn expand(template: &str, t: TileId, tile_size: u32, tms: bool, subdomains: 
         rest = after.get(close + 1..).unwrap_or_default();
     }
     out.push_str(rest);
+    if crate::cache::ceiling_for(template) == crate::address::Reach::Public
+        && crate::cache::ceiling_for(&out) != crate::address::Reach::Public
+    {
+        crate::cache::restrict_to_public(&out);
+    }
     out
 }
 

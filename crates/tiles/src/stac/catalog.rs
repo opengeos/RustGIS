@@ -492,16 +492,23 @@ pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
     let mut w = Walk::new(root, filter, limit);
     loop {
         // A few documents at a time, each on its own thread.
-        let urls: Vec<String> = std::iter::from_fn(|| w.next_url()).take(AT_ONCE).collect();
+        let urls: Vec<(String, bool)> = std::iter::from_fn(|| w.next_request()).take(AT_ONCE).collect();
         if urls.is_empty() {
             break;
         }
-        let answers: Vec<(String, Result<Vec<u8>, String>)> = std::thread::scope(|s| {
+        let answers: Vec<(String, Result<crate::cache::Fetched, String>)> = std::thread::scope(|s| {
             let handles: Vec<_> = urls
                 .into_iter()
-                .map(|u| {
+                .map(|(u, public)| {
                     s.spawn(move || {
-                        let r = crate::cache::download_blocking(&u);
+                        let ceiling = if public { crate::address::Reach::Public } else { crate::address::Reach::Local };
+                        let r = crate::cache::download_blocking_with_origin_within(
+                            &u,
+                            crate::cache::MAX_DOWNLOAD,
+                            std::time::Duration::from_secs(60),
+                            &[],
+                            ceiling,
+                        );
                         (u, r)
                     })
                 })
@@ -509,7 +516,7 @@ pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
             handles.into_iter().filter_map(|h| h.join().ok()).collect()
         });
         for (u, r) in answers {
-            w.land(&u, r);
+            w.land_fetched(&u, r);
         }
         // A thread that died leaves its document asked for: it counts as failed.
         for u in w.asked.iter().map(|(u, ..)| u.clone()).collect::<Vec<_>>() {

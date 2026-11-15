@@ -313,17 +313,10 @@ fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
             let slot: Answer = Slot::default();
             let land = slot.clone();
             let public = app.ui.stac.api_from_document;
-            let origin = Origin::named(&url).narrow_reach(if public { Reach::Public } else { Reach::Local });
-            let done = Box::new(move |r: Result<Vec<u8>, String>| {
-                *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r.map(|bytes| cache::Fetched { bytes, origin }));
+            let done = Box::new(move |r| {
+                *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
             });
-            // The API the user typed or picked may be on their own network; one that a document
-            // named (an opened item's or collection's root link) is internet only.
-            if public {
-                cache::post_json(&url, body, done);
-            } else {
-                cache::post_json_named(&url, body, done);
-            }
+            cache::post_json_with_origin(&url, body, public, done);
             slot
         }
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
@@ -456,18 +449,23 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         Asked::Search(url, _) => {
             match r.and_then(|f| {
                 let origin = if f.origin.url().is_empty() { Origin::named(&url) } else { f.origin };
-                Ok((stac::parse_items_from_origin(&f.bytes, &origin)?, stac::parse_matched(&f.bytes), stac::has_next(&f.bytes)))
+                Ok((
+                    stac::parse_items_from_origin(&f.bytes, &origin)?,
+                    stac::parse_matched(&f.bytes),
+                    stac::has_next(&f.bytes),
+                    stac::next_refused(&f.bytes, &origin),
+                ))
             }) {
-                Ok(((items, next), matched, has_next)) => {
+                Ok(((items, next), matched, has_next, refused)) => {
                     let n = items.len().to_string();
                     // Logical order until the line is whole: `fmt` puts a finished message in display
                     // form, so it runs once, over the count and the note together.
-                    let count = match matched.filter(|m| *m as usize > items.len()) {
+                    let count = match matched.filter(|m| !refused && *m as usize > items.len()) {
                         Some(m) => {
                             i18n::fmt_raw("Showing {n} of {m} items (narrow the search for others)", &[("n", &n), ("m", &m.to_string())])
                         }
                         // A POST search's `next` link has no address to give, so `next` is none for it.
-                        None if next.is_some() || has_next => {
+                        None if !refused && (next.is_some() || has_next) => {
                             i18n::fmt_raw("Showing {n} items (more match: narrow the search)", &[("n", &n)])
                         }
                         None => i18n::fmt_raw("Showing {n} items", &[("n", &n)]),
@@ -479,6 +477,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                         Some(note) => i18n::fmt("{count}. {note}", &[("count", &count), ("note", &note)]),
                         None => i18n::fmt("{count}", &[("count", &count)]),
                     });
+                    if refused {
+                        let note =
+                            tl!("The next page link was refused: it points where this search may not read, so only this page is loaded.");
+                        st.info = Some(i18n::fmt("{count}. {note}", &[("count", st.info.as_deref().unwrap_or(&count)), ("note", note)]));
+                    }
                     st.details = None;
                     st.counted = true;
                     st.chosen = items.iter().map(|i| i.pick(None).map(|a| a.key.clone()).unwrap_or_default()).collect();
@@ -2981,5 +2984,20 @@ mod tests {
             assert_eq!(app.ui.stac.items.len(), 1);
             assert_eq!(app.ui.stac.items[0].origin_reach, Reach::Public);
         }
+    }
+    #[test]
+    fn a_refused_next_link_is_reported_without_claiming_more_match() {
+        let mut app = RustGisApp::with_sample();
+        let body =
+            br#"{"type":"FeatureCollection","features":[],"numberMatched":100,"links":[{"rel":"next","href":"http://127.0.0.1/private"}]}"#;
+        let answer = Slot::new(std::sync::Mutex::new(Some(Ok(cache::Fetched {
+            bytes: body.to_vec(),
+            origin: Origin::named("https://public.example/search"),
+        }))));
+        app.ui.stac.waiting = Some((Asked::Search("http://127.0.0.1/start".into(), None), answer));
+        poll(&mut app, &egui::Context::default());
+        let said = app.ui.stac.info.as_deref().unwrap();
+        assert!(said.contains("next page link was refused"), "{said}");
+        assert!(!said.contains("more match") && !said.contains("narrow the search"), "{said}");
     }
 }
