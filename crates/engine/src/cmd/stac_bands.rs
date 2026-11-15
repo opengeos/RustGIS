@@ -316,6 +316,11 @@ mod desktop {
         // A scale of 0 (or one that isn't a number) would turn every value of a band into its
         // offset: a catalog error to say, not a constant band to draw.
         for ((_, band), who) in sources.iter().zip(channels) {
+            if band.unread {
+                return Err(format!(
+                    "{who}: the catalog gives its scale, offset or no-data as something that is not a number (a string, say), so its values can't be scaled"
+                ));
+            }
             if !band.scale.is_finite() || band.scale == 0.0 {
                 return Err(format!("{who}: the catalog gives its values a scale of {}, so they can't be scaled", band.scale));
             }
@@ -385,6 +390,20 @@ mod desktop {
                     band.index, band.asset, band.in_file
                 ));
             }
+        }
+        // Integer files the catalog gives no scale for are used as stored: not reflectance, which the
+        // indices' constants and a colour mixed with scaled bands assume. One notice, naming them.
+        let unscaled: Vec<String> = sources
+            .iter()
+            .zip(channels)
+            .filter(|((r, b), _)| !b.scaled && (r.data_type.starts_with("UInt") || r.data_type.starts_with("Int")))
+            .map(|((r, _), who)| format!("{who} ({})", r.data_type))
+            .collect();
+        if !unscaled.is_empty() {
+            notes.push(format!(
+                "{} have no scale in the catalog, so their integer values are used as stored, not as reflectance: an index, or a colour mixing them with scaled bands, will be off",
+                unscaled.join(", ")
+            ));
         }
         let size = finest.transform.pixel_width.abs();
         let resampled: Vec<&str> = sources
@@ -456,7 +475,32 @@ mod tests {
             scale,
             offset,
             nodata: None,
+            scaled: true,
+            unread: false,
         }
+    }
+
+    #[test]
+    fn a_band_the_catalog_gave_unreadable_numbers_is_refused_and_an_unscaled_integer_file_is_said() {
+        let a = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        // A scale given as text was not read: its band is refused, not drawn unscaled.
+        let mut text = band(1.0, 0.0);
+        (text.scaled, text.unread) = (false, true);
+        let err = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &text)]).unwrap_err();
+        assert!(err.starts_with("red:") && err.contains("not a number"), "{err}");
+        // No scale on an integer file ("UInt16" in the grid helper): said once, naming the band and its type.
+        let mut plain = band(1.0, 0.0);
+        plain.scaled = false;
+        let (_, notes) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &plain)]).unwrap();
+        assert!(notes.iter().any(|n| n.starts_with("red (UInt16) have no scale in the catalog")), "{notes:?}");
+        // A stated scale says nothing, and neither does a float file without one.
+        let (_, none) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &band(1.0, 0.0))]).unwrap();
+        assert!(!none.iter().any(|n| n.contains("no scale")), "{none:?}");
+        let mut float = grid(2, 2, 0.0001, vec![0.5; 4]);
+        float.data_type = "Float32".into();
+        let (_, none) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&float, &plain)]).unwrap();
+        assert!(!none.iter().any(|n| n.contains("no scale")), "reflectance as stored needs no note: {none:?}");
     }
 
     #[test]

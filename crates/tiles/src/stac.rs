@@ -84,6 +84,10 @@ pub struct BandInfo {
     pub offset: Option<f64>,
     /// Its stored no-data value, when the catalog gives a number (`"nan"` is not one).
     pub nodata: Option<f64>,
+    /// Whether the catalog gives its scale, offset or no-data as something that isn't a number (a
+    /// string such as `"0.0001"`, or a number that isn't finite): they were not read, and a band
+    /// made from it would come out unscaled, so it is refused where it is used.
+    pub unread: bool,
 }
 
 /// The most bands of one asset that are kept.
@@ -94,6 +98,24 @@ fn declared_bands(asset: &Value) -> usize {
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
     let named = list("eo:bands").or_else(|| list("bands"));
     named.map_or(0, |l| l.len()).max(list("raster:bands").map_or(0, |l| l.len()))
+}
+
+/// Whether a band's scale, offset or no-data is there but not a number: a string (`"0.0001"`) or
+/// a number that isn't finite. A no-data may be `"nan"`, `"inf"` or `"-inf"`, which the raster
+/// extension allows, and is then not odd. [`item_json`] marks a band it passed on with `rg:unread`.
+fn odd_numbers(band: Option<&Value>) -> bool {
+    let Some(band) = band else { return false };
+    if band.get("rg:unread").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    [("scale", false), ("raster:scale", false), ("offset", false), ("raster:offset", false), ("nodata", true)].iter().any(
+        |(key, nodata)| match band.get(*key) {
+            None | Some(Value::Null) => false,
+            Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
+            Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
+            Some(_) => true,
+        },
+    )
 }
 
 /// The bands an asset describes, from `eo:bands` (names) or STAC 1.1's unified `bands`, and
@@ -119,6 +141,7 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                 scale: pick(&["scale", "raster:scale"]),
                 offset: pick(&["offset", "raster:offset"]),
                 nodata: pick(&["nodata"]),
+                unread: odd_numbers(raster) || odd_numbers(named),
             }
         })
         .collect()
@@ -947,10 +970,14 @@ fn asset_json(a: &Asset) -> Value {
                 o.insert(key.into(), serde_json::json!(v));
             }
         }
+        // That a number was there and not read goes with the band, for the command that gets it.
+        if b.unread {
+            o.insert("rg:unread".into(), Value::Bool(true));
+        }
         Value::Object(o)
     };
     let bands: Vec<Value> = if a.bands.is_empty() {
-        let first = BandInfo { common: String::new(), scale: a.scale, offset: a.offset, nodata: a.nodata };
+        let first = BandInfo { common: String::new(), scale: a.scale, offset: a.offset, nodata: a.nodata, unread: false };
         if first == BandInfo::default() { Vec::new() } else { vec![band(&first)] }
     } else {
         a.bands.iter().map(band).collect()

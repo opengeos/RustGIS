@@ -29,6 +29,11 @@ pub struct Band {
     pub offset: f64,
     /// The stored value the catalog says is no data, when it names one.
     pub nodata: Option<f64>,
+    /// Whether the catalog gave the scale (when not, the stored values are used as they are).
+    pub scaled: bool,
+    /// Whether the catalog's scale, offset or no-data for it is not a number (see
+    /// [`BandInfo::unread`](super::BandInfo::unread)).
+    pub unread: bool,
 }
 
 /// A wanted name and the names that can stand in for it, best first.
@@ -116,6 +121,8 @@ pub fn bands(item: &Item) -> Vec<Band> {
                 scale: scale.unwrap_or(1.0),
                 offset: offset.unwrap_or(0.0),
                 nodata,
+                scaled: scale.is_some(),
+                unread: info.is_some_and(|b| b.unread),
             });
         }
     }
@@ -123,12 +130,12 @@ pub fn bands(item: &Item) -> Vec<Band> {
 }
 
 /// The band `wanted` names (`red`, `nir`…): the first of its stand-ins (see [`ALIASES`]) that some
-/// band has as its common name, else that an asset of exactly one band has as its key. Of several
-/// bands with the name, one in a file of its own is taken over one of a stack: Sentinel-2's
-/// `visual` and `preview` are colour images whose bands are named red, green and blue too, and
-/// they are not the band files. A key of an asset with several bands says nothing of which one is
-/// meant, so it is not taken for one, nor is the key of an asset whose one band the catalog names
-/// something else (an asset `red` of `nir` is not red).
+/// band has as its common name, else that an asset of exactly one band has as its key. A file of its
+/// own comes first, whether the catalog names its band or it is known by its key, over a band of a
+/// stack: Sentinel-2's `visual` and `preview` are colour images whose bands are named red, green
+/// and blue too, and they are not the band files (their values are 8-bit). A key of an asset with
+/// several bands says nothing of which one is meant, so it is not taken for one, nor is the key of
+/// an asset whose one band the catalog names something else (an asset `red` of `nir` is not red).
 pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     let wanted = wanted.trim().to_ascii_lowercase();
     let names: Vec<&str> = match ALIASES.iter().find(|(name, _)| *name == wanted) {
@@ -137,13 +144,14 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     };
     names.iter().find_map(|name| {
         let named = || bands.iter().filter(|b| b.common == *name);
-        named().find(|b| b.in_file == 1).or_else(|| named().next()).or_else(|| {
+        let key_only = || {
             let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(name));
             match (of_asset.next(), of_asset.next()) {
                 (Some(only), None) if only.common.is_empty() => Some(only),
                 _ => None,
             }
-        })
+        };
+        named().find(|b| b.in_file == 1).or_else(key_only).or_else(|| named().next())
     })
 }
 
@@ -263,6 +271,35 @@ mod tests {
         assert!(find(&b, "red").is_none(), "`red` holds the near infrared band");
         assert_eq!(find(&b, "nir").unwrap().asset, "red", "and it is found as what it is");
         assert_eq!(find(&b, "green").unwrap().asset, "green", "a band the catalog names none for goes by its key");
+    }
+
+    #[test]
+    fn a_file_of_its_own_known_by_its_key_is_taken_over_a_band_of_a_colour_image() {
+        // `red` is one band the catalog names none for; `visual` is a colour image with a band named red.
+        let colour = json!({"eo:bands": [{"common_name": "red"}, {"common_name": "green"}, {"common_name": "blue"}]});
+        let b = bands(&item(&[("red", json!({})), ("visual", colour)]));
+        let red = find(&b, "red").unwrap();
+        assert_eq!((red.asset.as_str(), red.in_file), ("red", 1), "the file of its own, not visual's first band");
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_number_is_marked_not_dropped_and_a_missing_one_is_known() {
+        let odd =
+            |extra: serde_json::Value| bands(&item(&[("red", json!({"eo:bands": [{"common_name": "red"}], "raster:bands": [extra]}))]));
+        // A string for a number: not read (1 and 0 stand in), and marked.
+        let b = odd(json!({"scale": "0.0001", "offset": -0.1}));
+        assert_eq!((b[0].scale, b[0].unread, b[0].scaled), (1.0, true, false));
+        assert!(odd(json!({"offset": {"v": 1}}))[0].unread, "an object is no number either");
+        // "nan" is a no-data the raster extension allows: not read as a number, but not odd.
+        assert!(!odd(json!({"scale": 0.0001, "nodata": "nan"}))[0].unread);
+        assert!(odd(json!({"scale": 0.0001, "nodata": "zero"}))[0].unread);
+        // A real scale is known; no scale is known as none.
+        let (scaled, plain) = (odd(json!({"scale": 0.0001})), odd(json!({})));
+        assert_eq!((scaled[0].scaled, scaled[0].unread, plain[0].scaled, plain[0].unread), (true, false, false, false));
+        // The mark goes with the item to the command.
+        let item = item(&[("red", json!({"eo:bands": [{"common_name": "red"}], "raster:bands": [{"scale": "0.0001"}]}))]);
+        let again = crate::stac::item_from_json(&crate::stac::item_json(&item), None).unwrap();
+        assert!(bands(&again)[0].unread, "still marked after the item is passed on");
     }
 
     #[test]
