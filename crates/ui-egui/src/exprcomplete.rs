@@ -150,7 +150,8 @@ fn store(ui: &Ui, id: Id, state: State) {
     ui.data_mut(|d| d.insert_temp(id.with("expr_complete"), state));
 }
 
-/// A single-line box for an expression over `ds` (none: no suggestions), its id `id`, styled by
+/// A single-line box for an expression over `ds` (none: no suggestions nor signature, as both
+/// come from reading the expression against its fields), its id `id`, styled by
 /// `style` (hint, font, width…), with the suggestion list, and the signature of the call the
 /// cursor is in floating by it while no list shows. Returns the box's response.
 pub(crate) fn expr_edit(
@@ -201,7 +202,6 @@ pub(crate) fn expr_edit(
         }
         let quiet = accepted.is_some() && !here;
         let with = (fields, here, quiet);
-        // The call is read after `show`, from what's kept.
         let (offer, _) = Worked::get(worked, at, hash, &with).unwrap_or_else(|| {
             let c = at.zip(ds).and_then(|(at, ds)| Some((query::complete_at(text.as_str(), at, ds)?, ds)));
             let offer = c.as_ref().filter(|_| !quiet).and_then(|(c, ds)| offer_from(c, text.as_str(), ds, here));
@@ -219,8 +219,8 @@ pub(crate) fn expr_edit(
         }
     };
     let clicked = state.list.show(ui, id.with("expr_list"), &out, visible, work, icon, draw);
-    // The call the cursor is in, as worked out for the list this frame (it works one out for the
-    // cursor whenever the box has the focus). Shown while no list is open: one open only hides
+    // The call the cursor is in, kept with the offer `work` worked out for the list this frame
+    // (it works one out for the cursor whenever the box has the focus). Shown while no list is open: one open only hides
     // it, so what Escape closed stays closed until the cursor leaves the call.
     let focused = out.response.response.has_focus() && ui.input(|i| i.focused);
     let cursor = out.cursor_range.filter(|r| focused && r.is_empty()).map(|r| r.primary.index.0);
@@ -262,12 +262,16 @@ fn arg_range(signature: &str, arg: usize) -> Option<std::ops::Range<usize>> {
             names.push(i..i + c.len_utf8());
         }
     }
+    // A name that ends the signature (none does: each ends in `)`).
+    if let Some(start) = name {
+        names.push(start..signature.len());
+    }
     let rest = names.last().filter(|r| signature.get((*r).clone()) == Some("…"));
     names.get(arg).or(rest).cloned()
 }
 
 /// A function's `signature` coloured as the list's help colours one (`scriptcolor::expr_job`),
-/// the argument at `arg` (bytes) marked in `mark`'s background and text colours. Laid out in
+/// the argument at the byte range `arg` marked in `mark`'s background and text colours. Laid out in
 /// three parts, so the argument is a part of its own: a layout joins neighbours of one format
 /// (`places` with the space before it).
 fn signature_job(
