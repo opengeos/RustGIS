@@ -319,7 +319,7 @@ pub struct Walk {
     asked: Vec<(String, usize, bool)>,
     /// Observed network reach of the root document once it lands.
     root_reach: Option<crate::address::Reach>,
-    refused: HashSet<String>,
+    refused: usize,
     skipped: usize,
     filter: Filter,
     limit: usize,
@@ -341,7 +341,7 @@ impl Walk {
             visited: HashSet::new(),
             asked: Vec::new(),
             root_reach: None,
-            refused: HashSet::new(),
+            refused: 0,
             skipped: 0,
             filter,
             limit: limit.clamp(1, super::MAX_ITEMS),
@@ -394,13 +394,14 @@ impl Walk {
             && self.folders.is_empty()
             && !self.cut
             && self.failed == 0
-            && self.refused.is_empty()
+            && self.refused == 0
             && self.skipped == 0
     }
 
-    /// Number of distinct document links refused by their supplying origin's reach.
+    /// Number of inspected link references refused by their supplying origin's reach.
+    /// Counts references rather than retaining addresses across the entire walk.
     pub fn refused(&self) -> usize {
-        self.refused.len()
+        self.refused
     }
 
     /// Number of inspected links with missing, invalid or non-HTTP(S) addresses.
@@ -475,7 +476,7 @@ impl Walk {
                             continue;
                         }
                         if origin.check(&u).is_err() {
-                            self.refused.insert(u);
+                            self.refused += 1;
                             continue;
                         }
                         if self.items.len() + self.folders.len() >= MAX_QUEUE {
@@ -861,7 +862,7 @@ mod tests {
         walk.land_fetched(&url, Ok(crate::cache::Fetched { bytes: body, origin }));
         assert!(walk.finished());
         assert!(!walk.complete());
-        assert_eq!(walk.refused(), 2);
+        assert_eq!(walk.refused(), 3);
         let clean = br#"{"type":"Catalog","id":"empty","links":[]}"#;
         let origin = crate::address::Origin::named("https://public.example/empty.json");
         assert_eq!(parse_children_noted(clean, &origin).unwrap().refused, 0);
@@ -912,6 +913,25 @@ mod tests {
             assert_eq!(walk.skipped(), if skipped { 3 } else { 0 });
             assert_eq!(walk.refused(), 0);
         }
+    }
+
+    #[test]
+    fn refusal_counts_cover_references_across_documents_without_retaining_addresses() {
+        let root = "https://refusal-count.example/catalog.json";
+        let mut walk = Walk::new(root, Filter::default(), 50);
+        let url = walk.next_url().unwrap();
+        let children: Vec<Value> = (0..4).map(|i| json!({"rel":"child","href":format!("{i}.json")})).collect();
+        walk.land(&url, Ok(json!({"type":"Catalog","id":"root","links":children}).to_string().into_bytes()));
+        let refused: Vec<Value> = (0..MAX_LINKS).map(|_| json!({"rel":"child","href":"http://10.0.0.5/private.json"})).collect();
+        let body = json!({"type":"Catalog","id":"child","links":refused}).to_string().into_bytes();
+        while let Some(url) = walk.next_url() {
+            walk.land(&url, Ok(body.clone()));
+        }
+        assert!(walk.finished());
+        assert!(!walk.complete());
+        assert_eq!(walk.refused(), 4 * MAX_LINKS);
+        assert_eq!(walk.reads, 5);
+        assert_eq!(walk.visited.len(), 5, "refused addresses never enter the visited or pending document sets");
     }
 
     #[test]
