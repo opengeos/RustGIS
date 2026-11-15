@@ -916,5 +916,14 @@ mod tests {
         h.key_press(Key::Backspace);
         h.run();
         assert_eq!(h.state(), "x", "Backspace in `()` deletes both");
+        // As Wayland types with an input method running (ibus, fcitx): the `(` committed by it,
+        // after an empty composition.
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("(".into())));
+        h.run();
+        assert_eq!(h.state(), "x()", "an input method's `(` closes itself too");
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit(")".into())));
+        h.run();
+        assert_eq!(h.state(), "x()", "and its `)` steps over");
     }
 }

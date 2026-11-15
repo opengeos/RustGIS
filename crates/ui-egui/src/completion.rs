@@ -454,13 +454,18 @@ pub(crate) fn pairs(
         return;
     }
     // One edit, made by one of those keys: the character typed alone (Shift, AltGr or Option as
-    // it takes), or Backspace alone.
+    // it takes), or Backspace alone. Typed as text, or committed by an input method: with one
+    // running (ibus, fcitx) on Wayland, every key comes that way, a `(` included, between empty
+    // compositions that edit nothing.
     let keyed = ui.input(|i| {
+        use egui::ImeEvent;
         let edits: Vec<&egui::Event> = i
             .events
             .iter()
             .filter(|e| match e {
-                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
+                egui::Event::Ime(ImeEvent::Preedit { text, .. } | ImeEvent::Commit(text)) => !text.is_empty(),
+                egui::Event::Ime(ImeEvent::DeleteSurrounding { .. }) => true,
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut => true,
                 // Undo and redo, not every key with Ctrl: Windows reports AltGr, which types a
                 // bracket on many keyboards, as Ctrl+Alt.
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
@@ -470,7 +475,11 @@ pub(crate) fn pairs(
             })
             .collect();
         match edits.as_slice() {
-            [egui::Event::Text(t)] if t.chars().count() == 1 && t.chars().all(|c| paired.contains(&c)) => Keyed::Pair,
+            [egui::Event::Text(t) | egui::Event::Ime(ImeEvent::Commit(t))]
+                if t.chars().count() == 1 && t.chars().all(|c| paired.contains(&c)) =>
+            {
+                Keyed::Pair
+            }
             [egui::Event::Key { key: Key::Backspace, modifiers, .. }] if modifiers.is_none() => Keyed::Backspace,
             _ => Keyed::Other,
         }
