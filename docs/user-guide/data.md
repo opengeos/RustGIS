@@ -96,13 +96,14 @@ ones from, with the coordinate system (such as `EPSG:2263`) and the separator (c
 the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
 (columns named like longitude/latitude, including GTFS `stop_lon`/`stop_lat`, easting/northing or
 geometry, and EWKT's `SRID=`). With no projected coordinate system or explicit column choices,
-if the first pair contains coordinates outside ±180° longitude or ±90° latitude and a more
-specific longitude/latitude pair gives in-range, non-0,0 positions on at least as many rows as
-the first pair gives finite positions, that pair is used for the whole file.
+a specific longitude/latitude pair is preferred over generic X/Y when it gives in-range,
+non-0,0 positions on at least as many rows as the first pair gives finite positions.
+That pair is used for the whole file.
 The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
 `Longitutde`/`Lattitude` are recognised too. The dialog checks its first 1,000 rows to pick
 defaults, and recomputes unchanged defaults when you leave the coordinate-system box or press
-Enter; columns you picked stay picked. A projected system keeps the columns found by name.
+Enter; columns you picked stay picked. With a projected coordinate system, defaults prefer
+X/Y or easting/northing columns when the file also has longitude/latitude columns.
 Add Data checks all rows. Coordinates still outside degree ranges are counted in a
 notice. Points placed at exactly 0,0 are also counted in a notice: these often mean missing
 coordinates, but the points are kept. A CSV without coordinate columns, or a layer without geometry, opens as a
@@ -114,6 +115,7 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 ([Geoprocessing](analysis.md), and a table's right-click menu) makes points of a table already in
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
+
 Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
 sheets that were not selected. The workbook shares a memory budget across its sheets and retained
 metadata. Value and formula grids are counted separately, with conservative estimates for
@@ -1512,8 +1514,16 @@ value isn't: chunks never written are left empty, but chunks missing from inside
 fill value. `scale_factor` and `add_offset` are applied. The coordinates must be evenly spaced (a curvilinear grid isn't read);
 longitude/latitude grids of 0–360° are turned to -180–180°, and projected ones take their
 coordinate system from the variable's grid mapping (`crs_wkt`, `spatial_ref`, an EPSG code) or
-`"crs"`. Blosclz-compressed and transposed chunks and shards inside shards aren't read yet, and
-say so. A store by web address must allow the browser to fetch it (CORS) for the web app;
+`"crs"`. A grid placed by the zarr-conventions `spatial:transform` (an affine transform with no
+rotation, pixel- or node-registered) reads no coordinates, and the transform wins over coordinates
+the store also holds. It is the variable's own, or that of the nearest group above it (up to 64
+levels up) that gives one, taken with that group's `spatial:shape`, which must be the variable's map's. Its map
+dimensions are those `spatial:dimensions` names. `proj:code`, `proj:wkt2` or `proj:epsg` give
+the coordinate system, after the variable's own attributes and its grid mapping, and before a
+`spatial_ref` or `crs` array beside it. A variable opened by its own address doesn't see its
+groups' attributes: open the store's address with `"variable"` instead.
+Blosclz-compressed and transposed chunks and shards inside shards aren't read yet, and say so. A
+store by web address must allow the browser to fetch it (CORS) for the web app;
 Google Cloud's CMIP6 bucket does, ARCO-ERA5's doesn't (the desktop reads both).
 
 ```sh
@@ -1527,7 +1537,8 @@ coordinates (by byte range when they are stored uncompressed). In a sharded arra
 shard's index by range, then only the shard's chunks the window needs, one range each; a window
 over more than 4,096 of the shards' chunks reads its shards whole instead. A box is placed by the variable's
 coordinates, read whole, so it takes grids of up to 4,000,000 cells a side; a longer one takes
-`"cells"`. A box reaching past the grid is read within it, and says so; one over a longitude grid's
+`"cells"`. A grid placed by its `spatial:transform` places a box by arithmetic, whatever its
+size. A box reaching past the grid is read within it, and says so; one over a longitude grid's
 edge (0°/360°, or ±180°) is refused: give a box on each side (one round the whole globe is the
 whole grid); `raster.zarrInfo` with
 `"bbox"` gives the cells a box covers (`window.cells`). A window is at least 2 × 2 cells (a box within one cell is widened to two, and says so), and
