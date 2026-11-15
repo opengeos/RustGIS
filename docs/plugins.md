@@ -1108,5 +1108,6 @@ one for the platform it runs on. The entry's own `package` and `sha256` are then
 given, they are the package for the platforms `packages` doesn't name (and the only one the web
 app installs). A plugin with no package for your platform stays in the list, marked
 *Not available for* your platform with the platforms it has; `rustgis-cli plugins browse` prints
-`"available": false` for it, and `rustgis-cli plugins get` refuses it with the same reason. A
+`"available": false` for it, as for a release that needs a newer RustGIS, with the reason in
+`unavailable`, and `rustgis-cli plugins get` refuses it with the same reason. A
 RustGIS older than this feature skips an entry that has `packages` only.

@@ -469,6 +469,7 @@ fn registries_and_blocklists_are_read_defensively() {
         {"id": "bad", "name": "Bad", "version": "1.0.0", "package": "http://insecure.example.com/x.rgplugin", "sha256": sha},
         {"id": "nohash", "name": "No hash", "version": "1.0.0", "package": "x.rgplugin", "sha256": "abc"},
         {"id": "Bad Id", "name": "X", "version": "1.0.0", "package": "x.rgplugin", "sha256": sha},
+        {"id": "bad-min", "name": "X", "version": "1.0.0", "minRustgisVersion": "0.6.x", "package": "x.rgplugin", "sha256": sha},
         7
     ]})
     .to_string();

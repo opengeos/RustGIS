@@ -264,7 +264,10 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
     let (mut skipped, mut which) = (0usize, Vec::new());
     for v in list.into_iter().take(MAX_ENTRIES) {
         let Ok(mut e) = serde_json::from_value::<Entry>(v) else { continue };
-        if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || e.name.trim().is_empty() {
+        // A `minRustgisVersion` that isn't a version is a package no RustGIS installs (its manifest
+        // is refused), so it isn't listed to be downloaded and refused.
+        let min_unreadable = !e.min_rustgis_version.is_empty() && version_parts(&e.min_rustgis_version).is_none();
+        if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || min_unreadable || e.name.trim().is_empty() {
             continue;
         }
         // The entry named a package for this platform: its own package then isn't this
