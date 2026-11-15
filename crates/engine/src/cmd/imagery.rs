@@ -2221,6 +2221,7 @@ fn mosaic_crs(w: &Workspace, imgs: &[Arc<Raster>]) -> Result<(Crs, Option<String
 
 /// A surface model as a triangle mesh (Wavefront OBJ), in metres from its south-west corner.
 fn mesh(s: &mut Session, p: &Value) -> CmdResult {
+    let written = s.notice_mark();
     if ps(p, "path").is_some_and(|path| !path.to_ascii_lowercase().ends_with(".obj")) {
         return Err("the mesh is written to an .obj file".into());
     }
@@ -2268,6 +2269,7 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
     match ps(p, "path") {
         Some(path) => {
             rustgis_data::io::write_atomic(std::path::Path::new(path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+            s.retain_written_notices(written);
             Ok(json!({"path": path, "vertices": v, "faces": faces}))
         }
         None => Ok(json!({"text": obj, "vertices": v, "faces": faces})),
