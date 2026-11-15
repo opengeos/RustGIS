@@ -678,10 +678,13 @@ pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
     if s.project.offline_areas.len() >= MAX_AREAS {
         return Err(format!("a project keeps at most {MAX_AREAS} offline areas; remove one first"));
     }
+    let id = crate::project::field_id()?;
+    let origin_id = if s.project.origin_id.is_empty() { crate::project::field_id()? } else { s.project.origin_id.clone() };
     let data = snapshot(s.map_mut(), &e);
     let features: usize = data.layers.iter().map(|l| l.dataset.features.len()).sum();
     let t = now();
-    s.project.offline_areas.push(OfflineArea { name: name.clone(), map: s.map().name.clone(), extent: e, created: t, synced: t, data });
+    s.project.origin_id = origin_id;
+    s.project.offline_areas.push(OfflineArea { id, name: name.clone(), map: s.map().name.clone(), extent: e, created: t, synced: t, data });
     Ok(json!({"name": name, "features": features}))
 }
 

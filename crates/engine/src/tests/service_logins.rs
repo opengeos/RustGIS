@@ -2746,6 +2746,9 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert_eq!(no_method["strippedParameters"], json!(["zqwithoutmethod757"]));
     assert_eq!(no_method["address"], format!("{origin}/custom?layer=a"));
     assert!(!s.connections.to_json().contains("RGSYNTHnomethod757"));
+    let public_hint = s.run("connection.new", &json!({"kind":"wmts","name":"Public name used as key hint","address":format!("{origin}/custom?layer=public-code&style=light"),"keyName":"layer"})).unwrap();
+    assert_eq!(public_hint["address"], format!("{origin}/custom?style=light"));
+    assert_eq!(public_hint["strippedParameters"], json!(["layer"]));
     let explicit_none = s
         .run("connection.new", &json!({"kind":"wmts","name":"Explicit no login","address":format!("{origin}/none?zqordinary757=public-code"),"keyName":"zqordinary757","auth":"none"}))
         .unwrap();

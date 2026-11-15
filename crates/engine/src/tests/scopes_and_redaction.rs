@@ -736,6 +736,32 @@ fn outputs_redact_urls_capabilities_and_local_paths_across_scopes() {
     rustgis_plugins::unload("plug");
 }
 
+/// Protocol document selectors are URLs in actual command results, including restricted ones.
+#[test]
+fn service_result_document_fields_are_addresses_and_keep_public_query_values() {
+    let params = json!({"url":"https://protocol-fields.example/catalog", "type":"ogcapi",
+        "text":json!({"collections":[{"id":"roads","title":"Roads","links":[
+            {"rel":"tilesets-map","type":"application/json","href":"https://protocol-fields.example/tiles?f=json&style=light"}
+        ]}]}).to_string()});
+    let mut s = world();
+    let native = s.run("service.layers", &params).unwrap();
+    let restricted = s.run_scoped(agent_scope(AgentAccess::Allow, "protocol-fields"), &Call::command("service.layers", params)).unwrap();
+    for result in [&native, &restricted] {
+        let address = result["layers"].as_array().unwrap().iter().find_map(|layer| layer["tilesets"].as_str()).unwrap();
+        assert_eq!(address, "https://protocol-fields.example/tiles?f=json&style=light");
+    }
+    let coverage = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0" xmlns:xlink="http://www.w3.org/1999/xlink"><ows:OperationsMetadata><ows:Operation name="GetCoverage"><ows:DCP><ows:HTTP><ows:Get xlink:href="https://protocol-fields.example/wcs?style=light&amp;"/></ows:HTTP></ows:DCP></ows:Operation></ows:OperationsMetadata><wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>soil</wcs:CoverageId><ows:Title>Soil</ows:Title></wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+    let result = s
+        .run_scoped(
+            agent_scope(AgentAccess::Allow, "protocol-fields-wcs"),
+            &Call::command("service.layers", json!({"url":"https://protocol-fields.example/wcs", "text":coverage})),
+        )
+        .unwrap();
+    let describe = result["layers"][0]["offer"]["describe"].as_str().unwrap();
+    assert!(describe.starts_with("https://protocol-fields.example/wcs?"), "{describe}");
+    assert!(describe.to_ascii_lowercase().contains("request=describecoverage"), "{describe}");
+}
+
 #[test]
 fn an_agent_url_request_cannot_clear_a_document_restriction() {
     use crate::render::rustgis_tiles::{address::Reach, cache};

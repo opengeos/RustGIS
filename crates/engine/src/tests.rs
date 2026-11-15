@@ -6410,6 +6410,7 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
         transparency: 0.0,
     });
     project.offline_areas.push(crate::project::OfflineArea {
+        id: String::new(),
         name: "Field copy".into(),
         map: "Map".into(),
         extent: rustgis_geom::Extent::new(-1.0, -1.0, 1.0, 1.0),
@@ -46380,6 +46381,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
     let mut offline = Session::new(Project::from_json(&clean).unwrap());
     let snapshot = s.map().clone();
     offline.project.offline_areas.push(crate::project::OfflineArea {
+        id: String::new(),
         name: "Trip".into(),
         map: snapshot.name.clone(),
         extent: rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0),

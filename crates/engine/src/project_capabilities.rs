@@ -28,7 +28,11 @@ impl<'de> Deserialize<'de> for Project {
 impl Project {
     /// Required features of all maps, including snapshots that can later be restored.
     pub(crate) fn required_capabilities(&self) -> Vec<&'static str> {
-        map_capabilities(self.maps.iter().chain(self.offline_areas.iter().map(|a| &a.data)))
+        let mut required = map_capabilities(self.maps.iter().chain(self.offline_areas.iter().map(|a| &a.data)));
+        if !self.origin_id.is_empty() || self.field_origin.is_some() || self.offline_areas.iter().any(|area| !area.id.is_empty()) {
+            required.push("field-origin");
+        }
+        required
     }
 }
 
@@ -40,15 +44,18 @@ fn relief_effects(layer: &Layer) -> bool {
 }
 
 fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static str> {
-    let (mut block, mut water, mut relief) = (false, false, false);
+    let (mut block, mut water, mut relief, mut legends) = (false, false, false, false);
     for map in maps {
         if let Some(t) = &map.view.terrain {
             block |= t.block.is_some();
             water |= t.water.is_some();
         }
         relief |= map.layers.iter().any(relief_effects);
+        legends |= map.tiles.iter().any(|tile| {
+            tile.legends.iter().any(|legend| rustgis_data::login_address::inner(&legend.url).len() > rustgis_map::tiles::MAX_LEGEND_URL)
+        });
     }
-    [(block, "terrain-block"), (water, "terrain-water"), (relief, "shaded-relief-effects")]
+    [(block, "terrain-block"), (water, "terrain-water"), (relief, "shaded-relief-effects"), (legends, "normalized-legend-urls")]
         .into_iter()
         .filter_map(|(used, name)| used.then_some(name))
         .collect()
@@ -83,6 +90,47 @@ mod tests {
         serde_json::from_slice(bytes).unwrap()
     }
 
+    #[test]
+    fn field_identity_is_preserved_and_required_in_a_plain_saved_project() {
+        let project = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
+        let saved = serde_json::to_value(&project).unwrap();
+        assert_eq!(saved["requires"], json!(["field-origin"]));
+        let reopened = Project::from_json(&saved.to_string()).unwrap();
+        assert_eq!(reopened.origin_id, project.origin_id);
+        assert_eq!(reopened.field_origin, project.field_origin);
+        let mut invalid = saved.clone();
+        invalid["field_origin"]["area"] = json!("not-an-id");
+        assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
+        let mut clean = Project::new("Legacy");
+        assert!(serde_json::to_value(&clean).unwrap().get("requires").is_none());
+        clean.origin_id = "0123456789abcdef0123456789abcdef".into();
+        assert_eq!(serde_json::to_value(&clean).unwrap()["requires"], json!(["field-origin"]));
+    }
+
+    #[test]
+    fn normalized_legend_capability_follows_maps_and_offline_snapshots() {
+        let mut p = Project::from_json(include_str!("../../../schema/fixtures/normalized_legend.rgis")).unwrap();
+        assert_eq!(p.map().tiles[0].legends.len(), 1);
+        let url = p.map().tiles[0].legends[0].url.clone();
+        assert!(url.len() > rustgis_map::tiles::MAX_LEGEND_URL);
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["requires"], json!(["normalized-legend-urls"]));
+        assert_eq!(json_bytes(&map_file_bytes(p.map()).unwrap())["requires"], saved["requires"]);
+        p.offline_areas.push(super::super::OfflineArea {
+            id: String::new(),
+            name: "Field".into(),
+            map: "Map".into(),
+            extent: rustgis_geom::Extent::new(0.0, 0.0, 1.0, 1.0),
+            created: 0.0,
+            synced: 0.0,
+            data: p.map().clone(),
+        });
+        p.maps[0].tiles.clear();
+        assert_eq!(serde_json::to_value(&p).unwrap()["requires"], json!(["normalized-legend-urls"]));
+        let reopened = Project::from_json(&saved.to_string()).unwrap();
+        assert_eq!(reopened.map().tiles[0].legends[0].url, url);
+    }
+
     /// Legacy files still open; a save names terrain features an older format-2 reader loses.
     #[test]
     fn terrain_headers_follow_the_saved_payload_including_offline_snapshots() {
@@ -94,6 +142,7 @@ mod tests {
         let loaded = Project::from_json(&saved.to_string()).unwrap();
         assert_eq!(loaded.map().view.terrain, p.map().view.terrain);
         p.offline_areas.push(super::super::OfflineArea {
+            id: String::new(),
             name: "Field".into(),
             map: "Map".into(),
             extent: rustgis_geom::Extent::new(0.0, 0.0, 1.0, 1.0),

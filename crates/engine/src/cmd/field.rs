@@ -50,17 +50,22 @@ pub fn is_field_package(name: &str) -> bool {
 /// It runs where it is called, on the window's thread from Save (`ui.saveItem`), as Package
 /// Project does: each archive is one read and the zip one write, with no Cancel between them.
 pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), String> {
+    if s.project.field_origin.is_some() && s.project.maps.len() != 1 {
+        return Err("a returning field project must hold only its original field map: remove added maps before sending it back".into());
+    }
     // An offline area's map: named for one of this project's areas, or opened from a field
     // package (the phone's project holds no areas). A map only named so is packaged as any other.
-    let opened_field = s.opened_package.as_deref().is_some_and(|p| is_field_package(&p.to_string_lossy()));
+    let opened_field =
+        s.project.field_origin.is_some() || s.opened_package.as_deref().is_some_and(|p| is_field_package(&p.to_string_lossy()));
     let returning = s
         .map()
         .name
         .strip_suffix(OFFLINE)
         .map(str::to_string)
-        .filter(|area| opened_field || s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(area)));
-    // Only a map coming back from the field (its project opened from a field package) carries its
-    // photos: going out, an area's map included, the photos named are at home.
+        .filter(|area| opened_field || s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(area)))
+        .or_else(|| s.project.field_origin.as_ref().map(|_| s.map().name.clone()));
+    // Only a map coming back from the field carries its photos. Its persisted provenance
+    // survives an ordinary Save As; going out, the photos named are at home.
     let coming_back = returning.is_some() && opened_field;
     let (area, mut map) = match returning {
         Some(area) => {
@@ -196,7 +201,37 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     // A project of the one map: what else the project holds (tables, notebooks, models, shared
     // items and their paths…) stays at home. The custom colour ramps and styles go with it, as its
     // layers may draw with them.
+    let origin = if coming_back {
+        s.project
+            .field_origin
+            .clone()
+            .ok_or("this legacy field package has no origin identity: make a new field package from the home project")?
+    } else {
+        let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(&area)).ok_or("the offline area was not found")?;
+        let new_home = s.project.origin_id.is_empty().then(crate::project::field_id).transpose()?;
+        let new_area = s.project.offline_areas.get(ai).is_some_and(|a| a.id.is_empty()).then(crate::project::field_id).transpose()?;
+        let assigned_identity = new_home.is_some() || new_area.is_some();
+        if let Some(id) = new_home {
+            s.project.origin_id = id;
+        }
+        if let Some(id) = new_area
+            && let Some(area) = s.project.offline_areas.get_mut(ai)
+        {
+            area.id = id;
+        }
+        if assigned_identity {
+            s.notify("Assigned this legacy offline area an origin identity: save the home project before sending the field package", false);
+        }
+        crate::project::FieldOrigin {
+            project: s.project.origin_id.clone(),
+            area: s.project.offline_areas.get(ai).ok_or("the offline area was not found")?.id.clone(),
+        }
+    };
+    if !crate::project::valid_field_id(&origin.project) || !crate::project::valid_field_id(&origin.area) {
+        return Err("the field origin identity is invalid: make a new field package from the home project".into());
+    }
     let mut project = crate::project::Project::new(area.clone());
+    project.field_origin = Some(origin);
     // Rasters were taken out above, so the map goes as it is.
     project.maps = vec![map];
     let home = &s.project;
@@ -237,11 +272,6 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
     entries.insert(0, (format!("{}.{}", super::items::safe(&area), crate::project::EXTENSION), text.into_bytes()));
     entries.push(("README.txt".into(), readme.into_bytes()));
     Ok((area, rustgis_data::zip::write(&entries)?))
-}
-
-/// Whether `map` is an offline area's map (`<area> (offline)`), packaged to come back.
-fn returning_map(map: &rustgis_map::Map) -> bool {
-    map.name.ends_with(OFFLINE)
 }
 
 /// A layer's photos field, by its place: its text field named `photos` or `photo`, whatever the
@@ -480,17 +510,30 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     }
     let text = text.ok_or("the file holds no field package's project")?;
     let project = Project::from_import_json(&text, None)?;
-    let mut edited = project
-        .maps
-        .into_iter()
-        .find(returning_map)
-        .ok_or("the field package holds no offline area's map: package the map in the field (Send Field Package) to bring it back")?;
-    let area = edited.name.strip_suffix(OFFLINE).unwrap_or_default().to_string();
-    let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(&area)).ok_or_else(|| {
-        format!(
-            "this project has no offline area '{area}': open the project the field package was made from, as it was saved after packaging"
-        )
-    })?;
+    let origin = project
+        .field_origin
+        .as_ref()
+        .ok_or("this legacy field package has no origin identity: make a new field package from the home project")?;
+    if !crate::project::valid_field_id(&origin.project)
+        || !crate::project::valid_field_id(&origin.area)
+        || s.project.origin_id.is_empty()
+        || origin.project != s.project.origin_id
+    {
+        return Err(
+            "the field package belongs to another home project, or has no valid origin identity: open the project it was made from".into(),
+        );
+    }
+    let ai = s
+        .project
+        .offline_areas
+        .iter()
+        .position(|a| a.id == origin.area)
+        .ok_or("this project has no offline area with the field package's identity: open the project as saved after packaging")?;
+    let area = s.project.offline_areas.get(ai).ok_or("no such area")?.name.clone();
+    if project.maps.len() != 1 {
+        return Err("a field package must hold exactly its original field map".into());
+    }
+    let mut edited = project.maps.into_iter().next().ok_or("the field package holds no map")?;
     // An area of that name in another project isn't this package's: its layers, matched by id,
     // must be the area's own, of the same kind (a name may have changed in the field), or features
     // of other layers would be changed.
@@ -518,6 +561,13 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
                 .join("field photos")
                 .join(super::items::safe(&area)),
         };
+        match std::fs::metadata(&dir) {
+            Ok(metadata) if !metadata.is_dir() => return Err(format!("{}: not a folder; no photo was brought back", dir.display())),
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(format!("{}: {error}; no photo was brought back", dir.display()));
+            }
+            _ => {}
+        }
         // The path each photo was named by where it was packaged.
         let before: std::collections::HashMap<&str, &str> = index.lines().filter_map(|l| l.split_once('\t')).collect();
         // Where each photo goes, decided before anything is written: the edits are brought back
@@ -1315,6 +1365,51 @@ mod tests {
     }
 
     #[test]
+    fn field_origin_survives_plain_save_and_names_never_choose_the_home_or_area() {
+        let temp = Temp::new("origin");
+        let mut home = sample();
+        let params = json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]});
+        let (_, out) = package(&mut home, &params).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap();
+        let field_project = project_in(&text, &unpacked).unwrap();
+        let origin = field_project.field_origin.clone().unwrap();
+        assert_eq!(origin.project, home.project.origin_id);
+        assert_eq!(origin.area, home.project.offline_areas[0].id);
+        // Ordinary Save As and reopen have no opened_package hint. The renamed map still
+        // returns with its original area identity, rather than making a fresh offline area.
+        let plain = serde_json::to_string(&field_project).unwrap();
+        assert!(plain.contains("field-origin"));
+        let mut field = Session::new(Project::from_json(&plain).unwrap());
+        field.map_mut().name = "Renamed on phone".into();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let path = temp.path().join("back.rgisfield");
+        std::fs::write(&path, &back).unwrap();
+        let mut other = sample();
+        package(&mut other, &params).unwrap();
+        // These projects have identical layer IDs, types and area labels: only their
+        // persisted origin differs. Refusal occurs before edits or photo installation.
+        let before = serde_json::to_value(&other.project).unwrap();
+        let err = other.run("offline.bringBack", &json!({"path": path})).unwrap_err();
+        assert!(err.contains("another home project"), "{err}");
+        assert_eq!(serde_json::to_value(&other.project).unwrap(), before);
+        home.project.offline_areas[0].name = "Renamed at home".into();
+        home.run("offline.bringBack", &json!({"path": path})).unwrap();
+        // Recreating a same-named area in the correct home gets a fresh ID too.
+        home.project.offline_areas.clear();
+        package(&mut home, &params).unwrap();
+        let err = home.run("offline.bringBack", &json!({"path": path})).unwrap_err();
+        assert!(err.contains("no offline area with"), "{err}");
+        // A legacy file remains readable, but cannot guess a home by name or layer ID.
+        let mut legacy = field_project;
+        legacy.field_origin = None;
+        let bytes = rustgis_data::zip::write(&[("Site.rgis".into(), serde_json::to_vec(&legacy).unwrap())]).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let err = home.run("offline.bringBack", &json!({"path": path})).unwrap_err();
+        assert!(err.contains("legacy") && err.contains("make a new field package"), "{err}");
+    }
+
+    #[test]
     fn a_package_from_another_projects_area_of_the_same_name_is_refused() {
         let temp = Temp::new("foreign");
         // Elsewhere, an area named "Site" of another project's map: its own layers, its own ids.
@@ -1341,7 +1436,7 @@ mod tests {
         let path = temp.path().join("back.rgisfield");
         std::fs::write(&path, &back).unwrap();
         let e = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap_err();
-        assert!(e.contains("layers aren't the area's"), "{e} {ids:?} {theirs:?}");
+        assert!(e.contains("another home project"), "{e} {ids:?} {theirs:?}");
     }
 
     #[test]

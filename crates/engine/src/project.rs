@@ -70,7 +70,7 @@ pub const FORMAT: u32 = 2;
 pub const READ_FORMAT: u32 = 2;
 /// The saved additions this RustGIS understands. Writers require only capabilities used by
 /// their payload, so a format-2 reader without them refuses instead of discarding their fields.
-pub const CAPABILITIES: &[&str] = &["terrain-block", "terrain-water", "shaded-relief-effects"];
+pub const CAPABILITIES: &[&str] = &["terrain-block", "terrain-water", "shaded-relief-effects", "normalized-legend-urls", "field-origin"];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 pub(crate) const MAX_REQUIRES: usize = 256;
@@ -351,6 +351,12 @@ pub struct Project {
     #[serde(default = "format", serialize_with = "write_format")]
     pub format: u32,
     pub name: String,
+    /// Persistent home-project identity for offline returns; legacy projects acquire it when packaged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin_id: String,
+    /// The home and area this field copy belongs to, retained through ordinary saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_origin: Option<FieldOrigin>,
     #[cfg_attr(feature = "schema", schemars(with = "Vec<crate::schema::Open>"))]
     pub maps: Vec<Map>,
     pub active_map: usize,
@@ -564,10 +570,31 @@ pub struct Job {
     pub updated: f64,
 }
 
+/// A field copy's exact home and offline-area identities (128 random bits each).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct FieldOrigin {
+    pub project: String,
+    pub area: String,
+}
+
+pub(crate) fn field_id() -> Result<String, String> {
+    let mut bits = [0u8; 16];
+    getrandom::fill(&mut bits).map_err(|e| format!("cannot make a field-package identity: {e}"))?;
+    Ok(bits.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub(crate) fn valid_field_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// A map's data clipped to an extent, to take into the field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OfflineArea {
+    /// Persistent identity, independent of the editable display name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     /// The map it came from (by name).
     pub map: String,
@@ -1043,6 +1070,8 @@ impl Project {
             read_notices: Vec::new(),
             format: FORMAT,
             name: name.into(),
+            origin_id: String::new(),
+            field_origin: None,
             maps: vec![Map::new("Map")],
             active_map: 0,
             tables: Vec::new(),
@@ -1623,6 +1652,13 @@ impl Project {
                 format!("not a RustGIS project: {msg}")
             }
         })?;
+        let mut area_ids = std::collections::HashSet::new();
+        if (!p.origin_id.is_empty() && !valid_field_id(&p.origin_id))
+            || p.field_origin.as_ref().is_some_and(|origin| !valid_field_id(&origin.project) || !valid_field_id(&origin.area))
+            || p.offline_areas.iter().any(|area| !area.id.is_empty() && (!valid_field_id(&area.id) || !area_ids.insert(area.id.as_str())))
+        {
+            return Err("not a RustGIS project: an offline field identity is invalid or duplicated".into());
+        }
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
         // (A backstop: `check_format` has refused it already.)
         if p.format > READ_FORMAT {
@@ -2209,6 +2245,8 @@ impl Durable for Project {
             read_notices: _,
             format: _,
             name: _,
+            origin_id: _,
+            field_origin: _,
             maps,
             active_map: _,
             tables,
@@ -2237,7 +2275,7 @@ impl Durable for Project {
             p.child(Owner::Map(i), v);
         }
         for (i, v) in offline_areas.iter().enumerate() {
-            let OfflineArea { name: _, map: _, extent: _, created: _, synced: _, data } = v;
+            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, data } = v;
             p.child(Owner::Area(i), data);
         }
         for (i, v) in tables.iter().enumerate() {
@@ -2475,6 +2513,28 @@ mod limit_tests {
 #[cfg(test)]
 mod login_binding_tests {
     use super::*;
+
+    #[test]
+    fn a_near_limit_encoded_legend_survives_save_and_recovery_unbinding() {
+        use rustgis_data::{login_address, ogc::Legend};
+        let document = login_address::bind("0123456789abcdef", "https://maps.test", "https://maps.test/wms").unwrap();
+        let prefix = "https://maps.test/legend?name=";
+        let raw = format!("{prefix}{}x", " ".repeat(rustgis_map::tiles::MAX_LEGEND_URL - prefix.len() - 1));
+        let bound = login_address::inherit(&document, &raw);
+        let mut tile = rustgis_map::TileLayer::new("Legend", rustgis_map::tiles::TileKind::Raster, "https://maps.test/{z}/{x}/{y}.png");
+        tile.legends = rustgis_map::tiles::checked_legends([Legend { url: bound.clone(), ..Default::default() }]);
+        assert_eq!(tile.legends.len(), 1);
+        let mut project = Project::default();
+        project.map_mut().tiles.push(tile);
+        let (saved, _) = project.saved_text(None).unwrap();
+        for text in [saved, project.recovery_text().unwrap()] {
+            assert!(!text.contains(login_address::PREFIX));
+            let opened = Project::from_json(&text).unwrap();
+            let legends = &opened.map().tiles[0].legends;
+            assert_eq!(legends.len(), 1, "unbinding must not make an accepted legend too long");
+            assert_eq!(legends[0].url, login_address::inner(&bound));
+        }
+    }
 
     #[test]
     fn saves_and_imports_strip_runtime_capabilities_including_recorded_urls() {
