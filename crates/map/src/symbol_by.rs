@@ -110,7 +110,8 @@ impl SizeBy {
     }
 
     /// Legend rows for the sizes: the smallest, middle and largest value, each drawn with `like`
-    /// and its mark stack at the mapped size and labelled with the field.
+    /// and its mark stack at the mapped size and labelled with the field. Marks of a `like` sized 0
+    /// have nothing to scale against and stay as set.
     pub fn legend(&self, like: Symbol, strokes: &[LineStroke]) -> Vec<crate::symbology::LegendEntry> {
         let like = Symbol { fill: crate::symbology::OTHER_FILL, ..like };
         let (lo, hi) = if self.max > self.min { (self.min, self.max) } else { (self.min, self.min) };
@@ -185,6 +186,7 @@ pub fn de_size_by<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<SizeB
         s.field.is_empty()
             || !s.min.is_finite()
             || !s.max.is_finite()
+            || !(s.max > s.min && (s.max - s.min).is_finite())
             || !(0.0..=MAX_SIZE).contains(&s.min_size)
             || !(0.0..=MAX_SIZE).contains(&s.max_size)
     }) {
@@ -381,7 +383,7 @@ impl<'a> Styler<'a> {
     /// A point's marks (`strokes`, as [`Styler::style`] gives them) scaled with the size its
     /// expression (else its size mapping) gives, against the symbol's own, as QGIS scales a marker
     /// of several layers: their sizes and offsets. None at size 0. The marks as they are without
-    /// either.
+    /// either, or when the symbol's own size is 0 and there is nothing to scale against.
     pub fn marks(&self, row: usize, strokes: &'a [LineStroke]) -> std::borrow::Cow<'a, [LineStroke]> {
         use std::borrow::Cow;
         if strokes.is_empty() {
@@ -697,6 +699,9 @@ mod tests {
             serde_json::json!({"field": "", "min": 1, "max": 2, "min_size": 1, "max_size": 2}),
             serde_json::json!({"field": "pop", "min": 1, "max": 2, "min_size": -1, "max_size": 2}),
             serde_json::json!({"field": "pop", "min": 1, "max": 2, "min_size": 1, "max_size": 2, "scaling": "cubic"}),
+            // Ranges `layer.sizeBy` refuses: none, and one too wide to scale over.
+            serde_json::json!({"field": "pop", "min": 5, "max": 5, "min_size": 1, "max_size": 2}),
+            serde_json::json!({"field": "pop", "min": -1e308, "max": 1e308, "min_size": 1, "max_size": 2}),
         ] {
             let mut v = v.clone();
             v["size_by"] = junk.clone();
