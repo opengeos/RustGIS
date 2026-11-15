@@ -109,8 +109,7 @@ the first pair gives finite positions, that pair is used for the whole file.
 The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
 `Longitutde`/`Lattitude` are recognised too. The dialog checks the first 1,000 rows of delimited
 text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you
-leave the coordinate-system box or press Enter; columns you picked stay picked. With a projected system, defaults prefer X/Y or easting/northing
-columns over longitude/latitude names when both exist; explicit column picks still take precedence.
+leave the coordinate-system box or press Enter; columns you picked stay picked.
 Add Data checks all rows. Coordinates still outside degree ranges are counted in a
 notice. Points placed at exactly 0,0 are also counted in a notice: these often mean missing
 coordinates, but the points are kept. A CSV without coordinate columns, or a layer without geometry, opens as a

@@ -19,8 +19,10 @@ the AI Assistant are reachable from them. On top of that:
   positions nowhere, but the [AI Assistant](#ai-assistant-and-connected-agents), when you use
   it, can send a feature's geometry to the provider you configure if one of its tools reads it.
 - **Camera and photos**: a photo you take is saved in the app's storage and attached to the
-  feature you capture. The original camera metadata is kept and may include GPS coordinates;
-  it travels with the photo in a project or field package you save or send.
+  feature you capture. The original camera metadata is kept and may include GPS coordinates.
+  A field package created to bring work back from the phone copies its attached photos and
+  their metadata. A saved project or project package keeps the attached photo's path, without
+  copying the photo file.
 - **Files you open**: copied into the app's storage, where they are opened and edited. Remove
   Unused Copies deletes the copies your project no longer uses. Android app storage is excluded
   from device backups. On iPhone and iPad these copies
@@ -56,16 +58,18 @@ token or signature does not hide the HTTP status or other explanation. The compl
 fragment are omitted, including values with unescaped spaces. For an unknown URL embedded in
 free text, a secret-named query or fragment still omits the rest of that text: those later
 words might be part of the credential, not an explanation. The same rule applies to copied
-history errors, saved run messages and notebook cell output. Scheme-less text is cut only in
+history errors, saved run messages and notebook cell output. Scheme-less text is scanned as an address in
 copied history errors and the project log's saved parameters and errors (Copy as code keeps opaque
 text parameters and says so, as below):
 a secret in the query or fragment of one of its words (`data.tif?token=abc def`,
 `a.tif?x=1;token=abc def`) goes with the rest of the text, saying
 `[query and the rest omitted]`. A word alone (`data.tif?pwd=hunter2`, `data.tif#pwd=hunter2`) has
 only the secret's value emptied, with no marker. A `key`, `sig` or `sas` counts only when its value reads as a key,
-so `a.tif?key=abc def` stays. Notices and notebook output do not scan scheme-less text as
-URLs, but their credential-field rules still apply: `a.tif?token=abc def` loses the value and
-the rest of the text. For an unknown
+so `a.tif?key=abc def` stays. Notices and failed notebook command output also apply the
+credential-field rules to scheme-less text: `a.tif?token=abc def` loses the value and the rest
+of the text. Successful notebook command output removes recorded login bindings, recognized
+addresses and known login secrets, but can keep opaque scheme-less text such as that example.
+For an unknown
 `scheme://` URL, a query with no secret name (`?custom=hidden unescaped hidden`) is omitted only
 to its first space: the redactor can't tell a value's later words from prose, so they are kept.
 Ambiguous slash-containing userinfo is omitted rather than guessed to be a host, port and path.

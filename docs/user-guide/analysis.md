@@ -1742,10 +1742,11 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
     (each channel's most frequent value among the pixels that show). Class names are kept with
     `nearest` and `mode`; other methods remove them with a notice naming the affected bands.
     Palette images use `nearest` for sampling and `mode` for aggregation, keeping their classes.
-  - Cells off the raster are its no-data value. A raster without one keeps its bands as they are,
-    with NaN there in a floating-point type and 0 in an unlabelled whole-number one. If any band
-    has class names, every band uses NaN outside, keeping class zero distinct from missing
-    coverage. A colour image gains an alpha band instead, so outside cells are see-through.
+  - Cells off the raster use 0 in every band when the image has alpha or gains it, so they are
+    see-through. Otherwise an explicit no-data value takes precedence. Without either, every
+    band uses NaN when any band has class names or the type is floating-point; unlabelled
+    whole-number data uses 0. A three-band RGB image without alpha or no-data gains an alpha
+    band for its outside cells.
   - Datums are shifted as everywhere in RustGIS, through each system's transformation to WGS 84
     (a Helmert step for SAD69 or Córrego Alegre, a few metres from the IBGE's grid shifts).
   - The result has to fit in memory (120 million values, cells times bands, or more on a computer

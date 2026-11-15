@@ -453,9 +453,10 @@ impl Method {
 /// Projects `r` onto the grid `g`, through longitude/latitude when their coordinate systems
 /// differ: each cell sampled at its centre, or (average, mode) taken from every pixel of `r`
 /// whose centre falls in it. A cell no pixel centre falls in (a grid finer than the raster) takes
-/// the pixel under its centre. Cells off the raster are its no-data (else NaN, or 0 in an
-/// unlabelled whole-number type). A band with class names makes outside cells NaN in every band.
-/// A colour image with neither alpha nor no-data gains an alpha band for see-through cells.
+/// the pixel under its centre. Outside cells use 0 in every band when alpha is present or
+/// added; otherwise they use explicit no-data. Without either, they use NaN for floating-point
+/// data or when any band has class names, else 0. A three-band RGB image with neither alpha nor
+/// no-data gains an alpha band for see-through cells.
 pub fn project(r: &Raster, g: &Grid, method: Method, name: String) -> Result<Raster, String> {
     project_on(None, r, g, method, name)
 }
