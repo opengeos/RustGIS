@@ -129,6 +129,10 @@ mod desktop {
 
     pub(super) fn work(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
+        // A parameter of the other command is refused, not dropped.
+        if given(p, "index") {
+            return Err("index is for stac.addIndex (stac.addBands takes a combination, or red, green and blue)".into());
+        }
         // The three bands: a combination, or the three named.
         let named = ["red", "green", "blue"].map(|k| text(p, k)).into_iter().collect::<Result<Vec<_>, _>>()?;
         let named: [Option<&str>; 3] = named.try_into().map_err(|_| "red, green and blue are names".to_string())?;
@@ -164,6 +168,9 @@ mod desktop {
     /// inside it (the window is bounded by the cell size); Cancel is looked at before each file.
     pub(super) fn index(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
+        if let Some(k) = ["combination", "red", "green", "blue"].into_iter().find(|k| given(p, k)) {
+            return Err(format!("{k} is for stac.addBands (stac.addIndex takes an index)"));
+        }
         let id = text(p, "index")?.ok_or_else(|| {
             let ids: Vec<&str> = sb::INDICES.iter().map(|i| i.id).collect();
             format!("give index: {}", ids.join(", "))
@@ -222,6 +229,11 @@ mod desktop {
         }
     }
 
+    /// Whether a parameter is given: there, and neither null nor blank text.
+    fn given(p: &Value, key: &str) -> bool {
+        p.get(key).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()))
+    }
+
     /// A text parameter: its trimmed text, `None` when it is missing, null or blank, and an error
     /// when it is something else (a number would otherwise be taken as missing, and the default used).
     fn text<'a>(p: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
@@ -254,11 +266,9 @@ mod desktop {
         (w.max(h) / ACROSS).max(0.001)
     }
 
-    /// One file's window, every band: signed as it is read (a Planetary Computer file is signed
-    /// when read, not when the item was found), and only `href`, the file's own address, is ever said.
-    fn read_one(href: &str, bbox: [f64; 4], cell: (f64, bool), bands: usize, stop: &AtomicBool) -> Result<WindowRaster, String> {
-        let signed = stac::sign_blocking(href)?;
-        let asked = WindowAsked::of(&signed, bbox, Some(cell.0), bands);
+    /// One file's window, every band, from its signed address (only the file's own address is ever said).
+    fn read_one(signed: &str, bbox: [f64; 4], cell: (f64, bool), bands: usize, stop: &AtomicBool) -> Result<WindowRaster, String> {
+        let asked = WindowAsked::of(signed, bbox, Some(cell.0), bands);
         super::super::layer::read_window_raster(&if cell.1 { asked.automatic() } else { asked }, stop)
     }
 
@@ -271,20 +281,29 @@ mod desktop {
         // The run's request predicate is of this thread: each reader thread is given it, as the shared
         // helpers give their workers, so a request whose claim has gone is not sent.
         let still = rustgis_data::source::remote::current_still();
+        // Signed here, in order, before any thread starts: a Planetary Computer file is signed when it is
+        // read (not when the item was found), the first token fetched is cached for the files of its
+        // container, and Cancel is looked at before each request.
+        let mut signed = Vec::with_capacity(files.len());
+        for (href, _) in files {
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            signed.push(stac::sign_blocking(href)?);
+        }
         let stop = AtomicBool::new(false);
         let mut out = Vec::with_capacity(files.len());
-        for chunk in files.chunks(rustgis_data::threads::max().max(1)) {
+        let jobs: Vec<(&String, &String, usize)> = files.iter().zip(&signed).map(|((href, bands), s)| (href, s, *bands)).collect();
+        for chunk in jobs.chunks(rustgis_data::threads::max().max(1)) {
             let results: Vec<Result<WindowRaster, String>> = std::thread::scope(|scope| {
                 let started: Vec<_> = chunk
                     .iter()
-                    .map(|(href, bands)| {
+                    .map(|(href, signed, bands)| {
                         let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, || {
-                            rustgis_data::source::remote::with_optional_still(still.clone(), || read_one(href, bbox, cell, *bands, &stop))
+                            rustgis_data::source::remote::with_optional_still(still.clone(), || read_one(signed, bbox, cell, *bands, &stop))
                         });
-                        (href, *bands, reader)
+                        (href, signed, *bands, reader)
                     })
                     .collect();
-                while started.iter().any(|(_, _, r)| r.as_ref().is_ok_and(|r| !r.is_finished())) {
+                while started.iter().any(|(_, _, _, r)| r.as_ref().is_ok_and(|r| !r.is_finished())) {
                     if rustgis_data::progress::check().is_err() {
                         stop.store(true, Ordering::Relaxed);
                     }
@@ -292,12 +311,12 @@ mod desktop {
                 }
                 started
                     .into_iter()
-                    .map(|(href, bands, reader)| match reader {
+                    .map(|(href, signed, bands, reader)| match reader {
                         Ok(r) => r.join().unwrap_or_else(|_| Err(format!("{href}: the read failed unexpectedly"))),
                         Err(_) => {
                             // Looked at before it starts: once started, this read runs to its end.
                             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-                            read_one(href, bbox, cell, bands, &stop)
+                            read_one(signed, bbox, cell, bands, &stop)
                         }
                     })
                     .collect()
@@ -443,7 +462,7 @@ mod desktop {
                         continue;
                     }
                     let Some(&v) = data.get(sr as usize * raster.width as usize + sc as usize) else { continue };
-                    if raster.is_valid(v) && catalog_nodata != Some(v) && !band.invalid.contains(&f64::from(v)) {
+                    if raster.is_valid(v) && catalog_nodata != Some(v) && !band.invalid.iter().any(|&code| code as f32 == v) {
                         let value = (f64::from(v) * band.scale + band.offset) as f32;
                         if value.is_finite()
                             && let Some(o) = out.get_mut(row * w + col)
@@ -839,6 +858,46 @@ mod tests {
         unread.codes_unread = true;
         let err = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &unread)]).unwrap_err();
         assert!(err.starts_with("red:") && err.contains("failed retrieval"), "{err}");
+    }
+
+    #[test]
+    fn a_parameter_of_the_other_command_is_refused_not_dropped() {
+        let asset = |name: &str| {
+            json!({"href": format!("https://example.org/{name}.tif"), "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                "eo:bands": [{"common_name": name}]})
+        };
+        let item = json!({"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+            "assets": {"red": asset("red"), "green": asset("green"), "blue": asset("blue"), "nir": asset("nir")}});
+        let s = crate::Session::new(crate::Project::default());
+        let bbox = json!([10.0, 45.0, 10.02, 45.02]);
+        let with = |base: serde_json::Value, k: &str, v: serde_json::Value| {
+            let mut p = base;
+            p["item"] = item.clone();
+            p["bbox"] = bbox.clone();
+            p[k] = v;
+            p
+        };
+        assert!(
+            super::bands_work(&s, &with(json!({}), "index", json!("ndvi"))).err().is_some_and(|e| e.contains("index is for stac.addIndex"))
+        );
+        for k in ["combination", "red", "green", "blue"] {
+            let err = super::index_work(&s, &with(json!({"index": "ndvi"}), k, json!("red"))).err();
+            assert!(err.is_some_and(|e| e.contains(&format!("{k} is for stac.addBands"))), "{k}");
+        }
+        // Blank and null are not given; each command alone is fine.
+        assert!(super::bands_work(&s, &with(json!({}), "index", json!(" "))).is_ok());
+        assert!(super::index_work(&s, &with(json!({"index": "ndvi"}), "combination", json!(null))).is_ok());
+    }
+
+    #[test]
+    fn a_failed_retrieval_code_that_f32_rounds_is_still_masked() {
+        // 4294967295 is not exactly an f32: the sample reads 4294967296.
+        let a = grid(2, 1, 0.0001, vec![1000.0, 4_294_967_295.0_f32]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let mut coded = band(1.0, 0.0);
+        coded.invalid = vec![4_294_967_295.0];
+        let (r, _) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &coded)]).unwrap();
+        assert_eq!(r.bands[1].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1, "the rounded code is no data");
     }
 
     #[test]
