@@ -100,6 +100,23 @@ fn declared_bands(asset: &Value) -> usize {
     named.map_or(0, |l| l.len()).max(list("raster:bands").map_or(0, |l| l.len()))
 }
 
+/// The longest common name kept, in characters.
+const MAX_NAME: usize = 32;
+
+/// Whether a band of the asset has a common name longer than [`MAX_NAME`] characters, which
+/// `asset_bands` cuts: said like the bands past [`MAX_BANDS`] are (`bands_cut`).
+fn long_name(asset: &Value) -> bool {
+    let list = |key: &str| asset.get(key).and_then(Value::as_array);
+    list("eo:bands").or_else(|| list("bands")).is_some_and(|l| {
+        l.iter().take(MAX_BANDS).any(|b| {
+            b.get("common_name")
+                .or_else(|| b.get("eo:common_name"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.trim().chars().count() > MAX_NAME)
+        })
+    })
+}
+
 /// Whether a band's scale, offset or no-data is there but not a number: a string (`"0.0001"`) or
 /// a number that isn't finite. A no-data may be `"nan"`, `"inf"` or `"-inf"`, which the raster
 /// extension allows, and is then not odd. [`item_json`] marks a band it passed on with `rg:unread`.
@@ -136,7 +153,7 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                 common: named
                     .and_then(|b| b.get("common_name").or_else(|| b.get("eo:common_name")))
                     .and_then(Value::as_str)
-                    .map(|t| t.trim().to_ascii_lowercase().chars().take(32).collect())
+                    .map(|t| t.trim().to_ascii_lowercase().chars().take(MAX_NAME).collect())
                     .unwrap_or_default(),
                 scale: pick(&["scale", "raster:scale"]),
                 offset: pick(&["offset", "raster:offset"]),
@@ -682,7 +699,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 invalid: invalid.clone().unwrap_or_default(),
                 codes_unread: invalid.is_none(),
                 bands: asset_bands(a),
-                bands_cut: declared_bands(a) > MAX_BANDS || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
+                bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
             })
         })
         .collect();
@@ -1552,6 +1569,10 @@ mod tests {
         assert_eq!((band_number(&a, "scale"), band_number(&a, "offset")), (Some(0.0001), Some(-0.1)));
         assert_eq!(band_number(&serde_json::json!({"eo:bands": [{"scale": 0.0001}]}), "scale"), Some(0.0001));
         assert_eq!(band_number(&serde_json::json!({"type": "image/tiff"}), "scale"), None);
+        // STAC 1.1's unified `bands`, with the raster terms bare or prefixed (as `item_json` writes them).
+        assert_eq!(band_number(&serde_json::json!({"bands": [{"raster:scale": 0.5, "raster:offset": 2.0}]}), "scale"), Some(0.5));
+        assert_eq!(band_number(&serde_json::json!({"bands": [{"raster:scale": 0.5, "raster:offset": 2.0}]}), "offset"), Some(2.0));
+        assert_eq!(band_number(&serde_json::json!({"bands": [{"scale": 0.25}]}), "scale"), Some(0.25));
         assert_eq!(band_number(&serde_json::json!({"raster:bands": [{"nodata": -3000.0}]}), "nodata"), Some(-3000.0));
     }
 }

@@ -164,7 +164,13 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
 /// of those left out. None when nothing was cut.
 pub fn cut_note(item: &Item) -> Option<String> {
     if item.assets.iter().any(|a| a.bands_cut) {
-        return Some(format!("an asset describes more than {} bands and only the first {} are read", super::MAX_BANDS, super::MAX_BANDS));
+        return Some(format!(
+            "an asset describes more than {} bands, or a band name over {} characters, and only the first {} bands and the first {} characters of a name are read",
+            super::MAX_BANDS,
+            super::MAX_NAME,
+            super::MAX_BANDS,
+            super::MAX_NAME
+        ));
     }
     let total: usize = item.assets.iter().filter(|a| a.is_geotiff()).map(|a| a.bands.len().max(1)).sum();
     (total > MAX_BANDS).then(|| format!("the item has more than {MAX_BANDS} bands and only the first {MAX_BANDS} are listed"))
@@ -435,7 +441,12 @@ mod tests {
         assert_eq!(bands(&wide).len(), 256, "the list stops at its cap");
         assert!(cut_note(&wide).is_some_and(|n| n.contains("more than 256 bands")), "{:?}", cut_note(&wide));
         assert_eq!(cut_note(&sentinel()), None);
-        // A name cut to a sane length, and nothing panics on junk.
+        // A name cut to 32 characters is said, as bands past the cap are; a name that fits says nothing.
+        let long = item(&[("x", json!({"eo:bands": [{"common_name": "r".repeat(40)}]}))]);
+        assert!(bands(&long).iter().all(|b| b.common.chars().count() <= 32));
+        assert!(cut_note(&long).is_some_and(|n| n.contains("name over 32")), "{:?}", cut_note(&long));
+        assert_eq!(cut_note(&item(&[("x", json!({"eo:bands": [{"common_name": "r".repeat(32)}]}))])), None);
+        // Nothing panics on junk.
         let junk = bands(&item(&[("x", json!({"eo:bands": [1, "a", null, {"common_name": 7}], "raster:bands": "no"}))]));
         assert_eq!(junk.len(), 4);
         assert!(find(&junk, "red").is_none());

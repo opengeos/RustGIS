@@ -16,10 +16,10 @@ use super::workflows::Work;
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
-    vec![C::new("stac.addBands", "Add STAC Bands", "Home › Add › Web Data › STAC Search", add_bands).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).view().params(
+    vec![C::new("stac.addBands", "Add STAC Bands", "Home › Add › Web Data › STAC Search", add_bands).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
         r#"{"item": a STAC item (from stac.search), "combination"?: "trueColor"|"colorInfrared"|"shortwaveInfrared"|"falseColorUrban"|"agriculture"|"geology"|"bathymetric" (default trueColor), "red"?, "green"?, "blue"?: band names (red, nir, swir16… or an asset's key) used instead of a combination, "bbox"?: [west, south, east, north] in degrees | "view" (default), "cellSize"?: the coarsest overview whose cells are at most this size is read (default: about 2,048 cells across the box), "name"?: text, "ran"?: (internal: a raster the app has worked out)}"#,
     ),
-    C::new("stac.addIndex", "Add STAC Index", "Home › Add › Web Data › STAC Search", add_index).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).view().params(
+    C::new("stac.addIndex", "Add STAC Index", "Home › Add › Web Data › STAC Search", add_index).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
         r#"{"item": a STAC item (from stac.search), "index": "ndvi"|"ndwi"|"savi"|"nbr"|"ndbi"|"evi" (the Indices section's formulas, on the item's bands: NDVI nir and red, NDWI green and nir, SAVI nir and red, NBR nir and swir22, NDBI swir16 and nir, EVI nir, red and blue; their scale and offset applied), "bbox"?: [west, south, east, north] in degrees | "view" (default), "cellSize"?: the coarsest overview whose cells are at most this size is read (default: about 2,048 cells across the box), "name"?: text, "ran"?: (internal: a raster the app has worked out)} → a raster layer of one band"#,
     )]
 }
@@ -70,7 +70,6 @@ mod desktop {
     use serde_json::{Value, json};
 
     use super::super::layer::{WindowAsked, WindowRaster};
-    use super::super::ps;
     use super::super::workflows::{Made, Then, Work};
     use crate::Session;
     use crate::render::rustgis_tiles::stac::{self, bands as sb};
@@ -130,16 +129,18 @@ mod desktop {
     pub(super) fn work(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
         // The three bands: a combination, or the three named.
-        let named = ["red", "green", "blue"].map(|k| ps(p, k).map(str::trim).filter(|v| !v.is_empty()));
+        let named = ["red", "green", "blue"].map(|k| text(p, k)).into_iter().collect::<Result<Vec<_>, _>>()?;
+        let named: [Option<&str>; 3] = named.try_into().map_err(|_| "red, green and blue are names".to_string())?;
         // One or the other: a combination given with the three bands would be dropped without a word.
-        if named.iter().any(Option::is_some) && ps(p, "combination").is_some_and(|c| !c.trim().is_empty()) {
+        let combination = text(p, "combination")?;
+        if named.iter().any(Option::is_some) && combination.is_some() {
             return Err("give a combination, or red, green and blue, not both".into());
         }
         let (label, wanted): (String, [String; 3]) = if named.iter().any(Option::is_some) {
             let [Some(r), Some(g), Some(b)] = named else { return Err("give red, green and blue together, or a combination".into()) };
             (format!("{r}-{g}-{b}"), [r.to_string(), g.to_string(), b.to_string()])
         } else {
-            let id = ps(p, "combination").map(str::trim).filter(|v| !v.is_empty()).unwrap_or("trueColor");
+            let id = combination.unwrap_or("trueColor");
             let c = sb::COMBINATIONS.iter().find(|c| c.id.eq_ignore_ascii_case(id)).ok_or_else(|| {
                 let ids: Vec<&str> = sb::COMBINATIONS.iter().map(|c| c.id).collect();
                 format!("unknown combination '{id}' (the combinations are {})", ids.join(", "))
@@ -147,7 +148,7 @@ mod desktop {
             (c.name.to_string(), c.channels.map(str::to_string))
         };
         let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted)?;
-        let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| format!("{} {label}", item.id), str::to_string);
+        let name = text(p, "name")?.map_or_else(|| format!("{} {label}", item.id), str::to_string);
         let channels = [wanted[0].clone(), wanted[1].clone(), wanted[2].clone()];
         Ok(Box::new(move || {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
@@ -162,7 +163,7 @@ mod desktop {
     /// inside it (the window is bounded by the cell size); Cancel is looked at before each file.
     pub(super) fn index(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
-        let id = ps(p, "index").map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| {
+        let id = text(p, "index")?.ok_or_else(|| {
             let ids: Vec<&str> = sb::INDICES.iter().map(|i| i.id).collect();
             format!("give index: {}", ids.join(", "))
         })?;
@@ -182,10 +183,7 @@ mod desktop {
             at(&["nir"]),
             at(&["swir16", "swir22"]),
         )?;
-        let name = ps(p, "name")
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .map_or_else(|| format!("{} {}", item.id, ix.id.to_ascii_uppercase()), str::to_string);
+        let name = text(p, "name")?.map_or_else(|| format!("{} {}", item.id, ix.id.to_ascii_uppercase()), str::to_string);
         let id = ix.id;
         Ok(Box::new(move || {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
@@ -223,6 +221,16 @@ mod desktop {
         }
     }
 
+    /// A text parameter: its trimmed text, `None` when it is missing, null or blank, and an error
+    /// when it is something else (a number would otherwise be taken as missing, and the default used).
+    fn text<'a>(p: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(t)) => Ok(Some(t.trim()).filter(|t| !t.is_empty())),
+            Some(_) => Err(format!("{key} is text")),
+        }
+    }
+
     /// The names a bands list offers, for an error: common names, else keys, each once.
     fn names_of(all: &[sb::Band]) -> String {
         let mut seen = BTreeSet::new();
@@ -245,27 +253,52 @@ mod desktop {
         (w.max(h) / ACROSS).max(0.001)
     }
 
-    /// A window of the file at `url`, every band, read on a thread of its own while this one looks
-    /// at the run's Cancel and stops the read once it is set. A thread the system refuses costs
-    /// only that: the read runs here, Cancel looked at once it is in.
-    fn read_window(url: &str, bbox: [f64; 4], cell: f64, bands: usize) -> Result<WindowRaster, String> {
-        let asked = WindowAsked::of(url, bbox, Some(cell), bands);
+    /// One file's window, every band: signed as it is read (a Planetary Computer file is signed
+    /// when read, not when the item was found), and only `href`, the file's own address, is ever said.
+    fn read_one(href: &str, bbox: [f64; 4], cell: f64, bands: usize, stop: &AtomicBool) -> Result<WindowRaster, String> {
+        let signed = stac::sign_blocking(href)?;
+        super::super::layer::read_window_raster(&WindowAsked::of(&signed, bbox, Some(cell), bands), stop)
+    }
+
+    /// The windows of these files (address, bands to read), in order: the files are independent and
+    /// network-bound, so up to the user's thread count are read at once, each on a thread of its own
+    /// while this one looks at the run's Cancel and stops the reads once it is set. The same windows
+    /// as reading them one by one. A thread the system refuses costs only that: the file is read
+    /// here, Cancel looked at once it is in.
+    fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: f64) -> Result<Vec<WindowRaster>, String> {
         let stop = AtomicBool::new(false);
-        let w = std::thread::scope(|scope| {
-            let reader = std::thread::Builder::new()
-                .name("STAC band window".into())
-                .spawn_scoped(scope, || super::super::layer::read_window_raster(&asked, &stop));
-            let Ok(reader) = reader else { return super::super::layer::read_window_raster(&asked, &stop) };
-            while !reader.is_finished() {
-                if rustgis_data::progress::check().is_err() {
-                    stop.store(true, Ordering::Relaxed);
+        let mut out = Vec::with_capacity(files.len());
+        for chunk in files.chunks(rustgis_data::threads::max().max(1)) {
+            let results: Vec<Result<WindowRaster, String>> = std::thread::scope(|scope| {
+                let started: Vec<_> = chunk
+                    .iter()
+                    .map(|(href, bands)| {
+                        let reader = std::thread::Builder::new()
+                            .name("STAC band window".into())
+                            .spawn_scoped(scope, || read_one(href, bbox, cell, *bands, &stop));
+                        (href, *bands, reader)
+                    })
+                    .collect();
+                while started.iter().any(|(_, _, r)| r.as_ref().is_ok_and(|r| !r.is_finished())) {
+                    if rustgis_data::progress::check().is_err() {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                started
+                    .into_iter()
+                    .map(|(href, bands, reader)| match reader {
+                        Ok(r) => r.join().unwrap_or_else(|_| Err(format!("{href}: the read failed unexpectedly"))),
+                        Err(_) => read_one(href, bbox, cell, bands, &stop),
+                    })
+                    .collect()
+            });
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            for r in results {
+                out.push(r?);
             }
-            reader.join().unwrap_or_else(|_| Err(format!("{url}: the read failed unexpectedly")))
-        })?;
-        rustgis_data::progress::check().map_err(|e| e.to_string())?;
-        Ok(w)
+        }
+        Ok(out)
     }
 
     /// The three windows, read, and put on one grid: the raster of three bands, and what to say.
@@ -277,25 +310,38 @@ mod desktop {
         bbox: [f64; 4],
         cell: f64,
     ) -> Result<(Raster, Vec<String>), String> {
-        // One read for a file, whichever of its bands are wanted.
-        let mut windows: Vec<(String, WindowRaster)> = Vec::new();
-        let mut notes = Vec::new();
+        // One read for a file, whichever of its bands are wanted: the first band to want it, and
+        // every band of the file is read, so the count asked is the file's, not the band's place.
+        // The cost grows with the file's band count (a 13-band file is about 13 times the bytes
+        // and memory of the one band wanted); the values read are bounded by the window's own
+        // limit, and a window reader that picks bands would spare it.
+        let mut files: Vec<(String, usize)> = Vec::new();
+        let mut firsts: Vec<usize> = Vec::new();
         for (i, band) in picked.iter().enumerate() {
             let href = hrefs.get(i).ok_or("a band has no address")?;
-            if windows.iter().any(|(h, _)| h == href) {
-                continue;
+            if !files.iter().any(|(h, _)| h == href) {
+                files.push((href.clone(), band.in_file.max(band.index) as usize));
+                firsts.push(i);
             }
-            // A Planetary Computer file is signed as it is read, not when the item was found.
-            let signed = stac::sign_blocking(href)?;
-            // Every band of the file is read, so the count asked is the file's, not the band's place.
-            // The cost grows with the file's band count (a 13-band file is about 13 times the bytes
-            // and memory of the one band wanted); the values read are bounded by the window's own
-            // limit, and a window reader that picks bands would spare it.
-            let w = read_window(&signed, bbox, cell, band.in_file.max(band.index) as usize)?;
-            let who = channels.get(i).map_or("band", String::as_str);
-            notes.extend(w.notes().into_iter().map(|n| format!("{who}: {n}")));
-            windows.push((href.clone(), w));
         }
+        let read = read_windows(&files, bbox, cell)?;
+        // What a file's read said, with the bands it is for: one notice for a kind, not one a file.
+        let mut window_notes: Vec<(String, Vec<String>)> = Vec::new();
+        let mut windows: Vec<(String, WindowRaster)> = Vec::new();
+        for (((href, _), i), w) in files.into_iter().zip(firsts).zip(read) {
+            let who = channels.get(i).map_or("band", String::as_str);
+            for n in w.notes() {
+                match window_notes.iter_mut().find(|(t, _)| *t == n) {
+                    Some((_, whos)) => whos.push(who.to_string()),
+                    None => window_notes.push((n, vec![who.to_string()])),
+                }
+            }
+            windows.push((href, w));
+        }
+        let mut notes: Vec<String> = window_notes
+            .into_iter()
+            .map(|(n, whos)| format!("{} ({} file{}): {n}", whos.join(", "), whos.len(), if whos.len() == 1 { "" } else { "s" }))
+            .collect();
         let sources: Vec<(&Raster, &sb::Band)> = picked
             .iter()
             .enumerate()
@@ -336,14 +382,14 @@ mod desktop {
             .ok_or("a stack needs at least two bands")?;
         let (w, h) = (finest.width as usize, finest.height as usize);
         let mut bands: Vec<Vec<f32>> = Vec::with_capacity(3);
+        // Progress counts the rows of every band; each row looks at Cancel.
+        rustgis_data::progress::begin(sources.len() * h);
         for (raster, band) in sources {
             let mut out = rustgis_analysis::rasterops::new_band(w, h, rustgis_analysis::rasterops::NODATA)?;
             let data = &raster.bands.get(band.index.saturating_sub(1) as usize).ok_or("a band is not in its file")?.data;
             let catalog_nodata = band.nodata.map(|v| v as f32);
             for row in 0..h {
-                if row % 256 == 0 {
-                    rustgis_data::progress::check().map_err(|e| e.to_string())?;
-                }
+                rustgis_data::progress::step(1).map_err(|e| e.to_string())?;
                 for col in 0..w {
                     let world = finest.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
                     let (sc, sr) = raster.transform.to_pixel(world);
@@ -387,13 +433,20 @@ mod desktop {
         let mut notes = Vec::new();
         // A band taken from a colour image (the item has no file of its own for it) is not in the
         // units of the bands that come from band files: the catalog's scale and offset are for those.
-        for ((_, band), who) in sources.iter().zip(channels) {
-            if band.in_file > 1 {
-                notes.push(format!(
-                    "{who} is band {} of {}, a file of {} bands, as the item has no file of its own for it: its values may not be in the units of the other bands (a colour image's are 8-bit)",
-                    band.index, band.asset, band.in_file
-                ));
-            }
+        // One notice with the bands, and none when they all come from the one image (the units agree).
+        let one_image = sources.iter().all(|(_, b)| Some(&b.href) == sources.first().map(|(_, f)| &f.href));
+        let from_colour: Vec<String> = sources
+            .iter()
+            .zip(channels)
+            .filter(|((_, b), _)| b.in_file > 1)
+            .map(|((_, b), who)| format!("{who} (band {} of {})", b.index, b.asset))
+            .collect();
+        if !from_colour.is_empty() && !one_image {
+            notes.push(format!(
+                "{} {} taken from a file of several bands, as the item has no file of its own: the values may not be in the units of the other bands (a colour image's are 8-bit)",
+                from_colour.join(", "),
+                if from_colour.len() == 1 { "is" } else { "are" }
+            ));
         }
         // Integer files the catalog gives no scale for are used as stored: not reflectance, which the
         // indices' constants and a colour mixed with scaled bands assume. One notice, naming them.
@@ -646,12 +699,45 @@ mod tests {
     fn a_band_taken_from_a_colour_image_is_said_and_a_band_file_is_not() {
         let a = grid(2, 2, 0.0001, vec![1000.0; 4]);
         let names: Vec<String> = vec!["nir".into(), "red".into()];
-        let mut from_colour = band(1.0, 0.0);
-        (from_colour.asset, from_colour.in_file) = ("visual".into(), 3);
-        let (_, notes) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &from_colour)]).unwrap();
-        assert!(notes.iter().any(|n| n.starts_with("red is band 1 of visual, a file of 3 bands")), "{notes:?}");
+        let colour = |index: u32| {
+            let mut b = band(1.0, 0.0);
+            (b.asset, b.href, b.in_file, b.index) = ("visual".into(), "https://x.org/visual.tif".into(), 3, index);
+            b
+        };
+        let (_, notes) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &colour(1))]).unwrap();
+        assert!(notes.iter().any(|n| n.starts_with("red (band 1 of visual) is taken from a file of several bands")), "{notes:?}");
         let (_, none) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &band(1.0, 0.0))]).unwrap();
-        assert!(!none.iter().any(|n| n.contains("a file of")), "files of their own say nothing: {none:?}");
+        assert!(!none.iter().any(|n| n.contains("several bands")), "files of their own say nothing: {none:?}");
+        // Two bands from colour images are one notice naming both; all from one image (the units agree) say nothing.
+        let three: Vec<String> = vec!["nir".into(), "red".into(), "green".into()];
+        let (_, notes) = stack("s", &three, &[(&a, &band(1.0, 0.0)), (&a, &colour(1)), (&a, &colour(1))]).unwrap();
+        let said: Vec<&String> = notes.iter().filter(|n| n.contains("several bands")).collect();
+        assert!(said.len() == 1 && said[0].contains("red (band 1 of visual), green (band 1 of visual) are taken"), "{notes:?}");
+        let (_, same) = stack("s", &names, &[(&a, &colour(1)), (&a, &colour(1))]).unwrap();
+        assert!(!same.iter().any(|n| n.contains("several bands")), "one image: {same:?}");
+    }
+
+    #[test]
+    fn a_parameter_of_the_wrong_type_is_refused_not_taken_as_missing() {
+        let asset = |name: &str| {
+            json!({"href": format!("https://example.org/{name}.tif"), "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                "eo:bands": [{"common_name": name}]})
+        };
+        let item = json!({"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+            "assets": {"red": asset("red"), "green": asset("green"), "blue": asset("blue"), "nir": asset("nir")}});
+        let s = crate::Session::new(crate::Project::default());
+        let bbox = json!([10.0, 45.0, 10.02, 45.02]);
+        let err = |extra: serde_json::Value| {
+            let mut p = json!({"item": item, "bbox": bbox});
+            for (k, v) in extra.as_object().unwrap() {
+                p[k] = v.clone();
+            }
+            super::bands_work(&s, &p).err()
+        };
+        assert!(err(json!({"combination": 5})).is_some_and(|e| e.contains("combination is text")));
+        assert!(err(json!({"red": 4})).is_some_and(|e| e.contains("red is text")));
+        assert!(err(json!({"name": 5})).is_some_and(|e| e.contains("name is text")));
+        assert!(err(json!({"combination": null, "name": ""})).is_none(), "null and blank are missing");
     }
 
     #[test]
