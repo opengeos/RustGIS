@@ -19,7 +19,7 @@ readonly OMITTED_ASSET_PATTERNS_JSON='[
   "\\.msix$",
   "\\.aab$",
   "\\.ipa$",
-  "\\.sha256$",
+  "\\.(apk|aab|ipa)\\.sha256$",
   "^SHA256SUMS$"
 ]'
 
