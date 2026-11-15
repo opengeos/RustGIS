@@ -1057,7 +1057,8 @@ struct Drawing {
 
 /// The magnitude of an ACI color index (negative means its layer is off). The one signed
 /// integer without a positive counterpart is malformed and must not overflow while reading.
-/// It refuses the drawing rather than substituting a color for malformed input.
+/// When encountered in a layer definition or drawn entity it refuses the drawing rather than
+/// substituting a color. Skipped paper-space entities and unused blocks are not color-validated.
 fn color_magnitude(color: i64) -> Result<i64> {
     color.checked_abs().ok_or_else(|| DataError::Format("DXF color index has no representable positive value".into()))
 }

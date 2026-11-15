@@ -437,6 +437,19 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
     if converted.unprojected {
         converted.notes.push(format!("GDAL: '{layer}' has no declared coordinate system; its coordinates were left unprojected"));
     }
+    // A repair/reload reports the same conversion loss as Add. For a mixed layer, compare
+    // only the selected family; the other families have their own counted notice.
+    let expected = match family.filter(|_| info.family.is_none()) {
+        Some(family) => count_geometry_filter(src, &info.name, family.filter()).map(Some),
+        None => Ok(info.count.and_then(|n| u64::try_from(n).ok())),
+    };
+    match expected.and_then(|expected| super::fgb::header_feature_count(&converted.path).map(|actual| expected.map(|n| (n, actual)))) {
+        Ok(Some((expected, actual))) if actual < expected => {
+            converted.notes.push(format!("{}: GDAL conversion left out {} of {expected} source features", info.name, expected - actual))
+        }
+        Ok(_) => {}
+        Err(error) => converted.notes.push(format!("{}: couldn't check how many features GDAL's conversion kept ({error})", info.name)),
+    }
     let mut zm_dropped = info.has_zm && !converted.empty;
     if zm_dropped {
         let count = info.count.filter(|n| *n >= 0).map_or_else(|| "an unknown number of".into(), |n| n.to_string());
@@ -616,8 +629,13 @@ fn count_other_families(src: &Path, layer: &str, selected: Family) -> Result<u64
         Family::Polygons => (Family::Points, Family::Lines),
     };
     let filter = format!("({}) OR ({})", first.filter(), second.filter());
+    count_geometry_filter(src, layer, &filter)
+}
+
+/// The count under the exact family filter used by conversion, including empty geometries.
+fn count_geometry_filter(src: &Path, layer: &str, filter: &str) -> Result<u64> {
     let mut c = command(program("ogrinfo").ok_or_else(missing)?, drivers(src)?);
-    c.args(["-json", "-ro", "-so", "-nomd", "-where", &filter]).arg(src).arg(layer);
+    c.args(["-json", "-ro", "-so", "-nomd", "-where", filter]).arg(src).arg(layer);
     let out = output(c, CONVERT_TIMEOUT, &format!("GDAL geometry count for {}, layer '{layer}'", src.display()))?;
     if !out.status.success() {
         return Err(DataError::Format(format!("GDAL: {}", String::from_utf8_lossy(&out.stderr).trim())));
@@ -900,6 +918,13 @@ mod tests {
             assert!(error.contains("empties: GDAL conversion left out 2 of 2 source features"), "{error}");
         }
         // A cached conversion whose header can't be read is said, and the layer still comes back.
+        // Repair refuses malformed geometry rather than installing a partial conversion.
+        let lossy = dir.path().join("lossy.geojsonl");
+        assert!(convert_one_fresh_in(&dir.path().join("fresh"), &lossy, "lossy", None, None).is_err());
+        let clean = dir.path().join("clean.geojsonl");
+        let converted = convert_one_fresh_in(&dir.path().join("fresh"), &clean, "clean", None, None).unwrap();
+        assert!(converted.notes.is_empty(), "{:?}", converted.notes);
+
         let path = dir.path().join("clean.geojsonl");
         let (converted, _) = convert_in(&dir.path().join("cache"), &path, None, None).unwrap();
         std::fs::write(&converted[0].path, b"not a FlatGeobuf").unwrap();

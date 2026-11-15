@@ -1238,6 +1238,15 @@ fn projected(p: &Node) -> Result<Crs, String> {
         if p.items.iter().any(unusable) {
             return Err("a Web Mercator system with a parameter that isn't a finite number isn't supported".into());
         }
+        let invalid_unit = p.child("UNIT").is_some_and(|unit| unit.num(0).is_none());
+        let invalid_axis = p
+            .child("GEOGCS")
+            .and_then(|g| g.child("DATUM"))
+            .and_then(|datum| datum.child_of(&["SPHEROID", "ELLIPSOID"]))
+            .is_some_and(|ellipsoid| ellipsoid.num(0).is_none());
+        if invalid_unit || invalid_axis {
+            return Err("a Web Mercator system with a unit or datum radius that isn't a finite number isn't supported".into());
+        }
         if is_web_mercator(p, &method) {
             if axis_flip(p)?.is_some() {
                 return Err(REVERSED_AXES.into());
@@ -3779,6 +3788,9 @@ pub(crate) mod tests {
             (r#""Latitude_Of_Origin",0.0"#, r#""Latitude_Of_Origin",1.0"#),
             (r#""False_Northing",0.0"#, r#""False_Northing",10000000.0"#),
             (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Foot_US",0.3048006096012192]]"#),
+            (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Meter",1e400]]"#),
+            (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Meter"]]"#),
+            ("6378137.0,298.257223563", "1e400,298.257223563"),
             (
                 r#"DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]]"#,
                 r#"DATUM["D_European_1950",SPHEROID["International_1924",6378388.0,297.0]]"#,
@@ -4193,6 +4205,9 @@ pub(crate) mod tests {
             (r#""Central_Meridian",0.0"#, r#""Central_Meridian",10.0"#),
             (r#""Auxiliary_Sphere_Type",0.0"#, r#""Auxiliary_Sphere_Type",1.0"#),
             (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Foot_US",0.3048006096012192]]"#),
+            (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Meter",1e400]]"#),
+            (r#"UNIT["Meter",1.0]]"#, r#"UNIT["Meter"]]"#),
+            ("6378137.0,298.257223563", "1e400,298.257223563"),
         ] {
             let off = ESRI_3857.replace(from, to);
             assert_ne!(off, ESRI_3857, "{from}");

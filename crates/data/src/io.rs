@@ -1661,8 +1661,8 @@ fn found_projected_xy(headers: &[String]) -> Option<(usize, usize)> {
     find(X_NAMES, "x").zip(find(Y_NAMES, "y")).or_else(|| found_xy(headers))
 }
 
-/// Keeps the first named pair unless its values exceed degrees and a more specific
-/// longitude/latitude pair has at least as many usable, nonzero degree positions as the first
+/// Prefers a specific longitude/latitude pair when it has at least as many usable, nonzero
+/// degree positions as the first
 /// pair has finite positions. The choice covers the whole file;
 /// explicit columns and projected systems bypass this inference.
 fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(usize, usize)>> {
@@ -1678,7 +1678,7 @@ fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(
         return Ok(Some(xy));
     }
     let degrees = |p: Coord| p.x.abs() <= 180.0 && p.y.abs() <= 90.0;
-    let (mut outside, mut positions, mut usable) = (false, 0usize, 0usize);
+    let (mut positions, mut usable) = (0usize, 0usize);
     for row in rows {
         crate::progress::check()?;
         let point = |(x, y): (usize, usize)| {
@@ -1689,10 +1689,9 @@ fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(
         };
         let first = point(xy);
         positions += usize::from(first.is_some());
-        outside |= first.is_some_and(|p| !degrees(p));
         usable += usize::from(point(geographic).is_some_and(|p| degrees(p) && (p.x != 0.0 || p.y != 0.0)));
     }
-    Ok(Some(if outside && usable >= positions { geographic } else { xy }))
+    Ok(Some(if usable >= positions { geographic } else { xy }))
 }
 
 /// A WKT column found: one named like geometry whose first value reads as WKT.
@@ -5213,9 +5212,8 @@ mod tests {
             read_csv_with(text, "explicit", &opts).unwrap().0.features[0].geometry,
             Some(Geometry::Point(Coord::new(1000.0, 2000.0)))
         );
-        // Degree-sized X/Y retain their existing priority, and an unusable alternative doesn't win.
+        // An unusable geographic alternative does not replace the generic pair.
         for (text, point) in [
-            ("X,Y,Longitude,Latitude\n1,2,3,4\n", Coord::new(1.0, 2.0)),
             ("X,Y,Longitude,Latitude\n1000,2000,bad,\n", Coord::new(1000.0, 2000.0)),
             ("X,Y,Longitude,Latitude\n1000,2000,0,0\n", Coord::new(1000.0, 2000.0)),
         ] {
@@ -5261,6 +5259,19 @@ mod tests {
         assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
         let columns = csv_columns("Longitude,Latitude\n1000,2000\n", None, Some(Crs::WebMercator)).unwrap();
         assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
+    }
+
+    #[test]
+    fn geographic_csv_prefers_specific_names_with_in_range_generic_xy() {
+        for text in ["X,Y,Longitude,Latitude\n1,2,40,50\n", "Longitude,Latitude,X,Y\n40,50,1,2\n"] {
+            let columns = csv_columns(text, None, Some(Crs::LonLat)).unwrap();
+            assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
+            let (ds, _) = read_csv_with(text, "geographic", &CsvOptions::default()).unwrap();
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(40.0, 50.0))));
+            let opts = CsvOptions { x: Some("X".into()), y: Some("Y".into()), ..Default::default() };
+            let (ds, _) = read_csv_with(text, "explicit", &opts).unwrap();
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
+        }
     }
 
     /// A geographic alternative must cover at least as many rows as the first pair can place.
