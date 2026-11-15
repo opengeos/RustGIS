@@ -1939,7 +1939,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             if unreadable.rows > 0 {
                 notes.push(format!("{path}: {} rows couldn't be read and were left out", unreadable.rows));
             }
-            notes.extend(super::share::read_date_notes(&path, &ds.name, &unreadable));
+            notes.extend(super::share::read_notes(&path, &ds.name, &unreadable));
             (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format))
         };
         let bytes = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len();

@@ -676,6 +676,12 @@ pub fn read_date_notes(file: &str, layer: &str, lost: &rustgis_map::Unreadable) 
     empty.chain(lost.rounded.iter().map(|n| format!("{file}: {layer}: {n} when read for the export"))).collect()
 }
 
+/// The complete diagnostics from a whole read made for an export, including metadata losses
+/// discovered by a temporary source opening that the live layer never received.
+pub fn read_notes(file: &str, layer: &str, lost: &rustgis_map::Unreadable) -> Vec<String> {
+    read_date_notes(file, layer, lost).into_iter().chain(lost.messages.iter().map(|n| format!("{file}: {n}"))).collect()
+}
+
 /// What a GeoPackage export of `ds` says of its dates: date-times written in UTC, and text in
 /// date fields that isn't a date, and rounded to the millisecond; for a FlatGeobuf, its date fields with no values. Nothing for
 /// another format, or when there was none.
@@ -748,7 +754,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
             let unfit = if parquet { rustgis_data::source::parquet::values_note(ds, path) } else { None };
             let null_numbers = rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, &ext);
             let csv = if ext == "csv" { rustgis_data::io::CsvLosses::of(&ds.features, ds.geometry_type) } else { Default::default() };
-            let mut dates = read_date_notes(path, &ds.name, &unreadable);
+            let mut dates = read_notes(path, &ds.name, &unreadable);
             dates.extend(gpkg_dates_note(ds, &ext, path));
             (ds.features.len().saturating_sub(left_out), left_out, unread, table, unfit, null_numbers, None, csv, dates)
         }

@@ -1209,6 +1209,7 @@ fn an_export_says_what_its_whole_read_did_to_dates() {
         rows: 0,
         dates: Some("1 value isn't a date and was read as empty, in 'day'".into()),
         rounded: Some("1 date-time was rounded to the microsecond, as more digits than that aren't kept, in 'at'".into()),
+        ..Default::default()
     };
     assert_eq!(
         crate::cmd::share::read_date_notes("out.geojson", "Sites", &lost),

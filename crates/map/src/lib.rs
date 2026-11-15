@@ -154,6 +154,9 @@ pub struct Unreadable {
     /// What it says of date-times rounded to the microsecond
     /// ([`rustgis_data::source::rounded_dates_note`]).
     pub rounded: Option<String>,
+    /// Other reader diagnostics, already qualified by their source. Date diagnostics stay in
+    /// their typed fields above so consumers can describe what an export did to them once.
+    pub messages: Vec<String>,
 }
 
 /// A layer: a dataset drawn with a renderer and labels.
@@ -786,7 +789,17 @@ impl Layer {
     /// [`Layer::load_all`], with what of the source couldn't be read.
     pub fn load_all_counted(&self) -> Result<(Dataset, Unreadable), String> {
         let (ds, report) = self.load_all_reported()?;
-        Ok((ds, Unreadable { rows: report.skipped, dates: report.unread_dates, rounded: report.rounded_dates }))
+        // materialize also puts the typed date diagnostics in messages. Existing consumers
+        // give them their own export wording, so preserve only the other messages here.
+        let date_notes: Vec<_> = report.unread_dates.iter().chain(&report.rounded_dates).map(|n| format!(": {n}")).collect();
+        let mut seen = std::collections::HashSet::new();
+        let messages = report
+            .messages
+            .into_iter()
+            .filter(|m| !date_notes.iter().any(|date| m.ends_with(date)))
+            .filter(|m| seen.insert(m.clone()))
+            .collect();
+        Ok((ds, Unreadable { rows: report.skipped, dates: report.unread_dates, rounded: report.rounded_dates, messages }))
     }
 
     /// A whole read with its complete reader report, including messages beyond rows and dates.
