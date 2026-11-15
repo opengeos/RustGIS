@@ -1782,6 +1782,7 @@ impl RustGisApp {
         use rustgis_engine::render::fonts::{CjkRegion, ScriptFont};
         match script {
             i18n::Script::Cjk(i18n::CjkFont::SimplifiedChinese) => Some(ScriptFont::Cjk(CjkRegion::SimplifiedChinese)),
+            i18n::Script::Cjk(i18n::CjkFont::TraditionalChinese) => Some(ScriptFont::Cjk(CjkRegion::TraditionalChinese)),
             i18n::Script::Cjk(i18n::CjkFont::Japanese) => Some(ScriptFont::Cjk(CjkRegion::Japanese)),
             i18n::Script::Cjk(i18n::CjkFont::Korean) => Some(ScriptFont::Cjk(CjkRegion::Korean)),
             i18n::Script::Arabic => Some(ScriptFont::Arabic),
@@ -5985,7 +5986,7 @@ impl RustGisApp {
         };
         for (url, bytes) in fonts {
             use rustgis_engine::render::fonts::{CjkRegion, ScriptFont, script_font_url, valid_font};
-            let region = [CjkRegion::SimplifiedChinese, CjkRegion::Japanese, CjkRegion::Korean]
+            let region = [CjkRegion::SimplifiedChinese, CjkRegion::TraditionalChinese, CjkRegion::Japanese, CjkRegion::Korean]
                 .map(ScriptFont::Cjk)
                 .into_iter()
                 .chain([ScriptFont::Arabic, ScriptFont::Bengali, ScriptFont::Lao])
