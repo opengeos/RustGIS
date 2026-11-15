@@ -355,10 +355,14 @@ A release also releases the bundle on Google Play's **production** track
 (`.github/scripts/play_upload.py`, which calls the Play Developer API with no third-party Action):
 it reaches users once Google's review passes. Until the app's first release is published in Play
 Console, Play takes only drafts, so the release is made a draft there (and the run says so) for
-someone to roll out by hand. A manual run with `play` uploads to the track and status it is given,
-by default an internal testing draft. It needs a Google Cloud service account Play Console lets
-release, its JSON key in the `mobile-release` environment as `PLAY_SERVICE_ACCOUNT_JSON`:
+someone to roll out by hand. A pre-release goes to internal testing as a draft, never to
+production. A manual run with `play` uploads to the track and status it is given, by default an
+internal testing draft; a release of the same commit then releases that upload, which Play already
+has, by its version code. It needs a Google Cloud service account Play Console lets release, its
+JSON key in the `mobile-release` environment as `PLAY_SERVICE_ACCOUNT_JSON`:
 
+0. A new app's first bundle is uploaded in Play Console by hand (Test and release › Internal
+   testing): the API can't add one to an app that has none. RustGIS's was, on 2026-11-15.
 1. In Google Cloud (any project), enable the Google Play Android Developer API, create a service
    account and a JSON key for it.
 2. In Play Console, Users and permissions › Invite new users: the service account's email, with
