@@ -7,6 +7,11 @@
 //!
 //! A pick's folder is kept or removed whole: a project names a Shapefile's `.shp`, not its `.dbf`,
 //! nor a GeoPackage's `-wal`, so a pick is in use when the project names any file in it.
+//!
+//! A pick still being copied into is kept too. The phones mark a pick's folder with [`COPYING`]
+//! while they copy into it, and write each copy under a `.part` name of its own, renamed once
+//! whole. A mark or a `.part` file left by a copy the app was killed during stops counting after
+//! [`STALE`], and its pick is judged like any other.
 
 use rustgis_ui_egui::rustgis_engine::data::dirs;
 use rustgis_ui_egui::{RustGisApp, i18n, tl};
@@ -17,6 +22,14 @@ use std::sync::{Arc, Mutex};
 /// The deepest a file of a pick is (`picked/<pick>/<source folder>/<file>`), looked for a level
 /// deeper: a pick holds no deeper folders, and a link out of it is never followed.
 const DEPTH: usize = 3;
+
+/// The file the phones put in a pick's folder while they copy documents into it, for the whole
+/// pick, and remove once done.
+pub const COPYING: &str = ".copying";
+
+/// How long a pick's [`COPYING`] mark or `.part` file counts after it was last written: a copy
+/// writes its `.part` as it goes, but iOS may first download a document from iCloud for a while.
+const STALE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// The picks the project doesn't name.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -31,6 +44,8 @@ pub(crate) struct Unused {
     pub unreadable: usize,
     /// The picks among them (an entry not even listed has no path).
     pub unreadable_picks: Vec<PathBuf>,
+    /// Picks being copied into (or just made, with no file yet), kept.
+    pub busy_picks: Vec<PathBuf>,
 }
 
 /// What Remove Them did.
@@ -40,11 +55,12 @@ pub(crate) struct Removed {
     pub bytes: u64,
     /// What couldn't be removed, each in its own words.
     pub failed: Vec<String>,
-    /// Picks found unused when asked that still exist and the project names now (it changed
-    /// since), kept.
+    /// Picks found unused when asked that the project names now (it changed since), kept.
     pub now_named: usize,
     /// Picks found unused when asked that couldn't be read in full when looked at again, kept.
     pub unreadable: usize,
+    /// Picks found unused when asked that are being copied into now, kept.
+    pub busy: usize,
 }
 
 /// Where the copies are, where the app has a folder of its own (a phone).
@@ -77,9 +93,13 @@ pub(crate) fn unused(picked: &Path, project: &str, cancelled: &AtomicBool) -> Re
             found.unreadable_picks.push(pick);
             continue;
         }
-        // A pick with no file has nothing to judge it by, and one holding a copy still being
-        // written (`.part`, renamed once whole) isn't done: kept.
-        if files.is_empty() || files.iter().any(|(file, _)| named(project, file) || in_flight(file)) {
+        // A pick with no file is being made, and one with a recent mark or `.part` file is being
+        // copied into: kept.
+        if files.is_empty() || files.iter().any(|(file, _)| in_flight(file)) {
+            found.busy_picks.push(pick);
+            continue;
+        }
+        if files.iter().any(|(file, _)| named(project, file)) {
             continue;
         }
         found.files += files.len();
@@ -113,10 +133,18 @@ fn gather(path: &Path, depth: usize, files: &mut Vec<(PathBuf, u64)>) -> bool {
     complete
 }
 
-/// Whether `file` is a copy still being written: the phones write a picked copy as `<name>.part`
-/// and rename it once whole.
+/// Whether `file` says its pick is being copied into: a [`COPYING`] mark or a `.part` copy, written
+/// in the last [`STALE`].
 fn in_flight(file: &Path) -> bool {
-    file.extension().is_some_and(|e| e == "part")
+    let marks = file.file_name().is_some_and(|n| n == COPYING) || file.extension().is_some_and(|e| e == "part");
+    marks && recent(file)
+}
+
+/// Whether `file` was last written in the last [`STALE`] (or in the future, as a clock set back
+/// makes it).
+fn recent(file: &Path) -> bool {
+    let Ok(written) = std::fs::symlink_metadata(file).and_then(|m| m.modified()) else { return false };
+    std::time::SystemTime::now().duration_since(written).map_or(true, |age| age < STALE)
 }
 
 /// Whether the project's JSON names `file`, written as JSON writes it.
@@ -134,11 +162,13 @@ fn remove_unused(picked: &Path, found: &Unused, project: &str, cancelled: &Atomi
     let now = unused(picked, project, cancelled)?;
     let still: Vec<PathBuf> = found.picks.iter().filter(|pick| now.picks.contains(pick)).cloned().collect();
     let mut removed = remove(&still, cancelled);
-    // Each pick asked about that isn't removable now, counted once: not read in full, or named.
+    // Each pick asked about that isn't removable now, counted once: not read in full, being copied
+    // into, or named (what is left of those that still exist).
     let kept: Vec<&PathBuf> = found.picks.iter().filter(|pick| !now.picks.contains(pick)).collect();
     removed.unreadable = kept.iter().filter(|pick| now.unreadable_picks.contains(pick)).count();
-    // A pick that is gone since (removed elsewhere) isn't kept for being named.
-    removed.now_named = kept.iter().filter(|pick| pick.exists() && !now.unreadable_picks.contains(pick)).count();
+    removed.busy = kept.iter().filter(|pick| now.busy_picks.contains(pick)).count();
+    removed.now_named =
+        kept.iter().filter(|pick| pick.exists() && !now.unreadable_picks.contains(pick) && !now.busy_picks.contains(pick)).count();
     Ok(removed)
 }
 
@@ -233,9 +263,13 @@ pub(crate) fn confirm(app: &mut RustGisApp, ctx: &egui::Context, found: Unused) 
     }
 }
 
-/// Whether unused copies are being removed now.
+/// Whether unused copies are being removed now. Done once the thread has finished, though its
+/// answer is only said by the touch interface (which the user may have left meanwhile).
 pub(crate) fn removing(ctx: &egui::Context) -> bool {
-    matches!(job(ctx), Job::Removing(..))
+    match job(ctx) {
+        Job::Removing(result, _) => result.lock().unwrap_or_else(|e| e.into_inner()).is_none(),
+        _ => false,
+    }
 }
 
 /// Lets go of what was found, or stops what is running.
@@ -266,6 +300,10 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Some(Ok(found)) if found.picks.is_empty() => {
                 set_job(ctx, Job::Idle);
                 let mut text = tl!("No copies of picked files are unused: the project names every one.").to_string();
+                if !found.busy_picks.is_empty() {
+                    text.push(' ');
+                    text.push_str(&busy_said(found.busy_picks.len()));
+                }
                 if found.unreadable > 0 {
                     text.push(' ');
                     text.push_str(&unreadable_said(found.unreadable));
@@ -306,6 +344,9 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     let n = removed.now_named.to_string();
                     said(i18n::fmt("{n} kept: the project names them now.", &[("n", &n)]));
                 }
+                if removed.busy > 0 {
+                    said(busy_said(removed.busy));
+                }
                 if removed.unreadable > 0 {
                     said(unreadable_said(removed.unreadable));
                 }
@@ -317,6 +358,11 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
         },
     }
+}
+
+/// What is said of `n` picks being copied into, kept.
+fn busy_said(n: usize) -> String {
+    i18n::fmt("{n} picks are still being copied into and were kept.", &[("n", &n.to_string())])
 }
 
 /// What is said of `n` picks that couldn't be read in full and were kept.
@@ -384,8 +430,40 @@ mod tests {
         let picked = root.join("picked");
         std::fs::create_dir_all(picked.join("4/0")).unwrap();
         std::fs::write(picked.join("4/0/big.gpkg.part"), b"half").unwrap();
+        // Between two documents of one pick: a copy done, the next not started, the mark there.
+        std::fs::create_dir_all(picked.join("5/0")).unwrap();
+        std::fs::write(picked.join("5").join(COPYING), b"").unwrap();
+        std::fs::write(picked.join("5/0/roads.gpkg"), b"whole").unwrap();
         let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
         assert!(found.picks.is_empty());
+        assert_eq!(found.busy_picks, [picked.join("4"), picked.join("5")]);
+        // Found unused when asked, then copied into before the removal: kept, and said as such.
+        std::fs::remove_file(picked.join("5").join(COPYING)).unwrap();
+        let asked = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert_eq!(asked.picks, [picked.join("5")]);
+        std::fs::write(picked.join("5/0/rivers.gpkg.part"), b"half").unwrap();
+        let removed = remove_unused(&picked, &asked, "{}", &AtomicBool::new(false)).unwrap();
+        assert_eq!((removed.files, removed.busy, removed.now_named), (0, 1, 0));
+        assert!(picked.join("5/0/roads.gpkg").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pick_left_by_a_copy_cut_short_long_ago_is_judged_like_any_other() {
+        let root = std::env::temp_dir().join(format!("rustgis-copies-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        std::fs::create_dir_all(picked.join("6/0")).unwrap();
+        let (mark, part) = (picked.join("6").join(COPYING), picked.join("6/0/big.gpkg.part"));
+        std::fs::write(&mark, b"").unwrap();
+        std::fs::write(&part, b"half").unwrap();
+        let long_ago = std::time::SystemTime::now() - STALE - std::time::Duration::from_secs(60);
+        for file in [&mark, &part] {
+            std::fs::File::options().write(true).open(file).unwrap().set_modified(long_ago).unwrap();
+        }
+        let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert_eq!(found.picks, [picked.join("6")]);
+        assert!(found.busy_picks.is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
