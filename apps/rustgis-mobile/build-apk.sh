@@ -35,7 +35,10 @@ newest() { { ls -d "$1"/*/ 2>/dev/null || true; } | sort -V | tail -1 | sed 's:/
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(newest "$sdk/ndk")}
 tools=$(newest "$sdk/build-tools")
 platform=$(newest "$sdk/platforms")
-for need in "$ANDROID_NDK_HOME" "$tools" "$platform"; do
+# Signing needs only the build-tools (apksigner).
+needs=("$tools")
+[ -n "$sign_only" ] || needs+=("$ANDROID_NDK_HOME" "$platform")
+for need in "${needs[@]}"; do
     [ -d "$need" ] || { echo "build-apk: the Android SDK at $sdk has no NDK, build-tools or platform (see README.md)" >&2; exit 1; }
 done
 out=$root/target/android

@@ -326,10 +326,11 @@ to TestFlight, where the internal testers' group gets it. A manual run builds an
 workflow artifacts, and uploads to TestFlight only when asked. Building and signing are separate
 jobs: the build jobs run every crate's build script with no secret and hand on only the unsigned
 app, and the sign jobs run on fresh runners, from a checkout no build has run in (`build-apk.sh
---sign-only`, `build-ios.sh --sign-only`). The secrets its header lists are the `mobile-release`
-environment's, which only `main` and `v*` tags may use. A pull request that changes
-`apps/rustgis-mobile` builds both with no secrets: the APK signed with a throwaway debug key, the
-iOS app unsigned.
+--sign-only`, `build-ios.sh --sign-only`). The signature vouches for what the build job made: what
+dependencies compile into the app is kept in hand by `Cargo.lock` and reviewed updates. The secrets
+its header lists are the `mobile-release` environment's, which only `main` and `v*` tags may use. A
+pull request that changes `apps/rustgis-mobile` builds both with no secrets: the APK signed with a
+throwaway debug key, the iOS app unsigned.
 
 The Android release key (`ANDROID_KEYSTORE_BASE64`) can't be replaced: an APK signed with
 another key doesn't install as an update of one signed with it. Keep a copy of the keystore and

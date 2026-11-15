@@ -60,6 +60,7 @@ sign_app() {
     ls -lh "$out/RustGIS.ipa"
 }
 if [ -n "$sign_only" ]; then
+    [ "$kind" = device ] || { echo "build-ios: --sign-only signs a device build, not a $kind one" >&2; exit 1; }
     [ -x "$app/RustGIS" ] || { echo "build-ios: no app to sign at $app: build it with IOS_UNSIGNED=1 first" >&2; exit 1; }
     sign_app
     exit 0

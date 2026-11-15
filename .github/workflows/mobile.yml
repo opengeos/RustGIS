@@ -9,7 +9,8 @@ name: Mobile release
 # Building and signing are separate jobs. A build job runs every crate's build script and holds no
 # secret; it hands on only the unsigned app. A sign job runs on a fresh runner, from a fresh
 # checkout the build never touched, and compiles nothing: a build script can't reach the keys,
-# nor change the scripts that use them.
+# nor change the scripts that use them. The signature vouches for what the build job made, no more:
+# what a dependency compiles into the app is kept in hand by Cargo.lock and the reviewed updates.
 #
 # The secrets are the `mobile-release` environment's, which only main and v* tags may use, so a
 # run from any other branch never sees them (GeoLibre uses the same names):
