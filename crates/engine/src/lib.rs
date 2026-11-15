@@ -563,6 +563,8 @@ pub struct Notice {
     localized: Option<notice_text::NoticeText>,
     /// How the troubleshooting history files it (an error, a warning or information).
     pub(crate) severity: rustgis_data::diagnostics::Severity,
+    /// Describes a committed external write, which restoring a project cannot undo.
+    written: bool,
 }
 
 impl Notice {
@@ -676,6 +678,12 @@ struct PutAside {
 pub struct Session {
     pub(crate) boxes: box_edit::Cache,
     policy: policy::State,
+    /// Project generation and trusted exact asset provenance, never serialized.
+    pub(crate) document_assets: (u64, std::collections::BTreeMap<(String, String), crate::render::rustgis_tiles::address::Origin>),
+    /// Project generation and admitted catalog-node provenance, scoped by connection definition.
+    pub(crate) browse_origins: (u64, std::collections::BTreeMap<(String, String, String), crate::render::rustgis_tiles::address::Origin>),
+    /// A native transport answer scoped over one synchronous connection.browse dispatch.
+    pub(crate) browse_response: Option<(String, String, crate::render::rustgis_tiles::address::Origin)>,
     pub project: Project,
     pub path: Option<PathBuf>,
     /// What was run in this session (#797), whatever project was open: kept in memory only, so
@@ -1235,6 +1243,9 @@ impl Session {
             keep_tool: false,
             active_layout: None,
             policy: Default::default(),
+            document_assets: Default::default(),
+            browse_origins: Default::default(),
+            browse_response: None,
             trusted_tasks: Default::default(),
             task_running: false,
             trusted_models: Default::default(),
@@ -1523,12 +1534,6 @@ impl Session {
     /// step to be read off the frame ([`Session::zarr_off_frame`]): playing holds its next step.
     pub fn zarr_waiting(&self) -> bool {
         self.zarr_off_frame && cmd::zarr::waiting(self)
-    }
-
-    /// Drops the private prepared value left by a command that did not take it; owned reads
-    /// enter only through [`cmd::reads::read_land`].
-    pub fn drop_read(&mut self) {
-        self.read_ahead = None;
     }
 
     /// Shows the Zarr steps read off the frame ([`Session::zarr_off_frame`]) once they land: the
@@ -1945,17 +1950,17 @@ impl Session {
                     self.edit_counts = c;
                 }
                 // What it said it had done ("Deleted 3 features") didn't happen: those notices
-                // go; its errors stay.
+                // go; its errors and notices of committed external writes stay.
                 let new = usize::try_from(self.notices_given.saturating_sub(said)).unwrap_or(usize::MAX).min(self.notices.len());
                 let start = self.notices.len() - new;
                 let withdrawn: Vec<Notice> = self.notices.drain(start..).collect();
                 // A zoom it couldn't make, said and now withdrawn, is said again by the next one.
-                if withdrawn.iter().any(|n| n.text == BEYOND_PROJECTION) && self.beyond_said == Some(true) {
+                if withdrawn.iter().any(|n| !n.error && !n.written && n.text == BEYOND_PROJECTION) && self.beyond_said == Some(true) {
                     self.beyond_said = Some(false);
                 }
-                let errors: Vec<Notice> = withdrawn.into_iter().filter(|n| n.error).collect();
-                self.notices_given -= (new - errors.len()) as u64;
-                self.notices.extend(errors);
+                let kept: Vec<Notice> = withdrawn.into_iter().filter(|n| n.error || n.written).collect();
+                self.notices_given -= (new - kept.len()) as u64;
+                self.notices.extend(kept);
                 let mut recorded_failure = false;
                 for record in failed_history.into_iter().skip(history_from).filter(|record| {
                     !record.ok && rustgis_analysis::resolve_published(&record.id).is_some_and(|r| cmd::gp::writes_files(r.spec()))
@@ -2422,6 +2427,26 @@ impl Session {
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
     }
 
+    /// A notice about a file or database write that has committed, not a pending delivery or
+    /// an in-memory edit. It follows the ordinary redaction, bounds and diagnostics path, but
+    /// survives a later enclosing command's rollback.
+    pub(crate) fn notify_written(&mut self, text: impl Into<String>, error: bool) {
+        let mark = self.notice_mark();
+        self.notify(text, error);
+        self.retain_written_notices(mark);
+    }
+
+    /// Marks only the still-kept notices since `mark` as describing a confirmed external
+    /// write. Call after commit, including for preparation losses published before it. A
+    /// failed write or queued browser download must not retain its preparation notices.
+    pub(crate) fn retain_written_notices(&mut self, mark: u64) {
+        let n = usize::try_from(self.notices_given.saturating_sub(mark)).unwrap_or(usize::MAX).min(self.notices.len());
+        let start = self.notices.len() - n;
+        for notice in self.notices.iter_mut().skip(start) {
+            notice.written = true;
+        }
+    }
+
     /// Says, once per system, that a coordinate system this project uses (a map's projection, a
     /// layer's or a raster's) or a command used (an export's target, on its worker thread too)
     /// needed a datum grid RustGIS doesn't have, so a less accurate transformation placed it:
@@ -2605,6 +2630,7 @@ impl Session {
             error: severity == rustgis_data::diagnostics::Severity::Error,
             localized: None,
             severity,
+            written: false,
         });
         self.notices_given += 1;
         if self.notices.len() > 200 {

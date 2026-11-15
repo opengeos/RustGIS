@@ -122,7 +122,7 @@ fn export_log(s: &mut Session, p: &Value) -> CmdResult {
     rustgis_data::io::write_atomic_with(&path, |w| s.log.write(w, format == "csv")).map_err(|e| format!("{}: {e}", path.display()))?;
     // Entries dropped past the log's limits aren't in the file: said.
     let dropped = s.log.dropped_said().map(|d| format!("; not in it: {d}")).unwrap_or_default();
-    s.notify(format!("Exported the session log ({n} entries) to {}{dropped}", path.display()), false);
+    s.notify_written(format!("Exported the session log ({n} entries) to {}{dropped}", path.display()), false);
     Ok(json!({"path": path.display().to_string(), "entries": n, "format": format}))
 }
 
@@ -537,17 +537,23 @@ fn write(s: &mut Session, path: PathBuf) -> CmdResult {
     let stripped = report.layer_addresses();
     s.mark_saved();
     s.edit_counts.clear();
-    s.notify(format!("Saved {}", path.display()), false);
+    let written = s.notice_mark();
+    s.notify_written(format!("Saved {}", path.display()), false);
     crate::durable::notify(s, &report);
+    s.retain_written_notices(written);
     s.path = Some(destination);
     Ok(json!({"path": path.display().to_string(), "stripped": stripped}))
 }
 
 /// Names the project after its file, as Save As does, so a renamed or copied file opens under
-/// its own name.
+/// its own name. A file name over 200 characters is cut to 200, and that is said.
 fn name_from_file(s: &mut Session, file: &std::path::Path) {
     if let Some(stem) = file.file_stem().and_then(|x| x.to_str()).map(str::trim).filter(|x| !x.is_empty()) {
         s.project.name = stem.chars().take(200).collect();
+        let n = stem.chars().count();
+        if n > 200 {
+            s.notify(format!("Open Project: the file's name is {n} characters, so the project's name is its first 200 characters"), false);
+        }
     }
 }
 
@@ -572,7 +578,7 @@ fn save_as(s: &mut Session, p: &Value) -> CmdResult {
 
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
     let n = super::ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?;
-    s.project.name = n.chars().take(200).collect();
+    s.project.name = super::within("name", "a project's name", n, 200)?;
     Ok(Value::Null)
 }
 
@@ -618,6 +624,7 @@ pub(crate) fn bbox(e: rustgis_geom::Extent) -> Value {
 /// Everything about the open project in one call (the AI Assistant's and MCP's `list_layers`).
 /// Layers are in table-of-contents order, top first. `nameFilter` keeps the layers and tables
 /// whose name holds it (ignoring case); `includeFields: false` leaves out their fields.
+/// Project inventory; additive element addresses leave existing map-frame summaries intact.
 fn info(s: &mut Session, p: &Value) -> CmdResult {
     let filter = ps(p, "nameFilter").map(|f| f.trim().to_lowercase()).filter(|f| !f.is_empty());
     let named = |name: &str| filter.as_deref().is_none_or(|f| name.to_lowercase().contains(f));
@@ -689,7 +696,7 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
                 })
                 .collect();
             // The page in millimetres, as `layout.page` sets it.
-            json!({"name": lo.name, "width": lo.width, "height": lo.height, "mapFrames": frames})
+            json!({"name": lo.name, "width": lo.width, "height": lo.height, "mapFrames": frames, "elements": super::layout::element_list(lo)})
         })
         .collect();
     Ok(json!({
