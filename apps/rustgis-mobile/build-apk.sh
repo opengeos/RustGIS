@@ -16,7 +16,8 @@
 #
 # With BUNDLETOOL (the path of Google's bundletool jar) it also builds the Android App Bundle
 # Google Play takes (target/android/unsigned.aab), which signing with the release key turns into
-# target/android/rustgis-mobile.aab (Play's upload key). Without the release key it stays unsigned.
+# target/android/rustgis-mobile.aab, the bundle uploaded to Play (see README.md for the key's role
+# in Play App Signing). Without the release key it stays unsigned.
 #
 # Needs: a JDK (keytool, apksigner), the Rust Android targets, cargo-ndk, and an Android SDK with
 # the NDK, build-tools and a platform (see README.md). ANDROID_HOME names the SDK (default ~/Android/Sdk).
@@ -49,7 +50,8 @@ out=$root/target/android
 # The platform linked against is at least the API level the manifest targets.
 if [ -z "$sign_only" ]; then
     target_api=$(sed -n 's/.*targetSdkVersion="\([0-9]*\)".*/\1/p' "$root/apps/rustgis-mobile/AndroidManifest.xml")
-    platform_api=$(basename "$platform" | sed 's/^android-//; s/\..*//')
+    # The leading API level of android-36, android-37.0 or android-36-ext19.
+    platform_api=$(basename "$platform" | sed 's/^android-//; s/[^0-9].*//')
     case $target_api$platform_api in *[!0-9]* | "") platform_api=0 ;; esac
     if [ "$platform_api" -lt "${target_api:-0}" ] || [ -z "$target_api" ]; then
         echo "build-apk: the app targets API $target_api, and the newest platform in $sdk is $(basename "$platform"): install platforms;android-$target_api" >&2

@@ -333,18 +333,20 @@ pull request that changes `apps/rustgis-mobile` builds both with no secrets: the
 throwaway debug key, the iOS app unsigned.
 
 The same run builds the Android App Bundle Google Play takes (`RustGIS-<version>-android.aab`, the
-`rustgis-android-bundle` artifact), signed with the release key as Play's upload key and uploaded
+`rustgis-android-bundle` artifact), signed with the release key and uploaded
 by hand in the Play Console. `build-apk.sh` makes it when `BUNDLETOOL` names Google's bundletool
 jar: the manifest linked in protobuf form, and the APK's dex, libraries and assets as the bundle's
 one module, signed by `--sign-only` with `jarsigner`. A library with a segment aligned to less
 than 16 KB fails the build, as Play refuses one for apps targeting Android 15 and later. The app
 targets API 36.
 
-When the app is first set up in the Play Console, Play App Signing should be given this same key
-as the app signing key (the Console's option to export and upload a key from a Java keystore),
-not a key Play makes: Android installs an update only when it is signed with the certificate the
-installed copy was, so with one key an APK from GitHub and a build from Play update each other.
-With a key Play makes, they can't, and someone moving between them must uninstall first.
+The release key has both roles in Play App Signing. When the app is first set up in the Play
+Console, it is given as the app signing key (the Console's option to export and upload a key from
+a Java keystore), not a key Play makes, and no separate upload key is made, so the bundles are
+uploaded signed with it too (Play takes the app signing key as the upload key when there is no
+other). Android installs an update only when it is signed with the certificate the installed copy
+was: with one key, an APK from GitHub and a build from Play update each other. With a key Play
+makes, they can't, and someone moving between them must uninstall first.
 
 The Android release key (`ANDROID_KEYSTORE_BASE64`) can't be replaced: an APK signed with
 another key doesn't install as an update of one signed with it. Keep a copy of the keystore and

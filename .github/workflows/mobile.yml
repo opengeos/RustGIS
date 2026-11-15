@@ -1,8 +1,9 @@
 name: Mobile release
 
 # The phone apps (apps/rustgis-mobile, #1902) for a published release: a signed Android APK
-# attached to the release, the Android App Bundle for Google Play signed with the same key (Play's
-# upload key) kept as a workflow artifact, and a signed iOS build uploaded to TestFlight. A manual run (from main)
+# attached to the release, the Android App Bundle for Google Play signed with the same key (see
+# the README for its role in Play App Signing) kept as a workflow artifact, and a signed iOS build
+# uploaded to TestFlight. A manual run (from main)
 # builds and signs both and keeps them as workflow artifacts; it uploads to TestFlight only when
 # asked. A pull request that changes apps/rustgis-mobile or this workflow builds both with no
 # secrets: the Android APK signed with a throwaway debug key, the iOS app unsigned.
@@ -91,6 +92,11 @@ jobs:
             exit 1
           fi
           echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+      # The platform the manifest targets (build-apk.sh refuses an older one), named here rather
+      # than left to the runner image.
+      - name: The Android platform
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" >/dev/null
 
       - name: bundletool
         env:
