@@ -257,15 +257,13 @@ fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
     match region {
         CjkRegion::SimplifiedChinese => &[
             ("C:\\Windows\\Fonts\\msyh.ttc", 0),
-            ("/System/Library/Fonts/PingFang.ttc", 0),
-            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
             ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 2),
             ("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", 0),
             ("/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc", 0),
         ],
-        // macOS's PingFang TC has no fixed place in its collection: see `cjk_named_candidates`.
+        // PingFang TC has no fixed place in its collection: see `cjk_named_candidates`.
         CjkRegion::TraditionalChinese => &[
             ("C:\\Windows\\Fonts\\msjh.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 3),
@@ -276,7 +274,6 @@ fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
         CjkRegion::Japanese => &[
             ("C:\\Windows\\Fonts\\YuGothR.ttc", 0),
             ("C:\\Windows\\Fonts\\meiryo.ttc", 0),
-            ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 0),
@@ -284,7 +281,6 @@ fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
         ],
         CjkRegion::Korean => &[
             ("C:\\Windows\\Fonts\\malgun.ttf", 0),
-            ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 1),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
             ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 1),
@@ -293,12 +289,60 @@ fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
     }
 }
 
-/// Installed CJK collections whose face is found by family name, not by index: (path, family).
-fn cjk_named_candidates(region: CjkRegion) -> &'static [(&'static str, &'static str)] {
+/// Where Apple systems keep their fonts: macOS in the top folder, iOS and iPadOS in subfolders
+/// (#2153). The same collection can sit in a different one from one release to the next, so each
+/// Apple face is looked for in all of them.
+const APPLE_FONT_DIRS: &[&str] = &[
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Core",
+    "/System/Library/Fonts/CoreAddition",
+    "/System/Library/Fonts/CoreUI",
+    "/System/Library/Fonts/LanguageSupport",
+    "/System/Library/Fonts/UnicodeSupport",
+    "/System/Library/Fonts/AppFonts",
+];
+
+/// Apple's CJK collections for `region`, by file name: (file, face index). macOS and iOS name some
+/// of them differently (Hiragino Kaku Gothic, PingFang).
+fn apple_cjk_files(region: CjkRegion) -> &'static [(&'static str, u32)] {
     match region {
-        CjkRegion::TraditionalChinese => &[("/System/Library/Fonts/PingFang.ttc", "PingFang TC")],
+        CjkRegion::SimplifiedChinese => &[("PingFang.ttc", 0), ("PingFangUI.ttc", 0), ("Hiragino Sans GB.ttc", 0)],
+        // PingFang TC has no fixed place in its collection: see `apple_cjk_named_files`.
+        CjkRegion::TraditionalChinese => &[],
+        CjkRegion::Japanese => &[("ヒラギノ角ゴシック W3.ttc", 0), ("HiraginoKakuGothic.ttc", 0)],
+        CjkRegion::Korean => &[("AppleSDGothicNeo.ttc", 0)],
+    }
+}
+
+/// Apple's CJK collections whose face is found by family name, not by index: (file, family).
+fn apple_cjk_named_files(region: CjkRegion) -> &'static [(&'static str, &'static str)] {
+    match region {
+        CjkRegion::TraditionalChinese => &[("PingFang.ttc", "PingFang TC"), ("PingFangUI.ttc", "PingFang TC")],
         _ => &[],
     }
+}
+
+/// `file` in each of the Apple font folders, in order.
+fn in_apple_dirs<T: Copy>(files: &[(&str, T)]) -> impl Iterator<Item = (String, T)> {
+    APPLE_FONT_DIRS.iter().flat_map(move |dir| files.iter().map(move |(file, x)| (format!("{dir}/{file}"), *x)))
+}
+
+/// Every installed CJK font candidate for `region`, in order of preference: (path, face index).
+/// Windows first, then Apple's (macOS, iOS), then Linux's.
+fn cjk_paths(region: CjkRegion) -> Vec<(String, u32)> {
+    let listed = cjk_candidates(region);
+    let (windows, rest) = listed.split_at(listed.iter().take_while(|(p, _)| p.starts_with("C:\\")).count());
+    windows
+        .iter()
+        .map(|(p, i)| (p.to_string(), *i))
+        .chain(in_apple_dirs(apple_cjk_files(region)))
+        .chain(rest.iter().map(|(p, i)| (p.to_string(), *i)))
+        .collect()
+}
+
+/// Installed CJK collections whose face is found by family name, not by index: (path, family).
+fn cjk_named_candidates(region: CjkRegion) -> Vec<(String, &'static str)> {
+    in_apple_dirs(apple_cjk_named_files(region)).collect()
 }
 
 /// A CJK font file's bytes. CJK collections are large; accept up to 128 MiB.
@@ -337,7 +381,7 @@ pub fn cjk_font(region: CjkRegion) -> Option<&'static (Vec<u8>, u32)> {
     };
     let found = slot.get_or_init(|| {
         let indexed =
-            cjk_candidates(region).iter().find_map(|(path, index)| read_cjk(path).filter(|b| valid_font(b, *index)).map(|b| (b, *index)));
+            cjk_paths(region).iter().find_map(|(path, index)| read_cjk(path).filter(|b| valid_font(b, *index)).map(|b| (b, *index)));
         indexed.or_else(|| {
             cjk_named_candidates(region).iter().find_map(|(path, family)| {
                 let bytes = read_cjk(path)?;
@@ -542,6 +586,26 @@ mod tests {
         assert_eq!(super::regular_face(epaint_default_fonts::HACK_REGULAR, "Hack"), Some(0));
         assert_eq!(super::regular_face(epaint_default_fonts::HACK_REGULAR, "PingFang TC"), None);
         assert_eq!(super::regular_face(b"not a font", "Hack"), None);
+    }
+
+    /// Every CJK region names an Apple face in macOS's font folder and in iOS's (#2153: Korean
+    /// labels drew as boxes on iOS, whose fonts sit in subfolders), and a Windows one; Windows
+    /// faces are still tried first.
+    #[test]
+    fn every_cjk_region_names_a_face_on_each_platform() {
+        use super::{CjkRegion, cjk_named_candidates, cjk_paths};
+        for region in [CjkRegion::SimplifiedChinese, CjkRegion::TraditionalChinese, CjkRegion::Japanese, CjkRegion::Korean] {
+            let paths: Vec<String> =
+                cjk_paths(region).into_iter().map(|(p, _)| p).chain(cjk_named_candidates(region).into_iter().map(|(p, _)| p)).collect();
+            let in_dir = |dir: &str| paths.iter().any(|p| p.rsplit_once('/').is_some_and(|(d, _)| d == dir));
+            assert!(in_dir("/System/Library/Fonts"), "{region:?}: no macOS face");
+            assert!(in_dir("/System/Library/Fonts/Core"), "{region:?}: no iOS face");
+            assert!(paths.first().is_some_and(|p| p.starts_with("C:\\")), "{region:?}: Windows first");
+        }
+        let korean = cjk_paths(CjkRegion::Korean);
+        assert!(korean.iter().any(|(p, i)| p == "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc" && *i == 0));
+        let japanese = cjk_paths(CjkRegion::Japanese);
+        assert!(japanese.iter().any(|(p, _)| p == "/System/Library/Fonts/Core/HiraginoKakuGothic.ttc"));
     }
 
     /// Traditional Chinese has a web face of its own, not the Simplified one.
