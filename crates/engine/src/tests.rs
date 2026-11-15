@@ -22322,6 +22322,51 @@ fn extrusion_sets_several_layers_alike_or_none() {
     let r = s.run("layer.extrusion", &json!({"layer": "Park", "type": "height", "height": 4})).unwrap();
     assert!(r["note"].as_str().is_some_and(|n| n.contains("the globe draws the polygons flat")), "{r}");
     assert_eq!(x(&s, "Park").unwrap().height, 4.0);
+    // A call that doesn't give the height keeps each layer's own, also below the 1,000 m a new
+    // extrusion starts at: the factor alone, or a field over a constant height.
+    s.run("layer.extrusion", &json!({"layer": "Park", "type": "height", "factor": 3})).unwrap();
+    assert_eq!((x(&s, "Park").unwrap().height, x(&s, "Park").unwrap().factor), (4.0, 3.0));
+    s.run("layer.extrusion", &json!({"layer": pair, "type": "height", "height": 30})).unwrap();
+    s.run("layer.extrusion", &json!({"layer": pair, "type": "field", "field": "h"})).unwrap();
+    for n in ["Blocks", "Towers"] {
+        assert_eq!(x(&s, n).unwrap().height, 30.0, "{n}: the fallback height stays");
+    }
+}
+
+/// Extruding several layers whose diagrams the extrusion hides says so once, with how many more
+/// layers it holds for; layers without a diagram say nothing (#2160).
+#[test]
+fn extruding_several_layers_gives_one_notice_for_their_hidden_diagrams() {
+    let mut s = world();
+    let square = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"h": 10, "k": 2},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
+    for name in ["A", "B", "C"] {
+        s.run("layer.addDataText", &json!({"fileName": format!("{name}.geojson"), "text": square, "name": name})).unwrap();
+    }
+    let hidden = |s: &Session, mark| {
+        s.notices_since(mark).iter().filter(|n| n.text.contains("its diagram doesn't show")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    // No diagram: nothing to say.
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": ["A", "B", "C"], "type": "field", "field": "h"})).unwrap();
+    assert!(hidden(&s, mark).is_empty(), "{:?}", hidden(&s, mark));
+    for (name, n) in [("A", 0), ("B", 1), ("C", 2)] {
+        s.run("layer.diagram", &json!({"layer": name, "kind": "pie", "fields": ["h", "k"]})).unwrap();
+        let mark = s.notice_mark();
+        let layers: Vec<&str> = ["A", "B", "C"][..=n].to_vec();
+        s.run("layer.extrusion", &json!({"layer": layers, "type": "field", "field": "h"})).unwrap();
+        let said = hidden(&s, mark);
+        assert_eq!(said.len(), 1, "one notice: {said:?}");
+        let more = match n {
+            0 => None,
+            1 => Some("(and 1 more layer like it)"),
+            _ => Some("(and 2 more layers like it)"),
+        };
+        assert!(said[0].starts_with("Layer 'A'"), "{said:?}");
+        match more {
+            Some(m) => assert!(said[0].ends_with(m), "{said:?}"),
+            None => assert!(!said[0].contains("more layer"), "{said:?}"),
+        }
+    }
 }
 
 #[test]

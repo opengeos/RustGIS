@@ -179,8 +179,8 @@ fn targets(s: &Session, p: &Value) -> Result<(Vec<u32>, bool), String> {
     if p.get("layer").is_some_and(Value::is_array) { Ok((super::layer::layer_ids(s, p)?, true)) } else { Ok((vec![s.layer_id(p)?], false)) }
 }
 
-/// The names of the layers among `ids` that `bad` picks, quoted ("'A', 'B' and 3 more"), or
-/// `None` when it picks none.
+/// The names of the layers among `ids` that `bad` picks, quoted and joined ("'A', 'B'"; past five,
+/// the first five and "and 3 more"), or `None` when it picks none.
 fn named_where(s: &Session, ids: &[u32], bad: impl Fn(&rustgis_map::Layer) -> bool) -> Option<String> {
     let names: Vec<String> = ids
         .iter()
@@ -235,10 +235,13 @@ fn extrusion(s: &mut Session, p: &Value) -> CmdResult {
             None
         } else {
             let own = field.map(|n| numeric_field(&l.dataset, n)).transpose()?;
+            // A new extrusion starts at 1,000 m, so it shows; an extruded layer keeps its own height
+            // (the fallback where the field holds no number), as it keeps its factor.
+            let height = l.extrusion.as_ref().map(|x| x.height).filter(|h| h.is_finite()).unwrap_or(1000.0);
             let keep = l.extrusion.clone().unwrap_or_default();
             Some(Extrusion {
                 field: own,
-                height: f(p, "height").unwrap_or(keep.height.max(1000.0)).clamp(0.0, 1e7),
+                height: f(p, "height").unwrap_or(height).clamp(0.0, 1e7),
                 factor: f(p, "factor").unwrap_or(keep.factor).clamp(0.0, 1e6),
                 ..keep
             })
@@ -255,7 +258,10 @@ fn extrusion(s: &mut Session, p: &Value) -> CmdResult {
     match hidden.as_slice() {
         [] => {}
         [one] => s.notify(one.clone(), false),
-        [first, rest @ ..] => s.notify(format!("{first} (and {} more layers like it)", rest.len()), false),
+        [first, rest @ ..] => {
+            let more = if rest.len() == 1 { "1 more layer".to_string() } else { format!("{} more layers", rest.len()) };
+            s.notify(format!("{first} (and {more} like it)"), false)
+        }
     }
     // The globe draws polygons flat; extrusion shows on flat maps.
     Ok(if s.map().projection.is_globe() {
