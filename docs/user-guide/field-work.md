@@ -36,9 +36,14 @@ are never removed by themselves. **Remove Unused Copies**, in the More sheet, fi
 project in the window doesn't use, says how many there are and how much room they take, and
 removes them once you agree. A copy still being made is kept.
 
+!!! warning
+    Remove Unused Copies looks only at the project in the window. A copy that another project
+    saved on the phone uses counts as unused, and removing it breaks that project. Open the project
+    whose data you want to keep before removing copies, or keep the copies.
+
 Formats read through GDAL, DuckDB databases and the GeoLibre tools need programs a phone can't
 run: the app says so where they would appear. Convert such data on a computer first. Database
-connections (PostGIS, MySQL, SQL Server) work, as they need no program.
+connections (PostGIS, MySQL, SQL Server) work on a phone too, as they need no program.
 
 ## Capturing features
 
@@ -109,7 +114,8 @@ stand. **Hide My Position** stops it and spares the battery.
 
 **Average Position**, in the Capture sheet, averages the positions that come in while it runs,
 giving the more accurate ones more weight, and says how many it has and how far they spread.
-**Use Average** puts the cross on the average, for a point more exact than a single position.
+**Use Average** puts the cross on the average, which can place a point more precisely than a
+single position.
 
 ### Tracks
 
