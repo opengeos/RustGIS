@@ -422,6 +422,12 @@ fn raster_corners(r: &Raster) -> Option<([f64; 4], [f64; 4])> {
 
 /// A DEM's height at a Web Mercator point, read bilinearly from its first band; nodata and
 /// points off it give `None`.
+/// A DEM's height at a Web Mercator point, before exaggeration or water. Uses the same
+/// bounded bilinear sampling and full-turn wrapping as the ground drawn by [`Ground`].
+pub fn dem_height(raster: &Raster, at: Coord) -> Option<f64> {
+    raster_height(raster, at, crate::raster::full_turn_width(raster))
+}
+
 fn raster_height(r: &Raster, m: Coord, wrap_width: Option<i64>) -> Option<f64> {
     let n = r.transformer().from_merc(m)?;
     let (px, py) = r.transform.to_pixel(n);
