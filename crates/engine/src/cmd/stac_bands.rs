@@ -310,37 +310,40 @@ mod desktop {
         bbox: [f64; 4],
         cell: f64,
     ) -> Result<(Raster, Vec<String>), String> {
-        // One read for a file, whichever of its bands are wanted: the first band to want it, and
+        // One read for a file, whichever of its bands are wanted (the first to want it sets the count), and
         // every band of the file is read, so the count asked is the file's, not the band's place.
         // The cost grows with the file's band count (a 13-band file is about 13 times the bytes
         // and memory of the one band wanted); the values read are bounded by the window's own
         // limit, and a window reader that picks bands would spare it.
         let mut files: Vec<(String, usize)> = Vec::new();
-        let mut firsts: Vec<usize> = Vec::new();
         for (i, band) in picked.iter().enumerate() {
             let href = hrefs.get(i).ok_or("a band has no address")?;
             if !files.iter().any(|(h, _)| h == href) {
                 files.push((href.clone(), band.in_file.max(band.index) as usize));
-                firsts.push(i);
             }
         }
         let read = read_windows(&files, bbox, cell)?;
-        // What a file's read said, with the bands it is for: one notice for a kind, not one a file.
-        let mut window_notes: Vec<(String, Vec<String>)> = Vec::new();
+        // What a file's read said: one notice for a kind, naming every band of the files it is for
+        // and how many files.
+        let mut window_notes: Vec<(String, Vec<String>, usize)> = Vec::new();
         let mut windows: Vec<(String, WindowRaster)> = Vec::new();
-        for (((href, _), i), w) in files.into_iter().zip(firsts).zip(read) {
-            let who = channels.get(i).map_or("band", String::as_str);
+        for ((href, _), w) in files.into_iter().zip(read) {
+            let whos: Vec<String> =
+                picked.iter().zip(channels).zip(hrefs).filter(|(_, h)| **h == href).map(|((_, c), _)| c.clone()).collect();
             for n in w.notes() {
-                match window_notes.iter_mut().find(|(t, _)| *t == n) {
-                    Some((_, whos)) => whos.push(who.to_string()),
-                    None => window_notes.push((n, vec![who.to_string()])),
+                match window_notes.iter_mut().find(|(t, _, _)| *t == n) {
+                    Some((_, bands, files)) => {
+                        bands.extend(whos.iter().cloned());
+                        *files += 1;
+                    }
+                    None => window_notes.push((n, whos.clone(), 1)),
                 }
             }
             windows.push((href, w));
         }
         let mut notes: Vec<String> = window_notes
             .into_iter()
-            .map(|(n, whos)| format!("{} ({} file{}): {n}", whos.join(", "), whos.len(), if whos.len() == 1 { "" } else { "s" }))
+            .map(|(n, bands, files)| format!("{} ({files} file{}): {n}", bands.join(", "), if files == 1 { "" } else { "s" }))
             .collect();
         let sources: Vec<(&Raster, &sb::Band)> = picked
             .iter()
