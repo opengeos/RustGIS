@@ -792,12 +792,16 @@ mod tests {
         assert_eq!(checked_legends([Legend { url: url.clone(), ..Default::default() }]).len(), 1);
         let over = login_address::inherit(&document, &format!("{raw}x"));
         assert!(checked_legends([Legend { url: over, ..Default::default() }]).is_empty());
-        // Arbitrary escapes and plain encoded URLs do not bypass the advertised byte limit.
+        // Arbitrary escapes do not bypass the advertised byte limit.
         let long = format!("{prefix}{}", "%41".repeat(MAX_LEGEND_URL));
         let long = login_address::inherit(&document, &long);
         assert!(checked_legends([Legend { url: long, ..Default::default() }]).is_empty());
         let encoded = login_address::inner(&url).to_string();
-        assert!(checked_legends([Legend { url: encoded, ..Default::default() }]).is_empty());
+        assert_eq!(
+            checked_legends([Legend { url: encoded, ..Default::default() }]).len(),
+            1,
+            "saved URLs retain the same budget after unbinding"
+        );
     }
 
     #[test]

@@ -95,13 +95,17 @@ pub fn inner(address: &str) -> &str {
     parse(address).ok().flatten().map_or(address, |b| b.url)
 }
 
-/// A bound URL's length with the whitespace/control escapes [`as_sent`] writes counted at
-/// their original UTF-8 width. Other escapes, and plain addresses, keep their byte length.
+/// A URL's length with the whitespace/control escapes [`as_sent`] writes counted at their
+/// original UTF-8 width. Other escapes keep their byte length. Plain saved URLs use the same
+/// rule because project saving removes runtime login wrappers, retaining their encoded URL.
 /// Callers also bound the encoded address: this is a limit on the advertised-equivalent URL,
 /// not permission to decode arbitrary escapes or to accept an unbounded runtime wrapper.
 pub fn advertised_len(address: &str) -> usize {
-    let Ok(Some(bound)) = parse(address) else { return address.len() };
-    let url = bound.url;
+    let url = match parse(address) {
+        Ok(Some(bound)) => bound.url,
+        Ok(None) => address,
+        Err(_) => return address.len(),
+    };
     let mut chars = url.char_indices();
     let (mut length, mut in_path) = (0usize, true);
     while let Some((at, c)) = chars.next() {
@@ -115,7 +119,7 @@ pub fn advertised_len(address: &str) -> usize {
         {
             length += decoded.len_utf8();
             for _ in 1..width {
-                chars.next();
+                let _ = chars.next();
             }
         } else {
             length += c.len_utf8();
