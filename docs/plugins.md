@@ -191,7 +191,9 @@ cargo build --release --target wasm32-unknown-unknown
   `rc.1`), and build metadata is ignored. So **Update** is offered from `1.0.0-beta.1` to
   `1.0.0-beta.2` and to `1.0.0`, never to an equal or older version. `minRustgisVersion`
   compares only the numbers: RustGIS refuses a plugin that needs a newer RustGIS, and a
-  RustGIS pre-release such as `0.7.0-rc.1` runs plugins that need `0.7.0`.
+  RustGIS pre-release such as `0.7.0-rc.1` runs plugins that need `0.7.0`. Browse lists a
+  registry release that needs a newer RustGIS as *Needs RustGIS 0.7.0*, without downloading it
+  or offering it as an update.
 - `permissions`: `edit`, `files` and `network` (see [Safety](#safety)); empty by default.
   Ask only for what you use.
 - `commands[].params`: a string describing the command's parameters for scripts and agents,

@@ -134,10 +134,16 @@ impl Entry {
         crate::manifest::translate(&self.i18n, lang, s)
     }
 
-    /// Whether the plugin has a package for this platform. Without one it is listed, not
-    /// installed: its packages are for other platforms.
+    /// Whether the plugin can be installed here: it has a package for this platform, and this
+    /// RustGIS is as new as it needs (see [`Entry::needs_rustgis`]). Otherwise it is listed, not
+    /// downloaded, installed or offered as an update.
     pub fn available(&self) -> bool {
-        !self.package.is_empty()
+        !self.package.is_empty() && self.needs_rustgis().is_none()
+    }
+
+    /// The RustGIS this release needs (its `minRustgisVersion`), when that is newer than this one.
+    pub fn needs_rustgis(&self) -> Option<&str> {
+        (!crate::manifest::rustgis_meets(&self.min_rustgis_version)).then_some(self.min_rustgis_version.as_str())
     }
 
     /// The platforms the plugin has a package for, by the names shown for them (`Windows`,
@@ -146,8 +152,12 @@ impl Entry {
         PLATFORMS.iter().filter(|(key, _)| self.packages.contains_key(*key)).map(|(_, name)| *name).collect()
     }
 
-    /// Why the plugin can't be installed here, for one with packages for other platforms only.
+    /// Why the plugin can't be installed here: it needs a newer RustGIS, or its packages are for
+    /// other platforms.
     pub fn unavailable(&self) -> String {
+        if let Some(min) = self.needs_rustgis() {
+            return format!("{} needs RustGIS {min} or newer (this is {})", self.name, crate::manifest::RUSTGIS_VERSION);
+        }
         let (here, has) = (this_platform_name(), self.platforms());
         if has.is_empty() {
             return format!("{} has no package for {here}", self.name);
