@@ -166,5 +166,5 @@ they differ. A package for an area the project doesn't have is refused.
 - **Choosing a folder** is not possible with the phone's picker; the app says so where one is
   asked for.
 - **Preferences, saved passwords and autosave** are not available on a phone yet.
-- **HTTPS** is checked against a bundled list of trusted roots rather than the device's own, and
-  the app says so once.
+- **HTTPS** on Android is checked against a bundled list of trusted roots rather than the
+  device's own, and the app says so once. An iPhone or iPad uses the device's own.
