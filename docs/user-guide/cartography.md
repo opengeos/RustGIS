@@ -732,8 +732,9 @@ and on a tilted map drawn without the graphics card, extrusions are painted in t
 stand on the ground, so a part raised over a building behind it may be painted under it.
 
 Layers that go together, such as a city model's layers, are raised at once: pick them in the
-Layers pane, right-click one of them and choose **Extrusion › None**, **By Field ›** (the numeric
-fields every one of them has) or, once all are extruded, **Base › Ground** or **Base › By Field ›**.
+Layers pane, right-click one of them and choose **Extrusion › None** or **By** a numeric field
+every one of them has (**By height**) and, once all are extruded, **Extrusion Base › Ground** or
+**By** a field (**By base_height**).
 It acts on their polygon layers and says so when the others are left out, sets every one alike in
 one step to undo, and leaves each one's height, factor and base as they were where the choice
 doesn't set them. `layer.extrusion` and `layer.extrusionBase` take a list of layers in `layer`

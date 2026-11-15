@@ -2146,16 +2146,19 @@ fn new_group(app: &mut RustGisApp, params: Value) {
     app.dialogs.text = name;
 }
 
-/// The several layers' Extrusion menu (#2160): the picked polygon layers raised alike by a numeric
-/// field every one has, or flattened, and, once all are raised, what they stand on. One command
-/// for them all, so one undo step. Buttons, not radios: their settings may differ, and the ribbon
-/// shows one layer's.
+/// The several layers' Extrusion and Extrusion Base menus (#2160): the picked polygon layers
+/// raised alike by a numeric field every one has, or flattened, and, once all are raised, what
+/// they stand on. Two entries one level deep, as the ribbon's Type and Base menus, rather than
+/// nested menus three deep. One command for them all, so one undo step. Buttons, not radios: their
+/// settings may differ, and the ribbon shows one layer's.
 fn extrusion_menu(app: &mut RustGisApp, ui: &mut Ui, picked: &[u32]) {
     let m = app.session.map();
     let polygons: Vec<&Layer> =
         picked.iter().filter_map(|id| m.layer(*id)).filter(|l| l.geometry_type() == GeometryType::Polygon).collect();
     let Some((first, rest)) = polygons.split_first() else {
-        ui.add_enabled(false, egui::Button::new(tl!("Extrusion"))).on_disabled_hover_text(tl!("None of these layers are polygon layers."));
+        for label in ["Extrusion", "Extrusion Base"] {
+            ui.add_enabled(false, egui::Button::new(tl!(label))).on_disabled_hover_text(tl!("None of these layers are polygon layers."));
+        }
         return;
     };
     // The numeric fields every one has, as the first spells them (the command matches each
@@ -2175,48 +2178,48 @@ fn extrusion_menu(app: &mut RustGisApp, ui: &mut Ui, picked: &[u32]) {
         let _ = app.run(id, p);
         ui.close();
     };
-    let no_field = tl!("These layers share no numeric field.");
-    ui.menu_button(tl!("Extrusion"), |ui| {
-        if ids.len() < picked.len() {
-            let (n, all) = (ids.len().to_string(), picked.len().to_string());
-            ui.weak(crate::i18n::fmt("Polygon layers only: {n} of the {all} selected", &[("n", &n), ("all", &all)]));
+    // What both menus say first: that the others picked are left out, or that no field is shared.
+    let only = (ids.len() < picked.len()).then(|| {
+        let (n, all) = (ids.len().to_string(), picked.len().to_string());
+        crate::i18n::fmt("Polygon layers only: {n} of the {all} selected", &[("n", &n), ("all", &all)])
+    });
+    let head = |ui: &mut Ui| {
+        if let Some(text) = &only {
+            ui.weak(text.as_str());
             ui.separator();
         }
+    };
+    let by = |f: &str| crate::i18n::fmt("By {field}", &[("field", f)]);
+    let no_field = tl!("These layers share no numeric field.");
+    ui.menu_button(tl!("Extrusion"), |ui| {
+        head(ui);
         if ui.button(tl!("None")).clicked() {
             run(app, ui, "layer.extrusion", json!({"type": "none"}));
         }
+        for f in &fields {
+            if ui.button(by(f)).clicked() {
+                run(app, ui, "layer.extrusion", json!({"type": "field", "field": f}));
+            }
+        }
         if fields.is_empty() {
-            ui.add_enabled(false, egui::Button::new(tl!("By Field"))).on_disabled_hover_text(no_field);
-        } else {
-            ui.menu_button(tl!("By Field"), |ui| {
-                for f in &fields {
-                    if ui.button(f.as_str()).clicked() {
-                        run(app, ui, "layer.extrusion", json!({"type": "field", "field": f}));
-                    }
-                }
-            });
+            ui.weak(no_field);
         }
-        if !raised {
-            ui.add_enabled(false, egui::Button::new(tl!("Base")))
-                .on_disabled_hover_text(tl!("Extrude them all first: the base is what their walls stand on."));
-            return;
+    });
+    if !raised {
+        ui.add_enabled(false, egui::Button::new(tl!("Extrusion Base")))
+            .on_disabled_hover_text(tl!("Extrude them all first: the base is what their walls stand on."));
+        return;
+    }
+    ui.menu_button(tl!("Extrusion Base"), |ui| {
+        head(ui);
+        if ui.button(tl!("Ground")).clicked() {
+            run(app, ui, "layer.extrusionBase", json!({"field": null, "base": 0}));
         }
-        ui.menu_button(tl!("Base"), |ui| {
-            if ui.button(tl!("Ground")).clicked() {
-                run(app, ui, "layer.extrusionBase", json!({"field": null, "base": 0}));
+        for f in &fields {
+            if ui.button(by(f)).clicked() {
+                run(app, ui, "layer.extrusionBase", json!({"field": f}));
             }
-            if fields.is_empty() {
-                ui.add_enabled(false, egui::Button::new(tl!("By Field"))).on_disabled_hover_text(no_field);
-            } else {
-                ui.menu_button(tl!("By Field"), |ui| {
-                    for f in &fields {
-                        if ui.button(f.as_str()).clicked() {
-                            run(app, ui, "layer.extrusionBase", json!({"field": f}));
-                        }
-                    }
-                });
-            }
-        });
+        }
     });
 }
 
