@@ -323,7 +323,9 @@ TestFlight this way. None of it is automated in CI yet.
 arm64-v8a and x86_64, signed with the release key, and attaches it to the release
 (`RustGIS-<version>-android.apk`, with its `.sha256`), and it builds, signs and uploads the iOS
 app to TestFlight, where the internal testers' group gets it. A manual run builds and signs both
-as workflow artifacts, and uploads to TestFlight only when asked. Its header lists the secrets.
+as workflow artifacts, and uploads to TestFlight only when asked. The secrets its header lists are
+the `mobile-release` environment's, which only `main` and `v*` tags may use: a pull request's run
+builds both unsigned, with no secrets.
 
 The Android release key (`ANDROID_KEYSTORE_BASE64`) can't be replaced: an APK signed with
 another key doesn't install as an update of one signed with it. Keep a copy of the keystore and

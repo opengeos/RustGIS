@@ -1,11 +1,13 @@
 name: Mobile release
 
 # The phone apps (apps/rustgis-mobile, #1902) for a published release: a signed Android APK
-# attached to the release, and a signed iOS build uploaded to TestFlight. A manual run builds and
-# signs both and keeps them as workflow artifacts; it uploads to TestFlight only when asked. A pull
-# request that changes this workflow or the build scripts runs it too, uploading nothing.
+# attached to the release, and a signed iOS build uploaded to TestFlight. A manual run (from main)
+# builds and signs both and keeps them as workflow artifacts; it uploads to TestFlight only when
+# asked. A pull request that changes this workflow or the build scripts builds both unsigned, with
+# no secrets and nothing uploaded.
 #
-# Secrets (GeoLibre uses the same names):
+# The secrets are the `mobile-release` environment's, which only main and v* tags may use, so a
+# run from any other branch never sees them (GeoLibre uses the same names):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS: the release key.
 #     Every APK must be signed with the same one, or Android refuses it as an update.
 #   APPLE_IOS_CERTIFICATE_BASE64, APPLE_IOS_CERTIFICATE_PASSWORD: the Apple Distribution
@@ -34,21 +36,23 @@ on:
 permissions:
   contents: read
 
-# A release run is never cancelled: it is the only one that attaches that tag's APK.
+# Only a pull request's runs are cancelled by a newer one: a release run is the only one that
+# attaches that tag's APK, and a manual run may be uploading to TestFlight.
 concurrency:
   group: mobile-${{ github.event_name }}-${{ github.event.release.tag_name || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Whether this run signs (a release or a manual run), and so uses the secrets.
+  SIGNS: ${{ github.event_name != 'pull_request' }}
 
 jobs:
   android:
     name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    permissions:
-      contents: write
+    environment: ${{ github.event_name != 'pull_request' && 'mobile-release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -78,6 +82,7 @@ jobs:
           echo "version=$crate" >> "$GITHUB_OUTPUT"
 
       - name: The release key
+        if: env.SIGNS == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -88,27 +93,39 @@ jobs:
           [ -n "$KEYSTORE_PASSWORD" ] || missing+=(ANDROID_KEYSTORE_PASSWORD)
           [ -n "$KEY_ALIAS" ] || missing+=(ANDROID_KEY_ALIAS)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::No release key: the secrets ${missing[*]} aren't set."
+            echo "::error::No release key: the secrets ${missing[*]} aren't set in the mobile-release environment."
             exit 1
           fi
           umask 077
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
-      - name: Build and sign the APK
+      - name: Build the APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore" apps/rustgis-mobile/build-apk.sh arm64-v8a x86_64
-          rm -f "$RUNNER_TEMP/release.keystore"
+          # Signed with the release key when the step above set ANDROID_KEYSTORE; a pull request's
+          # build is signed with a debug key made for it.
+          apps/rustgis-mobile/build-apk.sh arm64-v8a x86_64
           mkdir -p dist
           apk="RustGIS-$VERSION-android.apk"
           cp target/android/rustgis-mobile.apk "dist/$apk"
           (cd dist && sha256sum "$apk" > "$apk.sha256")
           tools="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
-          "$tools/apksigner" verify --print-certs "dist/$apk" | grep -E 'DN|SHA-256'
+          signer="$("$tools/apksigner" verify --print-certs "dist/$apk")"
+          printf '%s\n' "$signer" | grep -E 'DN|SHA-256'
+          # A release APK signed with anything but the release key couldn't update an installed one.
+          if [ "$SIGNS" = true ] && printf '%s\n' "$signer" | grep -q 'CN=RustGIS debug'; then
+            echo "::error::The APK is signed with the debug key, not the release key."
+            exit 1
+          fi
+
+      - name: Remove the release key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -116,8 +133,20 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      - name: Attach to the GitHub Release
-        if: github.event_name == 'release'
+  # Its own job, so only it holds a token that can write to the repository.
+  android-release:
+    name: Attach the APK to the release
+    if: github.event_name == 'release'
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rustgis-android
+          path: dist
+      - name: Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
@@ -127,6 +156,7 @@ jobs:
     name: iOS to TestFlight
     runs-on: macos-latest
     timeout-minutes: 90
+    environment: ${{ github.event_name != 'pull_request' && 'mobile-release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -152,6 +182,7 @@ jobs:
 
       - name: The signing identity and profile
         id: signing
+        if: env.SIGNS == 'true'
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_IOS_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_IOS_CERTIFICATE_PASSWORD }}
@@ -163,13 +194,14 @@ jobs:
           [ -n "$CERTIFICATE_PASSWORD" ] || missing+=(APPLE_IOS_CERTIFICATE_PASSWORD)
           [ -n "$PROFILE_BASE64" ] || missing+=(APPLE_IOS_PROVISIONING_PROFILE_BASE64)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::No iOS signing: the secrets ${missing[*]} aren't set."
+            echo "::error::No iOS signing: the secrets ${missing[*]} aren't set in the mobile-release environment."
             exit 1
           fi
           umask 077
           # A keychain of this run's own, with a random password, so the key never reaches the
-          # login keychain; removed at the end.
+          # login keychain; removed at the end. `security` takes its passwords as arguments only.
           keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
           pass="$(openssl rand -base64 24)"
           security create-keychain -p "$pass" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
@@ -183,14 +215,21 @@ jobs:
           [ -n "$identity" ] || { echo "::error::The certificate holds no Apple Distribution identity."; exit 1; }
           printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
           echo "identity=$identity" >> "$GITHUB_OUTPUT"
-          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
 
       - name: Build and sign the app
+        if: env.SIGNS == 'true'
         env:
           IOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
         run: IOS_PROFILE="$RUNNER_TEMP/app.mobileprovision" apps/rustgis-mobile/build-ios.sh device
 
+      - name: Build the app unsigned
+        if: env.SIGNS != 'true'
+        # build-ios.sh exits 1 after building an app it can't sign (no .ipa): passing is the app
+        # being there.
+        run: apps/rustgis-mobile/build-ios.sh device || test -x target/ios/RustGIS.app/RustGIS
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: env.SIGNS == 'true'
         with:
           name: rustgis-ios
           path: target/ios/RustGIS.ipa
@@ -209,7 +248,7 @@ jobs:
           [ -n "$ISSUER_ID" ] || missing+=(APP_STORE_CONNECT_API_ISSUER_ID)
           [ -n "$KEY" ] || missing+=(APP_STORE_CONNECT_API_KEY)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::No upload: the secrets ${missing[*]} aren't set."
+            echo "::error::No upload: the secrets ${missing[*]} aren't set in the mobile-release environment."
             exit 1
           fi
           umask 077
@@ -217,10 +256,11 @@ jobs:
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           printf '%s\n' "$KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
           xcrun altool --upload-app --type ios --file target/ios/RustGIS.ipa --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
-          rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
 
-      - name: Remove the keychain
-        if: always() && steps.signing.outputs.keychain != ''
+      - name: Remove the keys and the keychain
+        if: always()
         env:
           KEYCHAIN: ${{ steps.signing.outputs.keychain }}
-        run: security delete-keychain "$KEYCHAIN" || true
+        run: |
+          rm -rf "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/app.mobileprovision" "$HOME/.appstoreconnect/private_keys"
+          if [ -n "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
