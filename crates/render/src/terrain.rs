@@ -15,6 +15,8 @@ use rustgis_tiles::template::{self, TileId};
 
 mod water;
 
+pub(crate) use water::Water;
+
 /// Cells along each side of a tilted view's band laid over the relief while the map moves (the
 /// drape, `tilt_drape` in the app): few enough to lay out every frame.
 pub const CELLS: usize = 40;
@@ -221,6 +223,10 @@ impl Ground {
             }),
         };
         (height, detailed)
+    /// The terrain's water (#1915), when it names a water layer: what Shaded Relief draws with
+    /// the even light of flat ground.
+    pub(crate) fn water(&self) -> Option<&Arc<Water>> {
+        self.water.as_ref()
     }
 
     /// How many polygons of the terrain's water layer have no level, so stay on the ground: no
