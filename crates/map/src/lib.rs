@@ -793,7 +793,16 @@ impl Layer {
     /// Callers decide which opening notices were already shown and which the new read discovered.
     pub fn load_all_reported(&self) -> Result<(Dataset, rustgis_data::ReadReport), String> {
         let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), rustgis_data::ReadReport::default())) };
-        let (mut ds, report) = copy.read_all()?;
+        let (mut ds, mut report) = copy.read_all()?;
+        if let Some(info) = copy.info() {
+            ds.zm_dropped |= info.zm_dropped;
+            for note in &info.notes {
+                let message = format!("{}: {note}", info.name);
+                if !report.messages.contains(&message) {
+                    report.messages.push(message);
+                }
+            }
+        }
         ds.name = self.dataset.name.clone();
         ds.zm_dropped |= self.dataset.zm_dropped;
         if ds.features.is_empty() && ds.geometry_type == rustgis_data::GeometryType::None {

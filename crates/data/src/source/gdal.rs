@@ -439,7 +439,7 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
     }
     // A repair/reload reports the same conversion loss as Add. For a mixed layer, compare
     // only the selected family; the other families have their own counted notice.
-    let expected = match family.filter(|_| info.family.is_none()) {
+    let expected = match family {
         Some(family) => count_geometry_filter(src, &info.name, family.filter()).map(Some),
         None => Ok(info.count.and_then(|n| u64::try_from(n).ok())),
     };

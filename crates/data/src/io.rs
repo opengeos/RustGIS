@@ -1661,19 +1661,24 @@ fn found_projected_xy(headers: &[String]) -> Option<(usize, usize)> {
     find(X_NAMES, "x").zip(find(Y_NAMES, "y")).or_else(|| found_xy(headers))
 }
 
-/// Prefers a specific longitude/latitude pair when it has at least as many usable, nonzero
-/// degree positions as the first
-/// pair has finite positions. The choice covers the whole file;
-/// explicit columns and projected systems bypass this inference.
-fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(usize, usize)>> {
-    let Some(xy) = found_xy(headers) else { return Ok(None) };
+/// A specific geographic pair, excluding generic X/Y aliases.
+fn found_geographic_xy(headers: &[String]) -> Option<(usize, usize)> {
     let find = |names: &[&str], aliases: &[&str], generic: &str| {
         headers.iter().position(|h| {
             let name = h.trim().to_ascii_lowercase();
             name != generic && (names.contains(&name.as_str()) || aliases.contains(&name.as_str()))
         })
     };
-    let Some(geographic) = find(LON_NAMES, LON_ALIASES, "x").zip(find(LAT_NAMES, LAT_ALIASES, "y")) else { return Ok(Some(xy)) };
+    find(LON_NAMES, LON_ALIASES, "x").zip(find(LAT_NAMES, LAT_ALIASES, "y"))
+}
+
+/// Prefers a specific longitude/latitude pair when it has at least as many usable, nonzero
+/// degree positions as the first
+/// pair has finite positions. The choice covers the whole file;
+/// explicit columns and projected systems bypass this inference.
+fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(usize, usize)>> {
+    let Some(xy) = found_xy(headers) else { return Ok(None) };
+    let Some(geographic) = found_geographic_xy(headers) else { return Ok(Some(xy)) };
     if xy == geographic {
         return Ok(Some(xy));
     }
@@ -2347,7 +2352,12 @@ fn csv_cell(v: &Value) -> String {
 fn csv_coordinate_names(fields: &[Field]) -> [String; 2] {
     let taken = |name: &str| fields.iter().any(|f| f.name.trim().eq_ignore_ascii_case(name));
     let pick = |base: &str, known: &[&str]| {
-        let name = known.iter().map(|n| n.to_string()).chain((1..).map(|i| format!("{base}_{i}"))).find(|n| !taken(n));
+        let name = known
+            .iter()
+            .filter(|n| !matches!(**n, "x" | "y"))
+            .map(|n| n.to_string())
+            .chain((1..).map(|i| format!("{base}_{i}")))
+            .find(|n| !taken(n));
         name.unwrap_or_default()
     };
     [pick("longitude", LON_NAMES), pick("latitude", LAT_NAMES)]
@@ -3599,7 +3609,7 @@ impl CsvLosses {
             return None;
         }
         let header: Vec<String> = csv_coordinate_names(fields).into_iter().chain(fields.iter().map(|f| f.name.clone())).collect();
-        let found = found_xy(&header);
+        let found = found_geographic_xy(&header).or_else(|| found_xy(&header));
         if found == Some((0, 1)) {
             return None;
         }
@@ -5394,6 +5404,21 @@ mod tests {
         let (back, _) = read_csv(&out, "t").unwrap();
         assert_eq!(back.features[0].geometry, Some(Geometry::Point(Coord::new(20.0, 10.0))));
         assert_eq!(back.value(0, back.field_index("longitude").unwrap()), &Value::Float(1.5));
+    }
+
+    #[test]
+    fn csv_generic_coordinate_name_collisions_keep_geometry_on_reimport() {
+        let names = ["longitude", "lon", "lng", "long", "latitude", "lat"];
+        let mut ds = Dataset::new("t", GeometryType::Point, names.iter().map(|n| Field::new(*n, FieldType::Double)).collect());
+        ds.push(
+            Some(Geometry::Point(Coord::new(20.0, 10.0))),
+            vec![Value::Float(40.0), Value::Float(40.0), Value::Float(40.0), Value::Float(40.0), Value::Float(50.0), Value::Float(50.0)],
+        );
+        let text = to_csv(&ds).unwrap();
+        assert!(text.starts_with("lon_dd,lat_dd,"), "{text}");
+        let (back, _) = read_csv(&text, "back").unwrap();
+        assert_eq!(back.features[0].geometry, ds.features[0].geometry);
+        assert!(export_losses_notes(&ds, "csv", None, "t.csv").is_empty());
     }
 
     /// A point layer with a field of every longitude name has its longitudes in a column reading
