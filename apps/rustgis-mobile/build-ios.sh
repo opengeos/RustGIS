@@ -7,7 +7,8 @@
 # device:    for iPhones and iPads (aarch64-apple-ios), signed with IOS_SIGN_IDENTITY and the
 #            provisioning profile IOS_PROFILE (a .mobileprovision for org.rustgis.mobile), and
 #            packed as target/ios/RustGIS.ipa for TestFlight. Without them the app is built
-#            unsigned, with no .ipa, and the script exits 1.
+#            unsigned, with no .ipa, and the script exits 1; IOS_UNSIGNED=1 asks for that build
+#            and exits 0.
 #
 # Needs: Xcode (xcrun, codesign, plutil) and the Rust iOS targets (see README.md). There is no
 # Xcode project: cargo builds the executable, and this script makes the bundle around it.
@@ -113,6 +114,11 @@ if [ "$kind" = simulator ]; then
     exit 0
 fi
 
+if [ "${IOS_UNSIGNED:-}" = 1 ]; then
+    # Asked for (CI's pull request builds): the bundle is complete, and isn't signed.
+    echo "build-ios: $app is complete and unsigned (IOS_UNSIGNED=1); no .ipa was made."
+    exit 0
+fi
 if [ -z "${IOS_SIGN_IDENTITY:-}" ] || [ -z "${IOS_PROFILE:-}" ]; then
     # Not a success: there is no .ipa, and the app won't install on a device.
     echo "build-ios: IOS_SIGN_IDENTITY and IOS_PROFILE aren't both set: $app is unsigned, and no .ipa was made." >&2

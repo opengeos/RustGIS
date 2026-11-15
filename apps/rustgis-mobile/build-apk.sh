@@ -50,6 +50,7 @@ mapfile -d '' classes < <(find "$out/java/classes" -name '*.class' -print0)
 "$tools/d8" --release --min-api 26 --lib "$platform/android.jar" --output "$out/java/dex" "${classes[@]}"
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
+[ -n "$version" ] || { echo "build-apk: no version in $root/Cargo.toml" >&2; exit 1; }
 code=${ANDROID_VERSION_CODE:-}
 if [ -z "$code" ]; then
     if [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = false ]; then
