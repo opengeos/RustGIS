@@ -19,6 +19,7 @@ import java.util.ArrayList;
  *
  * An event is one string, its fields separated by tabs:
  *   picked    purpose  name  path    a chosen file, copied to the app's storage
+ *   ended     purpose               a request whose every file failed to be copied
  *   cancelled                        a picker closed without a choice
  *   saved     name                   a file written where the user chose
  *   position  lon  lat  accuracy  time   where the device is (accuracy in metres, or empty;
@@ -611,13 +612,29 @@ public class MainActivity extends NativeActivity {
             final String purpose = this.purpose;
             // Copied off the main thread: a document can be large, or come from the network.
             new Thread(() -> {
-                // One folder for what was picked together, and for nothing else: a file that is
-                // read with the one beside it (a .mif and its .mid) finds it, and a later pick of
-                // the same name can't replace a file the session has open.
+                // One folder for what was picked together, and for nothing else, with a folder of
+                // its own for each folder the documents came from: a file read with the one beside
+                // it (a .shp and its .dbf) finds that one, not one of the same name picked from
+                // elsewhere, and a later pick can't replace a file the session has open.
                 File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
+                ArrayList<String> sources = new ArrayList<>();
+                int copies = 0;
                 try {
                     for (Uri uri : uris) {
-                        copyIn(purpose, uri, dir);
+                        String source = sourceFolder(uri);
+                        int k = sources.indexOf(source);
+                        if (k < 0) {
+                            sources.add(source);
+                            k = sources.size() - 1;
+                        }
+                        if (copyIn(purpose, uri, new File(dir, Integer.toString(k)))) {
+                            copies++;
+                        }
+                    }
+                    // Nothing copied (each failure said): this request ends, by name, as another
+                    // may have been asked for meanwhile (Import DXF stops waiting).
+                    if (copies == 0) {
+                        add("ended\t" + purpose);
                     }
                 } finally {
                     answered();
@@ -653,8 +670,27 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** Copies a picked document into the app's storage, where the Rust side can open it by path. */
-    private void copyIn(String purpose, Uri uri, File dir) {
+    /**
+     * The folder a picked document is in, as far as its provider says: the part of its document
+     * id before the last "/" (the device's storage gives "primary:Download/roads.shp"), with the
+     * provider. A provider whose ids name no folder gives the same answer for all its documents.
+     */
+    private static String sourceFolder(Uri uri) {
+        String id;
+        try {
+            id = android.provider.DocumentsContract.getDocumentId(uri);
+        } catch (RuntimeException e) {
+            id = uri.getPath() == null ? "" : uri.getPath();
+        }
+        int slash = id.lastIndexOf('/');
+        return uri.getAuthority() + "|" + (slash < 0 ? "" : id.substring(0, slash));
+    }
+
+    /**
+     * Copies a picked document into the app's storage, where the Rust side can open it by path.
+     * Returns whether it was copied.
+     */
+    private boolean copyIn(String purpose, Uri uri, File dir) {
         String name = displayName(uri);
         File file = new File(dir, name);
         // Two documents of one name picked together (from two folders) both keep their bytes.
@@ -677,12 +713,14 @@ public class MainActivity extends NativeActivity {
             }
             // The copy's own name: a second document of one name is told from the first.
             add("picked\t" + purpose + "\t" + file.getName() + "\t" + file.getAbsolutePath());
+            return true;
         } catch (Throwable e) {
             // Half a copy would only fill the storage: nothing reports its path to remove it later.
             // (The folder goes only once it is empty.)
             file.delete();
             dir.delete();
             add("failed\t" + name + " wasn't opened: " + e.getMessage());
+            return false;
         }
     }
 
