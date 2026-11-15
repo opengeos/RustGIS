@@ -1267,8 +1267,10 @@ impl Layer {
     /// the smallest, middle and largest value, drawn as the first class is.
     pub fn with_size_legend(&self, mut entries: Vec<symbology::LegendEntry>) -> Vec<symbology::LegendEntry> {
         if let Some(s) = self.size_by.as_ref().filter(|_| symbol_by::SizeBy::applies_to(self)) {
-            let like = entries.first().map_or_else(|| self.renderer.base_symbol(), |e| e.symbol);
-            entries.extend(s.legend(like));
+            let (like, own) = entries.first().map_or_else(|| (self.renderer.base_symbol(), Vec::new()), |e| (e.symbol, e.strokes.clone()));
+            // A class without marks of its own draws the layer's, as the legend's layout does.
+            let strokes = if own.is_empty() { self.line_strokes.clone() } else { own };
+            entries.extend(s.legend(like, &strokes));
         }
         entries
     }

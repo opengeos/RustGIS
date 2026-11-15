@@ -110,19 +110,25 @@ impl SizeBy {
     }
 
     /// Legend rows for the sizes: the smallest, middle and largest value, each drawn with `like`
-    /// (a class's symbol) at its size and labelled with the field.
-    pub fn legend(&self, like: Symbol) -> Vec<crate::symbology::LegendEntry> {
+    /// (a class's symbol) at its size, its marks (`strokes`) scaled to that size as on the map,
+    /// and labelled with the field.
+    pub fn legend(&self, like: Symbol, strokes: &[LineStroke]) -> Vec<crate::symbology::LegendEntry> {
         let like = Symbol { fill: crate::symbology::OTHER_FILL, ..like };
         let (lo, hi) = if self.max > self.min { (self.min, self.max) } else { (self.min, self.min) };
         let mut values = vec![lo, (lo + hi) / 2.0, hi];
         values.dedup();
         values
             .into_iter()
-            .map(|v| crate::symbology::LegendEntry {
-                label: format!("{} {}", self.field, crate::symbology::fmt_num(v)),
-                symbol: Symbol { size: self.size(v), ..like },
-                strokes: Vec::new(),
-                fallback: false,
+            .map(|v| {
+                let size = self.size(v);
+                // Scaled against the class symbol's own size, as `Styler::marks` scales a point's.
+                let marks = if like.size > 0.0 { scale_strokes(strokes, size / like.size) } else { strokes.to_vec() };
+                crate::symbology::LegendEntry {
+                    label: format!("{} {}", self.field, crate::symbology::fmt_num(v)),
+                    symbol: Symbol { size, ..like },
+                    strokes: marks,
+                    fallback: false,
+                }
             })
             .collect()
     }
@@ -132,7 +138,7 @@ impl SizeBy {
 /// `scaling`; values past an end take that end's size, and with no range (`max` not above `min`,
 /// or one too wide to divide) the size halfway.
 pub fn scaled_size(v: f64, min: f64, max: f64, min_size: f32, max_size: f32, scaling: SizeScaling) -> f32 {
-    let t = if max > min { (v - min) / (max - min) } else { 0.5 };
+    let t = if max > min && (max - min).is_finite() { (v - min) / (max - min) } else { 0.5 };
     let t = if t.is_nan() { 0.5 } else { t.clamp(0.0, 1.0) };
     let k = match scaling {
         SizeScaling::Area => t.sqrt(),
@@ -153,6 +159,23 @@ pub fn de_size_by<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<SizeB
             && (0.0..=MAX_SIZE).contains(&s.min_size)
             && (0.0..=MAX_SIZE).contains(&s.max_size)
     }))
+}
+
+/// A point's marks (`strokes`) scaled by `k`, the ratio of its size to its symbol's own: their
+/// offsets, marker sizes and offsets along.
+fn scale_strokes(strokes: &[LineStroke], k: f32) -> Vec<LineStroke> {
+    strokes
+        .iter()
+        .map(|st| {
+            let mut st = *st;
+            st.offset *= k;
+            if let Some(m) = &mut st.markers {
+                m.size *= k;
+                m.offset_along *= k;
+            }
+            st.clamped()
+        })
+        .collect()
 }
 
 /// Reads one expression leniently: text up to [`query::MAX_LEN`], blank or anything else none.
@@ -310,13 +333,20 @@ impl<'a> Styler<'a> {
 
     /// The class's symbol sized by the size mapping, then with the expressions' values.
     fn apply(&self, row: usize, mut sym: Symbol) -> Symbol {
-        if let Some(size) = self.mapped_size(row) {
+        let mapped = self.mapped_size(row);
+        if let Some(size) = mapped {
             sym.size = size;
         }
-        match &self.by {
+        let sym = match &self.by {
             Some(b) => b.apply(&self.layer.dataset, row, sym),
             None => sym,
+        };
+        // A point the mapping sizes 0 draws nothing: no fill, outline or marker, as an expression's 0 does.
+        if mapped.is_some() && sym.size == 0.0 {
+            let none = Rgba([0, 0, 0, 0]);
+            return Symbol { fill: none, stroke: none, stroke_width: 0.0, ..sym };
         }
+        sym
     }
 
     pub fn symbol(&self, row: usize) -> Symbol {
@@ -365,21 +395,7 @@ impl<'a> Styler<'a> {
         if base.is_nan() || base <= 0.0 {
             return Cow::Borrowed(strokes);
         }
-        let k = size / base;
-        Cow::Owned(
-            strokes
-                .iter()
-                .map(|st| {
-                    let mut st = *st;
-                    st.offset *= k;
-                    if let Some(m) = &mut st.markers {
-                        m.size *= k;
-                        m.offset_along *= k;
-                    }
-                    st.clamped()
-                })
-                .collect(),
-        )
+        Cow::Owned(scale_strokes(strokes, size / base))
     }
 
     pub fn marker_turn(&self, row: usize) -> f32 {
@@ -591,6 +607,10 @@ mod tests {
         assert_eq!(sizes, [12.0, 7.0, 4.5, 22.0, 7.0]);
         assert!((0..5).all(|r| st.symbol(r).fill == Rgba::rgb(1, 2, 3)), "colours kept");
         assert_eq!(l.dataset.value(0, 0), &Value::Float(2e6), "attributes untouched");
+        // A mapped size of 0 draws nothing: no fill, outline or marker.
+        l.size_by = Some(SizeBy { min: 2e6, min_size: 0.0, ..by.clone() });
+        let gone = l.styler(None).symbol(0);
+        assert_eq!((gone.size, gone.fill.a(), gone.stroke.a(), gone.stroke_width), (0.0, 0, 0, 0.0));
         // By area, halfway in value is the square root of a half of the way in size.
         l.size_by = Some(SizeBy { scaling: SizeScaling::Area, ..by.clone() });
         assert_eq!(l.styler(None).symbol(0).size, 2.0 + 20.0 * 0.5f32.sqrt());
@@ -602,6 +622,15 @@ mod tests {
         let rows = l.with_size_legend(l.renderer.legend());
         let sized: Vec<_> = rows.iter().skip(6).map(|e| (e.label.as_str(), e.symbol.size)).collect();
         assert_eq!(sized, [("pop 0", 2.0), ("pop 2.0M", 12.0), ("pop 4.0M", 22.0)]);
+        // Each size's row draws the layer's marks scaled to it, as the map does (the class is 7).
+        use crate::symbology::{LineMark, LineMarkers, Marker};
+        l.line_strokes = vec![LineStroke {
+            markers: Some(LineMarkers { mark: LineMark::Marker(Marker::Circle), size: 7.0, ..LineMarkers::default() }),
+            ..LineStroke::default()
+        }];
+        let rows = l.with_size_legend(l.renderer.legend());
+        let marks: Vec<f32> = rows.iter().skip(6).filter_map(|e| e.strokes.first()?.markers).map(|m| m.size).collect();
+        assert!(marks.len() == 3 && marks.iter().zip([2.0, 12.0, 22.0]).all(|(m, want)| (m - want).abs() < 1e-4), "{marks:?}");
         // A single symbol doesn't take it: kept, unused.
         l.renderer = crate::Renderer::Single(base);
         assert!(l.styler(None).is_plain());
@@ -634,5 +663,13 @@ mod tests {
             let read: Layer = serde_json::from_value(v).unwrap();
             assert!(read.size_by.is_none(), "{junk}");
         }
+    }
+
+    /// A range too wide for its width to be a finite number has no range: every value takes the
+    /// size halfway, rather than sizes that fall, then jump, as the value rises.
+    #[test]
+    fn a_range_too_wide_to_divide_takes_the_halfway_size() {
+        let wide = SizeBy { field: "pop".into(), min: -1e308, max: 1e308, min_size: 2.0, max_size: 22.0, scaling: SizeScaling::Radius };
+        assert_eq!([wide.size(-1e308), wide.size(0.0), wide.size(1e308)], [12.0; 3]);
     }
 }

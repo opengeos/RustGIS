@@ -279,6 +279,13 @@ mod style_tests {
             assert!(l.size_by.is_none() && matches!(l.renderer, crate::Renderer::Graduated { .. }));
             assert!(report.notes.iter().any(|n| n.text.contains("fixed size")), "{field}");
         }
+        // A radius past 128 is limited to it, and noted.
+        let mut big = style("value", 100.0);
+        big["style"]["proportionalSizeMaxRadius"] = json!(200);
+        let (mut l, mut report) = (layer(), Report::default());
+        style::apply(&mut l, &big, &mut report);
+        assert_eq!(l.size_by.map(|b| b.max_size), Some(256.0));
+        assert!(report.notes.iter().any(|n| n.text.contains("limit")), "{:?}", report.notes);
     }
 }
 

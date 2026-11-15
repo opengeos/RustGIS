@@ -116,8 +116,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
                     base: symbol,
                     min: number(st, "proportionalSizeMinValue", 0.0).clamp(-1e100, 1e100),
                     max: number(st, "proportionalSizeMaxValue", 100.0).clamp(-1e100, 1e100),
-                    min_size: (2.0 * number(st, "proportionalSizeMinRadius", 4.0).clamp(0.0, 128.0)) as f32,
-                    max_size: (2.0 * number(st, "proportionalSizeMaxRadius", 24.0).clamp(0.0, 128.0)) as f32,
+                    min_size: radius(st, "proportionalSizeMinRadius", 4.0, report, &name),
+                    max_size: radius(st, "proportionalSizeMaxRadius", 24.0, report, &name),
                 };
                 report.approximated(&name, "proportional sizes use area scaling instead of MapLibre linear radius scaling");
             } else {
@@ -131,8 +131,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
             // The colour classes keep their colours, sized as GeoLibre sizes them: the radius in
             // a straight line with the value, a value missing at the smallest (its class's size).
             let (min, max) = (number(st, "proportionalSizeMinValue", 0.0), number(st, "proportionalSizeMaxValue", 100.0));
-            let radius = |key, default| (2.0 * number(st, key, default).clamp(0.0, 128.0)) as f32;
-            let (min_size, max_size) = (radius("proportionalSizeMinRadius", 4.0), radius("proportionalSizeMaxRadius", 24.0));
+            let min_size = radius(st, "proportionalSizeMinRadius", 4.0, report, &name);
+            let max_size = radius(st, "proportionalSizeMaxRadius", 24.0, report, &name);
             if max <= min {
                 report.approximated(&name, "proportional size range is empty; using a fixed size");
             } else {
@@ -190,6 +190,16 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
 }
 
 /// Zoom limits become scale denominators at the equator, using RustGIS's 0.28 mm pixel.
+/// A proportional size's radius from the style, as a diameter in points: limited to a radius of
+/// 0 to 128, and noted when the style asks for more.
+fn radius(v: &Value, key: &str, default: f64, report: &mut Report, name: &str) -> f32 {
+    let r = number(v, key, default);
+    if !(0.0..=128.0).contains(&r) {
+        report.approximated(name, format!("{key} is outside 0 to 128; using the limit"));
+    }
+    (2.0 * r.clamp(0.0, 128.0)) as f32
+}
+
 fn scale(v: &Value, key: &str, default: f64) -> Option<f64> {
     let z = number(v, key, default).clamp(0.0, 24.0);
     (z != default).then(|| resolution(z) / 0.00028)
