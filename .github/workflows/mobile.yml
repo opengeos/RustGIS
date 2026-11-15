@@ -3,8 +3,13 @@ name: Mobile release
 # The phone apps (apps/rustgis-mobile, #1902) for a published release: a signed Android APK
 # attached to the release, and a signed iOS build uploaded to TestFlight. A manual run (from main)
 # builds and signs both and keeps them as workflow artifacts; it uploads to TestFlight only when
-# asked. A pull request that changes this workflow or the build scripts builds both unsigned, with
-# no secrets and nothing uploaded.
+# asked. A pull request that changes apps/rustgis-mobile or this workflow builds both with no
+# secrets: the Android APK signed with a throwaway debug key, the iOS app unsigned.
+#
+# Building and signing are separate jobs. A build job runs every crate's build script and holds no
+# secret; it hands on only the unsigned app. A sign job runs on a fresh runner, from a fresh
+# checkout the build never touched, and compiles nothing: a build script can't reach the keys,
+# nor change the scripts that use them.
 #
 # The secrets are the `mobile-release` environment's, which only main and v* tags may use, so a
 # run from any other branch never sees them (GeoLibre uses the same names):
@@ -47,15 +52,16 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Whether this run signs (a release or a manual run), and so uses the secrets.
+  # Whether this run signs (a release or a manual run), and so hands its apps to the sign jobs.
   SIGNS: ${{ github.event_name != 'pull_request' }}
 
 jobs:
-  android:
+  android-build:
     name: Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    environment: ${{ github.event_name != 'pull_request' && 'mobile-release' || '' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -84,16 +90,39 @@ jobs:
           fi
           echo "version=$crate" >> "$GITHUB_OUTPUT"
 
-      # Built with no secret anywhere in reach: every crate's build script runs during the build.
       - name: Build the APK
         env:
-          # A signing run leaves it unsigned for the step below; a pull request's is signed with
-          # a debug key made for it.
+          # A signing run leaves it unsigned for the sign job; a pull request's is signed with a
+          # debug key made for it.
           ANDROID_UNSIGNED: ${{ github.event_name != 'pull_request' && '1' || '' }}
         run: apps/rustgis-mobile/build-apk.sh arm64-v8a x86_64
 
-      - name: Sign the APK with the release key
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: env.SIGNS == 'true'
+        with:
+          name: android-unsigned
+          path: target/android/aligned.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  android-sign:
+    name: Sign the APK
+    if: github.event_name != 'pull_request'
+    needs: android-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: mobile-release
+    steps:
+      # The scripts from a checkout of the same commit that no build has run in.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: android-unsigned
+          path: target/android
+
+      - name: Sign with the release key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -118,7 +147,7 @@ jobs:
 
       - name: Check and name the APK
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.android-build.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -129,7 +158,7 @@ jobs:
           signer="$("$tools/apksigner" verify --print-certs "dist/$apk")"
           printf '%s\n' "$signer" | grep -E 'DN|SHA-256'
           # A release APK signed with anything but the release key couldn't update an installed one.
-          if [ "$SIGNS" = true ] && printf '%s\n' "$signer" | grep -q 'CN=RustGIS debug'; then
+          if printf '%s\n' "$signer" | grep -q 'CN=RustGIS debug'; then
             echo "::error::The APK is signed with the debug key, not the release key."
             exit 1
           fi
@@ -144,7 +173,7 @@ jobs:
   android-release:
     name: Attach the APK to the release
     if: github.event_name == 'release'
-    needs: android
+    needs: android-sign
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -159,11 +188,10 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
-  ios:
-    name: iOS to TestFlight
+  ios-build:
+    name: iOS app
     runs-on: macos-latest
     timeout-minutes: 90
-    environment: ${{ github.event_name != 'pull_request' && 'mobile-release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -197,20 +225,59 @@ jobs:
           sudo xcode-select -s "$newest/Contents/Developer"
           echo "::notice::$(xcodebuild -version | head -1), iOS SDK $(xcrun --sdk iphoneos --show-sdk-version)"
 
-      # Built with no signing identity on the machine: every crate's build script runs during the
-      # build. The whole bundle, unsigned: any failure on the way fails the step.
+      # The whole bundle, unsigned: any failure on the way fails the step.
       - name: Build the app
         env:
           IOS_BUILD: ${{ inputs.ios_build }}
         run: IOS_UNSIGNED=1 apps/rustgis-mobile/build-ios.sh device
 
+      # As a tar, which keeps the executable's mode (an artifact's zip doesn't).
+      - name: Pack the unsigned app
+        if: env.SIGNS == 'true'
+        run: tar -C target/ios -cf "$RUNNER_TEMP/RustGIS.app.tar" RustGIS.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: env.SIGNS == 'true'
+        with:
+          name: ios-unsigned
+          path: ${{ runner.temp }}/RustGIS.app.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-sign:
+    name: Sign the iOS app and upload it to TestFlight
+    if: github.event_name != 'pull_request'
+    needs: ios-build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    environment: mobile-release
+    steps:
+      # The scripts from a checkout of the same commit that no build has run in.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ios-unsigned
+          path: ${{ runner.temp }}
+      - name: Unpack the app
+        run: mkdir -p target/ios && tar -C target/ios -xf "$RUNNER_TEMP/RustGIS.app.tar"
+
+      - name: The newest Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)"
+          [ -n "$newest" ] || { echo "::error::No Xcode on the runner."; exit 1; }
+          sudo xcode-select -s "$newest/Contents/Developer"
+
       - name: The signing identity and profile
         id: signing
-        if: env.SIGNS == 'true'
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_IOS_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_IOS_CERTIFICATE_PASSWORD }}
           PROFILE_BASE64: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE_BASE64 }}
+          # Apple's intermediate the distribution certificate is issued by, pinned by digest.
+          WWDR_URL: https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          WWDR_SHA256: dcf21878c77f4198e4b4614f03d696d89c66c66008d4244e1b99161aac91601f
         run: |
           set -euo pipefail
           missing=()
@@ -230,6 +297,9 @@ jobs:
           security create-keychain -p "$pass" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$pass" "$keychain"
+          curl -fsSL -o "$RUNNER_TEMP/wwdr.cer" "$WWDR_URL"
+          echo "$WWDR_SHA256  $RUNNER_TEMP/wwdr.cer" | shasum -a 256 -c -
+          security import "$RUNNER_TEMP/wwdr.cer" -k "$keychain"
           printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
           security import "$RUNNER_TEMP/dist.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           rm -f "$RUNNER_TEMP/dist.p12"
@@ -241,13 +311,11 @@ jobs:
           echo "identity=$identity" >> "$GITHUB_OUTPUT"
 
       - name: Sign the app
-        if: env.SIGNS == 'true'
         env:
           IOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
         run: IOS_PROFILE="$RUNNER_TEMP/app.mobileprovision" apps/rustgis-mobile/build-ios.sh --sign-only
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: env.SIGNS == 'true'
         with:
           name: rustgis-ios
           path: target/ios/RustGIS.ipa

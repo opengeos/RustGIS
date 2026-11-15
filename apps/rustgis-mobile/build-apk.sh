@@ -80,8 +80,9 @@ code=${ANDROID_VERSION_CODE:-}
 if [ -z "$code" ]; then
     if [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = false ]; then
         code=$(git -C "$root" rev-list --count HEAD)
-    elif [ -n "${ANDROID_KEYSTORE:-}" ]; then
-        # A release build numbered 1 would never update an installed one.
+    elif [ -n "${ANDROID_KEYSTORE:-}" ] || [ "${ANDROID_UNSIGNED:-}" = 1 ]; then
+        # A release build (signed now, or by --sign-only later) numbered 1 would never update an
+        # installed one.
         echo "build-apk: no full git history to number the release: set ANDROID_VERSION_CODE" >&2
         exit 1
     else
