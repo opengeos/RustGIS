@@ -2040,7 +2040,10 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                             {
                                 // Read once for both menus: this runs every frame, for every card.
                                 let all = stac::bands::bands(item);
-                                let offered = combinations_offered(&all);
+                                // The commands get the item as JSON, without where it came from: an item from a local or
+                                // private network would be refused there, so they are not offered for it.
+                                let public = item.origin_reach == Reach::Public;
+                                let offered = if public { combinations_offered(&all) } else { Vec::new() };
                                 if !offered.is_empty() {
                                     ui.menu_button(tl!("Bands"), |ui| {
                                         for (id, name) in &offered {
@@ -2053,7 +2056,12 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                     .response
                                     .on_hover_text(tl!("Add the item's bands as one image, for the part of the map in view"));
                                 }
-                                let indices = indices_offered(&all);
+                                let indices = if public { indices_offered(&all) } else { Vec::new() };
+                                if !public && !all.is_empty() {
+                                    ui.weak(tl!("Bands: public items only")).on_hover_text(tl!(
+                                        "This item is from a local or private network, whose files Bands and Index don't read yet"
+                                    ));
+                                }
                                 if !indices.is_empty() {
                                     ui.menu_button(tl!("Index"), |ui| {
                                         for (id, name) in &indices {

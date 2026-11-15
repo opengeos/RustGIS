@@ -411,6 +411,11 @@ mod desktop {
                     "{who}: the catalog gives its scale, offset or no-data as something that is not a number (a string, say), so its values can't be scaled"
                 ));
             }
+            if band.codes_unread {
+                return Err(format!(
+                    "{who}: the catalog names codes for a failed retrieval but they could not be read whole, so its values can't be told from them"
+                ));
+            }
             if !band.scale.is_finite() || band.scale == 0.0 {
                 return Err(format!("{who}: the catalog gives its values a scale of {}, so they can't be scaled", band.scale));
             }
@@ -438,7 +443,7 @@ mod desktop {
                         continue;
                     }
                     let Some(&v) = data.get(sr as usize * raster.width as usize + sc as usize) else { continue };
-                    if raster.is_valid(v) && catalog_nodata != Some(v) {
+                    if raster.is_valid(v) && catalog_nodata != Some(v) && !band.invalid.contains(&f64::from(v)) {
                         let value = (f64::from(v) * band.scale + band.offset) as f32;
                         if value.is_finite()
                             && let Some(o) = out.get_mut(row * w + col)
@@ -575,6 +580,8 @@ mod tests {
             nodata: None,
             scaled: true,
             unread: false,
+            invalid: Vec::new(),
+            codes_unread: false,
         }
     }
 
@@ -818,6 +825,20 @@ mod tests {
         assert_eq!(finer_than_file(Some(auto), false, true), None, "the automatic size says nothing");
         assert_eq!(finer_than_file(Some(5.0), false, false), Some(5.0), "a size the user gave, finer than the file, is said");
         assert_eq!(finer_than_file(Some(50.0), true, false), None, "a level that fits says nothing");
+    }
+
+    #[test]
+    fn failed_retrieval_codes_are_not_values_and_codes_unread_are_refused() {
+        let a = grid(2, 1, 0.0001, vec![1000.0, 65535.0]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let mut coded = band(1.0, 0.0);
+        coded.invalid = vec![65535.0];
+        let (r, _) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &coded)]).unwrap();
+        assert_eq!(r.bands[1].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1, "the code is no data");
+        let mut unread = band(1.0, 0.0);
+        unread.codes_unread = true;
+        let err = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &unread)]).unwrap_err();
+        assert!(err.starts_with("red:") && err.contains("failed retrieval"), "{err}");
     }
 
     #[test]

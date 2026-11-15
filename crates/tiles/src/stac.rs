@@ -103,16 +103,16 @@ fn declared_bands(asset: &Value) -> usize {
 /// The longest common name kept, in characters.
 const MAX_NAME: usize = 32;
 
-/// Whether a band of the asset has a common name longer than [`MAX_NAME`] characters, which
-/// `asset_bands` cuts: said like the bands past [`MAX_BANDS`] are (`bands_cut`).
+/// Whether a band of the asset has a common name that `asset_bands` doesn't keep whole: longer
+/// than [`MAX_NAME`] characters (cut), or not text (dropped). Said like the bands past
+/// [`MAX_BANDS`] are (`bands_cut`).
 fn long_name(asset: &Value) -> bool {
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
     list("eo:bands").or_else(|| list("bands")).is_some_and(|l| {
-        l.iter().take(MAX_BANDS).any(|b| {
-            b.get("common_name")
-                .or_else(|| b.get("eo:common_name"))
-                .and_then(Value::as_str)
-                .is_some_and(|t| t.trim().chars().count() > MAX_NAME)
+        l.iter().take(MAX_BANDS).any(|b| match b.get("common_name").or_else(|| b.get("eo:common_name")) {
+            None | Some(Value::Null) => false,
+            Some(Value::String(t)) => t.trim().chars().count() > MAX_NAME,
+            Some(_) => true,
         })
     })
 }
@@ -149,15 +149,16 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
         .map(|i| {
             let (named, raster) = (named.and_then(|l| l.get(i)), raster.and_then(|l| l.get(i)));
             let pick = |keys: &[&str]| number(raster, keys).or_else(|| number(named, keys));
+            let first = i == 0;
             BandInfo {
                 common: named
                     .and_then(|b| b.get("common_name").or_else(|| b.get("eo:common_name")))
                     .and_then(Value::as_str)
                     .map(|t| t.trim().to_ascii_lowercase().chars().take(MAX_NAME).collect())
                     .unwrap_or_default(),
-                scale: pick(&["scale", "raster:scale"]),
-                offset: pick(&["offset", "raster:offset"]),
-                nodata: pick(&["nodata", "raster:nodata"]),
+                scale: pick(&["scale", "raster:scale"]).or_else(|| first.then(|| band_number(asset, "scale")).flatten()),
+                offset: pick(&["offset", "raster:offset"]).or_else(|| first.then(|| band_number(asset, "offset")).flatten()),
+                nodata: pick(&["nodata", "raster:nodata"]).or_else(|| first.then(|| band_number(asset, "nodata")).flatten()),
                 unread: odd_numbers(raster) || odd_numbers(named),
             }
         })
@@ -697,7 +698,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 offset: band_number(a, "offset"),
                 nodata: band_number(a, "nodata"),
                 invalid: invalid.clone().unwrap_or_default(),
-                codes_unread: invalid.is_none(),
+                codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
             })
@@ -1100,6 +1101,13 @@ fn asset_json(a: &Asset) -> Value {
     let mut out = serde_json::json!({"href": a.href, "type": a.media_type, "roles": a.roles, "title": a.title});
     if let (false, Some(o)) = (bands.is_empty(), out.as_object_mut()) {
         o.insert("bands".into(), Value::Array(bands));
+    }
+    // The failed-retrieval codes, and that they could not be read whole, go with the asset.
+    if let (false, Some(o)) = (a.invalid.is_empty(), out.as_object_mut()) {
+        o.insert("je:rasters".into(), serde_json::json!({"dn": {"error": a.invalid}}));
+    }
+    if let (true, Some(o)) = (a.codes_unread, out.as_object_mut()) {
+        o.insert("rg:codes_unread".into(), Value::Bool(true));
     }
     // The cut is kept, so the command that gets this item can say that bands were left out.
     if let (true, Some(o)) = (a.bands_cut, out.as_object_mut()) {

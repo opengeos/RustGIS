@@ -34,6 +34,10 @@ pub struct Band {
     /// Whether the catalog's scale, offset or no-data for it is not a number (see
     /// [`BandInfo::unread`](super::BandInfo::unread)).
     pub unread: bool,
+    /// Stored values the catalog says are codes for a failed retrieval (JAXA Earth's `dn.error`): not values.
+    pub invalid: Vec<f64>,
+    /// Whether the catalog names such codes but they could not be read whole: its values can't be told from them.
+    pub codes_unread: bool,
 }
 
 /// A wanted name and the names that can stand in for it, best first.
@@ -123,6 +127,8 @@ pub fn bands(item: &Item) -> Vec<Band> {
                 nodata,
                 scaled: scale.is_some(),
                 unread: info.is_some_and(|b| b.unread),
+                invalid: asset.invalid.clone(),
+                codes_unread: asset.codes_unread,
             });
         }
     }
@@ -149,7 +155,7 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
         let key_only = || {
             let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(name));
             match (of_asset.next(), of_asset.next()) {
-                (Some(only), None) if only.common.is_empty() => Some(only),
+                (Some(only), None) if only.common.is_empty() && only.in_file == 1 => Some(only),
                 _ => None,
             }
         };
@@ -165,7 +171,7 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
 pub fn cut_note(item: &Item) -> Option<String> {
     if item.assets.iter().any(|a| a.bands_cut) {
         return Some(format!(
-            "an asset describes more than {} bands, or a band name over {} characters, and only the first {} bands and the first {} characters of a name are read",
+            "an asset describes more than {} bands, or a band name over {} characters or not text, and only the first {} bands and the first {} characters of a name are read",
             super::MAX_BANDS,
             super::MAX_NAME,
             super::MAX_BANDS,
@@ -414,6 +420,41 @@ mod tests {
         let b = bands(&item(&[("data", unified)]));
         let red = find(&b, "red").unwrap();
         assert_eq!((red.scale, red.offset, red.nodata), (0.5, 2.0, Some(255.0)));
+    }
+
+    #[test]
+    fn a_truncated_multiband_file_is_not_taken_for_a_band_by_its_key() {
+        // 255 bands before it, so the cap keeps only the first of the three bands of `red`.
+        let filler = |n: usize| json!({"eo:bands": (0..n).map(|_| json!({})).collect::<Vec<_>>()});
+        let list = bands(&item(&[("a", filler(64)), ("b", filler(64)), ("c", filler(64)), ("d", filler(63)), ("red", filler(3))]));
+        assert_eq!(list.len(), 256);
+        assert!(find(&list, "red").is_none(), "an unnamed file of three bands says nothing of which is red");
+    }
+
+    #[test]
+    fn a_jaxa_scale_and_failed_retrieval_codes_reach_the_named_band_and_the_command() {
+        let a = json!({"eo:bands": [{"common_name": "red"}], "je:rasters": {"dn2value": {"slope": 0.0001, "offset": 0.5}, "dn": {"error": [65535.0]}}});
+        let it = item(&[("red", a)]);
+        let check = |it: &Item| {
+            let b = bands(it);
+            let red = find(&b, "red").unwrap();
+            assert_eq!((red.scale, red.offset, red.scaled), (0.0001, 0.5, true));
+            assert_eq!(red.invalid, vec![65535.0]);
+            assert!(!red.codes_unread);
+        };
+        check(&it);
+        check(&crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap());
+        // Codes that couldn't be read whole stay unread through the command's copy of the item.
+        let odd = item(&[("red", json!({"eo:bands": [{"common_name": "red"}], "je:rasters": {"dn": {"error": ["x"]}}}))]);
+        assert!(bands(&odd)[0].codes_unread);
+        let again = crate::stac::item_from_json(&crate::stac::item_json(&odd), None).unwrap();
+        assert!(bands(&again)[0].codes_unread);
+    }
+
+    #[test]
+    fn a_band_name_that_is_not_text_is_said() {
+        let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
+        assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));
     }
 
     #[test]
