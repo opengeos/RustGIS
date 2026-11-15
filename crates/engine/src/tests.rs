@@ -2615,8 +2615,12 @@ fn qgis_import_notices_group_layers_and_bound_the_sample_without_dropping_return
     let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.starts_with("QGIS import")).collect();
     assert_eq!(said.len(), 1, "one omission notice across all layers");
     assert!(said[0].text.contains("10 omissions") && said[0].text.contains("affected layers: 10"));
-    assert!(said[0].text.contains("Unsupported0") && said[0].text.contains("2 additional notes not listed here"));
-    assert!(!said[0].text.contains("Unsupported9"));
+    assert!(
+        said[0].text.contains(notes[0]["layer"].as_str().unwrap()) && said[0].text.contains("2 additional notes not listed here"),
+        "{}",
+        said[0].text
+    );
+    assert!(!said[0].text.contains(notes[9]["layer"].as_str().unwrap()));
     assert!(said[0].text.len() < 4096);
 }
 
