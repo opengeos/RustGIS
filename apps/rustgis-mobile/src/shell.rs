@@ -470,8 +470,8 @@ impl<P: Phone> eframe::App for App<P> {
             self.keyboard = keyboard;
         }
         self.take_phone_events(ctx, raw_input);
-        // The soft keyboard's Return, as the Enter key egui knows: it ends a single-line field
-        // and a line in a multi-line one.
+        // The soft keyboard's Return, as the Enter key egui knows: each field does with it what
+        // it does with Enter.
         if self.phone.as_ref().is_some_and(|phone| phone.take_return()) {
             for pressed in [true, false] {
                 raw_input.events.push(egui::Event::Key {

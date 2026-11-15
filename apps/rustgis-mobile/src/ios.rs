@@ -598,8 +598,11 @@ fn attach_window() {
         window.makeKeyAndVisible();
     }
     fill_screen(&window);
-    if let Some(view) = window.rootViewController().and_then(|controller| controller.view()) {
-        take_return(&view);
+    match window.rootViewController().and_then(|controller| controller.view()) {
+        Some(view) => take_return(&view),
+        // winit makes its view controller with the window, so this shouldn't happen: said in the
+        // log, as Return then does nothing for the session.
+        None => log::warn!("winit's window has no view yet: the soft keyboard's Return won't reach the form"),
     }
 }
 
@@ -615,8 +618,8 @@ thread_local! {
 /// Makes the soft keyboard's Return reach egui, by making winit's view an instance of a
 /// subclass of winit's whose `insertText:` keeps a Return for the shell ([`RETURNED`]) and
 /// passes everything else on. winit 0.30 hands Return on as the character `"\n"`, which egui
-/// takes for no key at all: a single-line field then can't be left with Return, nor a line
-/// ended in a multi-line one.
+/// takes for no key at all: a field then couldn't be left with Return. As Enter, it does what
+/// each field does with Enter.
 fn take_return(view: &objc2_ui_kit::UIView) {
     use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
     if view.class().name() == RETURN_KEY {
