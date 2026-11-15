@@ -72,6 +72,9 @@ pub struct Asset {
     /// Whether the catalog describes more bands than are kept (`bands` stops at the first
     /// [`MAX_BANDS`]): the ones past them can't be found by name.
     pub bands_cut: bool,
+    /// Whether JAXA Earth's `je:rasters` gives its first band's scale, offset or no-data as something that
+    /// isn't a number (a string, say): not read, so a band made from it is refused where it is used.
+    pub je_unread: bool,
 }
 
 /// One band of an asset's file, as its catalog describes it.
@@ -114,6 +117,21 @@ fn long_name(asset: &Value) -> bool {
             Some(Value::String(t)) => t.trim().chars().count() > MAX_NAME,
             Some(_) => true,
         })
+    })
+}
+
+/// Whether JAXA Earth's `je:rasters` gives a scale (`dn2value.slope`), offset or no-data (`dn.nodata`)
+/// that is there but not a number (a string such as `"0.0001"`, or one that isn't finite); a no-data
+/// may be `"nan"`, `"inf"` or `"-inf"`, as in [`odd_numbers`].
+fn je_odd(asset: &Value) -> bool {
+    let Some(je) = asset.get("je:rasters") else { return false };
+    [("dn2value", "slope", false), ("dn2value", "offset", false), ("dn", "nodata", true)].iter().any(|(group, name, nodata)| {
+        match je.get(*group).and_then(|g| g.get(*name)) {
+            None | Some(Value::Null) => false,
+            Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
+            Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
+            Some(_) => true,
+        }
     })
 }
 
@@ -701,6 +719,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
+                je_unread: je_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
             })
         })
         .collect();
@@ -1102,6 +1121,10 @@ fn asset_json(a: &Asset) -> Value {
     if let (false, Some(o)) = (bands.is_empty(), out.as_object_mut()) {
         o.insert("bands".into(), Value::Array(bands));
     }
+    // That JAXA numbers were there and not read goes with the asset, for the command that gets it.
+    if let (true, Some(o)) = (a.je_unread, out.as_object_mut()) {
+        o.insert("rg:unread".into(), Value::Bool(true));
+    }
     // The failed-retrieval codes, and that they could not be read whole, go with the asset.
     if let (false, Some(o)) = (a.invalid.is_empty(), out.as_object_mut()) {
         o.insert("je:rasters".into(), serde_json::json!({"dn": {"error": a.invalid}}));
@@ -1453,6 +1476,7 @@ mod tests {
             codes_unread: false,
             bands: Vec::new(),
             bands_cut: false,
+            je_unread: false,
         }];
         // A Planetary Computer asset is added after signing it with its container's token.
         let (_, href) = pc.asset_href(None).unwrap();

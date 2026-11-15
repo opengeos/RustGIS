@@ -126,7 +126,7 @@ pub fn bands(item: &Item) -> Vec<Band> {
                 offset: offset.unwrap_or(0.0),
                 nodata,
                 scaled: scale.is_some(),
-                unread: info.is_some_and(|b| b.unread),
+                unread: info.is_some_and(|b| b.unread) || (i == 0 && asset.je_unread),
                 invalid: asset.invalid.clone(),
                 codes_unread: asset.codes_unread,
             });
@@ -449,6 +449,24 @@ mod tests {
         assert!(bands(&odd)[0].codes_unread);
         let again = crate::stac::item_from_json(&crate::stac::item_json(&odd), None).unwrap();
         assert!(bands(&again)[0].codes_unread);
+    }
+
+    #[test]
+    fn a_jaxa_number_given_as_text_marks_the_band_unread() {
+        let jaxa = |named: bool, slope: serde_json::Value| {
+            let mut a = json!({"je:rasters": {"dn2value": {"slope": slope}}});
+            if named {
+                a["eo:bands"] = json!([{"common_name": "red"}]);
+            }
+            item(&[("red", a)])
+        };
+        for named in [false, true] {
+            let it = jaxa(named, json!("0.0001"));
+            assert!(bands(&it)[0].unread, "text is no number (named: {named})");
+            let again = crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap();
+            assert!(bands(&again)[0].unread, "it goes through the command's copy (named: {named})");
+            assert!(!bands(&jaxa(named, json!(0.0001)))[0].unread, "a number is read");
+        }
     }
 
     #[test]
