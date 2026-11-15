@@ -1649,6 +1649,18 @@ fn found_xy(headers: &[String]) -> Option<(usize, usize)> {
     find(LON_NAMES, LON_ALIASES).zip(find(LAT_NAMES, LAT_ALIASES)).or_else(|| find(X_NAMES, &[]).zip(find(Y_NAMES, &[])))
 }
 
+/// A projected system prefers explicitly planar names over longitude/latitude, regardless of
+/// header order. With no planar pair, retain the ordinary named-pair fallback.
+fn found_projected_xy(headers: &[String]) -> Option<(usize, usize)> {
+    let find = |names: &[&str], generic: &str| {
+        headers.iter().position(|h| {
+            let name = h.trim().to_ascii_lowercase();
+            name == generic || names.contains(&name.as_str())
+        })
+    };
+    find(X_NAMES, "x").zip(find(Y_NAMES, "y")).or_else(|| found_xy(headers))
+}
+
 /// Keeps the first named pair unless its values exceed degrees and a more specific
 /// longitude/latitude pair has at least as many usable, nonzero degree positions as the first
 /// pair has finite positions. The choice covers the whole file;
@@ -1709,7 +1721,7 @@ const COLUMN_SAMPLE_ROWS: usize = 1000;
 
 /// The columns of rows under a header row, as [`read_rows`] would find them with `crs`.
 pub(crate) fn columns_of(headers: &[String], rows: &[Vec<String>], crs: Option<Crs>) -> Result<Columns> {
-    let xy = if crs.is_none_or(Crs::is_geographic) { found_xy_in_rows(headers, rows)? } else { found_xy(headers) };
+    let xy = if crs.is_none_or(Crs::is_geographic) { found_xy_in_rows(headers, rows)? } else { found_projected_xy(headers) };
     let wkt = if xy.is_some() { None } else { found_wkt(headers, rows) };
     let name = |i: usize| headers.get(i).map(|h| h.trim().to_string());
     Ok(Columns {
@@ -1723,7 +1735,8 @@ pub(crate) fn columns_of(headers: &[String], rows: &[Vec<String>], crs: Option<C
 
 /// The columns of delimited text (split at `delimiter`, or the one found), without reading all
 /// of it: coordinate ranges and a WKT column's first value are checked within
-/// the first [`COLUMN_SAMPLE_ROWS`] rows only. A projected `crs` keeps the columns found by name.
+/// the first [`COLUMN_SAMPLE_ROWS`] rows only. A projected `crs` prefers planar x/y or
+/// easting/northing names over longitude/latitude, without inspecting coordinate ranges.
 pub fn csv_columns(text: &str, delimiter: Option<u8>, crs: Option<Crs>) -> Result<Columns> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let delimiter = delimiter.unwrap_or_else(|| sniff_delimiter(text));
@@ -2011,7 +2024,7 @@ pub(crate) fn read_rows(
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (Some(x), Some(y)),
         (None, None) if wkt_given.is_none() => {
-            if opts.crs.is_none_or(Crs::is_geographic) { found_xy_in_rows(headers, rows)? } else { found_xy(headers) }.unzip()
+            if opts.crs.is_none_or(Crs::is_geographic) { found_xy_in_rows(headers, rows)? } else { found_projected_xy(headers) }.unzip()
         }
         (None, None) => (None, None),
         _ => return Err(DataError::Format("give both the x and the y column".into())),
@@ -5214,6 +5227,40 @@ mod tests {
         // A named GTFS pair works alone, but a lone longitude never becomes geometry.
         assert_eq!(read_csv("stop_lat,stop_lon\n35.1,-89.9\n", "stops").unwrap().0.geometry_type, GeometryType::Point);
         assert_eq!(read_csv("stop_lon,stop_name\n-89.9,Main\n", "stops").unwrap().0.geometry_type, GeometryType::None);
+    }
+
+    /// A projected system must never treat an earlier geographic pair as easting/northing when
+    /// planar coordinate columns are also present. Explicit choices retain their authority.
+    #[test]
+    fn projected_csv_prefers_planar_columns_in_either_header_order() {
+        for (x, y) in [("X", "Y"), ("Easting", "Northing"), ("point_x", "point_y"), ("x_coord", "y_coord")] {
+            for header_first in [true, false] {
+                let text = if header_first {
+                    format!("Longitude,Latitude,{x},{y}\n40,50,111319.49079327357,222684.20850554405\n")
+                } else {
+                    format!("{x},{y},Longitude,Latitude\n111319.49079327357,222684.20850554405,40,50\n")
+                };
+                let columns = csv_columns(&text, None, Some(Crs::WebMercator)).unwrap();
+                assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some(x), Some(y)));
+                let opts = CsvOptions { crs: Some(Crs::WebMercator), ..Default::default() };
+                let (dataset, report) = read_csv_with(&text, "projected", &opts).unwrap();
+                let Some(Geometry::Point(point)) = dataset.features[0].geometry else { panic!("point") };
+                assert!((point.x - 1.0).abs() < 1e-10 && (point.y - 2.0).abs() < 1e-10, "{point:?}");
+                assert_eq!(report.skipped, 0);
+                assert!(report.messages.is_empty(), "{:?}", report.messages);
+                let opts = CsvOptions { x: Some("Longitude".into()), y: Some("Latitude".into()), ..opts };
+                let (explicit, _) = read_csv_with(&text, "explicit", &opts).unwrap();
+                let Some(Geometry::Point(point)) = explicit.features[0].geometry else { panic!("point") };
+                assert!(point.x.abs() < 0.001 && point.y.abs() < 0.001, "explicit selection must win: {point:?}");
+            }
+        }
+        // A geographic system still chooses the geographic family; a projected file without
+        // planar names retains its existing longitude/latitude-name fallback.
+        let text = "Longitude,Latitude,Easting,Northing\n40,50,111319.49079327357,222684.20850554405\n";
+        let columns = csv_columns(text, None, Some(Crs::LonLat)).unwrap();
+        assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
+        let columns = csv_columns("Longitude,Latitude\n1000,2000\n", None, Some(Crs::WebMercator)).unwrap();
+        assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
     }
 
     /// A geographic alternative must cover at least as many rows as the first pair can place.
