@@ -281,6 +281,9 @@ mod desktop {
         // The run's request predicate is of this thread: each reader thread is given it, as the shared
         // helpers give their workers, so a request whose claim has gone is not sent.
         let still = rustgis_data::source::remote::current_still();
+        // The requests the reads make belong to the session that asked: its diagnostics capture goes
+        // with each reader thread, as the source readers' does (the network readers have no test).
+        let diagnostics = rustgis_data::diagnostics::Capture::current();
         // Signed here, in order, before any thread starts: a Planetary Computer file is signed when it is
         // read (not when the item was found), the first token fetched is cached for the files of its
         // container, and Cancel is looked at before each request.
@@ -298,6 +301,7 @@ mod desktop {
                     .iter()
                     .map(|(href, signed, bands)| {
                         let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, || {
+                            let _diagnostics = diagnostics.enter();
                             rustgis_data::source::remote::with_optional_still(still.clone(), || {
                                 let read = read_one(signed, bbox, cell, *bands, &stop);
                                 // A file that failed stops the reads beside it: they would only finish to be dropped.
