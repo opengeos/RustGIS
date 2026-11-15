@@ -17374,7 +17374,12 @@ fn split_sources_keep_their_points_on_top() {
     let origin =
         |family| rustgis_map::source::DuckdbOrigin { sql: Some("SELECT 1".into()), database: None, table: None, crs: None, family };
     let parts = duckdb_parts(&mut s, "Trip", duckdb::Output { parts, skipped: 0, other_family: 0 }, origin);
-    add_converted(&mut s, &json!({}), "the query", "DuckDB query", parts).unwrap();
+    let requested = "Requested".repeat(500);
+    add_converted(&mut s, &json!({"name": requested}), "the query", "DuckDB query", parts).unwrap();
+    let warning: Vec<_> = s.notices.iter().filter(|n| n.text.contains("converted layer parts keep their generated names")).collect();
+    assert_eq!(warning.len(), 1);
+    assert!(warning[0].text.contains("3 converted layer parts") && warning[0].text.len() < 300);
+    assert!(!warning[0].text.contains(&requested));
     assert_eq!(names(&s), ["Trip (points)", "Trip (lines)", "Trip (polygons)"]);
 
     // A GDAL file with two mixed layers: each keeps its points on top, and the file's second layer
@@ -17394,6 +17399,18 @@ fn split_sources_keep_their_points_on_top() {
     let original = dir.join("file.gpx").display().to_string();
     add_converted(&mut s, &json!({}), &original, &original, gdal_parts(converted, &original, None)).unwrap();
     assert_eq!(names(&s), ["b (points)", "b (lines)", "b (polygons)", "a (points)", "a (lines)", "a (polygons)"]);
+
+    assert!(!s.notices.iter().any(|n| n.text.contains("converted layer parts keep their generated names")), "no ignored name was supplied");
+    let mut single = Session::new(Project::default());
+    let output = duckdb::Output {
+        parts: vec![duckdb::Part { path: write("single", Family::Points), family: Family::Points, count: 1 }],
+        skipped: 0,
+        other_family: 0,
+    };
+    let one = duckdb_parts(&mut single, "Generated", output, origin);
+    add_converted(&mut single, &json!({"name": "Requested"}), "the query", "DuckDB query", one).unwrap();
+    assert_eq!(names(&single), ["Requested"]);
+    assert!(!single.notices.iter().any(|n| n.text.contains("converted layer parts keep their generated names")));
 
     // A file the built-in readers split by type (a KML here, as GPX, OSM or DXF): the same order,
     // and the first layer added (the polygons, away from the rest) still frames an empty map on

@@ -3331,7 +3331,8 @@ enum ConvertedOrigin {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &str, converted: Vec<Converted>) -> CmdResult {
     let empty_before = super::map_is_empty(s);
-    let single = converted.len() == 1;
+    let parts = converted.len();
+    let single = parts == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
     for c in converted {
         let mut q = json!({"name": c.name});
@@ -3384,6 +3385,15 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
     }
     if ids.is_empty() {
         return Err(format!("{label}: none of its layers could be added"));
+    }
+    if !single && let Some(name) = ps(p, "name") {
+        s.notify_text(
+            crate::notice_text::NoticeText::format(
+                "Name '{name}' was not used: {parts} converted layer parts keep their generated names",
+                [("name", crate::project::short_name(name).into()), ("parts", parts.to_string().into())],
+            ),
+            false,
+        );
     }
     Ok(json!({"layer": ids.first(), "layers": ids, "features": features, "streamed": streamed}))
 }
