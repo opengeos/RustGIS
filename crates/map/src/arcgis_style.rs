@@ -242,9 +242,10 @@ fn class_breaks(layer: &mut Layer, r: &Value, g: GeometryType, notes: &mut Notes
     if values().flatten().any(in_gap) {
         notes.add("values between its classes, drawn in the class above");
     }
-    // Below its first class's own lower bound, when that is above the renderer's: in none for
-    // ArcGIS, in the first here.
-    let floor = infos.first().and_then(|i| lowest(i.1)).map_or(min, |lo| lo.max(min).min(infos.first().map_or(last, |i| i.0)));
+    // Below the higher of the renderer's lowest (`minValue`, below which ArcGIS begins no class)
+    // and its first class's own: in none for ArcGIS, in the first here.
+    let first = infos.first();
+    let floor = first.and_then(|i| lowest(i.1)).map_or(min, |lo| lo.max(min).min(first.map_or(last, |i| i.0)));
     if values().flatten().any(|v| v < floor || v > last) {
         notes.add("values below its first class or above its last, drawn in the first or last class");
     }

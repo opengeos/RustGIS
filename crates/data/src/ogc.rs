@@ -3150,7 +3150,8 @@ const WINDOW_DRAWING: &str = "its service's symbology, not read for an address t
 /// What an ArcGIS layer says of its symbology when its description couldn't be read (`why`), cut
 /// and with any secret left out (#2152).
 fn drawing_unread(why: &str) -> String {
-    let mut why = crate::diagnostics::redact(why);
+    // An error holding an address isn't repeated: `redact` keeps its path, which can hold a key.
+    let mut why = if why.contains("://") { "its description couldn't be fetched".to_string() } else { crate::diagnostics::redact(why) };
     crate::diagnostics::cut_with_ellipsis(&mut why, MAX_REASON);
     format!("its service's symbology, which RustGIS couldn't read ({why}), drawn with RustGIS's single symbol")
 }
@@ -3238,6 +3239,12 @@ fn arcgis_page_error(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    arcgis_error_text(&v)
+}
+
+/// What an ArcGIS answer already read (`v`) says when it is the service's error (`{"error": …}`),
+/// whatever its size, as [`arcgis_page_error`] says it.
+fn arcgis_error_text(v: &serde_json::Value) -> Option<String> {
     let error = v.get("error")?.as_object()?;
     let code = error.get("code").and_then(serde_json::Value::as_u64).unwrap_or(0);
     let message = error.get("message").and_then(serde_json::Value::as_str).unwrap_or("query refused");
@@ -3812,9 +3819,14 @@ impl Pages {
             return self.advance();
         }
         if let Phase::Describe { pbf } = self.phase {
-            let read: Result<serde_json::Value, String> = answer.and_then(|b| match arcgis_page_error(&b) {
-                Some(error) => Err(error),
-                None => serde_json::from_slice(&b).map_err(|_| "not JSON".to_string()),
+            // Read once, whatever its size: the service's error may be as long as a description.
+            let read: Result<serde_json::Value, String> = answer.and_then(|b| {
+                let v: serde_json::Value = serde_json::from_slice(&b).map_err(|_| "not JSON".to_string())?;
+                match arcgis_error_text(&v) {
+                    Some(error) => Err(error),
+                    None if !v.is_object() => Err("not an object".to_string()),
+                    None => Ok(v),
+                }
             });
             let (mut layer, unread) = match read {
                 Ok(layer) => (Some(layer), None),
@@ -6057,6 +6069,14 @@ mod tests {
             (json(serde_json::json!({"currentVersion": 11})), None),
             (json(serde_json::json!({"error": {"code": 498, "message": "Invalid token."}})), unread("service error: 498: Invalid token.")),
             (Ok(b"<html>busy</html>".to_vec()), unread("not JSON")),
+            (json(serde_json::json!([1])), unread("not an object")),
+            // The service's error, however long, as a description may be.
+            (
+                json(serde_json::json!({"error": {"code": 500, "message": "Failed.", "details": ["x".repeat(EDGE)]}})),
+                unread("service error: 500: Failed."),
+            ),
+            // An address in the error isn't repeated: its path may hold a key.
+            (Err("https://x.org/key/s3cr3t/a/MapServer/3: http status: 502".to_string()), unread("its description couldn't be fetched")),
             (Err("timeout: service page".to_string()), unread("timeout: service page")),
         ] {
             let Step::Fetch(mut pages) = begin(q, 100) else { panic!("the description is fetched first") };
