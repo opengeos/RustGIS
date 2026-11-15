@@ -21107,6 +21107,83 @@ fn repair_source_checks_the_extrusion_base_field() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+#[test]
+fn deleting_a_field_clears_the_extrusion_and_marker_rotation_reading_it() {
+    // #2081: the extrusion's height and base and the marker rotation stopped reading a deleted
+    // field without a word, and the saved project kept its name for a field added later.
+    let mut s = world();
+    let x = |s: &Session| s.map().layer_by_name("Countries").and_then(|l| l.extrusion.clone()).unwrap();
+    let about = |s: &Session, mark: u64, word: &str| -> Vec<String> {
+        s.notices_since(mark).iter().filter(|n| n.text.contains(word)).map(|n| n.text.clone()).collect()
+    };
+    for f in ["tall", "low", "both", "spare"] {
+        s.run("edit.addField", &json!({"layer": "Countries", "name": f, "type": "double"})).unwrap();
+    }
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "field", "field": "tall", "factor": 2})).unwrap();
+    s.run("layer.extrusionBase", &json!({"layer": "Countries", "field": "low", "base": 5})).unwrap();
+    let height = x(&s).height;
+    // A field the extrusion doesn't read goes without a word about it.
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "spare"})).unwrap();
+    assert_eq!((x(&s).field.as_deref(), x(&s).base_field.as_deref()), (Some("tall"), Some("low")));
+    assert_eq!(about(&s, mark, "extrusion"), Vec::<String>::new());
+    // A refused deletion changes nothing and says nothing about the extrusion.
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "low is null"})).unwrap();
+    let mark = s.notice_mark();
+    assert!(s.run("edit.deleteField", &json!({"layer": "Countries", "field": "low"})).is_err());
+    assert_eq!(x(&s).base_field.as_deref(), Some("low"));
+    assert_eq!(about(&s, mark, "extrusion"), Vec::<String>::new());
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": ""})).unwrap();
+    // The base's field (named in another case): the base goes back to its constant, the height
+    // keeps its field, said once.
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "LOW"})).unwrap();
+    let got = x(&s);
+    assert_eq!((got.base_field.as_deref(), got.base, got.field.as_deref(), got.factor), (None, 5.0, Some("tall"), 2.0));
+    assert_eq!(about(&s, mark, "extrusion"), ["Countries: its extrusion's base read the deleted field low, so it uses its constant base"]);
+    // Undo brings the field and the base's reference back.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(x(&s).base_field.as_deref(), Some("low"));
+    // The height's field: the height goes back to its constant.
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "tall"})).unwrap();
+    let got = x(&s);
+    assert_eq!((got.field.as_deref(), got.height, got.base_field.as_deref()), (None, height, Some("low")));
+    assert_eq!(
+        about(&s, mark, "extrusion"),
+        ["Countries: its extrusion's height read the deleted field tall, so it uses its constant height"]
+    );
+    // Both on one field: both cleared, one notice naming both, and the saved extrusion forgets it.
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "field", "field": "both"})).unwrap();
+    s.run("layer.extrusionBase", &json!({"layer": "Countries", "field": "both"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "both"})).unwrap();
+    let got = x(&s);
+    assert_eq!((got.field.as_deref(), got.base_field.as_deref()), (None, None));
+    assert_eq!(
+        about(&s, mark, "extrusion"),
+        ["Countries: its extrusion's height and base read the deleted field both, so it uses its constant height and base"]
+    );
+    let saved = serde_json::to_string(&got).unwrap();
+    assert!(!saved.contains("\"both\""), "{saved}");
+    // The marker rotation: one on another field stays; one on the field (set in another case) goes.
+    let r = |s: &Session| s.map().layer_by_name("Cities").and_then(|l| l.marker_rotation.clone());
+    for f in ["angle", "other"] {
+        s.run("edit.addField", &json!({"layer": "Cities", "name": f, "type": "double"})).unwrap();
+    }
+    s.run("layer.markerRotation", &json!({"layer": "Cities", "field": "ANGLE", "counterclockwise": true})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "other"})).unwrap();
+    assert!(r(&s).is_some());
+    assert_eq!(about(&s, mark, "markers"), Vec::<String>::new());
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "angle"})).unwrap();
+    assert!(r(&s).is_none());
+    assert_eq!(about(&s, mark, "markers"), ["Cities: its markers turned by the deleted field angle, so they are no longer turned"]);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(r(&s).map(|r| (r.field, r.counterclockwise)), Some(("ANGLE".to_string(), true)));
+}
+
 /// Extrusion Base sets what an extrusion stands on, a numeric field or a constant, and changes
 /// nothing else: the height, its field and the factor stay, as does whatever is left out. Null or
 /// an empty name clears the field; a field that isn't numeric, or a base that is no number or is

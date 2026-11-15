@@ -815,7 +815,8 @@ fn to_dates(ds: &mut Dataset, fi: usize, ty: FieldType) -> Result<Dates, String>
 }
 
 /// `edit.deleteField`: removes a field and every reference to it (symbology, labels, the data
-/// design), or refuses while the definition query or a display filter reads it.
+/// design, diagrams, the extrusion's height and base, the marker rotation), or refuses while the
+/// definition query or a display filter reads it.
 /// A standalone table's field just goes: nothing refers to it. Its rows are changed on the
 /// desktop worker ([`table_ahead`]), with progress and Cancel.
 fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
@@ -921,6 +922,31 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
             }
             diagram_note = Some(format!("{}: its diagram drew the deleted field {removed}, so that slice or bar is removed", l.name));
         }
+    }
+    // Nor its extrusion (#2081): a height or base read from the field goes back to its constant,
+    // said once for both. Nor its marker rotation, which goes: the markers stop turning.
+    let mut extrusion_note = None;
+    if let Some(x) = &mut l.extrusion {
+        let mut what = Vec::new();
+        for (read, name) in [(&mut x.field, "height"), (&mut x.base_field, "base")] {
+            if read.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&removed)) {
+                *read = None;
+                what.push(name);
+            }
+        }
+        if !what.is_empty() {
+            let what = what.join(" and ");
+            extrusion_note =
+                Some(format!("{}: its extrusion's {what} read the deleted field {removed}, so it uses its constant {what}", l.name));
+        }
+    }
+    let mut rotation_note = None;
+    if l.marker_rotation.as_ref().is_some_and(|r| r.field.eq_ignore_ascii_case(&removed)) {
+        l.marker_rotation = None;
+        rotation_note = Some(format!("{}: its markers turned by the deleted field {removed}, so they are no longer turned", l.name));
+    }
+    for note in [extrusion_note, rotation_note].into_iter().flatten() {
+        s.notify(note, false);
     }
     if let Some(note) = diagram_note {
         s.notify(note, false);
