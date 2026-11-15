@@ -119,11 +119,11 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
                 Some("esriSMSDiamond") => Marker::Diamond,
                 Some("esriSMSTriangle") => Marker::Triangle,
                 Some("esriSMSCross") => {
-                    notes.add("cross and x markers, drawn as + and × characters in the fill colour");
+                    notes.add("cross and x markers, drawn as + and × characters in the outline's colour");
                     Marker::Char(crate::symbology::Glyph::new('+', ""))
                 }
                 Some("esriSMSX") => {
-                    notes.add("cross and x markers, drawn as + and × characters in the fill colour");
+                    notes.add("cross and x markers, drawn as + and × characters in the outline's colour");
                     Marker::Char(crate::symbology::Glyph::new('×', ""))
                 }
                 None | Some("esriSMSCircle") => Marker::Circle,
@@ -135,6 +135,12 @@ fn symbol(s: &Value, g: GeometryType, notes: &mut Notes) -> Option<(Symbol, Opti
             let (stroke, stroke_width) = outline(s, "dashed marker outlines, drawn solid", notes);
             if offset_or_angle(s) {
                 notes.add("markers' angles and offsets, left out");
+            }
+            // A cross or an x is all outline in ArcGIS: its character is drawn in the outline's
+            // colour, and nothing with none.
+            if matches!(marker, Marker::Char(_)) {
+                let size = size(s.get("size"), base.size, notes);
+                return Some((Symbol { fill: stroke, stroke: Rgba::TRANSPARENT, stroke_width: 0.0, size, marker }, None));
             }
             let fill = color(s.get("color"), notes);
             Some((Symbol { fill, stroke, stroke_width, size: size(s.get("size"), base.size, notes), marker }, None))
@@ -339,14 +345,21 @@ mod tests {
         );
         assert!(notes.is_empty());
         for (style, ch) in [("esriSMSCross", '+'), ("esriSMSX", '×')] {
-            let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "style": style, "color": [0, 0, 0, 255], "size": 8, "angle": 45}}});
+            let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "style": style, "color": [0, 0, 255, 255], "size": 8, "angle": 45,
+                "outline": {"type": "esriSLS", "style": "esriSLSSolid", "color": [230, 0, 0, 255], "width": 1}}}});
             let (l, notes) = styled(GeometryType::Point, info);
             let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
             assert_eq!(s.marker, Marker::Char(crate::symbology::Glyph::new(ch, "")));
+            // All outline: the character takes the outline's colour, with no outline of its own.
+            assert_eq!((s.fill, s.stroke, s.stroke_width, s.size), (Rgba::rgb(230, 0, 0), Rgba::TRANSPARENT, 0.0, 8.0));
             assert_eq!(
                 notes.text(),
-                "cross and x markers, drawn as + and × characters in the fill colour; markers' angles and offsets, left out"
+                "cross and x markers, drawn as + and × characters in the outline's colour; markers' angles and offsets, left out"
             );
+            // Without an outline, ArcGIS draws nothing, whatever its colour.
+            let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriSMS", "style": style, "color": [0, 0, 255, 255], "outline": null}}});
+            let Renderer::Single(s) = styled(GeometryType::Point, info).0.renderer else { panic!("a single symbol") };
+            assert_eq!((s.fill, s.stroke), (Rgba::TRANSPARENT, Rgba::TRANSPARENT));
         }
     }
 
