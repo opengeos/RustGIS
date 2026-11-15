@@ -166,7 +166,6 @@ mod desktop {
     /// range, over the window), and the index made from them as one band of numbers, by the
     /// Indices section's formula. The band math checks Cancel and counts its rows as it runs (see
     /// `band_math`); Cancel is also looked at before each file.
-    /// inside it (the window is bounded by the cell size); Cancel is looked at before each file.
     pub(super) fn index(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
         if let Some(k) = ["combination", "red", "green", "blue"].into_iter().find(|k| given(p, k)) {
