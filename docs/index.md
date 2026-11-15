@@ -56,9 +56,9 @@ Map operations are commands you can script from the command line, Python or the 
 
 -   **Field work**
 
-    Carry a map to an Android or iOS phone with its offline basemap, capture points, lines and
-    polygons by touch or at the device's position, record tracks, attach photos, and bring the
-    edits back into the project.
+    Carry a map to an Android phone (iOS through the App Store to follow) with its offline
+    basemap, capture points, lines and polygons by touch or at the device's position, record
+    tracks, attach photos, and bring the edits back into the project.
     [Field Work](user-guide/field-work.md)
 
 -   **AI Assistant**

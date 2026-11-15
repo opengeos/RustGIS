@@ -214,9 +214,10 @@ And alongside it:
   ([#882](https://github.com/opengeos/RustGIS/issues/882)); add SLD styles.
 - A histogram for raster stretches; editable raster class labels (labels from a colour table or
   `.aux.xml` attribute table are read; [#889](https://github.com/opengeos/RustGIS/issues/889)).
-- What [#1042](https://github.com/opengeos/RustGIS/issues/1042) leaves open of UTM and MGRS grids
-  (measured and UTM zone graticules, MGRS layout grids and UPS are done) _(open)_; more than two synced maps side by side _(open)_; auto-refresh for web service layers
-  _(open)_.
+- What [#1042](https://github.com/opengeos/RustGIS/issues/1042) leaves open of UTM and MGRS
+  grids: MGRS square labels in layout frames north of 84° N or south of 80° S, where MGRS uses UPS
+  (measured and UTM zone graticules, MGRS labels elsewhere and UPS readouts are done) _(open)_;
+  more than two synced maps side by side _(open)_; auto-refresh for web service layers _(open)_.
 - GPU map: vector tiles and labels on the GPU tile layer
   ([#635](https://github.com/opengeos/RustGIS/issues/635),
   [#596](https://github.com/opengeos/RustGIS/issues/596)).
