@@ -644,6 +644,11 @@ pub fn commands() -> Vec<C> {
         .view()
         .key("Ctrl+T")
         .when(need_feature_layer),
+        C::new("table.statistics", "Column Statistics", "Data › Table", super::table_stats::run)
+            .roles(&[])
+            .effects(crate::policy::Effects::NONE)
+            .view()
+            .params(r#"{"layer"?: name|id (default: the active layer), "field": name (the first of that name, not told apart by case) | "index": the field's position in dataset order, from 0 (not the displayed order after Move Left/Right) (tells apart columns of the same name; wins over "field"), "selected"?: bool (only the layer's selected features; default: all)} → a numeric field: {layer, field, kind: "number", selected, rows (features considered), count (numbers used), nulls (null or empty), skipped (not finite numbers: NaN, infinity, or text that isn't a number; said in a notice), sum, mean, min, max (whole numbers are added up exactly: past 2^53 a sum, min or max is a whole number or its digits as text, never rounded), stdDev (the population one, divided by n, as Summary Statistics' STD)}; a sum or other number too large for a decimal is null, said in a notice; a text, date or other field: {…, kind: "text"|"date", count, nulls, distinct (bounded by 100,000 entries and 8 MiB of distinct text: then distinctCapped is true and a notice gives the lower bound), min, max (text by character code, dates by date)}"#),
         C::new("table.close", "Close Table", "Data › Table", |s, _| {
             s.table_layer = None;
             Ok(Value::Null)
@@ -1631,8 +1636,9 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     // `"as": "scan"` opens a TIFF, PNG or JPEG as a picture with no coordinates, a photo too.
     let scan = super::raster::wants_scan(p, path)?;
     // A photo: a point in the photo layer (one without a GPS position is named and left out). In the
-    // browser `add_photos` asks for an upload, so a JPEG isn't taken for a scan there either.
-    if !scan && rustgis_data::photo::is_photo_name(path) {
+    // browser `add_photos` asks for an upload, so a JPEG isn't taken for a scan there either. A
+    // JPEG with a world file beside it (`.jgw`) is a picture placed by it, a raster (#2075).
+    if !scan && rustgis_data::photo::is_photo_name(path) && !rustgis_data::raster::world::places(Path::new(path)) {
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
         return add_photos(s, &json!({"paths": [path], "name": name}));
     }
@@ -2019,12 +2025,12 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     const NAME: &str = "Add Data";
     let path = gdb_path(ps(p, "path")?).into_owned();
     let scan = super::raster::wants_scan(p, &path).ok()?;
-    if !scan && rustgis_data::photo::is_photo_name(&path) {
+    if !scan && rustgis_data::photo::is_photo_name(&path) && !rustgis_data::raster::world::places(Path::new(&path)) {
         return None;
     }
     if rustgis_data::raster::is_raster_name(&path) {
-        let key = super::raster::read_key(&path);
-        return Some(ahead(NAME, key, move || super::raster::read_raster(&path)));
+        let key = super::raster::read_key(&path, scan);
+        return Some(ahead(NAME, key, move || super::raster::read_raster_as(&path, scan)));
     }
     if rustgis_data::raster::zarr::is_store(Path::new(&path)) {
         return None;
@@ -5487,6 +5493,10 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
             replace(mask);
         }
     }
+    // The terrain's water layer (#1915), kept by name as a mask is.
+    if let Some(water) = s.map_mut().view.terrain.as_mut().and_then(|t| t.water.as_mut()) {
+        replace(&mut water.layer);
+    }
     // Elevation and Map Series selectors compare spellings exactly, even though lookup does not.
     if case_only {
         if s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(old)).count() == 1 {
@@ -5633,8 +5643,17 @@ pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
 }
 
 /// After layers called `names` are removed: a terrain drawn from one of them would lose its
-/// relief, or take another layer's heights by that name, so it is turned off, and said.
+/// relief, or take another layer's heights by that name, so it is turned off, and said. Its water
+/// layer removed (#1915), the water keeps the name, so a layer of that name brings it back, and
+/// its lakes lie on the ground meanwhile: said.
 fn terrain_follows_removal(s: &mut Session, names: &[String]) {
+    let water = s.map().view.terrain.as_ref().and_then(|t| t.water.as_ref()).map(|w| w.layer.clone());
+    if let Some(w) = water.filter(|w| names.iter().any(|n| n.eq_ignore_ascii_case(w)) && named_layers(s, w) == 0) {
+        s.notify(
+            format!("Water: its layer '{w}' was removed, so its lakes lie on the ground until a layer of that name comes back"),
+            false,
+        );
+    }
     let Some(dem) = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d))) else { return };
     s.map_mut().view.terrain = None;
     let said = if named_layers(s, &dem) > 0 {
