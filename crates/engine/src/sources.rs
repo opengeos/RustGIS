@@ -797,7 +797,7 @@ pub(crate) fn strip_capabilities(address: &str) -> String {
 
 fn strip_capabilities_at(address: &str, depth: usize) -> String {
     if depth >= 8 {
-        return String::new();
+        return "[address omitted]".into();
     }
     let text = address.trim_start();
     if let Some((head, archive)) = template_archive(text) {

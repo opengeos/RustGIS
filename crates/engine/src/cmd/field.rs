@@ -209,6 +209,13 @@ pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), S
         (home.presentations.len(), "presentation(s)"),
         (home.workspaces.len(), "imagery workspace(s)"),
         (home.dl_models.len(), "deep learning model(s)"),
+        (home.folders.len(), "folder(s)"),
+        (home.shared.len(), "shared item(s)"),
+        (home.data_stores.len(), "data store(s)"),
+        (home.tasks.len(), "task(s)"),
+        (home.jobs.len(), "job(s)"),
+        (home.gp_history.len(), "geoprocessing history run(s)"),
+        (home.offline_areas.len(), "offline area(s)"),
         (home.maps.len().saturating_sub(1), "other map(s)"),
     ]
     .into_iter()
@@ -865,7 +872,10 @@ mod tests {
         let (_, bytes) = package(&mut s, &json!({"name": "Survey", "extent": [-20.0, -40.0, 60.0, 40.0]})).unwrap();
         // What stayed at home is said.
         let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(said.iter().any(|t| t.contains("stayed in this project") && t.contains("table(s)")), "{said:?}");
+        assert!(
+            said.iter().any(|t| t.contains("stayed in this project") && t.contains("1 table(s)") && t.contains("1 folder(s)")),
+            "{said:?}"
+        );
         let names: Vec<String> = rustgis_data::zip::read(&bytes).unwrap().into_iter().map(|(n, _)| n).collect();
         assert!(names.contains(&"basemaps/site_a_b__.mbtiles".to_string()), "{names:?}");
         let into = temp.path().join("unpacked");
