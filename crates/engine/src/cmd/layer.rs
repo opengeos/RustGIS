@@ -985,7 +985,7 @@ fn class_symbol<'a>(r: &'a mut Renderer, class: &ClassRef) -> Option<&'a mut rus
 }
 
 /// A symbol's fill No Fill made transparent, shown again in its own colour.
-fn show_fill(sym: &mut rustgis_map::Symbol) {
+pub(super) fn show_fill(sym: &mut rustgis_map::Symbol) {
     if sym.fill.a() == 0 {
         sym.fill = sym.fill.with_alpha(shown_fill_alpha());
     }
