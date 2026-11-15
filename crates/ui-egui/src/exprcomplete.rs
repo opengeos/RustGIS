@@ -280,8 +280,9 @@ fn quoted_at(text: &str, at: usize) -> Option<char> {
 /// `"` too (`'|'`), when it also comes where a value can start (the start, a space, `(`, `,` or
 /// an operator); a `)` typed right before a `)` steps over it rather than add one, and so does a
 /// quote typed before the one that ends its text or name; Backspace in an empty `(|)`, `'|'` or
-/// `"|"` deletes both. Not in a text or a field's name, and only for the keys that make those
-/// edits (`keyed`). The cursor stays where the box put it. None to leave the edit as it is.
+/// `"|"` deletes both. Not in a text or a field's name, nor past the longest expression read
+/// (`MAX_LEN`, as the box takes no more), and only for the keys that make those edits (`keyed`).
+/// The cursor stays where the box put it. None to leave the edit as it is.
 fn pair(text: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> {
     let Before { at, prev, len } = before;
     let plain = |i: usize| quoted_at(text, i).is_none();
@@ -292,7 +293,7 @@ fn pair(text: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> 
     let (b, rest) = (text.get(..cut)?, text.get(cut..)?);
     // What may come before a quote that closes itself.
     let opens = |c: char| c.is_whitespace() || matches!(c, '(' | ',' | '=' | '<' | '>' | '+' | '-' | '*' | '/' | '%' | '^' | '|');
-    match (typed, next) {
+    let new = match (typed, next) {
         (Some('('), next) if typed_one && plain(at) && next.is_none_or(closes) => Some(format!("{b}(){}", rest.get(1..)?)),
         (Some(q @ ('\'' | '"')), next) if typed_one && plain(at) && next.is_none_or(closes) && prev.is_none_or(opens) => {
             Some(format!("{b}{q}{q}{}", rest.get(1..)?))
@@ -308,7 +309,8 @@ fn pair(text: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> 
             Some(format!("{b}{}", rest.get(1..)?))
         }
         _ => None,
-    }
+    };
+    new.filter(|t| t.chars().count() <= query::MAX_LEN)
 }
 
 /// The span (bytes) of argument `arg` (from 0) in a function's `signature` (`round(x[, places])`):
@@ -832,6 +834,10 @@ mod tests {
         assert_eq!(typed("pop != ", 7, "(").as_deref(), Some("pop != ()"), "`!=` is no name");
         assert_eq!(typed("ñandú", 5, "(").as_deref(), Some("ñandú()"), "chars, not bytes");
         assert_eq!(typed("round", 5, "(("), None, "more than the bracket typed");
+        let long = "x".repeat(query::MAX_LEN - 1);
+        assert_eq!(typed(&long, long.len(), "("), None, "not past the longest expression");
+        let short = "x".repeat(query::MAX_LEN - 2);
+        assert!(typed(&short, short.len(), "(").is_some(), "up to it");
         assert_eq!(typed("round(1)", 7, ")").as_deref(), Some("round(1)"), "stepped over");
         assert_eq!(typed("'a)'", 2, ")"), None, "not over one in a text");
         assert_eq!(backspace("round()", 6).as_deref(), Some("round"));
