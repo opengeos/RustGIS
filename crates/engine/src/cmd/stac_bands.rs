@@ -66,7 +66,7 @@ mod desktop {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use rustgis_data::raster::Raster;
-    use rustgis_map::{RasterLayer, RasterRenderer};
+    use rustgis_map::{Ramp, RasterLayer, RasterRenderer, Stretch};
     use serde_json::{Value, json};
 
     use super::super::layer::{WindowAsked, WindowRaster};
@@ -105,7 +105,10 @@ mod desktop {
     ) -> Result<(Vec<sb::Band>, Vec<String>, [f64; 4], f64), String> {
         let mut picked = Vec::with_capacity(wanted.len());
         for name in wanted {
-            let band = sb::find(all, name).ok_or_else(|| format!("{}: no band '{name}' (it has {})", item.id, names_of(all)))?;
+            let band = sb::find(all, name).ok_or_else(|| {
+                let cut = sb::cut_note(item).map(|n| format!("; {n}")).unwrap_or_default();
+                format!("{}: no band '{name}' (it has {}){cut}", item.id, names_of(all))
+            })?;
             picked.push(band.clone());
         }
         let mut hrefs = Vec::with_capacity(picked.len());
@@ -187,8 +190,33 @@ mod desktop {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let raster = rustgis_analysis::rasterops::derive(&stacked, &name, vec![band])?;
             let then = noted(raster.name.clone(), notes);
-            super::super::workflows::made_then(raster, Some(json!({"index": id, "bands": wanted, "bbox": bbox})), Some(then))
+            let bytes = rustgis_data::raster::geotiff::write_all(&raster).map_err(|e| e.to_string())?;
+            let layer_name = raster.name.clone();
+            let mut layer = RasterLayer::from_bytes(raster, format!("{layer_name}.tif"), bytes);
+            // Drawn in colour over the range the index means something in, not grey over this window's own.
+            let (ramp, min, max) = index_look(id);
+            layer.style.renderer = RasterRenderer::Stretch { band: 0, ramp, invert: false };
+            layer.style.stretch = Stretch::Custom { min, max, bands: None };
+            Ok(super::super::workflows::made_layer(
+                layer_name,
+                layer,
+                Some(json!({"index": id, "bands": wanted, "bbox": bbox})),
+                Some(then),
+            ))
         }))
+    }
+
+    /// The colours an index is drawn in and the values they run between (low to high): greens for
+    /// the vegetation indices, blues for water, red to blue for a burn ratio (burnt to healthy), and
+    /// blue to red for the built-up index. The range is the index's own, so two scenes compare.
+    pub(super) fn index_look(id: &str) -> (Ramp, f64, f64) {
+        match id {
+            "ndwi" => (Ramp::Lagoon, -0.5, 0.5),
+            "nbr" => (Ramp::Diverging, -0.5, 0.5),
+            "ndbi" => (Ramp::Thermal, -0.5, 0.5),
+            "evi" => (Ramp::Forest, 0.0, 1.0),
+            _ => (Ramp::Forest, -0.1, 0.9),
+        }
     }
 
     /// The names a bands list offers, for an error: common names, else keys, each once.
@@ -255,6 +283,9 @@ mod desktop {
             // A Planetary Computer file is signed as it is read, not when the item was found.
             let signed = stac::sign_blocking(href)?;
             // Every band of the file is read, so the count asked is the file's, not the band's place.
+            // The cost grows with the file's band count (a 13-band file is about 13 times the bytes
+            // and memory of the one band wanted); the values read are bounded by the window's own
+            // limit, and a window reader that picks bands would spare it.
             let w = read_window(&signed, bbox, cell, band.in_file.max(band.index) as usize)?;
             let who = channels.get(i).map_or("band", String::as_str);
             notes.extend(w.notes().into_iter().map(|n| format!("{who}: {n}")));
@@ -280,6 +311,13 @@ mod desktop {
         let (Some((first, _)), true) = (sources.first(), sources.len() >= 2) else { return Err("a stack needs at least two bands".into()) };
         if sources.iter().any(|(r, _)| r.crs != first.crs) {
             return Err("the bands are in different coordinate systems: they can't be put on one grid".into());
+        }
+        // A scale of 0 (or one that isn't a number) would turn every value of a band into its
+        // offset: a catalog error to say, not a constant band to draw.
+        for ((_, band), who) in sources.iter().zip(channels) {
+            if !band.scale.is_finite() || band.scale == 0.0 {
+                return Err(format!("{who}: the catalog gives its values a scale of {}, so they can't be scaled", band.scale));
+            }
         }
         let finest = sources
             .iter()
@@ -387,7 +425,7 @@ mod desktop {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[expect(clippy::unwrap_used, reason = "a test module gated on more than `test`, which clippy's allow-unwrap-in-tests does not see")]
 mod tests {
-    use super::desktop::{auto_cell, stack};
+    use super::desktop::{auto_cell, index_look, stack};
     use crate::render::rustgis_tiles::stac::bands::Band;
     use rustgis_data::raster::{ColorHint, GeoTransform, Raster, crs::Crs};
 
@@ -485,6 +523,19 @@ mod tests {
     }
 
     #[test]
+    fn every_index_is_drawn_in_colour_over_a_range_of_its_own() {
+        use crate::render::rustgis_tiles::stac::bands::INDICES;
+        use rustgis_map::Ramp;
+        for ix in &INDICES {
+            let (ramp, min, max) = index_look(ix.id);
+            assert!(min < max && min.is_finite() && max.is_finite(), "{}: {min}..{max}", ix.id);
+            assert_ne!(ramp, Ramp::Greys, "{} is not drawn in grey", ix.id);
+        }
+        // Vegetation in greens, water in blues.
+        assert_eq!((index_look("ndvi").0, index_look("ndwi").0), (Ramp::Forest, Ramp::Lagoon));
+    }
+
+    #[test]
     fn bands_with_no_cell_in_common_are_an_error_not_an_empty_image() {
         // The first band has a value in the top-left cell only, the second in the bottom-right
         // cell only (0 is the files' no data): no cell has a value in both.
@@ -501,6 +552,18 @@ mod tests {
         let (r, notes) = stack("s", &["a".into(), "b".into()], &[(&wide, &band(1.0, 0.0)), (&corner, &band(1.0, 0.0))]).unwrap();
         assert_eq!(r.bands[0].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1);
         assert!(notes.iter().any(|n| n.contains("15 cells")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_band_with_a_scale_of_zero_is_refused_not_drawn_as_one_value() {
+        let a = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let err = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &band(0.0, 0.5))]).unwrap_err();
+        assert!(err.starts_with("red:") && err.contains("scale of 0"), "{err}");
+        let err = stack("s", &names, &[(&a, &band(f64::NAN, 0.0)), (&a, &band(1.0, 0.0))]).unwrap_err();
+        assert!(err.starts_with("nir:") && err.contains("scale"), "{err}");
+        // A negative scale is odd but is a scale.
+        assert!(stack("s", &names, &[(&a, &band(-1.0, 0.0)), (&a, &band(1.0, 0.0))]).is_ok());
     }
 
     #[test]

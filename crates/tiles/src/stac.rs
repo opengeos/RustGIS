@@ -69,6 +69,9 @@ pub struct Asset {
     /// Each band of its file as the catalog describes it (`eo:bands`, `raster:bands`, or STAC 1.1's
     /// `bands`), in file order; empty when it describes none. See [`bands`].
     pub bands: Vec<BandInfo>,
+    /// Whether the catalog describes more bands than are kept (`bands` stops at the first
+    /// [`MAX_BANDS`]): the ones past them can't be found by name.
+    pub bands_cut: bool,
 }
 
 /// One band of an asset's file, as its catalog describes it.
@@ -86,14 +89,22 @@ pub struct BandInfo {
 /// The most bands of one asset that are kept.
 const MAX_BANDS: usize = 64;
 
+/// How many bands an asset describes, before the cut to [`MAX_BANDS`].
+fn declared_bands(asset: &Value) -> usize {
+    let list = |key: &str| asset.get(key).and_then(Value::as_array);
+    let named = list("eo:bands").or_else(|| list("bands"));
+    named.map_or(0, |l| l.len()).max(list("raster:bands").map_or(0, |l| l.len()))
+}
+
 /// The bands an asset describes, from `eo:bands` (names) or STAC 1.1's unified `bands`, and
 /// `raster:bands` (scale, offset, no-data), matched by position. Both spellings of the raster
-/// terms are read (`scale` and `raster:scale`). Hostile input: at most [`MAX_BANDS`], text cut.
+/// terms are read (`scale` and `raster:scale`). Hostile input: at most [`MAX_BANDS`], text cut
+/// (an asset with more says so in `bands_cut`).
 fn asset_bands(asset: &Value) -> Vec<BandInfo> {
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
     let named = list("eo:bands").or_else(|| list("bands"));
     let raster = list("raster:bands");
-    let count = named.map_or(0, |l| l.len()).max(raster.map_or(0, |l| l.len())).min(MAX_BANDS);
+    let count = declared_bands(asset).min(MAX_BANDS);
     let number = |band: Option<&Value>, keys: &[&str]| keys.iter().find_map(|k| band?.get(*k)?.as_f64()).filter(|v| v.is_finite());
     (0..count)
         .map(|i| {
@@ -559,6 +570,7 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
                 invalid: invalid.clone().unwrap_or_default(),
                 codes_unread: invalid.is_none(),
                 bands: asset_bands(a),
+                bands_cut: declared_bands(a) > MAX_BANDS || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
             })
         })
         .collect();
@@ -939,6 +951,10 @@ fn asset_json(a: &Asset) -> Value {
     if let (false, Some(o)) = (bands.is_empty(), out.as_object_mut()) {
         o.insert("bands".into(), Value::Array(bands));
     }
+    // The cut is kept, so the command that gets this item can say that bands were left out.
+    if let (true, Some(o)) = (a.bands_cut, out.as_object_mut()) {
+        o.insert("rg:bands_cut".into(), Value::Bool(true));
+    }
     out
 }
 
@@ -1230,6 +1246,7 @@ mod tests {
             invalid: Vec::new(),
             codes_unread: false,
             bands: Vec::new(),
+            bands_cut: false,
         }];
         // A Planetary Computer asset is added after signing it with its container's token.
         let (_, href) = pc.asset_href(None).unwrap();

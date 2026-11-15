@@ -127,7 +127,8 @@ pub fn bands(item: &Item) -> Vec<Band> {
 /// bands with the name, one in a file of its own is taken over one of a stack: Sentinel-2's
 /// `visual` and `preview` are colour images whose bands are named red, green and blue too, and
 /// they are not the band files. A key of an asset with several bands says nothing of which one is
-/// meant, so it is not taken for one.
+/// meant, so it is not taken for one, nor is the key of an asset whose one band the catalog names
+/// something else (an asset `red` of `nir` is not red).
 pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     let wanted = wanted.trim().to_ascii_lowercase();
     let names: Vec<&str> = match ALIASES.iter().find(|(name, _)| *name == wanted) {
@@ -139,11 +140,22 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
         named().find(|b| b.in_file == 1).or_else(|| named().next()).or_else(|| {
             let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(name));
             match (of_asset.next(), of_asset.next()) {
-                (Some(only), None) => Some(only),
+                (Some(only), None) if only.common.is_empty() => Some(only),
                 _ => None,
             }
         })
     })
+}
+
+/// A note for an error about a band not found, when the item describes more bands than are kept
+/// (an asset's past [`super::MAX_BANDS`], or the item's past this list's cap): the band may be one
+/// of those left out. None when nothing was cut.
+pub fn cut_note(item: &Item) -> Option<String> {
+    if item.assets.iter().any(|a| a.bands_cut) {
+        return Some(format!("an asset describes more than {} bands and only the first {} are read", super::MAX_BANDS, super::MAX_BANDS));
+    }
+    let total: usize = item.assets.iter().filter(|a| a.is_geotiff()).map(|a| a.bands.len().max(1)).sum();
+    (total > MAX_BANDS).then(|| format!("the item has more than {MAX_BANDS} bands and only the first {MAX_BANDS} are listed"))
 }
 
 /// The combinations the item can make, each with the bands found for its red, green and blue:
@@ -240,6 +252,15 @@ mod tests {
     }
 
     #[test]
+    fn an_assets_key_is_not_its_band_when_the_catalog_names_the_band_something_else() {
+        // An asset `red` whose one band is near infrared is not red; with no name it still is.
+        let b = bands(&item(&[("red", named("nir")), ("green", json!({}))]));
+        assert!(find(&b, "red").is_none(), "`red` holds the near infrared band");
+        assert_eq!(find(&b, "nir").unwrap().asset, "red", "and it is found as what it is");
+        assert_eq!(find(&b, "green").unwrap().asset, "green", "a band the catalog names none for goes by its key");
+    }
+
+    #[test]
     fn only_the_indices_an_item_can_make_are_offered() {
         let ids = |i: &Item| available_indices(&bands(i)).iter().map(|x| x.id).collect::<Vec<_>>();
         assert_eq!(ids(&sentinel()), ["ndvi", "ndwi", "savi", "nbr", "ndbi", "evi"]);
@@ -324,6 +345,24 @@ mod tests {
         let nan = bands(&item(&[("red", json!({"eo:bands": [{"common_name": "red"}], "raster:bands": [{"nodata": "nan", "scale": 0}]}))]));
         assert_eq!(nan[0].nodata, None, "\"nan\" is not a number");
         assert_eq!(nan[0].scale, 0.0, "a stated scale is kept as stated");
+        // The cut is said: for the asset, and again after the item has been passed to a command.
+        let big = item(&[("big", json!({"eo:bands": (0..500).map(|_| json!({})).collect::<Vec<_>>()}))]);
+        assert!(cut_note(&big).is_some_and(|n| n.contains("more than 64 bands")), "{:?}", cut_note(&big));
+        let again = crate::stac::item_from_json(&crate::stac::item_json(&big), None).unwrap();
+        assert!(cut_note(&again).is_some(), "the cut survives the item being passed on");
+        // An item with more bands than the list keeps (six files of 64) says so too; a whole one says nothing.
+        let sixty_four = json!({"eo:bands": (0..64).map(|_| json!({})).collect::<Vec<_>>()});
+        let wide = item(&[
+            ("a", sixty_four.clone()),
+            ("b", sixty_four.clone()),
+            ("c", sixty_four.clone()),
+            ("d", sixty_four.clone()),
+            ("e", sixty_four.clone()),
+            ("f", sixty_four),
+        ]);
+        assert_eq!(bands(&wide).len(), 256, "the list stops at its cap");
+        assert!(cut_note(&wide).is_some_and(|n| n.contains("more than 256 bands")), "{:?}", cut_note(&wide));
+        assert_eq!(cut_note(&sentinel()), None);
         // A name cut to a sane length, and nothing panics on junk.
         let junk = bands(&item(&[("x", json!({"eo:bands": [1, "a", null, {"common_name": 7}], "raster:bands": "no"}))]));
         assert_eq!(junk.len(), 4);
