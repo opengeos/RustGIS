@@ -161,10 +161,15 @@ they differ. A package for an area the project doesn't have is refused.
 
 ### Origin identities and older field copies
 
-New field packages keep a home-project identity and an offline-area identity, including after
-Save As and reopening. Bring Back checks both before applying edits or writing photos. Creating
-a package can add those identities to the home project: save that project so the return can be
-matched to it. Undo can remove the newly created area and identities too.
+Download Map gives each new offline area and its home project stable identities. New field
+packages preserve those identities, including after Save As and reopening. Bring Back checks
+both before applying edits or writing photos. Packaging an older area can also add identities
+to its home project: save that project so the return can be matched to it. Undo can remove the
+newly created area and identities too.
+
+Saving a project with these identities declares the `field-origin` capability, even when the
+offline area has never been sent as a field package. Earlier RustGIS releases that do not
+support this capability refuse the saved project rather than discard its return association.
 
 A field copy made before these identities were introduced still opens, and Send Field Package
 preserves its edits and photos as an unverified legacy return. Ordinary Bring Back refuses to
