@@ -318,6 +318,8 @@ mod tests {
         // "nan" is a no-data the raster extension allows: not read as a number, but not odd.
         assert!(!odd(json!({"scale": 0.0001, "nodata": "nan"}))[0].unread);
         assert!(odd(json!({"scale": 0.0001, "nodata": "zero"}))[0].unread);
+        assert!(odd(json!({"scale": 0.0001, "raster:nodata": "0"}))[0].unread, "the prefixed no-data is checked too");
+        assert!(!odd(json!({"scale": 0.0001, "raster:nodata": "nan"}))[0].unread);
         // A real scale is known; no scale is known as none.
         let (scaled, plain) = (odd(json!({"scale": 0.0001})), odd(json!({})));
         assert_eq!((scaled[0].scaled, scaled[0].unread, plain[0].scaled, plain[0].unread), (true, false, false, false));

@@ -301,6 +301,17 @@ mod desktop {
         Ok(out)
     }
 
+    /// What a window note is about, apart from the numbers and edge names that differ from file to
+    /// file: the note with its digits and the edges the box reaches past taken out.
+    pub(super) fn note_kind(note: &str) -> String {
+        if let Some((before, rest)) = note.split_once("the box reaches past the file's ")
+            && let Some((_, after)) = rest.split_once(" edge(s)")
+        {
+            return format!("{before}the box reaches past the file's edge(s){after}");
+        }
+        note.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect()
+    }
+
     /// The three windows, read, and put on one grid: the raster of three bands, and what to say.
     fn read_and_stack(
         name: &str,
@@ -324,26 +335,33 @@ mod desktop {
         }
         let read = read_windows(&files, bbox, cell)?;
         // What a file's read said: one notice for a kind, naming every band of the files it is for
-        // and how many files.
-        let mut window_notes: Vec<(String, Vec<String>, usize)> = Vec::new();
+        // and how many files. The notes of a kind differ by a number or an edge name from file to
+        // file, so they are matched by [`note_kind`], and each file's own wording is kept.
+        let mut window_notes: Vec<(String, Vec<String>, Vec<String>, usize)> = Vec::new();
         let mut windows: Vec<(String, WindowRaster)> = Vec::new();
         for ((href, _), w) in files.into_iter().zip(read) {
             let whos: Vec<String> =
                 picked.iter().zip(channels).zip(hrefs).filter(|(_, h)| **h == href).map(|((_, c), _)| c.clone()).collect();
             for n in w.notes() {
-                match window_notes.iter_mut().find(|(t, _, _)| *t == n) {
-                    Some((_, bands, files)) => {
+                let kind = note_kind(&n);
+                match window_notes.iter_mut().find(|(k, ..)| *k == kind) {
+                    Some((_, texts, bands, files)) => {
+                        if !texts.contains(&n) {
+                            texts.push(n);
+                        }
                         bands.extend(whos.iter().cloned());
                         *files += 1;
                     }
-                    None => window_notes.push((n, whos.clone(), 1)),
+                    None => window_notes.push((kind, vec![n], whos.clone(), 1)),
                 }
             }
             windows.push((href, w));
         }
         let mut notes: Vec<String> = window_notes
             .into_iter()
-            .map(|(n, bands, files)| format!("{} ({files} file{}): {n}", bands.join(", "), if files == 1 { "" } else { "s" }))
+            .map(|(_, texts, bands, files)| {
+                format!("{} ({files} file{}): {}", bands.join(", "), if files == 1 { "" } else { "s" }, texts.join("; "))
+            })
             .collect();
         let sources: Vec<(&Raster, &sb::Band)> = picked
             .iter()
@@ -515,7 +533,7 @@ mod desktop {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[expect(clippy::unwrap_used, reason = "a test module gated on more than `test`, which clippy's allow-unwrap-in-tests does not see")]
 mod tests {
-    use super::desktop::{auto_cell, index_look, stack};
+    use super::desktop::{auto_cell, index_look, note_kind, stack};
     use crate::render::rustgis_tiles::stac::bands::Band;
     use rustgis_data::raster::{ColorHint, GeoTransform, Raster, crs::Crs};
     use serde_json::json;
@@ -762,6 +780,20 @@ mod tests {
         b.crs = Crs::from_epsg(3857).unwrap();
         let err = stack("s", &names(), &[(&a, &band(1.0, 0.0)), (&b, &band(1.0, 0.0)), (&a, &band(1.0, 0.0))]).unwrap_err();
         assert!(err.contains("different coordinate systems"), "{err}");
+    }
+
+    #[test]
+    fn window_notes_of_one_kind_match_whatever_their_numbers_and_edges() {
+        let edges = |e: &str| format!("the box reaches past the file's {e} edge(s): the window is cut to the file");
+        assert_eq!(note_kind(&edges("north, east")), note_kind(&edges("south")));
+        let pieces = |n: u32| {
+            format!("{n} piece(s) of the box's edges not followed to a quarter of a pixel: the window may fall short of a bent edge")
+        };
+        assert_eq!(note_kind(&pieces(3)), note_kind(&pieces(12)));
+        let cell = |c: f64| format!("cellSize 5 is finer than the file's finest cells ({c:.1}m): the full image is read");
+        assert_eq!(note_kind(&cell(10.0)), note_kind(&cell(20.5)));
+        // Different kinds stay apart.
+        assert_ne!(note_kind(&edges("north")), note_kind(&pieces(3)));
     }
 
     #[test]

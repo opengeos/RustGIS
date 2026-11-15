@@ -125,14 +125,14 @@ fn odd_numbers(band: Option<&Value>) -> bool {
     if band.get("rg:unread").and_then(Value::as_bool) == Some(true) {
         return true;
     }
-    [("scale", false), ("raster:scale", false), ("offset", false), ("raster:offset", false), ("nodata", true)].iter().any(
-        |(key, nodata)| match band.get(*key) {
+    [("scale", false), ("raster:scale", false), ("offset", false), ("raster:offset", false), ("nodata", true), ("raster:nodata", true)]
+        .iter()
+        .any(|(key, nodata)| match band.get(*key) {
             None | Some(Value::Null) => false,
             Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
             Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
             Some(_) => true,
-        },
-    )
+        })
 }
 
 /// The bands an asset describes, from `eo:bands` (names) or STAC 1.1's unified `bands`, and
