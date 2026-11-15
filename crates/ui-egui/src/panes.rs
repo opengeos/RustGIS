@@ -2146,8 +2146,6 @@ fn new_group(app: &mut RustGisApp, params: Value) {
     app.dialogs.text = name;
 }
 
-/// The menu of several layers picked together: what acts on all of them; what needs one layer is
-/// there, dimmed, so it is known why it can't be used.
 /// The several layers' Extrusion menu (#2160): the picked polygon layers raised alike by a numeric
 /// field every one has, or flattened, and, once all are raised, what they stand on. One command
 /// for them all, so one undo step. Buttons, not radios: their settings may differ, and the ribbon
@@ -2181,7 +2179,7 @@ fn extrusion_menu(app: &mut RustGisApp, ui: &mut Ui, picked: &[u32]) {
     ui.menu_button(tl!("Extrusion"), |ui| {
         if ids.len() < picked.len() {
             let (n, all) = (ids.len().to_string(), picked.len().to_string());
-            ui.weak(crate::i18n::fmt("For the {n} polygon layers of the {all} selected", &[("n", &n), ("all", &all)]));
+            ui.weak(crate::i18n::fmt("Polygon layers only: {n} of the {all} selected", &[("n", &n), ("all", &all)]));
             ui.separator();
         }
         if ui.button(tl!("None")).clicked() {
@@ -2222,6 +2220,8 @@ fn extrusion_menu(app: &mut RustGisApp, ui: &mut Ui, picked: &[u32]) {
     });
 }
 
+/// The menu of several layers picked together: what acts on all of them; what needs one layer is
+/// there, dimmed, so it is known why it can't be used.
 fn layers_menu(app: &mut RustGisApp, ui: &mut Ui, picked: &[u32], reorder: bool) {
     let in_service = picked.iter().any(|id| app.session.map().service_groups.iter().any(|g| g.children.iter().any(|c| c.layer == *id)));
     let ids = json!(picked);

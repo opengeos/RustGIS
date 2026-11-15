@@ -738,8 +738,8 @@ It acts on their polygon layers and says so when the others are left out, sets e
 one step to undo, and leaves each one's height, factor and base as they were where the choice
 doesn't set them. `layer.extrusion` and `layer.extrusionBase` take a list of layers in `layer`
 for the same. A layer that isn't polygons, a field that one of them lacks, or (for the base) one
-that isn't extruded yet refuses the whole list and changes none; the message names the layers
-without the field or the extrusion.
+that isn't extruded yet refuses the whole list and changes none; the message names those layers
+(a list whose first layer isn't polygons is refused as that one layer would be).
 
 For a raster layer, the **Style** tab also has **Layer Blend** (multiply, screen, overlay,
 darken, lighten, difference), **Swipe** (the layer shows only left of a divider you slide, to

@@ -234,10 +234,10 @@ fn extrusion(s: &mut Session, p: &Value) -> CmdResult {
         let x = if t == "none" {
             None
         } else {
-            let field = field.map(|n| numeric_field(&l.dataset, n)).transpose()?;
+            let own = field.map(|n| numeric_field(&l.dataset, n)).transpose()?;
             let keep = l.extrusion.clone().unwrap_or_default();
             Some(Extrusion {
-                field,
+                field: own,
                 height: f(p, "height").unwrap_or(keep.height.max(1000.0)).clamp(0.0, 1e7),
                 factor: f(p, "factor").unwrap_or(keep.factor).clamp(0.0, 1e6),
                 ..keep
@@ -245,11 +245,17 @@ fn extrusion(s: &mut Session, p: &Value) -> CmdResult {
         };
         next.push((id, x));
     }
-    for (id, x) in next {
-        if let Some(l) = s.map_mut().layer_mut(id) {
-            l.extrusion = x;
+    for (id, x) in &mut next {
+        if let Some(l) = s.map_mut().layer_mut(*id) {
+            l.extrusion = x.take();
         }
-        super::diagram::hidden_notice(s, id);
+    }
+    // Diagrams the extrusion hides: one notice, as for one layer, with how many more it holds for.
+    let hidden: Vec<String> = next.iter().filter_map(|(id, _)| s.map().layer(*id).and_then(super::diagram::hidden_text)).collect();
+    match hidden.as_slice() {
+        [] => {}
+        [one] => s.notify(one.clone(), false),
+        [first, rest @ ..] => s.notify(format!("{first} (and {} more layers like it)", rest.len()), false),
     }
     // The globe draws polygons flat; extrusion shows on flat maps.
     Ok(if s.map().projection.is_globe() {
@@ -281,7 +287,7 @@ fn extrusion_base(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(names) = named_where(s, &ids, |l| l.extrusion.is_none()) {
             return Err(format!("turn extrusion on first (Layer Extrusion) in {names}; no layer changed"));
         }
-    } else if s.map().layer(ids[0]).ok_or("no such layer")?.extrusion.is_none() {
+    } else if ids.first().and_then(|id| s.map().layer(*id)).ok_or("no such layer")?.extrusion.is_none() {
         return Err("turn extrusion on first (Layer Extrusion)".into());
     }
     let name = match p.get("field") {
