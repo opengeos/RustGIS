@@ -2727,6 +2727,29 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert!(bare.get("strippedParameters").is_none(), "{bare}");
     let said = format!("{bare}{:?}", s.notices_since(mark));
     assert!(!said.contains("RGSYNTHbare757"), "{said}");
+    // Legacy semicolons separate query pairs too. A public pair dropped alongside a key is not
+    // offered as a credential name.
+    let legacy = s
+        .run(
+            "connection.new",
+            &json!({"kind":"wmts","name":"Legacy separators","address":format!("{origin}/legacy?x=1;token=RGSYNTHlegacy757")}),
+        )
+        .unwrap();
+    assert_eq!(legacy["stripped"], true);
+    assert_eq!(legacy["strippedParameters"], json!(["token"]));
+    // A custom key name is a redaction hint even before a method is chosen; the saved definition
+    // must be as safe as its replay log. An explicit no-login method leaves ordinary data alone.
+    let no_method = s
+        .run("connection.new", &json!({"kind":"wmts","name":"Custom without method","address":format!("{origin}/custom?zqwithoutmethod757=RGSYNTHnomethod757&layer=a"),"keyName":"zqwithoutmethod757"}))
+        .unwrap();
+    assert_eq!(no_method["stripped"], true);
+    assert_eq!(no_method["address"], format!("{origin}/custom?layer=a"));
+    assert!(!s.connections.to_json().contains("RGSYNTHnomethod757"));
+    let explicit_none = s
+        .run("connection.new", &json!({"kind":"wmts","name":"Explicit no login","address":format!("{origin}/none?zqordinary757=public-code"),"keyName":"zqordinary757","auth":"none"}))
+        .unwrap();
+    assert!(explicit_none.get("stripped").is_none());
+    assert_eq!(explicit_none["address"], format!("{origin}/none?zqordinary757=public-code"));
 }
 
 /// A key in a query login is sent on the wire to the origin (and only as the parameter the

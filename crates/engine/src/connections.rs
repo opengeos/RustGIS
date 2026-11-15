@@ -354,13 +354,16 @@ pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
     use crate::render::rustgis_tiles::logins;
     fn names(address: &str) -> Vec<&str> {
         let query = address.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
-        query.split('&').filter_map(|pair| pair.split_once('=').map(|(name, _)| name)).filter(|name| !name.is_empty()).collect()
+        query.split(['&', ';']).filter_map(|pair| pair.split_once('=').map(|(name, _)| name)).filter(|name| !name.is_empty()).collect()
     }
+    let query = given.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
+    let context = rustgis_data::address::QueryNames::of(query);
     let kept = names(saved);
     let mut left_out: Vec<String> = Vec::new();
     for name in names(given) {
         if left_out.len() < 4
             && logins::valid_query_name(name)
+            && rustgis_data::address::name_class(name, &context) == rustgis_data::address::NameClass::Credential
             && !kept.contains(&name)
             && !left_out.iter().any(|known| known.eq_ignore_ascii_case(name))
         {
@@ -395,8 +398,11 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         return Err("a connection address must be at most 2048 bytes and contain no control characters".into());
     }
     // A query login's own parameter goes before anything quotes the address (an error included):
-    // its name may not be registered yet, so the generic redaction can't see it.
-    let query_name = Some(c.key_name.trim()).filter(|name| c.auth.trim().eq_ignore_ascii_case("query") && !name.is_empty());
+    // its name may not be registered yet, so the generic redaction can't see it. A name given
+    // without a method still declares a possible key, as it does in the replay log. An explicit
+    // other method (`none` included) does not select a query parameter.
+    let query_name = Some(c.key_name.trim())
+        .filter(|name| (c.auth.trim().is_empty() || c.auth.trim().eq_ignore_ascii_case("query")) && !name.is_empty());
     let given = query_name.map_or_else(|| t.to_string(), |name| crate::render::rustgis_tiles::logins::without_query_parameter(t, name));
     let stored = sources::redact(&given);
     let stripped = stored != t;
