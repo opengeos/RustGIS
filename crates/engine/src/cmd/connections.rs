@@ -207,7 +207,7 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
         ..Connection::default()
     };
     login_fields(p, &mut c)?;
-    let key_hint = c.auth.trim().is_empty().then(|| c.key_name.trim().to_string());
+    let key_hint = (c.auth.trim().is_empty() || c.auth.trim().eq_ignore_ascii_case("query")).then(|| c.key_name.trim().to_string());
     let explicit = !c.name.trim().is_empty();
     let redactions = s.connections.redaction_counts();
     let (c, stripped) = s.connections.add(c, explicit)?;
@@ -288,7 +288,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         c.options = options(v)?;
     }
     login_fields(p, &mut c)?;
-    let key_hint = c.auth.trim().is_empty().then(|| c.key_name.trim().to_string());
+    let key_hint = (c.auth.trim().is_empty() || c.auth.trim().eq_ignore_ascii_case("query")).then(|| c.key_name.trim().to_string());
     // Validate everything, then locate the commit target before touching the store.
     let (mut prepared, stripped) = s.connections.prepare_update(&old.id, c)?;
     let database_changed = DATABASE_KINDS.contains(&old.kind.as_str()) && old.address != prepared.address;
