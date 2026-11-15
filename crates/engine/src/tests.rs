@@ -1604,6 +1604,22 @@ fn a_point_takes_stacked_marks_and_turns_by_a_field() {
 
 /// `layer.sizeBy` sizes a classified point layer by a field, keeping what it isn't given, refusing
 /// what doesn't fit (without an undo step), and is undone and removed like any style.
+/// A streamed layer holds the view's features only, so its size range isn't taken from them.
+#[test]
+fn a_streamed_layer_needs_bounds_for_its_size_mapping() {
+    let path = grid_fgb("sized", 4);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let id = s.map().layers[0].id;
+    s.run("layer.symbology", &json!({"layer": id, "type": "unique", "field": "i"})).unwrap();
+    let err = s.run("layer.sizeBy", &json!({"layer": id, "field": "x"})).unwrap_err();
+    assert!(err.contains("streamed"), "{err}");
+    s.run("layer.sizeBy", &json!({"layer": id, "field": "x", "min": -180, "max": 180})).unwrap();
+    assert!(s.map().layers[0].size_by.is_some());
+}
+
 #[test]
 fn a_classified_point_layer_is_sized_by_a_field() {
     let mut s = world();

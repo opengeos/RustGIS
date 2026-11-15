@@ -2149,7 +2149,10 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             ui.add_space(74.0);
             ui.label(egui::RichText::new(field).size(11.0).color(t.text_dim));
         });
-        for e in vector_legend.iter().take(40) {
+        // At most 40 classes, then the size rows the legend ends with.
+        let sizes = l.with_size_legend(Vec::new()).len().min(vector_legend.len());
+        let (classes, sized) = vector_legend.split_at(vector_legend.len() - sizes);
+        for e in classes.iter().take(40).chain(sized) {
             let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &e.label));
             let pr = Rect::from_center_size(pos2(r.min.x + 84.0, r.center().y), vec2(18.0, 14.0));

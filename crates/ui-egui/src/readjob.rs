@@ -223,7 +223,7 @@ pub fn admitted(app: &mut RustGisApp, ahead: reads::ReadAhead, relay: rustgis_as
     };
     let params = params.clone();
     let archive = matches!(command, "map.reloadTiles" | "map.repairTiles").then(|| reads::archive_target(&app.session, &params)).flatten();
-    let layer = (command == "table.statistics")
+    let layer = matches!(command, "table.statistics" | "layer.sizeBy")
         .then(|| app.session.layer_id(&params).ok().and_then(|id| app.session.map().layer(id)).map(|l| (l.instance_id(), l.name.clone())))
         .flatten();
     let what =

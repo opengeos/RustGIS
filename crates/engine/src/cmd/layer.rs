@@ -776,6 +776,10 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     let had = l.size_by.as_ref().filter(|h| h.field == field);
     let (min, max) = (min.or(had.map(|h| h.min)), max.or(had.map(|h| h.max)));
     let range = if min.is_none() || max.is_none() {
+        // A streamed layer holds the view's features only, so their range would be the view's.
+        if l.is_streamed() {
+            return Err("a size range needs all of a streamed layer: layer.loadAll first, or give min and max".into());
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if ahead.is_none() && on_window {
             return Err(
@@ -842,7 +846,7 @@ pub(crate) fn size_by_ahead(s: &Session, p: &Value) -> Option<super::reads::Read
     let id = s.layer_id(p).ok()?;
     let layer = s.map().layer(id)?;
     let field = layer.dataset.field_index(ps(p, "field")?)?;
-    if !rustgis_map::symbol_by::SizeBy::applies_to(layer) || !layer.dataset.fields.get(field)?.ty.is_numeric() {
+    if !rustgis_map::symbol_by::SizeBy::applies_to(layer) || layer.is_streamed() || !layer.dataset.fields.get(field)?.ty.is_numeric() {
         return None;
     }
     if (f(p, "min").is_some() && f(p, "max").is_some())

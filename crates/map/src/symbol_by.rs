@@ -390,6 +390,10 @@ impl<'a> Styler<'a> {
         // The expression's size, else the size mapping's.
         let by = self.by.as_ref().filter(|b| b.points).and_then(|b| b.number(&b.size, &self.layer.dataset, row));
         let Some(size) = by.map(|v| (v as f32).clamp(0.0, MAX_SIZE)).or_else(|| self.mapped_size(row)) else {
+            // A row the mapping leaves at its class's size: a class of size 0 is hidden, marks too.
+            if self.sized.is_some() && self.base_symbol(row).size == 0.0 {
+                return Cow::Owned(Vec::new());
+            }
             return Cow::Borrowed(strokes);
         };
         if size == 0.0 {
@@ -658,6 +662,13 @@ mod tests {
         let back = l.styler(None).symbol(0);
         assert_eq!((back.size, back.fill), (6.0, Rgba::rgb(1, 2, 3)));
         l.symbol_by.size = None;
+        // A null value keeps its class's size; a class of size 0 then draws nothing, marks included.
+        if let crate::Renderer::Unique { classes, .. } = &mut l.renderer {
+            classes.iter_mut().filter(|(k, _)| k == "b").for_each(|(_, s)| s.size = 0.0);
+        }
+        let hidden = l.styler(None).symbol(1);
+        assert_eq!((hidden.size, hidden.fill.a(), hidden.stroke.a()), (0.0, 0, 0));
+        assert!(l.styler(None).marks(1, std::slice::from_ref(&mark)).is_empty());
         // A single symbol doesn't take it: kept, unused.
         l.renderer = crate::Renderer::Single(base);
         assert!(l.styler(None).is_plain());
