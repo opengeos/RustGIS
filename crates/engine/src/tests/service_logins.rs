@@ -2727,8 +2727,9 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert!(bare.get("strippedParameters").is_none(), "{bare}");
     let said = format!("{bare}{:?}", s.notices_since(mark));
     assert!(!said.contains("RGSYNTHbare757"), "{said}");
-    // Legacy semicolons separate query pairs too. A public pair dropped alongside a key is not
-    // offered as a credential name.
+    // Legacy credential-bearing ampersand pairs are dropped conservatively. Public options
+    // lost alongside a key are counted separately, never offered as credential names.
+    let legacy_mark = s.notice_mark();
     let legacy = s
         .run(
             "connection.new",
@@ -2737,6 +2738,18 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
         .unwrap();
     assert_eq!(legacy["stripped"], true);
     assert_eq!(legacy["strippedParameters"], json!(["token"]));
+    assert_eq!(legacy["address"], format!("{origin}/legacy"));
+    assert_eq!(legacy["omittedPublicParameterCount"], 1);
+    assert_eq!(legacy["omittedPublicParameters"], json!(["x"]));
+    let collateral: Vec<_> = s.notices_since(legacy_mark).iter().filter(|n| n.text.contains("public query component")).collect();
+    assert_eq!(collateral.len(), 1);
+    assert!(collateral[0].text.contains("Legacy separators") && collateral[0].text.contains("first names: x"));
+    assert!(!collateral[0].text.contains("RGSYNTHlegacy757"));
+    let repeated = s.run("connection.new", &json!({"kind":"wmts","name":"Repeated public option","address":format!("{origin}/legacy?x=1;token=RGSYNTHlegacyRepeated&x=1&style=light")})).unwrap();
+    assert_eq!(repeated["address"], format!("{origin}/legacy?x=1&style=light"));
+    assert_eq!(repeated["omittedPublicParameterCount"], 1);
+    assert_eq!(repeated["omittedPublicParameters"], json!(["x"]));
+
     // A custom key name is a redaction hint even before a method is chosen; the saved definition
     // must be as safe as its replay log. An explicit no-login method leaves ordinary data alone.
     let no_method = s
@@ -2745,10 +2758,12 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
     assert_eq!(no_method["stripped"], true);
     assert_eq!(no_method["strippedParameters"], json!(["zqwithoutmethod757"]));
     assert_eq!(no_method["address"], format!("{origin}/custom?layer=a"));
+    assert!(no_method.get("omittedPublicParameterCount").is_none());
     assert!(!s.connections.to_json().contains("RGSYNTHnomethod757"));
     let public_hint = s.run("connection.new", &json!({"kind":"wmts","name":"Public name used as key hint","address":format!("{origin}/custom?layer=public-code&style=light"),"keyName":"layer"})).unwrap();
     assert_eq!(public_hint["address"], format!("{origin}/custom?style=light"));
     assert_eq!(public_hint["strippedParameters"], json!(["layer"]));
+    assert!(public_hint.get("omittedPublicParameterCount").is_none());
     let explicit_none = s
         .run("connection.new", &json!({"kind":"wmts","name":"Explicit no login","address":format!("{origin}/none?zqordinary757=public-code"),"keyName":"zqordinary757","auth":"none"}))
         .unwrap();

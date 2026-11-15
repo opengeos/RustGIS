@@ -381,6 +381,45 @@ pub(crate) fn stripped_parameters_with_hint(given: &str, saved: &str, hint: Opti
     left_out
 }
 
+/// Public query components lost with a legacy credential-bearing ampersand pair. Count every
+/// lost component, including repeated names; report at most four safe names, never bare text or
+/// values. These are diagnostics, not query-login suggestions.
+pub(crate) fn collateral_parameters(given: &str, saved: &str, hint: Option<&str>) -> (usize, Vec<String>) {
+    fn query(address: &str) -> &str {
+        address.split('#').next().and_then(|address| address.split_once('?')).map_or("", |(_, query)| query)
+    }
+    let given = query(given);
+    let context = rustgis_data::address::QueryNames::of(given);
+    let mut kept = std::collections::HashMap::<&str, usize>::new();
+    for pair in query(saved).split(['&', ';']).filter(|pair| !pair.is_empty()) {
+        *kept.entry(pair).or_default() += 1;
+    }
+    let (mut count, mut names) = (0usize, Vec::<String>::new());
+    for pair in given.split(['&', ';']).filter(|pair| !pair.is_empty()) {
+        let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+        if rustgis_data::address::name_class(name, &context) != rustgis_data::address::NameClass::Plain
+            || hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+        {
+            continue;
+        }
+        if let Some(remaining) = kept.get_mut(pair)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            continue;
+        }
+        count += 1;
+        if names.len() < 4
+            && pair.contains('=')
+            && crate::render::rustgis_tiles::logins::valid_query_name(name)
+            && !names.iter().any(|known| known.eq_ignore_ascii_case(name))
+        {
+            names.push(name.to_string());
+        }
+    }
+    (count, names)
+}
+
 /// The origin (`scheme://host[:port]`) a web-service connection's login goes to: the only one.
 pub fn login_origin(c: &Connection) -> Option<String> {
     crate::render::rustgis_tiles::logins::origin(&c.address)

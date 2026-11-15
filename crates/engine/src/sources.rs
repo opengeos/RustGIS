@@ -868,7 +868,8 @@ pub fn scrub_s3_wrappers(text: &str) -> String {
 /// Recursively redacts known URL fields in a JSON value for non-User callers.
 /// `tilesets`, `describe` and `capabilities` name protocol documents' addresses, not their
 /// contents: respectively `ogc::tileset`, `describe_coverage_url` and Identify's `next_fetch`.
-/// Supplied protocol bodies travel as `text`/`documents`, separately from these result URLs.
+/// Supplied protocol bodies are parsed separately; Identify's input `capabilities` parameter
+/// contains XML, while its result field of the same name is a GetCapabilities address.
 pub(crate) fn redact_url_fields(value: &mut Value) {
     match value {
         Value::Object(map) => {

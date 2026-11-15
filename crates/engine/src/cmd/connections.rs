@@ -239,6 +239,22 @@ fn shown_stripped(s: &mut Session, c: &Connection, stripped: bool, given: &str, 
             )
         };
         s.notify_text(said, false);
+        let (count, collateral) = crate::connections::collateral_parameters(given, &c.address, key_hint);
+        if count > 0 {
+            let args = [
+                ("connection", crate::project::short_name(&c.name).into()),
+                ("count", count.to_string().into()),
+                ("names", collateral.join(", ").into()),
+            ];
+            let text = if collateral.is_empty() {
+                "Connection '{connection}': {count} public query component(s) were also left out with credential-bearing pairs; use ampersand separators to keep public options"
+            } else {
+                "Connection '{connection}': {count} public query component(s) were also left out with credential-bearing pairs (first names: {names}); use ampersand separators to keep public options"
+            };
+            s.notify_text(NoticeText::format(text, args), false);
+            out["omittedPublicParameterCount"] = json!(count);
+            out["omittedPublicParameters"] = json!(collateral);
+        }
         if !names.is_empty() {
             out["strippedParameters"] = json!(names);
         }
