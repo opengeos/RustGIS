@@ -207,7 +207,9 @@ mod tests {
             .to_string();
             std::fs::write(&path, text).unwrap();
             let mut layer = Layer::new(1, Dataset::new("sites", rustgis_data::GeometryType::Point, Vec::new()));
-            layer.source = Some(rustgis_map::source::SourceLayer { path: Some(path.display().to_string()), ..Default::default() });
+            let mut source = rustgis_map::source::SourceLayer::default();
+            source.path = Some(path.display().to_string());
+            layer.source = Some(source);
             let (dataset, unread) = Whole::of(&layer).read().unwrap();
             assert_eq!(dataset.features.len(), 1);
             assert_eq!(dataset.zm_dropped, lossy);
