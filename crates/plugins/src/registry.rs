@@ -305,9 +305,16 @@ pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Ve
             }
             good
         });
+        let shared_given = !e.package.is_empty() || !e.sha256.is_empty() || e.size > 0;
         let whole = !e.package.trim().is_empty() && is_sha256(&e.sha256);
         e.package = resolve(url, &e.package);
         let whole = whole && allowed_url(&e.package);
+        if shared_given && !whole && !e.packages.is_empty() {
+            skipped += 1;
+            if which.len() < 5 {
+                which.push(format!("{} (shared)", e.id));
+            }
+        }
         match platform.and_then(|key| e.packages.get(key)) {
             Some(own) => (e.package, e.sha256, e.size) = (own.package.clone(), own.sha256.clone(), own.size),
             None if whole && !named => {}

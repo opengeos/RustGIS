@@ -455,7 +455,8 @@ impl Method {
 /// whose centre falls in it. A cell no pixel centre falls in (a grid finer than the raster) takes
 /// the pixel under its centre. Outside cells use 0 in every band when alpha is present or
 /// added; otherwise they use explicit no-data. Without either, they use NaN for floating-point
-/// data or when any band has class names, else 0. A three-band RGB image with neither alpha nor
+/// data, RGB data with more than three bands, or when any band has class names, else 0.
+/// A three-band RGB image with neither alpha nor
 /// no-data gains an alpha band for see-through cells.
 pub fn project(r: &Raster, g: &Grid, method: Method, name: String) -> Result<Raster, String> {
     project_on(None, r, g, method, name)

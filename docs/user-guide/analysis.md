@@ -1744,7 +1744,8 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
     Palette images use `nearest` for sampling and `mode` for aggregation, keeping their classes.
   - Cells off the raster use 0 in every band when the image has alpha or gains it, so they are
     see-through. Otherwise an explicit no-data value takes precedence. Without either, every
-    band uses NaN when any band has class names or the type is floating-point; unlabelled
+    band uses NaN when any band has class names, the type is floating-point, or RGB data has
+    more than three bands (for example RGBI, whose fourth band is data). Other unlabelled
     whole-number data uses 0. A three-band RGB image without alpha or no-data gains an alpha
     band for its outside cells.
   - Datums are shifted as everywhere in RustGIS, through each system's transformation to WGS 84

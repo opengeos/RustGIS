@@ -562,8 +562,9 @@ class _Api:
             path: The file: GeoJSON, CSV, Shapefile (or a zip of them), GeoPackage, GeoParquet,
                 FlatGeobuf, KML/KMZ, GPX, GeoTIFF, ASCII grid, and the formats GDAL or DuckDB
                 read when they are installed.
-            name: The layer's name (the file's name when left out). For a file adding several
-                layers, this names only the first layer added.
+            name: The layer's name (the file's name when left out). Native multi-layer imports
+                apply it only to the first layer. GDAL or DuckDB files split into several layers keep
+                their generated names and report the ignored name in a notice.
             **params: More ``layer.addData`` parameters, e.g. ``layer=`` for one table of a
                 GeoPackage, ``x=`` and ``y=`` for a CSV's coordinate columns.
 
