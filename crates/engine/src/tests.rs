@@ -22251,6 +22251,79 @@ fn extrusion_base_sets_the_base_and_nothing_else() {
     assert_eq!((got.field, got.height, got.factor), (None, 30.0, 2.0), "nothing else changed on the way");
 }
 
+/// A list of layers is raised, based and flattened alike, one undo step each (#2160). A list with
+/// a layer that lacks the field, isn't polygons or isn't raised yet is refused whole, naming them,
+/// and changes none; one layer works as before.
+#[test]
+fn extrusion_sets_several_layers_alike_or_none() {
+    let mut s = world();
+    let square = |props: &str| {
+        format!(
+            r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","properties":{props},"geometry":{{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}}}]}}"#
+        )
+    };
+    let well = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"h":1},"geometry":{"type":"Point","coordinates":[0,0]}}]}"#;
+    for (name, text) in [
+        ("Blocks", square(r#"{"h": 10, "b": 2}"#)),
+        ("Towers", square(r#"{"H": 90, "b": 5, "label": "x"}"#)),
+        ("Park", square(r#"{"label": "x"}"#)),
+        ("Wells", well.to_string()),
+    ] {
+        s.run("layer.addDataText", &json!({"fileName": format!("{name}.geojson"), "text": text, "name": name})).unwrap();
+    }
+    let x = |s: &Session, n: &str| s.map().layer_by_name(n).unwrap().extrusion.clone();
+    let pair = json!(["Blocks", "Towers"]);
+    // Raised by a field each layer spells its own way, in one undo step.
+    let depth = s.undo_depth();
+    s.run("layer.extrusion", &json!({"layer": pair, "type": "field", "field": "h", "factor": 2})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    assert_eq!(x(&s, "Blocks").unwrap().field.as_deref(), Some("h"));
+    assert_eq!(x(&s, "Towers").unwrap().field.as_deref(), Some("H"), "the layer's own spelling");
+    assert_eq!(x(&s, "Towers").unwrap().factor, 2.0);
+    // Based alike on a field, then back on the ground.
+    s.run("layer.extrusionBase", &json!({"layer": pair, "field": "b"})).unwrap();
+    for n in ["Blocks", "Towers"] {
+        assert_eq!(x(&s, n).unwrap().base_field.as_deref(), Some("b"), "{n}");
+    }
+    s.run("layer.extrusionBase", &json!({"layer": pair, "field": null, "base": 0})).unwrap();
+    for n in ["Blocks", "Towers"] {
+        let got = x(&s, n).unwrap();
+        assert_eq!((got.base_field, got.base, got.factor), (None, 0.0, 2.0), "{n}: the base only");
+    }
+    // Refused whole, naming the layers, and nothing changes.
+    let all = |s: &Session| ["Blocks", "Towers", "Park", "Wells"].map(|n| x(s, n));
+    let was = all(&s);
+    let refused = [
+        (
+            "layer.extrusion",
+            json!({"layer": ["Blocks", "Towers", "Park"], "type": "field", "field": "h"}),
+            "no numeric field 'h' in 'Park'",
+        ),
+        ("layer.extrusion", json!({"layer": ["Blocks", "Wells"], "type": "none"}), "these aren't: 'Wells'"),
+        ("layer.extrusionBase", json!({"layer": ["Blocks", "Park"], "base": 3}), "turn extrusion on first (Layer Extrusion) in 'Park'"),
+        ("layer.extrusionBase", json!({"layer": pair, "field": "label"}), "no numeric field 'label' in 'Blocks', 'Towers'"),
+        // The command's conditions read the list's first layer, as for every command taking one.
+        ("layer.extrusion", json!({"layer": ["Wells", "Blocks"], "type": "none"}), "this works on polygon layers"),
+    ];
+    for (id, p, why) in refused {
+        let e = s.run(id, &p).unwrap_err();
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    assert_eq!(all(&s), was, "no layer changed");
+    // Flattened together, and one undo raises both again.
+    s.run("layer.extrusion", &json!({"layer": pair, "type": "none"})).unwrap();
+    assert!(x(&s, "Blocks").is_none() && x(&s, "Towers").is_none());
+    s.undo();
+    assert!(x(&s, "Blocks").is_some() && x(&s, "Towers").is_some(), "one undo brings both back");
+    // One layer as before: its own message, and on the globe the note that it draws them flat.
+    let e = s.run("layer.extrusion", &json!({"layer": "Park", "type": "field", "field": "h"})).unwrap_err();
+    assert!(e.contains("no numeric field 'h'") && !e.contains("no layer changed"), "{e}");
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    let r = s.run("layer.extrusion", &json!({"layer": "Park", "type": "height", "height": 4})).unwrap();
+    assert!(r["note"].as_str().is_some_and(|n| n.contains("the globe draws the polygons flat")), "{r}");
+    assert_eq!(x(&s, "Park").unwrap().height, 4.0);
+}
+
 #[test]
 fn area_review_attribute_edits_keep_retained_display_expressions() {
     let (mut session, id) = area_review_fixture();

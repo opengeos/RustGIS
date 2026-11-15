@@ -731,6 +731,16 @@ the height or the factor. The `layer.extrusionBase` command does the same (`fiel
 and on a tilted map drawn without the graphics card, extrusions are painted in the order they
 stand on the ground, so a part raised over a building behind it may be painted under it.
 
+Layers that go together, such as a city model's layers, are raised at once: pick them in the
+Layers pane, right-click one of them and choose **Extrusion › None**, **By Field ›** (the numeric
+fields every one of them has) or, once all are extruded, **Base › Ground** or **Base › By Field ›**.
+It acts on their polygon layers and says so when the others are left out, sets every one alike in
+one step to undo, and leaves each one's height, factor and base as they were where the choice
+doesn't set them. `layer.extrusion` and `layer.extrusionBase` take a list of layers in `layer`
+for the same. A layer that isn't polygons, a field that one of them lacks, or (for the base) one
+that isn't extruded yet refuses the whole list and changes none; the message names the layers
+without the field or the extrusion.
+
 For a raster layer, the **Style** tab also has **Layer Blend** (multiply, screen, overlay,
 darken, lighten, difference), **Swipe** (the layer shows only left of a divider you slide, to
 compare it with what's beneath), **Masking** and **Rotation**.
