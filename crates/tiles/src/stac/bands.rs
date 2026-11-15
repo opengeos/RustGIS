@@ -171,7 +171,7 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
 pub fn cut_note(item: &Item) -> Option<String> {
     if item.assets.iter().any(|a| a.bands_cut) {
         return Some(format!(
-            "an asset describes more than {} bands, or a band name over {} characters or not text, and only the first {} bands and the first {} characters of a name are read",
+            "an asset's band list was cut (more than {} bands, or a band name over {} characters or not text): bands past {}, the characters of a name past {}, and a name that is not text are not read",
             super::MAX_BANDS,
             super::MAX_NAME,
             super::MAX_BANDS,

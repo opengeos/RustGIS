@@ -299,7 +299,14 @@ mod desktop {
                     .iter()
                     .map(|(href, signed, bands)| {
                         let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, || {
-                            rustgis_data::source::remote::with_optional_still(still.clone(), || read_one(signed, bbox, cell, *bands, &stop))
+                            rustgis_data::source::remote::with_optional_still(still.clone(), || {
+                                let read = read_one(signed, bbox, cell, *bands, &stop);
+                                // A file that failed stops the reads beside it: they would only finish to be dropped.
+                                if read.is_err() {
+                                    stop.store(true, Ordering::Relaxed);
+                                }
+                                read
+                            })
                         });
                         (href, signed, *bands, reader)
                     })
@@ -323,11 +330,19 @@ mod desktop {
                     .collect()
             });
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            for r in results {
-                out.push(r?);
-            }
+            out.extend(first_failure_or_all(results)?);
         }
         Ok(out)
+    }
+
+    /// The reads' results, in file order, as the values, or the failure to say: the first one that is
+    /// not a cancellation. A file that failed stops the reads beside it, which then answer
+    /// "cancelled"; the user is told what failed, not that.
+    pub(super) fn first_failure_or_all<T>(results: Vec<Result<T, String>>) -> Result<Vec<T>, String> {
+        if let Some(e) = results.iter().find_map(|r| r.as_ref().err().filter(|e| !e.contains("cancel"))) {
+            return Err(e.clone());
+        }
+        results.into_iter().collect()
     }
 
     /// What a window note is about, apart from the numbers and edge names that differ from file to
@@ -899,6 +914,20 @@ mod tests {
         coded.invalid = vec![4_294_967_295.0];
         let (r, _) = stack("s", &names, &[(&a, &band(1.0, 0.0)), (&a, &coded)]).unwrap();
         assert_eq!(r.bands[1].data.iter().filter(|v| **v != rustgis_analysis::rasterops::NODATA).count(), 1, "the rounded code is no data");
+    }
+
+    #[test]
+    fn the_failure_said_is_the_first_real_one_not_a_sibling_stopped_by_it() {
+        use super::desktop::first_failure_or_all;
+        let cancelled = || Err::<u8, String>("a.tif: cancelled".into());
+        // The first file is stopped by the second's failure: the second's message is said.
+        let said = first_failure_or_all(vec![cancelled(), Err("b.tif: http status: 404".into()), cancelled()]);
+        assert_eq!(said, Err("b.tif: http status: 404".into()));
+        // Two real failures: the first in file order.
+        assert_eq!(first_failure_or_all(vec![Err::<u8, _>("a: 500".into()), Err("b: 404".into())]), Err("a: 500".into()));
+        // A cancel by the user alone is said as a cancel; no failure gives the values.
+        assert_eq!(first_failure_or_all(vec![Ok(1), cancelled()]), Err("a.tif: cancelled".into()));
+        assert_eq!(first_failure_or_all(vec![Ok(1), Ok(2)]), Ok(vec![1, 2]));
     }
 
     #[test]

@@ -47502,7 +47502,9 @@ fn cancelling_at_each_check_leaves_nothing_behind() {
 
     // Embeddings and STAC bands read from the network, which no offline run finishes (the cancel test
     // above runs them cancelled, before anything is sent).
-    for (command, p) in cancel_rasters(&dem).into_iter().filter(|(c, _)| !c.starts_with("embeddings.") && !c.starts_with("stac.")) {
+    for (command, p) in
+        cancel_rasters(&dem).into_iter().filter(|(c, _)| !c.starts_with("embeddings.") && !matches!(*c, "stac.addBands" | "stac.addIndex"))
+    {
         let attempt = |s: &mut Session, control: &Arc<Control>| {
             let run = crate::cmd::workflows::raster_start(s, command, &p)?;
             let id = run.id;
