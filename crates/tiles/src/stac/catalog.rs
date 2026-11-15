@@ -320,6 +320,7 @@ pub struct Walk {
     /// Observed network reach of the root document once it lands.
     root_reach: Option<crate::address::Reach>,
     refused: HashSet<String>,
+    skipped: usize,
     filter: Filter,
     limit: usize,
     found: Vec<Item>,
@@ -341,6 +342,7 @@ impl Walk {
             asked: Vec::new(),
             root_reach: None,
             refused: HashSet::new(),
+            skipped: 0,
             filter,
             limit: limit.clamp(1, super::MAX_ITEMS),
             found: Vec::new(),
@@ -387,12 +389,23 @@ impl Walk {
 
     /// Whether everything below the start was read (so the items are all that match).
     pub fn complete(&self) -> bool {
-        self.finished() && self.items.is_empty() && self.folders.is_empty() && !self.cut && self.failed == 0 && self.refused.is_empty()
+        self.finished()
+            && self.items.is_empty()
+            && self.folders.is_empty()
+            && !self.cut
+            && self.failed == 0
+            && self.refused.is_empty()
+            && self.skipped == 0
     }
 
     /// Number of distinct document links refused by their supplying origin's reach.
     pub fn refused(&self) -> usize {
         self.refused.len()
+    }
+
+    /// Number of inspected links with missing, invalid or non-HTTP(S) addresses.
+    pub fn skipped(&self) -> usize {
+        self.skipped
     }
 
     /// The items found.
@@ -448,9 +461,17 @@ impl Walk {
                 for (rel, queue) in [("item", true), ("child", false)] {
                     // Links past the most followed leave the walk incomplete, and say so.
                     self.cut |= too_many(&v, rel);
-                    for (u, _) in links(&v, rel, from) {
+                    for link in of_rel(&v, rel).take(MAX_LINKS) {
+                        let Some(u) = link.get("href").and_then(Value::as_str).and_then(|href| resolve(from, href)) else {
+                            self.skipped += 1;
+                            continue;
+                        };
                         // A document on the web can't send the walk into the local network.
-                        if !is_web(&u) || self.visited.contains(&u) {
+                        if !is_web(&u) {
+                            self.skipped += 1;
+                            continue;
+                        }
+                        if self.visited.contains(&u) {
                             continue;
                         }
                         if origin.check(&u).is_err() {
@@ -868,6 +889,28 @@ mod tests {
             let lossy = json!({"type":"Catalog","id":"test","links":links}).to_string();
             let listing = parse_links_noted(lossy.as_bytes(), &origin, rel).unwrap();
             assert_eq!((listing.links.len(), listing.refused, listing.skipped, listing.omitted), (1, 0, 5, 0));
+        }
+    }
+
+    #[test]
+    fn walks_count_invalid_links_and_mark_the_result_incomplete() {
+        for skipped in [false, true] {
+            let links = if skipped {
+                json!([
+                    {"rel":"child","href":"ftp://files.example/catalog.json"},
+                    {"rel":"item","href":""}, {"rel":"child"}
+                ])
+            } else {
+                json!([])
+            };
+            let body = json!({"type":"Catalog","id":"test","links":links}).to_string();
+            let mut walk = Walk::new("https://public.example/catalog.json", Filter::default(), 50);
+            let url = walk.next_url().unwrap();
+            walk.land(&url, Ok(body.into_bytes()));
+            assert!(walk.finished());
+            assert_eq!(walk.complete(), !skipped);
+            assert_eq!(walk.skipped(), if skipped { 3 } else { 0 });
+            assert_eq!(walk.refused(), 0);
         }
     }
 

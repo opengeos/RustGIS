@@ -313,10 +313,14 @@ fn search_static(s: &mut Session, p: &Value, root: &str) -> CmdResult {
         if refused > 0 {
             s.warn(format!("{refused} catalog links were refused by the document's network reach"));
         }
+        let skipped = walk.skipped();
+        if skipped > 0 {
+            s.warn(format!("{skipped} catalog links were left out because their addresses are missing, invalid or not HTTP(S)"));
+        }
         let items = walk.into_items();
         let all = b(p, "properties").unwrap_or(false);
         let mut out = json!({"count": items.len(), "items": items.iter().map(|i| stac::item_json_with(i, all)).collect::<Vec<_>>(),
-            "complete": complete, "read": read, "failed": failed, "refused": refused});
+            "complete": complete, "read": read, "failed": failed, "refused": refused, "skipped": skipped});
         if let Some(n) = note {
             out["note"] = json!(n);
         }

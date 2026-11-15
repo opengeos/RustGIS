@@ -260,7 +260,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
                 Level::StacRoot { .. } => collections(bytes)?,
                 Level::StacCatalog { .. } => catalogs(s, bytes, &origin)?,
                 Level::StacItem { .. } => item_file(bytes, &origin)?,
-                Level::StacCollection { .. } => items(bytes, at)?,
+                Level::StacCollection { .. } => items(bytes, &origin)?,
                 Level::S3Root => buckets(s3::parse_buckets(bytes)?.into_iter()),
                 Level::S3Prefix { bucket, prefix } => {
                     let binding = conn.as_ref().and_then(|conn| super::saved_binding(s, &c, conn));
@@ -686,8 +686,8 @@ fn item_file(bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
 }
 
 /// The items of a collection's search, each with the assets that can be added.
-fn items(bytes: &[u8], from: &str) -> Result<Found, String> {
-    let (list, next) = stac::parse_items(bytes, from)?;
+fn items(bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
+    let (list, next) = stac::parse_items_from_origin(bytes, origin)?;
     let matched = stac::parse_matched(bytes);
     let truncated = next.is_some() || matched.is_some_and(|m| m > list.len() as u64);
     let children = list
@@ -981,6 +981,23 @@ mod tests {
             assert_eq!(found.children[0]["href"], href);
             assert_eq!(found.children[0]["fromDocument"], public);
         }
+    }
+
+    #[test]
+    fn collection_search_assets_keep_the_responses_observed_origin() {
+        let requested = "https://search.corp.example/search";
+        let body = json!({"type":"FeatureCollection","features":[{
+            "type":"Feature","id":"scene","geometry":null,"properties":{},
+            "assets":{"data":{"href":"http://10.0.0.5/scene.geojson","roles":["data"]}},"links":[]
+        }]})
+        .to_string();
+        let local = super::address::Origin::connected(requested, "10.0.0.5".parse().unwrap()).unwrap();
+        let found = super::items(body.as_bytes(), &local).unwrap();
+        assert_eq!(found.children[0]["children"][0]["href"], "http://10.0.0.5/scene.geojson");
+        assert_eq!(found.children[0]["children"][0]["fromDocument"], false);
+        let public = super::address::Origin::connected(requested, "93.184.216.34".parse().unwrap()).unwrap();
+        let found = super::items(body.as_bytes(), &public).unwrap();
+        assert!(found.children[0]["children"].as_array().unwrap().is_empty());
     }
 
     #[test]

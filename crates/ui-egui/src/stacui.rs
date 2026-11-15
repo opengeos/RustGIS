@@ -39,9 +39,9 @@ enum Asked {
     /// A token for an asset that needs signing: the token service's address, the asset's, the
     /// layer's name, saved connection, supplying document origin and reach, captured when Add was
     /// requested.
-    Token { token_url: String, href: String, name: String, connection: Option<String>, from: String, public: bool },
+    Token { token_url: String, href: String, name: String, connection: Option<String>, from: String, public: bool, opened: u64 },
     /// An item's or a collection's document (a `?stac=` link), by its address.
-    Link(String),
+    Link { url: String, opened: u64 },
     /// A static catalog's document, for its children, by its address.
     Children(String),
 }
@@ -427,6 +427,18 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     poll_loading(app, ctx);
     poll_preparing(app, ctx);
     stop_stale_drawing(app);
+    let pending = match &app.ui.stac.waiting {
+        Some((Asked::Link { url, opened }, _)) => Some((*opened, url.clone())),
+        Some((Asked::Token { href, opened, .. }, _)) => Some((*opened, href.clone())),
+        _ => None,
+    };
+    if let Some((opened, address)) = pending
+        && !app.service_read_current(opened, &address, None)
+    {
+        app.ui.stac.waiting = None;
+        app.ui.stac.info = None;
+        return;
+    }
     let Some((_, slot)) = &app.ui.stac.waiting else { return };
     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -500,7 +512,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 Err(e) => st.error = Some(e),
             }
         }
-        Asked::Token { token_url, href, name, connection, from, public } => {
+        Asked::Token { token_url, href, name, connection, from, public, .. } => {
             let signed = r.and_then(|f| stac::parse_sas(&f.bytes)).and_then(|token| {
                 stac::remember_token(&token_url, &token);
                 let signed = stac::sign(&href, &token);
@@ -512,7 +524,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 Err(e) => app.ui.stac.error = Some(e),
             }
         }
-        Asked::Link(url) => landed_link(app, &url, r),
+        Asked::Link { url, .. } => landed_link(app, &url, r),
         Asked::Children(url) => match r.and_then(|f| Ok((f.origin.reach(), catalog::parse_children_noted(&f.bytes, &f.origin)?))) {
             Ok((reach, listing)) => {
                 if listing.refused > 0 {
@@ -606,12 +618,23 @@ fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
             false,
         );
     }
+    if walk.skipped() > 0 {
+        app.session.notify(
+            i18n::fmt(
+                "{n} catalog links were left out because their addresses are missing, invalid or not HTTP(S)",
+                &[("n", &walk.skipped().to_string())],
+            ),
+            false,
+        );
+    }
     let st = &mut app.ui.stac;
     let n = walk.items().len().to_string();
     st.info = Some(if walk.complete() {
         i18n::fmt("Showing {n} items", &[("n", &n)])
     } else if walk.refused() > 0 {
         i18n::fmt("Showing {n} items ({f} catalog links were refused)", &[("n", &n), ("f", &walk.refused().to_string())])
+    } else if walk.skipped() > 0 {
+        i18n::fmt("Showing {n} items ({s} catalog links were skipped)", &[("n", &n), ("s", &walk.skipped().to_string())])
     } else if walk.reads >= catalog::MAX_READS {
         i18n::fmt(
             "Showing {n} items (stopped after reading {r} documents: pick a catalog further down)",
@@ -739,7 +762,15 @@ fn add_signed(app: &mut RustGisApp, href: &str, name: &str, from: &str, public: 
                 app.ui.stac.info = Some(tl!("Signing the asset (Planetary Computer)…").to_string());
                 let connection = selected_connection(app);
                 app.ui.stac.waiting = Some((
-                    Asked::Token { token_url, href: href.to_string(), name: name.to_string(), connection, from: from.to_string(), public },
+                    Asked::Token {
+                        token_url,
+                        href: href.to_string(),
+                        name: name.to_string(),
+                        connection,
+                        from: from.to_string(),
+                        public,
+                        opened: app.session.opened,
+                    },
                     slot,
                 ));
             }
@@ -806,7 +837,7 @@ pub fn open_link(app: &mut RustGisApp, url: &str) -> Result<(), String> {
     let slot = fetch(&address, false);
     app.ui.stac.error = None;
     app.ui.stac.info = Some(i18n::fmt("Opening {url}…", &[("url", url)]));
-    app.ui.stac.waiting = Some((Asked::Link(url.to_string()), slot));
+    app.ui.stac.waiting = Some((Asked::Link { url: url.to_string(), opened: app.session.opened }, slot));
     Ok(())
 }
 
@@ -2157,6 +2188,7 @@ mod tests {
         app.ui.stac.api = api.into();
         app.ui.stac.connection = one["id"].as_str().map(str::to_string);
         let asked = Asked::Token {
+            opened: app.session.opened,
             token_url: "http://127.0.0.1:9/token".into(),
             href: "http://127.0.0.1:9/points.geojson".into(),
             name: "Original asset".into(),
@@ -2173,6 +2205,73 @@ mod tests {
         let params = &app.ui.downloads.last().unwrap().params;
         assert_eq!(params["connection"], one["id"], "token completion must not re-read the picker");
         assert_ne!(params["connection"], two["id"]);
+    }
+
+    #[test]
+    fn item_link_and_token_responses_cannot_add_to_a_replacement_project() {
+        let _turn = crate::fetching::turn();
+        for (case, (token, ready)) in [(false, false), (false, true), (true, false), (true, true)].into_iter().enumerate() {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sent = seen.clone();
+            cache::set_fetcher(move |url, done| {
+                sent.lock().unwrap().push(url);
+                done(Err("unexpected stale asset request".into()));
+            });
+            let mut app = RustGisApp::with_sample();
+            let opened = app.session.opened;
+            let from = format!("https://late-project{case}.corp.example/item.json");
+            let href = if token {
+                format!("https://late-project{case}.blob.core.windows.net/assets/points.geojson")
+            } else {
+                format!("http://10.0.0.5/late-project{case}.geojson")
+            };
+            let token_url = token.then(|| stac::sas_token_url(&href).unwrap());
+            let asked = match &token_url {
+                Some(url) => Asked::Token {
+                    token_url: url.clone(),
+                    href: href.clone(),
+                    name: "Old asset".into(),
+                    connection: None,
+                    from: from.clone(),
+                    public: true,
+                    opened,
+                },
+                None => Asked::Link { url: from.clone(), opened },
+            };
+            let bytes = if token {
+                br#"{"token":"sig=late-project-synthetic"}"#.to_vec()
+            } else {
+                json!({"type":"Feature","id":"old","geometry":null,"properties":{},
+                    "assets":{"data":{"href":href,"type":"application/geo+json","roles":["data"]}},"links":[]})
+                .to_string()
+                .into_bytes()
+            };
+            let origin = Origin::connected(&from, "10.0.0.5".parse().unwrap()).unwrap();
+            let answer: Answer = Slot::default();
+            if ready {
+                *answer.lock().unwrap() = Some(Ok(cache::Fetched { bytes: bytes.clone(), origin: origin.clone() }));
+            }
+            app.ui.stac.waiting = Some((asked, answer.clone()));
+            app.session.run("project.new", &json!({})).unwrap();
+            let layers = app.session.map().layers.len();
+            let mark = app.session.notice_mark();
+            let ctx = egui::Context::default();
+            poll(&mut app, &ctx);
+            assert!(app.ui.stac.waiting.is_none());
+            if !ready {
+                *answer.lock().unwrap() = Some(Ok(cache::Fetched { bytes, origin }));
+            }
+            poll(&mut app, &ctx);
+            assert!(seen.lock().unwrap().is_empty());
+            assert!(app.ui.downloads.is_empty() && app.ui.cog_probes.is_empty());
+            assert_eq!(app.session.map().layers.len(), layers);
+            let params = json!({"url":href,"from":from,"fromDocument":false});
+            assert!(rustgis_engine::cmd::layer::request_origin_for(&app.session, &params).unwrap().1);
+            if let Some(url) = token_url {
+                assert!(stac::cached_token(&url).is_none());
+            }
+            assert_eq!(app.session.notices_since(mark).iter().filter(|n| n.text.contains("project was closed")).count(), 1);
+        }
     }
 
     /// The cube's request names the connection picked for the API, so it never falls back to the
@@ -2402,9 +2501,10 @@ mod tests {
         assert!(app.ui.stac.listed.is_empty());
         assert_eq!(app.ui.stac.info, None);
 
-        app.ui.stac.waiting = Some((Asked::Link("https://two.example/item.json".into()), Slot::default()));
+        app.ui.stac.waiting =
+            Some((Asked::Link { url: "https://two.example/item.json".into(), opened: app.session.opened }, Slot::default()));
         switch_api(&mut app.ui.stac, "https://three.example/stac");
-        assert!(matches!(app.ui.stac.waiting, Some((Asked::Link(_), _))), "a link already asked for goes on");
+        assert!(matches!(app.ui.stac.waiting, Some((Asked::Link { .. }, _))), "a link already asked for goes on");
     }
 
     /// A static catalog picked while a listing of the last API is pending is browsed at once:
@@ -3077,6 +3177,36 @@ mod tests {
         add_item_asset(&mut app, &item, None);
         assert!(app.ui.stac.error.is_none(), "{:?}", app.ui.stac.error);
         assert!(seen.lock().unwrap().iter().any(|(url, reach)| url.contains("10.0.0.5/scene.geojson") && *reach == Reach::Local));
+    }
+
+    #[test]
+    fn walk_notices_report_skipped_links_once_and_clean_walks_stay_quiet() {
+        for skipped in [false, true] {
+            let mut app = RustGisApp::with_sample();
+            let links = if skipped {
+                json!([
+                    {"rel":"child","href":"ftp://files.example/catalog.json"}, {"rel":"item","href":""}
+                ])
+            } else {
+                json!([])
+            };
+            let body = json!({"type":"Catalog","id":"test","links":links}).to_string();
+            let mut walk = catalog::Walk::new("https://public.example/catalog.json", catalog::Filter::default(), 50);
+            let url = walk.next_url().unwrap();
+            walk.land(&url, Ok(body.into_bytes()));
+            app.ui.stac.walk = Some((walk, Vec::new()));
+            let mark = app.session.notice_mark();
+            let ctx = egui::Context::default();
+            poll_walk(&mut app, &ctx);
+            assert_eq!(app.session.notices_since(mark).len(), usize::from(skipped));
+            if skipped {
+                assert!(app.session.notices_since(mark)[0].text.contains("2 catalog links were left out"));
+                assert!(app.ui.stac.info.as_deref().unwrap().contains("2 catalog links were skipped"));
+            }
+            let mark = app.session.notice_mark();
+            poll_walk(&mut app, &ctx);
+            assert!(app.session.notices_since(mark).is_empty());
+        }
     }
     #[test]
     fn catalog_child_notices_count_refusals_and_stay_quiet_for_clean_documents() {
