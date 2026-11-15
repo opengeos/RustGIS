@@ -164,7 +164,8 @@ mod desktop {
 
     /// `stac.addIndex`: the bands an index reads, read as a combination's are (the item's files, by
     /// range, over the window), and the index made from them as one band of numbers, by the
-    /// Indices section's formula. The band math is one pass over the window with no Cancel check
+    /// Indices section's formula. The band math checks Cancel and counts its rows as it runs (see
+    /// `band_math`); Cancel is also looked at before each file.
     /// inside it (the window is bounded by the cell size); Cancel is looked at before each file.
     pub(super) fn index(s: &Session, p: &Value) -> Result<Work, String> {
         let (item, all) = item_of(p)?;
