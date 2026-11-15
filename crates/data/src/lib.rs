@@ -10,6 +10,7 @@ pub mod cityjson;
 mod citymodel;
 pub mod color;
 pub mod date;
+pub mod date_format;
 mod dbf;
 pub mod diagnostics;
 pub mod dirs;
@@ -195,6 +196,7 @@ mod secret_redaction_tests {
 
 /// One row: an optional geometry and one value per field.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Feature {
     pub id: u64,
     pub geometry: Option<Geometry>,
@@ -313,6 +315,17 @@ impl<'a> IntoIterator for &'a mut Features {
 impl Serialize for Features {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         self.rows.serialize(s)
+    }
+}
+
+/// Features are saved as a list of [`Feature`]s.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Features {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Features".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <Vec<Feature>>::json_schema(generator)
     }
 }
 
