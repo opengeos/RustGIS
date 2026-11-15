@@ -251,7 +251,7 @@ fn number_func(f: Func) -> bool {
         | Func::ColorRgb
         | Func::ColorRgba => true,
         // Keep this exhaustive: a new function must decide whether dates are valid arguments.
-        // text_or_date also uses this distinction to reject numeric/date comparisons.
+        // text_or_date separately excludes numeric-result functions that do not take numbers.
         Func::If
         | Func::Coalesce
         | Func::NullIf

@@ -114,6 +114,10 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 ([Geoprocessing](analysis.md), and a table's right-click menu) makes points of a table already in
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
+
+With a projected coordinate system, defaults prefer X/Y or easting/northing columns when the file
+also has longitude/latitude columns. Columns you explicitly pick remain selected.
+
 Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
 sheets that were not selected. The workbook shares a memory budget across its sheets and retained
 metadata. Value and formula grids are counted separately, with conservative estimates for
