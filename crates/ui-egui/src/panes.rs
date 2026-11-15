@@ -492,12 +492,12 @@ fn glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, px: f32, c: egui::Color32)
 
 /// Paints a symbol patch for a layer of geometry type `g`.
 pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
-    patch_sized(p, r, s, g, s.size.clamp(4.0, 14.0));
+    patch_sized(p, r, s, g, s.size.clamp(4.0, 14.0), (s.size * 1.4).clamp(8.0, 18.0));
 }
 
-/// [`patch`] with a point drawn `size` across as given, for rows whose sizes compare (size
-/// legends).
-fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f32) {
+/// [`patch`] with a point drawn `size` across and a character marker at `glyph_px`, as given,
+/// for rows whose sizes compare (size legends).
+fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f32, glyph_px: f32) {
     match g {
         GeometryType::Point => {
             let rad = size / 2.0;
@@ -529,7 +529,7 @@ fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f3
                 // An outline-only character shows in its outline's colour.
                 Marker::Char(g) => {
                     let col = if s.fill.a() == 0 && s.stroke_width > 0.0 { s.stroke } else { s.fill };
-                    glyph(p, c, g, (s.size * 1.4).clamp(8.0, 18.0), c32(col));
+                    glyph(p, c, g, glyph_px, c32(col));
                 }
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
@@ -2166,7 +2166,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &e.label));
             let pr = Rect::from_center_size(pos2(r.min.x + 84.0, r.center().y), vec2(18.0, 14.0));
             match scale {
-                Some(k) => patch_sized(ui.painter(), pr, &e.symbol, l.geometry_type(), e.symbol.size * k),
+                Some(k) => patch_sized(ui.painter(), pr, &e.symbol, l.geometry_type(), e.symbol.size * k, e.symbol.size * k * 1.4),
                 None => patch(ui.painter(), pr, &e.symbol, l.geometry_type()),
             }
             ui.painter().text(pos2(r.min.x + 100.0, r.center().y), Align2::LEFT_CENTER, &e.label, regular(11.5), t.text);
