@@ -134,6 +134,27 @@ class UploadTest(unittest.TestCase):
     def test_an_unpublished_app_gets_a_draft_when_the_commit_refuses(self):
         self.check_draft_fallback("commit")
 
+    def test_an_edit_is_dropped_after_any_failure_and_the_first_error_stands(self):
+        dropped = []
+
+        def request(method, url, headers, body):
+            if method == "DELETE":
+                dropped.append(url.rsplit("/", 1)[-1])
+                raise OSError("network is unreachable")
+            if url.endswith("/edits"):
+                return {"id": "E1"}
+            if "/bundles" in url:
+                raise TimeoutError("the upload timed out")
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                with self.assertRaisesRegex(TimeoutError, "timed out"):
+                    play_upload.upload("org.rustgis.mobile", bundle_file(directory), "internal", "draft", "1", "",
+                                       "T", request=request)
+        self.assertEqual(dropped, ["E1"])
+        self.assertIn("could not be dropped", said.getvalue())
+
     def test_other_track_errors_are_not_retried(self):
         def request(method, url, headers, body):
             if url.endswith("/edits"):

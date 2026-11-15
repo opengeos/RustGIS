@@ -242,12 +242,13 @@ def upload_once(
         )
         request("POST", f"{base}/{edit}:commit", auth, b"")
         return code
-    except RuntimeError:
+    except Exception:
         # An edit left open keeps what was uploaded to it until Play expires it: drop it now, so a
-        # retry starts clean.
+        # retry starts clean. Any failure counts (a refusal, the network, an answer without a
+        # version code), and a failed drop is said without hiding the error that came first.
         try:
             request("DELETE", f"{base}/{edit}", auth, None)
-        except RuntimeError as dropped:
+        except (RuntimeError, OSError) as dropped:
             print(f"play_upload: the refused edit {edit} could not be dropped: {dropped}", file=sys.stderr)
         raise
 
