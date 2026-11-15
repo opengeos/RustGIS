@@ -27,10 +27,22 @@ pub(crate) struct Unused {
     pub files: usize,
     /// Their size, in bytes.
     pub bytes: u64,
+    /// Entries that couldn't be read in full, kept: what isn't seen can't be judged unused.
+    pub unreadable: usize,
 }
 
-/// What was removed: files, bytes, and what couldn't be (each in its own words).
-type Removed = (usize, u64, Vec<String>);
+/// What Remove Them did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Removed {
+    pub files: usize,
+    pub bytes: u64,
+    /// What couldn't be removed, each in its own words.
+    pub failed: Vec<String>,
+    /// Picks found unused when asked that the project names now (it changed since), kept.
+    pub now_named: usize,
+    /// Picks that couldn't be read in full when looked at again, kept.
+    pub unreadable: usize,
+}
 
 /// Where the copies are, where the app has a folder of its own (a phone).
 pub(crate) fn folder() -> Option<PathBuf> {
@@ -42,14 +54,25 @@ pub(crate) fn folder() -> Option<PathBuf> {
 pub(crate) fn unused(picked: &Path, project: &str, cancelled: &AtomicBool) -> Result<Unused, String> {
     let entries = std::fs::read_dir(picked).map_err(|e| format!("{}: {e}", picked.display()))?;
     let mut found = Unused::default();
-    let mut picks: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    let mut picks = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => picks.push(entry.path()),
+            // Not seen, so not judged: counted, and said.
+            Err(_) => found.unreadable += 1,
+        }
+    }
     picks.sort();
     for pick in picks {
         if cancelled.load(Ordering::Relaxed) {
             return Err(tl!("Stopped.").to_string());
         }
         let mut files = Vec::new();
-        gather(&pick, DEPTH, &mut files);
+        // A pick not read in full may hold a file the project names: kept.
+        if !gather(&pick, DEPTH, &mut files) {
+            found.unreadable += 1;
+            continue;
+        }
         if files.iter().any(|(file, _)| named(project, file)) {
             continue;
         }
@@ -61,16 +84,25 @@ pub(crate) fn unused(picked: &Path, project: &str, cancelled: &AtomicBool) -> Re
 }
 
 /// The files at or under `path` (itself, if it is one), with their sizes, `depth` levels down at
-/// most. Links aren't followed.
-fn gather(path: &Path, depth: usize, files: &mut Vec<(PathBuf, u64)>) {
-    let Ok(meta) = std::fs::symlink_metadata(path) else { return };
+/// most. Links aren't followed. Returns whether everything there could be read.
+fn gather(path: &Path, depth: usize, files: &mut Vec<(PathBuf, u64)>) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
     if meta.is_file() {
         files.push((path.to_path_buf(), meta.len()));
-    } else if meta.is_dir() && depth > 0 {
-        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
-            gather(&entry.path(), depth - 1, files);
+        return true;
+    }
+    if !meta.is_dir() || depth == 0 {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return false };
+    let mut complete = true;
+    for entry in entries {
+        match entry {
+            Ok(entry) => complete &= gather(&entry.path(), depth - 1, files),
+            Err(_) => complete = false,
         }
     }
+    complete
 }
 
 /// Whether the project's JSON names `file`, written as JSON writes it.
@@ -79,6 +111,19 @@ fn named(project: &str, file: &Path) -> bool {
     let quoted = serde_json::to_string(text.as_ref()).unwrap_or_default();
     let escaped = quoted.strip_prefix('"').and_then(|q| q.strip_suffix('"')).unwrap_or(&quoted);
     !escaped.is_empty() && project.contains(escaped)
+}
+
+/// Removes the picks of `found` that `picked` still holds unused by `project` (the project as it
+/// is now, looked at again: it may have changed since the user was asked), looking for
+/// `cancelled` between them.
+fn remove_unused(picked: &Path, found: &Unused, project: &str, cancelled: &AtomicBool) -> Result<Removed, String> {
+    let now = unused(picked, project, cancelled)?;
+    let still: Vec<PathBuf> = found.picks.iter().filter(|pick| now.picks.contains(pick)).cloned().collect();
+    let mut removed = remove(&still, cancelled);
+    removed.unreadable = now.unreadable;
+    // Each pick asked about that isn't removable now: named, or not read in full.
+    removed.now_named = found.picks.len().saturating_sub(still.len());
+    Ok(removed)
 }
 
 /// Removes `picks` (folders or files), looking for `cancelled` between them.
@@ -99,7 +144,7 @@ fn remove(picks: &[PathBuf], cancelled: &AtomicBool) -> Removed {
             Err(e) => failed.push(format!("{}: {e}", pick.display())),
         }
     }
-    (files, bytes, failed)
+    Removed { files, bytes, failed, ..Removed::default() }
 }
 
 /// Where Remove Unused Copies is.
@@ -112,7 +157,7 @@ pub(crate) enum Job {
     /// Found: waiting for the user to agree.
     Asking(Unused),
     /// Removing them, off the window's thread.
-    Removing(Arc<Mutex<Option<Removed>>>, Arc<AtomicBool>),
+    Removing(Arc<Mutex<Option<Result<Removed, String>>>>, Arc<AtomicBool>),
 }
 
 fn id() -> egui::Id {
@@ -145,12 +190,20 @@ pub(crate) fn start(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// Removes the copies the user agreed to, off the window's thread.
+/// Removes the copies the user agreed to, off the window's thread: those still unused by the
+/// project as it is now (copied here, one step), as it may have changed while the question was up
+/// (an Undo, another project opened).
 pub(crate) fn confirm(app: &mut RustGisApp, ctx: &egui::Context, found: Unused) {
+    let Some(picked) = folder() else {
+        set_job(ctx, Job::Idle);
+        return;
+    };
+    let project = app.session.project.clone();
     let (result, cancelled) = (Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)));
     let (out, stop, wake) = (result.clone(), cancelled.clone(), ctx.clone());
     let started = std::thread::Builder::new().name("removing copies".into()).spawn(move || {
-        let removed = remove(&found.picks, &stop);
+        let removed =
+            serde_json::to_string(&project).map_err(|e| e.to_string()).and_then(|text| remove_unused(&picked, &found, &text, &stop));
         *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(removed);
         wake.request_repaint();
     });
@@ -190,7 +243,12 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
             Some(Ok(found)) if found.picks.is_empty() => {
                 set_job(ctx, Job::Idle);
-                app.session.notify(tl!("No copies of picked files are unused: the project names every one."), false);
+                let mut text = tl!("No copies of picked files are unused: the project names every one.").to_string();
+                if found.unreadable > 0 {
+                    text.push(' ');
+                    text.push_str(&unreadable_said(found.unreadable));
+                }
+                app.session.notify(text, found.unreadable > 0);
             }
             Some(Ok(found)) => set_job(ctx, Job::Asking(found)),
             Some(Err(_)) if stop.load(Ordering::Relaxed) => set_job(ctx, Job::Idle),
@@ -201,28 +259,47 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         },
         Job::Removing(result, stop) => match result.lock().unwrap_or_else(|e| e.into_inner()).take() {
             None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
-            Some((files, bytes, failed)) => {
+            Some(Err(_)) if stop.load(Ordering::Relaxed) => set_job(ctx, Job::Idle),
+            Some(Err(error)) => {
                 set_job(ctx, Job::Idle);
-                let (count, size) = (files.to_string(), size(bytes));
-                let template = if files == 1 {
+                app.session.notify(i18n::fmt("The unused copies weren't removed: {error}", &[("error", &error)]), true);
+            }
+            Some(Ok(removed)) => {
+                set_job(ctx, Job::Idle);
+                let (count, size) = (removed.files.to_string(), size(removed.bytes));
+                let template = if removed.files == 1 {
                     "Removed 1 copy of a picked file ({size})."
                 } else {
                     "Removed {count} copies of picked files ({size})."
                 };
                 let mut text = i18n::fmt(template, &[("count", &count), ("size", &size)]);
+                let mut said = |more: String| {
+                    text.push(' ');
+                    text.push_str(&more);
+                };
                 if stop.load(Ordering::Relaxed) {
-                    text.push(' ');
-                    text.push_str(tl!("Stopped before the rest."));
+                    said(tl!("Stopped before the rest.").to_string());
                 }
-                if let Some(first) = failed.first() {
-                    let (n, first) = (failed.len().to_string(), first.clone());
-                    text.push(' ');
-                    text.push_str(&i18n::fmt("{n} couldn't be removed, the first: {first}", &[("n", &n), ("first", &first)]));
+                if removed.now_named > 0 {
+                    let n = removed.now_named.to_string();
+                    said(i18n::fmt("{n} kept: the project names them now, or they couldn't be read.", &[("n", &n)]));
                 }
-                app.session.notify(text, !failed.is_empty());
+                if removed.unreadable > 0 {
+                    said(unreadable_said(removed.unreadable));
+                }
+                if let Some(first) = removed.failed.first() {
+                    let (n, first) = (removed.failed.len().to_string(), first.clone());
+                    said(i18n::fmt("{n} couldn't be removed, the first: {first}", &[("n", &n), ("first", &first)]));
+                }
+                app.session.notify(text, !removed.failed.is_empty() || removed.unreadable > 0);
             }
         },
     }
+}
+
+/// What is said of `n` picks that couldn't be read in full and were kept.
+fn unreadable_said(n: usize) -> String {
+    i18n::fmt("{n} picks couldn't be read in full and were kept.", &[("n", &n.to_string())])
 }
 
 #[cfg(test)]
@@ -249,12 +326,52 @@ mod tests {
         assert_eq!(found.picks, vec![picked.join("2"), picked.join("loose.csv")]);
         assert_eq!((found.files, found.bytes), (2, 13));
         // Removed: the named pick stays, sidecar and all.
-        let (files, bytes, failed) = remove(&found.picks, &AtomicBool::new(false));
-        assert_eq!((files, bytes, failed.len()), (2, 13, 0));
+        let removed = remove(&found.picks, &AtomicBool::new(false));
+        assert_eq!((removed.files, removed.bytes, removed.failed.len()), (2, 13, 0));
         assert!(shapes.join("roads.dbf").exists());
         assert!(!picked.join("2").exists() && !picked.join("loose.csv").exists());
         // Cancelled, nothing is looked at.
         assert!(unused(&picked, &project, &AtomicBool::new(true)).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pick_the_project_names_by_the_time_of_removal_is_kept() {
+        let root = std::env::temp_dir().join(format!("rustgis-copies-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        for pick in ["1/0", "2/0"] {
+            std::fs::create_dir_all(picked.join(pick)).unwrap();
+        }
+        std::fs::write(picked.join("1/0/a.gpkg"), b"a").unwrap();
+        std::fs::write(picked.join("2/0/b.gpkg"), b"bb").unwrap();
+        let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+        assert_eq!(found.picks.len(), 2);
+        // An Undo brings back the layer reading a.gpkg before Remove Them.
+        let now = serde_json::json!({"path": picked.join("1/0/a.gpkg").to_string_lossy()}).to_string();
+        let removed = remove_unused(&picked, &found, &now, &AtomicBool::new(false)).unwrap();
+        assert_eq!((removed.files, removed.now_named), (1, 1));
+        assert!(picked.join("1/0/a.gpkg").exists() && !picked.join("2").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pick_not_read_in_full_is_kept() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(format!("rustgis-copies-locked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let picked = root.join("picked");
+        let locked = picked.join("1/0");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("a.gpkg"), b"a").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Skipped where permissions don't hold (running as root).
+        if std::fs::read_dir(&locked).is_err() {
+            let found = unused(&picked, "{}", &AtomicBool::new(false)).unwrap();
+            assert_eq!((found.picks.len(), found.unreadable), (0, 1));
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
     }
 

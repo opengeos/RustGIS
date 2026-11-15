@@ -152,7 +152,11 @@ impl PickerDelegate {
         let ivars = self.ivars();
         let shared = ivars.shared.clone();
         match ivars.asked.borrow_mut().take() {
-            // Answered already.
+            // Answered already, or taken for declined (`check_presented`) and shown after all: files
+            // chosen then aren't opened, which is said.
+            None if !urls.is_empty() => {
+                shared.failed(i18n::fmt("The files chosen weren't opened: the picker was taken for not shown. Choose them again.", &[]))
+            }
             None => {}
             Some(Asked::Save { name, temporary }) => {
                 if urls.is_empty() {
@@ -795,7 +799,8 @@ pub struct Ios {
     saving: RefCell<Option<Saving>>,
     /// The picker last presented, and when, until it is seen shown or declined
     /// ([`Ios::check_presented`]).
-    presenting: RefCell<Option<(Retained<UIViewController>, std::time::Instant)>>,
+    /// With whether it is the camera.
+    presenting: RefCell<Option<(Retained<UIViewController>, std::time::Instant, bool)>>,
 }
 
 /// Whether a file to save is written: `None` while it is being written.
@@ -871,7 +876,7 @@ impl Ios {
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
         // Declined, it is seen on a later frame ([`Ios::check_presented`]).
-        let _ = self.present(&presenter, &picker);
+        let _ = self.present(&presenter, &picker, false);
     }
 
     /// Shows `picker` over `presenter`, counted as showing until it answers. UIKit declines a
@@ -879,10 +884,10 @@ impl Ios {
     /// then no delegate ever answers: counted, it would hold back every later picker until the app
     /// is started again. UIKit starts a presentation on a later turn of the run loop, so whether
     /// it was declined is seen on the frames after ([`Ios::check_presented`]).
-    fn present(&self, presenter: &UIViewController, picker: &UIViewController) -> Result<(), String> {
+    fn present(&self, presenter: &UIViewController, picker: &UIViewController, camera: bool) -> Result<(), String> {
         count(&self.shared.showing, true);
         presenter.presentViewController_animated_completion(picker, true, None);
-        self.presenting.replace(Some((picker.retain(), std::time::Instant::now())));
+        self.presenting.replace(Some((picker.retain(), std::time::Instant::now(), camera)));
         Ok(())
     }
 
@@ -890,11 +895,11 @@ impl Ios {
     /// it is let go; neither shown nor being shown a while after, UIKit declined it, so it is
     /// uncounted and said (a file waiting to be saved is removed).
     fn check_presented(&self) {
-        let declined = match self.presenting.borrow().as_ref() {
+        let (declined, camera) = match self.presenting.borrow().as_ref() {
             None => return,
-            Some((picker, _)) if picker.presentingViewController().is_some() => false,
-            Some((picker, at)) if picker.isBeingPresented() || at.elapsed() < PRESENTING => return,
-            Some(_) => true,
+            Some((picker, _, _)) if picker.presentingViewController().is_some() => (false, false),
+            Some((picker, at, _)) if picker.isBeingPresented() || at.elapsed() < PRESENTING => return,
+            Some((_, _, camera)) => (true, *camera),
         };
         self.presenting.replace(None);
         if !declined {
@@ -902,6 +907,16 @@ impl Ios {
         }
         count(&self.shared.showing, false);
         let error = i18n::fmt("The picker couldn't be shown just now: try again.", &[]);
+        // The camera's answer is none: as when it is cancelled, so the shell lets go of the photo
+        // it was waiting for.
+        if camera {
+            if let Some(delegate) = self.camera.borrow().as_ref() {
+                delegate.ivars().answered.set(true);
+            }
+            self.shared.failed(error);
+            self.shared.add(Event::Cancelled);
+            return;
+        }
         match self.picker.borrow().as_ref().and_then(|delegate| delegate.ivars().asked.borrow_mut().take()) {
             Some(Asked::Save { name, temporary }) => {
                 remove_with_folder(&temporary);
@@ -963,7 +978,7 @@ impl Platform for Ios {
             PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Open { purpose: purpose.to_string() });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
-        self.present(&presenter, &picker)
+        self.present(&presenter, &picker, false)
     }
 
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
@@ -1038,7 +1053,7 @@ impl Platform for Ios {
         // SAFETY: the delegate conforms to both protocols the picker asks of it.
         unsafe { picker.setDelegate(Some(&delegate)) };
         self.camera.replace(Some(delegate));
-        self.present(&presenter, &picker)
+        self.present(&presenter, &picker, true)
     }
 
     fn take_events(&self) -> Vec<Event> {
