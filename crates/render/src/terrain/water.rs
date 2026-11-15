@@ -764,6 +764,32 @@ mod tests {
     }
 
     #[test]
+    fn fifty_thousand_broad_lakes_still_skip_the_empty_pond_field() {
+        let (map, camera) = hill_with_water(None);
+        let ground = Ground::of(&map, &camera).unwrap();
+        let wide = vec![Coord::new(0.0, 0.0), Coord::new(10_000.0, 10_000.0), Coord::new(0.0, 10_000.0)];
+        let mut polygons: Vec<_> = (0..50_000).map(|i| (vec![wide.clone()], Some(f64::from(i) + 50.0))).collect();
+        polygons.extend((0..5000).map(|i| {
+            let (x, y) = (6000.0 + f64::from(i % 400) * 10.0, f64::from(i / 400) * 10.0);
+            (vec![square(x, y, 1.0)], Some(f64::from(i) + 100.0))
+        }));
+        let water = Water::build(polygons, &ground, MAX_SHORE_SAMPLES);
+        assert_eq!(water.cols, MAX_GRID);
+        assert!(water.broad.side <= 4, "even a coarsened broad grid prunes this empty region");
+        let references = water.cells.iter().map(Vec::len).sum::<usize>() + water.broad.cells.iter().map(Vec::len).sum::<usize>();
+        assert!(references <= MAX_GRID_REFERENCES);
+        let miss = Coord::new(6005.0, 5.0);
+        assert!(water.broad.near(miss).is_empty());
+        let (col, row) = (
+            cell(miss.x, water.extent.min_x, water.extent.width(), water.cols),
+            cell(miss.y, water.extent.min_y, water.extent.height(), water.rows),
+        );
+        assert!(water.cells[row * water.cols + col].len() <= 25);
+        assert_eq!(water.level(miss), None);
+        assert_eq!(water.level(Coord::new(1.0, 9000.0)), Some(50.0), "overlaps retain the first match");
+    }
+
+    #[test]
     fn a_long_shore_is_read_at_the_grounds_cell_and_its_budget_said() {
         let at = |lon, lat| lonlat_to_merc(Coord::new(lon, lat));
         let (m, camera) = hill_with_water(None);

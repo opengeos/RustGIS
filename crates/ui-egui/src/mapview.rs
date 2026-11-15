@@ -2086,7 +2086,6 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     draw_label_ink(p, l, at, true, true);
 }
 
-/// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
 /// The UI draws in its interface font until a named face is actually installed in egui. This
 /// decision uses only readiness, never font-file reads or the renderer's parsed face cache.
 fn fallback_bold_width(bold: bool, named_ready: bool, px: f32) -> f32 {
@@ -2094,6 +2093,7 @@ fn fallback_bold_width(bold: bool, named_ready: bool, px: f32) -> f32 {
     if bold && !named_ready && fonts::bold_is_synthetic() { fonts::bold_thickening(px) } else { 0.0 }
 }
 
+/// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
 fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
     let family = crate::labelfonts::family(p.ctx(), l.font, l.bold, l.italic);
     // Bold with no heavier face to draw it in: drawn again a little to its right, as exports do.
