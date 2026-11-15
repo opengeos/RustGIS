@@ -167,6 +167,7 @@ impl<P: Phone> App<P> {
             }
         }
         let events = phone.take_events();
+        // Mirrors EventBuffer.PER_FRAME in the Android bridge: a full batch may leave more queued.
         if events.len() >= 512 {
             ctx.request_repaint();
         }
