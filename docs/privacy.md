@@ -1,8 +1,28 @@
 # Privacy
 
-The RustGIS desktop app and command line collect no analytics, telemetry or usage data.
-Local files and projects are processed on your device. Features that use remote services can
+The RustGIS desktop app, the phone apps (Android, iPhone and iPad) and the command line collect
+no analytics, telemetry or usage data. Local files and projects are processed on your device. Features that use remote services can
 send searches, coordinates, data or assistant context to those services, as described below.
+
+## Phone apps
+
+The Android, iPhone and iPad apps send nothing to the RustGIS project. On top of what this page
+says for the desktop app, which the phone apps include (its online services and the AI Assistant
+are reachable from them):
+
+- **Location**: used on the device to show your position, capture features at it and record
+  tracks, and only once you allow it. Recording a track keeps using it while the app is out of
+  sight, until you stop the track. Positions are kept in your project and are not sent anywhere
+  by the app.
+- **Camera and photos**: a photo you take is saved in the app's storage and attached to the
+  feature you capture. It leaves the device only in a project or field package you save or send.
+- **Files you open**: copied into the app's storage, where they are opened and edited. Remove
+  Unused Copies deletes the copies your project no longer uses. On iPhone and iPad these copies
+  are left out of the device's backups.
+- **Notifications** (Android): used only for the notice Android requires while a track is
+  recorded with the app out of sight.
+
+Uninstalling the app removes its storage: copies, photos, settings and projects saved there.
 
 ## Local troubleshooting history
 
