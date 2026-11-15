@@ -56,6 +56,7 @@ pub mod sql;
 pub mod stac;
 pub mod stac_area;
 pub mod stac_bands;
+pub mod table_stats;
 pub mod tile_export;
 pub mod tiles;
 pub mod time;
