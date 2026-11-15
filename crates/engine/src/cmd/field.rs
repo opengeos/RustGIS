@@ -1255,6 +1255,7 @@ mod tests {
 
     /// An unusable destination is refused before edits land, rather than trying numbered photo
     /// names forever. Run it with a completion deadline so a regression fails instead of hanging.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn bringing_back_photos_refuses_a_file_where_their_folder_should_be() {
         let temp = Temp::new("photo-folder-is-file");

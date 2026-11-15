@@ -352,6 +352,12 @@ pub(crate) fn reserve_query_name(c: &Connection) -> Result<Option<rustgis_data::
 /// parameter. At most four, each once. Only `name=value` pairs count: a bare segment can't be a
 /// login's parameter, and when it is a key written as a name, its text is the secret.
 pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
+    stripped_parameters_with_hint(given, saved, None)
+}
+
+/// Also offers an unregistered parameter the caller explicitly declared as a query-key hint.
+/// The hint is per call: merely previewing a definition must not register a login name.
+pub(crate) fn stripped_parameters_with_hint(given: &str, saved: &str, hint: Option<&str>) -> Vec<String> {
     use crate::render::rustgis_tiles::logins;
     fn names(address: &str) -> Vec<&str> {
         let query = address.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
@@ -364,7 +370,8 @@ pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
     for name in names(given) {
         if left_out.len() < 4
             && logins::valid_query_name(name)
-            && rustgis_data::address::name_class(name, &context) == rustgis_data::address::NameClass::Credential
+            && (hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+                || rustgis_data::address::name_class(name, &context) == rustgis_data::address::NameClass::Credential)
             && !kept.contains(&name)
             && !left_out.iter().any(|known| known.eq_ignore_ascii_case(name))
         {

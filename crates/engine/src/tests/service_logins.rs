@@ -2743,6 +2743,7 @@ fn a_key_in_the_address_is_left_out_and_its_parameter_offered_as_the_login() {
         .run("connection.new", &json!({"kind":"wmts","name":"Custom without method","address":format!("{origin}/custom?zqwithoutmethod757=RGSYNTHnomethod757&layer=a"),"keyName":"zqwithoutmethod757"}))
         .unwrap();
     assert_eq!(no_method["stripped"], true);
+    assert_eq!(no_method["strippedParameters"], json!(["zqwithoutmethod757"]));
     assert_eq!(no_method["address"], format!("{origin}/custom?layer=a"));
     assert!(!s.connections.to_json().contains("RGSYNTHnomethod757"));
     let explicit_none = s

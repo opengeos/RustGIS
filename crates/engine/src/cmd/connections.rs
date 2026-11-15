@@ -207,6 +207,7 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
         ..Connection::default()
     };
     login_fields(p, &mut c)?;
+    let key_hint = c.auth.trim().is_empty().then(|| c.key_name.trim().to_string());
     let explicit = !c.name.trim().is_empty();
     let redactions = s.connections.redaction_counts();
     let (c, stripped) = s.connections.add(c, explicit)?;
@@ -215,19 +216,20 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     }
     resolve_keys(s, &address_keys(&c.address));
     resolve_origins(s, &[&c]);
-    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or("")))
+    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or(""), key_hint.as_deref()))
 }
 
 /// A connection as `shown` gives it, and what was left out of its address: `stripped`, and the
 /// names of the key parameters (`strippedParameters`, no values) a query login could send, when
 /// it isn't one already. What was left out is also said as a notice, so the CLI and Python hear
 /// it as the app does.
-fn shown_stripped(s: &mut Session, c: &Connection, stripped: bool, given: &str) -> Value {
+fn shown_stripped(s: &mut Session, c: &Connection, stripped: bool, given: &str, key_hint: Option<&str>) -> Value {
     use crate::notice_text::NoticeText;
     let mut out = shown(s, c);
     if stripped {
         out["stripped"] = json!(true);
-        let names = if c.auth == "query" { Vec::new() } else { crate::connections::stripped_parameters(given, &c.address) };
+        let names =
+            if c.auth == "query" { Vec::new() } else { crate::connections::stripped_parameters_with_hint(given, &c.address, key_hint) };
         let said = if names.is_empty() {
             NoticeText::format("A password or token in the address was left out of the saved connection definition.", [])
         } else {
@@ -270,6 +272,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         c.options = options(v)?;
     }
     login_fields(p, &mut c)?;
+    let key_hint = c.auth.trim().is_empty().then(|| c.key_name.trim().to_string());
     // Validate everything, then locate the commit target before touching the store.
     let (mut prepared, stripped) = s.connections.prepare_update(&old.id, c)?;
     let database_changed = DATABASE_KINDS.contains(&old.kind.as_str()) && old.address != prepared.address;
@@ -325,7 +328,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             s3::disconnect(&c.name);
         }
     }
-    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or("")))
+    Ok(shown_stripped(s, &c, stripped, ps(p, "address").unwrap_or(""), key_hint.as_deref()))
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> CmdResult {

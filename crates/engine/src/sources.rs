@@ -1036,6 +1036,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deeply_nested_capability_addresses_say_when_the_inner_address_is_omitted() {
+        let public = "https://example.invalid/data.tif";
+        assert_eq!(strip_capabilities(public), public);
+        let prefix = crate::render::rustgis_tiles::s3::ANONYMOUS;
+        for depth in [8, 32] {
+            let nested = format!("{}{public}", prefix.repeat(depth));
+            let shown = strip_capabilities(&nested);
+            assert!(shown.ends_with("[address omitted]"), "{shown}");
+            assert!(!shown.contains(public), "the unvisited inner address is not returned");
+        }
+    }
+
+    #[test]
     fn restored_sources_never_reuse_a_previous_process_login_binding() {
         let address = rustgis_data::s3_address::bind("0123456789abcdef", "https://s3.example.org", "s3://data/a.fgb").unwrap();
         let source = Source { kind: "url".into(), name: "Saved".into(), address, extra: Value::Null };
