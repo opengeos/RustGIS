@@ -893,7 +893,7 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
         .chain(&l.labels.classes)
         .map(|c| [&c.by.text, &c.by.size, &c.by.color, &c.by.angle].map(|t| t.as_deref().is_some_and(needs)))
         .collect();
-    // A Default class as a new layer has it loses nothing by starting again (said only otherwise).
+    // A Default class still as the layer made it loses nothing by starting again: that restart isn't said.
     let default_untouched = l.labels.default == rustgis_map::LabelClass::default_for(&l.dataset);
     let removed = l.dataset.fields.remove(fi).name;
     for f in &mut l.dataset.features {
@@ -954,12 +954,14 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
             let was_on = l.labels.enabled;
             l.labels.restart_default(&l.dataset);
             let d = &l.labels.default;
-            let on = if d.field.is_empty() { "with no field".to_string() } else { format!("on field {}", d.field) };
+            let on = if d.field.is_empty() { "with no field and".to_string() } else { format!("on field {} with", d.field) };
             let off = if was_on { ", and the labels are turned off" } else { "" };
-            restart_note = (was_on || !default_untouched).then(|| format!(
-                "{}: its label class {} labelled the deleted field {removed}, so it starts again {on} with the default text symbol{off}",
-                l.name, d.name
-            ));
+            restart_note = (was_on || !default_untouched).then(|| {
+                format!(
+                    "{}: its label class {} labelled the deleted field {removed}, so it starts again {on} the default text symbol{off}",
+                    l.name, d.name
+                )
+            });
         }
     }
     l.labels.repoint_missing_fields(&l.dataset);
