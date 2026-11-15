@@ -101,7 +101,7 @@ mod desktop {
         item: &stac::Item,
         all: &[sb::Band],
         wanted: &[String],
-    ) -> Result<(Vec<sb::Band>, Vec<String>, [f64; 4], f64), String> {
+    ) -> Result<(Vec<sb::Band>, Vec<String>, [f64; 4], (f64, bool)), String> {
         let mut picked = Vec::with_capacity(wanted.len());
         for name in wanted {
             let band = sb::find(all, name).ok_or_else(|| {
@@ -119,9 +119,10 @@ mod desktop {
             asked["bbox"] = json!("view");
         }
         let bbox = super::super::layer::window_box_of(s, &asked)?;
+        // The cell size, and whether it is the automatic one (the user gave none).
         let cell = match p.get("cellSize").filter(|v| !v.is_null()) {
-            None => auto_cell(bbox),
-            Some(v) => v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?,
+            None => (auto_cell(bbox), true),
+            Some(v) => (v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?, false),
         };
         Ok((picked, hrefs, bbox, cell))
     }
@@ -255,17 +256,18 @@ mod desktop {
 
     /// One file's window, every band: signed as it is read (a Planetary Computer file is signed
     /// when read, not when the item was found), and only `href`, the file's own address, is ever said.
-    fn read_one(href: &str, bbox: [f64; 4], cell: f64, bands: usize, stop: &AtomicBool) -> Result<WindowRaster, String> {
+    fn read_one(href: &str, bbox: [f64; 4], cell: (f64, bool), bands: usize, stop: &AtomicBool) -> Result<WindowRaster, String> {
         let signed = stac::sign_blocking(href)?;
-        super::super::layer::read_window_raster(&WindowAsked::of(&signed, bbox, Some(cell), bands), stop)
+        let asked = WindowAsked::of(&signed, bbox, Some(cell.0), bands);
+        super::super::layer::read_window_raster(&if cell.1 { asked.automatic() } else { asked }, stop)
     }
 
     /// The windows of these files (address, bands to read), in order: the files are independent and
     /// network-bound, so up to the user's thread count are read at once, each on a thread of its own
     /// while this one looks at the run's Cancel and stops the reads once it is set. The same windows
     /// as reading them one by one. A thread the system refuses costs only that: the file is read
-    /// here, Cancel looked at once it is in.
-    pub(super) fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: f64) -> Result<Vec<WindowRaster>, String> {
+    /// here, Cancel looked at before it starts (a read here, once started, runs to its end).
+    pub(super) fn read_windows(files: &[(String, usize)], bbox: [f64; 4], cell: (f64, bool)) -> Result<Vec<WindowRaster>, String> {
         // The run's request predicate is of this thread: each reader thread is given it, as the shared
         // helpers give their workers, so a request whose claim has gone is not sent.
         let still = rustgis_data::source::remote::current_still();
@@ -292,7 +294,11 @@ mod desktop {
                     .into_iter()
                     .map(|(href, bands, reader)| match reader {
                         Ok(r) => r.join().unwrap_or_else(|_| Err(format!("{href}: the read failed unexpectedly"))),
-                        Err(_) => read_one(href, bbox, cell, bands, &stop),
+                        Err(_) => {
+                            // Looked at before it starts: once started, this read runs to its end.
+                            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+                            read_one(href, bbox, cell, bands, &stop)
+                        }
                     })
                     .collect()
             });
@@ -322,7 +328,7 @@ mod desktop {
         picked: &[sb::Band],
         hrefs: &[String],
         bbox: [f64; 4],
-        cell: f64,
+        cell: (f64, bool),
     ) -> Result<(Raster, Vec<String>), String> {
         // One read for a file, whichever of its bands are wanted (the first to want it sets the count), and
         // every band of the file is read, so the count asked is the file's, not the band's place.
@@ -345,17 +351,25 @@ mod desktop {
         for ((href, _), w) in files.into_iter().zip(read) {
             let whos: Vec<String> =
                 picked.iter().zip(channels).zip(hrefs).filter(|(_, h)| **h == href).map(|((_, c), _)| c.clone()).collect();
+            // A file counts once for a kind, however many of its notes are of it.
+            let mut counted: Vec<String> = Vec::new();
             for n in w.notes() {
                 let kind = note_kind(&n);
+                let first = !counted.contains(&kind);
                 match window_notes.iter_mut().find(|(k, ..)| *k == kind) {
                     Some((_, texts, bands, files)) => {
                         if !texts.contains(&n) {
                             texts.push(n);
                         }
-                        bands.extend(whos.iter().cloned());
-                        *files += 1;
+                        if first {
+                            bands.extend(whos.iter().cloned());
+                            *files += 1;
+                        }
                     }
-                    None => window_notes.push((kind, vec![n], whos.clone(), 1)),
+                    None => window_notes.push((kind.clone(), vec![n], whos.clone(), 1)),
+                }
+                if first {
+                    counted.push(kind);
                 }
             }
             windows.push((href, w));
@@ -790,8 +804,18 @@ mod tests {
         // A claim that has gone: the reads stop before any request is sent, on the reader threads too.
         let gone: rustgis_data::source::remote::Still = std::sync::Arc::new(|| false);
         let files = vec![("https://127.0.0.1:9/a.tif".to_string(), 1), ("https://127.0.0.1:9/b.tif".to_string(), 1)];
-        let err = rustgis_data::source::remote::with_still(gone, || read_windows(&files, [10.0, 45.0, 10.1, 45.1], 10.0)).err();
+        let err = rustgis_data::source::remote::with_still(gone, || read_windows(&files, [10.0, 45.0, 10.1, 45.1], (10.0, false))).err();
         assert!(err.is_some_and(|e| e.contains("cancelled before it was sent")), "the predicate reached the reads");
+    }
+
+    #[test]
+    fn the_automatic_cell_size_never_says_the_full_image_is_finer_but_the_users_does() {
+        use crate::cmd::layer::finer_than_file;
+        // A 10 m file read for a box small enough that the automatic cell is 4.88 m: no level fits.
+        let auto = auto_cell([10.0, 45.0, 10.1, 45.1]) / 1000.0;
+        assert_eq!(finer_than_file(Some(auto), false, true), None, "the automatic size says nothing");
+        assert_eq!(finer_than_file(Some(5.0), false, false), Some(5.0), "a size the user gave, finer than the file, is said");
+        assert_eq!(finer_than_file(Some(50.0), true, false), None, "a level that fits says nothing");
     }
 
     #[test]
