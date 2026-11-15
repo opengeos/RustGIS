@@ -2047,7 +2047,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                 if !offered.is_empty() {
                                     ui.menu_button(tl!("Bands"), |ui| {
                                         for (id, name) in &offered {
-                                            if ui.button(tl!(*name)).clicked() {
+                                            if ui.button(menu_name(name)).clicked() {
                                                 bands = Some((i, *id));
                                                 ui.close();
                                             }
@@ -2065,7 +2065,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                 if !indices.is_empty() {
                                     ui.menu_button(tl!("Index"), |ui| {
                                         for (id, name) in &indices {
-                                            if ui.button(tl!(*name)).clicked() {
+                                            if ui.button(menu_name(name)).clicked() {
                                                 index = Some((i, *id));
                                                 ui.close();
                                             }
@@ -2119,6 +2119,29 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
 #[cfg(not(target_arch = "wasm32"))]
 fn combinations_offered(bands: &[stac::bands::Band]) -> Vec<(&'static str, &'static str)> {
     stac::bands::offered(bands).into_iter().map(|c| (c.id, c.name)).collect()
+}
+
+/// A combination's or index's name (a literal in `stac::bands`) in the current language. Each is
+/// written out as a `tl!` call here so the catalogs list it; a name not in the list (a new one
+/// added there first) shows in English until it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn menu_name(name: &str) -> &str {
+    match name {
+        "True color" => tl!("True color"),
+        "Color infrared" => tl!("Color infrared"),
+        "Shortwave infrared" => tl!("Shortwave infrared"),
+        "False color urban" => tl!("False color urban"),
+        "Agriculture" => tl!("Agriculture"),
+        "Geology" => tl!("Geology"),
+        "Bathymetric" => tl!("Bathymetric"),
+        "NDVI (vegetation)" => tl!("NDVI (vegetation)"),
+        "NDWI (water)" => tl!("NDWI (water)"),
+        "SAVI (vegetation over soil)" => tl!("SAVI (vegetation over soil)"),
+        "NBR (burn ratio)" => tl!("NBR (burn ratio)"),
+        "NDBI (built-up)" => tl!("NDBI (built-up)"),
+        "EVI (enhanced vegetation)" => tl!("EVI (enhanced vegetation)"),
+        other => tl!(other),
+    }
 }
 
 /// The spectral indices an item's files can make, as (id, name): only those whose bands it has

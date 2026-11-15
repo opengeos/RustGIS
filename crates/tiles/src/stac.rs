@@ -72,8 +72,9 @@ pub struct Asset {
     /// Whether the catalog describes more bands than are kept (`bands` stops at the first
     /// [`MAX_BANDS`]): the ones past them can't be found by name.
     pub bands_cut: bool,
-    /// Whether JAXA Earth's `je:rasters` gives its first band's scale, offset or no-data as something that
-    /// isn't a number (a string, say): not read, so a band made from it is refused where it is used.
+    /// Whether the catalog gives its first band's scale, offset or no-data as something that isn't read: a
+    /// number given as text in JAXA Earth's `je:rasters`, or a band list that isn't a list (an object,
+    /// text), so none of its numbers were. A band made from it is refused where it is used.
     pub je_unread: bool,
 }
 
@@ -118,6 +119,12 @@ fn long_name(asset: &Value) -> bool {
             Some(_) => true,
         })
     })
+}
+
+/// Whether a band list (`eo:bands`, `raster:bands`, STAC 1.1's `bands`) is there but isn't a list (an
+/// object, or text): none of its numbers or names are read, which is said like an unreadable number.
+fn bands_odd(asset: &Value) -> bool {
+    ["eo:bands", "raster:bands", "bands"].iter().any(|k| asset.get(*k).is_some_and(|v| !v.is_null() && !v.is_array()))
 }
 
 /// Whether JAXA Earth's `je:rasters` gives a scale (`dn2value.slope`), offset or no-data (`dn.nodata`)
@@ -719,7 +726,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
-                je_unread: je_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
+                je_unread: je_odd(a) || bands_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
             })
         })
         .collect();

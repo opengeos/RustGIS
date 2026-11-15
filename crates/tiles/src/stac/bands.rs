@@ -525,6 +525,20 @@ mod tests {
     }
 
     #[test]
+    fn a_band_list_that_is_not_a_list_marks_the_band_unread() {
+        for key in ["raster:bands", "eo:bands", "bands"] {
+            let mut a = json!({"eo:bands": [{"common_name": "red"}]});
+            a[key] = json!({"scale": 0.0001});
+            let it = item(&[("red", a)]);
+            let b = bands(&it);
+            assert!(b[0].unread, "{key} as an object is no list");
+            let again = crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap();
+            assert!(bands(&again)[0].unread, "{key}: it goes through the command's copy");
+        }
+        assert!(!bands(&item(&[("red", json!({"eo:bands": [{"common_name": "red"}], "raster:bands": [{"scale": 0.0001}]}))]))[0].unread);
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));
