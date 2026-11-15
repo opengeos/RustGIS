@@ -436,7 +436,7 @@ fn start(app: &mut RustGisApp, mut asked: Asked, p: Value) -> Result<Value, Stri
     let spawn = || if app.reads.fail_spawn { Err(std::io::Error::other("worker start refused for test")) } else { spawn() };
     let spawned = spawn();
     if let Err(e) = spawned {
-        if matches!(asked.command, "map.reloadTiles" | "map.repairTiles" | "service.add" | "service.layers" | "script.run")
+        if matches!(asked.command, "map.reloadTiles" | "map.repairTiles" | "service.add" | "service.layers" | "script.run" | "layer.sizeBy")
             || rustgis_engine::cmd::edit::table_edit_in_background(asked.command).is_some()
         {
             let why = crate::i18n::fmt("The background worker could not start ({error}). Retry the command.", &[("error", &e.to_string())]);

@@ -1627,6 +1627,8 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     assert!(err.contains("Unique Values or Graduated Colors"), "{err}");
     s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": "name"})).unwrap();
     let r = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "max": 2e7, "scaling": "radius"})).unwrap();
+    let err = s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "pop_max", "min": -1e308, "max": 1e308})).unwrap_err();
+    assert!(err.contains("too wide"), "{err}");
     let (lo, _) = {
         let l = s.map().layer_by_name("Cities").unwrap();
         l.dataset.numeric_range(l.dataset.field_index("pop_max").unwrap(), &[]).unwrap()

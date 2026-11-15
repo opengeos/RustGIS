@@ -800,6 +800,9 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     if max <= min {
         return Err(format!("max ({max}) must be above min ({min})"));
     }
+    if !(max - min).is_finite() {
+        return Err(format!("the range from {min} to {max} is too wide to scale sizes over"));
+    }
     let size = |v: Option<f64>, had: Option<f32>, default: f32, k: &str| -> Result<f32, String> {
         match v {
             Some(v) if (0.0..=f64::from(MAX_SIZE)).contains(&v) => Ok(v as f32),
