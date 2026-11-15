@@ -259,8 +259,8 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
                 Level::StacRoot { api } if stac::catalog::is_static(api) => catalogs(s, bytes, &origin)?,
                 Level::StacRoot { .. } => collections(bytes)?,
                 Level::StacCatalog { .. } => catalogs(s, bytes, &origin)?,
-                Level::StacItem { .. } => item_file(bytes, &origin)?,
-                Level::StacCollection { .. } => items(bytes, &origin)?,
+                Level::StacItem { .. } => item_file(s, bytes, &origin)?,
+                Level::StacCollection { .. } => items(s, bytes, &origin)?,
                 Level::S3Root => buckets(s3::parse_buckets(bytes)?.into_iter()),
                 Level::S3Prefix { bucket, prefix } => {
                     let binding = conn.as_ref().and_then(|conn| super::saved_binding(s, &c, conn));
@@ -655,46 +655,73 @@ fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<F
     Ok(found)
 }
 
-/// The assets of an item that can be added, each with the `stac.addAsset` that adds it.
-fn assets_of(item: &stac::Item) -> Vec<Value> {
-    item.assets
-        .iter()
-        .take(MAX_CHILDREN)
-        .filter_map(|a| {
-            let (key, href) = item.asset_href(Some(&a.key)).ok()?;
-            let mut params = json!({"asset": key, "name": format!("{} {key}", item.id)});
-            match &item.url {
-                Some(u) => params["url"] = json!(u),
-                None => params["item"] = stac::item_json_with(item, false),
-            }
-            Some(json!({
-                "key": format!("{}#{key}", item.url.as_deref().unwrap_or(&item.id)),
-                "name": if a.title.is_empty() { key.as_str() } else { a.title.as_str() },
-                "what": "asset",
-                "detail": a.media_type,
-                "href": href,
-                "fromDocument": item.origin_reach == address::Reach::Public,
-                "add": {"command": "stac.addAsset", "params": params},
-            }))
-        })
-        .collect()
+#[derive(Default)]
+struct AssetListing {
+    children: Vec<Value>,
+    skipped: usize,
+}
+
+/// The usable assets, retaining a count of unsupported or refused entries.
+fn assets_of(item: &stac::Item) -> AssetListing {
+    let mut listing = AssetListing::default();
+    for a in item.assets.iter().take(MAX_CHILDREN) {
+        let Ok((key, href)) = item.asset_href(Some(&a.key)) else {
+            listing.skipped += 1;
+            continue;
+        };
+        let mut params = json!({"asset": key, "name": format!("{} {key}", item.id)});
+        match &item.url {
+            Some(u) => params["url"] = json!(u),
+            None => params["item"] = stac::item_json_with(item, false),
+        }
+        listing.children.push(json!({
+            "key": format!("{}#{key}", item.url.as_deref().unwrap_or(&item.id)),
+            "name": if a.title.is_empty() { key.as_str() } else { a.title.as_str() },
+            "what": "asset",
+            "detail": a.media_type,
+            "href": href,
+            "fromDocument": item.origin_reach == address::Reach::Public,
+            "add": {"command": "stac.addAsset", "params": params},
+        }));
+    }
+    listing
+}
+
+/// One counted notice per asset-loss kind for this document, with a redacted source address.
+fn asset_notices(s: &mut Session, origin: &address::Origin, skipped: usize) {
+    let source = crate::sources::address_in_message(origin.url());
+    if skipped > 0 {
+        s.notify(format!("{source}: {skipped} STAC assets were left out because their addresses are unsupported or refused"), false);
+    }
 }
 
 /// A static catalog's item (its own file): its assets.
-fn item_file(bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
-    Ok(Found::new(assets_of(&stac::parse_item_from_origin(bytes, origin)?)))
+fn item_file(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
+    let listing = assets_of(&stac::parse_item_from_origin(bytes, origin)?);
+    asset_notices(s, origin, listing.skipped);
+    let mut found = Found::new(listing.children);
+    found.truncated |= listing.skipped > 0;
+    Ok(found)
 }
 
 /// The items of a collection's search, each with the assets that can be added.
-fn items(bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
+fn items(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
     let (list, next) = stac::parse_items_from_origin(bytes, origin)?;
     let matched = stac::parse_matched(bytes);
-    let truncated = next.is_some() || matched.is_some_and(|m| m > list.len() as u64);
+    let mut skipped = 0usize;
     let children = list
         .iter()
         .take(MAX_CHILDREN)
-        .map(|item| json!({"key": format!("item:{}", item.url.as_deref().unwrap_or(&item.id)), "name": item.id, "what": "item", "detail": item.datetime, "children": assets_of(item)}))
+        .map(|item| {
+            let listing = assets_of(item);
+            skipped += listing.skipped;
+            let mut child = json!({"key": format!("item:{}", item.url.as_deref().unwrap_or(&item.id)), "name": item.id, "what": "item", "detail": item.datetime, "children": listing.children});
+            if listing.skipped > 0 { child["truncated"] = json!(true); }
+            child
+        })
         .collect();
+    asset_notices(s, origin, skipped);
+    let truncated = next.is_some() || matched.is_some_and(|m| m > list.len() as u64) || skipped > 0;
     Ok(Found { children, truncated, matched })
 }
 
@@ -970,6 +997,7 @@ mod tests {
     fn listed_assets_carry_the_observed_items_public_download_ceiling() {
         use crate::render::rustgis_tiles::address::Origin;
         let requested = "https://catalog.corp.example/item.json";
+        let mut session = crate::Session::new(crate::Project::default());
         for (peer, href, public) in
             [("10.0.0.5", "http://10.0.0.5/scene.geojson", false), ("93.184.216.34", "https://public.example/scene.geojson", true)]
         {
@@ -977,7 +1005,7 @@ mod tests {
                 "assets":{"data":{"href":href,"roles":["data"]}},"links":[]})
             .to_string();
             let origin = Origin::connected(requested, peer.parse().unwrap()).unwrap();
-            let found = super::item_file(body.as_bytes(), &origin).unwrap();
+            let found = super::item_file(&mut session, body.as_bytes(), &origin).unwrap();
             assert_eq!(found.children[0]["href"], href);
             assert_eq!(found.children[0]["fromDocument"], public);
         }
@@ -985,6 +1013,7 @@ mod tests {
 
     #[test]
     fn collection_search_assets_keep_the_responses_observed_origin() {
+        let mut session = crate::Session::new(crate::Project::default());
         let requested = "https://search.corp.example/search";
         let body = json!({"type":"FeatureCollection","features":[{
             "type":"Feature","id":"scene","geometry":null,"properties":{},
@@ -992,12 +1021,50 @@ mod tests {
         }]})
         .to_string();
         let local = super::address::Origin::connected(requested, "10.0.0.5".parse().unwrap()).unwrap();
-        let found = super::items(body.as_bytes(), &local).unwrap();
+        let found = super::items(&mut session, body.as_bytes(), &local).unwrap();
         assert_eq!(found.children[0]["children"][0]["href"], "http://10.0.0.5/scene.geojson");
         assert_eq!(found.children[0]["children"][0]["fromDocument"], false);
         let public = super::address::Origin::connected(requested, "93.184.216.34".parse().unwrap()).unwrap();
-        let found = super::items(body.as_bytes(), &public).unwrap();
+        let found = super::items(&mut session, body.as_bytes(), &public).unwrap();
         assert!(found.children[0]["children"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unusable_assets_are_counted_once_per_listing_and_clean_assets_stay_quiet() {
+        let mut session = crate::Session::new(crate::Project::default());
+        let origin = super::address::Origin::named("https://public.example/item.json");
+        for bad in [None, Some("http://10.0.0.5/private.geojson"), Some("ftp://files.example/scene.geojson")] {
+            let mut item = json!({"type":"Feature","id":"scene","geometry":null,"properties":{},"links":[],
+                "assets":{"data":{"href":"https://public.example/scene.geojson","roles":["data"]}}});
+            if let Some(href) = bad {
+                item["assets"]["bad"] = json!({"href":href,"roles":["data"]});
+            }
+            let mark = session.notice_mark();
+            let found = super::item_file(&mut session, item.to_string().as_bytes(), &origin).unwrap();
+            assert_eq!(found.children.len(), 1);
+            assert_eq!(found.truncated, bad.is_some());
+            let notices = session.notices_since(mark);
+            assert_eq!(notices.len(), usize::from(bad.is_some()));
+            if bad.is_some() {
+                assert!(notices[0].text.contains("1 STAC assets were left out"));
+                assert!(notices[0].text.contains("public.example/item.json"));
+            }
+            let mut second = item.clone();
+            second["id"] = json!("scene2");
+            let body = json!({"type":"FeatureCollection","features":[item,second]}).to_string();
+            let mark = session.notice_mark();
+            let found = super::items(&mut session, body.as_bytes(), &origin).unwrap();
+            assert_eq!(found.truncated, bad.is_some());
+            for child in &found.children {
+                assert_eq!(child["children"].as_array().unwrap().len(), 1);
+                assert_eq!(child.get("truncated").and_then(Value::as_bool).unwrap_or(false), bad.is_some());
+            }
+            let notices = session.notices_since(mark);
+            assert_eq!(notices.len(), usize::from(bad.is_some()));
+            if bad.is_some() {
+                assert!(notices[0].text.contains("2 STAC assets were left out"));
+            }
+        }
     }
 
     #[test]
