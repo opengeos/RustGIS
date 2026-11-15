@@ -21108,9 +21108,10 @@ fn repair_source_checks_the_extrusion_base_field() {
 }
 
 #[test]
-fn deleting_a_field_clears_the_extrusion_and_marker_rotation_reading_it() {
-    // #2081: the extrusion's height and base and the marker rotation stopped reading a deleted
-    // field without a word, and the saved project kept its name for a field added later.
+fn deleting_a_field_clears_the_extrusion_marker_rotation_and_symbol_expressions_reading_it() {
+    // #2081: the extrusion's height and base, the marker rotation and the symbol's expressions
+    // by feature stopped reading a deleted field without a word, and the saved project kept its
+    // name for a field added later.
     let mut s = world();
     let x = |s: &Session| s.map().layer_by_name("Countries").and_then(|l| l.extrusion.clone()).unwrap();
     let about = |s: &Session, mark: u64, word: &str| -> Vec<String> {
@@ -21182,6 +21183,50 @@ fn deleting_a_field_clears_the_extrusion_and_marker_rotation_reading_it() {
     assert_eq!(about(&s, mark, "markers"), ["Cities: its markers turned by the deleted field angle, so they are no longer turned"]);
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(r(&s).map(|r| (r.field, r.counterclockwise)), Some(("ANGLE".to_string(), true)));
+    // The symbol's expressions by feature: those reading the field go, the others stay (one that
+    // read no field, one that named a field already gone); said once per layer, naming each.
+    let by = |s: &Session, layer: &str| s.map().layer_by_name(layer).map(|l| l.symbol_by.clone()).unwrap();
+    s.run("edit.addField", &json!({"layer": "Countries", "name": "shade", "type": "double"})).unwrap();
+    s.run("layer.symbolBy", &json!({"layer": "Countries", "fill": "CASE WHEN shade > 1 THEN 'red' ELSE 'blue' END", "strokeWidth": "2"}))
+        .unwrap();
+    let countries = s.map().layer_by_name("Countries").unwrap().id;
+    s.map_mut().layer_mut(countries).unwrap().symbol_by.stroke = Some("CASE WHEN ghost > 1 THEN 'red' ELSE 'blue' END".into());
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "shade"})).unwrap();
+    let got = by(&s, "Countries");
+    assert_eq!((got.fill, got.stroke_width.as_deref()), (None, Some("2")));
+    assert!(got.stroke.is_some_and(|t| t.contains("ghost")), "an expression that read nothing before stays");
+    assert_eq!(
+        about(&s, mark, "expression"),
+        ["Countries: its symbol's fill colour expression read the deleted field shade, so it is removed"]
+    );
+    for f in ["turn", "aside"] {
+        s.run("edit.addField", &json!({"layer": "Cities", "name": f, "type": "double"})).unwrap();
+    }
+    s.run("layer.symbolBy", &json!({"layer": "Cities", "size": "turn / 10 + 4", "fill": "'red'", "angle": "TURN"})).unwrap();
+    s.run("layer.symbolBy", &json!({"layer": "Cities", "stroke": "CASE WHEN turn > 1 THEN 'black' ELSE 'white' END"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "aside"})).unwrap();
+    assert_eq!(about(&s, mark, "expression"), Vec::<String>::new());
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "turn"})).unwrap();
+    let got = by(&s, "Cities");
+    assert_eq!((got.size, got.fill.as_deref(), got.stroke, got.angle), (None, Some("'red'"), None, None));
+    assert_eq!(
+        about(&s, mark, "expression"),
+        ["Cities: its symbol's size, outline colour and angle expressions read the deleted field turn, so they are removed"]
+    );
+    s.run("edit.undo", &Value::Null).unwrap();
+    let got = by(&s, "Cities");
+    assert_eq!((got.size.as_deref(), got.angle.as_deref()), (Some("turn / 10 + 4"), Some("TURN")));
+    // Two fields named the same but for case: `pop` reads the first, which deleting `pop` removes.
+    // Its text would still parse, reading the second, so it is judged by the field it read.
+    s.run("layer.addDataText", &json!({"fileName": "twins.csv", "text": "lon,lat,Pop,pop\n1,2,5,0\n3,4,0,5\n"})).unwrap();
+    s.run("layer.symbolBy", &json!({"layer": "twins", "size": "pop * 2"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "twins", "field": "pop"})).unwrap();
+    assert_eq!(by(&s, "twins").size, None);
+    assert_eq!(about(&s, mark, "expression"), ["twins: its symbol's size expression read the deleted field Pop, so it is removed"]);
 }
 
 /// Extrusion Base sets what an extrusion stands on, a numeric field or a constant, and changes
