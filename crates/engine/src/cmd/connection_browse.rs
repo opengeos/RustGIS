@@ -687,41 +687,53 @@ fn assets_of(item: &stac::Item) -> AssetListing {
     listing
 }
 
-/// One counted notice per asset-loss kind for this document, with a redacted source address.
-fn asset_notices(s: &mut Session, origin: &address::Origin, skipped: usize) {
+/// One counted notice per parsing-loss kind for this document, with a redacted source address.
+fn listing_notices(s: &mut Session, origin: &address::Origin, losses: stac::ParseLosses) {
     let source = crate::sources::address_in_message(origin.url());
-    if skipped > 0 {
-        s.notify(format!("{source}: {skipped} STAC assets were left out because their addresses are unsupported or refused"), false);
+    for (count, kind, reason) in [
+        (losses.skipped_items, "STAC items", "they were invalid"),
+        (losses.omitted_items, "STAC items", "the response limit was reached"),
+        (losses.skipped_assets, "STAC assets", "their addresses were missing, invalid, unsupported or refused"),
+        (losses.omitted_assets, "STAC assets", "the response limit was reached"),
+    ] {
+        if count > 0 {
+            s.notify(format!("{source}: {count} {kind} were left out because {reason}"), false);
+        }
     }
 }
 
 /// A static catalog's item (its own file): its assets.
 fn item_file(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
-    let listing = assets_of(&stac::parse_item_from_origin(bytes, origin)?);
-    asset_notices(s, origin, listing.skipped);
+    let stac::ParsedItem { item, mut losses } = stac::parse_item_noted(bytes, origin)?;
+    let listing = assets_of(&item);
+    losses.skipped_assets += listing.skipped;
+    listing_notices(s, origin, losses);
     let mut found = Found::new(listing.children);
-    found.truncated |= listing.skipped > 0;
+    found.truncated |= !losses.is_empty();
     Ok(found)
 }
 
 /// The items of a collection's search, each with the assets that can be added.
 fn items(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<Found, String> {
-    let (list, next) = stac::parse_items_from_origin(bytes, origin)?;
-    let matched = stac::parse_matched(bytes);
-    let mut skipped = 0usize;
+    let stac::ItemListing { items: list, next, next_refused, matched, mut losses } = stac::parse_items_noted(bytes, origin)?;
     let children = list
         .iter()
         .take(MAX_CHILDREN)
-        .map(|item| {
+        .map(|parsed| {
+            let item = &parsed.item;
             let listing = assets_of(item);
-            skipped += listing.skipped;
+            losses.skipped_assets += listing.skipped;
             let mut child = json!({"key": format!("item:{}", item.url.as_deref().unwrap_or(&item.id)), "name": item.id, "what": "item", "detail": item.datetime, "children": listing.children});
-            if listing.skipped > 0 { child["truncated"] = json!(true); }
+            if listing.skipped > 0 || !parsed.losses.is_empty() { child["truncated"] = json!(true); }
             child
         })
         .collect();
-    asset_notices(s, origin, skipped);
-    let truncated = next.is_some() || matched.is_some_and(|m| m > list.len() as u64) || skipped > 0;
+    listing_notices(s, origin, losses);
+    if next_refused {
+        let source = crate::sources::address_in_message(origin.url());
+        s.notify(format!("{source}: 1 next-page link was refused by the document's network reach"), false);
+    }
+    let truncated = next.is_some() || next_refused || matched.is_some_and(|m| m > list.len() as u64) || !losses.is_empty();
     Ok(Found { children, truncated, matched })
 }
 
@@ -1065,6 +1077,48 @@ mod tests {
                 assert!(notices[0].text.contains("2 STAC assets were left out"));
             }
         }
+    }
+
+    #[test]
+    fn browse_reports_parser_caps_and_invalid_entries_and_clean_lists_stay_quiet() {
+        let mut session = crate::Session::new(crate::Project::default());
+        let origin = super::address::Origin::named("https://public.example/search");
+        let item = |id: usize| json!({"type":"Feature","id":id.to_string(),"properties":{},"assets":{}});
+        for (count, omitted) in [(3, 0), (201, 1)] {
+            let body = json!({"features":(0..count).map(item).collect::<Vec<_>>()}).to_string();
+            let mark = session.notice_mark();
+            let found = super::items(&mut session, body.as_bytes(), &origin).unwrap();
+            assert_eq!(found.children.len(), count.min(200));
+            assert_eq!(found.truncated, omitted > 0);
+            let notices = session.notices_since(mark);
+            assert_eq!(notices.len(), usize::from(omitted > 0));
+            if omitted > 0 {
+                assert!(notices[0].text.contains("1 STAC items were left out because the response limit"));
+            }
+        }
+        let body = json!({"features":[item(0),{"type":"Feature"}]}).to_string();
+        let mark = session.notice_mark();
+        let found = super::items(&mut session, body.as_bytes(), &origin).unwrap();
+        assert_eq!(found.children.len(), 1);
+        assert!(found.truncated);
+        assert!(session.notices_since(mark)[0].text.contains("1 STAC items were left out because they were invalid"));
+
+        let mut feature = item(0);
+        for i in 0..101 {
+            feature["assets"][format!("a{i:03}")] = json!({"href":format!("https://public.example/{i}.geojson")});
+        }
+        let mark = session.notice_mark();
+        let found = super::item_file(&mut session, feature.to_string().as_bytes(), &origin).unwrap();
+        assert_eq!(found.children.len(), 100);
+        assert!(found.truncated);
+        let notices = session.notices_since(mark);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].text.contains("1 STAC assets were left out because the response limit"));
+
+        let body = json!({"features":[item(0)],"links":[{"rel":"next","href":"http://10.0.0.5/next"}]}).to_string();
+        let mark = session.notice_mark();
+        assert!(super::items(&mut session, body.as_bytes(), &origin).unwrap().truncated);
+        assert!(session.notices_since(mark)[0].text.contains("1 next-page link was refused"));
     }
 
     #[test]
