@@ -170,6 +170,11 @@ pub fn available(bands: &[Band]) -> Vec<(&'static Combination, [Band; 3])> {
         .collect()
 }
 
+/// [`available`] without the bands found, for a menu that is drawn every frame: no band is cloned.
+pub fn offered(bands: &[Band]) -> Vec<&'static Combination> {
+    COMBINATIONS.iter().filter(|c| c.channels.iter().all(|channel| find(bands, channel).is_some())).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +310,14 @@ mod tests {
         assert_eq!(visible.iter().map(|(c, _)| c.id).collect::<Vec<_>>(), ["trueColor"]);
         assert!(available(&bands(&item(&[("red", named("red"))]))).is_empty());
         assert!(available(&[]).is_empty());
+        // `offered` is the same list without cloning the bands.
+        for scene in [sentinel(), item(&[("red", named("red")), ("nir", named("nir"))]), item(&[])] {
+            let all = bands(&scene);
+            assert_eq!(
+                offered(&all).iter().map(|c| c.id).collect::<Vec<_>>(),
+                available(&all).iter().map(|(c, _)| c.id).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

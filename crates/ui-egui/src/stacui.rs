@@ -1879,7 +1879,9 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                             // thread to read several files on).
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                let offered = combinations_offered(item);
+                                // Read once for both menus: this runs every frame, for every card.
+                                let all = stac::bands::bands(item);
+                                let offered = combinations_offered(&all);
                                 if !offered.is_empty() {
                                     ui.menu_button(tl!("Bands"), |ui| {
                                         for (id, name) in &offered {
@@ -1892,7 +1894,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                     .response
                                     .on_hover_text(tl!("Add the item's bands as one image, for the part of the map in view"));
                                 }
-                                let indices = indices_offered(item);
+                                let indices = indices_offered(&all);
                                 if !indices.is_empty() {
                                     ui.menu_button(tl!("Index"), |ui| {
                                         for (id, name) in &indices {
@@ -1941,17 +1943,17 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
 }
 
 /// The band combinations an item's files can make, as (id, name): only those whose three bands it
-/// has ([`stac::bands::available`]).
+/// has ([`stac::bands::offered`]), given the item's bands ([`stac::bands::bands`]).
 #[cfg(not(target_arch = "wasm32"))]
-fn combinations_offered(item: &Item) -> Vec<(&'static str, &'static str)> {
-    stac::bands::available(&stac::bands::bands(item)).into_iter().map(|(c, _)| (c.id, c.name)).collect()
+fn combinations_offered(bands: &[stac::bands::Band]) -> Vec<(&'static str, &'static str)> {
+    stac::bands::offered(bands).into_iter().map(|c| (c.id, c.name)).collect()
 }
 
 /// The spectral indices an item's files can make, as (id, name): only those whose bands it has
-/// ([`stac::bands::available_indices`]).
+/// ([`stac::bands::available_indices`]), given the item's bands.
 #[cfg(not(target_arch = "wasm32"))]
-fn indices_offered(item: &Item) -> Vec<(&'static str, &'static str)> {
-    stac::bands::available_indices(&stac::bands::bands(item)).into_iter().map(|i| (i.id, i.name)).collect()
+fn indices_offered(bands: &[stac::bands::Band]) -> Vec<(&'static str, &'static str)> {
+    stac::bands::available_indices(bands).into_iter().map(|i| (i.id, i.name)).collect()
 }
 
 /// The Workflows section that shows a band combination's progress and Cancel while it is read: one
@@ -2210,10 +2212,10 @@ mod tests {
     #[test]
     fn a_card_offers_the_band_combinations_its_item_can_make_and_adds_one_in_the_background() {
         let mut app = RustGisApp::with_sample();
-        assert_eq!(combinations_offered(&scene(&["red", "green", "blue"])), [("trueColor", "True color")]);
-        let infrared = combinations_offered(&scene(&["red", "green", "blue", "nir"]));
+        assert_eq!(combinations_offered(&stac::bands::bands(&scene(&["red", "green", "blue"]))), [("trueColor", "True color")]);
+        let infrared = combinations_offered(&stac::bands::bands(&scene(&["red", "green", "blue", "nir"])));
         assert_eq!(infrared.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ["trueColor", "colorInfrared"]);
-        assert!(combinations_offered(&scene(&["red"])).is_empty(), "no three bands, no menu");
+        assert!(combinations_offered(&stac::bands::bands(&scene(&["red"]))).is_empty(), "no three bands, no menu");
         // Picking one starts the command on a thread, without holding the window, whether or not the
         // Imagery extension is on: its progress is shown in a section no extension owns.
         assert!(crate::analysispane::section_extension(BANDS_SECTION).is_none());
@@ -2227,7 +2229,7 @@ mod tests {
             if !crate::analysispane::land_job(&mut app) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(10)); // test-wait: the read runs on a thread of its own and lands through land_job, which gives no signal to wait on
         }
         assert!(app.workflow.job.is_none());
         assert!(app.workflow.error.is_some(), "the read's failure is said");
@@ -2237,8 +2239,8 @@ mod tests {
     #[test]
     fn a_card_offers_the_indices_its_item_can_make_and_adds_one_in_the_background() {
         let mut app = RustGisApp::with_sample();
-        assert!(indices_offered(&scene(&["red", "green", "blue"])).is_empty(), "no near infrared, no index");
-        let some = indices_offered(&scene(&["red", "nir"]));
+        assert!(indices_offered(&stac::bands::bands(&scene(&["red", "green", "blue"]))).is_empty(), "no near infrared, no index");
+        let some = indices_offered(&stac::bands::bands(&scene(&["red", "nir"])));
         assert_eq!(some.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ["ndvi", "savi"]);
         let layers = app.session.map().layers.len();
         add_item_index(&mut app, &scene(&["red", "nir"]), "ndvi");
@@ -2248,7 +2250,7 @@ mod tests {
             if !crate::analysispane::land_job(&mut app) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(10)); // test-wait: the read runs on a thread of its own and lands through land_job, which gives no signal to wait on
         }
         assert!(app.workflow.job.is_none() && app.workflow.error.is_some(), "the read's failure is said");
         assert_eq!(app.session.map().layers.len(), layers);
