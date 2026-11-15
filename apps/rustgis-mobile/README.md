@@ -317,6 +317,19 @@ TestFlight this way. None of it is automated in CI yet.
    are off on iOS), and why App Transport Security is off (a project's map layers may be any
    `http://` server).
 
+### Release builds in CI
+
+`.github/workflows/mobile.yml` runs for each published release: it builds the Android APK for
+arm64-v8a and x86_64, signed with the release key, and attaches it to the release
+(`RustGIS-<version>-android.apk`, with its `.sha256`), and it builds, signs and uploads the iOS
+app to TestFlight, where the internal testers' group gets it. A manual run builds and signs both
+as workflow artifacts, and uploads to TestFlight only when asked. Its header lists the secrets.
+
+The Android release key (`ANDROID_KEYSTORE_BASE64`) can't be replaced: an APK signed with
+another key doesn't install as an update of one signed with it. Keep a copy of the keystore and
+its password outside GitHub. The iOS certificate and profile expire after a year: renew them in
+the Apple Developer portal and set their secrets again.
+
 Files put in the app's Documents folder are opened once the window is up, as the pushed files are
 on Android:
 

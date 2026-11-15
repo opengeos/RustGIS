@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Builds a release APK of the Android app (#1902), signed with a debug key:
-# target/android/rustgis-mobile.apk. --debug builds the debug profile instead.
+# Builds a release APK of the Android app (#1902): target/android/rustgis-mobile.apk. --debug
+# builds the debug profile instead.
 #
 #   apps/rustgis-mobile/build-apk.sh [--debug] [abi ...]     (default: arm64-v8a x86_64)
+#
+# Signed with a debug key of this checkout's own, or, with ANDROID_KEYSTORE (a keystore file) and
+# ANDROID_KEYSTORE_PASSWORD, with the release key in it (alias ANDROID_KEY_ALIAS, default
+# rustgis), as the APKs on GitHub releases are. Its version is the workspace's; its version code,
+# which Android wants rising with each update, is ANDROID_VERSION_CODE or the count of commits.
 #
 # Needs: a JDK (keytool, apksigner), the Rust Android targets, cargo-ndk, and an Android SDK with
 # the NDK, build-tools and a platform (see README.md). ANDROID_HOME names the SDK (default ~/Android/Sdk).
@@ -44,8 +49,23 @@ javac -nowarn -source 11 -target 11 -classpath "$platform/android.jar" -d "$out/
 mapfile -d '' classes < <(find "$out/java/classes" -name '*.class' -print0)
 "$tools/d8" --release --min-api 26 --lib "$platform/android.jar" --output "$out/java/dex" "${classes[@]}"
 
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
+code=${ANDROID_VERSION_CODE:-}
+if [ -z "$code" ]; then
+    if [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = false ]; then
+        code=$(git -C "$root" rev-list --count HEAD)
+    elif [ -n "${ANDROID_KEYSTORE:-}" ]; then
+        # A release build numbered 1 would never update an installed one.
+        echo "build-apk: no full git history to number the release: set ANDROID_VERSION_CODE" >&2
+        exit 1
+    else
+        code=1
+    fi
+fi
+
 unsigned=$out/unsigned.apk
-"$tools/aapt2" link -o "$unsigned" --manifest "$root/apps/rustgis-mobile/AndroidManifest.xml" -I "$platform/android.jar"
+"$tools/aapt2" link -o "$unsigned" --manifest "$root/apps/rustgis-mobile/AndroidManifest.xml" -I "$platform/android.jar" \
+    --version-code "$code" --version-name "$version" --replace-version
 # The libraries go in uncompressed and page-aligned, so Android maps them straight from the APK.
 (cd "$out/apk" && zip -q -0 -r "$unsigned" lib)
 (cd "$out/java/dex" && zip -q "$unsigned" classes.dex)
@@ -56,10 +76,17 @@ cp "$root/LICENSE" "$root/apps/rustgis-mobile/THIRD-PARTY-LICENSES.txt" "$out/no
 # -P 16: on 16 KB pages, which Android 15 phones may use (build-tools 35 and later).
 "$tools/zipalign" -f -P 16 4 "$unsigned" "$out/aligned.apk"
 
-# A debug key of this checkout's own: an APK must be signed to install, even on an emulator.
-key=$out/debug.keystore
-[ -f "$key" ] || keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias debug \
-    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=RustGIS debug" >/dev/null
-"$tools/apksigner" sign --ks "$key" --ks-pass pass:android --key-pass pass:android --out "$out/rustgis-mobile.apk" "$out/aligned.apk"
+if [ -n "${ANDROID_KEYSTORE:-}" ]; then
+    # The release key: its password is read from the environment, never put on a command line.
+    : "${ANDROID_KEYSTORE_PASSWORD:?build-apk: ANDROID_KEYSTORE is set but ANDROID_KEYSTORE_PASSWORD is not}"
+    "$tools/apksigner" sign --ks "$ANDROID_KEYSTORE" --ks-key-alias "${ANDROID_KEY_ALIAS:-rustgis}" \
+        --ks-pass env:ANDROID_KEYSTORE_PASSWORD --out "$out/rustgis-mobile.apk" "$out/aligned.apk"
+else
+    # A debug key of this checkout's own: an APK must be signed to install, even on an emulator.
+    key=$out/debug.keystore
+    [ -f "$key" ] || keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias debug \
+        -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=RustGIS debug" >/dev/null
+    "$tools/apksigner" sign --ks "$key" --ks-pass pass:android --key-pass pass:android --out "$out/rustgis-mobile.apk" "$out/aligned.apk"
+fi
 rm -f "$unsigned" "$out/aligned.apk"
 ls -lh "$out/rustgis-mobile.apk"
