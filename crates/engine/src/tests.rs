@@ -2571,6 +2571,38 @@ fn qgis_diagrams_import_on_the_fields_the_layer_has() {
     assert!(s.map().layer_by_name("Sketch").unwrap().diagram.is_none());
 }
 
+#[test]
+fn qgis_import_reports_reach_session_notices_without_clean_import_noise() {
+    let mut s = world();
+    for field in ["pop_est", "missing_category"] {
+        let mark = s.notice_mark();
+        let qml = format!(
+            r##"<qgis><SingleCategoryDiagramRenderer diagramType="Pie"><DiagramCategory enabled="1" width="2" sizeType="MM"><attribute field="{field}" color="#ff0000"/></DiagramCategory></SingleCategoryDiagramRenderer></qgis>"##
+        );
+        let result = s.run("style.importQgis", &json!({"layer":"Countries", "text":qml})).unwrap();
+        let notes = result["notes"].as_array().unwrap();
+        let said = s.notices_since(mark);
+        assert_eq!(said.len(), notes.len());
+        for note in notes {
+            assert!(said.iter().any(|n| n.text.contains(note["text"].as_str().unwrap()) && n.text.contains("count 1")));
+        }
+        assert_eq!(said.is_empty(), field == "pop_est");
+    }
+    // Project imports use the same delivery path, including notes for a layer left out.
+    for layers in [
+        "",
+        r#"<maplayer type="vector"><id>x</id><layername>Unsupported</layername><provider>not-a-provider</provider><datasource>x</datasource></maplayer>"#,
+    ] {
+        let mark = s.notice_mark();
+        let result = s.run("project.importQgis", &json!({"text":format!("<qgis><projectlayers>{layers}</projectlayers></qgis>")})).unwrap();
+        let said = s.notices_since(mark);
+        for note in result["notes"].as_array().unwrap() {
+            assert!(said.iter().any(|n| n.text.contains(note["text"].as_str().unwrap()) && n.text.contains("count 1")));
+        }
+        assert_eq!(said.is_empty(), layers.is_empty());
+    }
+}
+
 /// A QGIS categorized renderer by an expression classes by it where the expression reads on the
 /// layer; where it doesn't, every feature draws with the first category's symbol, noted, as before.
 #[test]

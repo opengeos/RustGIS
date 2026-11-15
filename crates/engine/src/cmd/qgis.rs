@@ -145,7 +145,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         let left = report.notes.iter().filter(|n| n.kind == NoteKind::Skipped).count();
         s.notify(
             format!(
-                "Imported {} of {} QGIS layers; {} things drawn differently, {left} left out (see the import's notes)",
+                "Imported {} of {} QGIS layers; {} things drawn differently, {left} left out (see Messages)",
                 added.len(),
                 project.layers.len() + usize::from(project.main_annotations.is_some()),
                 report.notes.len() - left
@@ -153,6 +153,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             false,
         );
     }
+    notify_report(s, &report);
     Ok(json!({"map": name, "layers": added, "notes": notes}))
 }
 
@@ -1335,6 +1336,28 @@ fn note_json(n: &qgis::Note) -> Value {
     json!({"layer": n.layer, "kind": n.kind, "text": n.text, "count": n.count})
 }
 
+/// The returned report serves CLI and Python callers; the app also needs every coalesced
+/// approximation and omission in its Messages pane. Report bounds and groups these notes.
+fn notify_report(s: &mut Session, report: &Report) {
+    for note in &report.notes {
+        let template = match note.kind {
+            NoteKind::Approximated => "QGIS import, {layer}: {detail} (drawn differently; count {count})",
+            NoteKind::Skipped => "QGIS import, {layer}: {detail} (left out; count {count})",
+        };
+        s.notify_text(
+            crate::NoticeText::format(
+                template,
+                [
+                    ("layer", if note.layer.is_empty() { "project" } else { &note.layer }.to_string().into()),
+                    ("detail", note.text.clone().into()),
+                    ("count", note.count.to_string().into()),
+                ],
+            ),
+            false,
+        );
+    }
+}
+
 fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     let id = s.layer_id(p)?;
@@ -1384,5 +1407,6 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
             s.notify(notice, false);
         }
     }
+    notify_report(s, &report);
     Ok(json!({"notes": report.notes.iter().map(note_json).collect::<Vec<_>>()}))
 }
