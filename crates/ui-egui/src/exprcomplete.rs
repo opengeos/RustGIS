@@ -827,9 +827,8 @@ mod tests {
         }
     }
 
-    /// Clicks the list's `item`: pressed and let go in frames of their own, as a real click is
-    /// (`click()` does both in one frame, which hides that the release takes the focus from the
-    /// box), as the Script pane's `a_click_accepts_an_item` does.
+    /// Clicks the list's `item`: pressed, and let go two frames later, as a real click is, as the
+    /// Script pane's `a_click_accepts_an_item` does.
     fn click(h: &mut egui_kittest::Harness<'_, String>, item: &str) {
         use egui_kittest::kittest::Queryable;
         let at = h.get_by_role_and_label(egui::accesskit::Role::Button, item).rect().center();
@@ -864,6 +863,39 @@ mod tests {
         h.event(egui::Event::Text("ro".into()));
         h.run();
         click(&mut h, "round()");
+        assert!(h.ctx.memory(|m| m.has_focus(id)), "the box keeps the focus");
+        h.event(egui::Event::Text("1".into()));
+        h.run();
+        assert_eq!(h.state(), "round(1)");
+    }
+
+    /// A click whose press and release come in one frame (a quick tap, a slow frame) reaches the
+    /// item too, and the box keeps the focus. (kittest's `click()` gives each its own frame.)
+    #[test]
+    fn a_click_in_one_frame_accepts_too() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let data = ds();
+        let id = Id::unique("expr");
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, text: &mut String| {
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&data), |e| e).labelled_by(label.id);
+            },
+            String::new(),
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        h.event(egui::Event::Text("ro".into()));
+        h.run();
+        let at = h.get_by_role_and_label(Role::Button, "round()").rect().center();
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(at));
+        h.run();
+        h.input_mut().events.extend([button(true), button(false)]);
+        h.run();
         assert!(h.ctx.memory(|m| m.has_focus(id)), "the box keeps the focus");
         h.event(egui::Event::Text("1".into()));
         h.run();

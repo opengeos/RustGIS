@@ -291,9 +291,11 @@ impl<O: Offered> List<O> {
             self.pressed = false;
             return None;
         }
-        // A press on the list: only then does it outlive the box's focus.
-        let on_list =
-            self.drawn.is_some_and(|(r, _)| ui.input(|i| i.pointer.any_down() && i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
+        // A press on the list: only then does it outlive the box's focus. Pressed this frame
+        // counts though the button is up again (a quick tap, a slow frame): the item takes it.
+        let on_list = self.drawn.is_some_and(|(r, _)| {
+            ui.input(|i| (i.pointer.any_down() || i.pointer.any_pressed()) && i.pointer.hover_pos().is_some_and(|p| r.contains(p)))
+        });
         // The button pressed there, once up, took the focus from the box (a click outside it, a
         // single-line box's list being under it), the list having taken the press: what was
         // clicked was the box's list, so the focus goes back to it, and the list shows again
