@@ -517,7 +517,9 @@ fn read_column<E>(
 }
 
 /// A stable sort with Cancel between small sorts, merge runs and final copies. Indices are
-/// merged instead of cloned strings, so each output value is copied only once.
+/// merged instead of cloned strings, so each output value is copied only once. The two index
+/// buffers cost two `usize`s per value (16 bytes on a 64-bit host), in addition to the output;
+/// this trades scratch space for cancellation without cloning text at each merge pass.
 fn checked_sorted<T: Clone>(values: &[T], compare: impl Fn(&T, &T) -> Ordering) -> Result<Vec<T>, String> {
     const BLOCK: usize = 4096;
     let mut order = Vec::with_capacity(values.len());
@@ -577,7 +579,9 @@ fn checked_sorted<T: Clone>(values: &[T], compare: impl Fn(&T, &T) -> Ordering) 
 /// aggregate reduction after ordering finishes before the final Cancel check.
 pub(crate) fn checked_compute(stat: Stat, column: &Column, separator: &str) -> Result<Value, String> {
     crate::control::check()?;
-    let ordered = matches!(stat, Stat::Median | Stat::Percentile(_) | Stat::Iqr | Stat::Mode | Stat::Minority | Stat::Unique);
+    let frequency = matches!(stat, Stat::Mode | Stat::Minority | Stat::Unique);
+    let ordered =
+        frequency || (matches!(stat, Stat::Median | Stat::Percentile(_) | Stat::Iqr) && matches!(column.values, Values::Numbers(_)));
     if ordered && !column.dates.is_empty() {
         if stat == Stat::Unique {
             let mut keys = Vec::with_capacity(column.dates.len());
@@ -599,7 +603,24 @@ pub(crate) fn checked_compute(stat: Stat, column: &Column, separator: &str) -> R
             return Ok(value);
         }
     }
+    // Rounding checks sort exact percentile ranks only when some whole value exceeds 2^53.
+    let mut exact_needed = frequency;
     if ordered
+        && !frequency
+        && !column.whole.is_empty()
+        && let Values::Numbers(values) = &column.values
+    {
+        for (position, (number, whole)) in values.iter().zip(&column.whole).enumerate() {
+            if position % 4096 == 0 {
+                crate::control::check()?;
+            }
+            if whole.map(i128::from).or_else(|| decimal_whole(*number)).is_some_and(|n| n.unsigned_abs() > 1 << 53) {
+                exact_needed = true;
+                break;
+            }
+        }
+    }
+    if exact_needed
         && !column.whole.is_empty()
         && column.exact.get().is_none()
         && let Values::Numbers(values) = &column.values
@@ -1014,9 +1035,19 @@ mod tests {
             assert!(checked_sorted(&values, Ord::cmp).is_err());
         }
         assert_eq!(cancelled.looked(), 7);
-        let column = column(&ds, &rows, 0, false);
-        for stat in [Stat::Median, Stat::Mode, Stat::Minority, Stat::Unique, Stat::Iqr, Stat::Sum] {
-            assert_eq!(checked_compute(stat, &column, ",").unwrap(), compute(stat, &column, ","));
+        for offset in [0, 1i64 << 53] {
+            let mut values = Dataset::new("values", GeometryType::None, vec![Field::new("n", FieldType::Integer)]);
+            for n in 0..10_000 {
+                values.push(None, vec![Value::Int(offset + n)]);
+            }
+            for stat in [Stat::Median, Stat::Percentile(37), Stat::Mode, Stat::Minority, Stat::Unique, Stat::Iqr, Stat::Sum] {
+                let ordinary = column(&values, &rows, 0, false);
+                let checked = column(&values, &rows, 0, false);
+                let expected = compute(stat, &ordinary, ",");
+                let actual = checked_compute(stat, &checked, ",").unwrap();
+                assert_eq!(actual, expected, "{stat:?}, offset {offset}");
+                assert_eq!(rounded(stat, &checked, &actual), rounded(stat, &ordinary, &expected));
+            }
         }
     }
 

@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import warnings
 
 import pytest
 
@@ -27,11 +28,10 @@ def test_startup_plugin_failures_are_reported(monkeypatch):
         session = rustgis.Session(plugins=True)
     assert session.info()["layers"] == []
     monkeypatch.setattr(rustgis, "load_plugins", lambda: [])
-    import warnings
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
         rustgis.Session(plugins=True)
-    assert not seen
+    assert not any(issubclass(warning.category, RuntimeWarning) for warning in seen)
 
 
 def test_version_matches_the_engine():

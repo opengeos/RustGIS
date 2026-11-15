@@ -443,11 +443,12 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
         Some(family) => count_geometry_filter(src, &info.name, family.filter()).map(Some),
         None => Ok(info.count.and_then(|n| u64::try_from(n).ok())),
     };
-    match expected.and_then(|expected| super::fgb::header_feature_count(&converted.path).map(|actual| expected.map(|n| (n, actual)))) {
-        Ok(Some((expected, actual))) if actual < expected => {
-            converted.notes.push(format!("{}: GDAL conversion left out {} of {expected} source features", info.name, expected - actual))
+    match expected.and_then(|expected| super::fgb::header_feature_count(&converted.path).map(|actual| (expected, actual))) {
+        Ok((expected, actual)) => {
+            if let Some(note) = conversion_count_note(&info.name, expected, actual, !converted.empty) {
+                converted.notes.push(note);
+            }
         }
-        Ok(_) => {}
         Err(error) => converted.notes.push(format!("{}: couldn't check how many features GDAL's conversion kept ({error})", info.name)),
     }
     let mut zm_dropped = info.has_zm && !converted.empty;
@@ -472,6 +473,19 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
         }
     }
     Ok(FreshConverted { path: converted.path, notes: converted.notes, empty: converted.empty, zm_dropped, workspace })
+}
+
+/// A counted loss, or an honest diagnostic when a nonempty replacement's source count is unknown.
+fn conversion_count_note(layer: &str, expected: Option<u64>, actual: u64, nonempty: bool) -> Option<String> {
+    match expected {
+        Some(expected) if actual < expected => {
+            Some(format!("{layer}: GDAL conversion left out {} of {expected} source features", expected - actual))
+        }
+        None if nonempty => Some(format!(
+            "{layer}: couldn't check how many source features GDAL's conversion kept because the source count is unknown; features may have been left out"
+        )),
+        _ => None,
+    }
 }
 
 struct ConversionRequest<'a> {
@@ -881,6 +895,19 @@ mod tests {
         let (again, _) = convert_in(&cache, &kml, Some("mixed"), None).unwrap();
         assert_eq!(again.iter().map(|c| &c.path).collect::<Vec<_>>(), out.iter().map(|c| &c.path).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_nonempty_conversion_counts_are_reported_and_known_clean_counts_are_silent() {
+        let note = conversion_count_note("source", None, 1, true).unwrap();
+        assert!(note.contains("source count is unknown") && note.contains("features may have been left out"));
+        assert!(conversion_count_note("source", Some(1), 1, true).is_none());
+        assert!(conversion_count_note("source", Some(0), 0, false).is_none());
+        assert!(conversion_count_note("source", None, 0, false).is_none());
+        assert_eq!(
+            conversion_count_note("source", Some(3), 1, true).as_deref(),
+            Some("source: GDAL conversion left out 2 of 3 source features")
+        );
     }
 
     /// Indexed FlatGeobuf conversion drops empty polygons in GDAL, before RustGIS reads it.
