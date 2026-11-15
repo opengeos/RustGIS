@@ -64,7 +64,8 @@ jobs:
 
   # The iOS app (apps/rustgis-mobile, #1902): linted for devices and built for the Simulator,
   # where macOS is tested (pushes to main, a manual run on every platform, a pull request labelled
-  # `ci:macos` or `ci:full`).
+  # `ci:macos` or `ci:full`). Unlike the tests, it runs from the next push after the label is
+  # added, not straight away (ci-label.yml runs test-rust.yml only).
   ios:
     name: iOS app
     if: >-

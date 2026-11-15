@@ -488,7 +488,7 @@ pub fn received(app: &mut RustGisApp, bytes: Vec<u8>, from: Option<Box<Entry>>) 
     if !rp::INSTALLS {
         let _ = (bytes, from);
         app.plugins.message = Some((false, not_installed_here().to_string()));
-        app.session.notify(not_installed_here(), false);
+        app.session.notify(not_installed_here(), true);
         return;
     }
     let r = (|| {
@@ -654,7 +654,7 @@ pub fn install_from_file(app: &mut RustGisApp, path: Option<&str>) {
     // Said before a file is asked for, where none could be installed.
     if !rp::INSTALLS {
         app.plugins.message = Some((false, not_installed_here().to_string()));
-        app.session.notify(not_installed_here(), false);
+        app.session.notify(not_installed_here(), true);
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
