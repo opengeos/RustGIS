@@ -293,6 +293,7 @@ mod desktop {
             signed.push(stac::sign_blocking(href)?);
         }
         let stop = AtomicBool::new(false);
+        let cause = std::sync::Mutex::new(None);
         let mut out = Vec::with_capacity(files.len());
         let jobs: Vec<(&String, &String, usize)> = files.iter().zip(&signed).map(|((href, bands), s)| (href, s, *bands)).collect();
         for chunk in jobs.chunks(rustgis_data::threads::max().max(1)) {
@@ -305,8 +306,8 @@ mod desktop {
                             rustgis_data::source::remote::with_optional_still(still.clone(), || {
                                 let read = read_one(signed, bbox, cell, *bands, &stop);
                                 // A file that failed stops the reads beside it: they would only finish to be dropped.
-                                if read.is_err() {
-                                    stop.store(true, Ordering::Relaxed);
+                                if let Err(e) = &read {
+                                    note_failure(&stop, &cause, e);
                                 }
                                 read
                             })
@@ -333,19 +334,25 @@ mod desktop {
                     .collect()
             });
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            out.extend(first_failure_or_all(results)?);
+            if let Some(e) = cause.lock().ok().and_then(|c| c.clone()) {
+                return Err(e);
+            }
+            for r in results {
+                out.push(r?);
+            }
         }
         Ok(out)
     }
 
-    /// The reads' results, in file order, as the values, or the failure to say: the first one that is
-    /// not a cancellation. A file that failed stops the reads beside it, which then answer
-    /// "cancelled"; the user is told what failed, not that.
-    pub(super) fn first_failure_or_all<T>(results: Vec<Result<T, String>>) -> Result<Vec<T>, String> {
-        if let Some(e) = results.iter().find_map(|r| r.as_ref().err().filter(|e| !e.contains("cancel"))) {
-            return Err(e.clone());
+    /// A read that failed: if it is the first thing to stop the run (the user's Cancel has not),
+    /// it stops the reads beside it and its message is the one kept to say. What those then answer
+    /// is not a cause, whatever it says.
+    pub(super) fn note_failure(stop: &AtomicBool, cause: &std::sync::Mutex<Option<String>>, message: &str) {
+        if stop.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+            && let Ok(mut said) = cause.lock()
+        {
+            *said = Some(message.to_string());
         }
-        results.into_iter().collect()
     }
 
     /// What a window note is about, apart from the numbers and edge names that differ from file to
@@ -920,17 +927,21 @@ mod tests {
     }
 
     #[test]
-    fn the_failure_said_is_the_first_real_one_not_a_sibling_stopped_by_it() {
-        use super::desktop::first_failure_or_all;
-        let cancelled = || Err::<u8, String>("a.tif: cancelled".into());
-        // The first file is stopped by the second's failure: the second's message is said.
-        let said = first_failure_or_all(vec![cancelled(), Err("b.tif: http status: 404".into()), cancelled()]);
-        assert_eq!(said, Err("b.tif: http status: 404".into()));
-        // Two real failures: the first in file order.
-        assert_eq!(first_failure_or_all(vec![Err::<u8, _>("a: 500".into()), Err("b: 404".into())]), Err("a: 500".into()));
-        // A cancel by the user alone is said as a cancel; no failure gives the values.
-        assert_eq!(first_failure_or_all(vec![Ok(1), cancelled()]), Err("a.tif: cancelled".into()));
-        assert_eq!(first_failure_or_all(vec![Ok(1), Ok(2)]), Ok(vec![1, 2]));
+    fn the_failure_said_is_the_one_that_stopped_the_others_not_their_cancellations() {
+        use super::desktop::note_failure;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The first failure stops the others and is the one kept; a later one (a sibling's, whatever
+        // its wording: even one that says "cancel") is not.
+        let (stop, cause) = (AtomicBool::new(false), Mutex::new(None));
+        note_failure(&stop, &cause, "b.tif: the server cancelled the request: 404");
+        note_failure(&stop, &cause, "a.tif: cancelled");
+        assert!(stop.load(Ordering::Relaxed));
+        assert_eq!(cause.lock().unwrap().as_deref(), Some("b.tif: the server cancelled the request: 404"));
+        // Already stopped by the user's Cancel: what the reads then answer is not a cause.
+        let (stop, cause) = (AtomicBool::new(true), Mutex::new(None));
+        note_failure(&stop, &cause, "a.tif: cancelled");
+        assert_eq!(*cause.lock().unwrap(), None);
     }
 
     #[test]
