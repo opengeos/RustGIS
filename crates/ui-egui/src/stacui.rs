@@ -456,9 +456,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         Asked::Search(url, _) => {
             match r.and_then(|f| {
                 let origin = if f.origin.url().is_empty() { Origin::named(&url) } else { f.origin };
-                Ok((stac::parse_items_from_origin(&f.bytes, &origin)?, stac::parse_matched(&f.bytes), stac::has_next(&f.bytes)))
+                // `parse_items_from_origin` drops a refused next link without a word: asked here, so it is said.
+                let refused = stac::next_refused(&f.bytes, &origin);
+                Ok((stac::parse_items_from_origin(&f.bytes, &origin)?, stac::parse_matched(&f.bytes), stac::has_next(&f.bytes), refused))
             }) {
-                Ok(((items, next), matched, has_next)) => {
+                Ok(((items, next), matched, has_next, refused)) => {
                     let n = items.len().to_string();
                     // Logical order until the line is whole: `fmt` puts a finished message in display
                     // form, so it runs once, over the count and the note together.
@@ -467,7 +469,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                             i18n::fmt_raw("Showing {n} of {m} items (narrow the search for others)", &[("n", &n), ("m", &m.to_string())])
                         }
                         // A POST search's `next` link has no address to give, so `next` is none for it.
-                        None if next.is_some() || has_next => {
+                        // A refused next link is not a page to narrow the search for: it is said below.
+                        None if next.is_some() || (has_next && !refused) => {
                             i18n::fmt_raw("Showing {n} items (more match: narrow the search)", &[("n", &n)])
                         }
                         None => i18n::fmt_raw("Showing {n} items", &[("n", &n)]),
@@ -475,9 +478,18 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     // An API that can't sort may ignore the sort instead of refusing it: say so.
                     // The sort that was sent, not the dropdown's value now.
                     let asked = st.asked_sort.as_deref();
-                    st.info = Some(match sort_ignored_note(&items, asked).or_else(|| sort_unchecked_note(&items, asked)) {
-                        Some(note) => i18n::fmt("{count}. {note}", &[("count", &count), ("note", &note)]),
-                        None => i18n::fmt("{count}", &[("count", &count)]),
+                    let sort_note = sort_ignored_note(&items, asked).or_else(|| sort_unchecked_note(&items, asked));
+                    let refusal = refused.then(|| {
+                        tl!(
+                            "the answer's next page link is refused (it points where this search may not read), so only this page is loaded"
+                        )
+                        .to_string()
+                    });
+                    let notes: Vec<String> = refusal.into_iter().chain(sort_note).collect();
+                    st.info = Some(if notes.is_empty() {
+                        i18n::fmt("{count}", &[("count", &count)])
+                    } else {
+                        i18n::fmt("{count}. {note}", &[("count", &count), ("note", &notes.join(" "))])
                     });
                     st.details = None;
                     st.counted = true;
@@ -2620,6 +2632,24 @@ mod tests {
         app.ui.stac.waiting = Some((Asked::Search("http://127.0.0.1/search".into(), None), answer(all)));
         poll(&mut app, &ctx);
         let said = app.ui.stac.info.clone().unwrap_or_default();
+        assert!(!said.contains("more match"), "{said}");
+    }
+
+    #[test]
+    fn a_next_link_the_reach_refuses_is_said_rather_than_read_as_more_matches() {
+        let ctx = egui::Context::default();
+        // A public document's next page on the local network is dropped by the parser: the pane says
+        // so, and does not ask the user to narrow a search whose next page it won't load.
+        let page = r#"{"type":"FeatureCollection","features":[],"links":[{"rel":"next","href":"http://127.0.0.1/search?page=2"}]}"#;
+        let answer: Answer = Slot::new(std::sync::Mutex::new(Some(Ok(cache::Fetched {
+            bytes: page.as_bytes().to_vec(),
+            origin: Origin::named("https://example.com/search"),
+        }))));
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.waiting = Some((Asked::Search("https://example.com/search".into(), None), answer));
+        poll(&mut app, &ctx);
+        let said = app.ui.stac.info.clone().unwrap_or_default();
+        assert!(said.contains("refused"), "{said}");
         assert!(!said.contains("more match"), "{said}");
     }
 

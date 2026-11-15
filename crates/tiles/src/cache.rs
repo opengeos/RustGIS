@@ -475,7 +475,35 @@ pub fn restrict_to_public(url: &str) {
     };
     if added {
         forget(url);
+        forget_restricted_aliases(base);
     }
+}
+
+/// Forgets the cached answers of every address whose canonical resource is `base`: the plain
+/// spelling, the anonymous one and the login-wrapped ones alike ([`forget`] compares the spelling
+/// it was given). Reads under way are kept, as [`forget`] keeps them, and [`request`] and
+/// [`peek_from`] refuse what they complete under a wider reach.
+fn forget_restricted_aliases(base: &str) {
+    let mut c = lock();
+    c.slots.retain(|key, slot| {
+        if canonical_resource(key) != base {
+            return true;
+        }
+        slot.other = None;
+        matches!(slot.entry, Entry::Pending) && !crate::mbtiles::is_tile(key)
+    });
+    c.bytes = c.slots.values().map(Slot::bytes).sum();
+}
+
+/// The origin a direct warp address's base is asked under. The restriction recorded for the warp
+/// address must hold for its base, which has no fragment to find it by: without it the base could
+/// be read from the local network for a document that may reach only the public one.
+fn direct_base_origin(url: &str, from: Option<&crate::address::Origin>) -> Option<crate::address::Origin> {
+    if ceiling_for(url) != crate::address::Reach::Public {
+        return from.cloned();
+    }
+    let origin = from.map_or_else(|| url.to_string(), |o| o.url.clone());
+    Some(crate::address::Origin { url: origin, reach: crate::address::Reach::Public })
 }
 
 /// Clears any document-origin restriction on `url` when the user explicitly names it directly.
@@ -809,7 +837,8 @@ fn request(
     // A map tile of a layer in another system: its service's picture as it comes, or made from
     // its pictures (#769).
     if let Some(base) = crate::warp::direct(url) {
-        return request(base, want, omit, from);
+        let base_from = direct_base_origin(url, from);
+        return request(base, want, omit, base_from.as_ref());
     }
     // This shared entry point also serves documents, sprites and archive readers without
     // drawing. Drawing checks separately so it can report refusals in unfetched margin tiles.
@@ -838,7 +867,8 @@ fn request(
         let (entry, stored_ceiling) = slot.for_reach(ceiling);
         match entry {
             Entry::Ready(p, _, origin) => {
-                if origin.as_ref().is_none_or(|o| o.reach <= ceiling) {
+                // An answer with no origin (an archive's) is as wide as the reach it was stored under.
+                if origin.as_ref().map_or(stored_ceiling <= ceiling, |o| o.reach <= ceiling) {
                     return (State::Ready(p.clone()), origin.clone(), None);
                 }
                 // The same name can resolve both locally and publicly. Retry through the
@@ -946,16 +976,20 @@ pub fn peek(url: &str) -> Option<Arc<Payload>> {
 pub(crate) fn peek_from(url: &str, from: Option<&crate::address::Origin>) -> Option<Arc<Payload>> {
     crate::logins::check(resource_of(url)).ok()?;
     if let Some(base) = crate::warp::direct(url) {
-        return peek_from(base, from);
+        let base_from = direct_base_origin(url, from);
+        return peek_from(base, base_from.as_ref());
     }
     let mut c = lock();
     c.tick += 1;
     let tick = c.tick;
     let slot = c.slots.get_mut(url)?;
     let ceiling = from.map_or(crate::address::Reach::Local, |o| o.reach).min(ceiling_for(url));
-    match slot.for_reach(ceiling).0 {
+    let (entry, stored_ceiling) = slot.for_reach(ceiling);
+    match entry {
         Entry::Ready(p, _, origin) => {
-            if origin.as_ref().is_some_and(|o| o.reach > ceiling) || from.is_some_and(|f| f.check(url).is_err()) {
+            // An answer with no origin (an archive's) is as wide as the reach it was stored under.
+            let too_wide = origin.as_ref().map_or(stored_ceiling > ceiling, |o| o.reach > ceiling);
+            if too_wide || from.is_some_and(|f| f.check(url).is_err()) {
                 return None;
             }
             let payload = p.clone();
@@ -1797,6 +1831,15 @@ pub fn download_blocking_omitting_within(
 ) -> Result<Vec<u8>, String> {
     crate::address::check(url, None)?;
     native::get(&native::download_agent(timeout), &download_address(url, max), omit)
+}
+
+/// Like [`download_blocking`], keeping the final post-redirect [`crate::address::Origin`] and
+/// observed reach with the bytes: a caller that reads links in the answer resolves them against
+/// where it really came from, not the address it asked for.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_fetched(url: &str) -> Result<Fetched, String> {
+    crate::address::check(url, None)?;
+    native::get_fetched(&native::download_agent(BLOCKING_TIMEOUT), &download_address(url, MAX_DOWNLOAD), &[]).map_err(large_file_hint)
 }
 
 /// Like [`download_blocking_within`], connecting only to internet addresses: a name, or a
@@ -3079,7 +3122,12 @@ mod native {
     /// even when the address was already checked before expansion or signing; every redirect
     /// and every resolved connection is checked too.
     pub(super) fn get(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Vec<u8>, String> {
-        fetch_answer(agent, url, Reach::Local, false, omit).map(|f| f.bytes).map_err(|f| f.message)
+        get_fetched(agent, url, omit).map(|f| f.bytes)
+    }
+
+    /// [`get`], keeping the answer's observed origin (the final address after redirects).
+    pub(super) fn get_fetched(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Fetched, String> {
+        fetch_answer(agent, url, Reach::Local, false, omit).map_err(|f| f.message)
     }
 
     /// A body's read that gives up, at the next bytes that come, once its request is no longer
@@ -6897,7 +6945,9 @@ mod tests {
         restrict_to_public(key);
         land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
         assert!(peek(key).is_none(), "a read begun before the restriction was kept");
-        // Begun under the restriction, its answer is kept as it always was.
+        // Begun under the restriction (its pending slot is the public one, as `request` leaves it), its
+        // answer is kept as it always was.
+        keep_for(&mut lock(), key, Entry::Pending, crate::address::Reach::Public);
         land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Public);
         assert!(peek(key).is_some(), "a read begun under the restriction wasn't kept");
         forget(key);
@@ -6929,5 +6979,63 @@ mod tests {
         assert_eq!(ceiling_for("https://unseen.example/other.tif"), crate::address::Reach::Public, "saturated table fails closed");
         allow_named("https://192.168.1.5/logo.png");
         assert_eq!(ceiling_for("https://192.168.1.5/logo.png"), crate::address::Reach::Local);
+    }
+
+    /// A subdomain value with a delimiter can't move the host out of the restricted template (#2055).
+    #[test]
+    fn a_hostile_subdomain_keeps_its_public_restriction() {
+        let _turn = turn();
+        let template = "https://{s}.hostile-host.example/{z}/{x}/{y}.png";
+        restrict_to_public(template);
+        let t = crate::template::TileId { z: 3, x: 5, y: 2 };
+        let expanded = crate::template::expand(template, t, 256, false, &["192.168.1.5/x?".to_string()]);
+        assert_eq!(ceiling_for(&expanded), crate::address::Reach::Public, "{expanded}");
+        clear_public_restrictions();
+    }
+
+    /// Restricting a resource forgets the answers its other spellings (here the anonymous one) hold.
+    #[test]
+    fn restricting_a_resource_forgets_its_alias_answers() {
+        let _turn = turn();
+        let plain = "https://alias-restrict.example/scene.tif";
+        let anonymous = crate::s3::anonymous(plain);
+        let asked = crate::mbtiles::epoch();
+        land(&anonymous, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
+        assert!(lock().slots.contains_key(&anonymous), "the alias answer wasn't kept before the restriction");
+        restrict_to_public(plain);
+        assert!(!lock().slots.contains_key(&anonymous), "an alias's answer outlived the restriction of its resource");
+        assert!(peek(&anonymous).is_none());
+        clear_public_restrictions();
+    }
+
+    /// An answer with no origin, completed under a local reach, isn't reused under the public one.
+    #[test]
+    fn an_originless_local_answer_is_not_reused_for_a_public_request() {
+        let _turn = turn();
+        let concrete = "https://a.originless-reach.example/4/5/6.png";
+        let asked = crate::mbtiles::epoch();
+        land(concrete, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
+        assert!(peek(concrete).is_some(), "a local answer wasn't kept for a local read");
+        restrict_to_public("https://{s}.originless-reach.example/{z}/{x}/{y}.png");
+        assert_eq!(ceiling_for(concrete), crate::address::Reach::Public);
+        assert!(peek(concrete).is_none(), "a public request reused a local answer with no origin");
+        forget(concrete);
+        clear_public_restrictions();
+    }
+
+    /// A restriction on a direct warp address holds for the base it is fetched from, which has no
+    /// fragment to find it by (#2055).
+    #[test]
+    fn a_restriction_on_a_direct_warp_address_holds_for_its_base() {
+        let _turn = turn();
+        let warp = "https://direct-warp.example/wms#rustgis-warp=0/0/0;crs=3857";
+        let base = crate::warp::direct(warp).expect("a direct warp address");
+        let asked = crate::mbtiles::epoch();
+        land(base, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
+        assert!(peek_from(base, None).is_some(), "a local answer wasn't kept for the base");
+        restrict_to_public(warp);
+        assert!(peek_from(warp, None).is_none(), "a restricted warp address was served the base's local answer");
+        forget(base);
+        clear_public_restrictions();
     }
 }

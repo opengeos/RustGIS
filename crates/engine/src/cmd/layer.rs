@@ -3800,13 +3800,12 @@ pub fn request_origin(p: &Value) -> Result<(Option<&str>, bool), String> {
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err("\"fromDocument\" must be true or false".into()),
     };
-    let public = match from_document {
-        Some(b) => b,
-        None => from.is_some_and(|u| {
-            crate::render::rustgis_tiles::address::reach(crate::render::rustgis_tiles::logins::inner(u))
-                == crate::render::rustgis_tiles::address::Reach::Public
-        }),
-    };
+    // A public `from` keeps public reach whatever `fromDocument` says: `fromDocument` can only narrow it.
+    let from_public = from.is_some_and(|u| {
+        crate::render::rustgis_tiles::address::reach(crate::render::rustgis_tiles::logins::inner(u))
+            == crate::render::rustgis_tiles::address::Reach::Public
+    });
+    let public = from_document.unwrap_or(false) || from_public;
     let origin = if public && from.is_none() { Some("https://document.invalid/") } else { from };
     Ok((origin, public))
 }
@@ -6198,5 +6197,19 @@ mod tests {
             .run("layer.addUrl", &json!({"url": url, "from": "http://127.0.0.1:9/doc", "fromDocument": false}))
             .expect_err("a public restriction must refuse the local address");
         assert!(e.contains("local network"), "{e}");
+    }
+
+    /// `fromDocument: false` can't lower a public document's reach: only `true` narrows it (#2055).
+    #[test]
+    fn from_document_false_keeps_a_public_from_public() {
+        let public_doc = json!({"from": "https://example.com/doc.json", "fromDocument": false});
+        let (_, public) = super::request_origin(&public_doc).expect("a valid request origin");
+        assert!(public, "a public document's request was lowered to local reach");
+        let local_doc = json!({"from": "http://127.0.0.1:9/doc", "fromDocument": false});
+        let (_, public) = super::request_origin(&local_doc).expect("a valid request origin");
+        assert!(!public, "a local document was made public");
+        let narrowed = json!({"from": "http://127.0.0.1:9/doc", "fromDocument": true});
+        let (_, public) = super::request_origin(&narrowed).expect("a valid request origin");
+        assert!(public, "fromDocument true must narrow reach to public");
     }
 }

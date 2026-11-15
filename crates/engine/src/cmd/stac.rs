@@ -177,21 +177,27 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
     {
         // A shape goes in the body of a POST, which has no limit that matters; a server that
         // refuses it is asked again in the query, when the shape is short enough for one.
-        let (bytes, url, posted) = if search.intersects.is_some() {
+        let (bytes, url, posted, fetched_origin) = if search.intersects.is_some() {
             let post = stac::search_post_url(&api);
             let body = stac::search_body(&search)?.to_string();
             match crate::render::rustgis_tiles::cache::post_json_named_blocking(&post, &body) {
-                Ok(bytes) => (bytes, post, true),
+                Ok(bytes) => (bytes, post, true, None),
                 Err(e) => {
                     let url = stac::search_url(&api, &search).map_err(|_| e.clone())?;
-                    (crate::render::rustgis_tiles::cache::download_blocking(&url).map_err(|_| e)?, url, false)
+                    let f = crate::render::rustgis_tiles::cache::download_blocking_fetched(&url).map_err(|_| e)?;
+                    (f.bytes, url, false, Some(f.origin))
                 }
             }
         } else {
             let url = stac::search_url(&api, &search)?;
-            (crate::render::rustgis_tiles::cache::download_blocking(&url)?, url, false)
+            let f = crate::render::rustgis_tiles::cache::download_blocking_fetched(&url)?;
+            (f.bytes, url, false, Some(f.origin))
         };
-        let (items, next) = stac::parse_items(&bytes, &url)?;
+        // The links of a GET answer resolve against where it was observed, after any redirect; the
+        // requested address stands in only when none was observed.
+        let origin =
+            fetched_origin.filter(|o| !o.url().is_empty()).unwrap_or_else(|| crate::render::rustgis_tiles::address::Origin::named(&url));
+        let (items, next) = stac::parse_items_from_origin(&bytes, &origin)?;
         // A POST's next link is a request with a body, which is not an address to give back.
         let next = if posted {
             // `parse_items` drops a POST link, so the answer itself says whether there are more.
@@ -202,7 +208,7 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
             None
         } else {
             // `parse_items` drops a next link the reach refuses: said, so the missing page isn't taken for none.
-            if stac::next_refused(&bytes, &crate::render::rustgis_tiles::address::Origin::named(&url)) {
+            if stac::next_refused(&bytes, &origin) {
                 s.warn("the answer's next page link is refused (it points where this search may not read), so only this page is loaded");
             }
             next

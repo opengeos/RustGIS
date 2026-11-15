@@ -496,12 +496,13 @@ pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
         if urls.is_empty() {
             break;
         }
-        let answers: Vec<(String, Result<Vec<u8>, String>)> = std::thread::scope(|s| {
+        // Each answer keeps the origin the transport observed (after redirects), not the address asked for.
+        let answers: Vec<(String, Result<crate::cache::Fetched, String>)> = std::thread::scope(|s| {
             let handles: Vec<_> = urls
                 .into_iter()
                 .map(|u| {
                     s.spawn(move || {
-                        let r = crate::cache::download_blocking(&u);
+                        let r = crate::cache::download_blocking_fetched(&u);
                         (u, r)
                     })
                 })
@@ -509,7 +510,7 @@ pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
             handles.into_iter().filter_map(|h| h.join().ok()).collect()
         });
         for (u, r) in answers {
-            w.land(&u, r);
+            w.land_fetched(&u, r);
         }
         // A thread that died leaves its document asked for: it counts as failed.
         for u in w.asked.iter().map(|(u, ..)| u.clone()).collect::<Vec<_>>() {

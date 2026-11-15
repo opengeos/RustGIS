@@ -1926,7 +1926,15 @@ impl RustGisApp {
                 || rustgis_engine::map::geolibre::is_project_file(name)
                 || lower.ends_with(".rgispkg"))
         {
-            return self.open_project_bytes(Some(name), bytes);
+            // The picked file answers the picker's command, whatever happens to it: a command left
+            // pending would take the next file picked or dropped.
+            self.ui.pending_open = None;
+            let r = self.open_project_bytes(Some(name), bytes);
+            // The picker's and the web drop's caller discards this result, so a refusal is said here.
+            if let Err(e) = &r {
+                self.session.notify(e.clone(), true);
+            }
+            return r;
         }
         // A plugin package: ask before installing it.
         if lower.ends_with(".rgplugin") {
@@ -8429,8 +8437,14 @@ mod look_tests {
         assert!(app.run("ui.openUrl", json!({"url": "https://example.com/map.rgis"})).is_err());
         assert!(app.open_project_bytes(Some("map.geolibre.json"), b"{}").is_err());
         assert!(app.open_project_bytes(Some("map.rgispkg"), b"PK\x03\x04").is_err());
-        // Picked and dropped files take the same gate.
+        // Picked and dropped files take the same gate. A refused picked package is said (its caller
+        // discards the error), and it uses up the picker's command rather than leaving it for the next file.
+        let before = app.session.notices_since(0).len();
+        app.ui.pending_open = Some("project.importGeolibre");
         assert!(app.open_picked("map.rgispkg", b"PK\x03\x04").is_err());
+        assert_eq!(app.ui.pending_open, None, "the picker's command outlived the file it was for");
+        assert!(app.session.notices_since(0).iter().skip(before).any(|n| n.error), "a refused picked package wasn't reported");
+        app.ui.pending_open = None;
         assert!(app.open_picked("map.geolibre.json", b"{}").is_err());
         app.run("ui.theme", json!({"dark": true})).expect("in-memory theme toggle");
         assert!(app.ui.dark);
