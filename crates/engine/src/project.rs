@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::GpRecord;
 
+#[path = "project_capabilities.rs"]
+mod capabilities;
 #[path = "project_label_losses.rs"]
 pub(crate) mod label_losses;
+pub(crate) use capabilities::{layer_file_bytes, map_file_bytes};
 
 /// A map export cannot keep runtime-only download reservations, even in a larger project.
 pub(crate) fn ensure_map_imports_complete(map: &Map) -> Result<(), String> {
@@ -59,15 +62,15 @@ pub fn open_command(path: &str) -> &'static str {
 /// RustGIS release version. Advance it when an older reader would lose meaningful saved
 /// information on resaving; within format 2, such an addition is named in `requires` instead
 /// (see [`READ_FORMAT`] and [`CAPABILITIES`]).
-pub const FORMAT: u32 = 1;
-/// The newest format this RustGIS reads. Format 2 is read a release before anything writes it
+pub const FORMAT: u32 = 2;
+/// The newest format this RustGIS reads. Format 2 was made readable before writing began
 /// (#1853): a document of format 2 opens when this RustGIS knows every capability it `requires`,
 /// so what a later RustGIS adds to format 2, and an older one would lose, is listed there and
 /// refused by name instead.
 pub const READ_FORMAT: u32 = 2;
-/// The capabilities a saved document may require that this RustGIS reads. None yet: format 2 is
-/// format 1's content, and each later addition an older reader would lose comes with its name.
-pub const CAPABILITIES: &[&str] = &[];
+/// The saved additions this RustGIS understands. Writers require only capabilities used by
+/// their payload, so a format-2 reader without them refuses instead of discarding their fields.
+pub const CAPABILITIES: &[&str] = &["terrain-block", "terrain-water", "shaded-relief-effects"];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 pub(crate) const MAX_REQUIRES: usize = 256;
@@ -338,6 +341,7 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Project {
     /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.

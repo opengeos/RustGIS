@@ -875,7 +875,7 @@
   },
   "$id": "https://raw.githubusercontent.com/opengeos/RustGIS/main/schema/project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format 1 and reads formats up to 2.",
+  "description": "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format 2 and reads formats up to 2.",
   "properties": {
     "active_map": {
       "format": "uint",
@@ -907,7 +907,7 @@
       "type": "array"
     },
     "format": {
-      "default": 1,
+      "default": 2,
       "description": "The format read from disk; serialization always declares the current writer's format.",
       "format": "uint32",
       "maximum": 2,
@@ -1017,7 +1017,11 @@
     "requires": {
       "description": "The capabilities this file needs past its format, each one this RustGIS knows.",
       "items": {
-        "enum": [],
+        "enum": [
+          "terrain-block",
+          "terrain-water",
+          "shaded-relief-effects"
+        ],
         "type": "string"
       },
       "maxItems": 256,
@@ -1080,7 +1084,11 @@
   ],
   "title": "RustGIS project (.rgis)",
   "type": "object",
-  "x-rustgis-capabilities": [],
+  "x-rustgis-capabilities": [
+    "terrain-block",
+    "terrain-water",
+    "shaded-relief-effects"
+  ],
   "x-rustgis-reads-format": 2,
-  "x-rustgis-writes-format": 1
+  "x-rustgis-writes-format": 2
 }
