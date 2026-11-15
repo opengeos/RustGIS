@@ -484,7 +484,35 @@ pub fn restrict_to_public(url: &str) {
         for alias in aliases {
             forget(&alias);
         }
+        forget_restricted_aliases(base);
     }
+}
+
+/// Forgets the cached answers of every address whose canonical resource is `base`: the plain
+/// spelling, the anonymous one and the login-wrapped ones alike ([`forget`] compares the spelling
+/// it was given). Reads under way are kept, as [`forget`] keeps them, and [`request`] and
+/// [`peek_from`] refuse what they complete under a wider reach.
+fn forget_restricted_aliases(base: &str) {
+    let mut c = lock();
+    c.slots.retain(|key, slot| {
+        if canonical_resource(key) != base {
+            return true;
+        }
+        slot.other = None;
+        matches!(slot.entry, Entry::Pending) && !crate::mbtiles::is_tile(key)
+    });
+    c.bytes = c.slots.values().map(Slot::bytes).sum();
+}
+
+/// The origin a direct warp address's base is asked under. The restriction recorded for the warp
+/// address must hold for its base, which has no fragment to find it by: without it the base could
+/// be read from the local network for a document that may reach only the public one.
+fn direct_base_origin(url: &str, from: Option<&crate::address::Origin>) -> Option<crate::address::Origin> {
+    if ceiling_for(url) != crate::address::Reach::Public {
+        return from.cloned();
+    }
+    let origin = from.map_or_else(|| url.to_string(), |o| o.url.clone());
+    Some(crate::address::Origin { url: origin, reach: crate::address::Reach::Public })
 }
 
 /// Clears any document-origin restriction on `url` when the user explicitly names it directly.
@@ -818,7 +846,8 @@ fn request(
     // A map tile of a layer in another system: its service's picture as it comes, or made from
     // its pictures (#769).
     if let Some(base) = crate::warp::direct(url) {
-        return request(base, want, omit, from);
+        let base_from = direct_base_origin(url, from);
+        return request(base, want, omit, base_from.as_ref());
     }
     // This shared entry point also serves documents, sprites and archive readers without
     // drawing. Drawing checks separately so it can report refusals in unfetched margin tiles.
@@ -955,7 +984,8 @@ pub fn peek(url: &str) -> Option<Arc<Payload>> {
 pub(crate) fn peek_from(url: &str, from: Option<&crate::address::Origin>) -> Option<Arc<Payload>> {
     crate::logins::check(resource_of(url)).ok()?;
     if let Some(base) = crate::warp::direct(url) {
-        return peek_from(base, from);
+        let base_from = direct_base_origin(url, from);
+        return peek_from(base, base_from.as_ref());
     }
     let mut c = lock();
     c.tick += 1;
@@ -1827,6 +1857,14 @@ pub fn download_blocking_with_origin_within(
     crate::address::check_reach(url, ceiling)?;
     let agent = if ceiling == crate::address::Reach::Public { native::public_agent(timeout) } else { native::download_agent(timeout) };
     native::fetch_answer(&agent, &download_address(url, max), ceiling, false, omit).map_err(|f| f.message)
+}
+
+/// Like [`download_blocking`], keeping the final post-redirect [`crate::address::Origin`] and
+/// observed reach with the bytes: a caller that reads links in the answer resolves them against
+/// where it really came from, not the address it asked for.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_fetched(url: &str) -> Result<Fetched, String> {
+    download_blocking_with_origin(url).map_err(large_file_hint)
 }
 
 /// Like [`download_blocking_within`], connecting only to internet addresses: a name, or a
@@ -3116,7 +3154,13 @@ mod native {
     /// and every resolved connection is checked too.
     #[cfg(test)]
     pub(super) fn get(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Vec<u8>, String> {
-        fetch_answer(agent, url, Reach::Local, false, omit).map(|f| f.bytes).map_err(|f| f.message)
+        get_fetched(agent, url, omit).map(|f| f.bytes)
+    }
+
+    /// [`get`], keeping the answer's observed origin (the final address after redirects).
+    #[cfg(test)]
+    pub(super) fn get_fetched(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Fetched, String> {
+        fetch_answer(agent, url, Reach::Local, false, omit).map_err(|f| f.message)
     }
 
     /// A body's read that gives up, at the next bytes that come, once its request is no longer
@@ -6930,7 +6974,9 @@ mod tests {
         restrict_to_public(key);
         land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Local);
         assert!(peek(key).is_none(), "a read begun before the restriction was kept");
-        // Begun under the restriction, its answer is kept as it always was.
+        // Begun under the restriction (its pending slot is the public one, as `request` leaves it), its
+        // answer is kept as it always was.
+        keep_for(&mut lock(), key, Entry::Pending, crate::address::Reach::Public);
         land(key, Some(Entry::Ready(Arc::new(Payload::Empty), 64, None)), asked, crate::address::Reach::Public);
         assert!(peek(key).is_some(), "a read begun under the restriction wasn't kept");
         forget(key);

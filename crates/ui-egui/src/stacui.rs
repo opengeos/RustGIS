@@ -2627,6 +2627,24 @@ mod tests {
     }
 
     #[test]
+    fn a_next_link_the_reach_refuses_is_said_rather_than_read_as_more_matches() {
+        let ctx = egui::Context::default();
+        // A public document's next page on the local network is dropped by the parser: the pane says
+        // so, and does not ask the user to narrow a search whose next page it won't load.
+        let page = r#"{"type":"FeatureCollection","features":[],"links":[{"rel":"next","href":"http://127.0.0.1/search?page=2"}]}"#;
+        let answer: Answer = Slot::new(std::sync::Mutex::new(Some(Ok(cache::Fetched {
+            bytes: page.as_bytes().to_vec(),
+            origin: Origin::named("https://example.com/search"),
+        }))));
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.waiting = Some((Asked::Search("https://example.com/search".into(), None), answer));
+        poll(&mut app, &ctx);
+        let said = app.ui.stac.info.clone().unwrap_or_default();
+        assert!(said.contains("refused"), "{said}");
+        assert!(!said.contains("more match"), "{said}");
+    }
+
+    #[test]
     fn another_graphic_tool_stops_the_drawing_of_the_area() {
         let mut app = RustGisApp::with_sample();
         draw(&mut app, "polygon");
