@@ -21805,6 +21805,23 @@ fn repair_source_checks_the_extrusion_base_field() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Deleting the field a size mapping reads removes the mapping and says so; undo brings it back.
+#[test]
+fn deleting_a_field_clears_a_size_mapping_reading_it() {
+    let mut s = world();
+    let sized = |s: &Session| s.map().layer_by_name("Cities").and_then(|l| l.size_by.clone());
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": "name"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "mag", "type": "double"})).unwrap();
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "field": "mag", "min": 0, "max": 10})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "MAG"})).unwrap();
+    assert!(sized(&s).is_none());
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("sized by")).map(|n| n.text.clone()).collect();
+    assert_eq!(said, ["Cities: its markers were sized by the deleted field mag, so they keep their class sizes"]);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(sized(&s).map(|b| b.field), Some("mag".into()));
+}
+
 #[test]
 fn deleting_a_field_clears_the_extrusion_marker_rotation_and_symbol_expressions_reading_it() {
     // #2081: the extrusion's height and base, the marker rotation and the symbol's expressions
