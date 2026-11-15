@@ -123,7 +123,8 @@ RUSTGIS_DATA_DIR=/path/to/data cargo build --release
 | Linux (X11 and Wayland) | Supported |
 | macOS | Supported |
 | Windows | Supported |
-| Android and iOS | The [field app](user-guide/field-work.md): a touch interface for collecting and editing data |
+| Android | The [field app](user-guide/field-work.md): a touch interface for collecting and editing data (signed APKs with each release) |
+| iOS | The same field app, to follow through the App Store |
 | Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2), installable as an app on iOS, Android and desktops ([how](#install-the-web-app)) |
 
 ## Web app
