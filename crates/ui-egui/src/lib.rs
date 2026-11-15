@@ -79,6 +79,8 @@ mod popupmedia;
 mod portalsui;
 #[cfg(not(target_arch = "wasm32"))]
 mod readjob;
+#[cfg(not(target_arch = "wasm32"))]
+mod syncmark;
 
 /// How a command asked for ended ([`readjob::run_then`] on the desktop; the browser runs it where
 /// it's asked): what it answered when it ran, or why it never ran (cancelled, or left), which is
@@ -1206,6 +1208,9 @@ pub struct RustGisApp {
     pub watch_files: bool,
     #[cfg(not(target_arch = "wasm32"))]
     diskwatch: diskwatch::Watch,
+    /// Which layers hold edits their file lacks, for the Layers pane.
+    #[cfg(not(target_arch = "wasm32"))]
+    syncmark: syncmark::Marks,
     /// ModelBuilder's view: the model on its canvas.
     pub mb: modelbuilder::ModelBuilder,
     pub ws: workspacepanes::WorkspaceState,
@@ -1477,6 +1482,8 @@ impl RustGisApp {
             watch_files: false,
             #[cfg(not(target_arch = "wasm32"))]
             diskwatch: diskwatch::Watch::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            syncmark: syncmark::Marks::default(),
             mb: modelbuilder::ModelBuilder::default(),
             ws: workspacepanes::WorkspaceState::default(),
             time: timebar::TimeBarState::default(),
@@ -2079,7 +2086,7 @@ impl RustGisApp {
         }
         // On Android the file is written once the user has chosen its place, and the shell
         // says then whether it was.
-        let offered = if cfg!(target_os = "android") {
+        let offered = if cfg!(any(target_os = "android", target_os = "ios")) {
             crate::i18n::fmt("Choose where to save {name}.", &[("name", &file)])
         } else {
             crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)])
@@ -2104,7 +2111,7 @@ impl RustGisApp {
                     self.session.notify(e, true);
                     return false;
                 }
-                let offered = if cfg!(target_os = "android") {
+                let offered = if cfg!(any(target_os = "android", target_os = "ios")) {
                     crate::i18n::fmt("Choose where to save {name}.", &[("name", name)])
                 } else {
                     crate::i18n::fmt("Download offered: {name}", &[("name", name)])
@@ -5916,6 +5923,8 @@ impl RustGisApp {
         if self.watch_files {
             diskwatch::tick(self, ctx);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        syncmark::tick(self);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
         let fonts: Vec<(String, Vec<u8>)> = match &self.services.font_inbox {
@@ -5981,13 +5990,22 @@ impl RustGisApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
-        // A picker Android doesn't have was asked for: said, as the click did nothing.
+        // A picker the phone doesn't have was asked for: said, as the click did nothing.
         #[cfg(target_os = "android")]
         for what in filedialog::take_refused() {
             let text = match what {
                 "choose a folder" => tl!("Choosing a folder isn't available on Android yet."),
                 "save a file" => tl!("Saving to a file of your choice isn't available here on Android yet."),
                 _ => tl!("Choosing a file isn't available here on Android yet."),
+            };
+            self.session.notify(text, false);
+        }
+        #[cfg(target_os = "ios")]
+        for what in filedialog::take_refused() {
+            let text = match what {
+                "choose a folder" => tl!("Choosing a folder isn't available on iOS yet."),
+                "save a file" => tl!("Saving to a file of your choice isn't available here on iOS yet."),
+                _ => tl!("Choosing a file isn't available here on iOS yet."),
             };
             self.session.notify(text, false);
         }
