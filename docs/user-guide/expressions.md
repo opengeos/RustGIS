@@ -28,6 +28,7 @@ In Select By Attributes, the Layer Properties Query tab and a label class's SQL 
 help beside the list (below it in a narrow window): a function's signature, description and
 example, or a variable's description. Clicking appends it to the expression; a function opens
 its argument list, or inserts the complete call when it takes no arguments.
+In short windows, scroll the menu to reach the help below the list.
 
 ## Grammar
 
