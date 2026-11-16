@@ -535,13 +535,8 @@ fn credential_header(key: &str) -> bool {
 }
 
 /// Whether `{`, `[` or `<` opens structured content (a JSON value or a tag) rather than an
-/// ordinary bracket in a path, a name or a size ("Layer {2020} failed"). `'<Null>'` (any case,
-/// quoted as read notices name it) is the missing-value marker files hold, not a tag; the scan
-/// goes on past it. Unquoted, as in `<null>…</null>`, it is a tag like any other.
+/// ordinary bracket in a path, a name or a size ("Layer {2020} failed").
 fn opens_structured(rest: &str) -> bool {
-    if rest.get(..7).is_some_and(|t| t.get(..6).is_some_and(|m| m.eq_ignore_ascii_case("<null>")) && t.ends_with('\'')) {
-        return false;
-    }
     match rest.chars().next() {
         // The trim scans a bounded window: a long run of brackets is one O(window) look per
         // bracket, not a quadratic sweep of the whole text.
@@ -565,6 +560,14 @@ fn opens_structured(rest: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `rest`, coming after `before`, is `'<Null>'` (any case) with a quote on each side: the
+/// missing-value marker read notices name, not a tag, so the scan goes on past it. Anything else,
+/// such as `<null>'…</null>`, is a tag like any other.
+fn quoted_null_marker(before: &str, rest: &str) -> bool {
+    before.ends_with('\'')
+        && rest.get(..7).is_some_and(|t| t.ends_with('\'') && t.get(..6).is_some_and(|m| m.eq_ignore_ascii_case("<null>")))
 }
 
 /// A bare credential line is redacted only for an unambiguous secret name: `key`, `body` and
@@ -880,7 +883,7 @@ fn redact_scan(text: &str, diagnostic: bool) -> String {
                 break;
             }
         }
-        if matches!(c, '{' | '[' | '<') && opens_structured(rest) && diagnostic {
+        if matches!(c, '{' | '[' | '<') && opens_structured(rest) && diagnostic && !quoted_null_marker(text.get(..i).unwrap_or(""), rest) {
             out.push_str("[structured content omitted]");
             break;
         }
@@ -1199,7 +1202,9 @@ mod tests {
         let note = "zoning: 1 value '<Null>' was read as empty, in 'ZONING'";
         assert_eq!(redact(note), note);
         assert_eq!(redact("'<null>' then <div>body</div>"), "'<null>' then [structured content omitted]");
-        assert_eq!(redact("reply <null>secret</null>"), "reply [structured content omitted]", "unquoted, a tag");
+        for tag in ["reply <null>secret</null>", "reply <null>'secret</null>"] {
+            assert_eq!(redact(tag), "reply [structured content omitted]", "not quoted on both sides, a tag: {tag}");
+        }
     }
 
     #[test]

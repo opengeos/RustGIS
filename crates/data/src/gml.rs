@@ -37,6 +37,17 @@ fn text_of(n: &Node) -> String {
     n.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect::<String>()
 }
 
+/// A property's text without the indentation an XML writer lays it out with: a run of whitespace
+/// at either end is dropped when it holds a line break, as layout does; spaces on one line (`' R-1'`)
+/// are the value's and stay.
+fn without_layout(t: &str) -> &str {
+    let layout = |run: &str| run.contains(['\n', '\r']);
+    let start = t.len() - t.trim_start().len();
+    let t = if layout(t.get(..start).unwrap_or("")) { t.get(start..).unwrap_or(t) } else { t };
+    let end = t.trim_end().len();
+    if layout(t.get(end..).unwrap_or("")) { t.get(..end).unwrap_or(t) } else { t }
+}
+
 /// A coordinate system named by `srsName`, and whether its axes are latitude first.
 fn srs(name: &str) -> Option<(Crs, bool)> {
     let n = name.trim();
@@ -570,7 +581,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                     }
                     kind.columns.push(key.clone());
                 }
-                if attrs.insert(key.clone(), text_of(&p).to_string()).is_some() {
+                if attrs.insert(key.clone(), without_layout(&text_of(&p)).to_string()).is_some() {
                     kind.repeated += 1;
                     kind.repeated_names.add(key);
                 }
@@ -806,12 +817,16 @@ mod tests {
         let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
 <gml:featureMember><ogr:sites><ogr:code> R-1</ogr:code></ogr:sites></gml:featureMember>
 <gml:featureMember><ogr:sites><ogr:code>&lt;Null&gt;</ogr:code></ogr:sites></gml:featureMember>
+<gml:featureMember><ogr:sites><ogr:code>
+      Laid out
+    </ogr:code></ogr:sites></gml:featureMember>
 </ogr:FeatureCollection>"#;
         let layers = read("s.gml", gml.as_bytes()).unwrap();
         let (ds, report) = &layers[0];
         let code = ds.field_index("code").unwrap();
         assert_eq!(ds.value(0, code), &Value::Text(" R-1".into()));
         assert_eq!(ds.value(1, code), &Value::Null);
+        assert_eq!(ds.value(2, code), &Value::Text("Laid out".into()), "an indented value loses its layout");
         assert!(report.messages.iter().any(|m| m == "s: 1 value '<Null>' was read as empty, in 'code'"), "{:?}", report.messages);
     }
 

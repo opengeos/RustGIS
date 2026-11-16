@@ -47,7 +47,7 @@ export names its feature.
 Text is read as the file has it: spaces around a value are kept, as GeoPackage, GeoParquet and
 FlatGeobuf keep them, in delimited text, spreadsheets, dBASE tables and Shapefiles, MapInfo and
 GML. Text of spaces only stays text, except in dBASE, which pads a value with spaces after it and
-drops only those, so its text of spaces only is empty. An empty cell is empty, as delimited text
+drops only those, so its text of spaces only is empty. In GML, line breaks and indentation around a value are layout and are dropped. An empty cell is empty, as delimited text
 can't tell empty text from a missing value. In these formats, which store every value as text,
 `<Null>` (any case) is the missing value other programs write: it is read as empty, doesn't make a
 column of numbers text, and a notice counts those values and names their fields. A GeoPackage,
