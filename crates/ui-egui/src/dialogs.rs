@@ -2310,20 +2310,25 @@ pub(crate) fn expr_menus(ui: &mut egui::Ui, text: &mut String) {
     });
 }
 
-/// Buttons that add one of `fields` (the first 24), an operator, a function or a variable to the
-/// clause `text`, as Select By Attributes and the Layer Properties pane's Query tab offer them.
+/// The most fields a clause's buttons offer (a wider table is typed).
+const MAX_FIELD_CHIPS: usize = 40;
+
+/// Buttons that add one of `fields` (the first [`MAX_FIELD_CHIPS`]), as the expression names it
+/// (`"Pop Est"` in quotes), an operator, a function or a variable to the clause `text`: the one
+/// row Select By Attributes, the Layer Properties pane's Query tab and a label class's SQL query
+/// offer.
 pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Field], text: &mut String) {
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(tl!("Fields:")).small().weak());
-        for f in fields.iter().take(24) {
+        for f in fields.iter().take(MAX_FIELD_CHIPS) {
             if ui.small_button(&f.name).clicked() {
-                add_word(text, &f.name);
+                add_word(text, &crate::exprcomplete::field_ref(&f.name));
             }
         }
     });
     // Wrapped, as the fields are: a narrow pane (the Query tab) would cut the last ones off.
     ui.horizontal_wrapped(|ui| {
-        for op in ["=", "<>", ">", "<", "LIKE", "AND", "OR", "IS NULL"] {
+        for op in ["=", "<>", ">", "<", ">=", "<=", "LIKE", "IN", "IS NULL", "AND", "OR", "NOT"] {
             if ui.small_button(op).clicked() {
                 add_word(text, op);
             }
@@ -2733,6 +2738,32 @@ fn calculation_fields(dataset: &rustgis_engine::data::Dataset) -> impl Iterator<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clause's buttons add a field as the expression names it (`"Pop Est"` in quotes, a plain
+    /// name as it is), and every operator, `>=` and `NOT` among them; at most `MAX_FIELD_CHIPS`
+    /// fields are offered.
+    #[test]
+    fn the_buttons_add_a_field_as_the_expression_names_it() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::{Field, FieldType};
+        let mut fields = vec![Field::new("Pop Est", FieldType::Integer), Field::new("pop", FieldType::Integer)];
+        fields.extend((0..MAX_FIELD_CHIPS).map(|i| Field::new(format!("f{i}"), FieldType::Integer)));
+        // Without the interface fonts (`theme::install_fonts`) egui's faces have no "▾".
+        let mut h = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(move |ui, text: &mut String| field_chips(ui, &fields, text), String::new());
+        h.run();
+        for button in ["Pop Est", ">=", "pop", "AND", "NOT", "IN"] {
+            h.get_by_role_and_label(Role::Button, button).click();
+            h.run();
+        }
+        assert_eq!(h.state(), "\"Pop Est\" >= pop AND NOT IN ");
+        let last = format!("f{}", MAX_FIELD_CHIPS - 3);
+        assert!(h.query_by_role_and_label(Role::Button, &last).is_some(), "the first {MAX_FIELD_CHIPS} fields");
+        let past = format!("f{}", MAX_FIELD_CHIPS - 2);
+        assert!(h.query_by_role_and_label(Role::Button, &past).is_none(), "no more");
+    }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the
     /// command to refuse, not read as a bigger number.
