@@ -2994,6 +2994,7 @@ mod native {
                 } else {
                     req.config().timeout_global(agent.config().timeouts().global).build()
                 };
+                crate::logins::check(url).map_err(str::to_string)?;
                 let (resp, reached) = connected(|| req.call()).map_err(unanswered)?;
                 ceiling = ceiling.min(reached);
                 diagnostics.answered(resp.status().as_u16());
@@ -3085,6 +3086,7 @@ mod native {
                 req = req.header(name.as_str(), value.as_str());
             }
             super::check_current()?;
+            crate::logins::check(url).map_err(str::to_string)?;
             let (mut resp, reached) = connected(|| req.send(body)).map_err(unanswered)?;
             let status = resp.status().as_u16();
             diagnostics.answered(status);
@@ -3465,6 +3467,8 @@ mod native {
                 } else {
                     req.config().timeout_global(agent.config().timeouts().global).build()
                 };
+                // Recheck the original binding even after redirects dropped its credentials.
+                crate::logins::check(url).map_err(str::to_string)?;
                 let (mut resp, reached) = connected(|| req.call()).map_err(unanswered)?;
                 ceiling = ceiling.min(reached);
                 let status = resp.status().as_u16();
@@ -5238,6 +5242,53 @@ Connection: close
         assert!(logins::deactivate(&token));
         assert!(logins::deactivate(&key));
         arcgis_auth::sign_out(Some(portal));
+    }
+
+    /// Expiry during request preparation prevents the send, not just accepting its answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arcgis_token_expiry_during_preparation_blocks_native_sends() {
+        if isolate_cache_fixture("cache::tests::arcgis_token_expiry_during_preparation_blocks_native_sends") {
+            return;
+        }
+        let _turn = crate::cache::turn();
+        use crate::{
+            arcgis_token,
+            logins::{self, Method},
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let agent = native::download_agent(std::time::Duration::from_secs(1));
+        for (method, final_check) in [("GET", 2), ("HEAD", 1), ("POST", 1)] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let now = arcgis_token::now_millis().unwrap();
+            let expires = now + 60_000;
+            let binding =
+                logins::activate(&base, method, Method::Arcgis { expires_at: Some(expires) }, "preparation-expiry-token", true).unwrap();
+            let clock = logins::clock_for_test(&binding, now).unwrap();
+            let url = logins::bind(&binding, &format!("{base}/prepared")).unwrap();
+            let checks = Arc::new(AtomicUsize::new(0));
+            let observed = checks.clone();
+            let result = with_still(
+                Arc::new(move || {
+                    // GET also checks its continuation before preparing or applying the login.
+                    if observed.fetch_add(1, Ordering::SeqCst) + 1 == final_check {
+                        clock.store(expires, Ordering::SeqCst);
+                    }
+                    true
+                }),
+                || match method {
+                    "GET" => native::get(&agent, &url, &[]).map(|_| ()),
+                    "HEAD" => native::head_with(&agent, &url).map(|_| ()),
+                    _ => native::post_with(&agent, &url, "{}").map(|_| ()),
+                },
+            );
+            assert_eq!(result.unwrap_err(), arcgis_token::EXPIRED, "{method}");
+            assert_eq!(checks.load(Ordering::SeqCst), final_check, "{method}");
+            assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "{method}");
+            assert!(logins::deactivate(&binding));
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

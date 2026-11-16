@@ -3301,6 +3301,59 @@ mod arcgis_tokens {
     }
 
     #[test]
+    fn arcgis_token_rejected_login_preserves_sticky_logout() {
+        let origin = "https://sticky-refusal-arcgis757.example.test";
+        let store = Arc::new(CountingStore::default());
+        let mut s = session(Some(store.clone()));
+        let id = arcgis(&mut s, origin);
+        s.run("connection.login", &json!({"id":id,"token":"remembered-sticky-token-757","remember":true})).unwrap();
+        s.run("connection.logout", &json!({"id":id})).unwrap();
+        let reads = store.reads.load(Ordering::SeqCst);
+        for params in [
+            json!({"id":id,"token":5}),
+            json!({"id":id,"expiresAt":"invalid"}),
+            json!({"id":id,"expiresAt":FUTURE}),
+            json!({"id":id,"token":"has space"}),
+            json!({"id":id,"token":"expired-sticky-token-757","expiresAt":1}),
+            json!({"id":id,"password":5}),
+            json!({"id":id,"apiKey":{}}),
+        ] {
+            assert!(s.run("connection.login", &params).is_err());
+            web::resolve(&mut s, None);
+            assert!(web::request(&mut s, Some(&id), &format!("{origin}/a")).is_err(), "rejected input restored a saved login");
+            assert_eq!(store.reads.load(Ordering::SeqCst), reads, "rejected input cleared sticky Logout");
+        }
+        // A validated explicit reuse still ends Logout and restores the saved token.
+        s.run("connection.login", &json!({"id":id})).unwrap();
+        let address = bound(&mut s, &id, &format!("{origin}/a"));
+        assert!(logins::apply(&address).unwrap().unwrap().url.ends_with("?token=remembered-sticky-token-757"));
+    }
+
+    #[test]
+    fn arcgis_token_generation_by_name_survives_rename_and_same_origin_path_edit() {
+        let origin = "https://named-generation-arcgis757.example.test";
+        let endpoint = format!("{origin}/arcgis/tokens/generateToken");
+        let server = Held::at(&endpoint);
+        let mut s = session(None);
+        let name = "Named ArcGIS token connection";
+        let id = new(
+            &mut s,
+            json!({
+                "kind":"arcgis", "name":name, "address":format!("{origin}/arcgis/rest/services"), "auth":"arcgis", "user":"alice"
+            }),
+        );
+        s.run("connection.generateToken", &json!({"id":name,"tokenEndpoint":endpoint,"password":"named-password-757"})).unwrap();
+        s.run("connection.edit", &json!({"id":id,"name":"Renamed token connection","address":format!("{origin}/another/rest/services")}))
+            .unwrap();
+        let (done, still) = server.take();
+        assert!(still());
+        done(Ok(token("named-generated-token-757")));
+        assert_eq!(s.run("connection.tokenStatus", &json!({"id":id})).unwrap()["loggedIn"], true);
+        let address = bound(&mut s, &id, &format!("{origin}/a"));
+        assert!(logins::apply(&address).unwrap().unwrap().url.ends_with("?token=named-generated-token-757"));
+    }
+
+    #[test]
     fn arcgis_token_session_login_expires_and_is_never_replaced_by_anonymous_access() {
         let origin = "https://expiring-arcgis757.example.test";
         let mut s = session(None);

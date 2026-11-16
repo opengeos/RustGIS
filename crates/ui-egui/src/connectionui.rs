@@ -417,7 +417,12 @@ fn pasted_token(st: &State) -> Result<Option<arcgis_token::Credential>, String> 
                 .ok_or_else(|| tl!("Enter the expiry as a Unix time in milliseconds, or leave it blank.").to_string())?,
         )
     };
-    arcgis_token::Credential::new(token, expires_at).map(Some).map_err(translated)
+    let credential = arcgis_token::Credential::new(token, expires_at).map_err(translated)?;
+    let now = arcgis_token::now_millis();
+    if credential.is_expired(now) {
+        return Err(translated(if now.is_none() { arcgis_token::NO_CLOCK } else { arcgis_token::EXPIRED }));
+    }
+    Ok(Some(credential))
 }
 
 /// The secret a service login of the form sends as its method does: the password (basic), the
@@ -443,6 +448,9 @@ fn check_generation(st: &State) -> Result<(), String> {
     }
     if st.password.is_empty() {
         return Err(tl!("Enter the password to generate a token.").into());
+    }
+    if !logins::valid_value(&st.password) {
+        return Err(translated(tokens::BAD_PASSWORD));
     }
     if st.token_endpoint.trim().is_empty() {
         return Err(tl!("Enter the token endpoint (https://host/arcgis/tokens/generateToken).").into());

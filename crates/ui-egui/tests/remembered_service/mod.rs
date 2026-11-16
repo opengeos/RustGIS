@@ -327,6 +327,7 @@ mod arcgis_token {
     use super::*;
     use rustgis_engine::render::rustgis_tiles::arcgis_token::{self, Credential, Done};
     use rustgis_engine::render::rustgis_tiles::cache::Still;
+    use rustgis_engine::render::rustgis_tiles::logins;
     use std::collections::BTreeMap;
     use std::sync::{LazyLock, Mutex, Once};
 
@@ -443,6 +444,68 @@ mod arcgis_token {
         let saved = store.load(&format!("connection/{}", c.id)).unwrap().unwrap();
         assert!(saved.expose().contains(TOKEN) && saved.expose().contains(&FUTURE.to_string()));
         assert_clean(&h);
+    }
+
+    #[test]
+    fn arcgis_token_invalid_replacement_keeps_the_remembered_definition_and_login() {
+        if crate::in_own_process(
+            "remembered_service::arcgis_token::arcgis_token_invalid_replacement_keeps_the_remembered_definition_and_login",
+        ) {
+            return;
+        }
+        let store = Arc::new(MemorySecrets::new());
+        let mut h = with_store(Some(store.clone()));
+        let id = h
+            .state_mut()
+            .run(
+                "connection.new",
+                json!({
+                    "kind":"arcgis", "name":"Existing ArcGIS login",
+                    "address":"https://widget-arcgis-presave.example/arcgis/rest/services",
+                    "auth":"arcgis", "user":"alice"
+                }),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        h.state_mut().run("connection.login", json!({"id":id, "token":TOKEN, "remember":true})).unwrap();
+        let c = h.state().session.connections.find(&id).unwrap().clone();
+        let definition = h.state().session.connections.to_json();
+        let account = format!("connection/{id}");
+        let saved = store.load(&account).unwrap().unwrap().expose().to_string();
+        let bound = web::request(&mut h.state_mut().session, Some(&id), &c.address).unwrap();
+
+        for (generate, password) in [(false, String::new()), (true, "x".repeat(logins::MAX_VALUE + 1)), (true, "invalid\npassword".into())]
+        {
+            h.state_mut().run("ui.connection", json!({"id":id})).unwrap();
+            {
+                let st = &mut h.state_mut().ui.connection;
+                // Either edit changes login identity and would discard the old remembered login.
+                st.user = "bob".into();
+                st.address = "https://widget-arcgis-presave-changed.example/arcgis/rest/services".into();
+                st.token_generate = generate;
+                if generate {
+                    st.password = password;
+                    st.token_endpoint = "https://widget-arcgis-presave-changed.example/arcgis/tokens/generateToken".into();
+                } else {
+                    st.token = "replacement-widget-token".into();
+                    st.token_expires = "1".into(); // Positive, but already expired.
+                }
+            }
+            settle(&mut h);
+            save(&mut h);
+            assert_eq!(
+                h.state().dialogs.error.as_deref(),
+                Some(if generate { rustgis_engine::service_tokens::BAD_PASSWORD } else { arcgis_token::EXPIRED })
+            );
+            assert_eq!(h.state().dialogs.open, Some("editConnection"));
+            assert!(h.state().ui.connection.generating.is_none());
+            assert_eq!(h.state().session.connections.to_json(), definition);
+            assert_eq!(store.load(&account).unwrap().unwrap().expose(), saved);
+            assert!(web::logged_in(&h.state().session, &c));
+            assert_eq!(logins::check(&bound), Ok(()), "the original active binding survives");
+        }
     }
 
     #[test]

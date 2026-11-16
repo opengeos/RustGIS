@@ -9,7 +9,7 @@
 //! - an immutable snapshot of the connection definition it was started for,
 //! - the continuation of the invocation that started it: the scope, account and project it was
 //!   admitted under, and its admitted node *without its `password`* (see
-//!   [`Session::continuation_without`]). Exactly that caller, root or scoped, can poll or cancel
+//!   [`Session::token_continuation`]). Exactly that caller, root or scoped, can poll or cancel
 //!   it; any other is refused before it can touch the result,
 //! - a private result slot only its own callback fills, holding a validated token or a fixed
 //!   sentence (never the password, never server text), and
@@ -93,7 +93,7 @@ pub(crate) fn start(s: &mut Session, c: &Connection, endpoint: &str, password: &
     if !logins::valid_value(password) {
         return Err(BAD_PASSWORD.into());
     }
-    let owner = s.continuation_without(&["password"])?;
+    let owner = s.token_continuation(&c.id)?;
     owner.check()?;
     let slot: Slot = Slot::default();
     let cancelled = Arc::new(AtomicBool::new(false));

@@ -1075,16 +1075,14 @@ impl Session {
         let node = self.policy.nodes.last().cloned().ok_or("late work needs an authorized initiating operation")?;
         self.continuation_for(node)
     }
-    /// [`Session::continuation`] for late work whose invocation carried secrets: the retained node
-    /// is the admitted one (its operation, effects, targets and authority) with the named `params`
-    /// entries removed, so the late work holds the authority to land a result, never the secret.
-    pub(crate) fn continuation_without(&self, secrets: &[&str]) -> Result<Continuation, String> {
+    /// Retains the admitted token-generation authority without its password. Canonicalizing the
+    /// already-resolved connection selector keeps name-based calls bound to the same login identity.
+    pub(crate) fn token_continuation(&self, id: &str) -> Result<Continuation, String> {
         let node = self.policy.nodes.last().ok_or("late work needs an authorized initiating operation")?;
         let mut clean = (**node).clone();
         if let Some(params) = clean.params.as_object_mut() {
-            for key in secrets {
-                params.remove(*key);
-            }
+            params.remove("password");
+            params.insert("id".into(), json!(id));
         }
         self.continuation_for(Arc::new(clean))
     }

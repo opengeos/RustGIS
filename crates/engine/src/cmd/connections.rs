@@ -894,7 +894,7 @@ fn login_command(s: &mut Session, p: &Value) -> CmdResult {
         let remember = remember_flag(p)?;
         insecure_flag(p)?;
         let typed = ["password", "apiKey", "token"].iter().any(|key| ps(p, key).is_some_and(|v| !v.is_empty()));
-        if !remember && !typed {
+        if c.auth != "arcgis" && !remember && !typed {
             web::retry(s, &c.id);
         }
     }
@@ -1063,7 +1063,7 @@ fn service_login(s: &mut Session, c: &Connection, p: &Value, remember: bool) -> 
 /// `connection.generateToken` makes one from it. An expiry that isn't known stays unknown: the
 /// token is used until the server refuses it, never renewed or given a guessed lifetime.
 fn arcgis_login(s: &mut Session, c: &Connection, p: &Value, remember: bool, insecure: bool) -> Result<Reopened, String> {
-    if ["password", "apiKey"].iter().any(|key| ps(p, key).is_some_and(|v| !v.is_empty())) {
+    if ["password", "apiKey"].iter().any(|key| p.get(*key).is_some_and(|v| !v.is_null() && v.as_str() != Some(""))) {
         return Err(
             "an ArcGIS token login takes a token, not a password or apiKey (connection.generateToken makes a token from a password)".into(),
         );
@@ -1086,6 +1086,8 @@ fn arcgis_login(s: &mut Session, c: &Connection, p: &Value, remember: bool, inse
         if remember {
             return Err("remember keeps the token typed in this login: give it".into());
         }
+        // Only a fully validated request to reuse this login may clear a deliberate Logout.
+        web::retry(s, &c.id);
         // Already logged in: choose it again, keeping its binding and its cached tiles.
         if web::logged_in(s, c) {
             web::reselect(s, c, &origin);
