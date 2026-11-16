@@ -127,6 +127,51 @@ fn shown(item: &Item) -> String {
     }
 }
 
+/// Catalog menus use the completion rows and help, but keep ordinary menu clicks and dismissal.
+/// Returns what to append, preserving the clause buttons' insertion behavior.
+pub(crate) fn menus(ui: &mut Ui) -> Option<String> {
+    let mut word = None;
+    ui.menu_button(tl!("Functions ▾"), |ui| {
+        word = catalog_menu(ui, || query::functions().map(Item::Function));
+    });
+    ui.menu_button(tl!("Variables ▾"), |ui| {
+        word = catalog_menu(ui, || VARS.iter().enumerate().filter_map(|(i, v)| v.names.first().map(|&name| Item::Variable(i, name))));
+    });
+    word
+}
+
+fn catalog_menu<I: Iterator<Item = Item>>(ui: &mut Ui, items: impl Fn() -> I) -> Option<String> {
+    let id = ui.scope_id().with("catalog_selection");
+    let mut selected = ui.ctx().data_mut(|d| d.get_temp::<usize>(id)).unwrap_or(0);
+    let (layout, width) = crate::completion::help_layout(ui.ctx().content_rect().width());
+    let mut word = None;
+    ui.with_layout(layout, |ui| {
+        ui.vertical(|ui| {
+            ui.set_min_width(crate::completion::MIN_WIDTH);
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                for (i, item) in items().enumerate() {
+                    let r = crate::completion::item_row(ui, &shown(&item), i == selected, None);
+                    if r.hovered() || r.has_focus() {
+                        selected = i;
+                    }
+                    if r.clicked() {
+                        word = Some(match item {
+                            Item::Function(f) if f.max != 0 => format!("{}(", f.name),
+                            _ => shown(&item),
+                        });
+                        ui.close();
+                    }
+                }
+            });
+        });
+        if let Some(item) = items().nth(selected) {
+            draw_help(ui, &item, None, width);
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(id, selected));
+    word
+}
+
 /// The box's state between frames.
 #[derive(Clone, Default)]
 struct State {
