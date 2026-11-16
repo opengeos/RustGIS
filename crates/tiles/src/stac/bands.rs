@@ -120,13 +120,14 @@ pub fn bands(item: &Item) -> Vec<Band> {
                 asset: asset.key.clone(),
                 href: asset.href.clone(),
                 index: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                in_file: u32::try_from(count).unwrap_or(u32::MAX),
+                // The file's own count (the catalog's, which may be past the bands kept), for how many to read.
+                in_file: u32::try_from(count.max(asset.declared_bands)).unwrap_or(u32::MAX),
                 common: info.map(|b| b.common.clone()).unwrap_or_default(),
                 scale: scale.unwrap_or(1.0),
                 offset: offset.unwrap_or(0.0),
                 nodata,
                 scaled: scale.is_some(),
-                unread: info.is_some_and(|b| b.unread) || (i == 0 && asset.je_unread),
+                unread: info.is_some_and(|b| b.unread) || (i == 0 && asset.je_unread) || asset.lists_unread,
                 invalid: asset.invalid.clone(),
                 codes_unread: asset.codes_unread,
             });

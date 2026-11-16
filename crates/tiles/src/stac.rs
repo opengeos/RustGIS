@@ -72,10 +72,14 @@ pub struct Asset {
     /// Whether the catalog describes more bands than are kept (`bands` stops at the first
     /// [`MAX_BANDS`]): the ones past them can't be found by name.
     pub bands_cut: bool,
-    /// Whether the catalog gives its first band's scale, offset or no-data as something that isn't read: a
-    /// number given as text in JAXA Earth's `je:rasters`, or a band list that isn't a list (an object,
-    /// text), so none of its numbers were. A band made from it is refused where it is used.
+    /// Whether JAXA Earth's `je:rasters` gives its first band's scale, offset or no-data as something
+    /// that isn't a number (a string, say): not read, so a band made from it is refused where it is used.
     pub je_unread: bool,
+    /// Whether a band list (`eo:bands`, `raster:bands`, `bands`) is there but isn't a list: none of its
+    /// numbers or names were read, so every band of the asset is refused where it is used.
+    pub lists_unread: bool,
+    /// How many bands the catalog says the file has (more than `bands` keeps, when it is cut).
+    pub declared_bands: usize,
 }
 
 /// One band of an asset's file, as its catalog describes it.
@@ -726,7 +730,10 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
-                je_unread: je_odd(a) || bands_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
+                je_unread: je_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
+                lists_unread: bands_odd(a) || a.get("rg:lists_unread").and_then(Value::as_bool) == Some(true),
+                declared_bands: declared_bands(a)
+                    .max(a.get("rg:band_count").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX))),
             })
         })
         .collect();
@@ -1132,6 +1139,14 @@ fn asset_json(a: &Asset) -> Value {
     if let (true, Some(o)) = (a.je_unread, out.as_object_mut()) {
         o.insert("rg:unread".into(), Value::Bool(true));
     }
+    // That a band list was not a list (so no band of the asset was read) goes with it too, and how
+    // many bands the file has when the catalog describes more than are kept.
+    if let (true, Some(o)) = (a.lists_unread, out.as_object_mut()) {
+        o.insert("rg:lists_unread".into(), Value::Bool(true));
+    }
+    if let (true, Some(o)) = (a.declared_bands > a.bands.len(), out.as_object_mut()) {
+        o.insert("rg:band_count".into(), serde_json::json!(a.declared_bands));
+    }
     // The failed-retrieval codes, and that they could not be read whole, go with the asset.
     if let (false, Some(o)) = (a.invalid.is_empty(), out.as_object_mut()) {
         o.insert("je:rasters".into(), serde_json::json!({"dn": {"error": a.invalid}}));
@@ -1484,6 +1499,8 @@ mod tests {
             bands: Vec::new(),
             bands_cut: false,
             je_unread: false,
+            lists_unread: false,
+            declared_bands: 0,
         }];
         // A Planetary Computer asset is added after signing it with its container's token.
         let (_, href) = pc.asset_href(None).unwrap();

@@ -206,6 +206,8 @@ mod desktop {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let raster = rustgis_analysis::rasterops::derive(&stacked, &name, vec![band])?;
             let then = noted(raster.name.clone(), notes);
+            // The encode below is one step with no look inside it: Cancel is looked at before it.
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let bytes = rustgis_data::raster::geotiff::write_all(&raster).map_err(|e| e.to_string())?;
             let layer_name = raster.name.clone();
             let mut layer = RasterLayer::from_bytes(raster, format!("{layer_name}.tif"), bytes);
@@ -301,7 +303,12 @@ mod desktop {
         let mut signed = Vec::with_capacity(files.len());
         for (href, _) in files {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            signed.push(stac::sign_blocking(href)?);
+            let url = stac::sign_blocking(href)?;
+            // The item is a document's: its files connect to public addresses only, whatever a public-looking
+            // name resolves to. Marked (the address as given, and as signed) before any reader starts.
+            crate::render::rustgis_tiles::cache::restrict_to_public(href);
+            crate::render::rustgis_tiles::cache::restrict_to_public(&url);
+            signed.push(url);
         }
         let stop = AtomicBool::new(false);
         let cause = std::sync::Mutex::new(None);
@@ -312,13 +319,20 @@ mod desktop {
                 let started: Vec<_> = chunk
                     .iter()
                     .map(|(href, signed, bands)| {
-                        let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, || {
-                            let _diagnostics = diagnostics.enter();
-                            rustgis_data::source::remote::with_optional_still(still.clone(), || {
-                                let read = read_one(signed, bbox, cell, *bands, &stop);
+                        // Taken as references and values, so the reader thread owns what it uses.
+                        let (stop_r, cause_r, diagnostics_r, still_r) = (&stop, &cause, &diagnostics, &still);
+                        let (signed_s, bands_n) = (signed.as_str(), *bands);
+                        let message = format!("{href}: the read failed unexpectedly");
+                        let reader = std::thread::Builder::new().name("STAC band window".into()).spawn_scoped(scope, move || {
+                            let _diagnostics = diagnostics_r.enter();
+                            rustgis_data::source::remote::with_optional_still(still_r.clone(), || {
+                                // A reader that panics stops the run too (the guard, unless it is disarmed on return).
+                                let mut guard = PanicStop { stop: stop_r, cause: cause_r, message, armed: true };
+                                let read = read_one(signed_s, bbox, cell, bands_n, stop_r);
+                                guard.armed = false;
                                 // A file that failed stops the reads beside it: they would only finish to be dropped.
                                 if let Err(e) = &read {
-                                    note_failure(&stop, &cause, e);
+                                    note_failure(stop_r, cause_r, e);
                                 }
                                 read
                             })
@@ -357,6 +371,23 @@ mod desktop {
             }
         }
         Ok(out)
+    }
+
+    /// Stops the run when a reader thread panics: dropped still armed (the read didn't return), it
+    /// notes the failure as an `Err` would be, so the reads beside it end instead of running on.
+    pub(super) struct PanicStop<'a> {
+        pub(super) stop: &'a AtomicBool,
+        pub(super) cause: &'a std::sync::Mutex<Option<String>>,
+        pub(super) message: String,
+        pub(super) armed: bool,
+    }
+
+    impl Drop for PanicStop<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                note_failure(self.stop, self.cause, &self.message);
+            }
+        }
     }
 
     /// A read that failed: if it is the first thing to stop the run (the user's Cancel has not),
@@ -604,6 +635,8 @@ mod desktop {
     /// The made raster, kept as a GeoTIFF and drawn as red, green and blue, with what to say of it
     /// once it is added (by its name on the map) and what the command answers besides.
     fn made_saying(raster: Raster, notes: Vec<String>, extra: Value) -> Result<Made, String> {
+        // The encode is one step with no look inside it: Cancel is looked at before it.
+        rustgis_data::progress::check().map_err(|e| e.to_string())?;
         let bytes = rustgis_data::raster::geotiff::write_all(&raster).map_err(|e| e.to_string())?;
         let name = raster.name.clone();
         let mut layer = RasterLayer::from_bytes(raster, format!("{name}.tif"), bytes);
@@ -1013,6 +1046,67 @@ mod tests {
         let none = rustgis_analysis::rasterops::NODATA;
         assert!(r.bands.iter().all(|b| b.data.iter().all(|v| *v != none)), "every cell has both bands: {notes:?}");
         assert_eq!((r.bands[0].data[0], r.bands[1].data[0]), (1000.0, 2000.0));
+    }
+
+    #[test]
+    fn every_file_read_is_held_to_public_addresses() {
+        use crate::render::rustgis_tiles::{address::Reach, cache};
+        // A claim that has gone, so no request is sent; the files are marked before the readers start.
+        let gone: rustgis_data::source::remote::Still = std::sync::Arc::new(|| false);
+        let url = "https://rustgis-public-only.example/b.tif";
+        assert_eq!(cache::ceiling_for(url), Reach::Local, "unmarked, a URL's ceiling is local");
+        let _ = rustgis_data::source::remote::with_still(gone, || {
+            read_windows(&[(url.to_string(), 1)], [10.0, 45.0, 10.1, 45.1], (10.0, false))
+        });
+        assert_eq!(cache::ceiling_for(url), Reach::Public, "the read of it connects to public addresses only");
+    }
+
+    #[test]
+    fn a_malformed_band_list_refuses_every_band_and_a_file_above_the_cap_keeps_its_count() {
+        use crate::render::rustgis_tiles::stac::{self, bands};
+        let asset = |extra: serde_json::Value| {
+            let mut a = json!({"href": "https://example.org/s.tif", "type": "image/tiff; application=geotiff",
+                "eo:bands": [{"common_name": "blue"}, {"common_name": "green"}, {"common_name": "red"}, {"common_name": "nir"}]});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"type": "Feature", "id": "s", "bbox": [0.0, 0.0, 1.0, 1.0], "properties": {"datetime": "2024-06-01T00:00:00Z"}, "assets": {"s": a}})
+        };
+        let get = |extra: serde_json::Value| {
+            let it = stac::item_from_json(&asset(extra), None).unwrap();
+            let again = stac::item_from_json(&stac::item_json(&it), None).unwrap();
+            (bands::bands(&it), bands::bands(&again))
+        };
+        // The later bands (nir, red) are refused too, through the command's copy of the item.
+        let (a, b) = get(json!({"raster:bands": {"scale": 0.0001}}));
+        assert!(a.iter().chain(&b).all(|x| x.unread), "every band, not the first only");
+        let (a, _) = get(json!({}));
+        assert!(a.iter().all(|x| !x.unread));
+        // A file of 65 bands: the count read is the file's, though 64 are kept.
+        let many: Vec<serde_json::Value> = (0..65).map(|_| json!({})).collect();
+        let (a, b) = get(json!({"eo:bands": many}));
+        assert_eq!((a.len(), a[0].in_file, b[0].in_file), (64, 65, 65));
+    }
+
+    #[test]
+    fn a_reader_that_panics_stops_the_run_like_one_that_fails() {
+        use super::desktop::PanicStop;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (stop, cause) = (AtomicBool::new(false), Mutex::new(None));
+        // A reader that panics (the guard dropped while unwinding, still armed) stops the others.
+        let panicked = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = PanicStop { stop: &stop, cause: &cause, message: "a.tif: the read failed unexpectedly".into(), armed: true };
+                panic!("a reader panics");
+            })
+            .join()
+        });
+        assert!(panicked.is_err());
+        assert!(stop.load(Ordering::Relaxed));
+        assert_eq!(cause.lock().unwrap().as_deref(), Some("a.tif: the read failed unexpectedly"));
+        // One that returned (disarmed) leaves the run alone.
+        let (stop, cause) = (AtomicBool::new(false), Mutex::new(None));
+        drop(PanicStop { stop: &stop, cause: &cause, message: "x".into(), armed: false });
+        assert!(!stop.load(Ordering::Relaxed) && cause.lock().unwrap().is_none());
     }
 
     #[test]
