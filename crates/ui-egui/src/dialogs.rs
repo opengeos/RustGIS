@@ -2316,11 +2316,13 @@ const MAX_FIELD_CHIPS: usize = 40;
 /// Buttons that add one of `fields` (the first [`MAX_FIELD_CHIPS`]), as the expression names it
 /// (`"Pop Est"` in quotes), an operator, a function or a variable to the clause `text`: the one
 /// row Select By Attributes, the Layer Properties pane's Query tab and a label class's SQL query
-/// offer.
+/// offer. A field an earlier one shadows (`name` after `Name`: the expression reads the first,
+/// letter case aside) gets no button, as the completion list doesn't offer it.
 pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Field], text: &mut String) {
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(tl!("Fields:")).small().weak());
-        for f in fields.iter().take(MAX_FIELD_CHIPS) {
+        let named = fields.iter().enumerate().filter(|(i, f)| !fields.iter().take(*i).any(|g| g.name.eq_ignore_ascii_case(&f.name)));
+        for (_, f) in named.take(MAX_FIELD_CHIPS) {
             if ui.small_button(&f.name).clicked() {
                 add_word(text, &crate::exprcomplete::field_ref(&f.name));
             }
@@ -2741,13 +2743,15 @@ mod tests {
 
     /// A clause's buttons add a field as the expression names it (`"Pop Est"` in quotes, a plain
     /// name as it is), and every operator, `>=` and `NOT` among them; at most `MAX_FIELD_CHIPS`
-    /// fields are offered.
+    /// fields are offered, and none an earlier one shadows (`POP` after `pop`), which takes no
+    /// place among them.
     #[test]
     fn the_buttons_add_a_field_as_the_expression_names_it() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         use rustgis_engine::data::{Field, FieldType};
-        let mut fields = vec![Field::new("Pop Est", FieldType::Integer), Field::new("pop", FieldType::Integer)];
+        let mut fields =
+            vec![Field::new("Pop Est", FieldType::Integer), Field::new("pop", FieldType::Integer), Field::new("POP", FieldType::Integer)];
         fields.extend((0..MAX_FIELD_CHIPS).map(|i| Field::new(format!("f{i}"), FieldType::Integer)));
         // Without the interface fonts (`theme::install_fonts`) egui's faces have no "▾".
         let mut h = egui_kittest::Harness::builder()
@@ -2759,6 +2763,7 @@ mod tests {
             h.run();
         }
         assert_eq!(h.state(), "\"Pop Est\" >= pop AND NOT IN ");
+        assert!(h.query_by_role_and_label(Role::Button, "POP").is_none(), "a shadowed field");
         let last = format!("f{}", MAX_FIELD_CHIPS - 3);
         assert!(h.query_by_role_and_label(Role::Button, &last).is_some(), "the first {MAX_FIELD_CHIPS} fields");
         let past = format!("f{}", MAX_FIELD_CHIPS - 2);
