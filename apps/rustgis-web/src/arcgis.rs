@@ -299,8 +299,11 @@ async fn token_request(endpoint: &str, body: &Secret, still: &cache::Still) -> R
                 value.copy_to(bytes.get_mut(at..).unwrap_or_default());
             }
         }
-        // An answer that arrives after a cancel is discarded.
+        // An answer that arrives after a cancel, or past the deadline a throttled timer missed, is discarded.
         cache::check_still(&held).map_err(stopped)?;
+        if began.elapsed() >= std::time::Duration::from_secs(arcgis_token::DEADLINE_SECS) {
+            return Err(arcgis_token::TIMED_OUT.to_string());
+        }
         arcgis_token::from_answer(status, &bytes, arcgis_token::now_millis())
     };
     let result = read.await;
