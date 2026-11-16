@@ -19,8 +19,12 @@ signs the app and keeps it up to date:
 The [field app](user-guide/field-work.md) for collecting and editing data away from a desk is on
 Google Play for Android and on the App Store for iPhone and iPad:
 
-[![Get it on Google Play](https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png){ width="200" }](https://play.google.com/store/apps/details?id=org.rustgis.mobile)
-[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg){ width="150" }](https://apps.apple.com/app/rustgis/id6834987896)
+<div class="store-badges" markdown>
+
+[![Get it on Google Play](https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png){ .store-badge-play }](https://play.google.com/store/apps/details?id=org.rustgis.mobile)
+[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/app/rustgis/id6834987896)
+
+</div>
 
 Releases from v0.7.0 on also carry signed Android APKs (below), for a device without Google
 Play.
