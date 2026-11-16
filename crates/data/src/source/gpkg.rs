@@ -138,8 +138,11 @@ impl GpkgSource {
     pub fn open(path: &Path, layer: Option<&str>) -> Result<Self> {
         // The identity is taken before the database is opened: a file put in its place after
         // this leaves it describing the file opened, which a traversal then refuses to swap.
-        let id = file_identity(path);
-        Self::open_conn(open_db(path)?, path, layer, None, id)
+        // Made absolute first, so the file opened and the path kept for a traversal are one even
+        // if the working directory changes in between.
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let id = file_identity(&path);
+        Self::open_conn(open_db(&path)?, &path, layer, None, id)
     }
 
     /// Opens a GeoPackage held in memory, through a temporary copy (SQLite reads files). The copy
@@ -183,7 +186,7 @@ impl GpkgSource {
     /// Opens a feature table (`layer`, else the first) on an open database from its metadata,
     /// noting what reading changes: an unknown coordinate system, other tables, Z or M values
     /// dropped. `id` is the file's identity taken before it was opened.
-    /// `path` is the file as the caller named it. SQLite's own name for it resolves symbolic links
+    /// `path` is the file as the caller named it, made absolute. SQLite's own name for it resolves symbolic links
     /// (macOS's temporary folder `/var` is `/private/var`), so it isn't the path to record.
     fn open_conn(conn: Connection, path: &Path, layer: Option<&str>, temp: Option<PathBuf>, id: Option<(u64, u64)>) -> Result<Self> {
         let tables = feature_tables(&conn)?;
@@ -310,7 +313,7 @@ impl GpkgSource {
             notes,
             zm_dropped: false,
         };
-        let file = Some((std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()), id));
+        let file = Some((path.to_path_buf(), id));
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = src.peek_kind();

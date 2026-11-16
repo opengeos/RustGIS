@@ -111,8 +111,10 @@ pub fn sqlite(path: &Path) {
         return;
     }
     self::path(path);
+    // SQLite names its companions after the database with symbolic links resolved.
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     for suffix in ["-wal", "-shm", "-journal"] {
-        let mut companion = path.as_os_str().to_os_string();
+        let mut companion = resolved.as_os_str().to_os_string();
         companion.push(suffix);
         let companion = Path::new(&companion);
         if let Ok(metadata) = std::fs::metadata(companion)

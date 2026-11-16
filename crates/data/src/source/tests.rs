@@ -433,6 +433,30 @@ fn geopackage_provenance_skips_a_replaced_path() {
     assert!(captured.inputs().is_empty());
 }
 
+/// A GeoPackage reached through a linked folder is recorded at the path opened, as macOS's
+/// temporary folder (`/var` → `/private/var`) is, while SQLite's companions are found where SQLite
+/// puts them, beside the resolved file.
+#[cfg(unix)]
+#[test]
+fn geopackage_provenance_keeps_a_linked_path() {
+    let folder = tempfile::tempdir().unwrap();
+    let real = folder.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    write_gpkg(&real.join("original.gpkg"), true);
+    std::fs::write(real.join("original.gpkg-wal"), b"wal").unwrap();
+    let link = folder.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = link.join("original.gpkg");
+    let source = open_path(&path, None).unwrap();
+    let captured = crate::provenance::Capture::start();
+    assert!(!source.read(&Request { extent: None, limit: 1 }).unwrap().features.is_empty());
+    let paths: Vec<String> = captured.inputs().into_iter().map(|i| i.path).collect();
+    assert!(paths.contains(&path.display().to_string()), "{paths:?}");
+    let wal = std::fs::canonicalize(&real).unwrap().join("original.gpkg-wal");
+    assert!(paths.contains(&wal.display().to_string()), "{paths:?}");
+    assert!(!paths.contains(&std::fs::canonicalize(real.join("original.gpkg")).unwrap().display().to_string()), "{paths:?}");
+}
+
 /// 30 × 20 points over the world, named and numbered.
 fn points() -> Vec<(Coord, String, i64)> {
     let mut v = Vec::new();
