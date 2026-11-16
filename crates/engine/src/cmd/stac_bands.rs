@@ -546,7 +546,7 @@ mod desktop {
                     // A geographic grid stored in another turn of longitude (-10° and 350°) is the same place.
                     let sc = raster.wrap_col(sc);
                     let (sc, sr) = (sc.floor(), sr.floor());
-                    if sc < 0.0 || sr < 0.0 || sc >= f64::from(raster.width) || sr >= f64::from(raster.height) {
+                    if !(sc >= 0.0 && sr >= 0.0 && sc < f64::from(raster.width) && sr < f64::from(raster.height)) {
                         continue;
                     }
                     let Some(&v) = data.get(sr as usize * raster.width as usize + sc as usize) else { continue };
