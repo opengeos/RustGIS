@@ -193,6 +193,7 @@ pub(super) fn long_commands(boundaries: bool) {
         ("convexHull", json!({"input": "Countries", "group": "All", "output": "Hulls_all"})),
         ("kernelDensity", json!({"input": "Cities", "crs": "EPSG:3857", "pixelSize": if boundaries { 2000 } else { 1000000 }})),
         ("kriging", json!({"input": "Cities", "field": "pop_max", "pixelSize": if boundaries { 0.01 } else { 1.0 }})),
+        ("tabulateArea", json!({"raster": dem, "zones": "Countries"})),
     ];
     for (tool, params) in &tools {
         exercise(&s, tool, params, Kind::Tool, &dir.0, boundaries);
@@ -416,7 +417,10 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
         }
         assert!(s.undo(), "{what}: lost Undo");
         if added_step {
-            assert!(contents(&s.project) == before, "{what}: undo didn't restore the map");
+            // Table ids are never reused: undo keeps the counter (see the standalone-table removal regression).
+            let mut undone = contents(&s.project);
+            undone["project"]["next_table_id"] = before["project"]["next_table_id"].clone();
+            assert!(undone == before, "{what}: undo didn't restore the map");
             assert!(!s.dirty(), "{what}: undo didn't return to the saved state");
         }
         assert!(s.redo(), "{what}: lost Redo");
