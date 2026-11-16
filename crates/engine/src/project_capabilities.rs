@@ -263,6 +263,16 @@ mod tests {
         serde_json::from_slice(bytes).unwrap()
     }
 
+    /// A saved image marker reads back as the image it was, and saving names it again.
+    #[test]
+    fn picture_markers_fixture_reads_its_image() {
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/picture_markers.rgis")).unwrap();
+        let rustgis_map::Renderer::Single(symbol) = &fixture.styles[0].renderer else { panic!("a single symbol") };
+        let rustgis_map::Marker::Picture(picture) = symbol.marker else { panic!("an image marker") };
+        assert!(picture.base64().starts_with("iVBORw0KGgo") && !picture.is_dropped());
+        assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["picture-markers"]));
+    }
+
     /// All replayable project containers require the unit only when it differs from km².
     /// Selection of executable notebook cells follows the notebook runner's language boundary.
     #[test]

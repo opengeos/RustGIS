@@ -3186,8 +3186,9 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
 /// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
 /// layers, aggregations, graphics or stacked line strokes; no view effects; extrusions only
-/// stand up in a tilted one; nor characters or images standing up, which the GPU has no template for). A cheap check made before any drawing; labels with icons can still
-/// decline the scene once it is drawn.
+/// stand up in a tilted one; nor characters or images standing up, which the GPU has no
+/// template for). A cheap check made before any drawing; labels with icons can still decline
+/// the scene once it is drawn.
 pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
         || !map.view.effects.is_none()

@@ -1238,6 +1238,14 @@ impl Project {
         {
             notices.push(message.into());
         }
+        if parts.contains(&ReadPart::Maps) {
+            let layers = self.maps.iter().flat_map(|map| map.layers.iter()).filter(|l| l.any_picture(rustgis_map::Picture::is_dropped));
+            let styles = self.styles.iter().filter(|s| s.renderer.any_picture(rustgis_map::Picture::is_dropped));
+            let names: Vec<&str> = layers.map(|l| l.name.as_str()).chain(styles.map(|s| s.name.as_str())).collect();
+            if let Some(message) = dropped_pictures_notice(&names) {
+                notices.push(message.into());
+            }
+        }
         notices
     }
 
@@ -1862,6 +1870,26 @@ fn empty_map() -> &'static Map {
 
 /// Most reports, presentations and notebooks a project file may hold.
 pub const MAX_ITEMS: usize = 1000;
+
+/// What reading said of image markers it didn't keep (see [`rustgis_map::Picture::is_dropped`]),
+/// naming the layers and styles that had them (the first few).
+fn dropped_pictures_notice(names: &[&str]) -> Option<String> {
+    const SHOWN: usize = 5;
+    if names.is_empty() {
+        return None;
+    }
+    let more = names.len().saturating_sub(SHOWN);
+    let mut which = names.iter().take(SHOWN).copied().collect::<Vec<_>>().join(", ");
+    if more > 0 {
+        which.push_str(&format!(" and {more} more"));
+    }
+    Some(format!(
+        "Image markers in {which} weren't kept (longer than {} MiB, past the {} images or {} MiB a run keeps, or not an image) and are drawn as circles; saving the project loses them",
+        rustgis_map::symbology::MAX_PICTURE_BYTES >> 20,
+        rustgis_map::symbology::MAX_PICTURES,
+        rustgis_map::symbology::MAX_PICTURES_BYTES >> 20,
+    ))
+}
 
 /// The part of a project a read notice is about, so an import says only what it takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

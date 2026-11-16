@@ -1016,9 +1016,15 @@ impl Layer {
     /// Whether any marker the layer keeps is an image ([`Marker::Picture`]): its renderer's, its
     /// stacked strokes' or its dot fills'.
     pub fn has_picture_markers(&self) -> bool {
-        self.renderer.has_picture_markers()
-            || symbology::strokes_have_pictures(&self.line_strokes)
-            || fills::fills_have_pictures(&self.fill_layers)
+        self.any_picture(|_| true)
+    }
+
+    /// Whether any image the layer keeps as a marker (as [`Layer::has_picture_markers`] finds
+    /// them) is one `f` holds true for.
+    pub fn any_picture(&self, f: impl Fn(symbology::Picture) -> bool + Copy) -> bool {
+        self.renderer.any_picture(f)
+            || symbology::strokes_have_pictures(&self.line_strokes, f)
+            || fills::fills_have_pictures(&self.fill_layers, f)
     }
 
     pub fn is_raster(&self) -> bool {

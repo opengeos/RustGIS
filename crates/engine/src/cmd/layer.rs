@@ -404,10 +404,11 @@ pub fn commands() -> Vec<C> {
             if shape.is_some() && ch.is_some() {
                 return Err("give a shape or a char, not both".into());
             }
-            let image = picture(p)?;
-            if image.is_some() && (shape.is_some() || ch.is_some()) {
+            // Refused before the image is kept: a call that changes nothing keeps nothing.
+            if p.get("image").is_some_and(|v| !v.is_null()) && (shape.is_some() || ch.is_some()) {
                 return Err("give a shape, a char or an image, only one".into());
             }
+            let image = picture(p)?;
             with(s, p, |l| {
                 l.renderer.map_symbols(|sym| {
                     if let Some(m) = shape {

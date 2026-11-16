@@ -109,7 +109,7 @@ impl<'de> Deserialize<'de> for FontName {
 /// The most different pictures kept (each is kept for the rest of the run), and the most bytes
 /// of base64 they take together; past either, a new one is [`Picture::default`].
 pub const MAX_PICTURES: usize = 1024;
-const MAX_PICTURES_BYTES: usize = 64 << 20;
+pub const MAX_PICTURES_BYTES: usize = 64 << 20;
 /// The longest picture kept, in bytes of base64 (2 MiB): a marker's image is an icon.
 pub const MAX_PICTURE_BYTES: usize = 2 << 20;
 
@@ -121,6 +121,9 @@ pub const MAX_PICTURE_BYTES: usize = 2 << 20;
 /// file); that one, like one that doesn't decode, is drawn as a circle.
 #[derive(Clone, Copy, Default)]
 pub struct Picture(&'static str);
+
+/// Where [`Picture::is_dropped`] points: an image a file gave that wasn't kept.
+static DROPPED: &str = "(dropped)";
 
 impl Picture {
     pub fn new(base64: &str) -> Picture {
@@ -145,13 +148,27 @@ impl Picture {
         Picture(p)
     }
 
-    /// The image as base64 (empty: none kept).
-    pub fn base64(self) -> &'static str {
-        self.0
+    /// [`Picture::new`] for an image a file gives: one that isn't kept is [`Picture::is_dropped`],
+    /// so the reader can say so.
+    pub fn read(base64: &str) -> Picture {
+        let p = Picture::new(base64);
+        if p.is_default() && !base64.trim().is_empty() { Picture(DROPPED) } else { p }
     }
 
+    /// The image as base64 (empty: none kept).
+    pub fn base64(self) -> &'static str {
+        if self.is_dropped() { "" } else { self.0 }
+    }
+
+    /// No image: none given, or one not kept.
     pub fn is_default(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_empty() || self.is_dropped()
+    }
+
+    /// An image a file gave that wasn't kept (too long, past what a run keeps, or not text): drawn
+    /// as a circle, and lost when the file is saved again.
+    pub fn is_dropped(self) -> bool {
+        std::ptr::eq(self.0, DROPPED)
     }
 }
 
@@ -177,12 +194,13 @@ impl std::fmt::Debug for Picture {
 
 impl Serialize for Picture {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.0)
+        s.serialize_str(self.base64())
     }
 }
 
 impl<'de> Deserialize<'de> for Picture {
-    /// Not text (a crafted file): no image, drawn as a circle, and the rest still reads.
+    /// One not kept, or not text (a crafted file): no image, drawn as a circle and
+    /// [`Picture::is_dropped`] for the reader to say so, and the rest still reads.
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -191,15 +209,15 @@ impl<'de> Deserialize<'de> for Picture {
             Other(serde::de::IgnoredAny),
         }
         Ok(match Image::deserialize(d)? {
-            Image::Text(b64) => Picture::new(&b64),
-            Image::Other(_) => Picture::default(),
+            Image::Text(b64) => Picture::read(&b64),
+            Image::Other(_) => Picture(DROPPED),
         })
     }
 }
 
-/// Whether any of `strokes` draws an image as its markers.
-pub fn strokes_have_pictures(strokes: &[LineStroke]) -> bool {
-    strokes.iter().any(|s| s.markers.is_some_and(|m| matches!(m.mark, LineMark::Marker(Marker::Picture(_)))))
+/// Whether any of `strokes` draws an image as its markers that `f` holds true for.
+pub fn strokes_have_pictures(strokes: &[LineStroke], f: impl Fn(Picture) -> bool) -> bool {
+    strokes.iter().any(|s| s.markers.is_some_and(|m| matches!(m.mark, LineMark::Marker(Marker::Picture(p)) if f(p))))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -2043,19 +2061,25 @@ impl Renderer {
     /// Whether any marker it draws is an image ([`Marker::Picture`]): a symbol's, or one in a
     /// class's stacked strokes or dot fills.
     pub fn has_picture_markers(&self) -> bool {
-        let symbol = |s: &Symbol| matches!(s.marker, Marker::Picture(_));
+        self.any_picture(|_| true)
+    }
+
+    /// Whether any image it draws as a marker (as [`Renderer::has_picture_markers`] finds them)
+    /// is one `f` holds true for.
+    pub fn any_picture(&self, f: impl Fn(Picture) -> bool + Copy) -> bool {
+        let symbol = |s: &Symbol| matches!(s.marker, Marker::Picture(p) if f(p));
         match self {
             Renderer::Single(s) | Renderer::Proportional { base: s, .. } => symbol(s),
             Renderer::Unique { classes, other, class_strokes, other_strokes, class_fills, other_fills, .. } => {
                 symbol(other)
                     || classes.iter().any(|c| symbol(&c.1))
-                    || class_strokes.values().chain([other_strokes]).any(|s| strokes_have_pictures(s))
-                    || class_fills.values().chain([other_fills]).any(|f| crate::fills::fills_have_pictures(f))
+                    || class_strokes.values().chain([other_strokes]).any(|s| strokes_have_pictures(s, f))
+                    || class_fills.values().chain([other_fills]).any(|fl| crate::fills::fills_have_pictures(fl, f))
             }
             Renderer::Graduated { symbols, class_strokes, class_fills, .. } => {
                 symbols.iter().any(symbol)
-                    || class_strokes.values().any(|s| strokes_have_pictures(s))
-                    || class_fills.values().any(|f| crate::fills::fills_have_pictures(f))
+                    || class_strokes.values().any(|s| strokes_have_pictures(s, f))
+                    || class_fills.values().any(|fl| crate::fills::fills_have_pictures(fl, f))
             }
         }
     }
@@ -3539,8 +3563,13 @@ mod tests {
             [serde_json::json!(7), serde_json::json!(["a"]), serde_json::Value::Null, serde_json::json!("x".repeat(MAX_PICTURE_BYTES + 1))]
         {
             let read: Marker = serde_json::from_value(serde_json::json!({"Picture": junk})).unwrap();
-            assert_eq!(read, Marker::Picture(Picture::default()));
+            let Marker::Picture(p) = read else { panic!() };
+            assert!(p.is_dropped() && p.is_default(), "not kept, and the reader can say so");
+            // Written again it's no image; read back, nothing more is dropped.
+            assert_eq!(serde_json::to_value(read).unwrap(), serde_json::json!({"Picture": ""}));
         }
+        let empty: Marker = serde_json::from_value(serde_json::json!({"Picture": " "})).unwrap();
+        assert!(matches!(empty, Marker::Picture(p) if p.is_default() && !p.is_dropped()));
         let s: Symbol = serde_json::from_value(
             serde_json::json!({"fill": [1, 2, 3, 255], "stroke": [0, 0, 0, 255], "stroke_width": 1.0, "size": 7.0, "marker": {"Picture": 5}}),
         )
@@ -3556,8 +3585,8 @@ mod tests {
         assert!(!Symbol { marker: Marker::Picture(Picture::default()), ..hollow }.draws(GeometryType::Point));
         // Stacked strokes and dot fills keep images too.
         let mark = LineMarkers { mark: LineMark::Marker(m), ..LineMarkers::default() };
-        assert!(strokes_have_pictures(&[LineStroke::default(), LineStroke { markers: Some(mark), ..LineStroke::default() }]));
-        assert!(!strokes_have_pictures(&[LineStroke::default()]));
+        assert!(strokes_have_pictures(&[LineStroke::default(), LineStroke { markers: Some(mark), ..LineStroke::default() }], |_| true));
+        assert!(!strokes_have_pictures(&[LineStroke::default()], |_| true));
         let dots = |marker| crate::fills::FillLayer {
             color: None,
             pattern: crate::fills::FillPattern::Dots {
@@ -3570,8 +3599,8 @@ mod tests {
                 offset: [0.0, 0.0],
             },
         };
-        assert!(crate::fills::fills_have_pictures(&[dots(Marker::Circle), dots(m)]));
-        assert!(!crate::fills::fills_have_pictures(&[dots(Marker::Circle), crate::fills::FillLayer::default()]));
+        assert!(crate::fills::fills_have_pictures(&[dots(Marker::Circle), dots(m)], |_| true));
+        assert!(!crate::fills::fills_have_pictures(&[dots(Marker::Circle), crate::fills::FillLayer::default()], |_| true));
     }
 
     /// A project file is read with at most `MAX_LABEL_CLASSES` classes, and only that many count

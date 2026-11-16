@@ -1690,6 +1690,14 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
     t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
     assert_eq!(marker(&t), Marker::Picture(Picture::new(&b64)));
     t.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    // An image the file gives that isn't kept is said, not dropped silently; the rest reads.
+    let text = std::fs::read_to_string(&path).unwrap().replace(&b64, &"A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4));
+    let mut u = Session::new(Project::default());
+    let mark = u.notice_mark();
+    u.run("project.openText", &json!({"text": text})).unwrap();
+    let said: Vec<String> = u.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n.contains("Image markers in Cities weren't kept")), "{said:?}");
+    assert!(matches!(marker(&u), Marker::Picture(p) if p.is_dropped()));
     // A layer file names it too.
     let layer = dir.join("cities.rgislayer");
     t.run("layer.save", &json!({"layer": "Cities", "path": layer.display().to_string()})).unwrap();
