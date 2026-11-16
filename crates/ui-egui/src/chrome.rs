@@ -651,8 +651,8 @@ fn parse_scale(text: &str) -> Option<f64> {
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     // Behind a dialog (Save changes?, Recover unsaved work?, Command Search…) the keys are the
     // dialog's: Escape answers it rather than switching tools, and Ctrl+N can't start what it
-    // asks about.
-    if ctx.memory(|m| m.top_modal_layer()).is_some() || app.ui.shortcut_editor.capturing() {
+    // asks about. So are an open list's (a clause's Functions): Escape closes it.
+    if ctx.memory(|m| m.top_modal_layer()).is_some() || app.ui.shortcut_editor.capturing() || crate::completion::menu_is_open(ctx) {
         return;
     }
     crate::modelbuilder::shortcuts(app, ctx);
