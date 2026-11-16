@@ -6,8 +6,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod box_edit;
+pub mod circle_edit;
 pub mod cmd;
 pub mod connections;
+mod construction;
 pub mod durable;
 pub mod extensions;
 pub mod geometry_calc;
@@ -22,6 +24,7 @@ pub mod policy;
 pub mod prefs;
 pub mod project;
 mod roles;
+pub mod shape_conversion;
 pub use peer::Peer;
 pub(crate) use roles::{Document, ParamRole, Role};
 mod parameters;
@@ -410,6 +413,7 @@ pub enum Tool {
     EditVertices,
     /// Draws and edits session-local rectangle constructions on ordinary polygon layers.
     RotatedBox,
+    Circle,
     /// Drags a layer's label to where it should be (`labels.move`), as QGIS's Move Label tool;
     /// dragging anything else pans the map.
     MoveLabel,
@@ -452,6 +456,7 @@ impl Tool {
             Tool::CreatePolygon => "createPolygon",
             Tool::EditVertices => "editVertices",
             Tool::RotatedBox => "rotatedBox",
+            Tool::Circle => "circle",
             Tool::MoveLabel => "moveLabel",
             Tool::CutPolygon => "cutPolygon",
             Tool::Reshape => "reshape",
@@ -476,6 +481,7 @@ impl Tool {
             Tool::CreatePolygon,
             Tool::EditVertices,
             Tool::RotatedBox,
+            Tool::Circle,
             Tool::MoveLabel,
             Tool::CutPolygon,
             Tool::Reshape,
@@ -498,6 +504,7 @@ impl Tool {
             Tool::CreatePolygon => "Create Polygon",
             Tool::EditVertices => "Edit Vertices",
             Tool::RotatedBox => "Rotated Box",
+            Tool::Circle => "Circle",
             Tool::MoveLabel => "Move Label",
             Tool::CutPolygon => "Cut Polygon",
             Tool::Reshape => "Reshape",
@@ -607,7 +614,7 @@ type Step = (
     u64,
     Option<ProjectFiles>,
     (policy::Trust, policy::Trust, policy::Trust),
-    box_edit::Cache,
+    construction::Cache,
 );
 
 /// What a project holds in the session beside itself: what [`Session::clear_history`] forgets
@@ -617,7 +624,7 @@ type Step = (
 /// ([`Session::take_project_state`]) serves both, and giving it back names every field, so a
 /// field forgotten here can't be wiped by a replacement without coming back.
 struct PutAside {
-    boxes: box_edit::Cache,
+    constructions: construction::Cache,
     /// The project these belong to (`Session::opened` before the replacement).
     opened: u64,
     undo: Vec<Step>,
@@ -676,7 +683,7 @@ struct PutAside {
 }
 
 pub struct Session {
-    pub(crate) boxes: box_edit::Cache,
+    pub(crate) constructions: construction::Cache,
     policy: policy::State,
     /// Project generation and trusted exact asset provenance, never serialized.
     pub(crate) document_assets: (u64, std::collections::BTreeMap<(String, String), crate::render::rustgis_tiles::address::Origin>),
@@ -795,6 +802,8 @@ pub struct Session {
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
+    /// Last loaded DEM and block extent validated for each live map; no pixel buffers retained.
+    terrain_blocks_checked: std::collections::HashMap<u64, cmd::terrain_blocks::Checked>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
     /// The standalone table shown in the attribute table instead of a layer, by its id.
@@ -1024,6 +1033,7 @@ const MAX_URL_REQUESTS: usize = 16;
 
 /// A finished tool run, held until `gp.finish` applies it.
 pub(crate) struct PendingRun {
+    pub(crate) inputs: Vec<rustgis_data::provenance::Fingerprint>,
     pub(crate) continuation: policy::Continuation,
     pub id: u64,
     pub tool: String,
@@ -1067,9 +1077,11 @@ fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
 /// New features of a layer loaded for source editing never keep the key of a row it loaded (one
 /// deleted since, whose id an editing tool can hand out again): saved, they would be that row,
 /// changed. They take ids past every key instead. Layers whose rows were loaded or saved again by
-/// the command (their versions replaced) are left alone.
-fn fresh_source_ids(before: &Project, after: &mut Project) {
+/// the command (their versions replaced) are left alone. Session-only constructions follow the
+/// final ID; a full destination cache shard rejects the command through the usual rollback.
+fn fresh_source_ids(before: &Project, after: &mut Project, constructions: &mut construction::Cache) -> Result<(), String> {
     for (mb, ma) in before.maps.iter().zip(after.maps.iter_mut()) {
+        let map = ma.instance_id();
         for la in ma.layers.iter_mut() {
             let Some(versions) = la.edit_versions() else { continue };
             let Some(lb) = mb.layers.iter().find(|l| l.id == la.id) else { continue };
@@ -1098,14 +1110,17 @@ fn fresh_source_ids(before: &Project, after: &mut Project) {
                 .filter(|&k| k.cast_signed() >= 0)
                 .max()
                 .unwrap_or(0);
+            let scope = (map, la.instance_id(), la.replacement_revision());
             for i in reused {
                 next = next.saturating_add(1);
                 if let Some(f) = la.dataset.features.get_mut(i) {
+                    constructions.rekey((scope.0, scope.1, scope.2, f.id), next, f.geometry.as_ref())?;
                     f.id = next;
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// A lock names each label by its feature's id, and [`rustgis_data::Dataset::push`] hands the
@@ -1169,7 +1184,7 @@ fn edits_features(id: &str) -> bool {
 }
 
 impl Session {
-    /// Marks this thread as the desktop window owner for column statistics. Adapters with a
+    /// Marks this thread as the desktop window owner for column statistics and shape fitting. Adapters with a
     /// window use the prepared read queue; headless adapters leave this disabled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn statistics_need_read_ahead(&mut self, enabled: bool) {
@@ -1236,6 +1251,7 @@ impl Session {
             crs_used_elsewhere: Vec::new(),
             grid_notes_checked: None,
             cog_headers_seen: 0,
+            terrain_blocks_checked: Default::default(),
             table_layer: None,
             table_standalone: None,
             clipboard: None,
@@ -1258,7 +1274,7 @@ impl Session {
             active_report: None,
             active_presentation: None,
             active_notebook: None,
-            boxes: Default::default(),
+            constructions: Default::default(),
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
             measurements: Vec::new(),
@@ -1585,6 +1601,7 @@ impl Session {
     /// Shared command bookkeeping for ordinary dispatch and execution of an already pinned retry.
     pub(crate) fn command_epilogue(&mut self, id: &str, params: &Value, run: impl FnOnce(&mut Self) -> CmdResult) -> CmdResult {
         let outermost = self.depth == 0;
+        let _inputs = (outermost && self.log.on()).then(rustgis_data::provenance::Capture::start);
         #[cfg(not(target_arch = "wasm32"))]
         let _diagnostic_scope = self.requests_into.as_ref().map_or_else(|| self.diagnostics.enter(), |c| c.enter());
         #[cfg(target_arch = "wasm32")]
@@ -1624,6 +1641,9 @@ impl Session {
                 render::rustgis_tiles::mbtiles::close_unused(files.into_iter());
             }
             // Pixels the command read in place (a project, an import) say what they lost.
+            if res.is_ok() {
+                cmd::terrain_blocks::after_command(self, id);
+            }
             self.notice_landed_pixels();
             // And the coordinate systems that needed a missing datum grid, after every command.
             self.say_grid_notes();
@@ -1650,7 +1670,7 @@ impl Session {
                         };
                         let project = (project_log::kept_name(&self.title()), self.opened);
                         let e = project_log::entry(project, id, params, partial, &res, at, start.elapsed());
-                        if joins && res.is_ok() { self.log.join_last(e) } else { self.log.push(e) }
+                        self.log_entry(e, joins && res.is_ok());
                     }
                 }));
                 if logged.is_err() {
@@ -1768,9 +1788,12 @@ impl Session {
     /// the active one; a command that takes a standalone table is checked against the one they
     /// name.
     fn conditions(&mut self, spec: &CommandSpec, params: &Value) -> (Option<&'static str>, Option<u32>, Option<u32>) {
-        let named = match params.get("layer") {
+        // Apply carries its explicit target inside the preview, even when another layer is
+        // active. Conditions and the streamed-edit preflight must judge that same target.
+        let layer_params = if spec.id == "edit.applyShapeConversion" { params.get("preview").unwrap_or(params) } else { params };
+        let named = match layer_params.get("layer") {
             Some(serde_json::Value::Array(list)) => list.first().and_then(|v| self.layer_id(&serde_json::json!({"layer": v})).ok()),
-            Some(_) => self.layer_id(params).ok(),
+            Some(_) => self.layer_id(layer_params).ok(),
             None => None,
         };
         let active = self.active_layer;
@@ -1825,8 +1848,24 @@ impl Session {
     /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo
     /// and restored if `f` fails or panics.
     pub(crate) fn guarded(&mut self, label: &'static str, mutates: bool, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
+        self.guarded_inner(label, mutates, true, f)
+    }
+
+    /// An atomic host-call savepoint. The enclosing plugin transaction owns Undo; a guest may
+    /// handle this call's error and still succeed, so failure must restore its changes here.
+    pub(crate) fn savepoint(&mut self, label: &'static str, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
+        self.guarded_inner(label, true, false, f)
+    }
+
+    fn guarded_inner(
+        &mut self,
+        label: &'static str,
+        mutates: bool,
+        record_undo: bool,
+        f: impl FnOnce(&mut Session) -> CmdResult,
+    ) -> CmdResult {
         let snapshot = mutates.then(|| self.project.clone());
-        let box_snapshot = self.boxes.clone();
+        let construction_snapshot = self.constructions.clone();
         let trust = (self.trusted_tasks.clone(), self.trusted_models.clone(), self.trusted_notebooks.clone());
         let state = self.state;
         // The merge key asked for applies to this command only, whatever it does; and to a
@@ -1861,7 +1900,8 @@ impl Session {
         let res = match (&res, &snapshot) {
             (Ok(_), Some(snap)) => match edited_streamed(snap, &self.project) {
                 Some(name) => Err(streamed_refusal(label, &name)),
-                None => res,
+                None if self.request_only => res,
+                None => fresh_source_ids(snap, &mut self.project, &mut self.constructions).and(res),
             },
             _ => res,
         };
@@ -1870,12 +1910,12 @@ impl Session {
             // [`Session::request_url`]) changed nothing: no undo step, nothing to save yet. The
             // session's own flag says so, not the answer, which a plugin's command could forge.
             (Ok(_), Some(_)) if std::mem::take(&mut self.request_only) => {}
+            (Ok(_), Some(_)) if !record_undo => {}
             (Ok(_), Some(mut snap)) => {
                 // A successful script may publish and then remove the layer. Its undo
                 // snapshot still needs the committed file record, even without a live layer
                 // from which undo could carry that record forward.
                 self.keep_published_syncs(&mut snap);
-                fresh_source_ids(&snap, &mut self.project);
                 forget_label_state_of_removed_features(&snap, &mut self.project);
                 // An edit may change the dates the time slider's window filters on: bound layers
                 // whose features or fields the command changed (features are shared with the
@@ -1905,7 +1945,7 @@ impl Session {
                     files.identity != self.file_identity || files.path != self.path || files.opened_package != self.opened_package
                 });
                 if key.is_none() || key != self.merged || self.undo.is_empty() {
-                    self.undo.push((snap, open_layout, label, self.actor.clone(), state, files, trust.clone(), box_snapshot));
+                    self.undo.push((snap, open_layout, label, self.actor.clone(), state, files, trust.clone(), construction_snapshot));
                     if self.undo.len() > UNDO_LIMIT {
                         self.undo.remove(0);
                     }
@@ -1943,7 +1983,7 @@ impl Session {
                     self.opened_package = files.opened_package;
                 }
                 self.opened = opened;
-                self.boxes = box_snapshot;
+                self.constructions = construction_snapshot;
                 self.sync_policy_generation();
                 self.state = state;
                 if let Some(c) = counts {
@@ -2027,7 +2067,7 @@ impl Session {
         use std::mem::take;
         (self.merge, self.merged) = (None, None);
         PutAside {
-            boxes: take(&mut self.boxes),
+            constructions: take(&mut self.constructions),
             opened: self.opened,
             undo: take(&mut self.undo),
             redo: take(&mut self.redo),
@@ -2084,7 +2124,7 @@ impl Session {
     fn give_back(&mut self, opened: u64) {
         let Some(a) = self.put_aside.take_if(|a| a.opened == opened) else { return };
         let PutAside {
-            boxes,
+            constructions,
             opened: _,
             undo,
             redo,
@@ -2133,7 +2173,7 @@ impl Session {
             raster_runs,
             edit_counts,
         } = *a;
-        self.boxes = boxes;
+        self.constructions = constructions;
         (self.undo, self.redo, self.back, self.forward, self.last_camera) = (undo, redo, back, forward, last_camera);
         self.history_projection = history_projection;
         (self.state, self.saved) = (state, saved);
@@ -2172,8 +2212,10 @@ impl Session {
     /// read, and why; and what the header of a cloud-optimised GeoTIFF drawn as a tile layer
     /// leaves out, once that header lands (each date's file of a dated series as it is shown).
     /// Once for each layer's pixels, failure or file, one notice of each kind; the app calls it
-    /// each frame.
+    /// each frame. Also reports streamed vector read failures once, naming their linked file
+    /// and how to repair it when one is available.
     pub fn notice_landed_rasters(&mut self) {
+        cmd::terrain_blocks::landed(self);
         self.notice_landed_pixels();
         // From frames too: a system a frame first drew needs no command after it to be said.
         self.say_grid_notes_now_and_then();
@@ -2185,8 +2227,25 @@ impl Session {
         // once, keeping the same counted notice channel as retained resident expressions.
         let mut landed = Vec::new();
         let mut dates = Vec::new();
+        let mut source_errors = Vec::new();
+        let mut source_error_count = 0;
         for map in &mut self.project.maps {
             for layer in &mut map.layers {
+                // Only a source with a local file is said here; others keep their error for their own reports.
+                if let Some(source) = &mut layer.source
+                    && source.linked_file().is_some()
+                    && let Some(error) = source.error_unsaid()
+                    && let Some(path) = source.linked_file()
+                {
+                    source_error_count += 1;
+                    // Keep a moved folder's notice readable, marking every failure said.
+                    if source_errors.len() < 5 {
+                        source_errors.push(notice_text::NoticeText::format(
+                            "{name}: {path} ({error})",
+                            [("name", layer.name.clone().into()), ("path", path.to_string().into()), ("error", error.into())],
+                        ));
+                    }
+                }
                 // Values in date fields that weren't dates, once for a layer read in place.
                 let (unread, rounded) = layer.source.as_mut().map(|source| source.take_unread_dates()).unwrap_or_default();
                 if let Some(note) = unread {
@@ -2211,6 +2270,9 @@ impl Session {
         }
         for note in dates {
             self.notify(note, false);
+        }
+        if let Some(message) = notice_text::NoticeText::source_errors(source_error_count, source_errors, source_error_count) {
+            self.notify_text(message, true);
         }
         let (mut lost, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
@@ -2728,10 +2790,10 @@ impl Session {
 
     pub(crate) fn undo(&mut self) -> bool {
         self.merged = None;
-        let Some((p, saved, label, actor, state, mut files, trust, boxes)) = self.undo.pop() else { return false };
+        let Some((p, saved, label, actor, state, mut files, trust, constructions)) = self.undo.pop() else { return false };
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
-        let old_boxes = std::mem::replace(&mut self.boxes, boxes);
+        let old_constructions = std::mem::replace(&mut self.constructions, constructions);
         let old_trust = (
             std::mem::replace(&mut self.trusted_tasks, trust.0),
             std::mem::replace(&mut self.trusted_models, trust.1),
@@ -2748,17 +2810,17 @@ impl Session {
         self.keep_tile_pick(&cur);
         self.keep_headers_said(&cur);
         self.keep_synced(&cur);
-        self.redo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files, old_trust, old_boxes));
+        self.redo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files, old_trust, old_constructions));
         self.touch_all_geometry();
         true
     }
 
     pub(crate) fn redo(&mut self) -> bool {
         self.merged = None;
-        let Some((p, saved, label, actor, state, mut files, trust, boxes)) = self.redo.pop() else { return false };
+        let Some((p, saved, label, actor, state, mut files, trust, constructions)) = self.redo.pop() else { return false };
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
-        let old_boxes = std::mem::replace(&mut self.boxes, boxes);
+        let old_constructions = std::mem::replace(&mut self.constructions, constructions);
         let old_trust = (
             std::mem::replace(&mut self.trusted_tasks, trust.0),
             std::mem::replace(&mut self.trusted_models, trust.1),
@@ -2775,7 +2837,7 @@ impl Session {
         self.keep_tile_pick(&cur);
         self.keep_headers_said(&cur);
         self.keep_synced(&cur);
-        self.undo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files, old_trust, old_boxes));
+        self.undo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files, old_trust, old_constructions));
         self.touch_all_geometry();
         true
     }

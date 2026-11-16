@@ -11,6 +11,12 @@ pub fn commands() -> Vec<C> {
     let box_roles: &[crate::ParamRole] =
         &[crate::ParamRole { key: "box", role: crate::Role::Opaque }, crate::ParamRole { key: "attributes", role: crate::Role::Opaque }];
     vec![
+        C::new("edit.previewShapeConversion", "Preview Shape Conversion", "Edit › Features", crate::shape_conversion::preview).inputs(crate::shape_conversion::preview_inputs)
+            .roles(&[crate::ParamRole {key:"frame",role:crate::Role::Opaque}]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).view()
+            .when(crate::cmd::design::need_editable).params(r#"{"layer"?:name|id,"row":number,"featureId"?:number,"kind":"circle|rotatedBox","request"?:number (preview correlation only),"image"?:GeoTIFF layer name|id,"frame"?:construction grid as edit.addBox.box.frame (otherwise Web Mercator)}"#),
+        C::new("edit.applyShapeConversion", "Apply Shape Conversion", "Edit › Features", crate::shape_conversion::apply).inputs(crate::shape_conversion::apply_inputs)
+            .roles(&[crate::ParamRole {key:"preview",role:crate::Role::Opaque}]).effects(crate::policy::Effects::NONE)
+            .when(crate::shape_conversion::need_editing).params(r#"{"preview":result of edit.previewShapeConversion,"confirm":true}"#),
         C::new("edit.calculateGeometry", "Calculate Geometry", "Attribute Table", crate::geometry_calc::run).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::design::need_editable)
             .params(r#"{"layer"?, "field": string, "create": bool, "overwrite": bool, "property": string, "unit": string, "epsg"?: number, "scope": "all"|"selected"}"#),
@@ -40,6 +46,14 @@ pub fn commands() -> Vec<C> {
         C::new("edit.deleteBox", "Delete Box", "Edit › Features", crate::box_edit::delete_box).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(crate::cmd::design::need_editable).params(r#"{"layer"?:name|id,"row":number,"featureId"?:number}"#),
         C::new("edit.boxInfo", "Box Construction", "Edit › Features", crate::box_edit::info).roles(&[]).effects(crate::policy::Effects::NONE).view()
+            .params(r#"{"layer"?:name|id,"row":number}"#),
+        C::new("edit.addCircle", "Add Circle", "Edit › Features", crate::circle_edit::add).inputs(crate::circle_edit::new_circle_inputs).roles(&[crate::ParamRole { key: "circle", role: crate::Role::Opaque }, crate::ParamRole { key: "attributes", role: crate::Role::Opaque }]).effects(crate::policy::Effects::NONE)
+            .when(crate::cmd::design::need_editable).params(r#"{"layer"?: name|id, "circle": {"center":[x,y],"radius":number,"tolerance"?:number (default 0.25 grid units),"frame"?:{"epsg":number,"width":pixels,"height":pixels,"affine":[x0,xc,xr,y0,yc,yr]}},"attributes"?:{field:value},"template"?:string}"#),
+        C::new("edit.updateCircle", "Update Circle", "Edit › Features", crate::circle_edit::update).roles(&[crate::ParamRole { key: "circle", role: crate::Role::Opaque }]).effects(crate::policy::Effects::NONE)
+            .when(crate::cmd::design::need_editable).params(r#"{"layer"?:name|id,"row":number,"featureId"?:number,"circle":as edit.addCircle}"#),
+        C::new("edit.deleteCircle", "Delete Circle", "Edit › Features", crate::circle_edit::delete_circle).roles(&[]).effects(crate::policy::Effects::NONE)
+            .when(crate::cmd::design::need_editable).params(r#"{"layer"?:name|id,"row":number,"featureId"?:number}"#),
+        C::new("edit.circleInfo", "Circle Construction", "Edit › Features", crate::circle_edit::info).roles(&[]).effects(crate::policy::Effects::NONE).view()
             .params(r#"{"layer"?:name|id,"row":number}"#),
     ]
 }
@@ -840,8 +854,9 @@ fn to_dates(ds: &mut Dataset, fi: usize, ty: FieldType, reader: &rustgis_data::d
 }
 
 /// `edit.deleteField`: removes a field and the references to it (symbology and its expressions
-/// by feature, labels, the data design, diagrams, the extrusion's height and base, the marker
-/// rotation), or refuses while the definition query or a display filter reads it.
+/// by feature, labels and their expressions by feature, the data design, diagrams, the
+/// extrusion's height and base, the marker rotation), or refuses while the definition query, a
+/// display filter or the time slider reads it.
 /// A standalone table's field just goes: nothing refers to it. Its rows are changed on the
 /// desktop worker ([`table_ahead`]), with progress and Cancel.
 fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
@@ -877,10 +892,23 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
     if let Some(f) = l.display_filters.iter().find(|f| needs(&f.where_)) {
         return Err(format!("display filter '{}' uses '{name}': change or remove it first", f.name));
     }
+    // The time slider shows the rows whose dates fall in its window: without its field it would
+    // show every row, so it is refused like a filter (#2147). Judged by the field the binding
+    // reads, which may be named in another case.
+    if l.time.as_ref().is_some_and(|t| l.dataset.field_index(&t.field) == Some(fi)) {
+        return Err(format!("the layer is bound to the time slider by '{name}': unbind it first"));
+    }
     let read_before = l.renderer.expression().is_some_and(|e| rustgis_data::query::parse_fields(e, &l.dataset).is_ok());
     // The symbol's expressions by feature that read the field, found while it is there (#2081).
     let by = &l.symbol_by;
     let by_read = [&by.size, &by.fill, &by.stroke, &by.stroke_width, &by.angle].map(|t| t.as_deref().is_some_and(needs));
+    // And the labels' expressions by feature that read it, class by class, Default first (#2147).
+    let label_read: Vec<[bool; 4]> = std::iter::once(&l.labels.default)
+        .chain(&l.labels.classes)
+        .map(|c| [&c.by.text, &c.by.size, &c.by.color, &c.by.angle].map(|t| t.as_deref().is_some_and(needs)))
+        .collect();
+    // A Default class still as the layer made it loses nothing by starting again: that restart isn't said.
+    let default_untouched = l.labels.default == rustgis_map::LabelClass::default_for(&l.dataset);
     let removed = l.dataset.fields.remove(fi).name;
     for f in &mut l.dataset.features {
         if fi < f.attrs.len() {
@@ -895,17 +923,59 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
         l.renderer = rustgis_map::Renderer::Single(l.renderer.base_symbol());
         single = Some(l.name.clone());
     }
+    // Nor the labels' expressions by feature (#2147): one that read the field is removed, and the
+    // label draws as without it. Judged by the field it read, as the symbol's are. Said once for
+    // the layer, naming each class's parts.
+    let mut label_gone = Vec::new();
+    let classes = std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut());
+    for (c, read) in classes.zip(&label_read) {
+        let by = &mut c.by;
+        let parts = [(&mut by.text, "text"), (&mut by.size, "size"), (&mut by.color, "colour"), (&mut by.angle, "angle")];
+        let mut gone = Vec::new();
+        for ((text, part), read) in parts.into_iter().zip(read) {
+            if *read {
+                *text = None;
+                gone.push(part);
+            }
+        }
+        if !gone.is_empty() {
+            label_gone.push((format!("{}'s {}", c.name, and_list(&gone)), gone.len()));
+        }
+    }
+    let label_note = match label_gone.as_slice() {
+        [] => None,
+        [(one, n)] => {
+            let (what, it) = if *n == 1 { ("expression", "it is") } else { ("expressions", "they are") };
+            Some(format!("{}: its label class {one} {what} read the deleted field {removed}, so {it} removed", l.name))
+        }
+        many => {
+            let each: Vec<&str> = many.iter().map(|(class, _)| class.as_str()).collect();
+            Some(format!("{}: its label expressions read the deleted field {removed}, so they are removed: {}", l.name, each.join("; ")))
+        }
+    };
     // The layer's labels turn off if the Default class was on it, which starts again from the
-    // layer's first name-like field (keeping its name, clause and visibility); by a text expression
-    // that still reads, Default only loses the field. Another class on it labels with Default's
-    // field instead. A class clause naming it no longer reads, and takes no features, which go on
-    // to the next class: it is kept to edit, not dropped with its text symbol.
+    // layer's first name-like field (keeping its name, clause, visibility and the expressions left),
+    // said; by a text expression that still reads, Default only loses the field. Another class on
+    // it labels with Default's field instead. A class clause naming it no longer reads, and takes
+    // no features, which go on to the next class: it is kept to edit, not dropped with its text
+    // symbol.
+    let mut restart_note = None;
     if l.labels.default.field.eq_ignore_ascii_case(&removed) {
         let by_text = l.labels.default.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse_fields(t, &l.dataset).is_ok());
         if by_text {
             l.labels.default.field.clear();
         } else {
+            let was_on = l.labels.enabled;
             l.labels.restart_default(&l.dataset);
+            let d = &l.labels.default;
+            let on = if d.field.is_empty() { "with no field and".to_string() } else { format!("on field {} with", d.field) };
+            let off = if was_on { ", and the labels are turned off" } else { "" };
+            restart_note = (was_on || !default_untouched).then(|| {
+                format!(
+                    "{}: its label class {} labelled the deleted field {removed}, so it starts again {on} the default text symbol{off}",
+                    l.name, d.name
+                )
+            });
         }
     }
     l.labels.repoint_missing_fields(&l.dataset);
@@ -997,16 +1067,14 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
             gone.push(part);
         }
     }
-    let by_note = match gone.split_last() {
-        None => None,
-        Some((part, [])) => Some(format!("{}: its symbol's {part} expression read the deleted field {removed}, so it is removed", l.name)),
-        Some((last, rest)) => Some(format!(
-            "{}: its symbol's {} and {last} expressions read the deleted field {removed}, so they are removed",
-            l.name,
-            rest.join(", ")
-        )),
+    let by_note = match gone.as_slice() {
+        [] => None,
+        [part] => Some(format!("{}: its symbol's {part} expression read the deleted field {removed}, so it is removed", l.name)),
+        many => {
+            Some(format!("{}: its symbol's {} expressions read the deleted field {removed}, so they are removed", l.name, and_list(many)))
+        }
     };
-    for note in [extrusion_note, rotation_note, size_note, by_note].into_iter().flatten() {
+    for note in [extrusion_note, rotation_note, size_note, by_note, label_note, restart_note].into_iter().flatten() {
         s.notify(note, false);
     }
     if let Some(note) = diagram_note {
@@ -1029,6 +1097,15 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
         );
     }
     Ok(json!({"rulesRemoved": removed_rules}))
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(parts: &[&str]) -> String {
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// Table writes use one admitted worker path, including the first copy of shared rows. The

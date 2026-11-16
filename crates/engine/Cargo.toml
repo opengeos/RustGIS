@@ -40,6 +40,8 @@ miniz_oxide = { workspace = true }
 # Writing sample GeoPackages.
 rusqlite = { workspace = true }
 rustgis-plugins = { workspace = true, features = ["testing"] }
+# Cancelling a command at each of its checks in turn.
+rustgis-analysis = { workspace = true, features = ["testing"] }
 tiny-skia = { workspace = true }
 # Parsing the addresses commands ask for in tests.
 url = { workspace = true }
@@ -47,7 +49,11 @@ url = { workspace = true }
 proptest = { workspace = true }
 
 # Time slider animations as GIFs (exported by the desktop app only).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.4"
 image = { workspace = true, features = ["gif"] }
 
 # The live PostGIS tests make their own tables, and change rows as someone else would.

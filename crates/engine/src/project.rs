@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::GpRecord;
 
+#[path = "project_capabilities.rs"]
+mod capabilities;
 #[path = "project_label_losses.rs"]
 pub(crate) mod label_losses;
+pub(crate) use capabilities::{layer_file_bytes, map_file_bytes, model_capabilities};
 
 /// A map export cannot keep runtime-only download reservations, even in a larger project.
 pub(crate) fn ensure_map_imports_complete(map: &Map) -> Result<(), String> {
@@ -55,18 +58,33 @@ pub fn open_command(path: &str) -> &'static str {
         "layer.addData"
     }
 }
-/// The baseline saved-document format. Files using a new capability declare format 2 and
-/// name it in `requires`; files without one keep format 1 and their existing appearance.
-pub const FORMAT: u32 = 1;
-/// The newest format this RustGIS reads. A format 2 document opens only when this RustGIS knows
-/// every capability it `requires`, so an older reader refuses rather than losing saved settings.
+/// The format this RustGIS writes: the saved-document compatibility version, independent of the
+/// RustGIS release version. Advance it when an older reader would lose meaningful saved
+/// information on resaving; within format 2, such an addition is named in `requires` instead
+/// (see [`READ_FORMAT`] and [`CAPABILITIES`]).
+pub const FORMAT: u32 = 2;
+/// The newest format this RustGIS reads. Format 2 was made readable before writing began
+/// (#1853): a document of format 2 opens when this RustGIS knows every capability it `requires`,
+/// so what a later RustGIS adds to format 2, and an older one would lose, is listed there and
+/// refused by name instead.
 pub const READ_FORMAT: u32 = 2;
-/// The first format carrying named requirements, independent of later reader versions.
-pub(crate) const CAPABILITY_FORMAT: u32 = 2;
-/// Independent marker sizes alongside classified point colours.
+/// The saved additions this RustGIS understands. Writers require only capabilities used by
+/// their payload, so a format-2 reader without them refuses instead of discarding their fields.
+pub const CAPABILITIES: &[&str] = &[
+    "terrain-block",
+    "terrain-water",
+    "shaded-relief-effects",
+    "normalized-legend-urls",
+    "field-origin",
+    "slope-percent",
+    "shaded-relief-light",
+    "table-export-order",
+    "tabulate-intersection-unit",
+    "layout-element-background",
+    SIZE_BY_CAPABILITY,
+];
+/// Independent marker sizes alongside classified point colours (`Layer::size_by`).
 pub(crate) const SIZE_BY_CAPABILITY: &str = "classified-point-size";
-/// The capabilities a saved document may require that this RustGIS reads.
-pub const CAPABILITIES: &[&str] = &[SIZE_BY_CAPABILITY];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 pub(crate) const MAX_REQUIRES: usize = 256;
@@ -343,15 +361,16 @@ pub struct Project {
     /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.
     #[serde(skip)]
     pub(crate) read_notices: Vec<(ReadPart, NoticeText)>,
-    /// The format read from disk; serialization declares the minimum needed by this content.
-    #[serde(default = "format", getter = "Project::saved_format")]
+    /// The format read from disk; serialization always declares the current writer's format.
+    #[serde(default = "format", serialize_with = "write_format")]
     pub format: u32,
-    /// The read header, recomputed from the content on save so removing a capability also
-    /// removes its requirement. The bounded schema property is supplied by `schema.rs`.
-    #[serde(default, getter = "Project::saved_requires", skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    pub requires: Option<Vec<String>>,
     pub name: String,
+    /// Persistent home-project identity for offline returns; legacy projects acquire it when packaged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin_id: String,
+    /// The home and area this field copy belongs to, retained through ordinary saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_origin: Option<FieldOrigin>,
     #[cfg_attr(feature = "schema", schemars(with = "Vec<crate::schema::Open>"))]
     pub maps: Vec<Map>,
     pub active_map: usize,
@@ -565,10 +584,31 @@ pub struct Job {
     pub updated: f64,
 }
 
+/// A field copy's exact home and offline-area identities (128 random bits each).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct FieldOrigin {
+    pub project: String,
+    pub area: String,
+}
+
+pub(crate) fn field_id() -> Result<String, String> {
+    let mut bits = [0u8; 16];
+    getrandom::fill(&mut bits).map_err(|e| format!("cannot make a field-package identity: {e}"))?;
+    Ok(bits.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub(crate) fn valid_field_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// A map's data clipped to an extent, to take into the field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OfflineArea {
+    /// Persistent identity, independent of the editable display name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     /// The map it came from (by name).
     pub map: String,
@@ -747,41 +787,8 @@ fn format() -> u32 {
 
 /// Every project serialization, including templates and packages, describes the current
 /// writer's payload rather than retaining the version of the file originally opened.
-// The remote derive supplies field-wise codecs with computed header getters, avoiding a
-// second project copy or a JSON tree just to choose its version.
-impl Serialize for Project {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Self::serialize(self, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Project {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::deserialize(deserializer)
-    }
-}
-
-/// A map/layer item has no header in format 1. Add one only when its content needs an older
-/// reader to refuse it; flattening retains the original item shape without copying its data.
-#[derive(Serialize)]
-pub(crate) struct SizedDocument<'a, T> {
-    #[serde(flatten)]
-    header: Option<SizeHeader>,
-    #[serde(flatten)]
-    item: &'a T,
-}
-
-#[derive(Serialize)]
-struct SizeHeader {
-    format: u32,
-    requires: [&'static str; 1],
-}
-
-impl<'a, T> SizedDocument<'a, T> {
-    /// Keeps a plain item headerless; only a size mapping adds format 2 and its requirement.
-    pub(crate) fn new(item: &'a T, sized: bool) -> Self {
-        Self { header: sized.then_some(SizeHeader { format: CAPABILITY_FORMAT, requires: [SIZE_BY_CAPABILITY] }), item }
-    }
+fn write_format<S: serde::Serializer>(_: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32(FORMAT)
 }
 
 impl Default for Project {
@@ -1050,21 +1057,6 @@ fn requires_known(requires: &Requires, kind: &str, open: &str) -> Result<(), Str
 }
 
 impl Project {
-    /// Includes offline copies as well as live maps: both retain their size mappings on save.
-    fn has_size_mapping(&self) -> bool {
-        self.maps.iter().chain(self.offline_areas.iter().map(|a| &a.data)).any(|m| m.layers.iter().any(|l| l.size_by.is_some()))
-    }
-
-    /// Plain projects retain format 1; a new size mapping needs capability-aware readers.
-    fn saved_format(&self) -> u32 {
-        if self.has_size_mapping() { CAPABILITY_FORMAT } else { FORMAT }
-    }
-
-    /// Recomputes the capability list rather than copying a read header that may now be stale.
-    fn saved_requires(&self) -> Option<Vec<String>> {
-        self.has_size_mapping().then(|| vec![SIZE_BY_CAPABILITY.to_string()])
-    }
-
     fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
         let mut paths = Vec::new();
         for map in &mut self.maps {
@@ -1091,8 +1083,9 @@ impl Project {
         Project {
             read_notices: Vec::new(),
             format: FORMAT,
-            requires: None,
             name: name.into(),
+            origin_id: String::new(),
+            field_origin: None,
             maps: vec![Map::new("Map")],
             active_map: 0,
             tables: Vec::new(),
@@ -1425,6 +1418,13 @@ impl Project {
                 // The camera is in the lost projection's units: start from the whole world.
                 m.camera = rustgis_map::Camera::world();
             }
+            // A terrain water's glint from 0 to 1, as `map.terrain` checks it: another value (a hand
+            // edit, or a newer file) is brought into that range, and said.
+            if let Some(w) = m.view.terrain.as_mut().and_then(|t| t.water.as_mut()) {
+                let g = w.glint;
+                w.glint = if g.is_finite() { g.clamp(0.0, 1.0) } else { rustgis_map::view::WATER_GLINT };
+                done.water_glint.add(usize::from(w.glint != g), &m.name);
+            }
             m.camera.clamp();
             // The time slider's window and dated tile addresses, before the addresses are checked.
             m.apply_time();
@@ -1673,6 +1673,13 @@ impl Project {
                 format!("not a RustGIS project: {msg}")
             }
         })?;
+        let mut area_ids = std::collections::HashSet::new();
+        if (!p.origin_id.is_empty() && !valid_field_id(&p.origin_id))
+            || p.field_origin.as_ref().is_some_and(|origin| !valid_field_id(&origin.project) || !valid_field_id(&origin.area))
+            || p.offline_areas.iter().any(|area| !area.id.is_empty() && (!valid_field_id(&area.id) || !area_ids.insert(area.id.as_str())))
+        {
+            return Err("not a RustGIS project: an offline field identity is invalid or duplicated".into());
+        }
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
         // (A backstop: `check_format` has refused it already.)
         if p.format > READ_FORMAT {
@@ -1841,12 +1848,12 @@ pub(crate) fn read_file(path: &Path, max: u64) -> Result<Vec<u8>, String> {
         return Err(too_large());
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|f| f.take(max.saturating_add(1)).read_to_end(&mut bytes))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = rustgis_data::provenance::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    (&file).take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     if bytes.len() as u64 > max {
         return Err(too_large());
     }
+    rustgis_data::provenance::buffer(path, &file, &bytes);
     Ok(bytes)
 }
 
@@ -1999,6 +2006,7 @@ struct Repaired {
     content_images: Tally,
     content_settings: Tally,
     projection_lost: Tally,
+    water_glint: Tally,
     /// A map whose projection was lost has bookmarks, which stay in that projection's units.
     bookmarks_kept: bool,
     tile_addresses: Tally,
@@ -2113,6 +2121,12 @@ impl Repaired {
         );
         let t = &self.group_parents;
         say(ReadPart::Maps, t, message("{n} group(s) with an invalid parent moved to the top level {when} (in {places})", t, vec![]));
+        let t = &self.water_glint;
+        say(
+            ReadPart::Maps,
+            t,
+            message("{n} terrain water glint(s) outside 0 to 1 brought into that range {when} (in {places})", t, vec![]),
+        );
         let t = &self.projection_lost;
         let bookmarks = if self.bookmarks_kept {
             NoticeText::term("; their bookmarks are still in the old projection's units")
@@ -2181,7 +2195,7 @@ pub(crate) fn layout_notices(
     let adjusted = total(|r| r.elements_adjusted);
     if adjusted > 0 {
         notices.push(format!(
-            "{name}: {adjusted} layout element(s) with a value out of range, a repeated id, an over-long name or a missing map frame reference repaired {when} (in {})",
+            "{name}: {adjusted} layout element(s) with a value out of range, a repeated id, an over-long name, a missing map frame reference or a background on a map frame repaired {when} (in {})",
             layout_names(repairs, |r| r.elements_adjusted)
         ));
     }
@@ -2258,8 +2272,9 @@ impl Durable for Project {
         let Self {
             read_notices: _,
             format: _,
-            requires: _,
             name: _,
+            origin_id: _,
+            field_origin: _,
             maps,
             active_map: _,
             tables,
@@ -2288,7 +2303,7 @@ impl Durable for Project {
             p.child(Owner::Map(i), v);
         }
         for (i, v) in offline_areas.iter().enumerate() {
-            let OfflineArea { name: _, map: _, extent: _, created: _, synced: _, data } = v;
+            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, data } = v;
             p.child(Owner::Area(i), data);
         }
         for (i, v) in tables.iter().enumerate() {
@@ -2526,6 +2541,28 @@ mod limit_tests {
 #[cfg(test)]
 mod login_binding_tests {
     use super::*;
+
+    #[test]
+    fn a_near_limit_encoded_legend_survives_save_and_recovery_unbinding() {
+        use rustgis_data::{login_address, ogc::Legend};
+        let document = login_address::bind("0123456789abcdef", "https://maps.test", "https://maps.test/wms").unwrap();
+        let prefix = "https://maps.test/legend?name=";
+        let raw = format!("{prefix}{}x", " ".repeat(rustgis_map::tiles::MAX_LEGEND_URL - prefix.len() - 1));
+        let bound = login_address::inherit(&document, &raw);
+        let mut tile = rustgis_map::TileLayer::new("Legend", rustgis_map::tiles::TileKind::Raster, "https://maps.test/{z}/{x}/{y}.png");
+        tile.legends = rustgis_map::tiles::checked_legends([Legend { url: bound.clone(), ..Default::default() }]);
+        assert_eq!(tile.legends.len(), 1);
+        let mut project = Project::default();
+        project.map_mut().tiles.push(tile);
+        let (saved, _) = project.saved_text(None).unwrap();
+        for text in [saved, project.recovery_text().unwrap()] {
+            assert!(!text.contains(login_address::PREFIX));
+            let opened = Project::from_json(&text).unwrap();
+            let legends = &opened.map().tiles[0].legends;
+            assert_eq!(legends.len(), 1, "unbinding must not make an accepted legend too long");
+            assert_eq!(legends[0].url, login_address::inner(&bound));
+        }
+    }
 
     #[test]
     fn saves_and_imports_strip_runtime_capabilities_including_recorded_urls() {

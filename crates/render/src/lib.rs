@@ -33,6 +33,7 @@ mod raster;
 pub mod raster_export;
 pub mod report;
 mod single_image;
+mod square_labels;
 mod stroke_paths;
 pub mod svg;
 pub mod terrain;
@@ -2031,9 +2032,16 @@ impl ArchiveRevision {
         self.0 == archive_revisions(maps).0
     }
 
-    /// Refuses a spanning render before reporting any ordinary drawing failure.
-    pub(crate) fn finish<'a, T>(self, maps: impl IntoIterator<Item = &'a Map>, result: Option<T>, failure: &str) -> Result<T, String> {
-        self.finish_revision(archive_revisions(maps), result, failure)
+    /// Refuses a spanning render before reporting a drawing failure. `failed_source` is the
+    /// live layer identity returned by the read that stopped this render, never a retained
+    /// error chosen from another layer or an earlier render.
+    pub(crate) fn finish<T>(self, map: &Map, failed_source: Option<u64>, result: Option<T>, failure: &str) -> Result<T, String> {
+        let source_error = failed_source.filter(|_| result.is_none()).and_then(|id| {
+            let layer = map.layers.iter().find(|layer| layer.instance_id() == id)?;
+            layer.source.as_ref()?.read_error().map(|why| format!("{}: {why}", layer.name))
+        });
+        let current = archive_revisions([map]);
+        self.finish_revision(current, result, source_error.as_deref().unwrap_or(failure))
     }
 
     /// Checks a composed output against a newly captured revision of the same source set.
@@ -2066,13 +2074,13 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
 
 /// [`render_with_backend`] on the CPU, as pixels.
 fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
-    render_cpu(map, view, full_res_rasters, false)
+    render_cpu(map, view, full_res_rasters, false, &mut None)
 }
 
 /// [`render_with`] on the CPU, kept as vectors where it can be (`record`, see
 /// [`render_frame`]).
-fn render_cpu(map: &mut Map, view: &View, full_res_rasters: bool, record: bool) -> Option<Rendered> {
-    match render_any(map, view, full_res_rasters, Backend::Cpu, record) {
+fn render_cpu(map: &mut Map, view: &View, full_res_rasters: bool, record: bool, failed_source: &mut Option<u64>) -> Option<Rendered> {
+    match render_any(map, view, full_res_rasters, Backend::Cpu, record, failed_source) {
         Some(RenderOutput::Cpu(r)) => Some(r),
         // The Cpu backend never produces RenderOutput::Gpu.
         Some(RenderOutput::Gpu(_)) | None => None,
@@ -2097,14 +2105,22 @@ pub(crate) fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dir
 /// `full_res_rasters` renders rasters at full resolution (exports); `backend` selects the CPU
 /// pixmap or a GPU scene (see [`Backend`]).
 fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend) -> Option<RenderOutput> {
-    render_any(map, view, full_res_rasters, backend, false)
+    render_any(map, view, full_res_rasters, backend, false, &mut None)
 }
 
 /// [`render_with_backend`], `record` keeping a flat, north-up frame as vectors where it can
 /// ([`render_frame`]).
-fn render_any(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, record: bool) -> Option<RenderOutput> {
+/// `failed_source` carries only a fatal source read's live layer identity to the caller.
+fn render_any(
+    map: &mut Map,
+    view: &View,
+    full_res_rasters: bool,
+    backend: Backend,
+    record: bool,
+    failed_source: &mut Option<u64>,
+) -> Option<RenderOutput> {
     let revisions = archive_revisions([&*map]);
-    let output = render_pass(map, view, full_res_rasters, backend, record);
+    let output = render_pass(map, view, full_res_rasters, backend, record, failed_source);
     // A frame stopped part-way (see `cancel`) is no frame.
     if cancel::requested() {
         return None;
@@ -2123,7 +2139,15 @@ fn drawn_scales(map: &Map, camera: &Camera, view: &View) -> Vec<f64> {
 }
 
 /// One entire pass, including all bands and backend fallbacks, under `render_any`'s guard.
-fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, record: bool) -> Option<RenderOutput> {
+fn render_pass(
+    map: &mut Map,
+    view: &View,
+    full_res_rasters: bool,
+    backend: Backend,
+    record: bool,
+    failed_source: &mut Option<u64>,
+) -> Option<RenderOutput> {
+    *failed_source = None;
     // A bearing or pitch set directly on the camera may be unnormalised (or no number, which
     // faces north and looks straight down).
     let mut camera = view.camera;
@@ -2159,6 +2183,7 @@ fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Back
             {
                 if let Err(e) = source.open() {
                     source.error = Some(e);
+                    *failed_source = Some(layer.instance_id());
                     return None;
                 }
                 if layer.dataset.fields.is_empty()
@@ -2201,10 +2226,11 @@ fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Back
                 if let Some(s) = map.layer_mut(layer.id).and_then(|l| l.source.as_mut()) {
                     s.error = Some(e.to_string());
                 }
+                *failed_source = Some(layer.instance_id());
                 return None;
             }
             if let Some(source) = map.layer_mut(layer.id).and_then(|l| l.source.as_mut()) {
-                source.error = None;
+                source.clear_error();
             }
             layer.selection = features.iter().enumerate().filter_map(|(r, f)| ids.contains(&f.id).then_some(r)).collect();
             layer.source = None;
@@ -2216,11 +2242,11 @@ fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Back
         // Owner synchronization has already run. Repeating it on the copy could consume a
         // shared pending result before its owner installs it, even for a plain chunk source.
         let mut output = if backend.is_gpu() {
-            gpu_turned(&mut snapshot, &view, full_res_rasters, true)
+            gpu_turned(&mut snapshot, &view, full_res_rasters, true, failed_source)
                 .map(RenderOutput::Gpu)
-                .or_else(|| render_tilted(&mut snapshot, &view, full_res_rasters, true).map(RenderOutput::Cpu))
+                .or_else(|| render_tilted(&mut snapshot, &view, full_res_rasters, true, failed_source).map(RenderOutput::Cpu))
         } else {
-            render_tilted(&mut snapshot, &view, full_res_rasters, true).map(RenderOutput::Cpu)
+            render_tilted(&mut snapshot, &view, full_res_rasters, true, failed_source).map(RenderOutput::Cpu)
         };
         map.adopt_caches(&snapshot);
         if let Some(output) = &mut output {
@@ -2234,24 +2260,24 @@ fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Back
     // The globe turns and tilts itself (`Globe`): one frame.
     if map.projection.is_globe() {
         let view = View { camera, ..*view };
-        return render_frame(map, &view, full_res_rasters, backend, Labels::Own, false);
+        return render_frame(map, &view, full_res_rasters, backend, Labels::Own, false, failed_source);
     }
     {
         let view = View { camera, ..*view };
         if backend.is_gpu()
             && (camera.pitch != 0.0 || camera.bearing != 0.0)
-            && let Some(scene) = gpu_turned(map, &view, full_res_rasters, false)
+            && let Some(scene) = gpu_turned(map, &view, full_res_rasters, false, failed_source)
         {
             return Some(RenderOutput::Gpu(scene));
         }
         if camera.pitch != 0.0 {
-            return render_tilted(map, &view, full_res_rasters, false).map(RenderOutput::Cpu);
+            return render_tilted(map, &view, full_res_rasters, false, failed_source).map(RenderOutput::Cpu);
         }
         if camera.bearing != 0.0 {
-            return render_turned(map, &view, full_res_rasters, record).map(RenderOutput::Cpu);
+            return render_turned(map, &view, full_res_rasters, record, failed_source).map(RenderOutput::Cpu);
         }
     }
-    render_frame(map, view, full_res_rasters, backend, Labels::Own, record)
+    render_frame(map, view, full_res_rasters, backend, Labels::Own, record, failed_source)
 }
 
 /// Persisted local Shapefiles can require complete traversal before a handle is opened.
@@ -2469,7 +2495,14 @@ const LABEL_MIN_DEPTH_SCALE: f64 = 0.3;
 /// ([`Camera::tilt_bands`]), sharp near and coarser toward the horizon (so far tiles come at
 /// lower zoom), then each screen pixel takes its colour from the band under it, fading into fog
 /// and the sky past the view's reach. Labels are placed in the tilted view, upright.
-fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready: bool) -> Option<Rendered> {
+fn render_tilted(
+    map: &mut Map,
+    view: &View,
+    full_res_rasters: bool,
+    sources_ready: bool,
+    failed_source: &mut Option<u64>,
+) -> Option<Rendered> {
+    *failed_source = None;
     let bands_of = view.camera.tilt_bands(view.width, view.height);
     let data_pending = !sources_ready && sync_tilted(map, view, &bands_of, full_res_rasters);
     // Labels are placed in the tilted view: a lock on a flat view's labels doesn't apply.
@@ -2483,6 +2516,10 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
     // once (at most eight, `Camera::tilt_bands`, each capped at `MAX_BAND_PX` a side) where the flat warp holds
     // one at a time: the cost of hiding what slopes stand in front of.
     let ground = terrain::Ground::of(map, &view.camera);
+    // The bands' Shaded Relief draws this ground's water (see `relief_water`).
+    let _water = BandWater::set(ground.as_ref().and_then(|g| g.water().cloned()));
+    // And the sun's glint on it, which each band adds over the water's fill.
+    let _glint = TiltGlint::set(ground.as_ref().and_then(|g| terrain::Glint::of(map, view, g)));
     let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
     let last = bands_of.len().saturating_sub(1);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
@@ -2495,7 +2532,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         }
         let v = band_view(view, &b);
         let Some(RenderOutput::Cpu(r)) =
-            render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates), false)
+            render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates), false, failed_source)
         else {
             let scale = map.ground_res_at(&v.camera) / rustgis_geom::PIXEL_M;
             let complete = sources_ready
@@ -2749,7 +2786,8 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
     // Walls once the base is settled: over elevation tiles still on their way it would move with
     // each tile (the frame is drawn again when they arrive, `Ground::pending`).
     if let Some(b) = block.as_ref().filter(|b| b.walls_stand(ground)) {
-        block::draw_walls(pm, view, ground, b, &edges, fog, far);
+        let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+        block::draw_walls(pm, view, ground, b, &edges, &block::runs(map, b, scale), fog, far);
     }
     true
 }
@@ -2911,7 +2949,13 @@ fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidat
 /// [`render_tilted`] warps them), with point markers upright over them and labels placed in
 /// the view. `None` when the view needs pictures drawn on the CPU (tiles, rasters, layers drawn
 /// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
-fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready: bool) -> Option<gpu_scene::GpuScene> {
+fn gpu_turned(
+    map: &mut Map,
+    view: &View,
+    full_res_rasters: bool,
+    sources_ready: bool,
+    failed_source: &mut Option<u64>,
+) -> Option<gpu_scene::GpuScene> {
     use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
     if !gpu_may_turn(map, view) {
         return None;
@@ -2922,7 +2966,9 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
     if view.camera.pitch == 0.0 {
         let (bw, bh) = view.camera.rotated_size(view.width, view.height);
         let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
-        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &north, full_res_rasters, Backend::Gpu, Labels::Turned(view), false) else {
+        let Some(RenderOutput::Gpu(scene)) =
+            render_frame(map, &north, full_res_rasters, Backend::Gpu, Labels::Turned(view), false, failed_source)
+        else {
             return None;
         };
         if pictures(&scene.cmds) || scene.labels.iter().any(|l| l.icon.is_some()) {
@@ -2947,7 +2993,7 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
         }
         let v = band_view(view, b);
         let Some(RenderOutput::Gpu(scene)) =
-            render_frame(map, &v, full_res_rasters, Backend::Gpu, Labels::Tilted(view, &mut candidates), false)
+            render_frame(map, &v, full_res_rasters, Backend::Gpu, Labels::Tilted(view, &mut candidates), false, failed_source)
         else {
             if cancel::requested() {
                 map.label_lock = lock;
@@ -3809,10 +3855,12 @@ fn sample_band(v: &View, pm: &Pixmap, m: Coord) -> Option<[f32; 4]> {
 /// A view turned to a bearing, on the CPU: the map is drawn facing north over the box around
 /// the turned view, then turned into place. Labels are placed in the turned view and drawn
 /// upright, as MapLibre keeps them.
-fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool, record: bool) -> Option<Rendered> {
+fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool, record: bool, failed_source: &mut Option<u64>) -> Option<Rendered> {
     let (bw, bh) = view.camera.rotated_size(view.width, view.height);
     let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
-    let Some(RenderOutput::Cpu(mut r)) = render_frame(map, &north, full_res_rasters, Backend::Cpu, Labels::Turned(view), record) else {
+    let Some(RenderOutput::Cpu(mut r)) =
+        render_frame(map, &north, full_res_rasters, Backend::Cpu, Labels::Turned(view), record, failed_source)
+    else {
         return None;
     };
     // A recorded north-up frame is placed turned as it is: its vectors turn with it.
@@ -3848,11 +3896,93 @@ fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool, record: boo
     Some(Rendered { pixmap: pm.into_pixmap(), ..r })
 }
 
+thread_local! {
+    /// The terrain's water the bands of a tilted view, and of its drape, draw their Shaded Relief
+    /// with (#1915), taken from the ground the whole view lies on ([`BandWater`]): each band at
+    /// its own camera would read the shores again (over elevation tiles, at its own zoom), and
+    /// could get another level than the ground's once shore tiles land between two bands.
+    /// `None` when no view set it; `Some(None)` when the view has no water.
+    static BAND_WATER: std::cell::RefCell<Option<Option<std::sync::Arc<terrain::Water>>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Holds [`BAND_WATER`] while a tilted view's bands are drawn, and puts back what was there when
+/// dropped (also when a band panics).
+struct BandWater(Option<Option<std::sync::Arc<terrain::Water>>>);
+
+impl BandWater {
+    fn set(water: Option<std::sync::Arc<terrain::Water>>) -> BandWater {
+        BandWater(BAND_WATER.with(|w| w.replace(Some(water))))
+    }
+}
+
+impl Drop for BandWater {
+    fn drop(&mut self) {
+        let kept = self.0.take();
+        BAND_WATER.with(|w| *w.borrow_mut() = kept);
+    }
+}
+
+thread_local! {
+    /// The sun glint on the terrain's water (#1915) the bands of the tilted view being drawn add to
+    /// their frames ([`render_tilted`], [`render_tilt_drape`]): worked out once for the view, whose
+    /// eye it shines toward, not for each band's own camera. Both draw their bands one after
+    /// another on the thread that sets it: a band drawn on another thread would get no glint.
+    static TILT_GLINT: std::cell::RefCell<Option<std::rc::Rc<terrain::Glint>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The glint the bands of a tilted view add to their frames while it lives (see [`TILT_GLINT`]);
+/// the one before is put back when it is dropped, on every way out of drawing the view.
+struct TiltGlint(Option<std::rc::Rc<terrain::Glint>>);
+
+impl TiltGlint {
+    fn set(glint: Option<terrain::Glint>) -> TiltGlint {
+        TiltGlint(TILT_GLINT.with(|g| g.replace(glint.map(std::rc::Rc::new))))
+    }
+}
+
+impl Drop for TiltGlint {
+    fn drop(&mut self) {
+        let kept = self.0.take();
+        TILT_GLINT.with(|g| g.replace(kept));
+    }
+}
+
+/// The terrain's water a frame's Shaded Relief layers draw flat at its level with the even light
+/// of flat ground (#1915), and whether shore tiles it was read from are still on their way. A
+/// band of a tilted view or drape takes the whole view's ([`BAND_WATER`]); another frame reads it
+/// for the view it stands in for. `None` without water or with no Shaded Relief layer drawn at
+/// `scale`.
+fn relief_water(map: &Map, view: &View, labels_to: &Labels, scale: f64) -> Option<(std::sync::Arc<terrain::Water>, bool)> {
+    map.view.terrain.as_ref()?.water.as_ref()?;
+    let relief = map.layers.iter().any(|l| {
+        l.visible
+            && map.draws_at(l, scale)
+            && l.raster.as_ref().is_some_and(|r| matches!(r.style.renderer, rustgis_map::RasterRenderer::ShadedRelief { .. }))
+    });
+    if !relief {
+        return None;
+    }
+    if matches!(labels_to, Labels::Tilted(..) | Labels::Shared)
+        && let Some(water) = BAND_WATER.with(|w| w.borrow().clone())
+    {
+        // The view waits for its own ground's tiles.
+        return water.map(|w| (w, false));
+    }
+    let camera = match labels_to {
+        Labels::Turned(to) | Labels::Tilted(to, _) => &to.camera,
+        Labels::Own | Labels::Shared => &view.camera,
+    };
+    let ground = terrain::Ground::of(map, camera)?;
+    let pending = ground.pending();
+    ground.water().cloned().map(|w| (w, pending))
+}
+
 /// Draws one north-up frame. `labels_to` says where its labels go: a turned or tilted view the
 /// frame stands in for places them itself (and draws their icons). `full_res_rasters` marks an
 /// export, which draws everything as it will stay: rasters at full resolution, and labels in
 /// their installed font families, waiting for those to be indexed (`families::find`). A frame on
 /// screen passes `false`, and never waits for the index (`families::find_ready`).
+/// A fatal streamed read sets `failed_source` to the layer that stopped this frame.
 fn render_frame(
     map: &mut Map,
     view: &View,
@@ -3860,7 +3990,9 @@ fn render_frame(
     backend: Backend,
     mut labels_to: Labels<'_>,
     record: bool,
+    failed_source: &mut Option<u64>,
 ) -> Option<RenderOutput> {
+    *failed_source = None;
     let (w, h) = view.pixel_size();
     // Who draws a layer's cast shadows: this map and the layer, by their live identities (a
     // layer's id repeats from map to map: a locator's and its main map's, say).
@@ -4143,7 +4275,9 @@ fn render_frame(
     let tokens = rustgis_map::graphics::TokenValues::of(map, scale);
     let n_layers = map.layers.len();
     // Masks: layers shown only inside another layer's polygons, or left of the swipe divider.
-    let masks = layer_masks(map, &ctx, w, h, &flat, &key, scale)?;
+    let masks = layer_masks(map, &ctx, w, h, &flat, &key, scale, failed_source)?;
+    // The lines point labels are turned square to (#2263), on the screen.
+    let square_lines = square_lines(map, &ctx, &flat);
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..n_layers).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -4160,6 +4294,10 @@ fn render_frame(
     };
     // Extrusion heights are metres on the map's body.
     let body = map.body().ratio();
+    // The terrain's water, drawn flat by Shaded Relief.
+    let (lake_light, lake_pending) = relief_water(map, view, &labels_to, scale).map_or((None, false), |(w, p)| (Some(w), p));
+    // Shore tiles the water's levels wait for: the relief is drawn again once they land.
+    tile_out.pending |= lake_pending;
     // The layer drawn last, whose tile layers go over it before the next.
     let mut below: Option<u32> = None;
     for li in order {
@@ -4243,7 +4381,11 @@ fn render_frame(
                     rustgis_map::raster::CastShadows::None => None,
                 };
                 let (shadow, sky) = (lit(rl.cast_shadows(false, owner, shadows_landed)), lit(rl.sky_view(false, owner, shadows_landed)));
-                let light = raster::Lights { shadow: shadow.as_deref().map(Vec::as_slice), sky: sky.as_deref().map(Vec::as_slice) };
+                let light = raster::Lights {
+                    shadow: shadow.as_deref().map(Vec::as_slice),
+                    sky: sky.as_deref().map(Vec::as_slice),
+                    water: lake_light.as_deref(),
+                };
                 // Read in place: the part in view, at the level the view needs.
                 let address = rl.path.as_deref().filter(|_| rl.in_place);
                 let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
@@ -4318,6 +4460,7 @@ fn render_frame(
                     if let Some(s) = &mut layer.source {
                         s.error = Some(e.to_string());
                     }
+                    *failed_source = Some(layer.instance_id());
                     return None;
                 }
             }
@@ -4356,6 +4499,7 @@ fn render_frame(
                     if let Some(source) = &mut layer.source {
                         source.error = Some(e.to_string());
                     }
+                    *failed_source = Some(layer.instance_id());
                     return None;
                 }
             }
@@ -4956,6 +5100,8 @@ fn render_frame(
                         let mut curves = None;
                         let mut line_alternatives = Vec::new();
                         let mut line_places = None;
+                        // Turned square to a line: no other places round its point.
+                        let mut squared = false;
                         if let Some((mx, my)) = moved {
                             places.push((0, mx as f32, my as f32, None, Vec::new()));
                         } else if let (LabelPlacement::Parallel | LabelPlacement::Curved, Geometry::Line(parts)) = (class.placement, g) {
@@ -5041,6 +5187,7 @@ fn render_frame(
                                             chars,
                                             advances,
                                             gap: spacing * 1.33,
+                                            size,
                                             overrun,
                                             off,
                                         }),
@@ -5050,7 +5197,7 @@ fn render_frame(
                                 } else {
                                     for (i, at) in line_labels::repeats(line.length(), repeat) {
                                         let Some(((cx, cy), turns)) = line
-                                            .curved(&advances, spacing * 1.33, overrun, Some(at))
+                                            .curved(&advances, spacing * 1.33, size, overrun, Some(at))
                                             .and_then(|c| line_labels::curved_off(c, off))
                                         else {
                                             continue;
@@ -5091,6 +5238,28 @@ fn render_frame(
                                     }
                                 }
                             }
+                        } else if let Some((lx, ly, angle)) = class
+                            .square_to
+                            .as_ref()
+                            .filter(|_| is_point && class.placement == LabelPlacement::Perpendicular && point.is_some())
+                            .and_then(|to| {
+                                // Square to its nearest line, the line's course taken over a text
+                                // height; starting at the point, out by its offset.
+                                let runs = square_lines.get(&to.layer.to_ascii_lowercase())?;
+                                let reach = text::block_height(&text, size);
+                                let n = square_labels::normal(runs, (x as f32, y as f32), to.within * 1.33, reach, to.side)?;
+                                let start = (marker / 2.0 + 2.0 + class.offset[0] * 1.33) * label_factor;
+                                Some(square_labels::place(
+                                    (x as f32, y as f32),
+                                    n,
+                                    start,
+                                    bw * label_factor,
+                                    class.offset[1] * 1.33 * label_factor,
+                                ))
+                            })
+                        {
+                            squared = true;
+                            places.push((0, lx, ly, Some(angle), Vec::new()));
                         } else {
                             let (lx, ly) = place(class.placement);
                             // Turned by its angle expression (degrees clockwise), about its centre,
@@ -5122,7 +5291,7 @@ fn render_frame(
                                     class
                                         .placement
                                         .alternatives()
-                                        .filter(|_| class.other_positions && moved.is_none())
+                                        .filter(|_| class.other_positions && moved.is_none() && !squared)
                                         .map(place)
                                         .map(LabelPlace::from)
                                         .collect::<Vec<_>>()
@@ -5236,10 +5405,11 @@ fn render_frame(
                 if let Some(s) = &mut layer.source {
                     s.error = Some(e.to_string());
                 }
+                *failed_source = Some(layer.instance_id());
                 return None;
             }
             if let Some(source) = &mut layer.source {
-                source.error = None;
+                source.clear_error();
             }
         } else if let Err(e) = draw_chunk(layer) {
             log::warn!("cannot render layer '{}': {e}", layer.name);
@@ -5251,6 +5421,7 @@ fn render_frame(
             if let Some(source) = &mut layer.source {
                 source.error = Some(e.to_string());
             }
+            *failed_source = Some(layer.instance_id());
             return None;
         }
         if let Some(sheet) = extruded_charts {
@@ -5283,6 +5454,12 @@ fn render_frame(
     }
     if let Some(id) = below {
         draw_tiles!(Some(id));
+    }
+    // A band of a tilted view: the sun's glint on the terrain's water, over the water's own fill.
+    if matches!(labels_to, Labels::Tilted(..) | Labels::Shared)
+        && let Some(g) = TILT_GLINT.with(|g| g.borrow().clone())
+    {
+        g.paint(pm.pixels(), view);
     }
     if let Some(g) = &globe {
         globe_shading(pm.pixels(), g, water, space(view, map), view.pixels_per_point as f32);
@@ -5410,7 +5587,7 @@ fn render_frame(
             // layer) costs more full-screen uploads than a plain CPU rasterization.
             let images = cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count();
             if images > 4 {
-                return render_frame(map, view, full_res_rasters, Backend::Cpu, labels_to, record);
+                return render_frame(map, view, full_res_rasters, Backend::Cpu, labels_to, record, failed_source);
             }
             Some(RenderOutput::Gpu(gpu_scene::GpuScene {
                 clear: mesh::premul(water),
@@ -5466,6 +5643,7 @@ pub(crate) fn blend_mode(b: rustgis_map::effects::Blend) -> tiny_skia::BlendMode
 
 /// The mask of every masked or swiped layer: inside its mask layer's polygons and left of the
 /// swipe divider.
+/// A failed mask read returns its source layer's identity through `failed_source`.
 fn layer_masks(
     map: &mut Map,
     ctx: &Ctx,
@@ -5474,6 +5652,7 @@ fn layer_masks(
     flat: &rustgis_map::projection::Flat,
     key: &str,
     scale: f64,
+    failed_source: &mut Option<u64>,
 ) -> Option<Vec<(u32, tiny_skia::Mask)>> {
     let wanted: Vec<(u32, Option<String>, Option<f64>)> = map
         .layers
@@ -5517,7 +5696,11 @@ fn layer_masks(
                             if let Some(s) = map.layers.get_mut(mi).and_then(|l| l.source.as_mut()) {
                                 s.error = Some(e.to_string());
                             }
+                            *failed_source = map.layers.get(mi).map(|layer| layer.instance_id());
                             return None;
+                        }
+                        if let Some(source) = map.layers.get_mut(mi).and_then(|l| l.source.as_mut()) {
+                            source.clear_error();
                         }
                     } else if let Some(ml) = map.layers.get_mut(mi) {
                         if ctx.globe.is_some() {
@@ -5887,6 +6070,11 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     let anchors = std::mem::take(&mut map.label_lock_line_anchors);
     map.label_display.paused = true;
     let mut out = Vec::new();
+    // The bands' Shaded Relief draws the whole view's water (see `relief_water`).
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let _water = BandWater::set(relief_water(map, view, &Labels::Own, scale).map(|(w, _)| w));
+    // And the sun's glint on it, toward the view's eye.
+    let _glint = TiltGlint::set(terrain::Ground::of(map, &view.camera).and_then(|g| terrain::Glint::of(map, view, &g)));
     for b in bands {
         let (mut w, mut h) = (b.width * (1.0 + 2.0 * margin), b.height * (1.0 + 2.0 * margin));
         let mut camera = b.camera;
@@ -5898,7 +6086,7 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
         (w, h) = (fw, fh);
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The bands share the read above.
-        if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, false, Backend::Cpu, Labels::Shared, false) {
+        if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, false, Backend::Cpu, Labels::Shared, false, &mut None) {
             out.push(TiltPatch { pixmap: r.pixmap, band: rustgis_map::camera::Band { camera, width: w, height: h, depth: b.depth } });
         }
     }
@@ -5927,6 +6115,84 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
         .filter(|part| near(part))
         .flat_map(|part| line_labels::in_view(part.iter().map(|c| ctx.screen(*c).map(|(x, y)| (x as f32, y as f32))), w, h))
         .max_by(|a, b| length(a).total_cmp(&length(b)))
+}
+
+/// The lines of the layers point labels are turned square to ([`LabelPlacement::Perpendicular`],
+/// #2263), keyed by layer name in ASCII lower case (as [`Map::layer_by_name`] matches names):
+/// each line's and polygon outline's runs on the screen, a ring closed as it is drawn, broken
+/// where a place doesn't project (on the globe, cut at the horizon as its stroke is). A layer
+/// read in chunks from its source has none to hand.
+fn square_lines(
+    map: &Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+) -> std::collections::HashMap<String, Vec<square_labels::Run>> {
+    let mut out = std::collections::HashMap::new();
+    let wanted = map.layers.iter().filter(|l| l.visible && l.labels.enabled).flat_map(|l| l.labels.in_order()).filter_map(|c| {
+        c.square_to.as_ref().filter(|_| c.placement == LabelPlacement::Perpendicular).map(|t| t.layer.to_ascii_lowercase())
+    });
+    for name in wanted.collect::<Vec<_>>() {
+        if out.contains_key(&name) {
+            continue;
+        }
+        let Some(layer) = map.layer_by_name(&name) else { continue };
+        let mut runs = Vec::new();
+        for g in layer.dataset.features.iter().filter_map(|f| f.geometry.as_ref()) {
+            let (parts, rings): (Vec<&Vec<Coord>>, bool) = match g {
+                Geometry::Line(parts) => (parts.iter().collect(), false),
+                Geometry::Polygon(polys) => (polys.iter().flatten().collect(), true),
+                _ => continue,
+            };
+            for part in parts {
+                // A ring left open is closed, as its outline is drawn.
+                let closed: Vec<Coord>;
+                let part = match (part.first(), part.last()) {
+                    (Some(a), Some(b)) if rings && a != b => {
+                        closed = part.iter().chain([a]).copied().collect();
+                        &closed
+                    }
+                    _ => part,
+                };
+                let pieces = match &ctx.globe {
+                    Some(g) => globe_runs(g, part),
+                    None => {
+                        let points: Vec<Option<(f32, f32)>> = part
+                            .iter()
+                            .map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32)))
+                            .collect();
+                        points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
+                    }
+                };
+                runs.extend(pieces.into_iter().filter_map(square_labels::Run::new));
+            }
+        }
+        out.insert(name, runs);
+    }
+    out
+}
+
+/// A line's runs on the globe in screen points: bent along great circles and cut at the horizon,
+/// as [`Ctx::globe_line`] strokes it.
+fn globe_runs(g: &Globe, part: &[Coord]) -> Vec<Vec<(f32, f32)>> {
+    let h = g.horizon();
+    let at = |v: V3| {
+        let (x, y) = g.project(v);
+        (x as f32, y as f32)
+    };
+    let mut runs: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut prev: Option<V3> = None;
+    for v in Ctx::globe_vectors(g, part) {
+        let vis = v[2] > h;
+        match prev {
+            Some(p) if p[2] > h && vis => runs.last_mut().into_iter().for_each(|r| r.push(at(v))),
+            Some(p) if p[2] > h => runs.last_mut().into_iter().for_each(|r| r.push(at(g.horizon_crossing(p, v)))),
+            Some(p) if vis => runs.push(vec![at(g.horizon_crossing(p, v)), at(v)]),
+            None if vis => runs.push(vec![at(v)]),
+            _ => {}
+        }
+        prev = Some(v);
+    }
+    runs
 }
 
 /// Full projected runs nearest a saved geographic anchor, independent of viewport clipping.
@@ -6634,7 +6900,7 @@ fn wait_for_cast_shadows(map: &Map, view: &View) {
     }
 }
 
-/// Render passes [`render_complete`] makes at most with nothing come since the last (the wait ran
+/// Render passes [`complete`] makes at most with nothing come since the last (the wait ran
 /// out, or nothing was under way): passes that draw what came are bound by its minute alone.
 const IDLE_PASSES: usize = 6;
 
@@ -6642,18 +6908,20 @@ const IDLE_PASSES: usize = 6;
 /// missing (a style, then its sources, then their tiles, or a layer's tiles after its picture
 /// failed) and waits for news of it, at most a minute in all. In the browser, which can't wait,
 /// it draws what has arrived.
+/// Pixel regressions use this convenience wrapper without retaining a fatal source identity.
+#[cfg(test)]
 pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
-    complete(map, view, false)
+    complete(map, view, false, &mut None)
 }
 
-/// [`render_complete`] kept as vectors where the frame can be (flat, north up, without view
+/// [`complete`] kept as vectors where the frame can be (flat, north up, without view
 /// effects): its `recorded` canvas; anything else as pixels.
-pub(crate) fn render_complete_recorded(map: &mut Map, view: &View) -> Option<Rendered> {
-    complete(map, view, true)
+pub(crate) fn render_complete_recorded(map: &mut Map, view: &View, failed_source: &mut Option<u64>) -> Option<Rendered> {
+    complete(map, view, true, failed_source)
 }
 
-/// [`render_complete`]'s passes, each recorded when `record`.
-fn complete(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
+/// Full-resolution passes, each recorded when `record`, carrying a fatal source's identity.
+fn complete(map: &mut Map, view: &View, record: bool, failed_source: &mut Option<u64>) -> Option<Rendered> {
     // Cast shadows still being worked out are waited for first, unless this draws on the
     // interface's thread (see `on_the_interface_thread`).
     if !NO_SHADOW_WAIT.with(std::cell::Cell::get) {
@@ -6663,7 +6931,7 @@ fn complete(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
     // to say: an earlier one's may have been drawn again with them. What frames before it said
     // is kept (see `shadows_said`).
     let before = (SHADOWS_TO_COME.with(|c| c.replace(false)), take_shadow_notices());
-    let r = complete_passes(map, view, record);
+    let r = complete_passes(map, view, record, failed_source);
     SHADOWS_TO_COME.with(|c| c.set(before.0 || c.get()));
     let mut notices = before.1;
     for e in take_shadow_notices() {
@@ -6676,10 +6944,10 @@ fn complete(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
 }
 
 /// [`complete`]'s passes, each saying afresh what it drew of cast shadows.
-fn complete_passes(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
+fn complete_passes(map: &mut Map, view: &View, record: bool, failed_source: &mut Option<u64>) -> Option<Rendered> {
     // What had come when it drew: what lands meanwhile is news to the wait.
     let mut drawn_at = rustgis_tiles::cache::generation();
-    let mut r = render_cpu(map, view, true, record)?;
+    let mut r = render_cpu(map, view, true, record, failed_source)?;
     let start = web_time::Instant::now();
     let budget = web_time::Duration::from_secs(60);
     let mut idle = 0;
@@ -6700,7 +6968,7 @@ fn complete_passes(map: &mut Map, view: &View, record: bool) -> Option<Rendered>
         drawn_at = now;
         SHADOWS_TO_COME.with(|c| c.set(false));
         take_shadow_notices();
-        r = render_cpu(map, view, true, record)?;
+        r = render_cpu(map, view, true, record, failed_source)?;
     }
     Some(r)
 }
@@ -6710,12 +6978,14 @@ fn complete_passes(map: &mut Map, view: &View, record: bool) -> Option<Rendered>
 /// Returns an actionable error if a linked archive changes during the complete drawing.
 pub fn render_drawing(map: &mut Map, view: &View) -> Result<vector::Drawing, String> {
     let revisions = archive_revisions([&*map]);
-    let result = render_drawing_inner(map, view);
-    revisions.finish([&*map], result, "could not draw the map")
+    let mut failed_source = None;
+    let result = render_drawing_inner(map, view, &mut failed_source);
+    revisions.finish(map, failed_source, result, "could not draw the map")
 }
 
-fn render_drawing_inner(map: &mut Map, view: &View) -> Option<vector::Drawing> {
-    let r = render_complete_recorded(map, view)?;
+/// Completes the recording, retaining a fatal source's identity through the pixel fallback.
+fn render_drawing_inner(map: &mut Map, view: &View, failed_source: &mut Option<u64>) -> Option<vector::Drawing> {
+    let r = render_complete_recorded(map, view, failed_source)?;
     let mut pm = match r.recorded {
         Some(c) => c,
         None => {
@@ -6779,7 +7049,7 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
     draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32, (0.0, 0.0));
     let png = pm.into_pixmap().encode_png().map_err(|e| e.to_string())?;
-    revisions.finish([&*map], Some(png), "could not encode the image")
+    revisions.finish(map, None, Some(png), "could not encode the image")
 }
 
 /// A map drawn as data ([`render_placed`]), with what it holds besides its pixels.
@@ -6836,15 +7106,16 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     for l in r.unplaced.iter().chain(&r.labels) {
         text::draw(&mut pm, l, view.pixels_per_point as f32);
     }
-    revisions.finish([&*map], Some(Placed { pixmap: pm.into_pixmap(), credits: r.attribution, gaps }), "could not draw the map")
+    revisions.finish(map, None, Some(Placed { pixmap: pm.into_pixmap(), credits: r.attribution, gaps }), "could not draw the map")
 }
 
 /// The map drawn whole for an export, or why it can't be written: a raster read in place whose
 /// tiles haven't come, or that is drawn from less than the view needs.
 fn render_exported(map: &mut Map, view: &View) -> Result<Rendered, String> {
     let revisions = archive_revisions([&*map]);
-    let result = render_complete(map, view);
-    let r = revisions.finish([&*map], result, "could not draw the map")?;
+    let mut failed_source = None;
+    let result = complete(map, view, false, &mut failed_source);
+    let r = revisions.finish(map, failed_source, result, "could not draw the map")?;
     // A raster read in place drawn from less than the view needs isn't written: its tiles still
     // on their way (the browser can't wait; natively the wait ran out), or a coarser level or
     // tiles it couldn't read (`partial`).
@@ -7909,6 +8180,46 @@ mod tests {
         assert!(!lyon.collide.pinned && lyon.collide.callout.is_none());
     }
 
+    /// A point placed perpendicular to a line's layer (#2263): turned square to it, starting at
+    /// the point, across the line to the side the point isn't on; one farther than `within`
+    /// stays above its point, upright.
+    #[test]
+    fn a_perpendicular_label_turns_square_to_its_nearest_line() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        // (A name with a capital outside ASCII, matched as layer names are.)
+        let mut d = Dataset::new("Águas", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        m.add_dataset(d);
+        let mut d = Dataset::new("Praias", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        // About 11 and 55 points north of the line, at 100 m a point.
+        d.push(Some(Geometry::Point(Coord::new(-0.05, 0.01))), vec![Value::Text("Near".into())]);
+        d.push(Some(Geometry::Point(Coord::new(0.05, 0.05))), vec![Value::Text("Far".into())]);
+        let pts = m.add_dataset(d);
+        let l = m.layer_mut(pts).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.placement = LabelPlacement::Perpendicular;
+        l.labels.default.square_to =
+            Some(rustgis_map::SquareTo { layer: "ÁGUAS".into(), within: 20.0, side: rustgis_map::SquareSide::Away });
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.02)), res: 100.0, bearing: 0.0, pitch: 0.0 };
+        m.camera = camera;
+        let view = View { width: 300.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let at = |c: Coord| view.to_screen(lonlat_to_merc(c));
+        let labels = render(&mut m, &view).unwrap().labels;
+        let near = labels.iter().find(|l| l.text == "Near").expect("near labelled");
+        let a = near.angle.expect("turned");
+        assert!((a.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-3, "square to the line: {}", a.to_degrees());
+        // Below its point (south, across the line), its near end just off it.
+        let (px, py) = at(Coord::new(-0.05, 0.01));
+        let w = text::spaced_block_width("Near", near.size, text::Face::default(), 0.0);
+        assert!((near.x - px as f32).abs() < 0.5, "{} {px}", near.x);
+        let start = near.y - py as f32 - w / 2.0;
+        assert!((0.0..10.0).contains(&start), "starts at the point: {start}");
+        let far = labels.iter().find(|l| l.text == "Far").expect("far labelled");
+        let (_, fy) = at(Coord::new(0.05, 0.05));
+        assert!(far.angle.is_none() && far.y < fy as f32, "as auto: {:?} {} {fy}", far.angle, far.y);
+    }
+
     /// A label moved by hand into view is drawn whatever its feature's place: a point's, or a
     /// line's labelled along it, out of view, its callout's line reaching back off the screen.
     #[test]
@@ -8962,6 +9273,8 @@ mod tests {
                 sky: 0.0,
                 fill: 0.0,
                 rock: None,
+                ambient: None,
+                balanced: false,
             };
         };
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1200.0, bearing: 0.0, pitch: 0.0 };
@@ -8997,6 +9310,8 @@ mod tests {
             sky: 0.0,
             fill: 0.0,
             rock: None,
+            ambient: None,
+            balanced: false,
         };
         // Drawn only zoomed out past a scale between the centre's and the far band's.
         l.max_scale = Some((centre + farthest) / 2.0);
@@ -9042,6 +9357,8 @@ mod tests {
                 sky: 0.0,
                 fill: 0.0,
                 rock: None,
+                ambient: None,
+                balanced: false,
             };
             // Drawn only zoomed in past 1:1: or in a group drawn only there.
             if grouped {
@@ -9390,7 +9707,12 @@ mod tests {
         let mut m = Map::new("Map");
         m.basemap = rustgis_map::Basemap::Blank;
         m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
-        let block = |extent| rustgis_map::view::TerrainBlock { extent, depth: Some(1000.0), walls: rustgis_map::view::BLOCK_WALLS };
+        let block = |extent| rustgis_map::view::TerrainBlock {
+            extent,
+            depth: Some(1000.0),
+            walls: rustgis_map::view::BLOCK_WALLS,
+            walls_layer: None,
+        };
         let terrain = |block: Option<rustgis_map::view::TerrainBlock>| {
             Some(rustgis_map::view::Terrain {
                 source: rustgis_map::view::TerrainSource::Layer("dem".into()),
@@ -9430,6 +9752,91 @@ mod tests {
             "{beside:?} vs {fog:?}"
         );
         assert_ne!(beside, px(&whole, 4, top - 4.0));
+    }
+
+    #[test]
+    fn a_block_diagrams_wall_shows_the_unit_under_its_edge() {
+        // #1914: the near wall of a 2 km box, seen from the south, with a red unit over the box's
+        // west half: red below the edge's west half, the walls' sandy brown below its east half.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        use rustgis_data::{Dataset, Geometry, GeometryType};
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 20.0, bearing: 0.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![500.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        let deg = |x: f64, y: f64| rustgis_geom::merc_to_lonlat(Coord::new(x, y));
+        let west = vec![deg(-3000.0, -3000.0), deg(0.0, -3000.0), deg(0.0, 3000.0), deg(-3000.0, 3000.0), deg(-3000.0, -3000.0)];
+        let mut d = Dataset::new("geo", GeometryType::Polygon, Vec::new());
+        d.push(Some(Geometry::Polygon(vec![vec![west]])), Vec::new());
+        m.add_dataset(d);
+        let red = Rgba::rgb(220, 30, 30);
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "geo") {
+            l.renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol {
+                fill: red,
+                ..rustgis_map::Symbol::default_for(GeometryType::Polygon, 0)
+            });
+            l.visible = false;
+        }
+        m.view.terrain = Some(rustgis_map::view::Terrain {
+            source: rustgis_map::view::TerrainSource::Layer("dem".into()),
+            exaggeration: 1.0,
+            block: Some(rustgis_map::view::TerrainBlock {
+                extent: Some([-1000.0, -1000.0, 1000.0, 1000.0]),
+                depth: Some(1000.0),
+                walls: rustgis_map::view::BLOCK_WALLS,
+                walls_layer: Some("geo".into()),
+            }),
+            water: None,
+        });
+        let frame = render(&mut m, &view).expect("a frame");
+        let g = terrain::Ground::of(&m, &camera).expect("terrain");
+        // Halfway down the near wall, 500 m each side of its middle.
+        let at = |x: f64| {
+            let edge = Coord::new(x, -1000.0);
+            let (u, v) = camera.ground_px(edge);
+            let y = |metres: f64| {
+                camera.project_raised(u, v, metres / g.per_unit(edge) / camera.res, view.width, view.height).expect("in view")
+            };
+            let ((px, top), (_, foot)) = (y(500.0), y(-500.0));
+            frame.pixmap.pixel(px as u32, ((top + foot) / 2.0) as u32).expect("in the frame").demultiply()
+        };
+        let (w, e) = (at(-500.0), at(500.0));
+        assert!(w.red() > 2 * w.green() && w.red() > 2 * w.blue(), "west: {w:?}");
+        assert!(e.green() > e.blue() + 8 && e.red() < 2 * e.green(), "east: {e:?}");
+        // With blue hatch lines over its fill, the unit's stretch of wall is striped red and blue
+        // up its height; off the unit, the walls stay plain.
+        let blue = Rgba::rgb(20, 40, 230);
+        let hatch = rustgis_map::fills::FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 2.0, offset: 0.0 };
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "geo") {
+            l.fill_layers = vec![
+                rustgis_map::fills::FillLayer { color: None, pattern: rustgis_map::fills::FillPattern::Solid },
+                rustgis_map::fills::FillLayer { color: Some(blue), pattern: hatch },
+            ];
+        }
+        let frame = render(&mut m, &view).expect("a frame");
+        let column = |x: f64| {
+            let edge = Coord::new(x, -1000.0);
+            let (u, v) = camera.ground_px(edge);
+            let y = |metres: f64| {
+                camera.project_raised(u, v, metres / g.per_unit(edge) / camera.res, view.width, view.height).expect("in view")
+            };
+            let ((px, top), (_, foot)) = (y(400.0), y(-400.0));
+            (top as u32..foot as u32).filter_map(|py| frame.pixmap.pixel(px as u32, py)).map(|c| c.demultiply()).collect::<Vec<_>>()
+        };
+        let striped = |c: &[tiny_skia::ColorU8]| {
+            let r = |c: &tiny_skia::ColorU8| u16::from(c.red());
+            let b = |c: &tiny_skia::ColorU8| u16::from(c.blue());
+            let blues = c.iter().filter(|c| b(c) > 2 * r(c)).count();
+            let reds = c.iter().filter(|c| r(c) > 2 * b(c)).count();
+            (blues, reds)
+        };
+        let (blues, reds) = striped(&column(-500.0));
+        assert!(blues >= 3 && reds >= 3, "west: {blues} blue, {reds} red");
+        assert_eq!(striped(&column(500.0)).0, 0, "east");
     }
 
     #[test]

@@ -8,7 +8,7 @@
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 
-use crate::project::{CAPABILITIES, CAPABILITY_FORMAT, FORMAT, MAX_REQUIRES, Project, READ_FORMAT};
+use crate::project::{CAPABILITIES, FORMAT, MAX_REQUIRES, Project, READ_FORMAT};
 
 /// Where the schema is kept, from the repository's root.
 pub const PATH: &str = "schema/project.schema.json";
@@ -42,11 +42,11 @@ pub fn project() -> Result<serde_json::Value, String> {
     schema.insert(
         "description".into(),
         format!(
-            "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format {FORMAT}, or format {CAPABILITY_FORMAT} with `requires` naming what an older reader would lose, and reads formats up to {READ_FORMAT}."
+            "A RustGIS project file, as RustGIS reads it. Generated from the Rust types by `cargo xtask schema`; don't edit it by hand. It writes format {FORMAT} and reads formats up to {READ_FORMAT}."
         )
         .into(),
     );
-    schema.insert("x-rustgis-writes-format".into(), CAPABILITY_FORMAT.into());
+    schema.insert("x-rustgis-writes-format".into(), FORMAT.into());
     schema.insert("x-rustgis-reads-format".into(), READ_FORMAT.into());
     schema.insert("x-rustgis-capabilities".into(), CAPABILITIES.into());
     let mut value = schema.to_value();

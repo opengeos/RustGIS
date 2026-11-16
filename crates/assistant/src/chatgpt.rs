@@ -442,41 +442,7 @@ fn form_post(url: &str, params: &[(&str, &str)]) -> HttpRequest {
     }
 }
 
-/// Decodes a query value (`+` is a space).
-pub fn urldecode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes.get(i) {
-            Some(b'+') => out.push(b' '),
-            Some(b'%') => {
-                let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
-                match hex {
-                    Some(b) => {
-                        out.push(b);
-                        i += 2;
-                    }
-                    None => out.push(b'%'),
-                }
-            }
-            Some(b) => out.push(*b),
-            None => break,
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The (decoded) parameters of a query string.
-pub fn query_params(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter(|p| !p.is_empty())
-        .map(|p| p.split_once('=').unwrap_or((p, "")))
-        .map(|(k, v)| (urldecode(k), urldecode(v)))
-        .collect()
-}
+pub use rustgis_engine::data::address::query_params;
 
 /// Only the Responses API and the model list may receive the plan's access token.
 pub fn api_url(url: &str) -> bool {
@@ -628,17 +594,7 @@ pub fn discovered(config: &Value, key: &str) -> Option<String> {
 pub fn rfc3339(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
-    // Civil date from days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
+    let (y, m, d) = rustgis_engine::data::date::civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
@@ -1048,18 +1004,34 @@ mod native {
     /// The selected registration, including signed-out accounts. Reads the keychain only to move
     /// an older version's tokens into it (once); otherwise only the file.
     pub fn load_any() -> Option<Credentials> {
-        let path = auth_path()?;
-        let _guard = store(&path).ok()?;
-        load_any_at(&path, vault())
+        let (credentials, warning) = load_any_report();
+        if let Some(warning) = warning {
+            log::warn!("{warning}");
+        }
+        credentials
     }
 
+    /// Reads the selected registration and preserves a refused-store diagnostic for the caller.
+    /// A missing store is a clean signed-out state. A token-store failure may still return the
+    /// readable registration without tokens, as [`load_any`] does.
+    pub fn load_any_report() -> (Option<Credentials>, Option<Error>) {
+        let Some(path) = auth_path() else { return (None, None) };
+        let _guard = match store(&path) {
+            Ok(guard) => guard,
+            Err(e) => return (None, Some(e)),
+        };
+        load_any_report_at(&path, vault())
+    }
+
+    #[cfg(test)]
     fn load_any_at(path: &Path, v: &Vault) -> Option<Credentials> {
+        load_any_report_at(path, v).0
+    }
+
+    fn load_any_report_at(path: &Path, v: &Vault) -> (Option<Credentials>, Option<Error>) {
         match selected_at(path, v) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("{e}");
-                read_accounts(path).ok()?.selected().map(Credentials::without_tokens)
-            }
+            Ok(c) => (c, None),
+            Err(e) => (read_accounts(path).ok().and_then(|accounts| accounts.selected().map(Credentials::without_tokens)), Some(e)),
         }
     }
 
@@ -2062,17 +2034,28 @@ mod native {
             let e = read_accounts(&path).err().unwrap();
             assert!(e.to_string().contains("newer RustGIS (version 3; this one reads 2)"), "{e}");
             assert!(read_credentials(&path, &v).is_err());
+            let (credentials, warning) = load_any_report_at(&path, &v);
+            assert!(credentials.is_none());
+            let warning = warning.unwrap().to_string();
+            assert!(warning.contains("newer RustGIS") && !warning.contains("synthetic"), "{warning}");
             assert!(write_credentials(&path, &v, &synthetic(now() + 100_000)).is_err());
             assert!(sign_out_at(&path, &v).is_err());
             assert!(remove_at(&path, &v, "oaiapp_synthetic", "user-1").is_err());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
             // A version that isn't a plain integer is unreadable, not newer-or-not.
             for odd in [serde_json::json!("3"), serde_json::json!(3.0), serde_json::json!(true)] {
-                let mut v: Value = serde_json::from_str(&text).unwrap();
-                v["version"] = odd;
-                std::fs::write(&path, v.to_string()).unwrap();
+                let mut record: Value = serde_json::from_str(&text).unwrap();
+                record["version"] = odd;
+                std::fs::write(&path, record.to_string()).unwrap();
                 assert!(read_accounts(&path).is_err());
+                let before = std::fs::read(&path).unwrap();
+                let (credentials, warning) = load_any_report_at(&path, &v);
+                assert!(credentials.is_none() && warning.unwrap().to_string().contains("version isn't a whole number"));
+                assert_eq!(std::fs::read(&path).unwrap(), before);
             }
+            let missing = dir.path().join("missing.json");
+            let (credentials, warning) = load_any_report_at(&missing, &v);
+            assert!(credentials.is_none() && warning.is_none());
         }
 
         #[test]

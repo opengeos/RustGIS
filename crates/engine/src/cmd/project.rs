@@ -28,7 +28,7 @@ pub fn commands() -> Vec<C> {
             .when(|s| if s.can_redo() { None } else { Some("nothing to redo") }),
         C::new("tool.set", "Set Map Tool", "Home › Navigate", set_tool).roles(&[]).effects(crate::policy::Effects::NONE)
             .view()
-            .params(r#"{"tool": "explore"|"select"|"selectPolygon"|"selectLasso"|"selectRadius"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"editVertices"|"rotatedBox"|"cutPolygon"|"reshape"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
+            .params(r#"{"tool": "explore"|"select"|"selectPolygon"|"selectLasso"|"selectRadius"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"editVertices"|"rotatedBox"|"circle"|"cutPolygon"|"reshape"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
         C::new("info.project", "Project Info", "Project", info).inputs(super::tiles::listing_inputs).roles(&[]).effects(crate::policy::Effects::NONE).view().params(r#"{"nameFilter"?: string, "includeFields"?: bool}"#),
         C::new("info.commands", "List Commands", "Help", list).roles(&[]).effects(crate::policy::Effects::NONE).view(),
         // The session log (#797): read, written out, emptied, turned on or off. It sits outside
@@ -283,7 +283,7 @@ pub(crate) fn say_conversion_fallbacks(s: &mut Session) {
 /// Why a block with `extent` can't be drawn on the DEM `dem` (its name, its box and its footprint,
 /// as `cmd/view.rs` refuses it): no box fits the DEM and the block has none, or its box lies off the
 /// DEM's footprint. None when it can be drawn.
-fn off_dem(extent: Option<[f64; 4]>, dem: Option<&(String, Option<[f64; 4]>, Option<[f64; 4]>)>) -> Option<String> {
+pub(super) fn off_dem(extent: Option<[f64; 4]>, dem: Option<&(String, Option<[f64; 4]>, Option<[f64; 4]>)>) -> Option<String> {
     let (n, bbox, footprint) = dem?;
     match (*bbox, extent) {
         (None, None) => Some(format!("no box fits inside '{n}'s extent on the map: give the block an extent [xmin, ymin, xmax, ymax]")),
@@ -389,6 +389,34 @@ fn reset(s: &mut Session, p: Project) {
                 false,
             );
         }
+    }
+    // A block whose walls layer (#1914) is missing, holds no polygons, is read a view at a time or
+    // shares its name with another layer draws its walls in their own colour (`block::runs`, as
+    // the terrain command refuses such a layer): said, and kept, so a polygon layer of that name
+    // colours them again.
+    let plain: Vec<String> = s
+        .project
+        .maps
+        .iter()
+        .filter_map(|m| {
+            let l = m.view.terrain.as_ref()?.block.as_ref()?.walls_layer.as_ref()?;
+            rustgis_render::terrain::walls_layer(m, l).is_none().then(|| format!("{} ('{l}')", m.name))
+        })
+        .collect();
+    match plain.as_slice() {
+        [] => {}
+        [one] => s.notify(
+            format!("{one}: the block diagram's walls layer is missing, not a polygon layer, read a view at a time or of a name another layer shares, so its walls are one colour"),
+            false,
+        ),
+        _ => s.notify(
+            format!(
+                "{} block diagrams have a walls layer missing, not a polygon layer, read a view at a time or of a name another layer shares, so their walls are one colour: {}",
+                plain.len(),
+                plain.join(", ")
+            ),
+            false,
+        ),
     }
     // A terrain saved on a DEM name two layers share draws the first of them: said, as the
     // project opens (its layers keep their names).
@@ -533,6 +561,7 @@ fn write(s: &mut Session, path: PathBuf) -> CmdResult {
             format!("a project saves to a .rgis file, not a .{ext} one")
         });
     }
+    let construction_notes = s.construction_output_notes()?;
     let report = s.project.save(&destination)?;
     let stripped = report.layer_addresses();
     s.mark_saved();
@@ -540,6 +569,9 @@ fn write(s: &mut Session, path: PathBuf) -> CmdResult {
     let written = s.notice_mark();
     s.notify_written(format!("Saved {}", path.display()), false);
     crate::durable::notify(s, &report);
+    for note in construction_notes {
+        s.notify(note, false);
+    }
     s.retain_written_notices(written);
     s.path = Some(destination);
     Ok(json!({"path": path.display().to_string(), "stripped": stripped}))
@@ -604,6 +636,9 @@ fn set_tool(s: &mut Session, p: &Value) -> CmdResult {
     }
     if t == Tool::RotatedBox {
         crate::box_edit::check_tool(s, s.layer_id(&Value::Null)?)?;
+    }
+    if t == Tool::Circle {
+        crate::circle_edit::check_tool(s, s.layer_id(&Value::Null)?)?;
     }
     s.tool = t;
     Ok(Value::Null)

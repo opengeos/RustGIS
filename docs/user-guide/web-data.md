@@ -65,6 +65,21 @@ GeoTIFF, else the first point cloud, else the first data asset, preferring HTTP(
 Cloud-optimised GeoTIFF, GeoParquet and FlatGeobuf assets are read in place, and PMTiles a tile
 at a time; other assets download whole (see [Files on the web](data-formats.md#files-on-the-web)).
 
+Sentinel-2 and Landsat publish a file a band, so a card also has two menus (desktop) for what
+several files make. **Bands** offers the colour combinations the item's bands allow (true colour,
+colour infrared, shortwave infrared, false colour urban, agriculture, geology and bathymetric), and
+**Index** the spectral indices (NDVI, NDWI, SAVI, NBR, NDBI and EVI, the formulas of the Indices
+section). Each reads the part of each band's file that is in view, on a thread of its own with
+progress and Cancel in the Workflows pane, with the catalog's scale and offset applied, and adds one
+layer: three bands drawn as red, green and blue, or one band of index values. A band is found by
+its common name (`red`, `nir`, `swir16`…), from a file of its own before a colour image such as
+`visual` or `preview` whose bands carry the same names; bands read on a coarser grid are put on the
+finest one by nearest cell, and a cell with no value in one band is no data in all, which is said.
+Where no cell has a value in every band (the item's data doesn't reach this part of the map), it is
+an error and no layer is added. `stac.addBands` (`"item"`, `"combination"` or `"red"`, `"green"`
+and `"blue"`, `"bbox"`, `"cellSize"`, `"name"`) and `stac.addIndex` (`"item"`, `"index"`, `"bbox"`,
+`"cellSize"`, `"name"`) do the same; the web app makes neither yet.
+
 The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
 `"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
 `2024-06-01/2024-06-30`, `"limit"` from 1 to 200, default 10, `"maxCloud"`, `"footprints"`, and
@@ -252,8 +267,9 @@ The entries, all public and read in place:
 | [ARCO-ERA5](https://cloud.google.com/storage/docs/public-datasets/era5) (Google Cloud, ECMWF) | hourly air temperature at 2 m, total precipitation and top-layer soil moisture (0.25°, from 1940), as a Zarr store the desktop reads |
 
 Only cubes RustGIS reads today are listed. Collections whose files sit behind signed addresses
-(Planetary Computer), need a sign-in (Copernicus Data Space, NASA Earthdata) or charge the reader
-(Landsat Collection 2 on Earth Search) are left out. Digital Earth Australia's catalog sits behind
+(Planetary Computer), need a sign-in (NASA Earthdata) or charge the reader
+(Landsat Collection 2 on Earth Search) are left out. Copernicus Data Space's files are added one
+by one after a sign-in (see [Copernicus Data Space](#copernicus-data-space)). Digital Earth Australia's catalog sits behind
 a firewall that may ask a program making many requests in a row for a browser check for a while;
 its searches then fail until it lets them through again.
 
@@ -547,6 +563,44 @@ rustgis-cli run --cmd 'earthdata.collections={"keyword":"GEDI biomass","cloudHos
 rustgis-cli run --sample --cmd 'earthdata.granules={"shortName":"HLSL30","bbox":[-90,42.5,-89,43.5],"start":"2024-06-01","end":"2024-06-30"}' --cmd 'share.exportMap={"path":"hls.png"}'
 rustgis-cli run --sample --cmd 'earthdata.login={"token":"…"}' --cmd 'layer.addUrl={"url":"https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/HLSL30.020/…/….B04.tif"}'
 rustgis-cli run --sample --use-saved-secrets --cmd 'layer.addUrl={"url":"https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/HLSL30.020/…/….B04.tif"}'
+```
+
+### Copernicus Data Space
+
+The [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu) (CDSE) publishes the
+Copernicus Land Monitoring Service's global products (NDVI, LAI, Burnt Area, Water Bodies, Land
+Cover 100 m and 10 m, Tree Cover Density…) and the Sentinel-1 and Sentinel-2 mosaics as COGs. Its
+[STAC catalog](https://stac.dataspace.copernicus.eu/v1) is open, but its files need a sign-in with
+a free CDSE account. `copernicus.login` signs in with the account's username and password (and
+`"totp"`, the one-time code, for an account with two-factor authentication). The password is sent
+only to CDSE's sign-in server (`identity.dataspace.copernicus.eu`), and kept only if remembered
+(below). The token it
+gives is kept until RustGIS closes, never in the project, and renewed before it expires; once it
+can't be renewed any more (after a long pause), the sign-in ends and `copernicus.status` says so.
+The token is sent only over HTTPS to CDSE's data servers (`download.dataspace.copernicus.eu` and
+`zipper.dataspace.copernicus.eu`), never to the sign-in server, and a redirect away from them goes
+without it.
+
+A collection's items list each band as an asset whose `alternate.https` address is on the data
+server: add it with `layer.addUrl` (`"cog": true`, since the address ends in `$value`, and `"bbox"`
+for a window) and it is read in place, as any COG. A plugin does the same and never sees the token. `copernicus.status` reports the sign-in (as whom, when the token
+expires, until when it is renewed); `copernicus.logout` forgets it and empties the download cache.
+Signing in is for the desktop app and the command line (a password typed in a command line stays
+in the shell's history).
+
+With `"remember": true`, the username and password are also kept on this computer, in the system's
+credential store (Windows Credential Manager, the macOS Keychain, the Secret Service on Linux; the
+command line's only when it opts in to saved secrets), never in the project or a setting. RustGIS
+then signs in by itself (sending the remembered password to CDSE's sign-in server): the desktop app
+when it starts, the command line when a command names a file on CDSE, and either one again
+whenever the sign-in ends.
+Signing in without `remember` deletes the one remembered before, and so does `copernicus.logout`;
+if CDSE refuses it (after a password change), it is deleted and `copernicus.status` says the
+sign-in expired. An account with two-factor authentication isn't remembered, since each sign-in
+needs its one-time code. `copernicus.status` says whether a sign-in is remembered.
+
+```sh
+rustgis-cli run --cmd 'copernicus.login={"username":"you@example.org","password":"…"}' --cmd 'layer.addUrl={"url":"https://download.dataspace.copernicus.eu/odata/v1/Products(…)/Nodes(…)/Nodes(….tif)/$value","cog":true,"bbox":[-43.0,-20.84,-42.75,-20.65]}'
 ```
 
 ## Open-data portals

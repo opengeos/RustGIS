@@ -15,6 +15,29 @@ pub const PREF: &str = "connections";
 /// The version of that preference this RustGIS reads and writes. One from a newer RustGIS isn't
 /// read, and is kept as it is.
 pub const VERSION: u64 = 1;
+/// A web connection's saved-login marker is written under its own field. An older RustGIS
+/// reads `remembered` as a database password's marker and clears it on a web connection, so it
+/// would save the preference without the marker; a field it doesn't know it keeps unchanged.
+const WEB_MARKER: &str = "savedLogin";
+
+fn web_row(row: &Map<String, Value>) -> bool {
+    row.get("kind").and_then(Value::as_str).is_some_and(|k| SERVICE_KINDS.contains(&k.trim()))
+}
+
+/// A saved row as [`Connection`] reads it: a web connection's [`WEB_MARKER`] as its marker.
+fn read_marker(mut row: Value) -> Value {
+    if let Value::Object(o) = &mut row
+        && web_row(o)
+    {
+        let saved = o.remove(WEB_MARKER);
+        o.remove("remembered");
+        if let Some(saved) = saved {
+            o.insert("remembered".into(), saved);
+        }
+    }
+    row
+}
+
 /// Why the preference wasn't read when it couldn't be (`{why}`), and what to do.
 const UNREADABLE: &str =
     "the saved connections couldn't be read ({why}); fix or remove \"connections\" in the preferences file to use or change them";
@@ -56,9 +79,9 @@ pub struct Connection {
     /// still has them. Commands never take it from a caller.
     #[serde(default, rename = "savedKeys", skip_serializing_if = "is_false")]
     pub saved_keys: bool,
-    /// A database connection's password was saved in the system's secret store (never the
-    /// password itself, which is `DatabaseLogins`' to read). Set only by a login that asked to
-    /// remember it, and cleared when the saved password is forgotten or no longer fits.
+    /// A database password or web-service login was saved in the system's secret store (never
+    /// the secret itself). Set only by a login that asked to remember it, and cleared when the
+    /// saved credential is forgotten or no longer fits.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remembered: bool,
     /// How a web-service connection logs in ([`SERVICE_AUTH`]; empty: it doesn't). The method
@@ -136,16 +159,17 @@ impl Kept {
     /// keeps apart from them): a bare `key` is a secret beside a web address, and an address
     /// holding a secret doesn't stop being one. Only then are the classified entries removed.
     fn without_secrets(&mut self, mut o: Map<String, Value>, address: &str) -> Map<String, Value> {
-        let secret: Vec<String> = o
+        // Count address-bearing siblings once; unknown preference fields are not capped.
+        let addresses =
+            o.iter().filter(|(k, v)| !k.eq_ignore_ascii_case("data") && !k.eq_ignore_ascii_case("text") && web_address(v, 0)).count();
+        let beside = web_address(&Value::String(address.into()), 0);
+        let secret: BTreeSet<String> = o
             .iter()
             .filter(|(k, v)| {
                 let mut probe = Map::new();
                 probe.insert((*k).clone(), (*v).clone());
-                if web_address(&Value::String(address.into()), 0)
-                    || o.iter().any(|(other, v)| {
-                        other != *k && !other.eq_ignore_ascii_case("data") && !other.eq_ignore_ascii_case("text") && web_address(v, 0)
-                    })
-                {
+                let own_address = !k.eq_ignore_ascii_case("data") && !k.eq_ignore_ascii_case("text") && web_address(v, 0);
+                if beside || addresses > usize::from(own_address) {
                     probe.insert("\u{1}beside".into(), "https://a".into());
                 }
                 sources::holds_secret(&Value::Object(probe))
@@ -313,21 +337,73 @@ pub(crate) fn register_query_name(c: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Holds query-name capacity across a fallible saved-credential deletion without holding a lock.
+pub(crate) fn reserve_query_name(c: &Connection) -> Result<Option<rustgis_data::address::LoginQueryNameReservation>, String> {
+    if c.auth != "query" {
+        return Ok(None);
+    }
+    rustgis_data::address::reserve_login_query_name(&c.key_name)
+        .map(Some)
+        .ok_or_else(|| crate::render::rustgis_tiles::logins::TOO_MANY_QUERY_NAMES.into())
+}
+
+/// Query text after the same userinfo boundary the address redactor uses. A password may
+/// contain `?` or `#`; neither starts a public component until its authority is removed.
+fn public_query(address: &str) -> &str {
+    let rest = match address.split_once("://") {
+        Some((_, rest)) => rustgis_data::source::pgconn::userinfo_end(rest).and_then(|i| rest.get(i + 1..)).unwrap_or(rest),
+        None => address,
+    };
+    rest.split('#').next().and_then(|rest| rest.split_once('?')).map_or("", |(_, query)| query)
+}
+
+/// Legacy semicolon pairs are ambiguous after a credential-bearing pair: their text may be
+/// part of its secret value. Retain public prefixes and the first key, withholding its suffix.
+fn public_query_pairs<'a>(address: &'a str, hint: Option<&str>) -> Vec<&'a str> {
+    let query = public_query(address);
+    let context = rustgis_data::address::QueryNames::of(query);
+    let mut pairs = Vec::new();
+    for segment in query.split('&') {
+        for pair in segment.split(';').filter(|pair| !pair.is_empty()) {
+            pairs.push(pair);
+            let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+            if rustgis_data::address::name_class(name, &context) != rustgis_data::address::NameClass::Plain
+                || hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+            {
+                break;
+            }
+        }
+    }
+    pairs
+}
+
 /// The names (never the values) of the query parameters `given` had that `saved` lacks, which a
 /// query login can carry: the keys an address held and saving left out, to offer as the login's
 /// parameter. At most four, each once. Only `name=value` pairs count: a bare segment can't be a
 /// login's parameter, and when it is a key written as a name, its text is the secret.
 pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
+    stripped_parameters_with_hint(given, saved, None)
+}
+
+/// Also offers an unregistered parameter the caller explicitly declared as a query-key hint.
+/// The hint is per call: merely previewing a definition must not register a login name.
+pub(crate) fn stripped_parameters_with_hint(given: &str, saved: &str, hint: Option<&str>) -> Vec<String> {
     use crate::render::rustgis_tiles::logins;
-    fn names(address: &str) -> Vec<&str> {
-        let query = address.split('#').next().and_then(|a| a.split_once('?')).map_or("", |(_, query)| query);
-        query.split('&').filter_map(|pair| pair.split_once('=').map(|(name, _)| name)).filter(|name| !name.is_empty()).collect()
+    fn names<'a>(address: &'a str, hint: Option<&str>) -> Vec<&'a str> {
+        public_query_pairs(address, hint)
+            .into_iter()
+            .filter_map(|pair| pair.split_once('=').map(|(name, _)| name))
+            .filter(|name| !name.is_empty())
+            .collect()
     }
-    let kept = names(saved);
+    let context = rustgis_data::address::QueryNames::of(public_query(given));
+    let kept = names(saved, None);
     let mut left_out: Vec<String> = Vec::new();
-    for name in names(given) {
+    for name in names(given, hint) {
         if left_out.len() < 4
             && logins::valid_query_name(name)
+            && (hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+                || rustgis_data::address::name_class(name, &context) == rustgis_data::address::NameClass::Credential)
             && !kept.contains(&name)
             && !left_out.iter().any(|known| known.eq_ignore_ascii_case(name))
         {
@@ -337,13 +413,48 @@ pub fn stripped_parameters(given: &str, saved: &str) -> Vec<String> {
     left_out
 }
 
+/// Public query components lost with a legacy credential-bearing ampersand pair. Count every
+/// lost component, including repeated names; report at most four safe names, never bare text or
+/// values. These are diagnostics, not query-login suggestions.
+pub(crate) fn collateral_parameters(given: &str, saved: &str, hint: Option<&str>) -> (usize, Vec<String>) {
+    let context = rustgis_data::address::QueryNames::of(public_query(given));
+    let mut kept = std::collections::HashMap::<&str, usize>::new();
+    for pair in public_query_pairs(saved, None) {
+        *kept.entry(pair).or_default() += 1;
+    }
+    let (mut count, mut names) = (0usize, Vec::<String>::new());
+    for pair in public_query_pairs(given, hint) {
+        let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+        if rustgis_data::address::name_class(name, &context) != rustgis_data::address::NameClass::Plain
+            || hint.is_some_and(|hint| name.eq_ignore_ascii_case(hint))
+        {
+            continue;
+        }
+        if let Some(remaining) = kept.get_mut(pair)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            continue;
+        }
+        count += 1;
+        if names.len() < 4
+            && pair.contains('=')
+            && crate::render::rustgis_tiles::logins::valid_query_name(name)
+            && !names.iter().any(|known| known.eq_ignore_ascii_case(name))
+        {
+            names.push(name.to_string());
+        }
+    }
+    (count, names)
+}
+
 /// The origin (`scheme://host[:port]`) a web-service connection's login goes to: the only one.
 pub fn login_origin(c: &Connection) -> Option<String> {
     crate::render::rustgis_tiles::logins::origin(&c.address)
 }
 
 /// Whether two definitions retain the same login identity: a database password uses the same
-/// database address; a session web login uses the same origin, method, user and key name.
+/// database address; a web login uses the same origin, method, user and key name.
 pub fn same_login(a: &Connection, b: &Connection) -> bool {
     a.kind == b.kind
         && if DATABASE_KINDS.contains(&a.kind.as_str()) {
@@ -362,8 +473,11 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         return Err("a connection address must be at most 2048 bytes and contain no control characters".into());
     }
     // A query login's own parameter goes before anything quotes the address (an error included):
-    // its name may not be registered yet, so the generic redaction can't see it.
-    let query_name = Some(c.key_name.trim()).filter(|name| c.auth.trim().eq_ignore_ascii_case("query") && !name.is_empty());
+    // its name may not be registered yet, so the generic redaction can't see it. A name given
+    // without a method still declares a possible key, as it does in the replay log. An explicit
+    // other method (`none` included) does not select a query parameter.
+    let query_name = Some(c.key_name.trim())
+        .filter(|name| (c.auth.trim().is_empty() || c.auth.trim().eq_ignore_ascii_case("query")) && !name.is_empty());
     let given = query_name.map_or_else(|| t.to_string(), |name| crate::render::rustgis_tiles::logins::without_query_parameter(t, name));
     let stored = sources::redact(&given);
     let stripped = stored != t;
@@ -390,8 +504,8 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
     if c.kind != "s3" {
         c.saved_keys = false;
     }
-    // Only a database connection has a password to remember.
-    c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str());
+    // Only a database connection has a password to remember, and a web service its login.
+    c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str()) || !c.auth.is_empty();
     if c.kind != "s3" && !c.options.is_empty() {
         return Err(format!("{} connections take no options", c.kind));
     }
@@ -510,7 +624,7 @@ impl Connections {
         let mut stripped_flags = Vec::new();
         for row in rows {
             // Readability is checked even past the limit, without registering the login's name.
-            let read = serde_json::from_value::<Row>(row.clone()).ok().and_then(|r| {
+            let read = serde_json::from_value::<Row>(read_marker(row.clone())).ok().and_then(|r| {
                 let name = r.connection.name.trim().to_string();
                 let group = r.connection.group.trim().to_string();
                 let (c, stripped) = clean(r.connection).ok()?;
@@ -778,6 +892,12 @@ impl Connections {
         let mut rows: Vec<Value> = Vec::with_capacity(self.connections.len() + self.kept.rows.len());
         for c in &self.connections {
             let mut row = serde_json::to_value(c).unwrap_or(Value::Null);
+            if let Value::Object(o) = &mut row
+                && web_row(o)
+                && let Some(saved) = o.remove("remembered")
+            {
+                o.insert(WEB_MARKER.into(), saved);
+            }
             if let (Value::Object(row), Some(other)) = (&mut row, self.kept.fields.get(&c.id)) {
                 for (k, v) in other {
                     row.entry(k.clone()).or_insert_with(|| v.clone());
@@ -849,7 +969,7 @@ impl Connections {
         register_query_name(&c)?;
         self.next = following;
         c.id = format!("c{next}");
-        // A new connection, a copy or an import has no saved password: it is saved by a login.
+        // A new connection, a copy or an import has no saved login: it is saved by a login.
         c.remembered = false;
         self.connections.push(c.clone());
         if c.auth == "query" {
@@ -881,8 +1001,9 @@ impl Connections {
         let slot = self.connections.iter().find(|c| c.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
         c.id = id.into();
         c.saved_keys = slot.saved_keys && c.kind == "s3";
-        // Password identity includes the cleaned database kind, server and user.
-        c.remembered = slot.remembered && slot.kind == c.kind && slot.address == c.address;
+        // Password identity includes the cleaned database kind, server and user; a web login's,
+        // its origin, method, user and key name.
+        c.remembered = slot.remembered && same_login(slot, &c);
         Ok((c, stripped))
     }
 
@@ -927,9 +1048,10 @@ impl Connections {
         Some(c)
     }
 
-    /// Says whether a database connection's password is saved; whether that changed the row.
+    /// Says whether a database password or web-service login is saved; whether that changed the row.
     pub fn set_remembered(&mut self, id: &str, on: bool) -> bool {
-        let Some(c) = self.connections.iter_mut().find(|c| c.id == id && DATABASE_KINDS.contains(&c.kind.as_str())) else {
+        let Some(c) = self.connections.iter_mut().find(|c| c.id == id && (DATABASE_KINDS.contains(&c.kind.as_str()) || !c.auth.is_empty()))
+        else {
             return false;
         };
         if c.remembered == on {

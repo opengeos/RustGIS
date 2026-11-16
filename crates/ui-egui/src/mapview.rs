@@ -50,6 +50,7 @@ enum DragKind {
     /// Moving or inserting a vertex with the Edit Vertices tool.
     Vertex,
     BoxEdit,
+    CircleEdit,
     /// Moving the selected text graphic, grabbed by its text (#516): its layer id and row, and
     /// where the press was. Held by the drag itself, so it ends with it, however it ends.
     Text {
@@ -484,6 +485,11 @@ impl Default for MapView {
 impl MapView {
     pub(crate) fn cancel_rotated_box_drag(&mut self) {
         if matches!(self.drag, Some((_, DragKind::BoxEdit))) {
+            self.drag = None;
+        }
+    }
+    pub(crate) fn cancel_circle_drag(&mut self) {
+        if matches!(self.drag, Some((_, DragKind::CircleEdit))) {
             self.drag = None;
         }
     }
@@ -2080,14 +2086,22 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     draw_label_ink(p, l, at, true, true);
 }
 
+/// The UI draws in its interface font until a named face is actually installed in egui. This
+/// decision uses only readiness, never font-file reads or the renderer's parsed face cache.
+fn fallback_bold_width(bold: bool, named_ready: bool, px: f32) -> f32 {
+    use rustgis_engine::render::fonts;
+    if bold && !named_ready && fonts::bold_is_synthetic() { fonts::bold_thickening(px) } else { 0.0 }
+}
+
 /// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
 fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
     let family = crate::labelfonts::family(p.ctx(), l.font, l.bold, l.italic);
     // Bold with no heavier face to draw it in: drawn again a little to its right, as exports do.
     // (In the interface fonts: those of a named family not loaded yet too.)
-    use rustgis_engine::render::fonts;
-    let thick = if family.is_none() && l.bold && fonts::bold_is_synthetic() { fonts::bold_thickening(l.size * 1.33) } else { 0.0 };
-    let strikes = std::iter::once(egui::Vec2::ZERO).chain((thick > 0.0).then_some(vec2(thick, 0.0)));
+    let thick = fallback_bold_width(l.bold, family.is_some(), l.size * 1.33);
+    let angle = l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3);
+    let shift = angle.map_or(vec2(thick, 0.0), |a| vec2(thick * a.cos(), thick * a.sin()));
+    let strikes = std::iter::once(egui::Vec2::ZERO).chain((thick > 0.0).then_some(shift));
     let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align, family));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
     let anchor = if l.align < -0.25 {
@@ -2098,7 +2112,7 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
         Align2::CENTER_CENTER
     };
     // A label turned with the map (along a street): turned about its centre, at `at`.
-    if let Some(angle) = l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3) {
+    if let Some(angle) = angle {
         let (pos, r) = place_galley(Align2::CENTER_CENTER, at, &galley);
         if halo {
             draw_background(p, l, r, angle);
@@ -2742,15 +2756,35 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         app.map.kept_lonlat = Some((c, app.session.map().instance_id(), app.session.opened));
     }
     let tool = app.session.tool;
+    if resp.secondary_clicked()
+        && let Some(c) = resp.interact_pointer_pos().and_then(|p| screen_to_lonlat(app, rect, p))
+    {
+        crate::shapeconvert::pick(app, c, ui.input(|i| i.modifiers.alt));
+    }
     crate::boxedit::cancel_stale(app);
+    crate::circleedit::cancel_stale(app);
     if tool == Tool::RotatedBox {
         if resp.secondary_clicked() {
-            if let Some(c) = resp.interact_pointer_pos().and_then(|p| screen_to_lonlat(app, rect, p)) {
-                crate::boxedit::click(app, c, false, false);
-            }
             app.map.popup = None;
         }
         resp.context_menu(|ui| crate::boxedit::context_menu(app, ui));
+    }
+    if tool == Tool::Circle {
+        if resp.secondary_clicked() {
+            app.map.popup = None;
+        }
+        resp.context_menu(|ui| crate::circleedit::context_menu(app, ui));
+    }
+    // Selection-area tools return early below; their right-click must still open the menu.
+    if resp.secondary_clicked() && !matches!(tool, Tool::RotatedBox | Tool::Circle) {
+        app.map.menu_lonlat = app.map.pointer_lonlat;
+        app.map.menu_text = resp.interact_pointer_pos().and_then(|p| text_graphic_at(app, ui.ctx(), rect, p));
+    }
+    // No menu off the Earth (a globe's corners): there is no place for it to act on.
+    if !matches!(tool, Tool::RotatedBox | Tool::Circle)
+        && let Some(c) = app.map.menu_lonlat
+    {
+        resp.context_menu(|ui| crate::mapmenu::show(app, ui, c));
     }
     cancel_changed_selection(app, rect);
 
@@ -2868,7 +2902,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
 
     let shift = ui.input(|i| i.modifiers.shift);
-    let middle = ui.input(|i| i.pointer.middle_down() || (tool == Tool::RotatedBox && i.key_down(egui::Key::Space)));
+    let middle = ui.input(|i| i.pointer.middle_down() || (matches!(tool, Tool::RotatedBox | Tool::Circle) && i.key_down(egui::Key::Space)));
     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
     // Dragging with the right button turns the map or the globe (to the right turns it
     // clockwise) and tilts it (up tilts it further), as in MapLibre.
@@ -2912,9 +2946,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             DragKind::Label { origin }
         } else if middle {
             crate::boxedit::cancel(app);
+            crate::circleedit::cancel(app);
             DragKind::Pan
         } else if tool == Tool::RotatedBox && crate::boxedit::drag_start(app, rect, origin, ctrl) {
             DragKind::BoxEdit
+        } else if tool == Tool::Circle && crate::circleedit::drag_start(app, rect, origin, ctrl) {
+            DragKind::CircleEdit
         } else if tool == Tool::EditVertices && crate::vertexedit::drag_start(app, rect, origin) {
             DragKind::Vertex
         } else {
@@ -3035,6 +3072,17 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         crate::boxedit::drag_stop(app);
         return;
     }
+    if let (Some((_, DragKind::CircleEdit)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
+        crate::circleedit::drag_to(app, rect, p);
+        ui.ctx().request_repaint();
+    }
+    if resp.drag_stopped()
+        && let Some((_, DragKind::CircleEdit)) = app.map.drag
+    {
+        app.map.drag = None;
+        crate::circleedit::drag_stop(app);
+        return;
+    }
     if let (Some((_, DragKind::Vertex)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
         crate::vertexedit::drag_to(app, rect, p);
         ui.ctx().request_repaint();
@@ -3148,7 +3196,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.double_clicked() {
         if matches!(tool, Tool::Measure | Tool::MeasureArea) || tool.draws_edit() || vertex_shape(tool) {
             finish_sketch(app);
-        } else if matches!(tool, Tool::EditVertices | Tool::RotatedBox) {
+        } else if matches!(tool, Tool::EditVertices | Tool::RotatedBox | Tool::Circle) {
             // Its two clicks chose a vertex or a feature; zooming would lose the place.
         } else if let Some(p) = resp.interact_pointer_pos() {
             // A double-click on a text graphic edits it in the Format pane; elsewhere it zooms in.
@@ -3281,6 +3329,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                     crate::boxedit::click(app, c, shift, ui.input(|i| i.modifiers.alt));
                 }
             }
+            Tool::Circle => {
+                if !middle {
+                    crate::circleedit::click(app, c, shift, ui.input(|i| i.modifiers.alt));
+                }
+            }
             Tool::CreatePoint => {
                 let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
@@ -3322,15 +3375,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     {
         ui.ctx().set_cursor_icon(icon);
     }
-    if resp.secondary_clicked() && tool != Tool::RotatedBox {
-        app.map.menu_lonlat = app.map.pointer_lonlat;
-        app.map.menu_text = resp.interact_pointer_pos().and_then(|p| text_graphic_at(app, ui.ctx(), rect, p));
-    }
-    // No menu off the Earth (a globe's corners): there is no place for it to act on.
-    if tool != Tool::RotatedBox
-        && let Some(c) = app.map.menu_lonlat
+    if tool == Tool::Circle
+        && let Some(icon) = hover.and_then(|p| crate::circleedit::cursor(app, rect, p))
     {
-        resp.context_menu(|ui| crate::mapmenu::show(app, ui, c));
+        ui.ctx().set_cursor_icon(icon);
     }
     if hover.is_some() && (matches!(tool, Tool::Measure | Tool::MeasureArea) || tool.draws_edit()) && !app.map.sketch.is_empty() {
         ui.ctx().request_repaint();
@@ -3486,7 +3534,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     let editing = &app.session.map().editing;
     if editing.settings.enabled
         && editing.settings.show_vertices
-        && !matches!(app.session.tool, Tool::EditVertices | Tool::RotatedBox)
+        && !matches!(app.session.tool, Tool::EditVertices | Tool::RotatedBox | Tool::Circle)
         && (app.session.tool.creates() || app.session.tool.draws_edit() || app.ui.right == Some(crate::RightPane::Editing))
     {
         let mut verts: Vec<Coord> = Vec::new();
@@ -3516,6 +3564,10 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     if app.session.tool == Tool::RotatedBox {
         crate::boxedit::draw(app, p, rect, accent);
     }
+    if app.session.tool == Tool::Circle {
+        crate::circleedit::draw(app, p, rect, accent);
+    }
+    crate::shapeconvert::draw(app, p, rect);
     // The navigator: a compass, zoom buttons and a pan pad in the top-left corner.
     if app.session.map().view.navigator {
         navigator(app, ui, p, rect, t);
@@ -3753,6 +3805,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             Some("Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex")
         }
         Tool::EditVertices => Some("Click a feature, then drag its vertices · click an edge to add one"),
+        Tool::Circle => Some("Drag centre to edge · radius handle resizes · Space or middle-drag pans · Alt-click cycles overlaps"),
         Tool::RotatedBox => Some("Drag a box · paddle rotates · Shift snaps · Space or middle-drag pans · Alt-click cycles overlaps"),
         Tool::ZoomIn => Some("Drag a box or click to zoom in"),
         Tool::MoveLabel => Some("Drag a label to where it should be · drag the map to pan · Esc to stop"),
@@ -4969,6 +5022,58 @@ mod halo_tests {
     use super::*;
     use rustgis_engine::map::Rgba;
 
+    /// A child process gives the font cache a deterministic built-in-only fixture without
+    /// changing this test process's environment or racing its other font tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn synthetic_bold_strikes_follow_the_baseline() {
+        if std::env::var_os("RUSTGIS_BOLD_PARITY_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "mapview::halo_tests::synthetic_bold_strikes_follow_the_baseline", "--nocapture"])
+                .env("RUSTGIS_BOLD_PARITY_CHILD", "1")
+                .env("RUSTGIS_BUILTIN_FONTS", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        use rustgis_engine::render::LabelGlyph;
+        assert!(rustgis_engine::render::fonts::bold_is_synthetic());
+        for curved in [false, true] {
+            for angle in [0.0, std::f32::consts::FRAC_PI_2] {
+                let mut l = label(None);
+                (l.x, l.y, l.size, l.bold, l.halo) = (100.0, 100.0, 30.0, true, None);
+                // An unavailable explicit family must use the same fallback as no family.
+                l.font = Some(u16::MAX);
+                let thick = fallback_bold_width(l.bold, false, l.size * 1.33);
+                assert!(thick > 0.0);
+                l.font = None;
+                assert_eq!(fallback_bold_width(l.bold, false, l.size * 1.33), thick);
+                assert_eq!(fallback_bold_width(l.bold, true, l.size * 1.33), 0.0, "a ready named family draws its own face");
+                // The named family may already be indexed for exports while egui is still loading
+                // it: its fallback stays bold until the readiness flag becomes true.
+                l.font = Some(0);
+                assert_eq!(fallback_bold_width(l.bold, false, l.size * 1.33), thick);
+                l.font = Some(u16::MAX);
+                if curved {
+                    l.glyphs = vec![LabelGlyph { text: "A".into(), dx: 0.0, dy: 0.0, angle }];
+                } else {
+                    l.angle = Some(angle);
+                }
+                let ctx = egui::Context::default();
+                crate::theme::install_fonts(&ctx, &[], None);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| draw_label(ui.painter(), &l, pos2(l.x, l.y)));
+                output.textures_delta.clear();
+                let positions: Vec<Pos2> =
+                    output.shapes.iter().filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t.pos) } else { None }).collect();
+                assert_eq!(positions.len(), 2, "one actual text and one visual strike");
+                let ui_shift = positions[1] - positions[0];
+                let expected = vec2(thick * angle.cos(), thick * angle.sin());
+                assert!((ui_shift - expected).length() < 1e-3, "curved={curved}, angle={angle}: {ui_shift:?}");
+            }
+        }
+    }
+
     #[test]
     fn a_backgrounds_outline_is_its_rectangle_rounded_and_turned() {
         let r = Rect::from_min_max(pos2(10.0, 20.0), pos2(50.0, 30.0));
@@ -5188,6 +5293,8 @@ mod tests {
             sky: 0.0,
             fill: 0.0,
             rock: None,
+            ambient: None,
+            balanced: false,
         };
         let set = |map: &mut Map, shadow: f64, visible: bool| {
             let l = map.layer_mut(id).unwrap();

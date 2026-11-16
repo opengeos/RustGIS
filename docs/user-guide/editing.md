@@ -193,11 +193,11 @@ GeoTIFFs. This does not bind a layer to an image or save image metadata.
 Construction is kept only in the current session. An independent vertex edit disables the
 box handles rather than silently fitting a new box; undo restores them. Saving/reopening or
 sharing GeoJSON leaves **ordinary polygons** and ordinary feature properties. In-session edits
-preserve feature identity; import uses the normal GeoJSON reader. There is no automatic
-recognition of imported polygons. Use **Edit Vertices** to edit those polygons.
+preserve feature identity; import uses the normal GeoJSON reader. Copy/paste transfers ordinary polygon geometry and attributes, not construction parameters;
+the original keeps its constrained handles. There is no automatic recognition of imported polygons. Use **Edit Vertices** to edit those polygons.
 **Export Features** (`share.exportLayer`) includes one counted note explaining that box
-construction does not round-trip. Other shares and project saves do not currently emit this
-note; their saved output also has no box construction.
+construction does not round-trip. Explicit project saves/downloads, map/layer files, project
+and map packages, data conversions and feature-bearing web shares report the same loss.
 Source polygons contain four transformed corners joined by straight edges; curved grid edges
 are approximated. The target format may further approximate or omit geometry: CSV writes
 representative points and GPX does not retain polygon areas, with their own format-specific notes.
@@ -221,6 +221,59 @@ to change attribute values.
 An optional `box.frame` holds `epsg`, original `width`/`height` and the full GDAL-order `affine` array. Only recognised EPSG
 frames with supported datum transformations are accepted. These parameters are command input,
 not GeoJSON properties or a new saved-file representation.
+
+### Circles
+
+On a loaded polygon layer, turn **Edit › Edit** on and choose **Edit › Features › Circle**.
+This creates ordinary feature polygons, independently of the annotation workflow or graphics.
+The existing **Editing** pane opens with centre X/Y, radius and polygon tolerance controls.
+
+- Drag from the centre to the edge to create a circle. Drag inside an existing circle to select and move
+  it, or drag its round radius handle to resize with the centre fixed.
+- Click to select, ++alt++-click to cycle overlaps, ++shift++-click to extend the selection.
+  ++ctrl++/++cmd++-drag forces a new circle over existing features.
+- Hold ++space++ and drag, or middle-drag, to pan; releasing ++space++ keeps Circle active.
+  Right-click for **Edit Circle Dimensions** or **Delete Selected Circle** (just that object).
+- Each completed gesture is one undo step. ++esc++ cancels the preview before another press
+  leaves the tool. Templates, ordinary attributes and edit rules work as for other features.
+
+The interactive tool uses the same flat Earth view and frozen construction grids as Rotated
+Box. Its default radius is in **Web Mercator grid metres, not ground metres**. Scripts may
+supply `circle.frame` from an original GeoTIFF grid via `box_edit::Frame::from_grid`; centre,
+radius and tolerance then use original image pixels, including rotated or skewed grids.
+A pixel circle may look elliptical on the map. Geometry commands remain view-independent.
+Antimeridian crossings, polar editing limits and unsupported transformations are refused.
+
+The exact centre/radius are session-only. Geometry is regenerated with 32–2048 straight edges;
+`tolerance` (command default **0.25 grid units**) bounds the local-circle sagitta **before projection**,
+not error in geographic coordinates or ground distance. New mouse-drawn circles choose the
+larger of 0.25 grid units and radius/10000; this value is shown in the pane and preserved by
+moves and resizes. Requests needing more than 2048 edges
+are refused; increase tolerance or reduce radius. Commands report the edge count and approximation.
+Changing a radius does not repeatedly rescale old vertices.
+
+Exported GeoJSON holds only ordinary polygons and feature properties. **Export Features**
+reports a counted circle-construction/approximation note, separately from any box or format
+losses. Explicit project saves/downloads, map/layer files, project and map packages, data
+conversions and feature-bearing web shares report this loss too. Reopening a project or
+importing GeoJSON leaves polygons; use **Edit Vertices** for those. There is no automatic
+circle detection, image binding or custom metadata. Independent geometry edits disable the
+circle handles; undo restores them when the original geometry returns. Copy/paste produces
+ordinary polygons in the target; the original retains its circle construction.
+
+```text
+edit.addCircle={"layer":"Training polygons","circle":{"center":[1000,1000],"radius":100,"tolerance":0.25},"attributes":{"class":"tree"}}
+edit.updateCircle={"layer":"Training polygons","row":0,"circle":{"center":[1010,1000],"radius":120,"tolerance":0.25}}
+edit.circleInfo={"layer":"Training polygons","row":0}
+edit.deleteCircle={"layer":"Training polygons","row":0}
+```
+
+Replace `row:0` with the row returned by `edit.addCircle`. Update/delete accept `featureId`
+to refuse stale rows. Updates preserve IDs and attributes, inherit an omitted frame and refuse
+an explicitly changed frame. `edit.updateCircle` changes shape only; use `edit.setValue` for
+attributes. Attribute names must already exist. `edit.circleInfo` returns the current construction.
+`circle.frame` has the same EPSG, dimensions and affine input fields as `box.frame`, with no
+new saved-file representation.
 
 ### Moving shared polygon vertices
 
@@ -317,7 +370,7 @@ opens. A picture from any other server isn't: the pop-up shows **Show Picture** 
 name, and fetches nothing until you click it, because the request tells that server that someone
 opened the data (see [Privacy](../privacy.md)). A spinner shows while a picture is fetched. PNG, JPEG,
 WebP and GIF pictures of up to 4 MB and 2048 × 2048 pixels are shown (on every platform; any other
-format, such as BMP or TIFF, is "not supported"); the last 16 addresses' pictures are kept for the
+format, such as BMP or TIFF, shows "Picture unavailable: … pictures aren't supported"); the last 16 addresses' pictures are kept for the
 session, so opening the pop-up again shows the picture without asking again; they are forgotten with
 the web layers' cached tiles (signing out of ArcGIS, a login that ends, **Reload Web Layers**). When
 one can't be shown, the pop-up says why ("Picture unavailable: …": the server's answer, a network
@@ -356,3 +409,77 @@ no map layer is active then, and clicking one ends it). With **Selected in Layer
 the map then identifies that tile layer alone: a WMS layer is asked as above, and a vector tile
 layer, archive or MapLibre style lists its features. This works for catalog basemaps and MapLibre
 styles too, which the topmost and visible modes leave out.
+
+### Manually converting imported polygons
+
+Circles and rotated boxes shared as GeoJSON reopen as ordinary polygons. To edit one with
+constrained handles again, turn **Edit › Edit** on, select its loaded polygon layer, right-click
+the object and choose **Convert Polygon…**. Choose Circle or Rotated Box once, in the conversion
+pane. The **Editing** pane also has
+**Convert Selected Polygon…**, and Command Search has **Convert Polygon to Shape…**. These tools
+are available independently of any annotation workflow. A right-click keeps the selected object
+under the pointer; Alt-right-click cycles overlapping objects. In Explore, selection tools and
+Edit Vertices, right-clicking a polygon selects that object for the menu. Right-clicking empty
+space preserves the selection but offers no conversion target. Circle and Rotated Box instead
+clear the selection on empty space, ready to draw another shape. Drawing and measurement tools
+keep their current selection when opening the map menu.
+
+1. Choose Circle or Rotated Box and a construction grid. The shape defaults to the active
+   Circle or Rotated Box tool when opening conversion; other tools default to Circle. The default is **Web Mercator grid
+   metres**, not ground metres. Choose an open GeoTIFF to fit in its **original image pixels**,
+   preserving the source affine transform, including rotation and shear, rather than using a
+   display overview. Local GeoTIFFs and embedded/browser-uploaded GeoTIFFs are supported; remote
+   original grids must be downloaded and added first. An unreadable or unsupported source gives
+   an error, without falling back to a different grid.
+2. For a quick conversion, click **Convert Now** to fit and apply using the chosen shape and
+   grid, without a preview or another confirmation. Alternatively, click **Preview Conversion**
+   to show an orange outline without changing the feature or undo history, review or adjust the
+   centre and dimensions, then **Apply Conversion** or **Close**. Apply replaces Convert Now
+   in the same button position; the actions and Construction Grid stay in place after preview.
+3. Both routes replace only this feature, preserve its ID and attributes, and enable the existing
+   Circle or Rotated Box editor. One Undo restores the original polygon and construction state;
+   Redo restores the conversion. The desktop performs fitting and header reads in the background,
+   with progress and Cancel in the status bar. Cancel or a changed source/selection before fitting
+   finishes leaves the geometry and history unchanged. **Close** abandons an uncommitted
+   preview; **Cancel Fitting** stops an active fit. After applying, use the regular **Undo**
+   action to restore the original polygon. Drag the map to pan while fitting or
+   reviewing a preview.
+
+Conversion is not captured by **Record Task**: the proposal belongs to the current session and
+cannot safely be replayed after reopening a project. A notice explains when a conversion is
+omitted from the recording.
+
+A rotated box uses the minimum-area enclosing rectangle of the input vertices in the chosen
+planar grid (longer side as width, clockwise angle in `[0,180)`). A circle uses the centre of
+the vertices' axis-aligned bounds and the maximum vertex distance as radius. This deterministic
+circle encloses the vertices; it is not a least-squares or minimum-enclosing-circle fit.
+The tolerance starts at the larger of 0.25 grid units and radius/10000, before projection.
+Both operations can change the boundary; neither promises recovery of the original construction.
+Transformed edges are still represented by straight polygon edges, with the limits described above.
+
+Conversion accepts a single closed polygon without holes, with at most 4096 vertices (excluding
+its closing duplicate). Multipart features, holes, degenerate grids/polygons and unsupported
+projection boundaries are refused, never silently discarded. A source or selection changed while
+reviewing the preview invalidates it; preview again. Edit rules that change the proposed geometry,
+attributes or identity cause the whole conversion to be refused. Larger polygons must be simplified
+explicitly before fitting.
+
+The result remains an ordinary polygon on disk. Centre, radius and box dimensions live only in
+this session; saves and exports retain the existing counted construction-loss notes. No custom
+GeoJSON metadata, image bindings, class palette format or saved-file changes are introduced.
+
+Scripts, CLI, Python, the Assistant/MCP and permitted plugins use the same commands:
+
+```text
+edit.previewShapeConversion={"layer":"Annotations","row":0,"kind":"rotatedBox","image":"Original TIFF"}
+```
+
+Pass that command's complete answer as `preview` to
+`edit.applyShapeConversion={"preview":…,"confirm":true}` in the **same live session**. Preview is
+read-only and does not grant consent to Apply. Preview tokens cannot be reused after reopening
+a project; saved workflows must obtain a fresh preview. Omit `image` to use Web Mercator, or supply `frame`
+with the same EPSG, dimensions and affine fields accepted by `edit.addBox` (image and frame are
+mutually exclusive). Preview may read a source file and therefore declares the Files permission.
+Synchronous API callers must invoke fitting off their own UI thread. On the phone the commands
+are usable through its existing command interface; the desktop-style right-click menu is not a
+new touch-bar destination.

@@ -85,9 +85,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     fill and no labels, such as neighbouring borders, don't count as what the map draws here, unless
     nothing else is shown, nor do polygon layers in one colour with no labels that run on past the
     frame, such as neighbouring states, beside a layer drawn by classes or a raster. When no shape
-    of the legend fits, the map is first moved towards an edge, as far as the asked extent stays in
-    the frame, so the room on both its sides joins (the answer's `mapShift`, in mm right and down,
-    and a warning). Where the projection stretches, as Web Mercator does away from the equator, the
+    of the legend fits, the map is first moved towards an edge, by a quarter, a half, three quarters
+    or all of the way the asked extent can go and stay in the frame, so the room on both its sides
+    joins (the answer's `mapShift`, in mm right and down, and a warning). Of the moves that need the
+    fewest legend columns, the one that leaves the extent's centre nearest the page's visual centre
+    (in the middle across, 45% of the way down) is kept: a move away from that centre goes only as
+    far as makes room, one towards it as far as keeps it nearest. Of the moves within 1 mm of the
+    nearest, the one with the most room is kept. Where the projection stretches, as Web Mercator
+    does away from the equator, the
     moved frame is drawn at its new centre's ground scale, and the extent has to stay whole at that
     scale. Only when no move makes room for it, a continuous map with a long legend is veiled: at
     the asked scale, at least 80% of the extent's part of the frame and 30% of the rest are drawn
@@ -111,6 +116,13 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     latitude), the layout has no north arrow: the graticule gives north there, and one arrow can't
     point north across the whole frame. A warning says so; `"northArrow": "always"` draws one, and
     `"none"` leaves it out at any span.
+  - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
+    it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule
+    line, no web tiles, and no veil. Dark basemaps keep a white backing so the dark legend text
+    stays readable. Over light water its text sits on the page as on open sea. The answer's
+    `legendBox` says whether it has one; the clear box is still an element, to fill by hand, and
+    `"legendBox": "always"` keeps it white. A legend in a side column or on a card keeps its box
+    (`legendBox` is `true`).
   - **Decimal comma**: `"decimal": ","` prints the graticule, scale bar and colorbar numbers and
     `{scale}` with a decimal comma and points between thousands (`0,05`, `1:6.300.000`).
     `layout.page={"decimal": ","}` sets it on any layout; `"."` restores decimal points.
@@ -280,9 +292,13 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     service's legend picture, the one for the frame's scale (as the Layers pane shows it), a
     pixel a point and narrowed to fit the legend's width, in the order the map draws its layers
     (as the Layers pane lists them); one whose picture can't be loaded (or is wider or taller
-    than 2048 pixels) is left out. Exporting waits up to half a minute for the pictures, as it
-    waits for the map's tiles; in the browser the page is drawn with those that have arrived,
-    and again as the others arrive.
+    than 2048 pixels) is left out. The Layout view does not wait for pictures on either desktop
+    or browser: it draws what has arrived, then redraws once the pending legend pictures finish,
+    not on every unrelated download. Desktop exports wait up to half a minute in all for each
+    page's legend pictures (each page of a map series has its own wait), as they wait for the map's
+    tiles. A page drawn while a legend picture is still on its way stops the export, even if the
+    picture lands afterwards, rather than leave the file silently incomplete. The browser cannot wait:
+    export again once the pictures have arrived.
   - **Its Layers section**: a checkbox for each layer of the frame's map (and each WMS or WMTS
     layer with a legend): untick one to leave it out of the legend while the map still draws it
     (a mask, a highlight, a basemap-like layer). Scripts give the same with
@@ -407,6 +423,16 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   series still turns its pages. **Duplicate** makes an unlocked copy, and a map frame isn't
   deleted while one of its surrounds is locked. Scripts lock and unlock with `layout.update`
   `{"locked": true}` or `{"locked": false}`.
+- **Background**: every element but a map frame can have a box drawn behind it, which moves,
+  resizes, hides and turns with it, in the app and in PDF, PNG and SVG exports: a light box under
+  a legend or a scale bar over a busy map, or under a text on a dark page. Turn on **Background**
+  in the Format pane, then pick its **Fill** and **Outline** colours, the **Outline width** (0 for
+  none), the **Corner radius** and the **Padding**, how far the box reaches past the element on
+  every side; the element itself is drawn as before. It starts white with no outline, and a
+  duplicate keeps it. From a command:
+  `layout.update={"element":4,"background":{"fill":"#FFFFFFCC","radius":1,"padding":1.5}}`; the keys
+  not given keep theirs, and `"background":null` removes it. `layout.addElement` takes it too. A
+  map frame draws its own map and paper, so a background on one is refused.
 - **Rulers and guides**: rulers start on along the top and left and show millimetres from the page's corner.
   Drag out of a ruler to add a guide, drag a guide to move it, and drag it back onto a ruler to
   remove it. Guides are saved with the layout but never printed or exported. **Clear Guides**
@@ -415,6 +441,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   the other elements' edges and centres, and the line it snapped to is highlighted. Hold Alt to
   place an element freely, or turn **Snap** off in the Page group.
 - **Export** writes PDF (every map series page by default, up to 500), or PNG or SVG of the current page.
+  On desktop, **Cancel** also stops an export while it waits for legend pictures or map tiles;
+  a cancelled export does not replace the destination file.
   A PDF keeps the page as vectors: text, shapes, surrounds and map frames (their features, labels
   and grids, turned with the frame) stay sharp at any zoom or print size, and linear and radial
   gradient fills are PDF gradients. What is pixels by nature is a picture in it at the export's

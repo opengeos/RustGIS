@@ -217,9 +217,14 @@ pub struct TerrainBlock {
     /// half the box's relief, at least [`BLOCK_MIN_DEPTH`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<f64>,
-    /// The walls' colour.
+    /// The walls' colour, and where [`TerrainBlock::walls_layer`] has no polygon.
     #[serde(default = "block_walls")]
     pub walls: crate::color::Rgba,
+    /// A polygon layer, by name (as the terrain's DEM), that colours the walls: along each wall,
+    /// the colour the layer's symbology gives the polygon under the box's edge, its contacts
+    /// straight down (schematic: no dip or thickness). None: the walls are `walls` all along.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls_layer: Option<String>,
 }
 
 /// The least depth (metres, before exaggeration) of a block diagram's base below its lowest
@@ -279,6 +284,17 @@ pub struct TerrainWater {
     /// shore's lowest height. None: every water body's shore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
+    /// How brightly a tilted view's water shines where it would reflect the sun toward the eye,
+    /// 0 (none) to 1 (white at the brightest point).
+    #[serde(default = "water_glint")]
+    pub glint: f64,
+}
+
+/// A terrain's water's sun glint when none is given (#1915): broad and faint.
+pub const WATER_GLINT: f64 = 0.3;
+
+fn water_glint() -> f64 {
+    WATER_GLINT
 }
 
 /// The most a terrain's heights are exaggerated.
