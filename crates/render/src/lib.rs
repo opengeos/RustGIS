@@ -595,6 +595,12 @@ pub fn picture_marker_readable(b64: &str) -> bool {
     picture::readable(b64)
 }
 
+/// Whether a base64 image reads as a PNG or JPEG a marker takes from its header alone, without
+/// decoding it (for an image a file gives).
+pub fn picture_marker_header_readable(b64: &str) -> bool {
+    picture::header_readable(b64)
+}
+
 /// The colour unplaced labels are drawn in.
 pub const UNPLACED: Rgba = Rgba::rgb(0xD0, 0x1C, 0x1C);
 
@@ -1956,6 +1962,10 @@ pub(crate) fn picture_marker(
     image: bool,
     ppp: f32,
 ) -> bool {
+    // A width past what a view holds (from a crafted file) is drawn as the circle too.
+    if !(width.is_finite() && width > 0.0 && width < 1e5) {
+        return false;
+    }
     let Some(aspect) = picture::marker_aspect(p) else { return false };
     let height = width * aspect;
     if let Some(h) = halo
@@ -3539,6 +3549,8 @@ pub struct UprightMarker {
     pub height: f64,
     /// Its symbol, with the layer's transparency in its colours.
     pub symbol: Symbol,
+    /// Its layer's and groups' opacity, for an image marker, which has no colour to carry it.
+    pub opacity: f32,
     pub selected: bool,
 }
 
@@ -3658,7 +3670,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
                 let Some(k) = cam.depth_scale(*c, h) else { continue };
                 // On terrain, standing on the ground (its height in map units there).
                 let height = ground.as_ref().and_then(|g| g.height(*c).map(|m| (m / g.per_unit(*c)).clamp(-1e9, 1e9))).unwrap_or(0.0);
-                here.push((k, UprightMarker { at: *c, height, symbol, selected }));
+                here.push((k, UprightMarker { at: *c, height, symbol, opacity, selected }));
             }
         }
         here.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3680,7 +3692,14 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas) {
         if x < -reach || y < -reach || x > pw + reach || y > ph + reach {
             continue;
         }
-        draw_marker(pm, x, y, &s, 1.0, m.selected.then_some(SELECTION), ppp);
+        let halo = m.selected.then_some(SELECTION);
+        // An image takes the layer's opacity here; a shape has it in its colours.
+        if let Marker::Picture(p) = s.marker
+            && picture_marker(pm, p, s.size.max(1.0) * ppp, Transform::from_translate(x, y), m.opacity, halo, true, ppp)
+        {
+            continue;
+        }
+        draw_marker(pm, x, y, &s, 1.0, halo, ppp);
     }
 }
 
@@ -4795,18 +4814,21 @@ fn render_frame(
                         let Some(g) = g else { continue };
                         since_look += rustgis_map::lod::vertices(g);
                         let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
-                        // A point's marks, shifted from it, may show while the point is off the view.
+                        // A point's marks, shifted from it, or a tall image may show while the point is
+                        // off the view.
                         let marked_in = || {
                             if globe.is_some() || !matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
                                 return false;
                             }
                             let (sym, strokes) = styler.style(row);
                             let marks = styler.marks(row, strokes);
-                            if marks.is_empty() {
-                                return false;
-                            }
+                            let reach = match sym.marker {
+                                _ if !marks.is_empty() => point_marks::reach(&sym, &marks),
+                                Marker::Picture(_) => sym.size * marker_reach(sym.marker),
+                                _ => return false,
+                            };
                             // In the layer's pixels (`ctx` is scaled by its size factor).
-                            let r = f64::from(point_marks::reach(&sym, &marks) * ctx.ppp) * map_per_px;
+                            let r = f64::from(reach * ctx.ppp) * map_per_px;
                             Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
                         };
                         if rows.get(row) != Some(&true) || !(visible(&e) || marked_in()) {
@@ -11846,6 +11868,50 @@ mod tests {
             let r = render(&mut m, &view).unwrap();
             let green = |x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| p.green() > 200 && p.red() < 60 && p.alpha() > 200);
             assert!(green(100, 100) && green(100, 75) && !green(100, 65), "a 60 pt circle");
+        }
+    }
+
+    #[test]
+    fn a_picture_marker_shows_past_the_edge_fades_standing_up_and_bounds_its_size() {
+        use base64::Engine;
+        use rustgis_map::Picture;
+        let red = |p: tiny_skia::PremultipliedColorU8| p.red() > 200 && p.green() < 60 && p.blue() < 60;
+        // A red image ten times as tall as wide.
+        let mut tall = tiny_skia::Pixmap::new(4, 40).unwrap();
+        tall.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        let tall = Picture::new(&base64::engine::general_purpose::STANDARD.encode(tall.encode_png().unwrap()));
+        let symbol = |marker, size| Symbol { fill: Rgba::rgb(0, 255, 0), stroke: Rgba::new(0, 0, 0, 0), stroke_width: 0.0, size, marker };
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("icons", GeometryType::Point, vec![]);
+        // 40 px above a 200 px view (140 px north of its centre), past its cull margin; 10 pt
+        // wide, the image reaches 50 px down from it, 10 px into the view.
+        d.push(Some(Geometry::Point(Coord::new(0.0, 140.0 * 1500.0 / 111_319.49))), vec![]);
+        let id = m.add_dataset(d);
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol(Marker::Picture(tall), 10.0));
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        assert!(r.pixmap.pixel(100, 4).is_some_and(red), "the image's foot shows");
+        // A size past what a view holds is drawn as the circle, filling it, not as nothing.
+        let mut d = Dataset::new("huge", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let id = m.add_dataset(d);
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol(Marker::Picture(Picture::new(&picture_png())), 2e5));
+        let r = render(&mut m, &view).unwrap();
+        assert!(r.pixmap.pixel(100, 100).is_some_and(|p| p.green() > 200 && p.red() < 60), "the circle");
+        // Standing up in a tilted view, the image takes its layer's transparency.
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol(Marker::Picture(Picture::new(&picture_png())), 40.0));
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 30.0, pitch: 70.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        for (transparency, shows) in [(0.0, true), (100.0, false)] {
+            m.layer_mut(id).unwrap().transparency = transparency;
+            let up = upright_markers(&mut m, &view, 0.3);
+            assert!(up.first().is_some_and(|u| (u.opacity - (1.0 - transparency / 100.0)).abs() < 1e-6));
+            let r = render(&mut m, &view).unwrap();
+            assert_eq!(r.pixmap.pixels().iter().any(|p| red(*p)), shows, "{transparency}");
         }
     }
 

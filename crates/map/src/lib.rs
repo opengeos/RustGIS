@@ -1025,6 +1025,10 @@ impl Layer {
         self.renderer.any_picture(f)
             || symbology::strokes_have_pictures(&self.line_strokes, f)
             || fills::fills_have_pictures(&self.fill_layers, f)
+            // What No Fill hid is saved too.
+            || self.hidden_fills.as_ref().is_some_and(|h| {
+                fills::fills_have_pictures(&h.fills, f) || h.class_fills.iter().any(|(_, fl)| fills::fills_have_pictures(fl, f))
+            })
     }
 
     pub fn is_raster(&self) -> bool {
@@ -3651,6 +3655,29 @@ mod tests {
             v["hidden_fills"] = unknown.clone();
             assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().hidden_fills, None, "{unknown}");
         }
+    }
+
+    /// An image No Fill hid is saved with the layer, so it counts as one the layer keeps.
+    #[test]
+    fn an_image_no_fill_hid_is_one_the_layer_keeps() {
+        let mut l = Layer::new(1, Dataset::new("parcels", GeometryType::Polygon, vec![]));
+        let dots = fills::FillLayer {
+            color: None,
+            pattern: fills::FillPattern::Dots {
+                marker: symbology::Marker::Picture(symbology::Picture::new("aGlkZGVu")),
+                size: 2.0,
+                outline: None,
+                outline_width: 0.0,
+                spacing: [6.0, 6.0],
+                displacement: [0.0, 0.0],
+                offset: [0.0, 0.0],
+            },
+        };
+        assert!(!l.has_picture_markers());
+        l.hidden_fills = Some(HiddenFills { fills: vec![dots], ..HiddenFills::default() });
+        assert!(l.has_picture_markers());
+        l.hidden_fills = Some(HiddenFills { class_fills: vec![(symbology::ClassRef::Index(0), vec![dots])], ..HiddenFills::default() });
+        assert!(l.has_picture_markers());
     }
 
     #[test]

@@ -408,6 +408,10 @@ pub fn commands() -> Vec<C> {
             if p.get("image").is_some_and(|v| !v.is_null()) && (shape.is_some() || ch.is_some()) {
                 return Err("give a shape, a char or an image, only one".into());
             }
+            let id = s.layer_id(p)?;
+            s.map().layer(id).ok_or("no such layer")?;
+            // Decoded here, on the UI thread, as any command runs: at most 2 MiB of base64, whose
+            // declared size is checked before the decoder, capped in memory, runs.
             let image = picture(p)?;
             with(s, p, |l| {
                 l.renderer.map_symbols(|sym| {
@@ -3555,6 +3559,9 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     }
     for notice in crate::project::label_losses::layer_notices(text, &layer, true) {
         s.notify(notice, false);
+    }
+    for notice in crate::project::picture_notices([&layer], []) {
+        s.notify_text(notice, false);
     }
     // A binding in a file is no authority to use a login here.
     crate::s3_connections::clear_bindings(layer.addresses_mut());

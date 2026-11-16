@@ -1239,12 +1239,9 @@ impl Project {
             notices.push(message.into());
         }
         if parts.contains(&ReadPart::Maps) {
-            let layers = self.maps.iter().flat_map(|map| map.layers.iter()).filter(|l| l.any_picture(rustgis_map::Picture::is_dropped));
-            let styles = self.styles.iter().filter(|s| s.renderer.any_picture(rustgis_map::Picture::is_dropped));
-            let names: Vec<&str> = layers.map(|l| l.name.as_str()).chain(styles.map(|s| s.name.as_str())).collect();
-            if let Some(message) = dropped_pictures_notice(&names) {
-                notices.push(message.into());
-            }
+            // Offline snapshots are saved with the project too.
+            let layers = self.maps.iter().chain(self.offline_areas.iter().map(|a| &a.data)).flat_map(|map| map.layers.iter());
+            notices.extend(picture_notices(layers, self.styles.iter().map(|s| (s.name.as_str(), &s.renderer))));
         }
         notices
     }
@@ -1871,24 +1868,63 @@ fn empty_map() -> &'static Map {
 /// Most reports, presentations and notebooks a project file may hold.
 pub const MAX_ITEMS: usize = 1000;
 
-/// What reading said of image markers it didn't keep (see [`rustgis_map::Picture::is_dropped`]),
-/// naming the layers and styles that had them (the first few).
-fn dropped_pictures_notice(names: &[&str]) -> Option<String> {
+/// What a read made of the image markers of `layers` and saved `styles` (by name): those not
+/// kept, which saving loses, and those that aren't a PNG or JPEG image (by their header, each
+/// image once); both are drawn as circles.
+pub(crate) fn picture_notices<'a>(
+    layers: impl IntoIterator<Item = &'a rustgis_map::Layer>,
+    styles: impl IntoIterator<Item = (&'a str, &'a rustgis_map::Renderer)>,
+) -> Vec<NoticeText> {
+    use rustgis_map::Picture;
+    use rustgis_map::symbology::{MAX_PICTURE_BYTES, MAX_PICTURES, MAX_PICTURES_BYTES};
+    let seen = std::cell::RefCell::new(std::collections::HashMap::new());
+    let unreadable = |p: Picture| {
+        !p.is_default() && !*seen.borrow_mut().entry(p).or_insert_with(|| rustgis_render::picture_marker_header_readable(p.base64()))
+    };
+    let (mut dropped, mut bad) = (Vec::new(), Vec::new());
+    let mut note = |name: &'a str, any: &dyn Fn(&dyn Fn(Picture) -> bool) -> bool| {
+        if any(&Picture::is_dropped) {
+            dropped.push(name);
+        }
+        if any(&unreadable) {
+            bad.push(name);
+        }
+    };
+    for l in layers {
+        note(&l.name, &|f| l.any_picture(f));
+    }
+    for (name, renderer) in styles {
+        note(name, &|f| renderer.any_picture(f));
+    }
+    let mut notices = Vec::new();
+    if !dropped.is_empty() {
+        notices.push(NoticeText::format(
+            "Image markers in {names} weren't kept (longer than {mib} MiB, or past the {count} images or {total} MiB a run keeps) and are drawn as circles; saving loses them",
+            [
+                ("names", picture_names(&dropped)),
+                ("mib", (MAX_PICTURE_BYTES >> 20).to_string().into()),
+                ("count", MAX_PICTURES.to_string().into()),
+                ("total", (MAX_PICTURES_BYTES >> 20).to_string().into()),
+            ],
+        ));
+    }
+    if !bad.is_empty() {
+        notices.push(NoticeText::format(
+            "Image markers in {names} aren't PNG or JPEG images and are drawn as circles",
+            [("names", picture_names(&bad))],
+        ));
+    }
+    notices
+}
+
+/// Literal layer and style names, the first five, and a translatable count of the rest.
+fn picture_names(names: &[&str]) -> NoticeText {
     const SHOWN: usize = 5;
-    if names.is_empty() {
-        return None;
+    let shown: NoticeText = names.iter().take(SHOWN).map(|n| format!("\"{}\"", short_name(n))).collect::<Vec<_>>().join(", ").into();
+    match names.len().saturating_sub(SHOWN) {
+        0 => shown,
+        more => NoticeText::format("{names} and {n} more", [("names", shown), ("n", more.to_string().into())]),
     }
-    let more = names.len().saturating_sub(SHOWN);
-    let mut which = names.iter().take(SHOWN).copied().collect::<Vec<_>>().join(", ");
-    if more > 0 {
-        which.push_str(&format!(" and {more} more"));
-    }
-    Some(format!(
-        "Image markers in {which} weren't kept (longer than {} MiB, past the {} images or {} MiB a run keeps, or not an image) and are drawn as circles; saving the project loses them",
-        rustgis_map::symbology::MAX_PICTURE_BYTES >> 20,
-        rustgis_map::symbology::MAX_PICTURES,
-        rustgis_map::symbology::MAX_PICTURES_BYTES >> 20,
-    ))
 }
 
 /// The part of a project a read notice is about, so an import says only what it takes.

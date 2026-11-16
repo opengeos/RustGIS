@@ -174,7 +174,8 @@ impl Picture {
 
 impl PartialEq for Picture {
     fn eq(&self, other: &Picture) -> bool {
-        std::ptr::eq(self.0, other.0)
+        // Empty ones are equal wherever their `""` is.
+        std::ptr::eq(self.0, other.0) || (self.0.is_empty() && other.0.is_empty())
     }
 }
 
@@ -182,7 +183,7 @@ impl Eq for Picture {}
 
 impl std::hash::Hash for Picture {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
-        (self.0.as_ptr() as usize, self.0.len()).hash(h)
+        if self.0.is_empty() { 0usize.hash(h) } else { (self.0.as_ptr() as usize, self.0.len()).hash(h) }
     }
 }
 
@@ -3570,6 +3571,13 @@ mod tests {
         }
         let empty: Marker = serde_json::from_value(serde_json::json!({"Picture": " "})).unwrap();
         assert!(matches!(empty, Marker::Picture(p) if p.is_default() && !p.is_dropped()));
+        // No image is one, however it came.
+        let hash = |p: Picture| {
+            use std::hash::{BuildHasher, BuildHasherDefault};
+            BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default().hash_one(p)
+        };
+        assert_eq!(Picture::default(), Picture::new(" "));
+        assert_eq!(hash(Picture::default()), hash(Picture::new(" ")));
         let s: Symbol = serde_json::from_value(
             serde_json::json!({"fill": [1, 2, 3, 255], "stroke": [0, 0, 0, 255], "stroke_width": 1.0, "size": 7.0, "marker": {"Picture": 5}}),
         )

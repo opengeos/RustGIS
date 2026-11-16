@@ -71,7 +71,8 @@ A marker can also be an **image**: a PNG or JPEG, given by command as base64 (at
 Its size is its width, and it is as tall as its proportions make it, as QGIS draws a raster image
 marker; the symbol's fill and outline don't show. It turns with **Rotation**, is ringed when
 selected, and is kept in the project file. A project that has one opens only in a RustGIS that
-draws them. An image that doesn't decode draws a circle, so the point still shows:
+draws them. An image that doesn't decode draws a circle, so the point still shows; opening a
+project, map file or layer file says which layers have such an image, or one too large to keep:
 
 ```text
 layer.marker={"layer":"Schools","image":"iVBORw0KGgo…","size":16}

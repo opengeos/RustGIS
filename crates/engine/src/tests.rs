@@ -1690,14 +1690,39 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
     t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
     assert_eq!(marker(&t), Marker::Picture(Picture::new(&b64)));
     t.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
-    // An image the file gives that isn't kept is said, not dropped silently; the rest reads.
-    let text = std::fs::read_to_string(&path).unwrap().replace(&b64, &"A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4));
-    let mut u = Session::new(Project::default());
-    let mark = u.notice_mark();
-    u.run("project.openText", &json!({"text": text})).unwrap();
-    let said: Vec<String> = u.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-    assert!(said.iter().any(|n| n.contains("Image markers in Cities weren't kept")), "{said:?}");
+    // An image the file gives that isn't kept, or that isn't an image, is said, not drawn as a
+    // circle silently; the rest reads, and a clean file says nothing.
+    let saved_text = std::fs::read_to_string(&path).unwrap();
+    let opened = |text: String| {
+        let mut u = Session::new(Project::default());
+        let mark = u.notice_mark();
+        u.run("project.openText", &json!({"text": text})).unwrap();
+        let said: Vec<String> = u.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        (u, said)
+    };
+    let (_, said) = opened(saved_text.clone());
+    assert!(!said.iter().any(|n| n.contains("Image markers")), "{said:?}");
+    let too_long = "A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4);
+    let (u, said) = opened(saved_text.replace(&b64, &too_long));
+    assert!(said.iter().any(|n| n.contains("Image markers in \"Cities\" weren't kept")), "{said:?}");
     assert!(matches!(marker(&u), Marker::Picture(p) if p.is_dropped()));
+    let (_, said) = opened(saved_text.replace(&b64, "bm90IGFuIGltYWdl"));
+    assert!(said.iter().any(|n| n.contains("Image markers in \"Cities\" aren't PNG or JPEG images")), "{said:?}");
+    assert!(!said.iter().any(|n| n.contains("weren't kept")), "{said:?}");
+    // So does a map file or a layer file added on its own.
+    let map = serde_json::to_string(t.map()).unwrap();
+    let layer = serde_json::to_string(t.map().layer_by_name("Cities").unwrap()).unwrap();
+    for (command, text) in [("map.import", map), ("layer.addLayerFile", layer)] {
+        let said = |text: String| {
+            let mut w = world();
+            let mark = w.notices_given();
+            w.run(command, &json!({"text": text})).unwrap();
+            w.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<String>>()
+        };
+        assert!(!said(text.clone()).iter().any(|n| n.contains("Image markers")), "{command}");
+        let lost = said(text.replace(&b64, &too_long));
+        assert!(lost.iter().any(|n| n.contains("Image markers in \"Cities\" weren't kept")), "{command}: {lost:?}");
+    }
     // A layer file names it too.
     let layer = dir.join("cities.rgislayer");
     t.run("layer.save", &json!({"layer": "Cities", "path": layer.display().to_string()})).unwrap();
@@ -1731,6 +1756,8 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
         (json!({"layer": "Cities", "image": "A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4)}), "at most 2 MiB"),
         (json!({"layer": "Cities", "image": b64, "shape": "star"}), "only one"),
         (json!({"layer": "Cities", "image": b64, "char": "x"}), "only one"),
+        // No layer: refused before the image is kept.
+        (json!({"layer": "Nowhere", "image": b64}), "Nowhere"),
     ] {
         let err = s.run("layer.marker", &bad).unwrap_err();
         assert!(err.contains(says), "{err}");

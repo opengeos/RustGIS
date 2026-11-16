@@ -6101,8 +6101,10 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                 } else {
                     (tl!("Add Stroke"), tl!("Stack another stroke on top"))
                 };
-                // A point's first mark is its symbol's marker, which can't be an image yet.
-                let image = points && strokes.is_empty() && matches!(base.marker, Marker::Picture(_));
+                // A point's first mark is its symbol's marker and later ones copy the top one; no mark
+                // can be an image yet (a file's is kept, but not edited).
+                let image = (points && strokes.is_empty() && matches!(base.marker, Marker::Picture(_)))
+                    || rustgis_engine::map::symbology::strokes_have_pictures(&strokes, |_| true);
                 let add = ui.add_enabled(strokes.len() < MAX_STROKES && !image, egui::Button::new(label).small());
                 let add = if image { add.on_disabled_hover_text(tl!("An image marker takes no marks yet")) } else { add };
                 if add.on_hover_text(tip).clicked() {

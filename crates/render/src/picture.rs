@@ -162,15 +162,18 @@ pub(crate) fn marker_aspect(p: Picture) -> Option<f32> {
 /// `t`'s origin and turned with it. False if its image doesn't decode.
 pub(crate) fn draw_marker(pm: &mut Canvas, p: Picture, width: f32, t: Transform, opacity: f32) -> bool {
     with_marker(p, |img| {
-        if !(width.is_finite() && width > 0.0 && width < 1e5) {
-            return;
-        }
         let k = width / img.width() as f32;
         let at = t.pre_translate(-width / 2.0, -(img.height() as f32) * k / 2.0).pre_scale(k, k);
         let paint = PixmapPaint { opacity, quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
         pm.draw_pixmap(0, 0, img.as_ref(), &paint, at, None);
     })
     .is_some()
+}
+
+/// Whether base64 `b64` reads as a PNG or JPEG image of a size a marker takes, from its header
+/// alone (for an image a file gives; [`readable`] decodes it).
+pub(crate) fn header_readable(b64: &str) -> bool {
+    size(b64).is_some_and(|(w, h)| w > 0 && h > 0 && w <= MAX_DECLARED && h <= MAX_DECLARED)
 }
 
 /// Whether base64 `b64` is a PNG or JPEG image that decodes (a picture marker's, before it's set).

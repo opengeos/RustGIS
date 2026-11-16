@@ -506,6 +506,9 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             for notice in crate::project::label_losses::map_notices(&text, &m, true) {
                 s.notify(notice, false);
             }
+            for notice in crate::project::picture_notices(&m.layers, []) {
+                s.notify_text(notice, false);
+            }
             vec![m]
         }
         Err(_) => match Project::from_import_maps_json(&text, dir.as_deref(), MAX_IMPORTED_MAPS) {
@@ -628,10 +631,16 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
         for notice in crate::project::label_losses::layer_notices(&text, &l, false) {
             s.notify(notice, false);
         }
+        for notice in crate::project::picture_notices([&l], []) {
+            s.notify_text(notice, false);
+        }
         vec![l]
     } else if let Ok(m) = serde_json::from_str::<Map>(&text) {
         for notice in crate::project::label_losses::map_notices(&text, &m, false) {
             s.notify(notice, false);
+        }
+        for notice in crate::project::picture_notices(&m.layers, []) {
+            s.notify_text(notice, false);
         }
         m.layers
     } else {
@@ -642,6 +651,9 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
         let mut project = project.map_err(|e| not_a(e, "layer file, map file or project"))?;
         // Styles take the layers' renderers and labels, not their diagrams or the layouts.
         for notice in project.take_read_notices(&[crate::project::ReadPart::Labels]) {
+            s.notify_text(notice, false);
+        }
+        for notice in crate::project::picture_notices(project.maps.iter().flat_map(|m| &m.layers), []) {
             s.notify_text(notice, false);
         }
         project.maps.into_iter().flat_map(|m| m.layers).collect()
