@@ -151,27 +151,37 @@ fn je_odd(asset: &Value) -> bool {
 /// extension allows, and is then not odd. [`item_json`] marks a band it passed on with `rg:unread`.
 fn odd_numbers(band: Option<&Value>) -> bool {
     let Some(band) = band else { return false };
-    band.get("rg:unread").and_then(Value::as_bool) == Some(true) || odd_keys(band)
+    band.get("rg:unread").and_then(Value::as_bool) == Some(true)
+        || NUMBER_FIELDS.iter().any(|(keys, nodata)| odd_field(band, keys, *nodata))
 }
 
-/// Whether the object's own `scale`, `offset` or `nodata` (bare or `raster:`) is there but not a
-/// number, as [`odd_numbers`] reads it, without the mark [`item_json`] writes: for the asset, whose
-/// `rg:unread` is JAXA's and would wrongly mark every band.
-fn odd_keys(object: &Value) -> bool {
-    [("scale", false), ("raster:scale", false), ("offset", false), ("raster:offset", false), ("nodata", true), ("raster:nodata", true)]
-        .iter()
-        .any(|(key, nodata)| match object.get(*key) {
-            None | Some(Value::Null) => false,
-            Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
-            Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
-            Some(_) => true,
-        })
+/// The numbers a band carries, each as the keys it may be spelled with (bare or `raster:`), and whether
+/// it is a no-data, which may be `"nan"`, `"inf"` or `"-inf"`.
+const NUMBER_FIELDS: [(&[&str], bool); 3] =
+    [(&["scale", "raster:scale"], false), (&["offset", "raster:offset"], false), (&["nodata", "raster:nodata"], true)];
+
+/// Whether the object gives one of the number's keys at all (a value, odd or not; null is none).
+fn declares(object: Option<&Value>, keys: &[&str]) -> bool {
+    keys.iter().any(|k| object.and_then(|o| o.get(*k)).is_some_and(|v| !v.is_null()))
+}
+
+/// Whether the object's number is there but not a number: a string (`"0.0001"`), an object, or a
+/// number that isn't finite. Without the mark [`item_json`] writes (the asset's is JAXA's).
+fn odd_field(object: &Value, keys: &[&str], nodata: bool) -> bool {
+    keys.iter().any(|k| match object.get(*k) {
+        None | Some(Value::Null) => false,
+        Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
+        Some(Value::String(s)) => !(nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
+        Some(_) => true,
+    })
 }
 
 /// The bands an asset describes, from `eo:bands` (names) or STAC 1.1's unified `bands`, and
 /// `raster:bands` (scale, offset, no-data), matched by position. Both spellings of the raster
-/// terms are read (`scale` and `raster:scale`). Hostile input: at most [`MAX_BANDS`], text cut
-/// (an asset with more says so in `bands_cut`).
+/// terms are read (`scale` and `raster:scale`). A band's own declaration of a number (even
+/// `"nodata": "nan"`) is its own: only a band that declares none takes the asset's, then, for the
+/// first band, JAXA's; an asset's number given as text marks the bands that would take it unread.
+/// Hostile input: at most [`MAX_BANDS`], text cut (an asset with more says so in `bands_cut`).
 fn asset_bands(asset: &Value) -> Vec<BandInfo> {
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
     let named = list("eo:bands").or_else(|| list("bands"));
@@ -183,9 +193,18 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
     (0..count)
         .map(|i| {
             let (named, raster) = (named.and_then(|l| l.get(i)), raster.and_then(|l| l.get(i)));
-            // A band's own number, else the asset's (STAC 1.1 lets bands share them on the asset).
-            let pick = |keys: &[&str]| number(raster, keys).or_else(|| number(named, keys)).or_else(|| number(Some(asset), keys));
             let first = i == 0;
+            // Whether the band declares the number itself, and what it is: that stops every fallback.
+            let own = |keys: &[&str]| declares(raster, keys) || declares(named, keys);
+            let pick = |(keys, _): (&[&str], bool)| {
+                if own(keys) {
+                    number(raster, keys).or_else(|| number(named, keys))
+                } else {
+                    number(Some(asset), keys).or_else(|| first.then(|| band_number(asset, keys[0])).flatten())
+                }
+            };
+            // The asset's number given as text, for a band that takes it from there.
+            let inherited_odd = NUMBER_FIELDS.iter().any(|(keys, nodata)| !own(keys) && odd_field(asset, keys, *nodata));
             BandInfo {
                 common: named
                     .and_then(|b| b.get("common_name").or_else(|| b.get("eo:common_name")))
@@ -193,10 +212,10 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                     .or_else(|| (first && named.is_none()).then_some(asset_name).flatten())
                     .map(|t| t.trim().to_ascii_lowercase().chars().take(MAX_NAME).collect())
                     .unwrap_or_default(),
-                scale: pick(&["scale", "raster:scale"]).or_else(|| first.then(|| band_number(asset, "scale")).flatten()),
-                offset: pick(&["offset", "raster:offset"]).or_else(|| first.then(|| band_number(asset, "offset")).flatten()),
-                nodata: pick(&["nodata", "raster:nodata"]).or_else(|| first.then(|| band_number(asset, "nodata")).flatten()),
-                unread: odd_numbers(raster) || odd_numbers(named) || odd_keys(asset),
+                scale: pick(NUMBER_FIELDS[0]),
+                offset: pick(NUMBER_FIELDS[1]),
+                nodata: pick(NUMBER_FIELDS[2]),
+                unread: odd_numbers(raster) || odd_numbers(named) || inherited_odd,
             }
         })
         .collect()

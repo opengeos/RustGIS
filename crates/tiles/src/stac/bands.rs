@@ -575,6 +575,32 @@ mod tests {
     }
 
     #[test]
+    fn a_bands_own_declaration_stops_the_asset_defaults_even_a_special_no_data() {
+        // The asset says 255, the band says "nan" (no no-data value): the band's declaration is its own.
+        let it = item(&[(
+            "data",
+            json!({"nodata": 255, "raster:scale": 0.0001,
+                "bands": [{"eo:common_name": "red", "nodata": "nan"}, {"eo:common_name": "nir"}]}),
+        )]);
+        let b = bands(&it);
+        let (red, nir) = (find(&b, "red").unwrap(), find(&b, "nir").unwrap());
+        assert_eq!((red.nodata, red.unread), (None, false), "not the asset's 255");
+        assert_eq!((nir.nodata, nir.scale), (Some(255.0), 0.0001), "a band that declares none takes the asset's");
+    }
+
+    #[test]
+    fn an_asset_default_given_as_text_marks_only_the_bands_that_would_take_it() {
+        let it = item(&[(
+            "data",
+            json!({"raster:scale": "0.0001", "bands": [{"eo:common_name": "red", "raster:scale": 0.0002}, {"eo:common_name": "nir"}]}),
+        )]);
+        let b = bands(&it);
+        let (red, nir) = (find(&b, "red").unwrap(), find(&b, "nir").unwrap());
+        assert_eq!((red.scale, red.unread), (0.0002, false), "its own valid scale stands");
+        assert!(nir.unread, "this one would take the unreadable default");
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));
