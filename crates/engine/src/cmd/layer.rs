@@ -4118,7 +4118,8 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
             public || crate::render::rustgis_tiles::cache::ceiling_for(url) == crate::render::rustgis_tiles::address::Reach::Public;
         // A service's features with no app to leave them to (the CLI, a script, a task): read in
         // pages as the app reads them, not as one answer cut at the service's record limit (#1144).
-        if super::b(p, "service").unwrap_or(false) {
+        // A GeoTIFF keeps its own path below, read in place when it can be.
+        if super::b(p, "service").unwrap_or(false) && !tiff {
             let label = ps(p, "name").map(str::to_string).unwrap_or_else(|| crate::sources::address_in_message(url));
             let bounds = super::service::bounds_of(p.get("bounds"))?;
             let file = |bytes: &[u8]| url_file_name(url, bytes);
