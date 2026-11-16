@@ -584,8 +584,8 @@ mod tests {
         assert!(serde_json::from_str::<Value>(r#"{"Date":"2026-02-30"}"#).is_err());
     }
 
-    /// Interactive Double text rejects non-finite numbers, while source parsing preserves them
-    /// for the counted output notice. Exact integer text stays integer; source decimals stay real.
+    /// File text keeps its spaces in a text field (#2059); empty and `<Null>` are null in any
+    /// field, numbers read past spaces, and text typed into the table is still trimmed.
     #[test]
     fn file_text_is_kept_as_it_is_and_typed_text_is_trimmed() {
         for (text, kept) in
@@ -598,6 +598,8 @@ mod tests {
         assert_eq!(Value::parse(" 2535", FieldType::Text), Value::Text("2535".into()), "typed text is trimmed");
     }
 
+    /// Interactive Double text rejects non-finite numbers, while source parsing preserves them
+    /// for the counted output notice. Exact integer text stays integer; source decimals stay real.
     #[test]
     fn a_number_field_reads_text_that_is_not_a_finite_number_as_null() {
         for text in ["NaN", "inf", "-inf", "infinity", "1e400"] {
