@@ -156,7 +156,9 @@ impl GpkgSource {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
             let salt = std::collections::hash_map::RandomState::new();
             let tag = std::hash::BuildHasher::hash_one(&salt, (nanos, N.fetch_add(1, Ordering::Relaxed)));
-            let p = std::env::temp_dir().join(format!("rustgis-{}-{tag:016x}.gpkg", std::process::id()));
+            let p = std::path::absolute(std::env::temp_dir())
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join(format!("rustgis-{}-{tag:016x}.gpkg", std::process::id()));
             let mut o = std::fs::OpenOptions::new();
             o.write(true).create_new(true);
             // Readable by this user only: the copy holds their data, in a shared folder.

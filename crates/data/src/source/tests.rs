@@ -434,27 +434,36 @@ fn geopackage_provenance_skips_a_replaced_path() {
 }
 
 /// A GeoPackage reached through a linked folder is recorded at the path opened, as macOS's
-/// temporary folder (`/var` → `/private/var`) is, while SQLite's companions are found where SQLite
-/// puts them, beside the resolved file.
+/// temporary folder (`/var` → `/private/var`) is, its SQLite companions too; through a link to the
+/// file itself, the companions are found where SQLite puts them, beside the target.
 #[cfg(unix)]
 #[test]
 fn geopackage_provenance_keeps_a_linked_path() {
     let folder = tempfile::tempdir().unwrap();
     let real = folder.path().join("real");
     std::fs::create_dir(&real).unwrap();
-    write_gpkg(&real.join("original.gpkg"), true);
+    let target = real.join("original.gpkg");
+    write_gpkg(&target, true);
     std::fs::write(real.join("original.gpkg-wal"), b"wal").unwrap();
+    let inputs = |path: &Path| {
+        let source = open_path(path, None).unwrap();
+        let captured = crate::provenance::Capture::start();
+        assert!(!source.read(&Request { extent: None, limit: 1 }).unwrap().features.is_empty());
+        captured.inputs().into_iter().map(|i| i.path).collect::<Vec<String>>()
+    };
+    let resolved = std::fs::canonicalize(&target).unwrap();
     let link = folder.path().join("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let path = link.join("original.gpkg");
-    let source = open_path(&path, None).unwrap();
-    let captured = crate::provenance::Capture::start();
-    assert!(!source.read(&Request { extent: None, limit: 1 }).unwrap().features.is_empty());
-    let paths: Vec<String> = captured.inputs().into_iter().map(|i| i.path).collect();
+    let paths = inputs(&path);
     assert!(paths.contains(&path.display().to_string()), "{paths:?}");
-    let wal = std::fs::canonicalize(&real).unwrap().join("original.gpkg-wal");
-    assert!(paths.contains(&wal.display().to_string()), "{paths:?}");
-    assert!(!paths.contains(&std::fs::canonicalize(real.join("original.gpkg")).unwrap().display().to_string()), "{paths:?}");
+    assert!(paths.contains(&format!("{}-wal", path.display())), "{paths:?}");
+    assert!(!paths.iter().any(|p| p.starts_with(&resolved.display().to_string())), "{paths:?}");
+    let alias = folder.path().join("alias.gpkg");
+    std::os::unix::fs::symlink(&target, &alias).unwrap();
+    let paths = inputs(&alias);
+    assert!(paths.contains(&alias.display().to_string()), "{paths:?}");
+    assert!(paths.contains(&format!("{}-wal", resolved.display())), "{paths:?}");
 }
 
 /// 30 × 20 points over the world, named and numbered.
