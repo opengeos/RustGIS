@@ -44,7 +44,7 @@ pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{
     ClassMethod, Classer, FontName, Glyph, LabelBackground, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap,
-    LineJoin, LineMark, LineMarkers, LineStroke, Marker, MarkerRotation, Placements, Renderer, SquareSide, SquareTo, Symbol,
+    LineJoin, LineMark, LineMarkers, LineStroke, Marker, MarkerRotation, Picture, Placements, Renderer, SquareSide, SquareTo, Symbol,
 };
 pub use tiles::{TileKind, TileLayer};
 
@@ -1011,6 +1011,14 @@ impl Layer {
     /// Whether some feature may be drawn with stacked fills ([`Layer::fills`]).
     pub fn has_fills(&self) -> bool {
         !self.graphics && (!self.fill_layers.is_empty() || self.renderer.has_class_fills())
+    }
+
+    /// Whether any marker the layer keeps is an image ([`Marker::Picture`]): its renderer's, its
+    /// stacked strokes' or its dot fills'.
+    pub fn has_picture_markers(&self) -> bool {
+        self.renderer.has_picture_markers()
+            || symbology::strokes_have_pictures(&self.line_strokes)
+            || fills::fills_have_pictures(&self.fill_layers)
     }
 
     pub fn is_raster(&self) -> bool {

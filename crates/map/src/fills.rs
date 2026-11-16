@@ -44,6 +44,11 @@ pub struct FillLayer {
     pub pattern: FillPattern,
 }
 
+/// Whether any of `fills` draws an image as its dots' marker.
+pub fn fills_have_pictures(fills: &[FillLayer]) -> bool {
+    fills.iter().any(|f| matches!(f.pattern, FillPattern::Dots { marker: Marker::Picture(_), .. }))
+}
+
 /// What a fill draws inside its polygon.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]

@@ -67,6 +67,16 @@ draws a circle, so the point still shows. By command:
 layer.marker={"layer":"Peaks","char":"▲","font":"DejaVu Sans","size":12}
 ```
 
+A marker can also be an **image**: a PNG or JPEG, given by command as base64 (at most 2 MiB).
+Its size is its width, and it is as tall as its proportions make it, as QGIS draws a raster image
+marker; the symbol's fill and outline don't show. It turns with **Rotation**, is ringed when
+selected, and is kept in the project file. A project that has one opens only in a RustGIS that
+draws them. An image that doesn't decode draws a circle, so the point still shows:
+
+```text
+layer.marker={"layer":"Schools","image":"iVBORw0KGgo…","size":16}
+```
+
 **Rotation** turns each point's marker by the angle in a number field, in degrees clockwise
 (**Counterclockwise** for angles as mathematics counts them), as wind arrows or the signs of a
 topographic map turn. **Marks** stack several markers at a point, bottom first, in place of the
