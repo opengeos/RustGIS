@@ -1747,7 +1747,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                         ui.end_row();
                     }
-                    ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse } => {
+                    ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse, .. } => {
                         let input_label = ui.label(tl!("Title"));
                         if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false, input_label.id) {
                             update(app, json!({"title": tt}));
@@ -2064,6 +2064,28 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.end_row();
                     }
                     _ => {}
+                }
+                // A legend's, colorbar's, table's or chart's ink (#2257), on and off as a background
+                // is: off is the default dark grey, which isn't the same as a dark grey ink (a table
+                // keeps its white cells only without one). Turned on, it starts white, for a dark page.
+                if e.kind.takes_ink() {
+                    let ink = e.kind.ink();
+                    let input_label = ui.label(tl!("Ink"));
+                    ui.horizontal(|ui| {
+                        let mut on = ink.is_some();
+                        let hint = tl!("Its own colour for its text and lines; off, the default dark grey");
+                        if ui.checkbox(&mut on, "").labelled_by(input_label.id).on_hover_text(hint).changed() {
+                            update(app, json!({"color": on.then_some("#FFFFFF")}));
+                        }
+                        let Some(current) = ink else { return };
+                        let mut c = crate::theme::c32(current);
+                        let resp = crate::widgets::color_button(ui, &mut c);
+                        if resp.changed() {
+                            crate::widgets::one_step_per_press(app, &resp);
+                            update(app, json!({"color": crate::theme::rgba(c).hex()}));
+                        }
+                    });
+                    ui.end_row();
                 }
             },
         );
