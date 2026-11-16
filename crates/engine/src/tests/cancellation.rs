@@ -86,6 +86,25 @@ pub(super) fn long_commands(boundaries: bool) {
         // Cancelled before the index is read: nothing reaches the network.
         ("embeddings.similarity", json!({"dataset": "alphaearth", "point": [10.01, 45.01], "bbox": [10.0, 45.0, 10.02, 45.02]})),
         ("embeddings.change", json!({"dataset": "alphaearth", "bbox": [10.0, 45.0, 10.02, 45.02]})),
+        // Cancelled before a band's file is read: nothing reaches the network.
+        (
+            "stac.addBands",
+            json!({"item": {"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+                "assets": {
+                    "red": {"href": "https://example.org/red.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "red"}]},
+                    "green": {"href": "https://example.org/green.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "green"}]},
+                    "blue": {"href": "https://example.org/blue.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "blue"}]}}},
+                "bbox": [10.0, 45.0, 10.02, 45.02]}),
+        ),
+        // The same: an index reads two files and nothing reaches the network.
+        (
+            "stac.addIndex",
+            json!({"item": {"type": "Feature", "id": "scene", "bbox": [10.0, 45.0, 10.02, 45.02], "properties": {"datetime": "2024-06-01T00:00:00Z"},
+                "assets": {
+                    "red": {"href": "https://example.org/red.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "red"}]},
+                    "nir": {"href": "https://example.org/nir.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{"common_name": "nir"}]}}},
+                "index": "ndvi", "bbox": [10.0, 45.0, 10.02, 45.02]}),
+        ),
     ];
     // Every command that runs in the background is here, and only those.
     /// Keeps the shared fixture list in step with the production registry.
@@ -95,9 +114,9 @@ pub(super) fn long_commands(boundaries: bool) {
     let registered = crate::cmd::workflows::IN_BACKGROUND.iter().map(|(c, ..)| *c).collect::<std::collections::BTreeSet<_>>();
     assert_eq!(listed(&rasters), registered, "add a new background raster command here");
     for (command, p) in &rasters {
-        // These need remote tile discovery beyond their first check. Keep the existing
+        // Embeddings and STAC bands read from the network beyond their first check. Keep the
         // first-check coverage, but never run their boundary sweep or retry against the network.
-        if !boundaries || !command.starts_with("embeddings.") {
+        if !boundaries || !(command.starts_with("embeddings.") || matches!(*command, "stac.addBands" | "stac.addIndex")) {
             exercise(&s, command, p, Kind::Raster, &dir.0, boundaries);
         }
     }
@@ -133,6 +152,22 @@ pub(super) fn long_commands(boundaries: bool) {
         if !boundaries || command == "service.layers" {
             exercise(&s, command, &params, Kind::Read, &dir.0, boundaries);
         }
+    }
+    // Shape fitting uses the same cancellable read queue, without modifying its source. Its
+    // fixture is an editing session of its own, which the boundary sweep's sessions don't carry,
+    // so it keeps first-check coverage.
+    if !boundaries {
+        let mut shapes = Session::new(Project::default());
+        let id = shapes.map_mut().add_dataset(rustgis_data::Dataset::new("Conversion", rustgis_data::GeometryType::Polygon, vec![]));
+        shapes.active_layer = Some(id);
+        shapes.run("edit.enable", &json!({"on":true})).unwrap();
+        shapes.run("edit.addBox", &json!({"box":{"center":[0,0],"width":100,"height":60,"angle":25}})).unwrap();
+        let before = contents(&shapes.project);
+        let control = Control::cancelled_once_started();
+        let result = Kind::Read.run(&mut shapes, "edit.previewShapeConversion", &json!({"layer":id,"row":0,"kind":"rotatedBox"}), &control);
+        assert!(result.as_ref().is_err_and(|e| e.contains("cancelled")), "edit.previewShapeConversion ran on after Cancel: {result:?}");
+        assert!(control.looked() > 0, "edit.previewShapeConversion never looks at Cancel");
+        assert!(contents(&shapes.project) == before, "edit.previewShapeConversion changed the project after Cancel");
     }
     exercise(&s, "table.statistics", &json!({"layer": "Cities", "field": "pop_max"}), Kind::Read, &dir.0, boundaries);
 

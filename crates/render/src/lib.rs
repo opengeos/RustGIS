@@ -33,6 +33,7 @@ mod raster;
 pub mod raster_export;
 pub mod report;
 mod single_image;
+mod square_labels;
 mod stroke_paths;
 pub mod svg;
 pub mod terrain;
@@ -2517,6 +2518,8 @@ fn render_tilted(
     let ground = terrain::Ground::of(map, &view.camera);
     // The bands' Shaded Relief draws this ground's water (see `relief_water`).
     let _water = BandWater::set(ground.as_ref().and_then(|g| g.water().cloned()));
+    // And the sun's glint on it, which each band adds over the water's fill.
+    let _glint = TiltGlint::set(ground.as_ref().and_then(|g| terrain::Glint::of(map, view, g)));
     let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
     let last = bands_of.len().saturating_sub(1);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
@@ -3918,6 +3921,31 @@ impl Drop for BandWater {
     }
 }
 
+thread_local! {
+    /// The sun glint on the terrain's water (#1915) the bands of the tilted view being drawn add to
+    /// their frames ([`render_tilted`], [`render_tilt_drape`]): worked out once for the view, whose
+    /// eye it shines toward, not for each band's own camera. Both draw their bands one after
+    /// another on the thread that sets it: a band drawn on another thread would get no glint.
+    static TILT_GLINT: std::cell::RefCell<Option<std::rc::Rc<terrain::Glint>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The glint the bands of a tilted view add to their frames while it lives (see [`TILT_GLINT`]);
+/// the one before is put back when it is dropped, on every way out of drawing the view.
+struct TiltGlint(Option<std::rc::Rc<terrain::Glint>>);
+
+impl TiltGlint {
+    fn set(glint: Option<terrain::Glint>) -> TiltGlint {
+        TiltGlint(TILT_GLINT.with(|g| g.replace(glint.map(std::rc::Rc::new))))
+    }
+}
+
+impl Drop for TiltGlint {
+    fn drop(&mut self) {
+        let kept = self.0.take();
+        TILT_GLINT.with(|g| g.replace(kept));
+    }
+}
+
 /// The terrain's water a frame's Shaded Relief layers draw flat at its level with the even light
 /// of flat ground (#1915), and whether shore tiles it was read from are still on their way. A
 /// band of a tilted view or drape takes the whole view's ([`BAND_WATER`]); another frame reads it
@@ -4247,6 +4275,8 @@ fn render_frame(
     let n_layers = map.layers.len();
     // Masks: layers shown only inside another layer's polygons, or left of the swipe divider.
     let masks = layer_masks(map, &ctx, w, h, &flat, &key, scale, failed_source)?;
+    // The lines point labels are turned square to (#2263), on the screen.
+    let square_lines = square_lines(map, &ctx, &flat);
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..n_layers).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -5068,6 +5098,8 @@ fn render_frame(
                         let mut curves = None;
                         let mut line_alternatives = Vec::new();
                         let mut line_places = None;
+                        // Turned square to a line: no other places round its point.
+                        let mut squared = false;
                         if let Some((mx, my)) = moved {
                             places.push((0, mx as f32, my as f32, None, Vec::new()));
                         } else if let (LabelPlacement::Parallel | LabelPlacement::Curved, Geometry::Line(parts)) = (class.placement, g) {
@@ -5153,6 +5185,7 @@ fn render_frame(
                                             chars,
                                             advances,
                                             gap: spacing * 1.33,
+                                            size,
                                             overrun,
                                             off,
                                         }),
@@ -5162,7 +5195,7 @@ fn render_frame(
                                 } else {
                                     for (i, at) in line_labels::repeats(line.length(), repeat) {
                                         let Some(((cx, cy), turns)) = line
-                                            .curved(&advances, spacing * 1.33, overrun, Some(at))
+                                            .curved(&advances, spacing * 1.33, size, overrun, Some(at))
                                             .and_then(|c| line_labels::curved_off(c, off))
                                         else {
                                             continue;
@@ -5203,6 +5236,28 @@ fn render_frame(
                                     }
                                 }
                             }
+                        } else if let Some((lx, ly, angle)) = class
+                            .square_to
+                            .as_ref()
+                            .filter(|_| is_point && class.placement == LabelPlacement::Perpendicular && point.is_some())
+                            .and_then(|to| {
+                                // Square to its nearest line, the line's course taken over a text
+                                // height; starting at the point, out by its offset.
+                                let runs = square_lines.get(&to.layer.to_ascii_lowercase())?;
+                                let reach = text::block_height(&text, size);
+                                let n = square_labels::normal(runs, (x as f32, y as f32), to.within * 1.33, reach, to.side)?;
+                                let start = (marker / 2.0 + 2.0 + class.offset[0] * 1.33) * label_factor;
+                                Some(square_labels::place(
+                                    (x as f32, y as f32),
+                                    n,
+                                    start,
+                                    bw * label_factor,
+                                    class.offset[1] * 1.33 * label_factor,
+                                ))
+                            })
+                        {
+                            squared = true;
+                            places.push((0, lx, ly, Some(angle), Vec::new()));
                         } else {
                             let (lx, ly) = place(class.placement);
                             // Turned by its angle expression (degrees clockwise), about its centre,
@@ -5234,7 +5289,7 @@ fn render_frame(
                                     class
                                         .placement
                                         .alternatives()
-                                        .filter(|_| class.other_positions && moved.is_none())
+                                        .filter(|_| class.other_positions && moved.is_none() && !squared)
                                         .map(place)
                                         .map(LabelPlace::from)
                                         .collect::<Vec<_>>()
@@ -5397,6 +5452,12 @@ fn render_frame(
     }
     if let Some(id) = below {
         draw_tiles!(Some(id));
+    }
+    // A band of a tilted view: the sun's glint on the terrain's water, over the water's own fill.
+    if matches!(labels_to, Labels::Tilted(..) | Labels::Shared)
+        && let Some(g) = TILT_GLINT.with(|g| g.borrow().clone())
+    {
+        g.paint(pm.pixels(), view);
     }
     if let Some(g) = &globe {
         globe_shading(pm.pixels(), g, water, space(view, map), view.pixels_per_point as f32);
@@ -6010,6 +6071,8 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     // The bands' Shaded Relief draws the whole view's water (see `relief_water`).
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let _water = BandWater::set(relief_water(map, view, &Labels::Own, scale).map(|(w, _)| w));
+    // And the sun's glint on it, toward the view's eye.
+    let _glint = TiltGlint::set(terrain::Ground::of(map, &view.camera).and_then(|g| terrain::Glint::of(map, view, &g)));
     for b in bands {
         let (mut w, mut h) = (b.width * (1.0 + 2.0 * margin), b.height * (1.0 + 2.0 * margin));
         let mut camera = b.camera;
@@ -6050,6 +6113,84 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
         .filter(|part| near(part))
         .flat_map(|part| line_labels::in_view(part.iter().map(|c| ctx.screen(*c).map(|(x, y)| (x as f32, y as f32))), w, h))
         .max_by(|a, b| length(a).total_cmp(&length(b)))
+}
+
+/// The lines of the layers point labels are turned square to ([`LabelPlacement::Perpendicular`],
+/// #2263), keyed by layer name in ASCII lower case (as [`Map::layer_by_name`] matches names):
+/// each line's and polygon outline's runs on the screen, a ring closed as it is drawn, broken
+/// where a place doesn't project (on the globe, cut at the horizon as its stroke is). A layer
+/// read in chunks from its source has none to hand.
+fn square_lines(
+    map: &Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+) -> std::collections::HashMap<String, Vec<square_labels::Run>> {
+    let mut out = std::collections::HashMap::new();
+    let wanted = map.layers.iter().filter(|l| l.visible && l.labels.enabled).flat_map(|l| l.labels.in_order()).filter_map(|c| {
+        c.square_to.as_ref().filter(|_| c.placement == LabelPlacement::Perpendicular).map(|t| t.layer.to_ascii_lowercase())
+    });
+    for name in wanted.collect::<Vec<_>>() {
+        if out.contains_key(&name) {
+            continue;
+        }
+        let Some(layer) = map.layer_by_name(&name) else { continue };
+        let mut runs = Vec::new();
+        for g in layer.dataset.features.iter().filter_map(|f| f.geometry.as_ref()) {
+            let (parts, rings): (Vec<&Vec<Coord>>, bool) = match g {
+                Geometry::Line(parts) => (parts.iter().collect(), false),
+                Geometry::Polygon(polys) => (polys.iter().flatten().collect(), true),
+                _ => continue,
+            };
+            for part in parts {
+                // A ring left open is closed, as its outline is drawn.
+                let closed: Vec<Coord>;
+                let part = match (part.first(), part.last()) {
+                    (Some(a), Some(b)) if rings && a != b => {
+                        closed = part.iter().chain([a]).copied().collect();
+                        &closed
+                    }
+                    _ => part,
+                };
+                let pieces = match &ctx.globe {
+                    Some(g) => globe_runs(g, part),
+                    None => {
+                        let points: Vec<Option<(f32, f32)>> = part
+                            .iter()
+                            .map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32)))
+                            .collect();
+                        points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
+                    }
+                };
+                runs.extend(pieces.into_iter().filter_map(square_labels::Run::new));
+            }
+        }
+        out.insert(name, runs);
+    }
+    out
+}
+
+/// A line's runs on the globe in screen points: bent along great circles and cut at the horizon,
+/// as [`Ctx::globe_line`] strokes it.
+fn globe_runs(g: &Globe, part: &[Coord]) -> Vec<Vec<(f32, f32)>> {
+    let h = g.horizon();
+    let at = |v: V3| {
+        let (x, y) = g.project(v);
+        (x as f32, y as f32)
+    };
+    let mut runs: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut prev: Option<V3> = None;
+    for v in Ctx::globe_vectors(g, part) {
+        let vis = v[2] > h;
+        match prev {
+            Some(p) if p[2] > h && vis => runs.last_mut().into_iter().for_each(|r| r.push(at(v))),
+            Some(p) if p[2] > h => runs.last_mut().into_iter().for_each(|r| r.push(at(g.horizon_crossing(p, v)))),
+            Some(p) if vis => runs.push(vec![at(g.horizon_crossing(p, v)), at(v)]),
+            None if vis => runs.push(vec![at(v)]),
+            _ => {}
+        }
+        prev = Some(v);
+    }
+    runs
 }
 
 /// Full projected runs nearest a saved geographic anchor, independent of viewport clipping.
@@ -8037,6 +8178,46 @@ mod tests {
         assert!(!lyon.collide.pinned && lyon.collide.callout.is_none());
     }
 
+    /// A point placed perpendicular to a line's layer (#2263): turned square to it, starting at
+    /// the point, across the line to the side the point isn't on; one farther than `within`
+    /// stays above its point, upright.
+    #[test]
+    fn a_perpendicular_label_turns_square_to_its_nearest_line() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        // (A name with a capital outside ASCII, matched as layer names are.)
+        let mut d = Dataset::new("Águas", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        m.add_dataset(d);
+        let mut d = Dataset::new("Praias", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        // About 11 and 55 points north of the line, at 100 m a point.
+        d.push(Some(Geometry::Point(Coord::new(-0.05, 0.01))), vec![Value::Text("Near".into())]);
+        d.push(Some(Geometry::Point(Coord::new(0.05, 0.05))), vec![Value::Text("Far".into())]);
+        let pts = m.add_dataset(d);
+        let l = m.layer_mut(pts).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.placement = LabelPlacement::Perpendicular;
+        l.labels.default.square_to =
+            Some(rustgis_map::SquareTo { layer: "ÁGUAS".into(), within: 20.0, side: rustgis_map::SquareSide::Away });
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.02)), res: 100.0, bearing: 0.0, pitch: 0.0 };
+        m.camera = camera;
+        let view = View { width: 300.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let at = |c: Coord| view.to_screen(lonlat_to_merc(c));
+        let labels = render(&mut m, &view).unwrap().labels;
+        let near = labels.iter().find(|l| l.text == "Near").expect("near labelled");
+        let a = near.angle.expect("turned");
+        assert!((a.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-3, "square to the line: {}", a.to_degrees());
+        // Below its point (south, across the line), its near end just off it.
+        let (px, py) = at(Coord::new(-0.05, 0.01));
+        let w = text::spaced_block_width("Near", near.size, text::Face::default(), 0.0);
+        assert!((near.x - px as f32).abs() < 0.5, "{} {px}", near.x);
+        let start = near.y - py as f32 - w / 2.0;
+        assert!((0.0..10.0).contains(&start), "starts at the point: {start}");
+        let far = labels.iter().find(|l| l.text == "Far").expect("far labelled");
+        let (_, fy) = at(Coord::new(0.05, 0.05));
+        assert!(far.angle.is_none() && far.y < fy as f32, "as auto: {:?} {} {fy}", far.angle, far.y);
+    }
+
     /// A label moved by hand into view is drawn whatever its feature's place: a point's, or a
     /// line's labelled along it, out of view, its callout's line reaching back off the screen.
     #[test]
@@ -9090,6 +9271,8 @@ mod tests {
                 sky: 0.0,
                 fill: 0.0,
                 rock: None,
+                ambient: None,
+                balanced: false,
             };
         };
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1200.0, bearing: 0.0, pitch: 0.0 };
@@ -9125,6 +9308,8 @@ mod tests {
             sky: 0.0,
             fill: 0.0,
             rock: None,
+            ambient: None,
+            balanced: false,
         };
         // Drawn only zoomed out past a scale between the centre's and the far band's.
         l.max_scale = Some((centre + farthest) / 2.0);
@@ -9170,6 +9355,8 @@ mod tests {
                 sky: 0.0,
                 fill: 0.0,
                 rock: None,
+                ambient: None,
+                balanced: false,
             };
             // Drawn only zoomed in past 1:1: or in a group drawn only there.
             if grouped {
