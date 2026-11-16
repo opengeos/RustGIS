@@ -11301,6 +11301,43 @@ mod tests {
         assert_eq!(p, vec![(0.0, 1.0), (5.0, 1.0)]);
     }
 
+    /// A dot fill whose marker is an image draws it in a feature of no fill, as a point's image
+    /// shows whatever its colour; a circle there has no colour to show.
+    #[test]
+    fn an_image_dot_fill_draws_in_a_feature_of_no_fill() {
+        use rustgis_map::fills::{FillLayer, FillPattern};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("fields", GeometryType::Polygon, vec![]);
+        let ring = vec![Coord::new(-0.6, -0.5), Coord::new(0.6, -0.5), Coord::new(0.6, 0.5), Coord::new(-0.6, 0.5), Coord::new(-0.6, -0.5)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let id = m.add_dataset(d);
+        let none = Rgba::new(0, 0, 0, 0);
+        m.layer_mut(id).unwrap().renderer =
+            rustgis_map::Renderer::Single(Symbol { fill: none, stroke: none, stroke_width: 0.0, size: 1.0, marker: Marker::Circle });
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let dots = |marker| FillLayer {
+            color: None,
+            pattern: FillPattern::Dots {
+                marker,
+                size: 12.0,
+                outline: None,
+                outline_width: 0.0,
+                spacing: [20.0, 20.0],
+                displacement: [0.0, 0.0],
+                offset: [0.0, 0.0],
+            },
+        };
+        let inked = |m: &mut Map, marker| {
+            m.layer_mut(id).unwrap().fill_layers = vec![dots(marker)];
+            let r = render(m, &view).unwrap();
+            r.pixmap.pixels().iter().filter(|p| (p.red() > 200 || p.blue() > 200) && p.green() < 60).count()
+        };
+        assert!(inked(&mut m, Marker::Picture(rustgis_map::Picture::new(&picture_png()))) > 50, "the image's red and blue");
+        assert_eq!(inked(&mut m, Marker::Circle), 0, "a circle in no colour");
+    }
+
     #[test]
     fn stacked_fills_hatch_and_dot_polygons_anchored_to_the_map() {
         use rustgis_map::fills::{FillLayer, FillPattern};
