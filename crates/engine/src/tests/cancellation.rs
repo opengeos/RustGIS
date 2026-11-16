@@ -105,6 +105,10 @@ pub(super) fn long_commands(boundaries: bool) {
     let exports = [
         ("data.convert", json!({"layer": "Cities", "format": "geojson", "path": out("converted.geojson")})),
         ("share.exportLayer", json!({"layer": "Cities", "path": out("cities.geojson")})),
+        (
+            "share.exportTable",
+            json!({"table": "ranks", "path": out("ranks.csv"), "sort": [{"field": "score", "descending": true}], "limit": 1}),
+        ),
         ("share.exportRaster", json!({"layer": dem, "path": out("dem.tif")})),
         ("share.exportMap", json!({"path": out("map.png"), "width": 64, "height": 48})),
         ("map.exportOrbit", json!({"path": out("orbit.zip"), "frames": 3, "width": 64, "height": 64, "dpi": 48})),
@@ -113,6 +117,8 @@ pub(super) fn long_commands(boundaries: bool) {
         ("source.publish", json!({"layer": "towns"})),
     ];
     s.run("report.new", &json!({"layer": "Cities"})).unwrap();
+    // A standalone table to export ranked and limited.
+    s.run("layer.addDataText", &json!({"fileName": "ranks.csv", "text": "name,score\na,1\nb,3\n"})).unwrap();
     let registered = crate::cmd::exports::IN_BACKGROUND.iter().map(|(c, ..)| *c).collect::<std::collections::BTreeSet<_>>();
     assert_eq!(listed(&exports), registered, "add a new background export here");
     for (command, p) in &exports {

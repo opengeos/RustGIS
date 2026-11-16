@@ -587,6 +587,114 @@ fn standalone_tables_keep_their_ids_in_the_project_file() {
     assert_eq!(s.table_standalone, None);
 }
 
+/// Export the ranked table itself, preserving ties and the source table; options are validated
+/// before writing. A Summary Statistics result follows the same standalone-table path.
+#[test]
+fn table_export_sorts_stably_and_keeps_the_first_rows() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value as Cell};
+    let mut s = world();
+    let mut ds =
+        Dataset::new("ranked", GeometryType::None, vec![Field::new("label", FieldType::Text), Field::new("score", FieldType::Integer)]);
+    for (label, score) in [("z", Some(2)), ("b", None), ("c", Some(10)), ("a", Some(10)), ("d", Some(-1))] {
+        ds.push(None, vec![Cell::Text(label.into()), score.map(Cell::Int).unwrap_or(Cell::Null)]);
+    }
+    let original = ds.clone();
+    let table = s.project.add_table(ds);
+    let dir = std::env::temp_dir().join(format!("rustgis-table-order-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut export = |file: &str, sort: Value, limit: Value, expected: &[&str], omitted: Option<usize>| {
+        let path = dir.join(file);
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": table, "path": path, "sort": sort, "limit": limit})).unwrap();
+        let csv = std::fs::read_to_string(path).unwrap();
+        let labels: Vec<_> = csv.lines().skip(1).map(|line| line.split(',').next().unwrap()).collect();
+        assert_eq!(labels, expected, "{file}: {csv}");
+        let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("requested limit")).collect();
+        if let Some(n) = omitted {
+            assert_eq!(notices.len(), 1);
+            assert!(notices[0].text.contains(&format!("{n} row(s)")));
+        } else {
+            assert!(notices.is_empty());
+        }
+        assert_eq!(s.project.table(table).unwrap().dataset, original);
+    };
+    let number = json!([{"field": "score", "descending": true}]);
+    export("desc.csv", number.clone(), Value::Null, &["c", "a", "z", "d", "b"], None);
+    export("top.csv", number.clone(), json!(1), &["c"], Some(4));
+    export("text.csv", json!([{"field": "label"}]), Value::Null, &["a", "b", "c", "d", "z"], None);
+    export("asc.csv", json!([{"field": "score"}]), Value::Null, &["d", "z", "c", "a", "b"], None);
+    export("multi.csv", json!([{"field": "score", "descending": true}, {"field": "label"}]), json!(20), &["a", "c", "z", "d", "b"], None);
+    export("default.csv", Value::Null, Value::Null, &["z", "b", "c", "a", "d"], None);
+    export("first.csv", Value::Null, json!(2), &["z", "b"], Some(3));
+    export("empty.csv", number, json!(0), &[], Some(5));
+    for bad in [
+        json!({"sort": [{"field": "missing"}]}),
+        json!({"sort": "score"}),
+        json!({"sort": [{}]}),
+        json!({"sort": [{"field": "score", "descending": "yes"}]}),
+        json!({"limit": -1}),
+        json!({"limit": 1.5}),
+        json!({"limit": "2"}),
+    ] {
+        let path = dir.join("refused.csv");
+        let mut params = bad.clone();
+        params["table"] = json!(table);
+        params["path"] = json!(path);
+        let error = s.run("share.exportTable", &params).unwrap_err();
+        if bad["sort"][0]["field"] == "missing" {
+            assert!(error.contains("no field named 'missing'"), "{error}");
+        }
+        assert!(!path.exists(), "invalid options must not write: {bad}");
+    }
+    s.run(
+        "gp.run",
+        &json!({"tool": "summaryStatistics", "params": {
+            "input": "ranked", "case": ["label"], "statistics": [{"field": "score", "statistic": "SUM"}],
+        }}),
+    )
+    .unwrap();
+    let stats = s.project.tables.last().unwrap().id;
+    let path = dir.join("summary.csv");
+    s.run("share.exportTable", &json!({"table": stats, "path": path, "sort": [{"field": "SUM_score", "descending": true}], "limit": 2}))
+        .unwrap();
+    let csv = std::fs::read_to_string(path).unwrap();
+    assert_eq!(csv.lines().skip(1).map(|line| line.split(',').next().unwrap()).collect::<Vec<_>>(), ["a", "c"]);
+    // The writer turns nonfinite numbers into blank cells; they must sort alongside nulls,
+    // including stable ties between all four forms, and never displace the largest finite row.
+    let mut ds =
+        Dataset::new("nonfinite", GeometryType::None, vec![Field::new("label", FieldType::Text), Field::new("score", FieldType::Double)]);
+    for (label, score) in [
+        ("nan", Cell::Float(f64::NAN)),
+        ("high", Cell::Int(9)),
+        ("inf", Cell::Float(f64::INFINITY)),
+        ("null", Cell::Null),
+        ("low", Cell::Float(-2.5)),
+        ("neg-inf", Cell::Float(f64::NEG_INFINITY)),
+    ] {
+        ds.push(None, vec![Cell::Text(label.into()), score]);
+    }
+    let table = s.project.add_table(ds);
+    for (descending, want) in
+        [(true, vec!["high", "low", "nan", "inf", "null", "neg-inf"]), (false, vec!["low", "high", "nan", "inf", "null", "neg-inf"])]
+    {
+        let path = dir.join(format!("nonfinite-{descending}.geojson"));
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": table, "path": path, "sort": [{"field":"score", "descending":descending}]})).unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let rows = written["features"].as_array().unwrap();
+        assert_eq!(rows.iter().map(|row| row["properties"]["label"].as_str().unwrap()).collect::<Vec<_>>(), want);
+        assert!(rows.iter().skip(2).all(|row| row["properties"]["score"].is_null()), "{written}");
+        assert!(s.notices_since(mark).iter().any(|n| n.text.contains("3") && n.text.contains("null")));
+    }
+    let path = dir.join("finite-top.geojson");
+    let mark = s.notice_mark();
+    s.run("share.exportTable", &json!({"table":table,"path":path,"sort":[{"field":"score","descending":true}],"limit":1})).unwrap();
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(written["features"][0]["properties"]["label"], "high");
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("written as null")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn select_symbolize_undo_redo() {
     let mut s = world();
@@ -43998,6 +44106,7 @@ fn exports_run_on_another_thread() {
     let dir = std::env::temp_dir().join(format!("rustgis-exports-thread-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let at = |name: &str| dir.join(name).display().to_string();
+    s.run("layer.addDataText", &json!({"fileName": "ranks.csv", "text": "name,score\na,1\nb,3\nc,3\n"})).unwrap();
     s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
     for (command, file, p) in [
         ("data.convert", "converted.geojson", json!({"layer": "Cities", "format": "geojson"})),
@@ -44006,6 +44115,7 @@ fn exports_run_on_another_thread() {
         ("layout.export", "layout.png", json!({"dpi": 48})),
         ("layout.export", "layout.pdf", json!({"dpi": 48})),
         ("layout.export", "layout.svg", json!({"dpi": 48})),
+        ("share.exportTable", "ranks.csv", json!({"table": "ranks", "sort": [{"field": "score", "descending": true}], "limit": 2})),
         ("share.exportLayer", "countries.geojson", json!({"layer": "Countries"})),
         ("share.exportLayer", "countries.shp", json!({"layer": "Countries"})),
         ("share.exportLayer", "countries.gpkg", json!({"layer": "Countries", "crs": "EPSG:3857"})),
@@ -50688,4 +50798,90 @@ fn bookmark_layout_map_names_over_their_limit_are_refused() {
     s.run("bookmark.add", &json!({"name": long(120), "description": long(2000)})).unwrap();
     s.run("map.rename", &json!({"name": long(200)})).unwrap();
     assert_eq!(s.map().name.chars().count(), 200);
+}
+/// DBF imports land in the same table path as non-spatial CSV/GPKG, through desktop read-ahead
+/// and uploaded bytes. Picking attributes with a companion SHP still opens the spatial layer.
+#[test]
+fn standalone_dbf_add_data_uses_tables_and_companion_shapefile() {
+    use base64::Engine;
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as Cell};
+    let mut data =
+        Dataset::new("places", GeometryType::Point, vec![Field::new("name", FieldType::Text), Field::new("count", FieldType::Integer)]);
+    data.push_next(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Cell::Text("one".into()), Cell::Int(7)]);
+    data.push_next(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![Cell::Text("two".into()), Cell::Int(12)]);
+    let (parts, _) = rustgis_data::io::shapefile_parts(&data).unwrap();
+    let dbf = parts.iter().find(|(e, _)| *e == "dbf").unwrap().1.clone();
+    let dir = std::env::temp_dir().join(format!("rustgis-add-dbf-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("places.DBF");
+    std::fs::write(&path, &dbf).unwrap();
+    let p = json!({"path": path});
+    let mut s = Session::new(Project::default());
+    let ahead = crate::cmd::reads::read_ahead(&mut s, "layer.addData", &p).unwrap();
+    assert!(ahead.reads());
+    let control = rustgis_analysis::control::Control::cancelled_once_started();
+    assert!(crate::cmd::reads::read_ahead(&mut s, "layer.addData", &p).unwrap().run(&control).is_err());
+    assert!(control.looked() > 0);
+    let read = ahead.run(&rustgis_analysis::control::Control::new()).unwrap();
+    // A new companion after the read must not turn the prepared table into a layer.
+    let shp = path.with_extension("ShP");
+    let shape_bytes = &parts.iter().find(|(e, _)| *e == "shp").unwrap().1;
+    std::fs::write(&shp, shape_bytes).unwrap();
+    crate::cmd::reads::read_land(&mut s, read).unwrap();
+    std::fs::remove_file(&shp).unwrap();
+    assert!(s.map().layers.is_empty());
+    assert_eq!(s.project.tables.len(), 1);
+    let table = &s.project.tables[0].dataset;
+    assert_eq!(table.features.len(), 2);
+    assert_eq!(table.fields[1].ty, FieldType::Integer);
+    assert_eq!(table.value(1, 1), &Cell::Int(12));
+    let mut uploaded = Session::new(Project::default());
+    uploaded
+        .run("layer.addDataBytes", &json!({"fileName": "places.dbf", "data": base64::engine::general_purpose::STANDARD.encode(&dbf)}))
+        .unwrap();
+    assert_eq!(uploaded.project.tables[0].dataset.features, table.features);
+    let zip = rustgis_data::zip::write(
+        &parts
+            .iter()
+            .map(|(e, b)| (format!("places.{e}"), b.clone()))
+            .chain(std::iter::once(("L_COMM_INFO.dbf".into(), dbf)))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let mut mixed = Session::new(Project::default());
+    mixed
+        .run("layer.addDataBytes", &json!({"fileName": "county.zip", "data": base64::engine::general_purpose::STANDARD.encode(zip)}))
+        .unwrap();
+    assert_eq!(mixed.map().layers.len(), 1);
+    assert_eq!(mixed.project.tables.len(), 1);
+    assert_eq!(mixed.project.tables[0].dataset.name, "L_COMM_INFO");
+    for (ext, bytes) in &parts {
+        std::fs::write(
+            path.with_extension(match *ext {
+                "shp" => "ShP",
+                "dbf" => "DBF",
+                ext => ext,
+            }),
+            bytes,
+        )
+        .unwrap();
+    }
+    // Read-ahead and dispatch must agree on the SHP path, including the streamed route.
+    for stream in [false, true] {
+        let mut paired = Session::new(Project::default());
+        let p = json!({"path": path, "stream": stream});
+        let ahead = crate::cmd::reads::read_ahead(&mut paired, "layer.addData", &p).unwrap();
+        assert_eq!(ahead.reads(), !stream);
+        let read = ahead.run(&rustgis_analysis::control::Control::new()).unwrap();
+        if !stream {
+            std::fs::remove_file(&shp).unwrap();
+        }
+        crate::cmd::reads::read_land(&mut paired, read).unwrap();
+        std::fs::write(&shp, shape_bytes).unwrap();
+        assert_eq!(paired.map().layers.len(), 1);
+        assert!(paired.project.tables.is_empty());
+        assert_eq!(paired.map().layers[0].dataset.geometry_type, GeometryType::Point);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
