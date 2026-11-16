@@ -172,17 +172,21 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
     let named = list("eo:bands").or_else(|| list("bands"));
     let raster = list("raster:bands");
-    let count = declared_bands(asset).min(MAX_BANDS);
+    // STAC's EO extension allows the name on the asset itself, for a file of one band described by no list.
+    let asset_name = asset.get("eo:common_name").and_then(Value::as_str);
+    let count = declared_bands(asset).max(usize::from(asset_name.is_some())).min(MAX_BANDS);
     let number = |band: Option<&Value>, keys: &[&str]| keys.iter().find_map(|k| band?.get(*k)?.as_f64()).filter(|v| v.is_finite());
     (0..count)
         .map(|i| {
             let (named, raster) = (named.and_then(|l| l.get(i)), raster.and_then(|l| l.get(i)));
-            let pick = |keys: &[&str]| number(raster, keys).or_else(|| number(named, keys));
+            // A band's own number, else the asset's (STAC 1.1 lets bands share them on the asset).
+            let pick = |keys: &[&str]| number(raster, keys).or_else(|| number(named, keys)).or_else(|| number(Some(asset), keys));
             let first = i == 0;
             BandInfo {
                 common: named
                     .and_then(|b| b.get("common_name").or_else(|| b.get("eo:common_name")))
                     .and_then(Value::as_str)
+                    .or_else(|| (first && named.is_none()).then_some(asset_name).flatten())
                     .map(|t| t.trim().to_ascii_lowercase().chars().take(MAX_NAME).collect())
                     .unwrap_or_default(),
                 scale: pick(&["scale", "raster:scale"]).or_else(|| first.then(|| band_number(asset, "scale")).flatten()),
@@ -814,6 +818,8 @@ fn band_number(asset: &Value, key: &str) -> Option<f64> {
             let first = asset.get(*b)?.as_array()?.first()?;
             first.get(key).or_else(|| first.get(format!("raster:{key}")))?.as_f64()
         })
+        // Or the asset's own (STAC 1.1 lets bands share numbers on the asset, bare or `raster:`).
+        .or_else(|| asset.get(key).or_else(|| asset.get(format!("raster:{key}")))?.as_f64())
         .or_else(je)
         .filter(|v| v.is_finite())
 }

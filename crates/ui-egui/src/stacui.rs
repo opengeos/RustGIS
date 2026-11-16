@@ -2494,7 +2494,9 @@ mod tests {
         add_item_bands(&mut app, &scene(&["red", "green", "blue"]), "trueColor");
         assert!(app.workflow.job.is_some() && app.workflow.error.is_none(), "{:?}", app.workflow.error);
         // The files are never found: it ends as an error, and no layer is added.
-        for _ in 0..1000 {
+        // A failed lookup of a name that never resolves can take a runner long to give up: the cap (about a
+        // minute) only guards against a hang.
+        for _ in 0..6000 {
             if !crate::analysispane::land_job(&mut app) {
                 break;
             }
@@ -2515,7 +2517,9 @@ mod tests {
         add_item_index(&mut app, &scene(&["red", "nir"]), "ndvi");
         assert!(app.workflow.job.is_some() && app.workflow.error.is_none(), "{:?}", app.workflow.error);
         // The files are never found: it ends as an error, and no layer is added.
-        for _ in 0..1000 {
+        // A failed lookup of a name that never resolves can take a runner long to give up: the cap (about a
+        // minute) only guards against a hang.
+        for _ in 0..6000 {
             if !crate::analysispane::land_job(&mut app) {
                 break;
             }

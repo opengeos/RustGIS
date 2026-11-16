@@ -540,6 +540,27 @@ mod tests {
     }
 
     #[test]
+    fn an_asset_level_name_and_numbers_reach_its_bands() {
+        // The EO extension's name on the asset, for a file of one band with no list.
+        let b = bands(&item(&[("B04", json!({"eo:common_name": "Red"}))]));
+        assert_eq!(find(&b, "red").map(|b| b.asset.as_str()), Some("B04"));
+        // STAC 1.1: numbers shared on the asset, a band's own overriding.
+        let shared = item(&[(
+            "data",
+            json!({"raster:scale": 0.0001, "raster:offset": -0.1,
+                "bands": [{"eo:common_name": "nir"}, {"eo:common_name": "red", "raster:scale": 0.0002}]}),
+        )]);
+        let check = |it: &Item| {
+            let b = bands(it);
+            let (nir, red) = (find(&b, "nir").unwrap(), find(&b, "red").unwrap());
+            assert_eq!((nir.scale, nir.offset, nir.scaled), (0.0001, -0.1, true));
+            assert_eq!((red.scale, red.offset), (0.0002, -0.1), "the band's own scale, the asset's offset");
+        };
+        check(&shared);
+        check(&crate::stac::item_from_json(&crate::stac::item_json(&shared), None).unwrap());
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));

@@ -203,6 +203,12 @@ mod desktop {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let (stacked, notes) = read_and_stack(&name, &wanted, &picked, &hrefs, bbox, cell)?;
             let band = rustgis_analysis::rasterops::band_math(&stacked, &expr)?;
+            // An index with no value anywhere (every cell 0 / 0, say) is no result: an error, not an empty layer.
+            if !rustgis_analysis::rasterops::has_values(&band, stacked.width as usize)? {
+                return Err(format!(
+                    "the {id} index has no value in any cell: its bands are zero or empty here, so it can't be worked out"
+                ));
+            }
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let raster = rustgis_analysis::rasterops::derive(&stacked, &name, vec![band])?;
             let then = noted(raster.name.clone(), notes);
