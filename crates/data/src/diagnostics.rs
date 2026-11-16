@@ -562,12 +562,18 @@ fn opens_structured(rest: &str) -> bool {
     }
 }
 
-/// Whether `rest`, coming after `before`, is `'<Null>'` (any case) with a quote on each side: the
-/// missing-value marker read notices name, not a tag, so the scan goes on past it. Anything else,
-/// such as `<null>'…</null>`, is a tag like any other.
+/// Whether `rest`, coming after `before`, is the missing-value marker as a read notice names it
+/// (`source::null_text_note`): `'<Null>'` (any case) with a quote on each side, then the notice's
+/// own words, and nothing after it that opens structured content but another such marker. Only
+/// then is it text and the scan goes on; any other `<null>`, such as `'<null>'hidden<tag>`, is
+/// omitted from there as before.
 fn quoted_null_marker(before: &str, rest: &str) -> bool {
+    const MARKER: &str = "<null>'";
+    let lower = rest.to_ascii_lowercase();
+    let Some(after) = lower.strip_prefix(MARKER) else { return false };
     before.ends_with('\'')
-        && rest.get(..7).is_some_and(|t| t.ends_with('\'') && t.get(..6).is_some_and(|m| m.eq_ignore_ascii_case("<null>")))
+        && [" was read as empty", " were read as empty", " in it show as empty"].iter().any(|words| after.starts_with(words))
+        && !after.replace(&format!("'{MARKER}"), "").contains(['<', '{', '['])
 }
 
 /// A bare credential line is redacted only for an unambiguous secret name: `key`, `body` and
@@ -1201,10 +1207,16 @@ mod tests {
     fn the_null_marker_is_text_not_markup() {
         let note = "zoning: 1 value '<Null>' was read as empty, in 'ZONING'";
         assert_eq!(redact(note), note);
-        assert_eq!(redact("'<null>' then <div>body</div>"), "'<null>' then [structured content omitted]");
         for tag in ["reply <null>secret</null>", "reply <null>'secret</null>"] {
             assert_eq!(redact(tag), "reply [structured content omitted]", "not quoted on both sides, a tag: {tag}");
         }
+        // Quoted but not a notice's words, or with structured content after it: omitted as before.
+        for tag in ["reply '<null>'hidden<tag>", "reply 'x''<null>'hidden", "reply '<null>' was read as empty hidden<div>body</div>"] {
+            let out = redact(tag);
+            assert!(!out.contains("hidden") && out.contains("[structured content omitted]"), "{tag}: {out}");
+        }
+        let view = "zoning: some text values '<Null>' in it show as empty; so far, 2 values '<Null>' were read as empty, in 'A'";
+        assert_eq!(redact(view), view, "a notice naming the marker twice");
     }
 
     #[test]
