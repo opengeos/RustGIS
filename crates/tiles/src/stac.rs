@@ -151,12 +151,16 @@ fn je_odd(asset: &Value) -> bool {
 /// extension allows, and is then not odd. [`item_json`] marks a band it passed on with `rg:unread`.
 fn odd_numbers(band: Option<&Value>) -> bool {
     let Some(band) = band else { return false };
-    if band.get("rg:unread").and_then(Value::as_bool) == Some(true) {
-        return true;
-    }
+    band.get("rg:unread").and_then(Value::as_bool) == Some(true) || odd_keys(band)
+}
+
+/// Whether the object's own `scale`, `offset` or `nodata` (bare or `raster:`) is there but not a
+/// number, as [`odd_numbers`] reads it, without the mark [`item_json`] writes: for the asset, whose
+/// `rg:unread` is JAXA's and would wrongly mark every band.
+fn odd_keys(object: &Value) -> bool {
     [("scale", false), ("raster:scale", false), ("offset", false), ("raster:offset", false), ("nodata", true), ("raster:nodata", true)]
         .iter()
-        .any(|(key, nodata)| match band.get(*key) {
+        .any(|(key, nodata)| match object.get(*key) {
             None | Some(Value::Null) => false,
             Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
             Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
@@ -192,7 +196,7 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                 scale: pick(&["scale", "raster:scale"]).or_else(|| first.then(|| band_number(asset, "scale")).flatten()),
                 offset: pick(&["offset", "raster:offset"]).or_else(|| first.then(|| band_number(asset, "offset")).flatten()),
                 nodata: pick(&["nodata", "raster:nodata"]).or_else(|| first.then(|| band_number(asset, "nodata")).flatten()),
-                unread: odd_numbers(raster) || odd_numbers(named),
+                unread: odd_numbers(raster) || odd_numbers(named) || odd_keys(asset),
             }
         })
         .collect()

@@ -561,6 +561,20 @@ mod tests {
     }
 
     #[test]
+    fn an_asset_level_number_given_as_text_marks_every_band_unread() {
+        let it = item(&[("data", json!({"raster:scale": "0.0001", "eo:bands": [{"common_name": "nir"}, {"common_name": "red"}]}))]);
+        let again = crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap();
+        for it in [&it, &again] {
+            let b = bands(it);
+            assert_eq!(b.len(), 2);
+            assert!(b.iter().all(|x| x.unread), "every band, directly and after the round trip");
+        }
+        // A real number there, and JAXA's `rg:unread` on the asset alone, do not.
+        let ok = item(&[("data", json!({"raster:scale": 0.0001, "eo:bands": [{"common_name": "nir"}, {"common_name": "red"}]}))]);
+        assert!(bands(&ok).iter().all(|x| !x.unread));
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));
