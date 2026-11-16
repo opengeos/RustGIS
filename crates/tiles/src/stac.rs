@@ -176,6 +176,15 @@ fn odd_field(object: &Value, keys: &[&str], nodata: bool) -> bool {
     })
 }
 
+/// Whether an asset that describes no bands (no list, no `eo:common_name`: it is read as one band,
+/// numbered from the asset itself) gives its scale, offset or no-data as something that isn't a number.
+/// For an asset with bands, `asset_bands` marks the ones that would take the asset's number.
+fn lone_odd(asset: &Value) -> bool {
+    declared_bands(asset) == 0
+        && asset.get("eo:common_name").and_then(Value::as_str).is_none()
+        && NUMBER_FIELDS.iter().any(|(keys, nodata)| odd_field(asset, keys, *nodata))
+}
+
 /// The bands an asset describes, from `eo:bands` (names) or STAC 1.1's unified `bands`, and
 /// `raster:bands` (scale, offset, no-data), matched by position. Both spellings of the raster
 /// terms are read (`scale` and `raster:scale`). A band's own declaration of a number (even
@@ -757,7 +766,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
-                je_unread: je_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
+                je_unread: je_odd(a) || lone_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
                 lists_unread: bands_odd(a) || a.get("rg:lists_unread").and_then(Value::as_bool) == Some(true),
                 declared_bands: declared_bands(a)
                     .max(a.get("rg:band_count").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX))),

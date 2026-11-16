@@ -601,6 +601,18 @@ mod tests {
     }
 
     #[test]
+    fn an_asset_with_no_band_list_and_a_text_number_is_unread() {
+        let it = item(&[("red", json!({"raster:scale": "0.0001"}))]);
+        let again = crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap();
+        for it in [&it, &again] {
+            let b = bands(it);
+            assert_eq!(b.len(), 1);
+            assert!(b[0].unread, "the lone band would be used unscaled");
+        }
+        assert!(!bands(&item(&[("red", json!({"raster:scale": 0.0001}))]))[0].unread);
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));
