@@ -200,7 +200,10 @@ mod desktop {
             at(&["nir"]),
             at(&["swir16", "swir22"]),
         )?;
-        let name = text(p, "name")?.map_or_else(|| format!("{} {}", item.id, ix.id.to_ascii_uppercase()), str::to_string);
+        let name = match text(p, "name")? {
+            Some(n) => super::super::within("name", "the output's name", n, 200)?,
+            None => format!("{} {}", item.id, ix.id.to_ascii_uppercase()),
+        };
         let id = ix.id;
         Ok(Box::new(move || {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
