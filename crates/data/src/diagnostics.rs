@@ -535,10 +535,11 @@ fn credential_header(key: &str) -> bool {
 }
 
 /// Whether `{`, `[` or `<` opens structured content (a JSON value or a tag) rather than an
-/// ordinary bracket in a path, a name or a size ("Layer {2020} failed"). `<Null>` (any case) is
-/// the missing-value marker files hold and read notices name, not a tag; the scan goes on past it.
+/// ordinary bracket in a path, a name or a size ("Layer {2020} failed"). `'<Null>'` (any case,
+/// quoted as read notices name it) is the missing-value marker files hold, not a tag; the scan
+/// goes on past it. Unquoted, as in `<null>…</null>`, it is a tag like any other.
 fn opens_structured(rest: &str) -> bool {
-    if rest.get(..6).is_some_and(|t| t.eq_ignore_ascii_case("<null>")) {
+    if rest.get(..7).is_some_and(|t| t.get(..6).is_some_and(|m| m.eq_ignore_ascii_case("<null>")) && t.ends_with('\'')) {
         return false;
     }
     match rest.chars().next() {
@@ -1197,7 +1198,8 @@ mod tests {
     fn the_null_marker_is_text_not_markup() {
         let note = "zoning: 1 value '<Null>' was read as empty, in 'ZONING'";
         assert_eq!(redact(note), note);
-        assert_eq!(redact("<null> then <div>body</div>"), "<null> then [structured content omitted]");
+        assert_eq!(redact("'<null>' then <div>body</div>"), "'<null>' then [structured content omitted]");
+        assert_eq!(redact("reply <null>secret</null>"), "reply [structured content omitted]", "unquoted, a tag");
     }
 
     #[test]
