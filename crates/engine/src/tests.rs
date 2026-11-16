@@ -1723,6 +1723,15 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
         let lost = said(text.replace(&b64, &too_long));
         assert!(lost.iter().any(|n| n.contains("Image markers in \"Cities\" weren't kept")), "{command}: {lost:?}");
     }
+    // And a styles file.
+    let mut w = world();
+    w.run("layer.marker", &json!({"layer": "Cities", "image": b64})).unwrap();
+    w.run("style.new", &json!({"layer": "Cities", "name": "Icons"})).unwrap();
+    let styles = serde_json::to_string(&w.project.styles).unwrap().replace(&b64, &too_long);
+    let mark = w.notices_given();
+    w.run("style.add", &json!({"text": styles})).unwrap();
+    let said: Vec<String> = w.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n.contains("Image markers in \"Icons\" weren't kept")), "{said:?}");
     // A layer file names it too.
     let layer = dir.join("cities.rgislayer");
     t.run("layer.save", &json!({"layer": "Cities", "path": layer.display().to_string()})).unwrap();

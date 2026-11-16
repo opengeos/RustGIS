@@ -110,6 +110,9 @@ pub fn commands() -> Vec<C> {
             let text = read_text(p)?;
             crate::project::check_format(&text, "style file")?;
             let items: Vec<StyleItem> = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS style file: {e}"))?;
+            for notice in crate::project::picture_notices([], items.iter().map(|i| (i.name.as_str(), &i.renderer))) {
+                s.notify_text(notice, false);
+            }
             Ok(json!({"added": add_file_styles(s, "Add Style", items)}))
         }).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON, "data"?: base64 file}"#),
