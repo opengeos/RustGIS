@@ -339,7 +339,11 @@ mod desktop {
                         Err(_) => {
                             // Looked at before it starts: once started, this read runs to its end.
                             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-                            read_one(signed, bbox, cell, bands, &stop)
+                            let read = read_one(signed, bbox, cell, bands, &stop);
+                            if let Err(e) = &read {
+                                note_failure(&stop, &cause, e);
+                            }
+                            read
                         }
                     })
                     .collect()
