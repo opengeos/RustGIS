@@ -577,6 +577,19 @@ mod desktop {
             ));
         }
         let mut notes = Vec::new();
+        // The window reader rounds whole numbers past 2^24 and doubles to 32-bit floats: said once, by band.
+        let rounded: Vec<&str> = sources
+            .iter()
+            .zip(channels)
+            .filter(|((r, b), _)| r.rounded.get(b.index.saturating_sub(1) as usize).is_some_and(|n| *n > 0))
+            .map(|(_, c)| c.as_str())
+            .collect();
+        if !rounded.is_empty() {
+            notes.push(format!(
+                "{} read with values rounded to 32-bit floats (whole numbers past 16,777,216, or more digits than a 32-bit float holds): the stacked values are the rounded ones",
+                rounded.join(", ")
+            ));
+        }
         // A band taken from a colour image (the item has no file of its own for it) is not in the
         // units of the bands that come from band files: the catalog's scale and offset are for those.
         // One notice with the bands, and none when they all come from the one image (the units agree).
