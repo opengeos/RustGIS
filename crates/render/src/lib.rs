@@ -595,10 +595,10 @@ pub fn picture_marker_readable(b64: &str) -> bool {
     picture::readable(b64)
 }
 
-/// Whether a base64 image reads as a PNG or JPEG a marker takes from its header alone, without
-/// decoding it (for an image a file gives).
-pub fn picture_marker_header_readable(b64: &str) -> bool {
-    picture::header_readable(b64)
+/// Whether picture marker `p` (one a file gives) decodes, so it draws rather than a circle;
+/// decoded into this thread's cache of markers, where drawing on it finds it.
+pub fn picture_marker_draws(p: rustgis_map::Picture) -> bool {
+    picture::marker_aspect(p).is_some()
 }
 
 /// The colour unplaced labels are drawn in.
@@ -11893,6 +11893,12 @@ mod tests {
         let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         assert!(r.pixmap.pixel(100, 4).is_some_and(red), "the image's foot shows");
+        // An image narrower than a 700 px thumbnail can keep keeps its own proportions.
+        let mut narrow = tiny_skia::Pixmap::new(1, 1400).unwrap();
+        narrow.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        let narrow = Picture::new(&base64::engine::general_purpose::STANDARD.encode(narrow.encode_png().unwrap()));
+        assert!(picture::marker_aspect(narrow).is_some_and(|a| (a - 1400.0).abs() < 1e-3));
+        assert!(picture_marker_draws(narrow) && !picture_marker_draws(Picture::new("bm90IGFuIGltYWdl")));
         // A size past what a view holds is drawn as the circle, filling it, not as nothing.
         let mut d = Dataset::new("huge", GeometryType::Point, vec![]);
         d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);

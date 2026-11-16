@@ -1869,8 +1869,8 @@ fn empty_map() -> &'static Map {
 pub const MAX_ITEMS: usize = 1000;
 
 /// What a read made of the image markers of `layers` and saved `styles` (by name): those not
-/// kept, which saving loses, and those that aren't a PNG or JPEG image (by their header, each
-/// image once); both are drawn as circles.
+/// kept, which saving loses, and those that aren't a PNG or JPEG image that decodes (each image
+/// decoded once); both are drawn as circles.
 pub(crate) fn picture_notices<'a>(
     layers: impl IntoIterator<Item = &'a rustgis_map::Layer>,
     styles: impl IntoIterator<Item = (&'a str, &'a rustgis_map::Renderer)>,
@@ -1878,9 +1878,8 @@ pub(crate) fn picture_notices<'a>(
     use rustgis_map::Picture;
     use rustgis_map::symbology::{MAX_PICTURE_BYTES, MAX_PICTURES, MAX_PICTURES_BYTES};
     let seen = std::cell::RefCell::new(std::collections::HashMap::new());
-    let unreadable = |p: Picture| {
-        !p.is_default() && !*seen.borrow_mut().entry(p).or_insert_with(|| rustgis_render::picture_marker_header_readable(p.base64()))
-    };
+    let unreadable =
+        |p: Picture| !p.is_default() && !*seen.borrow_mut().entry(p).or_insert_with(|| rustgis_render::picture_marker_draws(p));
     let (mut dropped, mut bad) = (Vec::new(), Vec::new());
     let mut note = |name: &'a str, any: &dyn Fn(&dyn Fn(Picture) -> bool) -> bool| {
         if any(&Picture::is_dropped) {

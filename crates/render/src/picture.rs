@@ -41,7 +41,8 @@ struct Cache {
 /// first (for eviction).
 #[derive(Default)]
 struct Markers {
-    images: HashMap<Picture, Option<Pixmap>>,
+    /// Each image as drawn, and its height for its width.
+    images: HashMap<Picture, Option<(Pixmap, f32)>>,
     bytes: usize,
     order: std::collections::VecDeque<Picture>,
 }
@@ -76,6 +77,12 @@ pub fn decode(b64: &str) -> Option<Pixmap> {
 
 /// [`decode`], scaled down to at most `side` pixels per side.
 fn decode_within(b64: &str, side: u32) -> Option<Pixmap> {
+    decode_sized(b64, side).map(|(pm, _)| pm)
+}
+
+/// [`decode_within`], with the image's height for its width before it was scaled down (a
+/// thumbnail's one-pixel side can't keep a very narrow image's).
+fn decode_sized(b64: &str, side: u32) -> Option<(Pixmap, f32)> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
     let reader = || image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok();
     let (w, h) = reader()?.into_dimensions().ok()?;
@@ -87,6 +94,7 @@ fn decode_within(b64: &str, side: u32) -> Option<Pixmap> {
     limits.max_alloc = Some(MAX_ALLOC);
     r.limits(limits);
     let img = r.decode().ok()?;
+    let aspect = img.height() as f32 / img.width().max(1) as f32;
     let img = if img.width() > side || img.height() > side { img.thumbnail(side, side) } else { img };
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -96,7 +104,7 @@ fn decode_within(b64: &str, side: u32) -> Option<Pixmap> {
         let c = tiny_skia::ColorU8::from_rgba(r, g, b, a);
         *dst = c.premultiply();
     }
-    Some(pm)
+    Some((pm, aspect))
 }
 
 /// Draws row `row`'s picture into the pixel rectangle (x0, y0)–(x1, y1).
@@ -127,20 +135,21 @@ pub fn draw(pm: &mut Canvas, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
     });
 }
 
-/// Runs `f` on picture marker `p`'s decoded image; `None` if it has none or it doesn't decode.
-fn with_marker<R>(p: Picture, f: impl FnOnce(&Pixmap) -> R) -> Option<R> {
+/// Runs `f` on picture marker `p`'s decoded image and its height for its width; `None` if it has
+/// none or it doesn't decode.
+fn with_marker<R>(p: Picture, f: impl FnOnce(&Pixmap, f32) -> R) -> Option<R> {
     if p.is_default() {
         return None;
     }
     MARKERS_DECODED.with(|cache| {
         let mut cache = cache.borrow_mut();
         if !cache.images.contains_key(&p) {
-            let img = decode_within(p.base64(), MARKER_SIDE);
-            let size = img.as_ref().map_or(0, |i| i.data().len());
+            let img = decode_sized(p.base64(), MARKER_SIDE);
+            let size = img.as_ref().map_or(0, |(i, _)| i.data().len());
             // Evict the oldest (not all of them) to stay within the count and memory budget.
             while cache.images.len() >= MARKERS || (cache.bytes + size > MARKERS_BYTES && !cache.images.is_empty()) {
                 let Some(old) = cache.order.pop_front() else { break };
-                if let Some(Some(gone)) = cache.images.remove(&old) {
+                if let Some(Some((gone, _))) = cache.images.remove(&old) {
                     cache.bytes = cache.bytes.saturating_sub(gone.data().len());
                 }
             }
@@ -148,32 +157,26 @@ fn with_marker<R>(p: Picture, f: impl FnOnce(&Pixmap) -> R) -> Option<R> {
             cache.images.insert(p, img);
             cache.order.push_back(p);
         }
-        cache.images.get(&p)?.as_ref().map(f)
+        cache.images.get(&p)?.as_ref().map(|(img, aspect)| f(img, *aspect))
     })
 }
 
 /// Picture marker `p`'s height for its width; `None` if its image doesn't decode (it's drawn as a
 /// circle).
 pub(crate) fn marker_aspect(p: Picture) -> Option<f32> {
-    with_marker(p, |img| img.height() as f32 / img.width() as f32)
+    with_marker(p, |_, aspect| aspect)
 }
 
 /// Draws picture marker `p` `width` pixels wide (as tall as its proportions make it), centred at
 /// `t`'s origin and turned with it. False if its image doesn't decode.
 pub(crate) fn draw_marker(pm: &mut Canvas, p: Picture, width: f32, t: Transform, opacity: f32) -> bool {
-    with_marker(p, |img| {
-        let k = width / img.width() as f32;
-        let at = t.pre_translate(-width / 2.0, -(img.height() as f32) * k / 2.0).pre_scale(k, k);
+    with_marker(p, |img, aspect| {
+        let height = width * aspect;
+        let at = t.pre_translate(-width / 2.0, -height / 2.0).pre_scale(width / img.width() as f32, height / img.height() as f32);
         let paint = PixmapPaint { opacity, quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
         pm.draw_pixmap(0, 0, img.as_ref(), &paint, at, None);
     })
     .is_some()
-}
-
-/// Whether base64 `b64` reads as a PNG or JPEG image of a size a marker takes, from its header
-/// alone (for an image a file gives; [`readable`] decodes it).
-pub(crate) fn header_readable(b64: &str) -> bool {
-    size(b64).is_some_and(|(w, h)| w > 0 && h > 0 && w <= MAX_DECLARED && h <= MAX_DECLARED)
 }
 
 /// Whether base64 `b64` is a PNG or JPEG image that decodes (a picture marker's, before it's set).

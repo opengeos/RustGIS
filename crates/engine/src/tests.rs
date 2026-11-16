@@ -1706,9 +1706,13 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
     let (u, said) = opened(saved_text.replace(&b64, &too_long));
     assert!(said.iter().any(|n| n.contains("Image markers in \"Cities\" weren't kept")), "{said:?}");
     assert!(matches!(marker(&u), Marker::Picture(p) if p.is_dropped()));
-    let (_, said) = opened(saved_text.replace(&b64, "bm90IGFuIGltYWdl"));
-    assert!(said.iter().any(|n| n.contains("Image markers in \"Cities\" aren't PNG or JPEG images")), "{said:?}");
-    assert!(!said.iter().any(|n| n.contains("weren't kept")), "{said:?}");
+    // A PNG cut after its header reads as one until it's decoded.
+    let cut = base64::engine::general_purpose::STANDARD.encode(&png[..40]);
+    for junk in ["bm90IGFuIGltYWdl", cut.as_str()] {
+        let (_, said) = opened(saved_text.replace(&b64, junk));
+        assert!(said.iter().any(|n| n.contains("Image markers in \"Cities\" aren't PNG or JPEG images")), "{said:?}");
+        assert!(!said.iter().any(|n| n.contains("weren't kept")), "{said:?}");
+    }
     // So does a map file or a layer file added on its own.
     let map = serde_json::to_string(t.map()).unwrap();
     let layer = serde_json::to_string(t.map().layer_by_name("Cities").unwrap()).unwrap();
