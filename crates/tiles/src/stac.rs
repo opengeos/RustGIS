@@ -111,18 +111,21 @@ fn declared_bands(asset: &Value) -> usize {
 /// The longest common name kept, in characters.
 const MAX_NAME: usize = 32;
 
-/// Whether a band of the asset has a common name that `asset_bands` doesn't keep whole: longer
+/// Whether a band of the asset (or the asset itself) has a common name that `asset_bands` doesn't keep whole: longer
 /// than [`MAX_NAME`] characters (cut), or not text (dropped). Said like the bands past
 /// [`MAX_BANDS`] are (`bands_cut`).
 fn long_name(asset: &Value) -> bool {
+    let name_is_long = |v: &Value| match v {
+        Value::Null => false,
+        Value::String(t) => t.trim().chars().count() > MAX_NAME,
+        _ => true,
+    };
     let list = |key: &str| asset.get(key).and_then(Value::as_array);
-    list("eo:bands").or_else(|| list("bands")).is_some_and(|l| {
-        l.iter().take(MAX_BANDS).any(|b| match b.get("common_name").or_else(|| b.get("eo:common_name")) {
-            None | Some(Value::Null) => false,
-            Some(Value::String(t)) => t.trim().chars().count() > MAX_NAME,
-            Some(_) => true,
+    // The asset's own `eo:common_name` (a file of one band described by no list) is held to the same.
+    asset.get("eo:common_name").is_some_and(name_is_long)
+        || list("eo:bands").or_else(|| list("bands")).is_some_and(|l| {
+            l.iter().take(MAX_BANDS).any(|b| b.get("common_name").or_else(|| b.get("eo:common_name")).is_some_and(name_is_long))
         })
-    })
 }
 
 /// Whether a band list (`eo:bands`, `raster:bands`, STAC 1.1's `bands`) is there but isn't a list (an

@@ -172,10 +172,21 @@ pub fn find<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
 pub fn find_key<'a>(bands: &'a [Band], wanted: &str) -> Option<&'a Band> {
     let wanted = wanted.trim();
     let mut of_asset = bands.iter().filter(|b| b.asset.eq_ignore_ascii_case(wanted));
-    match (of_asset.next(), of_asset.next()) {
-        (Some(only), None) if only.in_file == 1 => Some(only),
-        _ => None,
-    }
+    let only = match (of_asset.next(), of_asset.next()) {
+        (Some(only), None) if only.in_file == 1 => only,
+        _ => return None,
+    };
+    // A key that is itself a band name (`red`, `nir`…) is not taken for it when the catalog names the
+    // file something else, as [`find`] doesn't; any other key (`B8A`) is the user's pick whatever the
+    // catalog calls it.
+    let lower = wanted.to_ascii_lowercase();
+    let is_name = ALIASES.iter().any(|(name, stand_ins)| *name == lower || stand_ins.contains(&lower.as_str()))
+        || ["coastal", "blue", "green", "red", "yellow", "pan", "cirrus", "nir", "swir16", "swir22", "lwir"].contains(&lower.as_str());
+    let names_it_so = only.common == lower
+        || ALIASES
+            .iter()
+            .any(|(name, stand_ins)| (*name == lower || stand_ins.contains(&lower.as_str())) && stand_ins.contains(&only.common.as_str()));
+    (!is_name || only.common.is_empty() || names_it_so).then_some(only)
 }
 
 /// A note for an error about a band not found, when the item describes more bands than are kept
@@ -610,6 +621,30 @@ mod tests {
             assert!(b[0].unread, "the lone band would be used unscaled");
         }
         assert!(!bands(&item(&[("red", json!({"raster:scale": 0.0001}))]))[0].unread);
+    }
+
+    #[test]
+    fn a_key_that_is_a_band_name_is_not_taken_when_the_catalog_names_the_file_otherwise() {
+        // An asset `red` whose one band the catalog calls nir: neither lookup gives it for red.
+        let odd = bands(&item(&[("red", named("nir")), ("green", named("green"))]));
+        assert!(find(&odd, "red").is_none());
+        assert!(find_key(&odd, "red").is_none(), "the key lookup agrees with the name lookup");
+        assert_eq!(find_key(&odd, "green").map(|b| b.asset.as_str()), Some("green"));
+        // A key that is no band name is the user's pick, whatever the catalog calls the file.
+        let b8a = bands(&item(&[("B08", named("nir")), ("B8A", named("nir"))]));
+        assert_eq!(find_key(&b8a, "b8a").map(|b| b.asset.as_str()), Some("B8A"));
+        // A stand-in the catalog uses (an asset `nir` named nir08) still matches.
+        let alias = bands(&item(&[("nir", named("nir08"))]));
+        assert!(find_key(&alias, "nir").is_some());
+    }
+
+    #[test]
+    fn an_asset_level_name_that_is_long_or_not_text_is_said() {
+        let long = item(&[("B04", json!({"eo:common_name": "r".repeat(40)}))]);
+        assert!(cut_note(&long).is_some_and(|n| n.contains("name over 32")), "{:?}", cut_note(&long));
+        let number = item(&[("B04", json!({"eo:common_name": 7}))]);
+        assert!(cut_note(&number).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&number));
+        assert_eq!(cut_note(&item(&[("B04", json!({"eo:common_name": "red"}))])), None);
     }
 
     #[test]
