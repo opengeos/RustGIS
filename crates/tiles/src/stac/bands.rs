@@ -664,6 +664,21 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_asset_number_is_not_refused_for_an_unused_jaxa_one() {
+        // No band list: read as one band numbered from the asset. A valid asset scale means JAXA's
+        // unreadable slope is never used.
+        let check = |asset: serde_json::Value, unread: bool, what: &str| {
+            let it = item(&[("red", asset)]);
+            let again = crate::stac::item_from_json(&crate::stac::item_json(&it), None).unwrap();
+            for it in [&it, &again] {
+                assert_eq!(bands(it)[0].unread, unread, "{what}");
+            }
+        };
+        check(json!({"scale": 0.0002, "je:rasters": {"dn2value": {"slope": "0.0001"}}}), false, "declared scale");
+        check(json!({"je:rasters": {"dn2value": {"slope": "0.0001"}}}), true, "would use the slope");
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));

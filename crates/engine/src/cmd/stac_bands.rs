@@ -1162,6 +1162,19 @@ mod tests {
     }
 
     #[test]
+    fn a_band_read_with_rounded_values_is_said_and_a_clean_one_is_not() {
+        let names: Vec<String> = vec!["nir".into(), "red".into()];
+        let clean = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        let mut lossy = grid(2, 2, 0.0001, vec![1000.0; 4]);
+        lossy.rounded = vec![3];
+        let (_, notes) = stack("s", &names, &[(&clean, &band(1.0, 0.0)), (&lossy, &band(1.0, 0.0))]).unwrap();
+        let said: Vec<&String> = notes.iter().filter(|n| n.contains("rounded")).collect();
+        assert!(said.len() == 1 && said[0].starts_with("red read with values rounded"), "{notes:?}");
+        let (_, none) = stack("s", &names, &[(&clean, &band(1.0, 0.0)), (&clean, &band(1.0, 0.0))]).unwrap();
+        assert!(!none.iter().any(|n| n.contains("rounded")), "{none:?}");
+    }
+
+    #[test]
     fn the_notes_of_the_files_are_one_notice_for_a_kind_counting_each_file_once() {
         use super::desktop::merge_notes;
         let edges = |e: &str| format!("the box reaches past the file's {e} edge(s): the window is cut to the file");

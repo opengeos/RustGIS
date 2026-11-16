@@ -156,7 +156,8 @@ fn je_field_odd(asset: &Value, field: &str) -> bool {
 
 /// Whether any of JAXA's numbers is odd (see [`je_field_odd`]).
 fn je_odd(asset: &Value) -> bool {
-    ["scale", "offset", "nodata"].iter().any(|f| je_field_odd(asset, f))
+    // Only for a number the asset itself leaves undeclared: a declared one is read before JAXA's.
+    NUMBER_FIELDS.iter().any(|(keys, _)| !declares(Some(asset), keys) && je_field_odd(asset, keys[0]))
 }
 
 /// Whether an asset describes no bands at all (no list, no `eo:common_name`): it is read as one band,
