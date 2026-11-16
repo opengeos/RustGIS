@@ -49,6 +49,9 @@ impl Project {
         {
             required.push("table-export-order");
         }
+        if self.layouts.iter().any(|l| l.elements.iter().any(|e| e.background.is_some())) {
+            required.push("layout-element-background");
+        }
         required
     }
 
@@ -323,6 +326,24 @@ mod tests {
         ]);
         let project = Project::from_json(&document.to_string()).unwrap();
         assert!(serde_json::to_value(&project).unwrap().get("requires").is_none());
+    }
+
+    /// A layout element's background is required where it is saved, so an older reader refuses
+    /// the project instead of opening it and saving it again without the background.
+    #[test]
+    fn element_background_capability_follows_saved_layouts() {
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_element_background.rgis")).unwrap();
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["layout-element-background"]));
+        let reopened = Project::from_json(&saved.to_string()).unwrap();
+        let backgrounds = |p: &Project| p.layouts[0].elements.iter().map(|e| e.background).collect::<Vec<_>>();
+        assert_eq!(backgrounds(&reopened), backgrounds(&fixture));
+        assert!(backgrounds(&fixture)[1].is_some_and(|b| b.padding == 1.5));
+        let mut clean = fixture;
+        for e in &mut clean.layouts[0].elements {
+            e.background = None;
+        }
+        assert!(serde_json::to_value(&clean).unwrap().get("requires").is_none());
     }
 
     #[test]

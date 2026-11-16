@@ -79,6 +79,7 @@ pub const CAPABILITIES: &[&str] = &[
     "slope-percent",
     "table-export-order",
     "tabulate-intersection-unit",
+    "layout-element-background",
 ];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.

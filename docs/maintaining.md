@@ -113,6 +113,10 @@ with a non-default `areaUnit`, so older readers refuse instead of silently using
 Omitted units and explicit `km2` require nothing extra; omitted zone fields need no
 capability because older tools refuse them.
 
+Projects with a background on a layout element require `layout-element-background`, so an
+older reader refuses them instead of opening the layout and saving it again without the
+background. Layout files (`.rgislayout`) carry no format header yet and are not covered.
+
 ## New dependencies
 
 A proposal for a dependency answers:

@@ -6111,7 +6111,7 @@ Elaboração: RustGIS",
         };
         assert!(at(30.0) && !at(-30.0), "turned clockwise");
         // Alone, the element's picture holds no background.
-        let (alone, _) = render_element(&l, id, &mut [], 96.0, &PageInfo::default()).unwrap().unwrap();
+        let (alone, _) = render_element(&l, id, &mut [], 96.0, &PageInfo::default(), &mut None).unwrap().unwrap();
         assert!(alone.pixels().iter().all(|c| c.alpha() == 0 || c.green() > 0), "no red in the element's own picture");
     }
 }
