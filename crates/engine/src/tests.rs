@@ -1863,6 +1863,12 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     let by = s.map().layer_by_name("Cities").and_then(|l| l.size_by.clone()).unwrap();
     assert_eq!((by.field.as_str(), by.max_size), ("pop_max", 30.0));
     s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 24})).unwrap();
+    // The mapping's field named in another case is still its field: its bounds are kept.
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    s.map_mut().layer_mut(id).and_then(|l| l.size_by.as_mut()).unwrap().field = "POP_MAX".into();
+    s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 24})).unwrap();
+    let by = s.map().layer_by_name("Cities").and_then(|l| l.size_by.clone()).unwrap();
+    assert_eq!((by.field.as_str(), by.max), ("pop_max", 2e7));
     let (lo, _) = {
         let l = s.map().layer_by_name("Cities").unwrap();
         l.dataset.numeric_range(l.dataset.field_index("pop_max").unwrap(), &[]).unwrap()

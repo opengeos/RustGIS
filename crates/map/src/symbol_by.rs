@@ -141,7 +141,12 @@ impl SizeBy {
 
 /// A point sized zero has no ink, even in render paths that clamp its geometry to one pixel.
 fn hide_zero(sym: Symbol) -> Symbol {
-    if sym.size == 0.0 { Symbol { fill: Rgba([0, 0, 0, 0]), stroke: Rgba([0, 0, 0, 0]), stroke_width: 0.0, ..sym } } else { sym }
+    if sym.size != 0.0 {
+        return sym;
+    }
+    // An image ignores the colours, so it gives way to a circle they hide.
+    let marker = if matches!(sym.marker, crate::Marker::Picture(_)) { crate::Marker::Circle } else { sym.marker };
+    Symbol { fill: Rgba([0, 0, 0, 0]), stroke: Rgba([0, 0, 0, 0]), stroke_width: 0.0, marker, ..sym }
 }
 
 /// Scales point marks and their offsets together, for both map drawing and size legends.
@@ -660,9 +665,14 @@ mod tests {
         assert_eq!((gone.size, gone.fill.a(), gone.stroke.a(), gone.stroke_width), (0.0, 0, 0, 0.0));
         let zero_sample = l.size_by.as_ref().unwrap().legend(Symbol { size: 0.0, ..base }, &[mark]);
         assert_eq!(zero_sample[0].strokes[0].color.unwrap().a(), 0, "a zero legend mark has no ink even with a zero class base");
+        // An image marker gives way too: it ignores the colours that hide a zero.
+        let picture = Symbol { marker: crate::Marker::Picture(crate::Picture::new("AA==")), size: 0.0, ..base };
+        assert!(!matches!(hide_zero(picture).marker, crate::Marker::Picture(_)));
         l.symbol_by.size = Some("6".into());
         let back = l.styler(None).symbol(0);
         assert_eq!((back.size, back.fill), (6.0, Rgba::rgb(1, 2, 3)));
+        // Under a Size expression the legend shows no mapped sizes, as the map draws none.
+        assert_eq!(l.with_size_legend(l.renderer.legend()).len(), l.renderer.legend().len());
         l.symbol_by.size = None;
         // A null value keeps its class's size; a class of size 0 then draws nothing, marks included.
         if let crate::Renderer::Unique { classes, .. } = &mut l.renderer {

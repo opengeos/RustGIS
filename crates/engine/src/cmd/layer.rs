@@ -792,7 +792,7 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     }
     let field = l.dataset.fields.get(fi).map(|fd| fd.name.clone()).unwrap_or(field);
     // The mapping's own where it is of the same field, else the field's range.
-    let had = l.size_by.as_ref().filter(|h| h.field == field);
+    let had = l.size_by.as_ref().filter(|h| l.dataset.field_index(&h.field) == Some(fi));
     let (min, max) = (min.or(had.map(|h| h.min)), max.or(had.map(|h| h.max)));
     let range = if min.is_none() || max.is_none() {
         // A streamed layer holds the view's features only, so their range would be the view's.
