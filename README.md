@@ -139,7 +139,8 @@ The [user guide](https://rustgis.app/user-guide/) covers each area in detail,
   installs it in one click and keeps it up to date.
 - **Phones and tablets**: get the field app from [Google Play](https://play.google.com/store/apps/details?id=org.rustgis.mobile) on
   Android or the [App Store](https://apps.apple.com/app/rustgis/id6834987896) on iPhone and iPad (see
-  [Field Work](docs/user-guide/field-work.md)); each release also carries signed Android APKs.
+  [Field Work](docs/user-guide/field-work.md)); releases from v0.7.0 on also carry signed Android
+  APKs.
 - **Package managers**: `winget install OpenGeos.RustGIS`,
   `brew install --cask rustgis` (macOS and Linux), `yay -S rustgis-bin` (AUR), or
   `sudo dnf copr enable giswqs/rustgis && sudo dnf install rustgis` (Fedora).
