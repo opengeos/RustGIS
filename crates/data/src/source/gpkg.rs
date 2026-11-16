@@ -1111,9 +1111,11 @@ fn register(conn: &Connection, layout: &Layout, extent: Extent) -> Result<()> {
         }
         identifier = format!("{table}_{i}");
     }
+    let pinned = source_date_epoch(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref())?;
     conn.execute(
         "INSERT INTO gpkg_contents (table_name, data_type, identifier, last_change, min_x, min_y, max_x, max_y, srs_id)
-            VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?4, ?5, ?6, ?7, ?8)",
+            VALUES (?1, ?2, ?3, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', ?9, 'unixepoch'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             table,
             if has_geom { "features" } else { "attributes" },
@@ -1122,7 +1124,8 @@ fn register(conn: &Connection, layout: &Layout, extent: Extent) -> Result<()> {
             bounds[1],
             bounds[2],
             bounds[3],
-            srs
+            srs,
+            pinned
         ],
     )
     .map_err(err)?;
@@ -1260,6 +1263,20 @@ fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Optio
         (ValueRef::Text(t), FieldType::Text) => Value::Text(String::from_utf8_lossy(t).into_owned()),
         (ValueRef::Text(t), ty) => Value::parse_source(&String::from_utf8_lossy(t), ty),
         (ValueRef::Blob(_), _) => Value::Null,
+    }
+}
+
+/// The time a new table's `last_change` records, when `SOURCE_DATE_EPOCH` sets one: seconds since
+/// 1970 as a whole number, as reproducible builds use it, so the same export run twice writes the
+/// same bytes. Unset or empty, the table records the time it is written. A value that isn't such a
+/// number, or lies past year 9999, refuses the export rather than being ignored.
+fn source_date_epoch(raw: Option<&str>) -> Result<Option<i64>> {
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else { return Ok(None) };
+    match raw.parse::<i64>() {
+        Ok(secs) if (0..=253_402_300_799).contains(&secs) => Ok(Some(secs)),
+        _ => Err(DataError::Format(format!(
+            "SOURCE_DATE_EPOCH is {raw:?}: it must be a whole number of seconds since 1970, up to the end of year 9999"
+        ))),
     }
 }
 
