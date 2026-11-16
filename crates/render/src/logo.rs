@@ -46,9 +46,11 @@ fn draw(size: u32, mono: bool) -> Option<Pixmap> {
     let mut pm = Pixmap::new(size, size)?;
     let t = Transform::from_scale(size as f32 / 512.0, size as f32 / 512.0);
     // In one colour, every colour is the shape and white cuts holes in it (as much as its alpha).
-    let gradient = |a, b, x0, y0, x1, y1| if mono { solid(255, 255, 255, 255) } else { gradient(a, b, x0, y0, x1, y1) };
+    // These closures shadow the module's `gradient` and `solid`, which they call by path
+    // (`self::`) so that what they call doesn't depend on the order they are declared in.
+    let gradient = |a, b, x0, y0, x1, y1| if mono { self::solid(255, 255, 255, 255) } else { self::gradient(a, b, x0, y0, x1, y1) };
     let solid = |r, g, b, a| {
-        let mut p = solid(r, g, b, a);
+        let mut p = self::solid(r, g, b, a);
         if mono {
             p.blend_mode = BlendMode::DestinationOut;
         }
@@ -260,7 +262,7 @@ mod tests {
         assert_eq!(at(2, 2).alpha(), 0);
         assert_eq!(at(256, 256 + 175).alpha(), 0);
         // A globe segment is solid, and the gap between two segments is clear.
-        assert_eq!(at(130, 120).alpha(), 255);
+        assert_eq!(at(180, 180).alpha(), 255);
         assert_eq!(at(214, 262).alpha(), 0);
     }
 

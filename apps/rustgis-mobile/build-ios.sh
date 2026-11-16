@@ -120,7 +120,7 @@ printf 'APPL????' > "$app/PkgInfo"
 # into the bundle, with the keys it adds merged into Info.plist.
 # (Cargo keeps them in build/rustgis-mobile-<hash>/out, or build/rustgis-mobile/<hash>/out in newer
 # versions: the newest of either.)
-icon=$(find "$target_dir/$target/$profile/build" -path '*rustgis-mobile*' -name AppIcon.png -exec ls -t {} + 2>/dev/null | head -1)
+icon=$(find "$target_dir/$target/$profile/build" -path '*rustgis-mobile*' -name AppIcon.png -exec ls -t {} + 2>/dev/null | head -1) || true
 [ -n "$icon" ] || { echo "build-ios: build.rs drew no AppIcon.png" >&2; exit 1; }
 assets=$out/Assets.xcassets
 rm -rf "$assets" && mkdir -p "$assets/AppIcon.appiconset"

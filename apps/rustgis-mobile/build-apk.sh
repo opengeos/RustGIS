@@ -141,7 +141,7 @@ case $target_dir in /*) ;; *) target_dir=$root/$target_dir ;; esac
 built=release
 [ -n "$profile" ] || built=debug
 icon=$(find "$target_dir"/*-linux-android*/"$built"/build -path '*rustgis-mobile*' -path '*/res/*' -name ic_launcher.xml \
-    -exec ls -t {} + 2>/dev/null | head -1)
+    -exec ls -t {} + 2>/dev/null | head -1) || true
 [ -n "$icon" ] || { echo "build-apk: build.rs drew no launcher icon" >&2; exit 1; }
 rm -rf "$out/res" && mkdir -p "$out/res"
 "$tools/aapt2" compile --dir "$(dirname "$(dirname "$icon")")" -o "$out/res/compiled.zip"
