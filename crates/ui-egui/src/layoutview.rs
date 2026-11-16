@@ -6,10 +6,10 @@
 
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{
-    Arrange, ArrowStyle, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, Layout, LineHead, MAX_BACKGROUND_PADDING,
-    MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS,
-    MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TickSide, frame_camera,
-    line_angle, line_length,
+    Arrange, ArrowStyle, Background, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, Layout, LineHead,
+    MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH,
+    MAX_LEGEND_COLUMNS, MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TickSide,
+    frame_camera, line_angle, line_length,
 };
 use rustgis_engine::map::symbology::Dash;
 use serde_json::{Value, json};
@@ -2067,7 +2067,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 }
                 // A legend's, colorbar's, table's or chart's ink (#2257), on and off as a background
                 // is: off is the default dark grey, which isn't the same as a dark grey ink (a table
-                // keeps its white cells only without one). Turned on, it starts white, for a dark page.
+                // keeps its white cells only without one). Turned on, it starts white over a dark
+                // background and dark grey otherwise, so its text never disappears.
                 if e.kind.takes_ink() {
                     let ink = e.kind.ink();
                     let input_label = ui.label(tl!("Ink"));
@@ -2075,7 +2076,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let mut on = ink.is_some();
                         let hint = tl!("Its own colour for its text and lines; off, the default dark grey");
                         if ui.checkbox(&mut on, "").labelled_by(input_label.id).on_hover_text(hint).changed() {
-                            update(app, json!({"color": on.then_some("#FFFFFF")}));
+                            update(app, json!({"color": on.then(|| first_ink(e.background.as_ref()).hex())}));
                         }
                         let Some(current) = ink else { return };
                         let mut c = crate::theme::c32(current);
@@ -2378,15 +2379,42 @@ pub(crate) fn locked_delete() -> &'static str {
     tl!("It is locked, or one of its surrounds is: unlock it first")
 }
 
+/// The ink an element starts with when Ink is turned on (#2257): white over a background that is
+/// dark once drawn on the white page, else the default dark grey, so its text never disappears.
+fn first_ink(background: Option<&Background>) -> rustgis_engine::map::Rgba {
+    let Some(fill) = background.map(|b| b.fill) else { return INK };
+    let a = u16::from(fill.a());
+    let over = |c: u8| u8::try_from((u16::from(c) * a + 255 * (255 - a)) / 255).unwrap_or(u8::MAX);
+    let shown = Color32::from_rgb(over(fill.r()), over(fill.g()), over(fill.b()));
+    let white = rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF);
+    if crate::theme::contrast(shown, Color32::WHITE) > crate::theme::contrast(shown, crate::theme::c32(INK)) { white } else { INK }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FRAMES_REDRAW_S, PageWait, RULER, handle_at, landing, page_rect, redraw_due, resized, rotate_handle, snap_to, to_screen, turned,
+        FRAMES_REDRAW_S, PageWait, RULER, first_ink, handle_at, landing, page_rect, redraw_due, resized, rotate_handle, snap_to, to_screen,
+        turned,
     };
     use crate::RustGisApp;
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
     use serde_json::json;
     use std::{cell::Cell, rc::Rc};
+
+    /// Ink starts white only over a dark background, so turning it on never hides the text (#2257).
+    #[test]
+    fn ink_starts_readable_on_its_background() {
+        use rustgis_engine::map::Rgba;
+        use rustgis_engine::map::layout::{Background, INK};
+        let on = |fill: Rgba| first_ink(Some(&Background { fill, ..serde_json::from_value(json!({})).unwrap() }));
+        let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(first_ink(None), INK);
+        assert_eq!(on(white), INK);
+        assert_eq!(on(Rgba::rgb(0x1E, 0x29, 0x3B)), white);
+        // A dark fill seen through mostly: the page shows, so it reads as light.
+        assert_eq!(on(Rgba::new(0x1E, 0x29, 0x3B, 0x20)), INK);
+        assert_eq!(on(Rgba::new(0x1E, 0x29, 0x3B, 0xE0)), white);
+    }
 
     /// In the browser, a page drawn while its frames' tiles were on their way is drawn again as
     /// they land, at most every `FRAMES_REDRAW_S`, without asking about legends.

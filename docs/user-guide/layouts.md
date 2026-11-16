@@ -435,7 +435,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   map frame draws its own map and paper, so a background on one is refused.
 - **Ink**: a legend, a colorbar, a table and a chart draw their text and lines in dark grey; turn
   on **Ink** in the Format pane and pick its colour to read them on a dark page or over imagery.
-  It starts white, and turned off it is the dark grey again. A legend's title, layer names and
+  It starts white over a dark background and dark grey otherwise, and turned off it is the dark
+  grey again. A legend's title, layer names and
   class labels, a colorbar's title, outline, ticks and labels, a table's text and a chart's title
   and labels take it; a chart's bars and a colorbar's colours keep theirs. A table with an ink
   draws no white cells of its own, only its header and every other row in a light tint of the ink,
