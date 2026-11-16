@@ -197,7 +197,9 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
     let raster = list("raster:bands");
     // STAC's EO extension allows the name on the asset itself, for a file of one band described by no list.
     let asset_name = asset.get("eo:common_name").and_then(Value::as_str);
-    let count = declared_bands(asset).max(usize::from(asset_name.is_some())).min(MAX_BANDS);
+    // An asset whose own number is text makes one band of it, so that band is refused by name.
+    let odd_asset = NUMBER_FIELDS.iter().any(|(keys, nodata)| odd_field(asset, keys, *nodata));
+    let count = declared_bands(asset).max(usize::from(asset_name.is_some() || odd_asset)).min(MAX_BANDS);
     let number = |band: Option<&Value>, keys: &[&str]| keys.iter().find_map(|k| band?.get(*k)?.as_f64()).filter(|v| v.is_finite());
     (0..count)
         .map(|i| {
