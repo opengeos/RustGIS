@@ -469,6 +469,15 @@ fn a_home_projects_offline_map_saved_with_a_table_link_opens_without_it() {
     assert!(maps.iter().find(|m| m.name != "Site (offline)").unwrap().layers[0].gpkg.is_some());
     let said: Vec<String> = opened.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(said.iter().any(|t| t.contains("this project's offline maps")), "{said:?}");
+    // The browser opens a project from its text: the same.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut browser = Session::new(crate::project::Project::default());
+    let mark = browser.notice_mark();
+    browser.run("project.openText", &json!({"text": text})).unwrap();
+    let maps = &browser.project.maps;
+    assert!(maps.iter().find(|m| m.name == "Site (offline)").unwrap().layers.iter().all(|l| l.gpkg.is_none()));
+    assert!(maps.iter().find(|m| m.name != "Site (offline)").unwrap().layers[0].gpkg.is_some());
+    assert!(browser.notices_since(mark).iter().any(|n| n.text.contains("this project's offline maps")));
     opened.project.active_map = opened.project.maps.iter().position(|m| m.name == "Site (offline)").unwrap();
     opened.map_mut().editing.settings.enabled = true;
     assert!(opened.run("gpkg.saveEdits", &json!({"layer": "R"})).is_err());
