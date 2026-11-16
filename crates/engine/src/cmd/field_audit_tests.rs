@@ -1,5 +1,6 @@
 //! Field capture round-trips (an audit of mobile offline capture and sync). The `#[ignore]`d tests
-//! reproduce known bugs and fail today; run them with `--ignored`. The others pass.
+//! reproduce known bugs and fail today; run them with `--ignored`. The others pass, and guard
+//! what was fixed.
 //!
 //! Field capture round-trips as a crew would run them: packages sent to phones, edited offline,
 //! and brought back to the home project, sometimes by more than one phone, sometimes more than once.
@@ -281,9 +282,6 @@ fn audit_delete_vs_edit_both_ways() {
     eprintln!("f0 at home: {:?}; f1 at home: {:?}", value_of(&home, hc, f0, &name), value_of(&home, hc, f1, &name));
 }
 
-#[allow(dead_code)]
-fn _unused(_: &Path) {}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn roads_gpkg(dir: &Path) -> PathBuf {
     let path = dir.join("roads.gpkg");
@@ -321,49 +319,116 @@ fn roads_gpkg(dir: &Path) -> PathBuf {
     path
 }
 
-/// A GeoPackage layer loaded for editing goes to the field. On the field copy (here opened on the
-/// same computer, so its absolute path still names the file; a laptop crew, or a phone with the
-/// file pushed to the same path) the crew edits one road and presses Save to GeoPackage.
+/// The table's row count.
+#[cfg(not(target_arch = "wasm32"))]
+fn roads(gpkg: &Path) -> i64 {
+    rusqlite::Connection::open(gpkg).unwrap().query_row("SELECT count(*) FROM roads", [], |r| r.get(0)).unwrap()
+}
+
+/// A GeoPackage layer loaded for editing goes to the field. Its copy holds only the roads in the
+/// area: it mustn't save to the table, where the roads it lacks would be deleted. Its edits come
+/// back by Bring Back, and the table is saved from the home map, whole.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-#[ignore = "repro of a known field-sync bug (mobile offline audit); run with --ignored"]
-fn audit_field_copy_of_a_geopackage_layer_saves_deletions_of_everything_outside_the_area() {
+fn a_field_copy_of_a_geopackage_layer_never_saves_to_the_table() {
     let temp = Temp::new("gpkg");
     let gpkg = roads_gpkg(&temp.0);
     let mut home = Session::new(crate::project::Project::default());
     home.path = Some(temp.0.join("home.rgis"));
     home.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
+    let mark = home.notice_mark();
     let (_, out) = package(&mut home, &json!({"name": "Roads", "extent": [0.5, 19.0, 3.5, 21.0]})).unwrap();
+    let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(
+        said.iter().any(|t| t.contains("1 layer(s) of the offline area 'Roads'") && t.contains("doesn't save to the table")),
+        "{said:?}"
+    );
+    // The home map keeps its link.
+    assert!(home.map().layer(layer(&home, "R")).unwrap().gpkg.is_some());
     let mut a = phone(&temp, &out, "a");
     let r = layer(&a, "R");
-    eprintln!("field copy has {} roads; gpkg binding kept: {}", count(&a, r), a.map().layer(r).unwrap().gpkg.is_some());
+    assert_eq!(count(&a, r), 3);
+    assert!(a.map().layer(r).unwrap().gpkg.is_none());
     a.map_mut().editing.settings.enabled = true;
     a.run("edit.setValue", &json!({"layer": r, "row": 0, "field": "name", "value": "fixed"})).unwrap();
-    let saved = a.run("gpkg.saveEdits", &json!({"layer": "R"}));
-    eprintln!("save from field copy: {saved:?}");
-    let db = rusqlite::Connection::open(&gpkg).unwrap();
-    let left: i64 = db.query_row("SELECT count(*) FROM roads", [], |r| r.get(0)).unwrap();
-    assert_eq!(left, 10, "the GeoPackage lost {} of its 10 roads", 10 - left);
+    let e = a.run("gpkg.saveEdits", &json!({"layer": "R"})).unwrap_err();
+    assert!(e.contains("not a GeoPackage layer loaded for editing"), "{e}");
+    assert_eq!(roads(&gpkg), 10);
+    // Back home, the edit is saved to the table, and only it.
+    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!((done["updated"].as_u64(), done["deleted"].as_u64()), (Some(1), Some(0)), "{done}");
+    let saved = home.run("gpkg.saveEdits", &json!({"layer": "R"})).unwrap();
+    assert_eq!((saved["updated"].as_u64(), saved["deleted"].as_u64()), (Some(1), Some(0)), "{saved}");
+    assert_eq!(roads(&gpkg), 10);
 }
 
 /// No phone at all: Download Map, Open Offline Map, edit, Save to GeoPackage, on the desktop.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-#[ignore = "repro of a known field-sync bug (mobile offline audit); run with --ignored"]
-fn audit_offline_map_on_desktop_saves_deletions_of_everything_outside_the_area() {
+fn an_offline_map_of_a_geopackage_layer_never_saves_to_the_table() {
     let temp = Temp::new("gpkg-desktop");
     let gpkg = roads_gpkg(&temp.0);
     let mut s = Session::new(crate::project::Project::default());
     s.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
     s.run("offline.download", &json!({"name": "Site", "extent": [0.5, 19.0, 3.5, 21.0]})).unwrap();
     s.run("offline.open", &json!({"name": "Site"})).unwrap();
-    eprintln!("active map: {}", s.map().name);
+    assert_eq!(s.map().name, "Site (offline)");
     s.map_mut().editing.settings.enabled = true;
     let r = layer(&s, "R");
     s.run("edit.setValue", &json!({"layer": r, "row": 0, "field": "name", "value": "fixed"})).unwrap();
-    let saved = s.run("gpkg.saveEdits", &json!({"layer": "R"}));
-    eprintln!("save from offline map: {saved:?}");
-    let db = rusqlite::Connection::open(&gpkg).unwrap();
-    let left: i64 = db.query_row("SELECT count(*) FROM roads", [], |r| r.get(0)).unwrap();
-    assert_eq!(left, 10, "the GeoPackage lost {} of its 10 roads", 10 - left);
+    assert!(s.run("gpkg.saveEdits", &json!({"layer": "R"})).is_err());
+    assert_eq!(roads(&gpkg), 10);
+}
+
+/// An offline area saved before offline copies were unlinked still holds the link: opening its
+/// map takes it away, and says so. A clean area says nothing.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_offline_area_saved_with_a_table_link_opens_without_it() {
+    let temp = Temp::new("gpkg-legacy-area");
+    let gpkg = roads_gpkg(&temp.0);
+    let mut s = Session::new(crate::project::Project::default());
+    s.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
+    s.run("offline.download", &json!({"name": "Clean", "extent": [0.5, 19.0, 3.5, 21.0]})).unwrap();
+    s.run("offline.download", &json!({"name": "Old", "extent": [0.5, 19.0, 3.5, 21.0]})).unwrap();
+    let link = s.map().layers[0].gpkg.clone();
+    s.project.offline_areas[1].data.layers[0].gpkg = link;
+    let mark = s.notice_mark();
+    s.run("offline.open", &json!({"name": "Clean"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("doesn't save to the table")));
+    let mark = s.notice_mark();
+    s.run("offline.open", &json!({"name": "Old"})).unwrap();
+    assert!(s.map().layers.iter().all(|l| l.gpkg.is_none()));
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("the offline map 'Old (offline)'")), "{said:?}");
+    s.map_mut().editing.settings.enabled = true;
+    assert!(s.run("gpkg.saveEdits", &json!({"layer": "R"})).is_err());
+    assert_eq!(roads(&gpkg), 10);
+}
+
+/// A field project saved before offline copies were unlinked (from a field package, so it names
+/// its home) opens without the link, and says so.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_field_project_saved_with_a_table_link_opens_without_it() {
+    let temp = Temp::new("gpkg-legacy-field");
+    let gpkg = roads_gpkg(&temp.0);
+    let mut s = Session::new(crate::project::Project::default());
+    s.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
+    s.project.field_origin =
+        Some(crate::project::FieldOrigin { project: crate::project::field_id().unwrap(), area: crate::project::field_id().unwrap() });
+    let path = temp.0.join("field.rgis");
+    s.project.save(&path).unwrap();
+    let mut opened = Session::new(crate::project::Project::default());
+    let mark = opened.notice_mark();
+    opened.run("project.open", &json!({"path": path})).unwrap();
+    assert!(opened.map().layers.iter().all(|l| l.gpkg.is_none()));
+    let said: Vec<String> = opened.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("this field project")), "{said:?}");
+    // A home project keeps its link.
+    s.project.field_origin = None;
+    let home = temp.0.join("home.rgis");
+    s.project.save(&home).unwrap();
+    opened.run("project.open", &json!({"path": home})).unwrap();
+    assert!(opened.map().layers[0].gpkg.is_some());
 }

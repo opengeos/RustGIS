@@ -505,6 +505,12 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     reset(s, proj);
+    // A field package's map, or a project saved from one, holds only some of a table's rows: one
+    // made before offline copies were unlinked from their tables mustn't save to them.
+    if is_field || s.project.field_origin.is_some() {
+        let unbound = s.project.maps.iter_mut().map(super::workspace::unbind_map_table_edits).sum();
+        super::workspace::note_unbound(s, unbound, "this field project");
+    }
     // A package opens as a new, unsaved project (saving writes a plain project file).
     if !is_package {
         name_from_file(s, &path);
