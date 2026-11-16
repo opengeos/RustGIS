@@ -570,7 +570,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                     }
                     kind.columns.push(key.clone());
                 }
-                if attrs.insert(key.clone(), text_of(&p).trim().to_string()).is_some() {
+                if attrs.insert(key.clone(), text_of(&p).to_string()).is_some() {
                     kind.repeated += 1;
                     kind.repeated_names.add(key);
                 }
@@ -628,7 +628,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut ds = Dataset::new(title, GeometryType::None, fields);
         let (zm, unread, parts) = (kind.zm, kind.unread, kind.parts_lost);
         let unread_names = kind.unread_names.said();
-        let mut outside = false;
+        let (mut outside, mut null_text) = (false, Vec::new());
         for (g, attrs) in kind.rows {
             let g = g.map(|g| match &transform {
                 Some((t, swap)) => g.map_coords(&|c| {
@@ -644,7 +644,19 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                 let e = g.extent();
                 outside |= e.min_x < -180.0 || e.max_x > 180.0 || e.min_y < -90.0 || e.max_y > 90.0;
             }
-            let row = ds.fields.iter().map(|f| attrs.get(&f.name).map(|v| Value::parse_source(v, f.ty)).unwrap_or_default()).collect();
+            let row = ds
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(k, f)| match attrs.get(&f.name) {
+                    Some(v) if Value::is_null_marker(v) => {
+                        crate::source::null_text_at(&mut null_text, k);
+                        Value::Null
+                    }
+                    Some(v) => Value::parse_file(v, f.ty),
+                    None => Value::Null,
+                })
+                .collect();
             ds.push_next(g, row);
         }
         ds.geometry_type = crate::io::dominant_type(&ds);
@@ -671,6 +683,9 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         if zm > 0 {
             ds.zm_dropped = true;
             rep.messages.push(format!("{}: {}", ds.name, crate::zm_note(Some(zm as u64))));
+        }
+        if let Some(n) = crate::source::null_text_note(&ds.fields, &null_text) {
+            rep.messages.push(format!("{}: {n}", ds.name));
         }
         if parts > 0 {
             let what = if parts == 1 { "part" } else { "parts" };
@@ -776,6 +791,21 @@ mod tests {
         assert!(matches!(&layers[1].0.features[0].geometry, Some(Geometry::Polygon(p)) if p[0].len() == 2));
         assert_eq!(layers[0].1.skipped, 0, "a feature's boundedBy is no failed geometry");
         assert!(layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("nested"))), "{layers:?}");
+    }
+
+    /// Property text read as the file has it (#2059): spaces kept, `<Null>` null and counted.
+    #[test]
+    fn property_text_keeps_its_spaces_and_counts_null_markers() {
+        let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
+<gml:featureMember><ogr:sites><ogr:code> 2535</ogr:code></ogr:sites></gml:featureMember>
+<gml:featureMember><ogr:sites><ogr:code>&lt;Null&gt;</ogr:code></ogr:sites></gml:featureMember>
+</ogr:FeatureCollection>"#;
+        let layers = read("s.gml", gml.as_bytes()).unwrap();
+        let (ds, report) = &layers[0];
+        let code = ds.field_index("code").unwrap();
+        assert_eq!(ds.value(0, code), &Value::Text(" 2535".into()));
+        assert_eq!(ds.value(1, code), &Value::Null);
+        assert!(report.messages.iter().any(|m| m == "s: 1 value '<Null>' was read as empty, in 'code'"), "{:?}", report.messages);
     }
 
     #[test]
