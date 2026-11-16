@@ -1008,7 +1008,7 @@ impl Session {
             opened: self.opened,
             map: self.map().instance_id(),
             epoch: self.policy.epoch.clone(),
-            accounts: if reads { self.policy_accounts() } else { Value::Null },
+            accounts: if reads { self.continuation_accounts(&node) } else { Value::Null },
             sources,
             time_sources: node_time_sources(&node),
             tables,
@@ -1075,6 +1075,19 @@ impl Session {
         let node = self.policy.nodes.last().cloned().ok_or("late work needs an authorized initiating operation")?;
         self.continuation_for(node)
     }
+    /// [`Session::continuation`] for late work whose invocation carried secrets: the retained node
+    /// is the admitted one (its operation, effects, targets and authority) with the named `params`
+    /// entries removed, so the late work holds the authority to land a result, never the secret.
+    pub(crate) fn continuation_without(&self, secrets: &[&str]) -> Result<Continuation, String> {
+        let node = self.policy.nodes.last().ok_or("late work needs an authorized initiating operation")?;
+        let mut clean = (**node).clone();
+        if let Some(params) = clean.params.as_object_mut() {
+            for key in secrets {
+                params.remove(*key);
+            }
+        }
+        self.continuation_for(Arc::new(clean))
+    }
     /// Checks generation, map, revocation, current load and private source/account identity.
     pub(crate) fn check_continuation(&self, c: &Continuation) -> Result<(), String> {
         self.check_continuation_origin(c)?;
@@ -1108,7 +1121,7 @@ impl Session {
         if c.opened != self.opened {
             return Err("this run belongs to a replaced project".into());
         }
-        if !c.accounts.is_null() && c.accounts != self.policy_accounts() {
+        if !c.accounts.is_null() && c.accounts != self.continuation_accounts(&c.node) {
             return Err("the live source or account changed since this request started".into());
         }
         Ok(())
@@ -1190,6 +1203,15 @@ impl Session {
     /// Refuses foreign ingress before a failed start may retire its owner's queued work.
     pub(crate) fn check_delivery_owner(&self, c: &Continuation) -> Result<(), String> {
         if !self.policy.scopes.is_empty() && !self.scope().same_caller(&c.scope) {
+            return Err("this run belongs to another caller".into());
+        }
+        Ok(())
+    }
+    /// Exactly the caller that started the late work, root and scoped alike: another caller (even
+    /// the trusted native root, which `check_delivery_owner` lets deliver) is refused before it
+    /// can read, consume or cancel the owner's result.
+    pub(crate) fn same_owner(&self, c: &Continuation) -> Result<(), String> {
+        if !self.scope().same_caller(&c.scope) {
             return Err("this run belongs to another caller".into());
         }
         Ok(())

@@ -1439,6 +1439,29 @@ impl Session {
             "web":{"selected":self.database_logins.web_selections(),"active":self.web_logins.active_ids()}
         })
     }
+    /// Token generation belongs to a login identity, not its display name or service path.
+    /// Other connections and all active credentials retain the full account checks.
+    pub(super) fn continuation_accounts(&self, node: &Node) -> Value {
+        let mut accounts = self.policy_accounts();
+        if node.id() == "connection.generateToken"
+            && let Some(id) = node.params.get("id").and_then(Value::as_str)
+            && let Some(rows) = accounts.get_mut("connections").and_then(Value::as_array_mut)
+        {
+            for row in rows {
+                if row.pointer("/definition/id").and_then(Value::as_str) != Some(id) {
+                    continue;
+                }
+                if let Some(c) = self.connections.find(id)
+                    && c.auth == "arcgis"
+                    && crate::connections::SERVICE_KINDS.contains(&c.kind.as_str())
+                {
+                    row["definition"]["name"] = Value::Null;
+                    row["definition"]["address"] = json!(crate::connections::login_origin(c));
+                }
+            }
+        }
+        accounts
+    }
 }
 
 /// What a batch's tool reaches beyond a built-in's, without its per-item parameters.
