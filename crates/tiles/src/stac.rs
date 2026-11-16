@@ -134,19 +134,35 @@ fn bands_odd(asset: &Value) -> bool {
     ["eo:bands", "raster:bands", "bands"].iter().any(|k| asset.get(*k).is_some_and(|v| !v.is_null() && !v.is_array()))
 }
 
-/// Whether JAXA Earth's `je:rasters` gives a scale (`dn2value.slope`), offset or no-data (`dn.nodata`)
-/// that is there but not a number (a string such as `"0.0001"`, or one that isn't finite); a no-data
-/// may be `"nan"`, `"inf"` or `"-inf"`, as in [`odd_numbers`].
-fn je_odd(asset: &Value) -> bool {
+/// Whether JAXA Earth's `je:rasters` gives the number `field` (`scale`, `offset` or `nodata`, as
+/// `dn2value.slope`, `dn2value.offset`, `dn.nodata`) that is there but not a number (a string such
+/// as `"0.0001"`, or one that isn't finite); a no-data may be `"nan"`, `"inf"` or `"-inf"`, as in
+/// [`odd_numbers`].
+fn je_field_odd(asset: &Value, field: &str) -> bool {
     let Some(je) = asset.get("je:rasters") else { return false };
-    [("dn2value", "slope", false), ("dn2value", "offset", false), ("dn", "nodata", true)].iter().any(|(group, name, nodata)| {
-        match je.get(*group).and_then(|g| g.get(*name)) {
-            None | Some(Value::Null) => false,
-            Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
-            Some(Value::String(s)) => !(*nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
-            Some(_) => true,
-        }
-    })
+    let (group, name, nodata) = match field {
+        "scale" => ("dn2value", "slope", false),
+        "offset" => ("dn2value", "offset", false),
+        "nodata" => ("dn", "nodata", true),
+        _ => return false,
+    };
+    match je.get(group).and_then(|g| g.get(name)) {
+        None | Some(Value::Null) => false,
+        Some(Value::Number(n)) => !n.as_f64().is_some_and(f64::is_finite),
+        Some(Value::String(s)) => !(nodata && matches!(s.as_str(), "nan" | "inf" | "-inf")),
+        Some(_) => true,
+    }
+}
+
+/// Whether any of JAXA's numbers is odd (see [`je_field_odd`]).
+fn je_odd(asset: &Value) -> bool {
+    ["scale", "offset", "nodata"].iter().any(|f| je_field_odd(asset, f))
+}
+
+/// Whether an asset describes no bands at all (no list, no `eo:common_name`): it is read as one band,
+/// numbered from the asset itself.
+fn describes_no_bands(asset: &Value) -> bool {
+    declared_bands(asset) == 0 && asset.get("eo:common_name").and_then(Value::as_str).is_none()
 }
 
 /// Whether a band's scale, offset or no-data is there but not a number: a string (`"0.0001"`) or
@@ -218,7 +234,9 @@ fn asset_bands(asset: &Value) -> Vec<BandInfo> {
                 }
             };
             // The asset's number given as text, for a band that takes it from there.
-            let inherited_odd = NUMBER_FIELDS.iter().any(|(keys, nodata)| !own(keys) && odd_field(asset, keys, *nodata));
+            let inherited_odd = NUMBER_FIELDS.iter().any(|(keys, nodata)| !own(keys) && odd_field(asset, keys, *nodata))
+                // The first band takes JAXA's number only for a field it, and the asset, leave undeclared.
+                || (first && NUMBER_FIELDS.iter().any(|(keys, _)| !own(keys) && number(Some(asset), keys).is_none() && je_field_odd(asset, keys[0])));
             BandInfo {
                 common: named
                     .and_then(|b| b.get("common_name").or_else(|| b.get("eo:common_name")))
@@ -771,7 +789,7 @@ pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate
                 codes_unread: invalid.is_none() || a.get("rg:codes_unread").and_then(Value::as_bool) == Some(true),
                 bands: asset_bands(a),
                 bands_cut: declared_bands(a) > MAX_BANDS || long_name(a) || a.get("rg:bands_cut").and_then(Value::as_bool) == Some(true),
-                je_unread: je_odd(a) || lone_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
+                je_unread: (describes_no_bands(a) && je_odd(a)) || lone_odd(a) || a.get("rg:unread").and_then(Value::as_bool) == Some(true),
                 lists_unread: bands_odd(a) || a.get("rg:lists_unread").and_then(Value::as_bool) == Some(true),
                 declared_bands: declared_bands(a)
                     .max(a.get("rg:band_count").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX))),
@@ -1672,6 +1690,9 @@ mod tests {
         assert_eq!(band_number(&serde_json::json!({"bands": [{"raster:scale": 0.5, "raster:offset": 2.0}]}), "scale"), Some(0.5));
         assert_eq!(band_number(&serde_json::json!({"bands": [{"raster:scale": 0.5, "raster:offset": 2.0}]}), "offset"), Some(2.0));
         assert_eq!(band_number(&serde_json::json!({"bands": [{"scale": 0.25}]}), "scale"), Some(0.25));
+        // Numbers shared on the asset (STAC 1.1), for a band list that gives none: what `stac.addAsset` scales by.
+        let shared = serde_json::json!({"raster:scale": 0.0001, "raster:offset": -0.1, "bands": [{"eo:common_name": "red"}]});
+        assert_eq!((band_number(&shared, "scale"), band_number(&shared, "offset")), (Some(0.0001), Some(-0.1)));
         assert_eq!(band_number(&serde_json::json!({"raster:bands": [{"nodata": -3000.0}]}), "nodata"), Some(-3000.0));
     }
 }

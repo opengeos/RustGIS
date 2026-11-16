@@ -648,6 +648,22 @@ mod tests {
     }
 
     #[test]
+    fn a_jaxa_default_unreadable_marks_the_first_band_only_if_it_inherits_that_field() {
+        let item_with =
+            |band: serde_json::Value| item(&[("red", json!({"je:rasters": {"dn2value": {"slope": "0.0001"}}, "eo:bands": [band]}))]);
+        let check = |it: &Item, unread: bool, what: &str| {
+            let again = crate::stac::item_from_json(&crate::stac::item_json(it), None).unwrap();
+            for it in [it, &again] {
+                assert_eq!(bands(it)[0].unread, unread, "{what}");
+            }
+        };
+        // A valid scale of its own: the unreadable JAXA slope is never used.
+        check(&item_with(json!({"common_name": "red", "raster:scale": 0.0002})), false, "own scale");
+        // No scale of its own: it would take the slope, so it is refused.
+        check(&item_with(json!({"common_name": "red"})), true, "inherits the slope");
+    }
+
+    #[test]
     fn a_band_name_that_is_not_text_is_said() {
         let odd = item(&[("x", json!({"eo:bands": [{"common_name": 7}]}))]);
         assert!(cut_note(&odd).is_some_and(|n| n.contains("not text")), "{:?}", cut_note(&odd));

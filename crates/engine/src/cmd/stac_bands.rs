@@ -424,6 +424,42 @@ mod desktop {
         note.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect()
     }
 
+    /// What each file's read said (the bands that take the file, its notes), as one notice for a kind,
+    /// naming every band of the files it is for and how many files. The notes of a kind differ by a
+    /// number or an edge name from file to file, so they are matched by [`note_kind`], and each file's
+    /// own wording is kept; a file counts once for a kind, however many of its notes are of it.
+    pub(super) fn merge_notes(files: &[(Vec<String>, Vec<String>)]) -> Vec<String> {
+        let mut merged: Vec<(String, Vec<String>, Vec<String>, usize)> = Vec::new();
+        for (whos, notes) in files {
+            let mut counted: Vec<String> = Vec::new();
+            for n in notes {
+                let kind = note_kind(n);
+                let first = !counted.contains(&kind);
+                match merged.iter_mut().find(|(k, ..)| *k == kind) {
+                    Some((_, texts, bands, files)) => {
+                        if !texts.contains(n) {
+                            texts.push(n.clone());
+                        }
+                        if first {
+                            bands.extend(whos.iter().cloned());
+                            *files += 1;
+                        }
+                    }
+                    None => merged.push((kind.clone(), vec![n.clone()], whos.clone(), 1)),
+                }
+                if first {
+                    counted.push(kind);
+                }
+            }
+        }
+        merged
+            .into_iter()
+            .map(|(_, texts, bands, files)| {
+                format!("{} ({files} file{}): {}", bands.join(", "), if files == 1 { "" } else { "s" }, texts.join("; "))
+            })
+            .collect()
+    }
+
     /// The three windows, read, and put on one grid: the raster of three bands, and what to say.
     fn read_and_stack(
         name: &str,
@@ -446,43 +482,16 @@ mod desktop {
             }
         }
         let read = read_windows(&files, bbox, cell)?;
-        // What a file's read said: one notice for a kind, naming every band of the files it is for
-        // and how many files. The notes of a kind differ by a number or an edge name from file to
-        // file, so they are matched by [`note_kind`], and each file's own wording is kept.
-        let mut window_notes: Vec<(String, Vec<String>, Vec<String>, usize)> = Vec::new();
+        // What each file's read said, merged into one notice for a kind (see [`merge_notes`]).
         let mut windows: Vec<(String, WindowRaster)> = Vec::new();
+        let mut said: Vec<(Vec<String>, Vec<String>)> = Vec::new();
         for ((href, _), w) in files.into_iter().zip(read) {
             let whos: Vec<String> =
                 picked.iter().zip(channels).zip(hrefs).filter(|(_, h)| **h == href).map(|((_, c), _)| c.clone()).collect();
-            // A file counts once for a kind, however many of its notes are of it.
-            let mut counted: Vec<String> = Vec::new();
-            for n in w.notes() {
-                let kind = note_kind(&n);
-                let first = !counted.contains(&kind);
-                match window_notes.iter_mut().find(|(k, ..)| *k == kind) {
-                    Some((_, texts, bands, files)) => {
-                        if !texts.contains(&n) {
-                            texts.push(n);
-                        }
-                        if first {
-                            bands.extend(whos.iter().cloned());
-                            *files += 1;
-                        }
-                    }
-                    None => window_notes.push((kind.clone(), vec![n], whos.clone(), 1)),
-                }
-                if first {
-                    counted.push(kind);
-                }
-            }
+            said.push((whos, w.notes()));
             windows.push((href, w));
         }
-        let mut notes: Vec<String> = window_notes
-            .into_iter()
-            .map(|(_, texts, bands, files)| {
-                format!("{} ({files} file{}): {}", bands.join(", "), if files == 1 { "" } else { "s" }, texts.join("; "))
-            })
-            .collect();
+        let mut notes = merge_notes(&said);
         let sources: Vec<(&Raster, &sb::Band)> = picked
             .iter()
             .enumerate()
@@ -1150,6 +1159,26 @@ mod tests {
         let (stop, cause) = (AtomicBool::new(true), Mutex::new(None));
         note_failure(&stop, &cause, "a.tif: cancelled");
         assert_eq!(*cause.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn the_notes_of_the_files_are_one_notice_for_a_kind_counting_each_file_once() {
+        use super::desktop::merge_notes;
+        let edges = |e: &str| format!("the box reaches past the file's {e} edge(s): the window is cut to the file");
+        let pieces =
+            "3 piece(s) of the box's edges not followed to a quarter of a pixel: the window may fall short of a bent edge".to_string();
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // Two files whose edge notes name different edges: one notice, two files, both wordings kept.
+        let two = merge_notes(&[(w(&["red"]), vec![edges("north")]), (w(&["green", "blue"]), vec![edges("south")])]);
+        assert_eq!(two.len(), 1, "{two:?}");
+        assert!(two[0].starts_with("red, green, blue (2 files): ") && two[0].contains("north") && two[0].contains("south"), "{two:?}");
+        // A file with two notes of one kind counts once, its bands listed once.
+        let once = merge_notes(&[(w(&["red"]), vec![edges("north"), edges("east")])]);
+        assert_eq!(once.len(), 1);
+        assert!(once[0].starts_with("red (1 file): "), "{once:?}");
+        // Different kinds stay apart; a clean run says nothing.
+        assert_eq!(merge_notes(&[(w(&["red"]), vec![edges("north"), pieces])]).len(), 2);
+        assert!(merge_notes(&[(w(&["red"]), Vec::new()), (w(&["green"]), Vec::new())]).is_empty());
     }
 
     #[test]
