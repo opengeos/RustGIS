@@ -622,7 +622,14 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let fields: Vec<Field> = kind
             .columns
             .iter()
-            .map(|c| Field::new(c.clone(), crate::io::text_type(kind.rows.iter().filter_map(|(_, a)| a.get(c)).map(String::as_str))))
+            .map(|c| {
+                Field::new(
+                    c.clone(),
+                    crate::io::text_type(
+                        kind.rows.iter().filter_map(|(_, a)| a.get(c)).map(String::as_str).filter(|v| !Value::is_null_marker(v)),
+                    ),
+                )
+            })
             .collect();
         let title = if single { stem.clone() } else { format!("{stem} {name}") };
         let mut ds = Dataset::new(title, GeometryType::None, fields);
@@ -797,13 +804,13 @@ mod tests {
     #[test]
     fn property_text_keeps_its_spaces_and_counts_null_markers() {
         let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
-<gml:featureMember><ogr:sites><ogr:code> 2535</ogr:code></ogr:sites></gml:featureMember>
+<gml:featureMember><ogr:sites><ogr:code> R-1</ogr:code></ogr:sites></gml:featureMember>
 <gml:featureMember><ogr:sites><ogr:code>&lt;Null&gt;</ogr:code></ogr:sites></gml:featureMember>
 </ogr:FeatureCollection>"#;
         let layers = read("s.gml", gml.as_bytes()).unwrap();
         let (ds, report) = &layers[0];
         let code = ds.field_index("code").unwrap();
-        assert_eq!(ds.value(0, code), &Value::Text(" 2535".into()));
+        assert_eq!(ds.value(0, code), &Value::Text(" R-1".into()));
         assert_eq!(ds.value(1, code), &Value::Null);
         assert!(report.messages.iter().any(|m| m == "s: 1 value '<Null>' was read as empty, in 'code'"), "{:?}", report.messages);
     }

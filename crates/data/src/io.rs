@@ -2056,7 +2056,10 @@ pub(crate) fn read_rows(
         .filter_map(|&i| {
             let ty = types
                 .and_then(|t| t.get(i).copied().flatten())
-                .unwrap_or_else(|| text_type(rows.iter().filter_map(|r| r.get(i)).map(|s| s.as_str())));
+                // `<Null>` is read as empty, so it types a column no more than an empty cell does.
+                .unwrap_or_else(|| {
+                    text_type(rows.iter().filter_map(|r| r.get(i)).map(|s| s.as_str()).filter(|s| !Value::is_null_marker(s)))
+                });
             Some(Field::new(headers.get(i)?.trim(), ty))
         })
         .collect();
@@ -5624,20 +5627,21 @@ mod tests {
     }
 
     /// Text cells read as the file has them (#2059): spaces kept, all-space text kept, an empty cell
-    /// null, `<Null>` null and counted; a number column still reads past the spaces.
+    /// null, `<Null>` null and counted; a number column still reads past the spaces, and `<Null>`
+    /// doesn't make it text.
     #[test]
     fn csv_and_workbook_text_is_read_as_the_file_has_it() {
         // A workbook keeps the spaces of a cell marked so, as spreadsheet programs mark them.
         let kept = |t: &str| format!(r#"<c t="inlineStr"><is><t xml:space="preserve">{t}</t></is></c>"#);
         let (lead, blank, trail) = (kept(" 2535"), kept("   "), kept("x  "));
         let rows: &[&[&str]] = &[
-            &["code", "n", "note"],
-            &[&lead, " 7 ", "a"],
-            &[&blank, "8", "&lt;null&gt;"],
-            &["&lt;Null&gt;", "", "b"],
-            &[&trail, "9", "c"],
+            &["code", "n", "note", "x"],
+            &[&lead, " 7 ", "a", "1.5"],
+            &[&blank, "8", "&lt;null&gt;", "&lt;Null&gt;"],
+            &["&lt;Null&gt;", "", "b", "2.5"],
+            &[&trail, "9", "c", "3.5"],
         ];
-        let text = "code,n,note\n 2535, 7 ,a\n   ,8,<null>\n<Null>,,b\nx  ,9,c\n";
+        let text = "code,n,note,x\n 2535, 7 ,a,1.5\n   ,8,<null>,<Null>\n<Null>,,b,2.5\nx  ,9,c,3.5\n";
         let csv = read_csv(text, "t").unwrap();
         let book = crate::sheets::read(&crate::sheets::xlsx(&[("Sheet1", rows)]), "t", None, &CsvOptions::default()).unwrap();
         for (what, (ds, report)) in [("csv", csv), ("xlsx", book)] {
@@ -5646,7 +5650,9 @@ mod tests {
             assert_eq!(column(0), [text(" 2535"), text("   "), Value::Null, text("x  ")], "{what}");
             assert_eq!(column(1), [Value::Int(7), Value::Int(8), Value::Null, Value::Int(9)], "{what}: numbers read past the spaces");
             assert_eq!(column(2), [text("a"), Value::Null, text("b"), text("c")], "{what}");
-            let said = "2 values '<Null>' were read as empty, in 'code', 'note'";
+            assert_eq!(ds.fields[3].ty, FieldType::Double, "{what}: `<Null>` doesn't type a column");
+            assert_eq!(column(3), [Value::Float(1.5), Value::Null, Value::Float(2.5), Value::Float(3.5)], "{what}");
+            let said = "3 values '<Null>' were read as empty, in 'code', 'note', 'x'";
             assert!(report.messages.iter().any(|m| m == said), "{what}: {:?}", report.messages);
         }
         let (_, report) = read_csv("code\n 2535\n", "t").unwrap();
