@@ -203,8 +203,8 @@ closes it. Inside a quoted field name (`"Pop`) only fields are suggested. A func
 the list comes with its brackets, the cursor inside them (after them when it takes no arguments).
 While the list is open the expression isn't checked: `pop_`, with `pop_est` suggested, is a word
 still being chosen. It is checked once the list closes (an item taken, Escape, the cursor moved
-away, the box left, or nothing matching what's typed), and called a missing field then if it's
-still invalid.
+away, the box left, or nothing matching what's typed), and its error shown then if it's still
+invalid (`pop_x`: no field named 'pop_x').
 
 A `(` typed closes itself, the cursor inside, unless text follows it or it's in a text or a field
 name; so does a `'` or `"` where a value can start (at the start, after a space, `(`, `,` or an
