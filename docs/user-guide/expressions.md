@@ -201,6 +201,8 @@ may switch the input source, type the first letter instead). ↑/↓ move throug
 or Tab take the highlighted item (Enter doesn't calculate while the list is open) and Escape
 closes it. Inside a quoted field name (`"Pop`) only fields are suggested. A function taken from
 the list comes with its brackets, the cursor inside them (after them when it takes no arguments).
+While the list is open the expression isn't checked: `pop_`, with `pop_est` suggested, is a word
+still being chosen, and is called a missing field only once nothing is suggested.
 
 A `(` typed closes itself, the cursor inside, unless text follows it or it's in a text or a field
 name; so does a `'` or `"` where a value can start (at the start, after a space, `(`, `,` or an
