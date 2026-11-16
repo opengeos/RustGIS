@@ -368,7 +368,8 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
     let expected = if boundaries {
         let count = Control::cancelled_at_look(u64::MAX);
         kind.run(&mut normal, command, p, &count).unwrap_or_else(|e| panic!("{command} {p}: normal run: {e}"));
-        assert!((1..MAX_CHECKS).contains(&count.looked()), "{command} {p}: {} checks; shrink the fixture to fit the cap", count.looked());
+        assert!(count.looked() > 0, "{command} {p}: never looks at Cancel");
+        assert!(count.looked() < MAX_CHECKS, "{command} {p}: {} checks; shrink the fixture to fit the cap", count.looked());
         let result = (contents(&normal.project), files());
         restore(dir, &before_files);
         Some(result)
@@ -392,7 +393,7 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
             if !boundaries {
                 return;
             }
-            kind.run(&mut s, command, p, &Control::stoppable()).unwrap_or_else(|e| panic!("{what}: retry: {e}"));
+            kind.run(&mut s, command, p, &Control::new()).unwrap_or_else(|e| panic!("{what}: retry: {e}"));
         } else {
             assert!(boundaries, "{what}: ran on after Cancel");
         }
@@ -401,7 +402,7 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
         assert!(&files() == complete_files, "{what}: completion left incomplete files");
         if result.is_ok() && control.is_cancelled() {
             // A committed export is already complete, and a subsequent invocation still works.
-            kind.run(&mut s, command, p, &Control::stoppable()).unwrap_or_else(|e| panic!("{what}: retry after commit: {e}"));
+            kind.run(&mut s, command, p, &Control::new()).unwrap_or_else(|e| panic!("{what}: retry after commit: {e}"));
             assert!(&contents(&s.project) == expected, "{what}: retry after commit changed completion");
             assert!(&files() == complete_files, "{what}: retry after commit left incomplete files");
         }
