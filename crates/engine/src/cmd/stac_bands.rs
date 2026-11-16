@@ -159,7 +159,7 @@ mod desktop {
         };
         let custom = named.iter().any(Option::is_some);
         let (picked, hrefs, bbox, cell) = plan(s, p, &item, &all, &wanted, custom)?;
-        let name = text(p, "name")?.map_or_else(|| format!("{} {label}", item.id), str::to_string);
+        let name = match text(p, "name")? { Some(n) => super::super::within("name", "the output's name", n, 200)?, None => format!("{} {label}", item.id) };
         let channels = [wanted[0].clone(), wanted[1].clone(), wanted[2].clone()];
         Ok(Box::new(move || {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
