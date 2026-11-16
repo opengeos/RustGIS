@@ -32786,6 +32786,18 @@ fn layout_element_backgrounds_from_commands() {
         assert!(s.run("layout.update", &p).is_err_and(|e| e.contains("locked")), "{p}");
     }
     assert_eq!(background(&s, title), Some(b));
+    // A hand-edited file with a background on its map frame says it was taken off; a clean one
+    // says nothing.
+    let mut file = serde_json::to_value(&s.project.layouts[li]).unwrap();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("a background on a map frame")).count();
+    let quiet = s.notices.len();
+    s.run("layout.import", &json!({"text": file.to_string()})).unwrap();
+    assert_eq!(s.notices.len(), quiet, "{:?}", s.notices);
+    let held = file["elements"].as_array_mut().unwrap().iter_mut().find(|e| e["id"] == json!(frame)).unwrap();
+    held["background"] = json!({"fill": [255, 255, 255, 255]});
+    s.run("layout.import", &json!({"text": file.to_string()})).unwrap();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    assert!(s.project.layouts.last().unwrap().elements.iter().all(|e| e.kind.takes_background() || e.background.is_none()));
 }
 
 #[test]

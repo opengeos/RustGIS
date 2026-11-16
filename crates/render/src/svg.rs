@@ -323,7 +323,7 @@ fn background(s: &mut String, e: &rustgis_map::layout::Element) {
         num(y),
         num(w),
         num(h),
-        num(b.radius.clamp(0.0, w.min(h) / 2.0)),
+        num(b.radius.min(w.min(h) / 2.0).max(0.0)),
         paint("fill", b.fill),
         stroke(b.outline, b.width, None)
     );
