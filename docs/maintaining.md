@@ -131,8 +131,9 @@ Projects with an ink on a legend, colorbar, table or chart (`color` on those ele
 grey and saving them again without it. Saved `layout.addElement` and `layout.update` commands
 that set one need nothing: an older reader refuses `color` on those elements, so the command
 fails there instead of losing the ink. A saved `layout.import` whose `text` gives an element an
-ink, or a background, requires the capability too, since an older reader would read that layout
-without it. Layout files are not covered, as for backgrounds (#2277).
+ink requires `layout-element-ink`, and one whose `text` gives an element a background requires
+`layout-element-background`, since an older reader would read that layout without them. Layout
+files are not covered, as for backgrounds (#2277).
 
 ## New dependencies
 

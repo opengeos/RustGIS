@@ -117,12 +117,13 @@ fn command_uses_element_ink(id: &str, params: &Value) -> bool {
 /// Whether a `layout.import` carries its layout as `"text"` with an element `uses`: an older
 /// reader reads it without the keys it doesn't know. One read from a `"path"` is a layout file,
 /// which carries no format header yet (#2277). Every save asks, so a text without the feature's
-/// `key` (a saved layout writes it only when set) isn't read through.
+/// `key` (a saved layout writes it only when set) isn't read through, unless it has a backslash:
+/// JSON may spell the key with escapes (`"\u0063olor"`).
 fn imported_layout_uses(params: &Value, key: &str, uses: fn(&rustgis_map::layout::Element) -> bool) -> bool {
     params
         .get("text")
         .and_then(Value::as_str)
-        .filter(|t| t.contains(key))
+        .filter(|t| t.contains(key) || t.contains('\\'))
         .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(t).ok())
         .is_some_and(|l| l.elements.iter().any(uses))
 }
@@ -521,6 +522,8 @@ mod tests {
         boxed["elements"][1]["background"] = json!({"fill": [255, 255, 255, 255]});
         for (params, required) in [
             (json!({"text": layout.to_string()}), json!(["layout-element-ink"])),
+            // The same key spelled with an escape is the same key.
+            (json!({"text": layout.to_string().replace("\"color\"", "\"\\u0063olor\"")}), json!(["layout-element-ink"])),
             (json!({"text": boxed.to_string()}), json!(["layout-element-background"])),
             (json!({"text": plain.to_string()}), Value::Null),
             (json!({"path": "inks.rgislayout"}), Value::Null),
