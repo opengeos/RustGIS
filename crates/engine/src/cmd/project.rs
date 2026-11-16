@@ -510,6 +510,10 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
     if is_field || s.project.field_origin.is_some() {
         let unbound = s.project.maps.iter_mut().map(super::workspace::unbind_map_table_edits).sum();
         super::workspace::note_unbound(s, unbound, "this field project");
+    } else {
+        // A home project's open offline maps (`<area> (offline)`), saved with their links.
+        let unbound = super::workspace::unbind_offline_maps(&mut s.project);
+        super::workspace::note_unbound(s, unbound, "this project's offline maps");
     }
     // A package opens as a new, unsaved project (saving writes a plain project file).
     if !is_package {

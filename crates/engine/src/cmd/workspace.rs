@@ -295,6 +295,9 @@ pub fn commands() -> Vec<C> {
             crate::project::ensure_map_imports_complete(&a.data)?;
             let map_name = format!("{} (offline)", a.name);
             if let Some(i) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&map_name)) {
+                // An offline map saved before offline copies were unlinked from their tables.
+                let unbound = s.project.maps.get_mut(i).map_or(0, unbind_map_table_edits);
+                note_unbound(s, unbound, &format!("the offline map '{map_name}'"));
                 s.project.active_map = i;
             } else {
                 let mut m = a.data.clone();
@@ -662,6 +665,13 @@ pub(crate) fn unbind_table_edits(l: &mut rustgis_map::Layer) -> bool {
 /// [`unbind_table_edits`] for each layer of `m`, as the number of layers that had a link.
 pub(crate) fn unbind_map_table_edits(m: &mut rustgis_map::Map) -> usize {
     m.layers.iter_mut().map(unbind_table_edits).filter(|had| *had).count()
+}
+
+/// [`unbind_map_table_edits`] for each of `project`'s offline areas' maps (`<area> (offline)`),
+/// as the number of layers that had a link. The project's other maps keep theirs.
+pub(crate) fn unbind_offline_maps(project: &mut crate::project::Project) -> usize {
+    let names: Vec<String> = project.offline_areas.iter().map(|a| format!("{}{}", a.name, super::field::OFFLINE)).collect();
+    project.maps.iter_mut().filter(|m| names.iter().any(|n| m.name.eq_ignore_ascii_case(n))).map(unbind_map_table_edits).sum()
 }
 
 /// Says that `n` layers of an offline copy no longer save to their tables, when `n` isn't 0.

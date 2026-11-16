@@ -228,7 +228,7 @@ fn audit_two_packages_same_feature_last_back_wins_and_is_said() {
     let (done, said) = bring_back(&temp, &mut b, &mut home, "b");
     eprintln!("B: {done}\nnotices: {said:#?}");
     let hc = layer(&home, "Cities");
-    eprintln!("home value: {:?}", value_of(&home, hc, id, &name));
+    assert_eq!(value_of(&home, hc, id, &name).as_deref(), Some("B says"));
     assert_eq!((with_label(&home, hc, &name, "New A"), with_label(&home, hc, &name, "New B")), (1, 1));
     assert!(said.iter().any(|t| t.contains("Cities #")), "the overwritten edit should be named: {said:?}");
 }
@@ -278,8 +278,12 @@ fn audit_delete_vs_edit_both_ways() {
     home.run("select.rows", &json!({"layer": hc, "rows": [r1]})).unwrap();
     home.run("edit.delete", &Value::Null).unwrap();
     let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
-    eprintln!("{done}\nnotices: {said:#?}");
-    eprintln!("f0 at home: {:?}; f1 at home: {:?}", value_of(&home, hc, f0, &name), value_of(&home, hc, f1, &name));
+    // The crew's deletion wins over the office's edit; the office's deletion wins over the crew's edit.
+    assert_eq!((value_of(&home, hc, f0, &name), value_of(&home, hc, f1, &name)), (None, None), "{done}");
+    assert_eq!((done["deleted"].as_u64(), done["skipped"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1), Some(1)), "{done}");
+    // Both losses are said, by feature.
+    assert!(said.iter().any(|t| t.contains("replaced the map's changes") && t.contains(&format!("Cities #{f0}"))), "{said:?}");
+    assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{f1}"))), "{said:?}");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -431,4 +435,42 @@ fn a_field_project_saved_with_a_table_link_opens_without_it() {
     s.project.save(&home).unwrap();
     opened.run("project.open", &json!({"path": home})).unwrap();
     assert!(opened.map().layers[0].gpkg.is_some());
+}
+
+/// A home project saved, before offline copies were unlinked, with an offline area's map open:
+/// that map loses its link when the project opens, and Open Offline Map, reusing it, keeps it
+/// unlinked. The source map keeps its link.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_home_projects_offline_map_saved_with_a_table_link_opens_without_it() {
+    let temp = Temp::new("gpkg-legacy-home");
+    let gpkg = roads_gpkg(&temp.0);
+    let mut s = Session::new(crate::project::Project::default());
+    s.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
+    s.run("offline.download", &json!({"name": "Site", "extent": [0.5, 19.0, 3.5, 21.0]})).unwrap();
+    s.run("offline.open", &json!({"name": "Site"})).unwrap();
+    let link = s.project.maps[0].layers[0].gpkg.clone();
+    let offline = s.project.active_map;
+    s.project.maps[offline].layers[0].gpkg = link.clone();
+    // Open Offline Map again, on the map already there.
+    let mark = s.notice_mark();
+    s.run("offline.open", &json!({"name": "Site"})).unwrap();
+    assert!(s.map().layers.iter().all(|l| l.gpkg.is_none()));
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("the offline map 'Site (offline)'")));
+    // Saved with the link, then opened.
+    s.project.maps[offline].layers[0].gpkg = link;
+    let path = temp.0.join("home.rgis");
+    s.project.save(&path).unwrap();
+    let mut opened = Session::new(crate::project::Project::default());
+    let mark = opened.notice_mark();
+    opened.run("project.open", &json!({"path": path})).unwrap();
+    let maps = &opened.project.maps;
+    assert!(maps.iter().find(|m| m.name == "Site (offline)").unwrap().layers.iter().all(|l| l.gpkg.is_none()));
+    assert!(maps.iter().find(|m| m.name != "Site (offline)").unwrap().layers[0].gpkg.is_some());
+    let said: Vec<String> = opened.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("this project's offline maps")), "{said:?}");
+    opened.project.active_map = opened.project.maps.iter().position(|m| m.name == "Site (offline)").unwrap();
+    opened.map_mut().editing.settings.enabled = true;
+    assert!(opened.run("gpkg.saveEdits", &json!({"layer": "R"})).is_err());
+    assert_eq!(roads(&gpkg), 10);
 }
