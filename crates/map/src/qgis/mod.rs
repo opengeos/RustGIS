@@ -668,17 +668,25 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
         let mut changed = false;
         for i in 0..layers.len() {
             let Some(Source::Virtual { from: Some(from), filter, .. }) = layers.get(i).map(|l| &l.source) else { continue };
+            let max = rustgis_data::query::MAX_LEN;
+            // The layer it selects from, as it reads (its file, with its own filter), copied
+            // without a filter longer than any RustGIS reads (`true`: one was left behind).
             let base = match from {
-                source::VirtualFrom::Source(s) => Some((**s).clone()),
-                // Another layer of the project, as it reads (its file, with its own filter).
-                source::VirtualFrom::Layer(id) => layers.iter().find(|l| &l.id == id).map(|l| l.source.clone()),
+                source::VirtualFrom::Source(s) => Some(&**s),
+                source::VirtualFrom::Layer(id) => layers.iter().find(|l| &l.id == id).map(|l| &l.source),
             };
             let Some(Source::File { path, layer, subset, ignored }) = base else { continue };
+            let (path, layer, ignored) = (path.clone(), layer.clone(), ignored.clone());
+            let (subset, base_too_long) = match subset {
+                Some(q) if q.len() > max => (None, true),
+                q => (q.clone(), false),
+            };
             let filter = filter.clone();
             let Some(l) = layers.get_mut(i) else { continue };
-            // A filter longer than any RustGIS reads isn't kept (nor copied into each layer that
-            // selects from this one): the layer shows what the rest of its filter keeps, noted.
-            let max = rustgis_data::query::MAX_LEN;
+            if base_too_long {
+                report.skipped(&l.name, "the filter of the layer its virtual layer selects from, which is too long to read");
+            }
+            // Its own filter likewise; the rest of the filter is kept, noted.
             let filter = match filter {
                 Some(f) if f.len() > max => {
                     report.skipped(&l.name, "its filter (from its virtual layer's query), which is too long to read");
@@ -687,10 +695,6 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
                 f => f,
             };
             let subset = match (subset, filter) {
-                (Some(a), _) if a.len() > max => {
-                    report.skipped(&l.name, "the filter of the layer its virtual layer selects from, which is too long to read");
-                    None
-                }
                 (Some(a), Some(b)) if a.len() + b.len() + 11 > max => {
                     report.skipped(&l.name, "its filter (from its virtual layer's query) with that of the layer it selects from, too long to read together: the latter alone kept");
                     Some(a)

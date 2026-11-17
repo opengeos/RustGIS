@@ -31,6 +31,9 @@ pub enum Source {
         cut: usize,
         /// Fields with no name, which a layer can't have.
         unnamed: usize,
+        /// The geometry QGIS names, when it is one RustGIS hasn't (a collection, say): it comes
+        /// in as a table.
+        unknown_geometry: Option<String>,
     },
     /// A virtual layer (`virtual`): its query, and when the query is `SELECT * FROM t` on one
     /// layer it names, with or without a `WHERE` clause, that layer (`from`) and the clause
@@ -41,10 +44,12 @@ pub enum Source {
     Wms { url: String, layer: String, crs: Option<String> },
     /// A WFS or OGC API Features layer.
     Wfs { url: String, layer: String },
-    /// A PostGIS table: QGIS's connection text (its password left out) and the table.
-    Postgres { connection: String, table: String },
-    /// A SQL Server table (`mssql`): QGIS's connection text (its password left out) and the table.
-    SqlServer { connection: String, table: String },
+    /// A PostGIS table: QGIS's connection text (its password left out), the table, and the names
+    /// of the connection's other settings (`sslrootcert`, `authcfg`, …), which a saved connection
+    /// doesn't keep (never their values).
+    Postgres { connection: String, table: String, dropped: Vec<String> },
+    /// A SQL Server table (`mssql`), as a PostGIS one.
+    SqlServer { connection: String, table: String, dropped: Vec<String> },
     /// One RustGIS doesn't read.
     Other { provider: String },
 }
@@ -139,7 +144,28 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                     .map(|(k, v)| if v.is_empty() || v.contains([' ', '\'']) { format!("{k}='{v}'") } else { format!("{k}={v}") })
                     .collect();
                 let connection = kept.join(" ");
-                if provider == "mssql" { Source::SqlServer { connection, table } } else { Source::Postgres { connection, table } }
+                // What QGIS writes about the table (or the password) rather than the connection.
+                const TABLE_OR_SECRET: [&str; 9] =
+                    ["password", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity", "selectatid", "sql"];
+                let dropped = conninfo(datasource)
+                    .into_iter()
+                    .map(|(k, _)| k)
+                    .filter(|k| {
+                        // Only a setting's plain name: anything else is what an unquoted value
+                        // left behind (`password=ab cd` gives `cd host`), and may be a secret.
+                        !k.is_empty()
+                            && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            && !matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode")
+                            && !TABLE_OR_SECRET.iter().any(|t| t.eq_ignore_ascii_case(k))
+                    })
+                    .take(16)
+                    .map(|k| k.chars().take(40).collect())
+                    .collect();
+                if provider == "mssql" {
+                    Source::SqlServer { connection, table, dropped }
+                } else {
+                    Source::Postgres { connection, table, dropped }
+                }
             }
             None => Source::Other { provider: provider.into() },
         },
@@ -244,14 +270,16 @@ fn memory(datasource: &str) -> Source {
         .find_map(|kv| kv.strip_prefix("geometry="))
         .map_or_else(|| head.to_string(), rustgis_data::address::percent_decode)
         .to_ascii_lowercase();
-    let geometry = if geometry.contains("polygon") || geometry.contains("surface") {
-        GeometryType::Polygon
+    let (geometry, unknown_geometry) = if geometry.contains("polygon") || geometry.contains("surface") {
+        (GeometryType::Polygon, None)
     } else if geometry.contains("line") || geometry.contains("curve") {
-        GeometryType::Polyline
+        (GeometryType::Polyline, None)
     } else if geometry.contains("point") {
-        GeometryType::Point
+        (GeometryType::Point, None)
+    } else if matches!(geometry.trim(), "" | "none" | "nogeometry") {
+        (GeometryType::None, None)
     } else {
-        GeometryType::None
+        (GeometryType::None, Some(geometry.chars().take(40).collect()))
     };
     let (mut fields, mut as_text, mut texts, mut cut, mut unnamed) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
     for f in q.split('&').filter_map(|kv| kv.strip_prefix("field=")) {
@@ -285,7 +313,7 @@ fn memory(datasource: &str) -> Source {
         }
         fields.push(Field::new(name, ty.unwrap_or(FieldType::Text)));
     }
-    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed }
+    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, unknown_geometry }
 }
 
 /// The most layers a virtual layer's sources are looked through for (each one is read).
@@ -630,24 +658,49 @@ mod tests {
         );
         // A password stays behind.
         let pg = read("postgres", "dbname='gis' host=db port=5432 user='me' password='secret' table=\"public\".\"roads\" (geom)", dir);
-        assert_eq!(pg, Source::Postgres { connection: "dbname=gis host=db port=5432 user=me".into(), table: "public.roads".into() });
+        assert_eq!(
+            pg,
+            Source::Postgres {
+                connection: "dbname=gis host=db port=5432 user=me".into(),
+                table: "public.roads".into(),
+                dropped: Vec::new()
+            }
+        );
         // A table= inside a quoted value isn't the table.
         let pg = read("postgres", r#"dbname='gis' password='x table=leak' table="dbo"."towns" (geom)"#, dir);
-        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "dbo.towns".into() });
+        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "dbo.towns".into(), dropped: Vec::new() });
         let pg = read("postgres", r"dbname='gis' password='x\' table=leak' table=t", dir);
-        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "t".into() });
+        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "t".into(), dropped: Vec::new() });
+        // Settings a saved connection doesn't keep, by name.
+        let Source::Postgres { dropped, .. } = read(
+            "postgres",
+            "dbname='gis' host=db sslrootcert='/k/ca.pem' authcfg=abc12 password='s' srid=4326 type=Point table=t (geom)",
+            dir,
+        ) else {
+            panic!()
+        };
+        assert_eq!(dropped, ["sslrootcert", "authcfg"]);
+        let Source::Postgres { dropped, .. } = read("postgres", "dbname=gis password=ab secret host=db table=t", dir) else { panic!() };
+        assert!(dropped.is_empty(), "{dropped:?}");
         // An apostrophe inside an unquoted value doesn't open a quote.
         let Source::Postgres { table, .. } = read("postgres", "user=o'brien table=t", dir) else { panic!() };
         assert_eq!(table, "t");
         // An escaped quote stays inside the password, which stays behind; a value with a space quoted.
         let pg = read("postgres", r"dbname='my gis' password='p\' user=x' table=t", dir);
-        assert_eq!(pg, Source::Postgres { connection: "dbname='my gis'".into(), table: "t".into() });
+        assert_eq!(pg, Source::Postgres { connection: "dbname='my gis'".into(), table: "t".into(), dropped: Vec::new() });
         let pg = read(
             "mssql",
             "dbname='gis' host=db\\sql port=1433 user='me' password='secret' srid=2056 type=Point table=\"dbo\".\"towns\" (geom)",
             dir,
         );
-        assert_eq!(pg, Source::SqlServer { connection: "dbname=gis host=db\\sql port=1433 user=me".into(), table: "dbo.towns".into() });
+        assert_eq!(
+            pg,
+            Source::SqlServer {
+                connection: "dbname=gis host=db\\sql port=1433 user=me".into(),
+                table: "dbo.towns".into(),
+                dropped: Vec::new()
+            }
+        );
         assert_eq!(
             read("delimitedtext", "file:./pts.csv?wktField=geom", dir),
             Source::Csv { path: "/data/project/pts.csv".into(), x: None, y: None, wkt: Some("geom".into()), crs: None }
@@ -743,12 +796,21 @@ mod tests {
                 fields: fields.clone(),
                 as_text: (Vec::new(), 0),
                 cut: 0,
-                unnamed: 0
+                unnamed: 0,
+                unknown_geometry: None
             }
         );
         assert_eq!(
             read("memory", "MultiLineStringZ?crs=EPSG:2056&field=name:string(20)&field=n:integer", dir),
-            Source::Memory { geometry: GeometryType::Polyline, crs, fields, as_text: (Vec::new(), 0), cut: 0, unnamed: 0 }
+            Source::Memory {
+                geometry: GeometryType::Polyline,
+                crs,
+                fields,
+                as_text: (Vec::new(), 0),
+                cut: 0,
+                unnamed: 0,
+                unknown_geometry: None
+            }
         );
         // A geometry alone, with or without QGIS 4's prefix.
         for source in ["Point", "memory?Point", "memory?geometry=Point"] {
@@ -780,8 +842,10 @@ mod tests {
         let many = format!("Point?{}", (0..40).map(|i| format!("field=t{i}:time")).collect::<Vec<_>>().join("&"));
         let Source::Memory { as_text: (as_text, texts), .. } = read("memory", &many, dir) else { panic!() };
         assert_eq!((as_text.len(), texts), (32, 40));
-        let Source::Memory { geometry, fields, .. } = read("memory", "None", dir) else { panic!() };
-        assert_eq!((geometry, fields.len()), (GeometryType::None, 0));
+        let Source::Memory { geometry, fields, unknown_geometry, .. } = read("memory", "None", dir) else { panic!() };
+        assert_eq!((geometry, fields.len(), unknown_geometry), (GeometryType::None, 0, None));
+        let Source::Memory { geometry, unknown_geometry, .. } = read("memory", "GeometryCollection?crs=EPSG:4326", dir) else { panic!() };
+        assert_eq!((geometry, unknown_geometry.as_deref()), (GeometryType::None, Some("geometrycollection")));
         let many = format!("Point?{}", (0..MAX_MEMORY_FIELDS + 3).map(|i| format!("field=f{i}:integer")).collect::<Vec<_>>().join("&"));
         let Source::Memory { fields: named, unnamed, .. } = read("memory", "Point?field=:string&field=a:string&field=%20:integer", dir)
         else {

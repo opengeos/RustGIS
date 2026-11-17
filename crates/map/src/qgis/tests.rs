@@ -2827,7 +2827,7 @@ fn the_corpus_sources_read_as_qgis_wrote_them() {
     let Source::Memory { geometry, fields, crs, .. } = one("memory") else { panic!() };
     assert_eq!(crs.as_deref(), Some("EPSG:2056"));
     assert_eq!((geometry, fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()), (GeometryType::Point, vec!["name", "n"]));
-    let Source::SqlServer { table, connection } = one("mssql") else { panic!() };
+    let Source::SqlServer { table, connection, .. } = one("mssql") else { panic!() };
     assert_eq!((table.as_str(), connection.as_str()), ("dbo.towns", "dbname=gis host=db.invalid user=me"));
     // Virtual layers on one layer read as it with their filter; another is left for a note.
     let gpkg = "/p/qgs/../data/sample.gpkg";
@@ -2898,6 +2898,25 @@ fn a_virtual_layer_on_another_layer_takes_its_filter_too() {
     let v3 = p3.layers.iter().find(|l| l.id == "v").unwrap();
     assert!(matches!(&v3.source, Source::File { subset: None, .. }) && v3.definition_query.is_none(), "{:?}", v3.source);
     assert!(report.notes.iter().any(|n| n.layer == "v" && n.text.contains("too long to read")), "{:?}", report.notes);
+    // A base layer's filter past any RustGIS reads is left behind, not copied: the virtual
+    // layer's own filter is kept, and each layer that selects from it says so.
+    let base_long = format!("./a.gpkg|layername=a|subset=value &gt; {}", "9".repeat(rustgis_data::query::MAX_LEN));
+    let qgs = format!(
+        "<qgis><projectlayers>{}{}{}</projectlayers></qgis>",
+        layer("v1", "virtual", "?layer_ref=base:b&amp;query=SELECT%20*%20FROM%20b%20WHERE%20value%20%3E%202"),
+        layer("v2", "virtual", "?layer_ref=base:b&amp;query=SELECT%20*%20FROM%20b%20WHERE%20value%20%3E%202"),
+        layer("base", "ogr", &base_long),
+    );
+    let mut report = Report::default();
+    let p4 = read_project(&qgs, "/d", &mut report).unwrap();
+    for id in ["v1", "v2"] {
+        let v = p4.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(v.definition_query.as_deref(), Some(r#""value" > 2"#), "{id}");
+        assert!(
+            report.notes.iter().any(|n| n.layer == id && n.text.contains("the filter of the layer its virtual layer selects from")),
+            "{id}"
+        );
+    }
     for id in ["lost", "web"] {
         let l = p.layers.iter().find(|l| l.id == id).unwrap();
         assert!(matches!(l.source, Source::Virtual { .. }), "{id}: {:?}", l.source);

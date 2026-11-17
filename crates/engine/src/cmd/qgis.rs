@@ -346,7 +346,7 @@ fn add_layer(
             }
             return Ok(Some(name.to_string()));
         }
-        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed } => {
+        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, unknown_geometry } => {
             // QGIS keeps none of a memory layer's features: it opens empty, with its fields.
             let mut ds = rustgis_data::Dataset::new(name, *geometry, fields.clone());
             if let Some(c) = layer.crs.as_deref().or(crs.as_deref()) {
@@ -359,6 +359,9 @@ fn add_layer(
             if *texts > 0 {
                 let more = if *texts > as_text.len() { ", …" } else { "" };
                 report.approximated(name, format!("its fields of kinds RustGIS hasn't, as text ({texts}: {}{more})", as_text.join(", ")));
+            }
+            if let Some(g) = unknown_geometry {
+                report.skipped(name, format!("its geometry ({g}), of a kind RustGIS hasn't: a table without geometry"));
             }
             if *unnamed > 0 {
                 report.skipped(name, format!("its fields with no name ({unnamed})"));
@@ -388,12 +391,12 @@ fn add_layer(
             report.skipped(name, format!("the WFS layer {typename} at {url} (add it with Home › Add › Web Data)"));
             return Ok(None);
         }
-        Source::Postgres { connection, table } => {
-            database_note(s, name, "PostGIS", table, connection, connections, report);
+        Source::Postgres { connection, table, dropped } => {
+            database_note(s, name, "PostGIS", table, connection, dropped, connections, report);
             return Ok(None);
         }
-        Source::SqlServer { connection, table } => {
-            database_note(s, name, "SQL Server", table, connection, connections, report);
+        Source::SqlServer { connection, table, dropped } => {
+            database_note(s, name, "SQL Server", table, connection, dropped, connections, report);
             return Ok(None);
         }
         Source::Other { provider } => {
@@ -447,13 +450,29 @@ const MAX_IMPORTED_CONNECTIONS: usize = 16;
 /// the saved connection to its database to log in to, made from the project's connection text
 /// (its password left out, which the project text never keeps here) when no connection to it is
 /// there yet. No connection is made to the database itself.
-fn database_note(s: &mut Session, name: &str, what: &str, table: &str, connection: &str, made: &mut usize, report: &mut Report) {
+#[expect(clippy::too_many_arguments, reason = "the parts of one note, each from the layer's source")]
+fn database_note(
+    s: &mut Session,
+    name: &str,
+    what: &str,
+    table: &str,
+    connection: &str,
+    dropped: &[String],
+    made: &mut usize,
+    report: &mut Report,
+) {
     let saved = saved_database_connection(s, what, connection, made);
     // Where a login would go, so a project can't hide it behind a connection's name.
     let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
+    // Its settings the saved connection leaves out, by name (`sslrootcert`, `authcfg`, …).
+    let left = if dropped.is_empty() {
+        String::new()
+    } else {
+        format!("; the saved connection leaves out these settings of the project's: {}", dropped.join(", "))
+    };
     let text = match saved {
         Some(c) => format!(
-            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it"
+            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it{left}"
         ),
         None => format!("the {what} table {table} ({connection}): connect to the database to add it"),
     };

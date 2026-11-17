@@ -2835,10 +2835,11 @@ fn qgis_sources_import_as_their_layers() {
         layer("big", "vector", "virtual", "?layer_ref=pts:p&amp;query=SELECT%20*%20FROM%20p%20WHERE%20value%20%3E%2020"),
         layer("counts", "vector", "virtual", "?layer_ref=pts:p&amp;query=SELECT%20kind,%20count(*)%20FROM%20p%20GROUP%20BY%20kind"),
         layer("tiles", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=https://e.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.pbf&amp;zmax=14&amp;zmin=0"),
-        layer("towns", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable key='id' srid=2056 type=Point table=\"public\".\"towns\" (geom)"),
+        layer("towns", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable sslrootcert='/k/ca.pem' key='id' srid=2056 type=Point table=\"public\".\"towns\" (geom)"),
         layer("roads", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable table=\"public\".\"roads\" (geom)"),
         layer("sites", "vector", "mssql", "dbname='gis' host=sql.invalid\\main user='me' password='secret' table=\"dbo\".\"sites\" (geom)"),
         layer("named", "vector", "postgres", "service='prod' table=\"public\".\"x\" (geom)"),
+        layer("bag", "vector", "memory", "GeometryCollection?crs=EPSG:4326&amp;field=a:integer"),
         layer("served", "vector", "postgres", "service='prod' host=db.invalid table=\"public\".\"y\" (geom)"),
         layer("escaped", "vector", "postgres", r"dbname='gis' host=db.invalid port=5432 user='me' password='p4ss\' table=x' sslmode=disable table=public.z"),
         layer("web mbtiles", "vector-tile", "mbtilesvectortiles", "type=mbtiles&amp;url=https://e.invalid/t.mbtiles"),
@@ -2893,6 +2894,9 @@ fn qgis_sources_import_as_their_layers() {
     assert!(notes.contains("the PostGIS table public.y (service=prod host=db.invalid): connect to the database to add it"), "{notes}");
     assert!(notes.contains("the PostGIS table public.z: log in to the saved connection"), "{notes}");
     assert!(notes.contains("the tile archive at a web address"), "{notes}");
+    assert!(notes.contains("the saved connection leaves out these settings of the project's: sslrootcert"), "{notes}");
+    assert!(!notes.contains("/k/ca.pem"), "{notes}");
+    assert!(notes.contains("its geometry (geometrycollection), of a kind RustGIS hasn't: a table without geometry"), "{notes}");
     assert!(notes.contains("the tile archive on a network share"), "{notes}");
     assert!(m.tiles.iter().all(|t| t.name != "web mbtiles" && t.name != "share"), "{notes}");
     // Imported again: the saved connections are used, none made twice.
