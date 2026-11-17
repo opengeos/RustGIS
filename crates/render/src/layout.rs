@@ -877,8 +877,9 @@ fn shape_path(shape: &FrameShape, r: Rect) -> Option<tiny_skia::Path> {
     }
 }
 
-/// The lon/lat outline of what a frame shows.
-fn frame_outline_lonlat(map: &Map, cam: &rustgis_map::Camera, w: f64, h: f64) -> Vec<Coord> {
+/// The lon/lat outline of what a frame shows, `None` where an edge of a frame on the globe is off
+/// the disc: the outline breaks there rather than cutting across the globe.
+fn frame_outline_lonlat(map: &Map, cam: &rustgis_map::Camera, w: f64, h: f64) -> Vec<Option<Coord>> {
     let mut ring = Vec::new();
     let n = 16;
     let edge = |t: f64, side: usize| match side {
@@ -887,18 +888,19 @@ fn frame_outline_lonlat(map: &Map, cam: &rustgis_map::Camera, w: f64, h: f64) ->
         2 => ((1.0 - t) * w, h),
         _ => (0.0, (1.0 - t) * h),
     };
-    // A frame on the globe is read through the globe as it draws it (#2348), its edges off the
-    // disc left out: one that shows the globe whole has no edge on it, and no outline.
+    // A frame on the globe is read through the globe as it draws it (#2348), with a gap where an
+    // edge runs off the disc: one that shows the globe whole has no edge on it, and no outline.
     let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(cam, w, h));
     for side in 0..4 {
         for i in 0..n {
             let (sx, sy) = edge(i as f64 / n as f64, side);
-            let at = match &globe {
-                Some(g) => g.inverse(sx, sy),
-                None => map.to_lonlat(cam.to_map(sx, sy, w, h)),
-            };
-            if let Some(c) = at {
-                ring.push(c);
+            match &globe {
+                Some(g) => ring.push(g.inverse(sx, sy)),
+                None => {
+                    if let Some(c) = map.to_lonlat(cam.to_map(sx, sy, w, h)) {
+                        ring.push(Some(c));
+                    }
+                }
             }
         }
     }
@@ -1161,8 +1163,8 @@ fn frame_viewport(
 }
 
 /// Strokes the ring `ring` (longitude, latitude) on a frame's map `width` points wide: another
-/// frame's extent, as an extent indicator shows it.
-fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Coord], color: Rgba, width: f32) {
+/// frame's extent, as an extent indicator shows it, broken at each `None`.
+fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Option<Coord>], color: Rgba, width: f32) {
     let ppp = view.pixels_per_point as f32;
     // On a globe, through the globe as the frame draws it, breaking behind its horizon (#2348):
     // through the flat camera the outline lands off the area once it is away from the centre.
@@ -1170,6 +1172,10 @@ fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Coord], color
     let mut pb = PathBuilder::new();
     let mut first = true;
     for c in ring {
+        let Some(c) = c else {
+            first = true;
+            continue;
+        };
         let at = match &globe {
             Some(g) => g.forward(*c),
             None => match map.to_map(*c) {
@@ -5371,6 +5377,58 @@ Elaboração: RustGIS",
         assert!(off < 1.5, "the outline's middle {mid:?} is {off:.1} mm from Iceland at {expected:?}");
         let whole = red(Coord::new(-20.0, 10.0), 4e8);
         assert!(whole.is_empty(), "the globe seen whole outlined by {} red pixels", whole.len());
+    }
+
+    /// A frame on the globe whose sides run off the disc is outlined by its top and bottom edges
+    /// only, broken where they leave the disc, not joined by a line across the globe (#2348).
+    #[test]
+    fn a_frame_partly_off_the_globe_is_outlined_without_a_chord() {
+        use rustgis_map::layout::{INDICATOR_COLOR, INDICATOR_WIDTH, frame_camera};
+        let mut globe = Map::new("g");
+        globe.set_projection(rustgis_map::Projection::Globe);
+        let frame = |center, scale, extent_of| ElementKind::MapFrame {
+            map: "g".into(),
+            center,
+            scale,
+            shape: FrameShape::Rectangle,
+            grid: None,
+            extent_of,
+            extent_color: INDICATOR_COLOR,
+            extent_width: INDICATOR_WIDTH,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let center = Coord::new(-20.0, 0.0);
+        // The source frame, 40 × 20 mm: a scale whose disc is taller than the frame, its sides in
+        // the sky beside the disc, and its corners too.
+        let (sw, sh) = (40.0, 20.0);
+        let disc = |scale: f64| {
+            let cam = frame_camera(&globe, center, scale, 0.0, 0.0);
+            rustgis_map::globe::Globe::new(&cam, sw * PT_PER_MM, sh * PT_PER_MM).disc_radius() / PT_PER_MM
+        };
+        let source_scale = (1..400).map(|i| f64::from(i) * 1e6).find(|&s| disc(s) < 0.5 * sw - 3.0).unwrap();
+        assert!(disc(source_scale) > 0.5 * sh + 2.0, "a disc {:.1} mm across", 2.0 * disc(source_scale));
+        let (at, scale) = (center, 2.0 * source_scale);
+        let mut l = Layout::new("Layout", 100.0, 100.0);
+        let source = l.add("Main", (55.0, 70.0, sw, sh), frame(center, source_scale, None));
+        l.add("Locator", (5.0, 5.0, 50.0, 50.0), frame(at, scale, Some(source)));
+        let pm = render(&l, &mut [globe.clone()], 96.0, &PageInfo::default()).unwrap();
+        let red = |x: u32, y: u32| {
+            let (r, g, b) = rgb(&pm, x, y);
+            r > 180 && g < 90 && b < 90
+        };
+        let k = PT_PER_MM;
+        let (x0, x1) = ((5.0 * k) as u32, (55.0 * k) as u32);
+        let inked = (x0..x1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| red(x, y)).count();
+        assert!(inked > 0, "no outline of the frame");
+        // The row through the source frame's centre, between its top and bottom edges: crossed only
+        // by a chord.
+        let side = 50.0 * k;
+        let g = rustgis_map::globe::Globe::new(&frame_camera(&globe, at, scale, 0.0, 0.0), side, side);
+        let (_, cy) = g.forward(center).unwrap();
+        let row = (5.0 * k + cy).round() as u32;
+        let crossed: Vec<u32> = (row - 2..=row + 2).flat_map(|y| (x0..x1).filter(move |&x| red(x, y))).collect();
+        assert!(crossed.is_empty(), "the outline crosses the middle of the globe at {crossed:?}");
     }
 
     fn rgb(pm: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
