@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::esripbf::tests::encode::{answer, feature, field, geometry, lonlat, number, text, transform, uint};
+use crate::esripbf::tests::encode::{answer, feature, field, geometry, lonlat, message, number, text, transform, uint};
 
 /// A points layer of 400 features on a 20 by 20 grid, 0.05° apart from (-100, 40): object id `i`
 /// (from 1) at column `(i - 1) % 20`, row `(i - 1) / 20`.
@@ -44,6 +44,10 @@ struct Opts {
     padded: bool,
     /// With `padded`, the first feature's text is short (its answer says little of the rest).
     small_first: bool,
+    /// Each feature has a text field whose value isn't valid UTF-8.
+    bad_text: bool,
+    /// It sends at most this many features a page, whatever is asked for.
+    caps: Option<usize>,
 }
 
 impl Default for Opts {
@@ -57,6 +61,8 @@ impl Default for Opts {
             empty_without_fields: false,
             padded: false,
             small_first: false,
+            bad_text: false,
+            caps: None,
         }
     }
 }
@@ -71,7 +77,7 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first } = opts;
+    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -111,7 +117,7 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             return Some(format!(r#"{{"count":{}{extent}}}"#, ids.len()).into_bytes());
         }
         let offset: usize = if ignores_offset { 0 } else { value("resultOffset").map_or(0, |o| o.parse().unwrap()) };
-        let size: usize = value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page);
+        let size: usize = value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page).min(caps.unwrap_or(usize::MAX));
         let sent: Vec<u64> = ids.iter().skip(offset).take(size).copied().collect();
         let geometry_too = value("returnGeometry").as_deref() != Some("false");
         let mut parts = vec![number(7, 0), lonlat(), transform(false, 0.01, 0.0, 0.0)];
@@ -119,6 +125,9 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             parts.push(field("OBJECTID", 6));
             if padded {
                 parts.push(field("NOTE", 4));
+            }
+            if bad_text {
+                parts.push(field("BAD", 4));
             }
         }
         if z {
@@ -137,6 +146,9 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             if padded {
                 let len = if small_first && id == 1 { 10 } else { (id % 7 + 1) as usize * 1500 };
                 values.push(text(&"x".repeat(len)));
+            }
+            if bad_text {
+                values.push(message(1, &message(1, &[0xff, 0xfe, b'a'])));
             }
             if geometry_too {
                 values.push(geometry(&[], &at));
@@ -299,15 +311,24 @@ fn views_anywhere_never_panic_and_ask_for_a_few_cells() {
 
 #[test]
 fn what_pages_lose_is_said_by_each_read_and_none_when_nothing_is() {
+    // Z values: said once, by the layer, as other sources say them; not again by its reads.
     let (query, _) = service_with("live-z.test", Opts { z: true, ..Opts::default() });
     let src = open_blocking(&query).unwrap();
-    assert!(src.info.zm_dropped);
+    assert!(src.info.zm_dropped && src.info.notes == vec![crate::zm_note(None)], "{:?}", src.info.notes);
+    assert!(read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap().notes.is_empty());
+    // Values each page loses: said by each read, a view's counted in its pages.
+    let (query, _) = service_with("live-utf8.test", Opts { bad_text: true, ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    assert!(src.info.notes.is_empty(), "{:?}", src.info.notes);
     let b = read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap();
-    // The pages of the view's cells: at least its 16 features.
-    assert!(b.notes.len() == 1 && b.notes[0].contains("features had Z or M values"), "{:?}", b.notes);
+    assert!(
+        b.notes.len() == 1 && b.notes[0].contains("UTF-8") && b.notes[0].ends_with("counted in the pages read for the view"),
+        "{:?}",
+        b.notes
+    );
     let mut visit = |_: Vec<Feature>| Ok(());
     let all = src.visit_chunks(None, 4 << 10, &mut visit).unwrap();
-    assert_eq!(all.notes, vec![crate::zm_note(Some(FEATURES))]);
+    assert!(all.notes.len() == 1 && all.notes[0].starts_with(&format!("{FEATURES} values")), "{:?}", all.notes);
     // Clean pages: no notes.
     let (query, _) = service("live-clean.test", 30, true, None);
     let src = open_blocking(&query).unwrap();
@@ -423,15 +444,14 @@ fn an_export_says_what_the_pages_lost_and_nothing_when_they_lost_nothing() {
     let dir = std::env::temp_dir().join(format!("rustgis-arcgis-tests-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    for (host, z) in [("live-export-z.test", true), ("live-export-clean.test", false)] {
-        let (query, _) = service_with(host, Opts { z, ..Opts::default() });
+    for (host, lossy) in [("live-export-utf8.test", true), ("live-export-clean.test", false)] {
+        let (query, _) = service_with(host, Opts { bad_text: lossy, ..Opts::default() });
         let src = open_blocking(&query).unwrap();
         let layer = crate::Dataset::new(src.info.name.clone(), src.info.geometry_type, src.info.fields.clone());
         let path = dir.join(format!("{host}.geojson"));
         let e = crate::export::write_source_in(&src, &layer, &path, crate::raster::Crs::LonLat).unwrap();
         assert_eq!(e.written, FEATURES as usize);
-        let want = if z { vec![crate::zm_note(Some(FEATURES))] } else { Vec::new() };
-        assert_eq!(e.read_notes, want, "{host}");
+        assert_eq!(e.read_notes.len(), usize::from(lossy), "{host}: {:?}", e.read_notes);
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -455,4 +475,37 @@ fn pages_whose_answers_are_too_large_are_asked_for_again_shorter() {
     .unwrap();
     assert!(visited.into_iter().eq(1..=FEATURES));
     assert!(src.page() < 30 && src.page() >= 1, "{}", src.page());
+}
+
+#[test]
+fn a_materialized_layer_says_each_loss_once() {
+    for (host, opts, want) in [
+        ("live-once-z.test", Opts { z: true, ..Opts::default() }, "Z or M"),
+        ("live-once-utf8.test", Opts { bad_text: true, ..Opts::default() }, "UTF-8"),
+    ] {
+        let (query, _) = service_with(host, opts);
+        let src = open_blocking(&query).unwrap();
+        let (ds, report) = crate::source::materialize(&src).unwrap();
+        assert_eq!(ds.features.len(), FEATURES as usize);
+        let said: Vec<&String> = report.messages.iter().filter(|m| m.contains(want)).collect();
+        assert_eq!(said.len(), 1, "{host}: {:?}", report.messages);
+    }
+    let (query, _) = service("live-once-clean.test", 30, true, None);
+    let (_, report) = crate::source::materialize(&open_blocking(&query).unwrap()).unwrap();
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+}
+
+#[test]
+fn a_visit_reads_short_pages_in_order() {
+    // Pages of 30 asked for a window at a time, 7 sent: each window starts again where a short
+    // page ended.
+    let (query, _) = service_with("live-short.test", Opts { caps: Some(7), ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    let mut seen = Vec::new();
+    src.visit_chunks(None, 4 << 10, &mut |c| {
+        seen.extend(c.iter().map(|f| f.id));
+        Ok(())
+    })
+    .unwrap();
+    assert!(seen.into_iter().eq(1..=FEATURES));
 }

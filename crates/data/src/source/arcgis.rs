@@ -160,11 +160,9 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     if first.losses.with_zm > 0 {
         info.drop_zm(None);
     }
-    // What the first feature's answer left out or assumed (fields it couldn't read, the coordinate
-    // system); each read says what its own features lost ([`Batch::notes`]).
-    let mut lost = first.losses;
-    lost.with_zm = 0;
-    info.notes.extend(first.report.messages.iter().cloned().chain(lost.messages()));
+    // What the first answer left out of the layer's fields; Z values are said once here, as for
+    // the other sources, and each read says what its own features lost ([`Batch::notes`]).
+    info.notes.extend(first.report.messages.iter().cloned());
     if !sample {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
@@ -299,6 +297,17 @@ impl ArcgisSource {
         )
     }
 
+    /// What a read's pages lost, said: Z values only when the layer didn't say it has them, and,
+    /// for a view, as counted in the pages read for it, which hold features around it (and those
+    /// crossing its cells twice).
+    fn notes(&self, mut losses: crate::esripbf::Losses, view: bool) -> Vec<String> {
+        if self.info.zm_dropped {
+            losses.with_zm = 0;
+        }
+        let notes = losses.messages();
+        if view { notes.into_iter().map(|n| format!("{n}, counted in the pages read for the view")).collect() } else { notes }
+    }
+
     /// The features a page asks for now.
     fn page(&self) -> usize {
         self.page.load(std::sync::atomic::Ordering::Relaxed)
@@ -415,8 +424,10 @@ impl ArcgisSource {
                 held = held.saturating_add(answer.len());
                 present += 1;
                 present_bytes = present_bytes.saturating_add(answer.len());
-                if gap {
-                    // An earlier page isn't in: this one's offset may be wrong, read it later.
+                if gap || waiting {
+                    // An earlier page isn't in: this one's offset may be wrong, and the read runs
+                    // again once it is, so it is read then (pages are decoded once, by the pass
+                    // that has them all).
                     offset = offset.saturating_add(page_len);
                     continue;
                 }
@@ -469,7 +480,8 @@ impl ArcgisSource {
             complete = false;
         }
         let matched = if complete { features.len() as u64 } else { matched };
-        Ok(Batch { features, matched, complete, skipped, notes: losses.messages(), ..Batch::default() })
+        let notes = self.notes(losses, view.is_some());
+        Ok(Batch { features, matched, complete, skipped, notes, ..Batch::default() })
     }
 
     /// A count's answer, or `None` when it isn't fetched yet (noted as missing).
@@ -550,9 +562,10 @@ impl FeatureSource for ArcgisSource {
         cfg!(not(target_arch = "wasm32"))
     }
 
-    /// Every feature (in `extent`, when given) in object id order, a page at a
-    /// time: each page is fetched while the visit waits, read, visited and let go. Checks Cancel
-    /// before each page; fetching one page is a step without a check (two minutes at most).
+    /// Every feature (in `extent`, when given) in object id order, a page at a time: pages are
+    /// fetched a window at a time while the visit waits, then read in order, visited and let go.
+    /// Checks Cancel before each page; fetching a window is a step without a check (two minutes
+    /// at most).
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -581,49 +594,92 @@ impl FeatureSource for ArcgisSource {
             crate::progress::begin(usize::try_from(total).unwrap_or(usize::MAX));
             let (mut offset, mut skipped, mut visited) = (0usize, 0usize, 0u64);
             let mut losses = crate::esripbf::Losses::default();
-            loop {
+            // Pages asked for together, then read in order: each next offset is known once the
+            // page before it is full, as pages are.
+            const WINDOW: usize = remote::ROUND_ANSWERS / 2;
+            let forget = |urls: &[String]| urls.iter().for_each(|u| self.remote.forget_answer(u));
+            'pages: loop {
                 crate::progress::check()?;
                 let page_len = self.page();
-                let url = self.page_url(view.as_ref(), 1, offset, page_len);
-                let answer = match fetch(url.clone()) {
-                    // Asked for again from the same offset, in a shorter page.
+                let urls: Vec<String> = (0..WINDOW)
+                    .map(|i| offset.saturating_add(i.saturating_mul(page_len)))
+                    .take_while(|o| *o == offset || (*o as u64) < total)
+                    .map(|o| self.page_url(view.as_ref(), 1, o, page_len))
+                    .collect();
+                let wanted = urls.clone();
+                let r = self.remote.clone();
+                let answers = remote::drive_blocking(
+                    self.remote.clone(),
+                    Arc::new(move || {
+                        let mut out = Vec::with_capacity(wanted.len());
+                        let mut missing = false;
+                        for u in &wanted {
+                            match r.answer(u)? {
+                                Some(a) => out.push(a),
+                                None => missing = true,
+                            }
+                        }
+                        if missing { Err(remote::need()) } else { Ok(out) }
+                    }),
+                );
+                let answers = match answers {
+                    // Asked for again from the same offset, in shorter pages.
                     Err(e) if remote::is_too_large(&e) => {
+                        forget(&urls);
                         self.shorten()?;
                         continue;
                     }
-                    answer => answer?,
-                };
-                // Not kept: the layer is read once, through.
-                self.remote.forget_answer(&url);
-                let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
-                drop(answer);
-                for f in got {
-                    if view.as_ref().is_none_or(|v| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(v))) {
-                        visited += 1;
-                        chunks.push(f)?;
+                    Err(e) => {
+                        forget(&urls);
+                        return Err(e);
                     }
-                }
-                crate::progress::step(sent)?;
-                if !more {
-                    break;
-                }
-                if sent == 0 {
-                    return Err(DataError::Format(crate::diagnostics::message_with_address(
-                        &self.query,
-                        "the service said it held more features but sent none",
-                    )));
-                }
-                offset = offset.saturating_add(sent);
-                // A service that ignores the offset would send pages for ever.
-                if offset as u64 > total.saturating_add(page_len as u64) {
-                    return Err(DataError::Format(crate::diagnostics::message_with_address(
-                        &self.query,
-                        &format!("the service kept sending pages past the {total} features it counted"),
-                    )));
+                    Ok(a) => a,
+                };
+                for (i, (url, answer)) in urls.iter().zip(answers).enumerate() {
+                    // Not kept: the layer is read once, through.
+                    self.remote.forget_answer(url);
+                    if i > 0 {
+                        crate::progress::check().inspect_err(|_| forget(urls.get(i..).unwrap_or_default()))?;
+                    }
+                    let (got, more, sent) = self.page_of(url, &answer, &mut skipped, &mut losses).inspect_err(|_| forget(&urls))?;
+                    drop(answer);
+                    for f in got {
+                        if view.as_ref().is_none_or(|v| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(v))) {
+                            visited += 1;
+                            chunks.push(f).inspect_err(|_| forget(&urls))?;
+                        }
+                    }
+                    crate::progress::step(sent).inspect_err(|_| forget(&urls))?;
+                    if !more {
+                        forget(&urls);
+                        break 'pages;
+                    }
+                    if sent == 0 {
+                        forget(&urls);
+                        return Err(DataError::Format(crate::diagnostics::message_with_address(
+                            &self.query,
+                            "the service said it held more features but sent none",
+                        )));
+                    }
+                    offset = offset.saturating_add(sent);
+                    // A service that ignores the offset would send pages for ever.
+                    if offset as u64 > total.saturating_add(page_len as u64) {
+                        forget(&urls);
+                        return Err(DataError::Format(crate::diagnostics::message_with_address(
+                            &self.query,
+                            &format!("the service kept sending pages past the {total} features it counted"),
+                        )));
+                    }
+                    if sent < page_len {
+                        // A short page: the rest of the window starts at the wrong offsets.
+                        forget(&urls);
+                        continue 'pages;
+                    }
                 }
             }
             chunks.flush()?;
-            Ok(Batch { matched: visited, complete: true, skipped, notes: losses.messages(), ..Batch::default() })
+            let notes = self.notes(losses, view.is_some());
+            Ok(Batch { matched: visited, complete: true, skipped, notes, ..Batch::default() })
         }
     }
 }
