@@ -659,8 +659,11 @@ downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly
   keeps its places until it is opened again.
 - Each download is said, with its size, and so is each that fails (not tried again until the
   setting is turned off and on). An answer that isn't a grid file is refused.
-- Turned off, grids already downloaded stay in use; delete the `datum-grids` folder to stop using
-  them. The web app keeps a grid for the session only.
+- Turned off, grids already downloaded stay in use, and downloads already under way finish. On a
+  computer, delete the `datum-grids` folder and start RustGIS again to stop using them (grids
+  installed for PROJ are still used). The web app keeps a grid for the session only.
+- At most 16 grids are downloaded each time the setting is turned on, and none is started once
+  2 GB have arrived; past that, the grid is said to be not downloaded.
 
 RustGIS supports a subset of Esri's projected systems, checked against
 PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) and the

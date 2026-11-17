@@ -20,6 +20,11 @@ use std::sync::{Condvar, Mutex, OnceLock};
 /// The largest grid downloaded: PROJ's largest are a few hundred megabytes (geoid models).
 const MAX_GRID: usize = 512 << 20;
 
+/// The most grids, and bytes, downloaded each time the setting is turned on: a file names the
+/// systems whose grids are fetched, so one can't make RustGIS download without end.
+const MAX_GRIDS: usize = 16;
+const MAX_BYTES: usize = 2 << 30;
+
 /// How long a download may take before it is given up.
 #[cfg(not(target_arch = "wasm32"))]
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
@@ -48,7 +53,19 @@ struct State {
     failed: HashSet<String>,
     /// Grids downloaded this run: never downloaded again, even when still listed as missing.
     got: HashSet<String>,
+    /// Downloads started, and bytes they brought, since the setting was turned on.
+    started: usize,
+    bytes: usize,
     news: Vec<News>,
+}
+
+impl State {
+    /// The setting turned on: this run's failures are tried again, and the limits start over.
+    fn turned_on(&mut self) {
+        self.failed.clear();
+        self.started = 0;
+        self.bytes = 0;
+    }
 }
 
 fn state() -> &'static (Mutex<State>, Condvar) {
@@ -82,7 +99,7 @@ pub fn set_download(f: Download) {
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
     if on {
-        lock().failed.clear();
+        lock().turned_on();
     }
     #[cfg(not(target_arch = "wasm32"))]
     crs::set_grid_waiter(if on { Some(wait_for) } else { None });
@@ -132,15 +149,42 @@ enum Claim {
 /// Marks `name` as being downloaded by the caller, unless it is already, or it arrived or failed
 /// this run.
 fn claim(name: &str) -> Claim {
-    let mut s = lock();
-    if s.busy.contains(name) {
-        return Claim::Coming;
+    // On a computer, a grid is downloaded only if there is a folder to keep it in.
+    #[cfg(not(target_arch = "wasm32"))]
+    let can_keep = crs::grid_dir().is_some();
+    #[cfg(target_arch = "wasm32")]
+    let can_keep = true;
+    lock().claim(name, can_keep)
+}
+
+impl State {
+    /// [`claim`], on this state.
+    fn claim(&mut self, name: &str, can_keep: bool) -> Claim {
+        if self.busy.contains(name) {
+            return Claim::Coming;
+        }
+        if self.failed.contains(name) || self.got.contains(name) {
+            return Claim::Settled;
+        }
+        let refused = if !can_keep {
+            Some("RustGIS has no folder to keep it in".to_string())
+        } else if self.started >= MAX_GRIDS || self.bytes >= MAX_BYTES {
+            Some(format!(
+                "RustGIS downloads at most {MAX_GRIDS} grids each time the setting is turned on, and starts none once {} GB have arrived",
+                MAX_BYTES >> 30
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = refused {
+            self.failed.insert(name.to_string());
+            self.news.push(News::Failed { name: name.to_string(), error });
+            return Claim::Settled;
+        }
+        self.started += 1;
+        self.busy.insert(name.to_string());
+        Claim::Mine
     }
-    if s.failed.contains(name) || s.got.contains(name) {
-        return Claim::Settled;
-    }
-    s.busy.insert(name.to_string());
-    Claim::Mine
 }
 
 /// Records how `name`'s download went, and wakes those waiting for it.
@@ -149,6 +193,7 @@ fn finish(name: &str, outcome: Result<usize, String>) {
     s.busy.remove(name);
     match outcome {
         Ok(bytes) => {
+            s.bytes += bytes;
             s.got.insert(name.to_string());
             s.news.push(News::Got { name: name.to_string(), bytes });
         }
@@ -174,8 +219,48 @@ fn plain(name: &str) -> bool {
 /// Whether `bytes` are a datum grid file, as PROJ's grid server gives them: a GeoTIFF (classic or
 /// BigTIFF, either byte order), an NTv2 file or a CTable2 one. Anything else (an error page a
 /// network answered with) isn't kept, or it would count as the grid from then on.
+/// Its header is checked to lie within the bytes, so a cut-off answer isn't kept either.
 fn a_grid(bytes: &[u8]) -> bool {
-    [&b"II*\0"[..], b"MM\0*", b"II+\0", b"MM\0+", b"NUM_OREC", b"CTABLE V2"].iter().any(|m| bytes.starts_with(m))
+    let n = bytes.len() as u64;
+    let at = |i: usize, w: usize| i.checked_add(w).and_then(|end| bytes.get(i..end));
+    let int = |i: usize, w: usize, big: bool| {
+        at(i, w).map(|b| {
+            let mut v = [0u8; 8];
+            if big {
+                v[8 - w..].copy_from_slice(b);
+                u64::from_be_bytes(v)
+            } else {
+                v[..w].copy_from_slice(b);
+                u64::from_le_bytes(v)
+            }
+        })
+    };
+    match bytes.get(..4) {
+        // TIFF: the first directory (its entry count, and its entries) is within the file.
+        Some(b"II*\0") | Some(b"MM\0*") => {
+            let big = bytes[0] == b'M';
+            let Some(ifd) = int(4, 4, big) else { return false };
+            let Some(entries) = usize::try_from(ifd).ok().and_then(|i| int(i, 2, big)) else { return false };
+            ifd >= 8 && ifd + 2 + entries * 12 + 4 <= n && entries > 0
+        }
+        // BigTIFF: the same, with 8-byte offsets and counts.
+        Some(b"II+\0") | Some(b"MM\0+") => {
+            let big = bytes[0] == b'M';
+            let Some(ifd) = int(8, 8, big) else { return false };
+            let Some(entries) = usize::try_from(ifd).ok().and_then(|i| int(i, 8, big)) else { return false };
+            ifd >= 16 && entries > 0 && entries.checked_mul(20).and_then(|e| e.checked_add(ifd + 16)).is_some_and(|end| end <= n)
+        }
+        // NTv2: its overview header (11 records of 16 bytes), then at least one grid's header.
+        _ if bytes.starts_with(b"NUM_OREC") => n >= 2 * 176,
+        // CTable2: its 160-byte header, then the shifts it says it has (8 bytes each).
+        _ if bytes.starts_with(b"CTABLE V2") => {
+            let (Some(cols), Some(rows)) = (int(128, 4, false), int(132, 4, false)) else { return false };
+            cols > 0
+                && rows > 0
+                && cols.checked_mul(rows).and_then(|c| c.checked_mul(8)).and_then(|c| c.checked_add(160)).is_some_and(|end| end <= n)
+        }
+        _ => false,
+    }
 }
 
 /// Makes the downloaded bytes of `name` available: kept in the grid folder on a computer, then
@@ -307,6 +392,57 @@ mod tests {
         for bad in ["", "../a.tif", "a/b.tif", "a\\b.tif", ".hidden", "c:a.tif", "a b.tif"] {
             assert!(!plain(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_grid_file_is_whole_and_anything_else_is_refused() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/tests/data/grids/");
+        for name in ["us_noaa_conus.tif", "us_noaa_ethpgn.tif"] {
+            let bytes = std::fs::read(format!("{dir}{name}")).unwrap();
+            assert!(a_grid(&bytes), "{name}");
+            // Cut off before its first directory ends: not kept.
+            assert!(!a_grid(&bytes[..16]), "{name}");
+        }
+        // Only the leading bytes of one, or of another kind: not grids.
+        for bad in [&b"II*\0"[..], b"II*\0\xff\xff\xff\x7f", b"II+\0", b"NUM_OREC", b"CTABLE V2", b"<html>"] {
+            assert!(!a_grid(bad), "{bad:?}");
+        }
+        // A CTable2 header whose shifts are all there.
+        let mut ct = vec![0u8; 160];
+        ct[..9].copy_from_slice(b"CTABLE V2");
+        ct[128..132].copy_from_slice(&2u32.to_le_bytes());
+        ct[132..136].copy_from_slice(&3u32.to_le_bytes());
+        assert!(!a_grid(&ct));
+        ct.resize(160 + 2 * 3 * 8, 0);
+        assert!(a_grid(&ct));
+    }
+
+    #[test]
+    fn downloads_stop_at_the_limit_until_the_setting_is_turned_on_again() {
+        // A state of the test's own: the process's is the other tests' in this binary.
+        let mut s = State { started: MAX_GRIDS, ..Default::default() };
+        assert!(matches!(s.claim("a.tif", true), Claim::Settled));
+        let news = std::mem::take(&mut s.news);
+        assert!(matches!(&news[..], [News::Failed { name, error }] if name == "a.tif" && error.contains("at most 16 grids")), "{news:?}");
+        assert!(matches!(s.claim("a.tif", true), Claim::Settled), "not asked again");
+        s.turned_on();
+        assert!(matches!(s.claim("a.tif", true), Claim::Mine));
+        assert!(matches!(s.claim("a.tif", true), Claim::Coming));
+        // Once 2 GB have arrived, none is started.
+        let mut s = State { bytes: MAX_BYTES, ..Default::default() };
+        assert!(matches!(s.claim("b.tif", true), Claim::Settled));
+        // Nowhere to keep it: not downloaded, and said.
+        let mut s = State::default();
+        assert!(matches!(s.claim("c.tif", false), Claim::Settled));
+        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("no folder")));
+        // Hostile sizes don't overflow.
+        let mut ct = vec![0u8; 160];
+        ct[..9].copy_from_slice(b"CTABLE V2");
+        ct[128..136].fill(0xff);
+        assert!(!a_grid(&ct));
+        let mut big = b"II+\0\x08\0\0\0".to_vec();
+        big.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(!a_grid(&big));
     }
 
     #[test]

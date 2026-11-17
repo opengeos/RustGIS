@@ -3754,9 +3754,17 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
     group(ui, "Datum Grids", |ui| {
         let mut on = app.ui.download_grids;
-        let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tl!(
-            "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: delete the datum-grids folder in RustGIS's app data to stop using them."
-        ));
+        // The browser keeps what it downloads for the session; a computer, in a folder.
+        let tip = if cfg!(target_arch = "wasm32") {
+            tl!(
+                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use for this session when this is off."
+            )
+        } else {
+            tl!(
+                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: to stop using them, delete the datum-grids folder in RustGIS's app data and start RustGIS again (grids installed for PROJ are still used)."
+            )
+        };
+        let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tip);
         if resp.clicked() {
             let _ = app.run("ui.datumGrids", json!({"on": on}));
         }

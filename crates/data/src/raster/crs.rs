@@ -744,8 +744,15 @@ fn grid_folders() -> &'static std::sync::RwLock<Vec<std::path::PathBuf>> {
 /// ([`use_grid_folders`]). `None` before the app sets them, and in the browser, which registers
 /// the grids it fetches ([`register_grid`]).
 pub fn grid_dir() -> Option<std::path::PathBuf> {
+    if !KEEPS_FIRST.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
     grid_folders().read().unwrap_or_else(|e| e.into_inner()).first().cloned()
 }
+
+/// Whether the first grid folder is RustGIS's own, where downloads are kept: not when there is no
+/// app data folder, so a download never lands in PROJ's.
+static KEEPS_FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Reads datum grids from RustGIS's own folder (`datum-grids` in its app data), where it keeps the
 /// ones it downloads, then from those PROJ and terrio-crs use on this computer (`TERRIO_GRID_DIR`,
@@ -755,13 +762,14 @@ pub fn grid_dir() -> Option<std::path::PathBuf> {
 pub fn use_grid_folders() {
     #[cfg(not(target_family = "wasm"))]
     {
-        let mut dirs: Vec<std::path::PathBuf> = crate::dirs::app_data_dir().map(|d| d.join("datum-grids")).into_iter().collect();
+        let own = crate::dirs::app_data_dir().map(|d| d.join("datum-grids"));
+        let mut dirs: Vec<std::path::PathBuf> = own.iter().cloned().collect();
         for d in terrio_crs::default_grid_search_paths() {
             if !dirs.contains(&d) {
                 dirs.push(d);
             }
         }
-        set_grid_folders(dirs);
+        set_folders(dirs, own.is_some());
     }
 }
 
@@ -769,6 +777,12 @@ pub fn use_grid_folders() {
 /// ([`grid_dir`]), and builds transformers again with them. A grid named by a path in a definition
 /// (`+nadgrids=/data/a.gsb`) stays refused, so a file read can't make RustGIS read others.
 pub fn set_grid_folders(dirs: Vec<std::path::PathBuf>) {
+    set_folders(dirs, true);
+}
+
+/// [`set_grid_folders`], the first of `dirs` being where downloads are kept only if `keeps_first`.
+fn set_folders(dirs: Vec<std::path::PathBuf>, keeps_first: bool) {
+    KEEPS_FIRST.store(keeps_first, std::sync::atomic::Ordering::SeqCst);
     // The first setting up done (on whatever thread started it), so it can't put the folders
     // read before these after them.
     grids_set_up();

@@ -2568,8 +2568,6 @@ impl Session {
                 }
             }
         }
-        // The systems behind them, by definition, for downloading the grids a note says are missing.
-        let behind = self.systems_in_use();
         used.extend(codes.into_iter().filter_map(|code| rustgis_map::projection::lookup(code).ok()));
         used.extend(systems.into_iter().filter_map(definition_and_label));
         // By definition: two typed systems share a label ("Custom PROJ").
@@ -2585,6 +2583,8 @@ impl Session {
             let labels: Vec<String> = found.iter().map(|(_, label)| label.clone()).collect();
             // What gets the grids: the downloads started for them, when the user has them on,
             // else where to turn them on, where this front end has the setting.
+            // The systems behind them, by definition, for downloading the grids a note says are missing.
+            let behind = self.systems_in_use();
             let mut coming: Vec<String> = Vec::new();
             for (_, crs) in behind.iter().filter(|(def, _)| found.iter().any(|(d, _)| d == def)) {
                 for name in crate::grids::want(*crs) {

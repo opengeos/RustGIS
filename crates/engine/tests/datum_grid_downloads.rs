@@ -40,6 +40,8 @@ fn server(url: &str, _max: usize, _timeout: std::time::Duration) -> Result<Vec<u
 #[test]
 fn a_read_waits_for_the_grids_its_system_needs() {
     let root = std::env::temp_dir().join(format!("rustgis-grid-downloads-{}", std::process::id()));
+    // What a run with this process id that panicked may have left.
+    let _ = std::fs::remove_dir_all(&root);
     // Only a folder of the test's own: none from this computer (PROJ's).
     crs::set_grid_folders(vec![root.join("datum-grids")]);
     grids::set_download(server);
