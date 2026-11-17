@@ -43,7 +43,7 @@ ignored. Put `CARGO_TARGET_DIR` somewhere roomy: a sanitizer build of the engine
 
 A fuzzing build reads its memory limits at their floors (`memory::physical` is `None` under
 `cfg(fuzzing)`). Otherwise a header claiming a vast image may use a quarter of the computer's
-memory by design, which is over `-rss_limit_mb=2048` on any computer with more than 8 GB.
+memory by design, which is over `-rss_limit_mb=2048` on any computer with more than 8 GiB.
 
 CI runs `.github/workflows/fuzz.yml`: every target for ten minutes a night, and for a minute on a
 pull request labelled `ci:fuzz`. It runs libFuzzer in fork mode with `-ignore_crashes`,
