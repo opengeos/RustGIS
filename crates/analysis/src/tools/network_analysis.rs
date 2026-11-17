@@ -221,14 +221,20 @@ fn bands(cp: f64, cq: f64, c: f64, lp: Option<usize>, lq: Option<usize>, limits:
     out
 }
 
-/// The place a fraction `t` of the way from `a` to `b`, exactly `a` and `b` at the ends.
+/// The place a fraction `t` of the way from `a` to `b`, exactly `a` and `b` at the ends. A segment
+/// across ±180° is followed the short way, as it is measured, and each place written within
+/// −180° to 180°, as the line's own vertices are.
 fn along(a: Coord, b: Coord, t: f64) -> Coord {
     if t <= 0.0 {
         a
     } else if t >= 1.0 {
         b
     } else {
-        Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y))
+        let dx = b.x - a.x;
+        let dx = if dx.abs() > 180.0 { (dx + 180.0).rem_euclid(360.0) - 180.0 } else { dx };
+        let x = a.x + t * dx;
+        let x = if (-180.0..=180.0).contains(&x) { x } else { (x + 180.0).rem_euclid(360.0) - 180.0 };
+        Coord::new(x, a.y + t * (b.y - a.y))
     }
 }
 
@@ -424,10 +430,11 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     );
     // Ids stored wrapped (a GeoPackage's negative ones) read back as they were written.
     let id = |v: u64| Value::Int(v.cast_signed());
-    let mut unreached = 0usize;
+    // Summed wide: origins by destinations can pass a 32-bit count in the browser.
+    let mut unreached = 0u64;
     for ((oid, _), (row, missed)) in origins.iter().zip(&found) {
         crate::control::check()?;
-        unreached += missed;
+        unreached = unreached.saturating_add(u64::try_from(*missed).unwrap_or(u64::MAX));
         for (rank, &(j, cost, length)) in row.iter().enumerate() {
             let did = destinations.get(j).map_or(Value::Null, |(d, _)| id(*d));
             out.push(None, vec![id(*oid), did, Value::Int(rank as i64 + 1), Value::Float(cost / unit_m), Value::Float(length / unit_m)]);
@@ -570,6 +577,30 @@ mod tests {
         };
         assert!((east_end(first) - 0.008).abs() < 1e-6, "{}", east_end(first));
         assert!(east_end(second) > 0.029, "the second shop reaches the end of the costly line: {}", east_end(second));
+    }
+
+    /// A part of a segment across ±180° runs the short way, near the antimeridian, not round the
+    /// world; segments elsewhere are interpolated as before.
+    #[test]
+    fn a_segment_across_the_antimeridian_is_cut_the_short_way() {
+        let mid = along(c(179.99, 0.0), c(-179.99, 0.0), 0.25);
+        assert!((mid.x - 179.995).abs() < 1e-9, "{mid:?}");
+        let over = along(c(179.99, 0.0), c(-179.99, 0.0), 0.75);
+        assert!((over.x + 179.995).abs() < 1e-9, "{over:?}");
+        assert_eq!(along(c(1.0, 2.0), c(3.0, 4.0), 0.5), c(2.0, 3.0));
+        let mut lines = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        lines.push(Some(Geometry::Line(vec![vec![c(179.99, 0.0), c(-179.99, 0.0)]])), vec![]);
+        let inputs = map(vec![lines, points("shops", &[Some(c(179.99, 0.0))])]);
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "0.5"})).unwrap();
+        let xs: Vec<f64> = dataset(&r)
+            .features
+            .iter()
+            .flat_map(|f| match &f.geometry {
+                Some(Geometry::Line(p)) => p.iter().flatten().map(|q| q.x).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(!xs.is_empty() && xs.iter().all(|x| x.abs() > 179.98), "{xs:?}");
     }
 
     /// Two facilities at one place in the middle of a line: the first has every part reached from
