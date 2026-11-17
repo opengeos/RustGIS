@@ -5,7 +5,7 @@
 
 use std::io::Cursor;
 
-use calamine::{Data, ExcelDateTime, ExcelDateTimeType, Reader, Sheets, open_workbook_auto_from_rs};
+use calamine::{Data, ExcelDateTime, ExcelDateTimeType, Reader, Sheets, Xls, open_workbook_auto_from_rs, open_workbook_from_rs};
 
 use crate::io::{Columns, CsvOptions, columns_of, read_rows};
 use crate::{DataError, Dataset, Field, FieldType, ReadReport, Result};
@@ -28,10 +28,10 @@ pub fn is_sheet_name(name: &str) -> bool {
 
 /// The sheets of a workbook, in order.
 pub fn sheet_names(bytes: &[u8]) -> Result<Vec<String>> {
-    check_expansion(bytes)?;
+    let zip_checked = check_expansion(bytes)?;
     check_compound(bytes)?;
     guarded(|| {
-        let wb = open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))?;
+        let wb = open_checked(bytes, zip_checked)?;
         Ok(wb.sheet_names())
     })
 }
@@ -87,14 +87,24 @@ struct Grid {
 }
 
 fn grid(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
-    check_expansion(bytes)?;
+    let zip_checked = check_expansion(bytes)?;
     check_compound(bytes)?;
-    guarded(|| grid_unguarded(bytes, sheet))
+    guarded(|| grid_unguarded(open_checked(bytes, zip_checked)?, sheet))
+}
+
+fn open_checked(bytes: &[u8], zip_checked: bool) -> Result<Sheets<Cursor<&[u8]>>> {
+    let reader = Cursor::new(bytes);
+    if zip_checked {
+        open_workbook_auto_from_rs(reader).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))
+    } else {
+        // Embedded ZIP signatures may occur in XLS data. If ZIP preflight did not pass,
+        // never let format detection retry the same bytes as a ZIP-based workbook.
+        open_workbook_from_rs::<Xls<_>, _>(reader).map(Sheets::Xls).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))
+    }
 }
 
 /// Reads a bounded workbook grid, retaining date types from cells rather than guessing ISO text.
-fn grid_unguarded(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
-    let mut wb = open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))?;
+fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<Grid> {
     let names = wb.sheet_names();
     let pick = match sheet.map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => names
@@ -196,11 +206,11 @@ fn grid_unguarded(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
 
 /// Check every ZIP member before calamine opens it, without suffix or case filters. ODS
 /// eagerly materializes every sheet in its constructor, even for a names-only read. Cancel is
-/// looked at between members; inflating one member isn't interrupted.
-fn check_expansion(bytes: &[u8]) -> Result<()> {
+/// looked at between members; inflating one member isn't interrupted. `false` permits only XLS.
+fn check_expansion(bytes: &[u8]) -> Result<bool> {
     use crate::zip::Failure;
     if !bytes.windows(4).any(|b| b == b"PK\x03\x04") {
-        return Ok(());
+        return Ok(false);
     }
     let entries = match crate::zip::read_all_within(bytes, crate::zip::MAX_TOTAL) {
         Ok(entries) => entries,
@@ -208,7 +218,7 @@ fn check_expansion(bytes: &[u8]) -> Result<()> {
         // An .xls can hold these signatures in its data (an embedded workbook, a stray run of
         // bytes): check_compound judges it. A member of an archive that does read is refused
         // whatever precedes it.
-        Err(Failure::Layout(_)) if bytes.starts_with(COMPOUND) => return Ok(()),
+        Err(Failure::Layout(_)) if bytes.starts_with(COMPOUND) => return Ok(false),
         Err(Failure::Layout(m) | Failure::Member(m)) => return Err(DataError::Format(format!("spreadsheet: {m}"))),
     };
     let is_ods = entries
@@ -220,7 +230,7 @@ fn check_expansion(bytes: &[u8]) -> Result<()> {
             ods::check(&data, MAX_CELLS, crate::zip::MAX_TOTAL)?;
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The signature of a compound file (`.xls`).
@@ -914,6 +924,15 @@ mod tests {
     }
 
     #[test]
+    fn ods_error_cell_text_counts_against_the_expansion_limit() {
+        let xml = r#"<table:table table:name="S"><table:table-row><table:table-cell office:string-value="message"/></table:table-row><table:table-row><table:table-cell office:string-value="" calcext:value-type="error"><text:p>bad<text:s text:c="2"/>value</text:p></table:table-cell></table:table-row></table:table>"#;
+        assert!(ods::check(xml.as_bytes(), 2, 12).unwrap_err().to_string().contains("too large"));
+        let (ds, report) = read(&ods(xml), "book", None, &CsvOptions::default()).unwrap();
+        assert_eq!(ds.value(0, 0), &Value::Text("bad  value".into()));
+        assert!(report.messages.is_empty());
+    }
+
+    #[test]
     fn ordinary_repeats_preambles_and_mixed_case_members_keep_values_and_notices() {
         for null in [false, true] {
             let note = if null { "&lt;Null&gt;" } else { " kept " };
@@ -1366,6 +1385,21 @@ mod tests {
         for e in [sheet_names(&book).err(), columns(&book, None, None).err()].into_iter().flatten() {
             assert!(!e.to_string().contains("zip archive"), "{e}");
         }
+    }
+
+    #[test]
+    fn unchecked_zip_does_not_open_through_the_xls_fallback() {
+        let workbook = xlsx(&[("S", &[&["name"], &["city"]])]);
+        let mut end = crate::zip::write(&[]).unwrap();
+        // A second directory declaration whose offset leaves no room for a central header.
+        end[8..12].copy_from_slice(&[1, 0, 1, 0]);
+        end[16..20].copy_from_slice(&((workbook.len() - 1) as u32).to_le_bytes());
+        let ambiguous = [workbook.as_slice(), &end].concat();
+        assert!(matches!(sheet_names(&ambiguous), Err(DataError::Format(m)) if m.contains("ambiguous")));
+        let compound = [COMPOUND, &ambiguous].concat();
+        assert!(matches!(sheet_names(&compound), Err(DataError::Format(_))));
+        assert!(matches!(columns(&compound, None, None), Err(DataError::Format(_))));
+        assert!(matches!(read(&compound, "book", None, &CsvOptions::default()), Err(DataError::Format(_))));
     }
 
     /// ZIP64 and entry-count refusals aren't deferred to the compound checks: a ZIP64 workbook

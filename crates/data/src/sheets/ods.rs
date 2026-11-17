@@ -75,6 +75,8 @@ impl Cell {
                     cell.occupied = true; // Even String("") differs from calamine's Empty.
                     cell.string = true;
                 }
+                // Calamine also reads element text for error cells with an empty string value.
+                "calcext:value-type" if a.value.as_ref() == "error" => cell.string = true,
                 "table:formula" => {
                     cell.occupied |= !a.value.is_empty();
                     cell.bytes = add(cell.bytes, a.value.len(), crate::zip::MAX_TOTAL)?;
