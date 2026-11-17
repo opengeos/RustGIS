@@ -4702,7 +4702,11 @@ fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map:
             }
         });
         col(ui, |ui| {
-            let mut c = crate::theme::c32(layer.renderer.base_symbol().fill);
+            // A fill No Fill hides shows the opacity Restore Fill gives back, so a colour picked
+            // here is drawn (#2308).
+            let fill = layer.renderer.base_symbol().fill;
+            let shown = rustgis_engine::cmd::layer::hidden_fill_opacity(layer, None);
+            let mut c = crate::theme::c32(shown.map_or(fill, |a| fill.with_alpha(a)));
             ui.horizontal(|ui| {
                 let resp = crate::widgets::color_button(ui, &mut c);
                 if resp.changed() {
@@ -5757,6 +5761,32 @@ mod tests {
         assert_eq!(color(h.state()), before);
         h.state_mut().run("edit.redo", json!(null)).unwrap();
         assert_eq!(color(h.state()), after);
+    }
+
+    /// A colour picked in the Fill swatch after No Fill is drawn at the opacity No Fill hid, not
+    /// kept at No Fill's 0 (#2308).
+    #[test]
+    fn a_fill_picked_after_no_fill_is_drawn() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let fill = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill;
+        let before = fill(h.state());
+        h.get_by_label("No Fill").click();
+        h.run();
+        assert_eq!(fill(h.state()).a(), 0);
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        // The picker's R/G/B/A numbers come first, then Outline: a new red.
+        let red = if before.r() == 200 { "100" } else { "200" };
+        type_into(&mut h, 0, red);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let after = fill(h.state());
+        assert_eq!(after.r().to_string(), red, "the colour picked");
+        assert_eq!(after.a(), before.a(), "drawn at the opacity No Fill hid");
+        assert!(h.state().session.map().layer(id).unwrap().no_fill.is_none());
     }
 
     /// Focuses the harness's `nth` number to type into it, and types `text` over its value.

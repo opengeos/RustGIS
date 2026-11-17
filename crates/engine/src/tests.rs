@@ -35672,6 +35672,56 @@ fn no_fill_layer(mixed: bool) -> (Session, u32) {
     (s, id)
 }
 
+/// While No Fill hides the fills, a swatch shows the opacity Restore Fill gives back
+/// (`hidden_fill_opacity`): a colour picked from it is drawn, and No Fill and Restore Fill work on
+/// it as before, for the layer's symbol and a class's alike (#2308). A fill No Fill doesn't hide
+/// by its opacity (a mixed layer's), or one shown since, is shown as it is.
+#[test]
+fn a_swatch_shows_the_opacity_no_fill_hid() {
+    use crate::cmd::layer::hidden_fill_opacity;
+    use rustgis_map::symbology::ClassRef;
+    // The layer's symbol, as the Fill swatches pick it.
+    let mut s = world();
+    let id = s.map().layer_by_name("Countries").unwrap().id;
+    let fill = |s: &Session| s.map().layer(id).unwrap().renderer.base_symbol().fill;
+    let opacity = fill(&s).a();
+    assert!(opacity > 0);
+    assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), None), None, "nothing hidden");
+    s.run("layer.noFill", &json!({"layer": id})).unwrap();
+    assert_eq!(fill(&s).a(), 0);
+    let shown = hidden_fill_opacity(s.map().layer(id).unwrap(), None);
+    assert_eq!(shown, Some(opacity));
+    // A hue picked in the swatch keeps the opacity it shows.
+    let red = rustgis_map::Rgba::from_hex("#ff0000").unwrap().with_alpha(opacity);
+    s.run("layer.color", &json!({"layer": id, "color": red.hex8()})).unwrap();
+    assert_eq!(fill(&s), red);
+    assert!(s.map().layer(id).unwrap().no_fill.is_none());
+    s.run("layer.noFill", &json!({"layer": id})).unwrap();
+    s.run("layer.restoreFill", &json!({"layer": id})).unwrap();
+    assert_eq!(fill(&s), red, "No Fill and Restore Fill as before");
+    // A class's, as its swatch in the Symbology pane picks it.
+    let (mut s, id) = no_fill_layer(false);
+    let class = ClassRef::Value("c".into());
+    let class_fill = |s: &Session| {
+        let mut r = s.map().layer(id).unwrap().renderer.clone();
+        let mut fills = Vec::new();
+        r.map_symbols(|sym| fills.push(sym.fill));
+        fills[2]
+    };
+    let opacity = class_fill(&s).a();
+    s.run("layer.noFill", &Value::Null).unwrap();
+    assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), Some(&class)), Some(opacity));
+    let red = rustgis_map::Rgba::from_hex("#ff0000").unwrap().with_alpha(opacity);
+    s.run("layer.classStyle", &json!({"value": "c", "color": red.hex8()})).unwrap();
+    assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), Some(&class)), None, "shown since: as it is");
+    s.run("layer.restoreFill", &Value::Null).unwrap();
+    assert_eq!(class_fill(&s), red);
+    // A mixed layer's No Fill lays a transparent fill over the symbols, whose opacity is their own.
+    let (mut s, id) = no_fill_layer(true);
+    s.run("layer.noFill", &Value::Null).unwrap();
+    assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), None), None);
+}
+
 /// No Fill again while it is on changes nothing, so it is no step: redo, undo and the saved state
 /// are left as they were.
 #[test]

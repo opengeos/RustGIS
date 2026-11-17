@@ -4643,7 +4643,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(6.0);
     }
     match &l.renderer {
-        Renderer::Single(s) => symbol_editor(app, ui, *s, g, t),
+        Renderer::Single(s) => symbol_editor(app, ui, *s, rustgis_engine::cmd::layer::hidden_fill_opacity(&l, None), g, t),
         Renderer::Unique { field, classes, ramp, expression, .. } => {
             field_combo(app, ui, "Field", if expression.is_some() { tl!("(expression)") } else { field.as_str() }, &all, "unique");
             // Or by an expression's values: blank goes back to the field.
@@ -4695,7 +4695,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         Renderer::Proportional { field, base, .. } => {
             field_combo(app, ui, "Field", field, &numeric, "proportional");
-            symbol_editor(app, ui, *base, g, t);
+            symbol_editor(app, ui, *base, rustgis_engine::cmd::layer::hidden_fill_opacity(&l, None), g, t);
             legend_list(app, ui, &l, t);
         }
     }
@@ -5354,7 +5354,10 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 };
                 ui.horizontal(|ui| {
                     // Construct hue independently of alpha: Color32 discards hidden RGB at zero.
+                    // A fill No Fill hides shows the opacity Restore Fill gives back, so a colour
+                    // picked here is drawn (#2308).
                     let fill = e.symbol.fill;
+                    let fill = rustgis_engine::cmd::layer::hidden_fill_opacity(l, Some(class_ref)).map_or(fill, |a| fill.with_alpha(a));
                     let mut hsva = egui::ecolor::Hsva::from_srgb([fill.r(), fill.g(), fill.b()]);
                     hsva.a = f32::from(fill.a()) / 255.0;
                     let alpha = hsva.a;
@@ -5508,7 +5511,10 @@ fn manual_breaks(app: &mut RustGisApp, ui: &mut Ui, field: &str, breaks: &[f64],
     }
 }
 
-fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, t: &Tokens) {
+/// `hidden`: the opacity of a fill No Fill hides, which its swatch shows ([`hidden_fill_opacity`]).
+///
+/// [`hidden_fill_opacity`]: rustgis_engine::cmd::layer::hidden_fill_opacity
+fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, hidden: Option<u8>, g: GeometryType, t: &Tokens) {
     egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -5521,7 +5527,7 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
             if g != GeometryType::Polyline {
                 // The same name as the ribbon's Drawing group gives this `layer.color` button.
                 ui.label(tl!("Fill"));
-                let mut c = c32(s.fill);
+                let mut c = c32(hidden.map_or(s.fill, |a| s.fill.with_alpha(a)));
                 let resp = crate::widgets::color_button(ui, &mut c);
                 if resp.changed() {
                     crate::widgets::one_step_per_press(app, &resp);

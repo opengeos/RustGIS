@@ -1276,6 +1276,43 @@ pub(crate) fn renderer_with_fills(l: &rustgis_map::Layer) -> (Renderer, usize) {
     (r, left_out)
 }
 
+/// The opacity a colour swatch shows for a fill No Fill made transparent: the one Restore Fill
+/// would give it back (the default when that wasn't kept), so that a colour picked from the
+/// swatch is drawn, not kept at No Fill's 0 (#2308). The layer's base symbol, or `class`'s.
+/// `None` for a fill No Fill doesn't hide that way, which the swatch shows as it is.
+pub fn hidden_fill_opacity(l: &rustgis_map::Layer, class: Option<&ClassRef>) -> Option<u8> {
+    if l.no_fill != Some(NoFill::Symbols) {
+        return None;
+    }
+    let a = match class {
+        // A class's, in place: the Symbology pane asks for each of its rows every frame.
+        Some(c) => {
+            let (now, count) = match (&l.renderer, c) {
+                (Renderer::Unique { classes, .. }, ClassRef::Value(v)) => {
+                    (classes.iter().find(|(k, _)| k == v).map(|(_, s)| s.fill.a()), classes.len() + 1)
+                }
+                (Renderer::Unique { classes, other, .. }, ClassRef::Other) => (Some(other.fill.a()), classes.len() + 1),
+                (Renderer::Graduated { symbols, .. }, ClassRef::Index(i)) => (symbols.get(*i).map(|s| s.fill.a()), symbols.len()),
+                _ => (None, 0),
+            };
+            // A fill shown since (given a colour of its own while No Fill was on) is drawn as it is.
+            if now? > 0 {
+                return None;
+            }
+            // Kept only while they still match the symbols, as Restore Fill needs.
+            let kept = l.hidden_fills.as_ref().map(|h| h.alphas.as_slice()).filter(|a| a.len() == count);
+            symbol_position(&l.renderer, c).and_then(|i| kept?.get(i).copied()).unwrap_or(0)
+        }
+        None => {
+            if l.renderer.base_symbol().fill.a() > 0 {
+                return None;
+            }
+            renderer_with_fills(l).0.base_symbol().fill.a()
+        }
+    };
+    Some(if a > 0 { a } else { shown_fill_alpha() })
+}
+
 /// The layer's own fill layers No Fill hid come back unless it has fill layers of its own now;
 /// those stay, and a note says the hidden ones weren't put back.
 fn put_back_layer_fills(l: &mut rustgis_map::Layer, fills: Vec<rustgis_map::fills::FillLayer>, notes: &mut Vec<String>) {
