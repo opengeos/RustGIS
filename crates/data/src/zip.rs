@@ -139,6 +139,15 @@ pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(S
 
 /// [`read_matching`] within `budget` inflated bytes in all (at most [`MAX_TOTAL`]).
 pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_within(bytes, |name| !name.ends_with('/') && want(name), budget)
+}
+
+/// All members, including directory payloads: spreadsheet relationships may name any member.
+pub(crate) fn read_all_within(bytes: &[u8], budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_within(bytes, |_| true, budget)
+}
+
+fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut budget = budget.min(MAX_TOTAL);
     let bad = || "not a zip archive (or a damaged one)".to_string();
     // The end-of-central-directory record is in the last 64 KiB + 22 bytes.
@@ -161,6 +170,21 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         return Err(format!("the archive holds {count} entries; at most {MAX_ENTRIES} can be read"));
     }
     let mut p = u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?).ok_or_else(bad)?;
+    // Like calamine's ZIP reader, allow a preamble whose bytes weren't included in the
+    // recorded offsets, as well as archives whose offsets already include those bytes.
+    let central_size = u32_at(bytes, add(&[eocd, 12]).ok_or_else(bad)?).ok_or_else(bad)?;
+    let abutting = eocd.checked_sub(central_size).filter(|start| *start >= p);
+    let central = if count == 0 {
+        p
+    } else if let Some(start) = abutting.filter(|start| u32_at(bytes, *start) == Some(0x0201_4B50)) {
+        start
+    } else {
+        // A digital-signature trailer may separate the directory from EOCD. Match
+        // calamine's ZIP lookup: otherwise take the first central header from p.
+        (p..eocd).find(|start| u32_at(bytes, *start) == Some(0x0201_4B50)).ok_or_else(bad)?
+    };
+    let offset = central.checked_sub(p).ok_or_else(bad)?;
+    p = central;
     let mut out = Vec::new();
     for _ in 0..count {
         if u32_at(bytes, p) != Some(0x0201_4B50) {
@@ -177,7 +201,7 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         let local = u32_at(bytes, at(42)?).ok_or_else(bad)?;
         let name = String::from_utf8_lossy(bytes.get(at(46)?..add(&[p, 46, nl]).ok_or_else(bad)?).ok_or_else(bad)?).to_string();
         p = add(&[p, 46, nl, xl, cl]).ok_or_else(bad)?;
-        if name.ends_with('/') || !want(&name) {
+        if !want(&name) {
             continue;
         }
         // Say what's wrong first: an encrypted entry or a ZIP64 one isn't damaged data.
@@ -187,6 +211,7 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         if csize == 0xFFFF_FFFF || usize_ == 0xFFFF_FFFF || local == 0xFFFF_FFFF {
             return Err("the archive uses ZIP64, which can't be read yet".into());
         }
+        let local = local.checked_add(offset).ok_or_else(bad)?;
         let lnl = u16_at(bytes, add(&[local, 26]).ok_or_else(bad)?).ok_or_else(bad)?;
         let lxl = u16_at(bytes, add(&[local, 28]).ok_or_else(bad)?).ok_or_else(bad)?;
         let data_at = add(&[local, 30, lnl, lxl]).ok_or_else(bad)?;
