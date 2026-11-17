@@ -483,7 +483,7 @@ fn start(app: &mut RustGisApp, mut asked: Asked, p: Value) -> Result<Value, Stri
             }
             let ahead = work.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             let read =
-                ahead.ok_or_else(|| tl!("This read was already started").to_string()).and_then(|ahead| ahead.run_on_its_thread(&ctl));
+                ahead.ok_or_else(|| tl!("This read was already started").to_string()).and_then(|ahead| ahead.run_waiting_for_grids(&ctl));
             *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read);
         })
     };

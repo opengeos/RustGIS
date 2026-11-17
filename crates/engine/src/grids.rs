@@ -3,12 +3,13 @@
 //! server (`https://cdn.proj.org/`), as `projsync` would get them. On a computer they are kept in
 //! RustGIS's grid folder ([`crs::grid_dir`]) and read from there on later runs; in the browser they
 //! are registered for the run ([`crs::register_grid`]). terrio-crs's own network stays off: a grid
-//! is only ever asked for here, never while a frame is drawn.
+//! is only ever asked for here. The frame path may start a download (the session asks for the
+//! grids of the systems in use), but it runs on a thread of its own: a frame never waits for one.
 //!
 //! A file read on a thread of its own waits for its system's grids before its features are
-//! converted ([`crate::cmd::reads::ReadAhead::run_on_its_thread`]), so they land where the grid puts
+//! converted ([`crate::cmd::reads::ReadAhead::run_waiting_for_grids`]), so they land where the grid puts
 //! them. Elsewhere a download starts in the background, and the session says what it brought:
-//! rasters, streamed layers and the map follow at once, while a layer read before keeps the places
+//! rasters, streamed layers and the map follow at once, while a layer read whole before keeps the places
 //! it was given until it is opened again (it is held in longitude/latitude).
 
 use rustgis_data::raster::Crs;
@@ -219,6 +220,9 @@ impl State {
         // Checked before anything is asked of the server: only PROJ's plain names are.
         let refused = if !plain(name) {
             Some("its name isn't a plain file name".to_string())
+        } else if !name.ends_with(".tif") {
+            // The server's other files (deformation models, point lists) aren't grids RustGIS reads.
+            Some("RustGIS downloads PROJ's GeoTIFF grids only".to_string())
         } else if !can_keep {
             Some("RustGIS has no folder to keep it in".to_string())
         } else if self.started >= MAX_GRIDS || self.bytes >= MAX_BYTES {
@@ -258,10 +262,13 @@ impl State {
     }
 }
 
+/// Why a grid isn't downloaded that trying again doesn't change.
+const FINAL: [&str; 3] = ["its name isn't a plain file name", "RustGIS has no folder", "RustGIS downloads PROJ's GeoTIFF grids only"];
+
 /// Why a grid past the limits isn't downloaded.
 fn limit_text() -> String {
     format!(
-        "RustGIS downloads at most {MAX_GRIDS} grids each time the setting is turned on, and starts none once {} GB have arrived",
+        "RustGIS downloads at most {MAX_GRIDS} grids each time the setting is turned on, and starts none once {} GB of grids have been kept",
         MAX_BYTES >> 30
     )
 }
@@ -298,9 +305,9 @@ fn plain(name: &str) -> bool {
 }
 
 /// Whether `bytes` are a datum grid file, as PROJ's grid server gives them: a GeoTIFF (classic or
-/// BigTIFF, either byte order), an NTv2 file or a CTable2 one. Anything else (an error page a
-/// network answered with) isn't kept, or it would count as the grid from then on.
-/// Its header is checked to lie within the bytes, so a cut-off answer isn't kept either.
+/// BigTIFF, either byte order; the server's grids are all GeoTIFFs, [`claim`]). Anything else (an
+/// error page a network answered with) isn't kept, or it would count as the grid from then on.
+/// Every part of it is checked to lie within the bytes, so a cut-off answer isn't kept either.
 fn a_grid(bytes: &[u8]) -> bool {
     let n = bytes.len() as u64;
     let at = |i: usize, w: usize| i.checked_add(w).and_then(|end| bytes.get(i..end));
@@ -319,17 +326,8 @@ fn a_grid(bytes: &[u8]) -> bool {
     match bytes.get(..4) {
         // TIFF and BigTIFF: every directory, and the strips or tiles each points to, within the
         // file, so one cut off anywhere is refused.
-        Some(b"II*\0") | Some(b"MM\0*") => tiff_whole(&int, n, bytes[0] == b'M', false),
-        Some(b"II+\0") | Some(b"MM\0+") => tiff_whole(&int, n, bytes[0] == b'M', true),
-        // NTv2: its overview header (11 records of 16 bytes), then at least one grid's header.
-        _ if bytes.starts_with(b"NUM_OREC") => n >= 2 * 176,
-        // CTable2: its 160-byte header, then the shifts it says it has (8 bytes each).
-        _ if bytes.starts_with(b"CTABLE V2") => {
-            let (Some(cols), Some(rows)) = (int(128, 4, false), int(132, 4, false)) else { return false };
-            cols > 0
-                && rows > 0
-                && cols.checked_mul(rows).and_then(|c| c.checked_mul(8)).and_then(|c| c.checked_add(160)).is_some_and(|end| end <= n)
-        }
+        Some(b"II*\0") | Some(b"MM\0*") => tiff_whole(&int, n, bytes.first() == Some(&b'M'), false),
+        Some(b"II+\0") | Some(b"MM\0+") => tiff_whole(&int, n, bytes.first() == Some(&b'M'), true),
         _ => false,
     }
 }
@@ -566,21 +564,22 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
         let (grids, it) = if got.len() == 1 { ("grid", "it") } else { ("grids", "them") };
         out.push((
             format!(
-                "Downloaded the datum {grids} {} from PROJ's grid server: places in the coordinate systems that use {it} are now where PROJ puts them with {it}. Layers opened before keep their places until they are opened again.",
+                "Downloaded the datum {grids} {} from PROJ's grid server: streamed layers, rasters and the map now place features with {it}, as PROJ does; layers read whole before keep their places until they are opened again.",
                 got.join(", ")
             ),
             false,
         ));
     }
-    if !failed.is_empty() {
+    if let Some(first) = failed.first() {
+        // Trying again helps a download that failed, not one RustGIS won't make (a name it
+        // doesn't download, no folder to keep it in).
+        let again = why.iter().any(|(e, _)| !FINAL.iter().any(|f| e.starts_with(f)));
+        let again = if again { "; turn Download Datum Grids off and on again to try again" } else { "" };
         let text = if count == 1 {
-            format!(
-                "The datum grid {} couldn't be downloaded, so the next transformation is used without it; turn Download Datum Grids off and on again to try again.",
-                failed[0]
-            )
+            format!("The datum grid {first} couldn't be downloaded, so the next transformation is used without it{again}.")
         } else {
             format!(
-                "{count} datum grids couldn't be downloaded: {}, so the next transformations are used without them; turn Download Datum Grids off and on again to try again.",
+                "{count} datum grids couldn't be downloaded: {}, so the next transformations are used without them{again}.",
                 failed.join("; ")
             )
         };
@@ -621,14 +620,13 @@ mod tests {
         for bad in [&b"II*\0"[..], b"II*\0\xff\xff\xff\x7f", b"II+\0", b"NUM_OREC", b"CTABLE V2", b"<html>"] {
             assert!(!a_grid(bad), "{bad:?}");
         }
-        // A CTable2 header whose shifts are all there.
-        let mut ct = vec![0u8; 160];
+        // A whole NTv2 or CTable2 file isn't one: PROJ's grid server has GeoTIFFs only, and the
+        // grids RustGIS reads from it are those.
+        let mut ct = vec![0u8; 160 + 2 * 3 * 8];
         ct[..9].copy_from_slice(b"CTABLE V2");
         ct[128..132].copy_from_slice(&2u32.to_le_bytes());
         ct[132..136].copy_from_slice(&3u32.to_le_bytes());
         assert!(!a_grid(&ct));
-        ct.resize(160 + 2 * 3 * 8, 0);
-        assert!(a_grid(&ct));
     }
 
     #[test]
@@ -675,11 +673,11 @@ mod tests {
         let mut s = State::default();
         assert!(matches!(s.claim("c.tif", false), Claim::Settled));
         assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("no folder")));
+        // A name not a GeoTIFF's (a deformation model): not asked for.
+        let mut s = State::default();
+        assert!(matches!(s.claim("nz_linz_nzgd2000-20180701.json", true), Claim::Settled));
+        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("GeoTIFF grids only")));
         // Hostile sizes don't overflow.
-        let mut ct = vec![0u8; 160];
-        ct[..9].copy_from_slice(b"CTABLE V2");
-        ct[128..136].fill(0xff);
-        assert!(!a_grid(&ct));
         let mut big = b"II+\0\x08\0\0\0".to_vec();
         big.extend_from_slice(&u64::MAX.to_le_bytes());
         assert!(!a_grid(&big));
@@ -704,6 +702,10 @@ mod tests {
         assert_eq!(said.len(), 2, "{said:?}");
         assert!(said[0].0.contains("grids a.tif (1 KB), c.tif (2 KB)") && !said[0].1, "{said:?}");
         assert!(said[1].0.starts_with("2 datum grids couldn't be downloaded: b.tif (HTTP 404); d.tif (HTTP 500)") && said[1].1, "{said:?}");
+        assert!(said[1].0.contains("off and on again"), "{said:?}");
+        // Where trying again doesn't help, it isn't offered.
+        let said = news_texts(&[News::Failed { name: "c.tif".into(), error: "RustGIS has no folder to keep it in".into() }]);
+        assert!(!said[0].0.contains("off and on again"), "{said:?}");
         // A reason given once for its grids, a few named.
         let limit: Vec<News> = (0..5).map(|i| News::Failed { name: format!("g{i}.tif"), error: limit_text() }).collect();
         let said = news_texts(&limit);

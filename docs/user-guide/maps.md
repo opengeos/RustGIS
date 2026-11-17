@@ -650,7 +650,8 @@ accurate transformation needs a grid that isn't there takes the next PROJ lists 
 without `us_noaa_conus.tif`: up to about 10 m off), and says so once.
 
 **Settings › Datum Grids › Download Datum Grids** (off by default, in the desktop and web apps)
-downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly licensed grids):
+downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly licensed GeoTIFF
+grids, the form all its grids have there):
 
 - On the desktop, a file read then waits for its systems' grids before its features are placed, up
   to two minutes in all, and stops waiting when you cancel it; the download goes on. In the web
@@ -664,7 +665,7 @@ downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly
   computer, delete the `datum-grids` folder and start RustGIS again to stop using them (grids
   installed for PROJ are still used). The web app keeps a grid for the session only.
 - Grids are downloaded three at a time, those a file read waits for first: at most 16 each time
-  the setting is turned on, and none is started once 2 GB have arrived; past that, the grid is said
+  the setting is turned on, and none is started once 2 GB of grids have been kept; past that, the grid is said
   to be not downloaded. Turning the setting off drops those not started yet.
 
 RustGIS supports a subset of Esri's projected systems, checked against

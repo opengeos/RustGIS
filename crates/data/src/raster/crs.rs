@@ -760,7 +760,7 @@ static KEEPS_FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// PROJ count. Called by the desktop app, the command line and Python as they start; nothing in
 /// the browser, which has no folders.
 pub fn use_grid_folders() {
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let own = crate::dirs::app_data_dir().map(|d| d.join("datum-grids"));
         let mut dirs: Vec<std::path::PathBuf> = own.iter().cloned().collect();
@@ -843,9 +843,11 @@ pub fn missing_grids(crs: Crs) -> Vec<MissingGrid> {
 /// Whether RustGIS downloads `grid`: one it doesn't have and needs (not optional), the file itself
 /// on PROJ's grid server (the only server it contacts for them) under an open licence. A
 /// definition read from a file can name any grid PROJ knows: this keeps what it can make RustGIS
-/// fetch to PROJ's own, freely licensed grids.
+/// fetch to PROJ's own, freely licensed grids. Only its GeoTIFF grids: the server's other files
+/// (deformation models, point lists) aren't grids RustGIS downloads.
 fn downloadable(grid: &terrio_crs::GridUse) -> bool {
     !grid.available
+        && grid.name.ends_with(".tif")
         && !grid.optional
         && grid.direct_download
         && grid.open_license
@@ -1896,6 +1898,8 @@ mod tests {
                 false,
             ),
             grid("../a.tif", Some("https://cdn.proj.org/us_noaa_conus.tif"), true, true, false, false),
+            // On the server, but not a GeoTIFF grid.
+            grid("nz_linz_nzgd2000-20180701.json", Some("https://cdn.proj.org/nz_linz_nzgd2000-20180701.json"), true, true, false, false),
             grid("a.tif", Some("http://cdn.proj.org/a.tif"), true, true, false, false),
         ] {
             assert!(!downloadable(&g), "{g:?}");

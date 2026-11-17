@@ -29,7 +29,8 @@ fn a_grid_in_the_grid_folder_is_used_once_it_is_there() {
     let generation = crs::grid_generation();
     // Texas South Central on NAD27, whose best transformation (NAD27 to NAD83 (1) + NAD83 to
     // WGS 84 (38)) needs `us_noaa_conus.tif` and `us_noaa_ethpgn.tif`, says so. EPSG:4267 is asked
-    // about in the middle of North America, in Canada, whose grid stays missing.
+    // about in the middle of its area of use, in Oregon, where its HARN grid (`us_noaa_WO.tif`)
+    // stays missing.
     let texas = Crs::Epsg(32040);
     let _ = texas.transformer().unwrap();
     assert!(crs::grid_note(texas).is_some());
