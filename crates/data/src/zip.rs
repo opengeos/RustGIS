@@ -139,17 +139,40 @@ pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(S
 
 /// [`read_matching`] within `budget` inflated bytes in all (at most [`MAX_TOTAL`]).
 pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
-    read_within(bytes, |name| !name.ends_with('/') && want(name), budget)
+    read_within(bytes, |name| !name.ends_with('/') && want(name), budget, false).map_err(Failure::message)
 }
 
-/// All members, including directory payloads: spreadsheet relationships may name any member.
-pub(crate) fn read_all_within(bytes: &[u8], budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
-    read_within(bytes, |_| true, budget)
+/// Why a read failed.
+pub(crate) enum Failure {
+    /// The archive's layout can't be followed: not a zip, or damaged. A file of another kind may
+    /// merely hold these bytes.
+    Layout(String),
+    /// Refused whatever precedes the archive: ZIP64 or too many entries (which other readers
+    /// open), or a member that is encrypted, too large or damaged.
+    Member(String),
+    /// The run was asked to stop between members.
+    Cancelled,
 }
 
-fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+impl Failure {
+    fn message(self) -> String {
+        match self {
+            Failure::Layout(m) | Failure::Member(m) => m,
+            Failure::Cancelled => "cancelled".into(),
+        }
+    }
+}
+
+/// Every member, including directory payloads (spreadsheet relationships may name any member),
+/// within `budget` inflated bytes in all. Cancel is looked at between members; inflating one
+/// member, up to [`MAX_ENTRY`], isn't interrupted.
+pub(crate) fn read_all_within(bytes: &[u8], budget: usize) -> Result<Vec<(String, Vec<u8>)>, Failure> {
+    read_within(bytes, |_| true, budget, true)
+}
+
+fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize, cancellable: bool) -> Result<Vec<(String, Vec<u8>)>, Failure> {
     let mut budget = budget.min(MAX_TOTAL);
-    let bad = || "not a zip archive (or a damaged one)".to_string();
+    let bad = || Failure::Layout("not a zip archive (or a damaged one)".to_string());
     // The end-of-central-directory record is in the last 64 KiB + 22 bytes.
     let start = bytes.len().saturating_sub(65_557);
     let eocd = (start..bytes.len().saturating_sub(21))
@@ -163,11 +186,11 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Resu
         || u32_at(bytes, add(&[eocd, 12]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
         || u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
     {
-        return Err("the archive uses ZIP64, which can't be read yet".into());
+        return Err(Failure::Member("the archive uses ZIP64, which can't be read yet".into()));
     }
     let count = u16_at(bytes, add(&[eocd, 10]).ok_or_else(bad)?).ok_or_else(bad)?;
     if count > MAX_ENTRIES {
-        return Err(format!("the archive holds {count} entries; at most {MAX_ENTRIES} can be read"));
+        return Err(Failure::Member(format!("the archive holds {count} entries; at most {MAX_ENTRIES} can be read")));
     }
     let mut p = u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?).ok_or_else(bad)?;
     // Like calamine's ZIP reader, allow a preamble whose bytes weren't included in the
@@ -187,6 +210,9 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Resu
     p = central;
     let mut out = Vec::new();
     for _ in 0..count {
+        if cancellable && crate::progress::check().is_err() {
+            return Err(Failure::Cancelled);
+        }
         if u32_at(bytes, p) != Some(0x0201_4B50) {
             return Err(bad());
         }
@@ -206,10 +232,10 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Resu
         }
         // Say what's wrong first: an encrypted entry or a ZIP64 one isn't damaged data.
         if flags & 1 != 0 {
-            return Err(format!("{name} is encrypted; its contents can't be read"));
+            return Err(Failure::Member(format!("{name} is encrypted; its contents can't be read")));
         }
         if csize == 0xFFFF_FFFF || usize_ == 0xFFFF_FFFF || local == 0xFFFF_FFFF {
-            return Err("the archive uses ZIP64, which can't be read yet".into());
+            return Err(Failure::Member("the archive uses ZIP64, which can't be read yet".into()));
         }
         let local = local.checked_add(offset).ok_or_else(bad)?;
         let lnl = u16_at(bytes, add(&[local, 26]).ok_or_else(bad)?).ok_or_else(bad)?;
@@ -217,21 +243,22 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Resu
         let data_at = add(&[local, 30, lnl, lxl]).ok_or_else(bad)?;
         let body = bytes.get(data_at..add(&[data_at, csize]).ok_or_else(bad)?).ok_or_else(bad)?;
         if usize_ > MAX_ENTRY || usize_ > budget {
-            return Err(format!("{name} is too large"));
+            return Err(Failure::Member(format!("{name} is too large")));
         }
         // Inflate no more than the entry says it holds (and the archive's budget allows).
         let data = match method {
-            0 if csize != usize_ => return Err(format!("{name} is damaged (wrong size)")),
+            0 if csize != usize_ => return Err(Failure::Member(format!("{name} is damaged (wrong size)"))),
             0 => body.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, usize_).map_err(|_| format!("{name} is damaged"))?,
-            m => return Err(format!("{name} uses an unsupported compression ({m})")),
+            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, usize_)
+                .map_err(|_| Failure::Member(format!("{name} is damaged")))?,
+            m => return Err(Failure::Member(format!("{name} uses an unsupported compression ({m})"))),
         };
         if data.len() != usize_ {
-            return Err(format!("{name} is damaged (wrong size)"));
+            return Err(Failure::Member(format!("{name} is damaged (wrong size)")));
         }
         budget -= data.len();
         if crc32(&data) as usize != crc {
-            return Err(format!("{name} is damaged (checksum mismatch)"));
+            return Err(Failure::Member(format!("{name} is damaged (checksum mismatch)")));
         }
         out.push((name, data));
     }

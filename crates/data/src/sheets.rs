@@ -195,13 +195,22 @@ fn grid_unguarded(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
 }
 
 /// Check every ZIP member before calamine opens it, without suffix or case filters. ODS
-/// eagerly materializes every sheet in its constructor, even for a names-only read.
+/// eagerly materializes every sheet in its constructor, even for a names-only read. Cancel is
+/// looked at between members; inflating one member isn't interrupted.
 fn check_expansion(bytes: &[u8]) -> Result<()> {
-    let has_end = bytes.get(bytes.len().saturating_sub(65_557)..).is_some_and(|tail| tail.windows(4).any(|b| b == b"PK\x05\x06"));
-    if (bytes.starts_with(COMPOUND) && !has_end) || !bytes.windows(4).any(|b| b == b"PK\x03\x04") {
+    use crate::zip::Failure;
+    if !bytes.windows(4).any(|b| b == b"PK\x03\x04") {
         return Ok(());
     }
-    let entries = crate::zip::read_all_within(bytes, crate::zip::MAX_TOTAL).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))?;
+    let entries = match crate::zip::read_all_within(bytes, crate::zip::MAX_TOTAL) {
+        Ok(entries) => entries,
+        Err(Failure::Cancelled) => return Err(DataError::Cancelled),
+        // An .xls can hold these signatures in its data (an embedded workbook, a stray run of
+        // bytes): check_compound judges it. A member of an archive that does read is refused
+        // whatever precedes it.
+        Err(Failure::Layout(_)) if bytes.starts_with(COMPOUND) => return Ok(()),
+        Err(Failure::Layout(m) | Failure::Member(m)) => return Err(DataError::Format(format!("spreadsheet: {m}"))),
+    };
     let is_ods = entries
         .iter()
         .any(|(name, data)| name.eq_ignore_ascii_case("mimetype") && data.starts_with(b"application/vnd.oasis.opendocument.spreadsheet"));
@@ -865,8 +874,9 @@ mod tests {
             refused_before_calamine(&[COMPOUND, &book].concat(), "too large");
         }
         let book = crate::zip::write(&[("one.XML".into(), vec![0; 6]), ("two.rels".into(), vec![0; 6])]).unwrap();
-        assert!(crate::zip::read_all_within(&book, 11).unwrap_err().contains("too large"));
-        assert_eq!(crate::zip::read_all_within(&book, 12).unwrap().len(), 2);
+        let refused = crate::zip::read_all_within(&book, 11);
+        assert!(matches!(refused, Err(crate::zip::Failure::Member(m)) if m.contains("too large")));
+        assert_eq!(crate::zip::read_all_within(&book, 12).ok().map(|entries| entries.len()), Some(2));
     }
 
     #[test]
@@ -1340,6 +1350,57 @@ mod tests {
         // A table cut at a whole word is still safe for calamine's word conversion.
         assert_eq!(words(&END.to_le_bytes()).unwrap(), [END]);
         assert!(words(&[]).unwrap().is_empty());
+    }
+
+    /// An `.xls` whose data holds ZIP signatures (an embedded workbook, a stray run of bytes) is
+    /// not taken for a ZIP archive that failed to read; its own checks judge it.
+    #[test]
+    fn an_xls_holding_zip_signatures_is_not_refused_as_a_zip() {
+        const END: u32 = 0xFFFF_FFFE;
+        let mut book = small_book(&[0xFFFF_FFFD, END, END, END], 0, 64, &[END]);
+        book.extend(b"PK\x03\x04 an embedded part, then an end record: PK\x05\x06");
+        // Not the ZIP64 sentinel: this run only fails as "not a zip archive".
+        book.extend([b'x'; 40]);
+        assert!(check_compound(&book).is_ok());
+        assert!(check_expansion(&book).is_ok());
+        for e in [sheet_names(&book).err(), columns(&book, None, None).err()].into_iter().flatten() {
+            assert!(!e.to_string().contains("zip archive"), "{e}");
+        }
+    }
+
+    /// ZIP64 and entry-count refusals aren't deferred to the compound checks: a ZIP64 workbook
+    /// behind a compound-file header is one other readers open.
+    #[test]
+    fn a_zip64_workbook_behind_a_compound_header_is_still_refused() {
+        let book = xlsx(&[("S", &[&["name"], &["city"]])]);
+        let eocd = book.len() - 22;
+        let central = u32::from_le_bytes(book[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+        let mut member = book.clone();
+        member[central + 24..central + 28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut end = book.clone();
+        end[eocd + 16..eocd + 20].copy_from_slice(&u32::MAX.to_le_bytes());
+        for zip64 in [member, end] {
+            for book in [zip64.clone(), [COMPOUND, &zip64].concat()] {
+                let e = check_expansion(&book).unwrap_err().to_string();
+                assert!(e.contains("ZIP64"), "{e}");
+                assert_eq!(sheet_names(&book).unwrap_err().to_string(), e);
+            }
+        }
+    }
+
+    /// Cancel is looked at between members, and is Cancel, not a damaged file.
+    #[test]
+    fn a_cancelled_run_stops_between_zip_members() {
+        use std::sync::{Arc, atomic::Ordering};
+        let book = xlsx(&[("S", &[&["name"], &["city"]])]);
+        assert!(check_expansion(&book).is_ok());
+        let probe = Arc::new(crate::progress::tests::Counted::default());
+        probe.cancel.store(true, Ordering::Relaxed);
+        let _installed = crate::progress::install(Some(probe));
+        assert!(matches!(check_expansion(&book), Err(DataError::Cancelled)));
+        assert!(matches!(sheet_names(&book), Err(DataError::Cancelled)));
+        assert!(matches!(columns(&book, None, None), Err(DataError::Cancelled)));
+        assert!(matches!(read(&book, "book", None, &CsvOptions::default()), Err(DataError::Cancelled)));
     }
 
     #[test]
