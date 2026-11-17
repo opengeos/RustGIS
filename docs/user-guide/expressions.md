@@ -24,11 +24,15 @@ area('ac') BETWEEN 1 AND 5 AND zoning = 'R-1'
 ```
 
 In Select By Attributes, the Layer Properties Query tab and a label class's SQL query, the
-**Functions** and **Variables** menus list the language's catalog. Hover over an item to see its
-help beside the list (below it in a narrow window): a function's signature, description and
-example, or a variable's description. Clicking appends it to the expression; a function opens
-its argument list, or inserts the complete call when it takes no arguments.
-In short windows, scroll the menu to reach the help below the list.
+**Functions** and **Variables** menus list the language's catalog in the same list the
+expression box suggests from. The highlighted item's help shows beside the list (below it in a
+narrow window), or the help of the item under the pointer: a function's signature, description
+and example, or a variable's description. The list shows ten items at a time and scrolls to the
+rest. Up and Down move the highlight, Enter or a click appends the item to the expression, and
+Escape, Tab or a click elsewhere closes the list; from the keyboard, Tab to the menu and press
+Enter or Space to open it (Space again closes it). While the list is open, shortcuts with Ctrl
+(⌘) still work. A function opens its argument list, or inserts the complete call when it takes
+no arguments.
 
 ## Grammar
 
@@ -231,6 +235,22 @@ left empty. Calculate Field, and a calculation attribute rule on each edit it ap
 many results lost their fraction, how many were past the range and how many weren't numbers. Text
 that doesn't read as a number at all (`n/a`) is left empty too, for now without a notice. A
 number into a text field is written as RustGIS shows it, to six decimal places.
+
+**Compare codes with different spellings.** With zoning codes in the `current` and `proposed`
+fields of the same parcel layer, add a **Text** field named `changed` and turn editing on.
+Use this expression in **Calculate Field** for `changed`.
+
+```sql
+CASE
+  WHEN current IS NULL OR proposed IS NULL THEN 'Unknown'
+  WHEN replace(current, '-', '') = replace(proposed, '-', '') THEN 'No'
+  ELSE 'Yes'
+END
+```
+
+Here `N-1` and `N1` both compare as `N1`, while `N-1` and `N2` give `Yes`.
+Strip hyphens only when they have no meaning in the coding schemes. Select `changed = 'Yes'`
+to find parcels with a different proposed code.
 
 Calculate Field also takes the forms its earlier calculator took: a field name with spaces
 written bare (`Pop Est * 2`) still works when the text isn't a valid expression, and on a layer

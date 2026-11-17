@@ -389,6 +389,20 @@ A gradient's `from` and `to` are places in the feature's box (`[across, down]`, 
 globe, patterns keep to the screen rather than the map as it turns); the
 legend shows the symbol's colour.
 
+**Hatch only flagged polygons.** Use an overlay to hatch unreliable estimates while keeping
+the choropleth's colours visible.
+
+1. On the choropleth layer, use **Select By Attributes** with `FLAG = 1`, then **Data ›
+   Selection › Make Layer From Selected Features**. Clear the selection on the original layer.
+2. Keep the new layer above the choropleth and rename it **Unreliable estimates (hatched)**.
+   In its **Symbology › Fills**, add one fill and set **Draw** to **Hatch lines**. Set the line
+   colour and spacing so the choropleth shows through. Set **Outline width** to 0 if the
+   choropleth already draws the boundaries.
+3. Include both layers in the [layout legend](layouts.md#layouts). The overlay's swatch
+   uses a solid colour, so keep “(hatched)” in its name or legend label to explain the pattern.
+
+The new layer contains a copy of the selected features. Recreate it if the flag values change.
+
 ### Reference scale
 
 Symbol and label sizes are set in points, and normally keep that size on screen at every scale.
@@ -633,8 +647,13 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   in view, centred on the line and kept upright, and may run past its ends by about a letter; a
   line too short for its text, or (curved) one bending more than 25° from one character to the
   next, is left unlabelled. A text over 200 characters long is set straight rather than
-  curved. Points and polygons with these placements are labelled as automatic
-  (`labels.placement={"layer": "Rivers", "position": "curved"}`).
+  curved. Points with these placements, and polygons placed parallel, are labelled as automatic
+  (`labels.placement={"layer": "Rivers", "position": "curved"}`). A polygon placed **Curved**
+  has its label on one line along its centre line, the longest path down the middle of its part
+  in view, as a lake's or a valley's name follows its shape: from its middle, else as near it as
+  the text fits, with the polygon at least half the text's height either side and the centre
+  line trimmed short of its tips. A polygon too short, narrow or sharply bent for its text is
+  labelled as automatic (`labels.placement={"layer": "Lakes", "position": "curved"}`).
 - **Other places round points**: a point's label whose place another label takes tries the
   other places round the point, corners first (above right, above left, below right, below left,
   right, left, above, below, leaving out its own), and goes to the first where
@@ -652,6 +671,17 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   the setting does nothing there or at a position off the line. Off by default, for the same reason
   as round points, and Lock keeps the place each label took
   (`labels.placement={"layer": "Rivers", "position": "curved", "otherPositions": true}`).
+- **Names that fit their line**: a Curved label with `"fit": "auto"` is fitted to the room its
+  line gives, as hand-lettered maps name streams. A name that can't follow the line anywhere it is
+  tried is abbreviated (whole words: Córrego → Cór., Ribeirão → Rib., Rio → R., Creek → Cr.,
+  River → R., Arroyo → Ao., from a built-in English, Portuguese and Spanish list, or the class's
+  own `"abbreviations"`, which go first) and tried again; still too long, it is left out. A name
+  that takes more than a third of the line goes on its straightest stretch rather than at the
+  middle: the stretch whose ends are farthest apart for its length. With other places along the
+  line on, the next straightest stretches are its other places. Text size by a stream's
+  importance (a Strahler order or a class field) comes from label classes or `labels.by` `"size"`
+  (`labels.placement={"layer": "Rivers", "position": "curved", "fit": "auto", "abbreviations":
+  {"Creek": "Ck"}}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
   apply to the whole map, so they are on the ribbon (Labeling › Map Labeling), not in the pane.

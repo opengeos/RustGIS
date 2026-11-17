@@ -124,6 +124,15 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
 
+**Use a polygon's published interior point.** To place TIGER interior points, run **XY Table
+To Point** with the polygon layer as **Input Table**. Set **X Field** to `INTPTLON` and **Y Field**
+to `INTPTLAT` (use `INTPTLON20` and `INTPTLAT20` when the fields have that suffix). The tool
+reads signed, zero-padded text directly, such as `-093.1445780` and `+44.9500000`.
+Set the tool's **Coordinate System** (`crs`) to the fields' system: NAD83, `EPSG:4269`, for
+TIGER/Line. Left empty, it places them as WGS 84. The new layer
+keeps the attributes and places points at the published coordinates. Check the tool's messages
+for any rows kept without a point.
+
 Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
 sheets that were not selected. The workbook shares a memory budget across its sheets and retained
 metadata. Value and formula grids are counted separately, with conservative allocation estimates
@@ -358,6 +367,53 @@ database is trusted like the query, since its views run as part of it.
 
 **Home › Add › Add Data** opens a DuckDB database file (`.duckdb`, `.ddb`): every table with a geometry
 column becomes a layer (`"layer"` picks one).
+
+### Count GTFS departures per stop
+
+To count scheduled departures from 07:00 up to but excluding 09:00 on Tuesday, 8 December 2026,
+unzip the feed and run this in **Analyze › SQL** with DuckDB installed. Use the extracted files'
+full paths in `read_csv`. Reading the fields as text keeps IDs such as `006` distinct from `6`.
+
+```sql
+WITH exceptions AS (
+  SELECT service_id, exception_type
+  FROM read_csv('calendar_dates.txt', all_varchar = true)
+  WHERE date = '20261208'
+), active AS (
+  SELECT service_id
+  FROM read_csv('calendar.txt', all_varchar = true)
+  WHERE tuesday = '1' AND '20261208' BETWEEN start_date AND end_date
+    AND service_id NOT IN (SELECT service_id FROM exceptions WHERE exception_type = '2')
+  UNION
+  SELECT service_id FROM exceptions WHERE exception_type = '1'
+)
+SELECT s.stop_id, count(*) AS departures
+FROM read_csv('stop_times.txt', all_varchar = true) AS s
+JOIN read_csv('trips.txt', all_varchar = true) AS t USING (trip_id)
+JOIN active AS a ON a.service_id = t.service_id
+WHERE lpad(s.departure_time, 8, '0') >= '07:00:00'
+  AND lpad(s.departure_time, 8, '0') < '09:00:00'
+  AND s.stop_id IS NOT NULL
+  -- With frequencies.txt in the feed, also leave out its template trips:
+  -- AND t.trip_id NOT IN (SELECT trip_id FROM read_csv('frequencies.txt', all_varchar = true))
+GROUP BY s.stop_id
+ORDER BY s.stop_id
+```
+
+Match date exceptions to the weekly calendar by `service_id`. Type 2 removes service and
+type 1 adds it, even when the ID has no weekly row. Then match active services to trips by
+`service_id` and trips to stop times by `trip_id`. For another date, change both date literals
+and the weekday column. If the feed uses only `calendar_dates.txt`, keep just the additions
+in `active`. If it uses only `calendar.txt`, keep the weekly rule and omit the exception checks.
+
+The time filter pads one-digit hours and uses the feed's local service-day times, where
+`24:30:00` is after midnight on that service day. The result counts timed rows per `stop_id`,
+including repeat visits by a trip. Stops with no departures in the window have no row. The SQL
+pane previews the first 200 rows. This query uses the times in `stop_times.txt`. Frequency-based trips need a
+separate calculation using [`frequencies.txt`](https://gtfs.org/documentation/schedule/reference/#frequenciestxt),
+and their `trip_id`s left out of this query: their stop times are a template, which it would
+count as one departure. When the feed has that file, remove the `-- ` before the
+`AND t.trip_id NOT IN …` line.
 
 ### PostgreSQL and PostGIS
 
@@ -1152,6 +1208,47 @@ Creating a login requires secure random numbers: the operating system's generato
 or the browser's `crypto.getRandomValues` in the web app. If that source is missing or fails,
 RustGIS refuses the login rather than using a predictable fallback. A failed replacement leaves
 the previous active login usable.
+
+**ArcGIS token** (`"auth": "arcgis"`, on any web-service kind: an ArcGIS-hosted WMS or WMTS needs it
+too) logs in to ArcGIS Server or ArcGIS Enterprise with a token, sent as each request's one `token`
+parameter (a parameter of that name in an address is replaced, whatever its case or escaping, and
+an explicit connection token outranks a portal sign-in's, which is then neither sent nor renewed for
+that request). The connection keeps the method and an optional user; the token is given in one of
+two ways.
+
+- **Paste token**: `connection.login {"id":"c1","token":"…","expiresAt":1893456000000}`. The token is
+  ASCII letters, digits and `- _ . ~ + / =`, at most 4096 bytes. `expiresAt` is optional, in Unix
+  milliseconds and in the future; without it the token is used until the server refuses it, and
+  nothing is renewed or guessed. **Test** with a pasted token uses a temporary login that ends with
+  the test: the saved connection, its session login and its saved login are not used or replaced.
+- **Username and password**: `connection.generateToken {"id":"c1","tokenEndpoint":"https://host/arcgis/tokens/generateToken","password":"…"}`
+  asks the server's `generateToken` for a token for the connection's user (`client=requestip`, 60
+  minutes) and answers `{"id","pending":true}`. The endpoint must be an `https://` address at the
+  connection's own origin, with no user information, query or fragment, and is never taken from a
+  service's answer; a federated portal's sign-in uses the portal sign-in instead. The request runs
+  in the background on the desktop and in the web app (30 seconds at most, answers up to 1 MiB, no
+  redirects, cookies or other login). `connection.tokenStatus {"id":"c1"}` answers
+  `{"pending":true}` until it lands, then `connection.login`'s result with `"pending":false`;
+  `connection.cancelToken {"id":"c1"}` stops it, leaving any earlier login. Only the caller that
+  started it can ask or cancel, and a replaced project, a changed login (user, method or origin), a
+  logout, a removal, a pasted token, a closed form, or logging in or out of another connection ends
+  it. Failures say a fixed sentence, never the
+  server's text. The password is in that one request and is kept nowhere: not in the form once sent,
+  the connection, the session, the saved login, History, recordings or notices.
+  **Test** requires a saved connection, generates through the same commands with Remember off, and
+  leaves the resulting session-only token logged in before testing the service. Cancelling a native
+  request never waits for the worker; one blocking network operation can finish at its 30-second
+  deadline before the worker notices cancellation.
+
+With **Remember on this computer** (`"remember": true`, on `connection.login` or
+`connection.generateToken`) the token and its expiry, never a password, go to the credential store as
+the same versioned login described above. A saved or session token that has expired is not used: the
+login is revoked, cached authenticated responses are not read, nothing falls back to anonymous
+access or a portal sign-in, and the connection asks to log in again (`connection.login` with a new
+token, or `connection.generateToken`). An expired saved token is neither deleted nor rewritten until
+it is forgotten or replaced, and is not read again that session. A token is never renewed
+automatically, since that would need the password. From the command line and Python, poll
+`connection.tokenStatus` until `pending` is false.
 
 A login is sent only to the connection's origin: the same scheme, host and port, for its
 capabilities, listings, tiles, feature pages and refreshes. On the desktop a redirect within that
