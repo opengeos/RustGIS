@@ -260,6 +260,8 @@ pub(super) fn service_area(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Str
         let Some(sg) = graph.segment(i) else { continue };
         let mut stops = vec![(sg.from, search.cost(sg.a), search.source(sg.a))];
         stops.extend(on.get(&i).into_iter().flatten().map(|&(_, at, f)| (at, 0.0, Some(f))));
+        // Facilities at one place: the first of them (in layer order, which the sort keeps) has it.
+        stops.dedup_by(|later, kept| later.0 == kept.0 && later.2.is_some() && kept.2.is_some() && later.1 == 0.0 && kept.1 == 0.0);
         stops.push((sg.to, search.cost(sg.b), search.source(sg.b)));
         for w in stops.windows(2) {
             let &[(a, ca, la), (b, cb, lb)] = w else { continue };
@@ -353,7 +355,10 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     }
     let targets = at_node.len();
     let rows = AtomicUsize::new(0);
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, Search::bytes(graph)));
+    // Each thread's search, and at most its rows, candidates and marks over every destination.
+    let per_destination = size_of::<(usize, f64, f64)>() + size_of::<usize>() + 1;
+    let scratch = Search::bytes(graph).saturating_add(destinations.len().saturating_mul(per_destination));
+    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, scratch));
     crate::control::begin(origins.len());
     let found = crate::parallel::try_map_each_on(
         &origins,
@@ -393,6 +398,8 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
             let unreached = destinations.len() - row.len();
             row.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
             row.truncate(per_origin);
+            // Kept until the table is made: only the rows, not the room every destination took.
+            row.shrink_to_fit();
             if rows.fetch_add(row.len(), Ordering::Relaxed).saturating_add(row.len()) > MAX_PAIRS {
                 return Err(format!(
                     "{TOOL}: the matrix would hold more than {MAX_PAIRS} rows; set a lower Cutoff or Destinations to Find"
@@ -557,6 +564,22 @@ mod tests {
         };
         assert!((east_end(first) - 0.008).abs() < 1e-6, "{}", east_end(first));
         assert!(east_end(second) > 0.029, "the second shop reaches the end of the costly line: {}", east_end(second));
+    }
+
+    /// Two facilities at one place in the middle of a line: the first has every part reached from
+    /// there, on both sides, not one side each.
+    #[test]
+    fn coincident_facilities_go_to_the_first() {
+        let shops = points("shops", &[Some(c(0.005, 0.0)), Some(c(0.005, 0.0))]);
+        let first = shops.features[0].id as f64;
+        let inputs = map(vec![roads(), shops]);
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "5"})).unwrap();
+        let out = dataset(&r);
+        assert!(
+            out.features.iter().all(|f| field(out, f, "facility_fid") == first),
+            "{:?}",
+            out.features.iter().map(|f| field(out, f, "facility_fid")).collect::<Vec<_>>()
+        );
     }
 
     /// Costs and lengths through the network, with the cost field doubling one line; along one
