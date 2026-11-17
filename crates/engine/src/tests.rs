@@ -35716,6 +35716,32 @@ fn a_swatch_shows_the_opacity_no_fill_hid() {
     assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), Some(&class)), None, "shown since: as it is");
     s.run("layer.restoreFill", &Value::Null).unwrap();
     assert_eq!(class_fill(&s), red);
+    // A class transparent before No Fill shows that, as Restore Fill gives it back.
+    let (mut s, id) = no_fill_layer(false);
+    s.run("layer.classStyle", &json!({"value": "c", "color": "#11223300"})).unwrap();
+    s.run("layer.noFill", &Value::Null).unwrap();
+    assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), Some(&class)), Some(0));
+    s.run("layer.restoreFill", &Value::Null).unwrap();
+    assert_eq!(class_fill(&s).a(), 0);
+    // The layer's symbol is its renderer's base one: Unique Values' first class, Graduated
+    // Colors' last, each given an opacity of its own so that another class's would show.
+    for (kind, params) in [
+        ("unique", json!({"type": "unique", "field": "name"})),
+        ("graduated", json!({"type": "graduated", "field": "pop_est", "classes": 3})),
+    ] {
+        let mut s = world();
+        let id = s.map().layer_by_name("Countries").unwrap().id;
+        s.active_layer = Some(id);
+        s.run("layer.symbology", &params).unwrap();
+        let mut n = 0;
+        s.map_mut().layer_mut(id).unwrap().renderer.map_symbols(|sym| {
+            n += 1;
+            sym.fill = sym.fill.with_alpha(40 + n);
+        });
+        let base = s.map().layer(id).unwrap().renderer.base_symbol().fill.a();
+        s.run("layer.noFill", &Value::Null).unwrap();
+        assert_eq!(hidden_fill_opacity(s.map().layer(id).unwrap(), None), Some(base), "{kind}");
+    }
     // A mixed layer's No Fill lays a transparent fill over the symbols, whose opacity is their own.
     let (mut s, id) = no_fill_layer(true);
     s.run("layer.noFill", &Value::Null).unwrap();
