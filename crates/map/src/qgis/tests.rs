@@ -2819,9 +2819,18 @@ fn the_corpus_sources_read_as_qgis_wrote_them() {
     );
     let Source::Xyz { style, .. } = one("vectortile-style") else { panic!() };
     assert_eq!(style.as_deref(), Some("https://example.invalid/style.json"));
-    assert_eq!(one("mbtilesvectortiles"), Source::Archive { path: "/p/qgs/../data/tiles.mbtiles".into(), kind: "mbtiles", vector: true });
-    assert_eq!(one("pmtiles"), Source::Archive { path: "/p/qgs/../data/tiles.pmtiles".into(), kind: "pmtiles", vector: true });
-    assert_eq!(one("mbtiles-raster"), Source::Archive { path: "/p/qgs/../data/raster.mbtiles".into(), kind: "mbtiles", vector: false });
+    assert_eq!(
+        one("mbtilesvectortiles"),
+        Source::Archive { path: "/p/qgs/../data/tiles.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
+    );
+    assert_eq!(
+        one("pmtiles"),
+        Source::Archive { path: "/p/qgs/../data/tiles.pmtiles".into(), kind: "pmtiles", vector: true, zoom: (None, None) }
+    );
+    assert_eq!(
+        one("mbtiles-raster"),
+        Source::Archive { path: "/p/qgs/../data/raster.mbtiles".into(), kind: "mbtiles", vector: false, zoom: (None, None) }
+    );
     assert_eq!(one("gpx"), file("/p/qgs/../data/waypoints.gpx", Some("waypoints"), None));
     assert_eq!(one("gpx-track"), file("/p/qgs/../data/waypoints.gpx", Some("tracks"), None));
     let Source::Memory { geometry, fields, crs, .. } = one("memory") else { panic!() };

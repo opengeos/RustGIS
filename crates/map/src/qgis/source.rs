@@ -17,7 +17,8 @@ pub enum Source {
     /// A tile archive: an MBTiles file (`mbtilesvectortiles`, or `wms` with `type=mbtiles`) or a
     /// PMTiles archive (`xyzvectortiles` whose address is one), by its path or web address, as
     /// `map.addTiles` takes it (`kind`: `mbtiles` or `pmtiles`).
-    Archive { path: String, kind: &'static str, vector: bool },
+    /// `zoom`: the levels QGIS limits it to (`zmin`, `zmax`), when it does.
+    Archive { path: String, kind: &'static str, vector: bool, zoom: (Option<u8>, Option<u8>) },
     /// A memory layer (`memory`): its geometry and fields. QGIS keeps no features of one in the
     /// project: it opens empty. Fields of a kind RustGIS hasn't are text (`as_text`); past
     /// [`MAX_MEMORY_FIELDS`], they are left out (`cut`).
@@ -104,9 +105,13 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             match (get("type").as_deref(), get("url")) {
                 // An archive by its path (`file://` or a plain one, relative to the project) or
                 // by its web address.
-                (Some("mbtiles"), Some(url)) => Source::Archive { path: archive_path(&url, dir), kind: "mbtiles", vector },
+                (Some("mbtiles"), Some(url)) => {
+                    Source::Archive { path: archive_path(&url, dir), kind: "mbtiles", vector, zoom: (zoom("zmin"), zoom("zmax")) }
+                }
                 // PMTiles, raster or vector: the archive reader reads both.
-                (Some("xyz"), Some(url)) if is_pmtiles(&url) => Source::Archive { path: archive_path(&url, dir), kind: "pmtiles", vector },
+                (Some("xyz"), Some(url)) if is_pmtiles(&url) => {
+                    Source::Archive { path: archive_path(&url, dir), kind: "pmtiles", vector, zoom: (zoom("zmin"), zoom("zmax")) }
+                }
                 (Some("xyz"), Some(url)) => Source::Xyz { url, zmin: zoom("zmin"), zmax: zoom("zmax"), vector, style: get("styleUrl") },
                 (_, Some(url)) if provider == "wms" => match get("layers") {
                     Some(layer) => Source::Wms { url, layer, crs: get("crs") },
@@ -367,21 +372,27 @@ const MAX_VIRTUAL_LAYERS: usize = 64;
 fn virtual_layer(datasource: &str, dir: &str) -> Source {
     let raw = datasource.strip_prefix('?').unwrap_or(datasource);
     let decode = rustgis_data::address::percent_decode;
-    let (mut named, mut query_text, mut past) = (Vec::new(), None, 0usize);
+    let (mut named, mut query_text, mut past, mut subset) = (Vec::new(), None, 0usize, None);
     // Every pair is looked at (the query may come last); at most MAX_VIRTUAL_LAYERS sources read.
     for kv in raw.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
         match k {
             "query" => query_text = Some(decode(v)),
+            // A filter on the virtual layer itself, on top of its query's.
+            "subsetstring" => subset = Some(decode(v)).filter(|s| !s.trim().is_empty()),
             "layer" if named.len() < MAX_VIRTUAL_LAYERS => {
                 // provider:source[:name[:encoding]], each part encoded.
                 let mut parts = v.split(':').map(decode);
                 let (provider, source, name) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default(), parts.next());
-                // (A virtual layer on a virtual layer isn't read as a file's layer: left as it is.)
-                let from = (provider != "virtual").then(|| read(&provider, &source, dir));
+                // (A virtual layer on a virtual layer isn't read as a file's layer: said as such.)
+                let from = if provider == "virtual" {
+                    VirtualFrom::Missing("its source is another virtual layer, which RustGIS doesn't read as a file's layer".into())
+                } else {
+                    VirtualFrom::Source(Box::new(read(&provider, &source, dir)))
+                };
                 // One with no name is `vtabN` to QGIS, N its place among the sources from 1.
                 let name = name.filter(|n| !n.is_empty()).unwrap_or_else(|| format!("vtab{}", named.len() + 1));
-                named.push((name, from.map(|f| VirtualFrom::Source(Box::new(f)))));
+                named.push((name, Some(from)));
             }
             "layer_ref" if named.len() < MAX_VIRTUAL_LAYERS => {
                 let v = decode(v);
@@ -394,10 +405,11 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
         }
     }
     let query = query_text.unwrap_or_default();
-    // With no query, QGIS reads its one layer whole.
+    // With no query, QGIS reads its one layer whole (with the virtual layer's own filter).
     if query.trim().is_empty() && named.len() == 1 {
         let from = named.pop().and_then(|(_, from)| from);
-        return Source::Virtual { query, from, filter: None };
+        let filter = subset.filter(|_| matches!(from, Some(VirtualFrom::Source(_) | VirtualFrom::Layer(_))));
+        return Source::Virtual { query, from, filter };
     }
     let (from, filter) = match select_all(&query) {
         Some((table, filter)) => {
@@ -415,6 +427,11 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
             (from, filter.map(|f| if f.len() > rustgis_data::query::MAX_LEN { f } else { unqualified(&f, &table) }))
         }
         None => (None, None),
+    };
+    // The virtual layer's own filter on top of its query's (its fields are the layer's).
+    let filter = match (filter, subset) {
+        (Some(a), Some(b)) => Some(format!("({a}) AND ({b})")),
+        (a, b) => a.or(b),
     };
     let filter = filter.filter(|_| matches!(from, Some(VirtualFrom::Source(_) | VirtualFrom::Layer(_))));
     Source::Virtual { query, from, filter }
@@ -790,44 +807,49 @@ mod tests {
         // Archives: relative (as QGIS writes them beside the project), absolute and on the web.
         assert_eq!(
             read("mbtilesvectortiles", "type=mbtiles&url=..%2Fdata%2Ftiles.mbtiles", dir),
-            Source::Archive { path: "/data/project/../data/tiles.mbtiles".into(), kind: "mbtiles", vector: true }
+            Source::Archive { path: "/data/project/../data/tiles.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
         );
         assert_eq!(
             read("wms", "type=mbtiles&url=/abs/raster.mbtiles", dir),
-            Source::Archive { path: "/abs/raster.mbtiles".into(), kind: "mbtiles", vector: false }
+            Source::Archive { path: "/abs/raster.mbtiles".into(), kind: "mbtiles", vector: false, zoom: (None, None) }
+        );
+        // The zoom levels QGIS limits an archive to come with it.
+        assert_eq!(
+            read("wms", "type=mbtiles&url=/abs/raster.mbtiles&zmin=2&zmax=12", dir),
+            Source::Archive { path: "/abs/raster.mbtiles".into(), kind: "mbtiles", vector: false, zoom: (Some(2), Some(12)) }
         );
         assert_eq!(
             read("xyzvectortiles", "type=xyz&url=file%3A..%2Fdata%2Ftiles.pmtiles", dir),
-            Source::Archive { path: "/data/project/../data/tiles.pmtiles".into(), kind: "pmtiles", vector: true }
+            Source::Archive { path: "/data/project/../data/tiles.pmtiles".into(), kind: "pmtiles", vector: true, zoom: (None, None) }
         );
         assert_eq!(
             read("xyzvectortiles", "type=xyz&url=file:///abs/t.PMTiles", dir),
-            Source::Archive { path: "/abs/t.PMTiles".into(), kind: "pmtiles", vector: true }
+            Source::Archive { path: "/abs/t.PMTiles".into(), kind: "pmtiles", vector: true, zoom: (None, None) }
         );
         assert_eq!(
             read("xyzvectortiles", "type=xyz&url=https://e.org/t.pmtiles?key=1", dir),
-            Source::Archive { path: "https://e.org/t.pmtiles?key=1".into(), kind: "pmtiles", vector: true }
+            Source::Archive { path: "https://e.org/t.pmtiles?key=1".into(), kind: "pmtiles", vector: true, zoom: (None, None) }
         );
         // A Windows drive's file address.
         assert_eq!(
             read("mbtilesvectortiles", "type=mbtiles&url=file:///C:/maps/t.mbtiles", dir),
-            Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true }
+            Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
         );
         let Source::Csv { path, .. } = read("delimitedtext", "file:///C:/maps/p.csv?xField=x", dir) else { panic!() };
         assert_eq!(path, "C:/maps/p.csv");
         // An encoded file address is decoded once (QGIS encodes the address again as a parameter).
         assert_eq!(
             read("mbtilesvectortiles", "type=mbtiles&url=file:///maps/my%2520tiles.mbtiles", dir),
-            Source::Archive { path: "/maps/my tiles.mbtiles".into(), kind: "mbtiles", vector: true }
+            Source::Archive { path: "/maps/my tiles.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
         );
         assert_eq!(
             read("mbtilesvectortiles", "type=mbtiles&url=file://C:/maps/t.mbtiles", dir),
-            Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true }
+            Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
         );
         // A network share's address isn't a path here: kept as it is, for the import to note.
         assert_eq!(
             read("xyzvectortiles", "type=xyz&url=file://server/share/t.pmtiles", dir),
-            Source::Archive { path: "file://server/share/t.pmtiles".into(), kind: "pmtiles", vector: true }
+            Source::Archive { path: "file://server/share/t.pmtiles".into(), kind: "pmtiles", vector: true, zoom: (None, None) }
         );
         let Source::Csv { path, .. } = read("delimitedtext", "file://server/share/p.csv?xField=x", dir) else { panic!() };
         assert_eq!(path, "file://server/share/p.csv");
@@ -1021,7 +1043,8 @@ mod tests {
         assert!(matches!(read("virtual", &many, dir), Source::Virtual { from: Some(_), .. }));
         // A virtual layer on a virtual layer isn't read as a file's layer.
         let nested = "?layer=virtual:%3Flayer%3Dogr%253Aa.gpkg%253At:v&query=SELECT%20*%20FROM%20v";
-        assert_eq!(read("virtual", nested, dir), Source::Virtual { query: "SELECT * FROM v".into(), from: None, filter: None });
+        let Source::Virtual { from: Some(VirtualFrom::Missing(why)), filter: None, .. } = read("virtual", nested, dir) else { panic!() };
+        assert!(why.contains("its source is another virtual layer"), "{why}");
         // Selecting from a name none of its sources has: that name, as missing.
         let Source::Virtual { from, filter, .. } = read(
             "virtual",
@@ -1048,6 +1071,20 @@ mod tests {
             from
         };
         assert!(matches!(unnamed("vtab1"), Some(VirtualFrom::Source(_))));
+        // The virtual layer's own filter (`subsetstring`) on top of its query's, or alone.
+        let filtered = |q: &str| {
+            let Source::Virtual { filter, .. } =
+                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg:pts{q}&subsetstring=%22kind%22%20%3D%20'a'"), dir)
+            else {
+                panic!()
+            };
+            filter
+        };
+        assert_eq!(
+            filtered("&query=SELECT%20*%20FROM%20pts%20WHERE%20value%20%3E%2020").as_deref(),
+            Some(r#"(value > 20) AND ("kind" = 'a')"#)
+        );
+        assert_eq!(filtered("").as_deref(), Some(r#""kind" = 'a'"#));
         assert!(matches!(unnamed("pts"), Some(VirtualFrom::Missing(_))));
     }
 }

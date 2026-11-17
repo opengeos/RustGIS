@@ -372,7 +372,7 @@ fn add_layer(
             }
             return Ok(Some(name.to_string()));
         }
-        Source::Archive { path, kind, vector } => {
+        Source::Archive { path, kind, vector, zoom: (zmin, zmax) } => {
             // RustGIS opens an MBTiles file on this computer, and an archive on a network share
             // by no address.
             if path.starts_with("file://") || (*kind == "mbtiles" && path.contains("://")) {
@@ -402,7 +402,14 @@ fn add_layer(
             // Without waiting for its metadata (it lands as the map draws), as Add Data adds a
             // local archive: an import of many archives doesn't hold the window a second for each.
             // (The import runs only in the user's own dispatch, which may read files and the web.)
-            let q = json!({"url": path, "name": name, "kind": kind, "overlay": true});
+            let mut q = json!({"url": path, "name": name, "kind": kind, "overlay": true});
+            // The zoom levels QGIS limits it to.
+            if let Some(z) = zmin {
+                q["minZoom"] = json!(z);
+            }
+            if let Some(z) = zmax {
+                q["maxZoom"] = json!(z);
+            }
             // (As run_part would, a refused add leaves the map's tile layers as they were: it may
             // drop the same archive's layer before it finds the map full.)
             let tiles = s.map().tiles.clone();
