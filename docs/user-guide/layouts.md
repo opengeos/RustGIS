@@ -125,7 +125,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     again, smaller; `"locator": "globe"` or `"inset"` still adds one. Warnings say both. Near a
     pole the frame can't draw the globe that small at the view's latitude, so the globe is
     centred as near it as fits, and a warning says where. With an `extent`, a sheet on the globe
-    is laid out as on a flat map. On any sheet on the globe, the light space around the globe is
+    is laid out as on a flat map. In any frame on the globe, the light space around the globe is
     room for the surrounds, as the blank page is.
   - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
     it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule

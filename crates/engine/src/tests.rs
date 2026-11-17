@@ -10307,7 +10307,7 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
         let short = frame.w.min(frame.h);
         assert!(across > 0.75 * short && across < short, "{profile}: a disc {across:.0} mm across in {short:.0} mm (1:{scale})");
         assert!(named("Scale Bar").is_none() && named("Locator").is_none(), "{profile}");
-        assert!(r["locator"].is_null(), "{profile}");
+        assert!(r.get("locator").is_some_and(Value::is_null), "{profile}");
         assert!(warnings.iter().any(|w| w.starts_with("no scale bar: the map shows the whole globe")), "{profile}: {warnings:?}");
         let sheet = !profile.starts_with("figure");
         assert_eq!(warnings.iter().any(|w| w.starts_with("no locator: the map shows the whole globe")), sheet, "{profile}: {warnings:?}");
@@ -10340,7 +10340,7 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
     // A locator asked for still comes, and "none" asked for is no news; an extent given keeps
     // the scale bar and the locator.
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "none"})).unwrap();
-    assert!(r["locator"].is_null() && !r["warnings"].to_string().contains("no locator"), "{}", r["warnings"]);
+    assert!(r.get("locator").is_some_and(Value::is_null) && !r["warnings"].to_string().contains("no locator"), "{}", r["warnings"]);
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "globe"})).unwrap();
     assert!(r["locator"].is_string());
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();

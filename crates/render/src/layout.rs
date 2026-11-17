@@ -1378,9 +1378,9 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
         edge_points.extend([(w * t, 0.0), (w * t, h), (0.0, h * t), (w, h * t)]);
     }
     let mut lonlats: Vec<Coord> = edge_points.iter().filter_map(|&(sx, sy)| lonlat_at(sx, sy)).collect();
-    // A frame whose edges reach past the globe's rim sees a whole hemisphere: its graticule is the
-    // whole Earth's, the lines behind the globe left out where they are drawn. A measured grid
-    // takes its bounds from the globe inside the frame too, its edges missing it.
+    // A frame with an edge past the globe's rim sees the globe's limb: its graticule is the whole
+    // Earth's, the lines behind the globe left out where they are drawn. A measured grid takes its
+    // bounds from the part of the globe inside the frame too, the edges missing it.
     let rim = globe.is_some() && lonlats.len() < edge_points.len();
     if rim {
         for i in 0..=16 {
