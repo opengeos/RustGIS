@@ -10,6 +10,22 @@ use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType,
 /// Largest file read into memory (256 MiB). Parsing JSON can take several times the file size.
 pub const MAX_BYTES: u64 = 256 << 20;
 
+const FILE_SIZE_LIMIT_START: &str = " is too large to open (limit ";
+const FILE_SIZE_LIMIT_END: &str =
+    " MiB). Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.";
+
+/// The whole-file refusal, using the limit of the reader that refused the input.
+pub fn file_size_error(name: &str, limit: u64) -> String {
+    format!("{name}{FILE_SIZE_LIMIT_START}{}{FILE_SIZE_LIMIT_END}", limit >> 20)
+}
+
+/// Recovers the literal file name and limit so the interface can translate the refusal.
+pub fn file_size_error_args(error: &str) -> Option<(&str, &str)> {
+    let (name, limit) = error.strip_suffix(FILE_SIZE_LIMIT_END)?.rsplit_once(FILE_SIZE_LIMIT_START)?;
+    limit.parse::<u64>().ok()?;
+    Some((name, limit))
+}
+
 /// File types the readers understand, for open dialogs.
 pub const READ_EXTENSIONS: &[&str] = &[
     "geojson",
@@ -110,7 +126,7 @@ fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<V
 /// track points. Other files give their one layer.
 pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
+        return Err(DataError::Format(file_size_error(file_name, MAX_BYTES)));
     }
     let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let plain =
@@ -1583,10 +1599,10 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
 
 /// Longitude and latitude columns, recognised in any order; CSV export names its coordinate
 /// columns with the first of each that no field has.
-const LON_NAMES: &[&str] = &["longitude", "lon", "lng", "long", "x", "lon_dd", "longitude_dd", "stop_lon"];
-const LAT_NAMES: &[&str] = &["latitude", "lat", "y", "lat_dd", "latitude_dd", "stop_lat"];
+const LON_NAMES: &[&str] = &["longitude", "lon", "lng", "long", "lon_dd", "longitude_dd", "stop_lon"];
+const LAT_NAMES: &[&str] = &["latitude", "lat", "lat_dd", "latitude_dd", "stop_lat"];
 /// Further spellings seen in published files, recognised on reading but never written.
-const LON_ALIASES: &[&str] = &["longitude decimal degrees", "longitutde"];
+const LON_ALIASES: &[&str] = &["longitude decimal degrees", "longitutde", "longtitude"];
 const LAT_ALIASES: &[&str] = &["latitude decimal degrees", "lattitude"];
 
 /// Projected coordinate columns, recognised as well as longitude/latitude ones.
@@ -1650,39 +1666,55 @@ pub fn sniff_delimiter(text: &str) -> u8 {
     seps.get(pick).copied().unwrap_or(b',')
 }
 
-/// The x/y columns found by name, as a pair from one family: longitude/latitude, else
-/// easting/northing.
+/// Only complete pairs compete: X/Y and longitude/latitude in header order, then planar aliases.
 fn found_xy(headers: &[String]) -> Option<(usize, usize)> {
-    let find = |names: &[&str], aliases: &[&str]| {
-        headers.iter().position(|h| {
-            let name = h.trim().to_ascii_lowercase();
-            names.contains(&name.as_str()) || aliases.contains(&name.as_str())
-        })
-    };
-    find(LON_NAMES, LON_ALIASES).zip(find(LAT_NAMES, LAT_ALIASES)).or_else(|| find(X_NAMES, &[]).zip(find(Y_NAMES, &[])))
+    let find = |name: &str| headers.iter().position(|h| h.trim().eq_ignore_ascii_case(name));
+    find("x").zip(find("y")).into_iter().chain(found_geographic_xy(headers)).min_by_key(|&(x, _)| x).or_else(|| found_planar_xy(headers))
 }
 
 /// A projected system prefers explicitly planar names over longitude/latitude, regardless of
 /// header order. With no planar pair, retain the ordinary named-pair fallback.
 fn found_projected_xy(headers: &[String]) -> Option<(usize, usize)> {
+    found_planar_xy(headers).or_else(|| found_geographic_xy(headers))
+}
+
+/// Finds both axes among planar aliases and generic X/Y names.
+fn found_planar_xy(headers: &[String]) -> Option<(usize, usize)> {
     let find = |names: &[&str], generic: &str| {
         headers.iter().position(|h| {
             let name = h.trim().to_ascii_lowercase();
             name == generic || names.contains(&name.as_str())
         })
     };
-    find(X_NAMES, "x").zip(find(Y_NAMES, "y")).or_else(|| found_xy(headers))
+    find(X_NAMES, "x").zip(find(Y_NAMES, "y"))
 }
 
-/// A specific geographic pair, excluding generic X/Y aliases.
+/// A complete longitude/latitude pair, including published aliases.
 fn found_geographic_xy(headers: &[String]) -> Option<(usize, usize)> {
-    let find = |names: &[&str], aliases: &[&str], generic: &str| {
+    let find = |names: &[&str], aliases: &[&str]| {
         headers.iter().position(|h| {
             let name = h.trim().to_ascii_lowercase();
-            name != generic && (names.contains(&name.as_str()) || aliases.contains(&name.as_str()))
+            names.contains(&name.as_str()) || aliases.contains(&name.as_str())
         })
     };
-    find(LON_NAMES, LON_ALIASES, "x").zip(find(LAT_NAMES, LAT_ALIASES, "y"))
+    find(LON_NAMES, LON_ALIASES).zip(find(LAT_NAMES, LAT_ALIASES))
+}
+
+/// Ordinary tables keep opening quietly. When there are coordinate-like names but no complete
+/// pair, name them so the user can supply the missing choice.
+fn unmatched_coordinates_note(headers: &[String]) -> Option<String> {
+    let candidates: Vec<_> = headers
+        .iter()
+        .map(|h| h.trim())
+        .filter(|h| {
+            let name = h.to_ascii_lowercase();
+            matches!(name.as_str(), "x" | "y")
+                || [LON_NAMES, LON_ALIASES, LAT_NAMES, LAT_ALIASES, X_NAMES, Y_NAMES].iter().any(|names| names.contains(&name.as_str()))
+        })
+        .collect();
+    (!candidates.is_empty()).then(|| {
+        format!("Opened as a table. No matching coordinate pair among {}. Choose x and y to import points.", candidates.join(", "))
+    })
 }
 
 /// Prefers a specific longitude/latitude pair when it has at least as many usable, nonzero
@@ -2064,6 +2096,12 @@ pub(crate) fn read_rows(
         })
         .collect();
     let mut report = ReadReport { skipped: malformed, ..ReadReport::default() };
+    if xy.is_none()
+        && wkt.is_none()
+        && let Some(note) = unmatched_coordinates_note(headers)
+    {
+        report.messages.push(note);
+    }
     if malformed > 0 {
         report.messages.push(format!("{malformed} rows were malformed and skipped"));
     }
@@ -2374,12 +2412,7 @@ fn csv_cell(v: &Value) -> String {
 fn csv_coordinate_names(fields: &[Field]) -> [String; 2] {
     let taken = |name: &str| fields.iter().any(|f| f.name.trim().eq_ignore_ascii_case(name));
     let pick = |base: &str, known: &[&str]| {
-        let name = known
-            .iter()
-            .filter(|n| !matches!(**n, "x" | "y"))
-            .map(|n| n.to_string())
-            .chain((1..).map(|i| format!("{base}_{i}")))
-            .find(|n| !taken(n));
+        let name = known.iter().map(|n| n.to_string()).chain((1..).map(|i| format!("{base}_{i}"))).find(|n| !taken(n));
         name.unwrap_or_default()
     };
     [pick("longitude", LON_NAMES), pick("latitude", LAT_NAMES)]
@@ -5404,6 +5437,33 @@ mod tests {
         // A named GTFS pair works alone, but a lone longitude never becomes geometry.
         assert_eq!(read_csv("stop_lat,stop_lon\n35.1,-89.9\n", "stops").unwrap().0.geometry_type, GeometryType::Point);
         assert_eq!(read_csv("stop_lon,stop_name\n-89.9,Main\n", "stops").unwrap().0.geometry_type, GeometryType::None);
+    }
+
+    /// An incomplete pair opens as a table, while a complete published pair places the point.
+    #[test]
+    fn csv_automatic_coordinates_require_a_complete_pair() {
+        for text in ["X,Latitude\n570000,44.95\n", "Longitude,Y\n-93.10,160000\n"] {
+            let (dataset, report) = read_csv(text, "incomplete").unwrap();
+            assert_eq!(dataset.geometry_type, GeometryType::None);
+            assert_eq!(dataset.features.len(), 1);
+            let (header, _) = text.split_once('\n').unwrap();
+            let (x, y) = header.split_once(',').unwrap();
+            assert_eq!(report.messages.len(), 1);
+            assert!(report.messages[0].contains(&format!("{x}, {y}")));
+            assert!(report.messages[0].contains("Choose x and y"));
+            let columns = csv_columns(text, None, None).unwrap();
+            assert_eq!((columns.x, columns.y), (None, None));
+        }
+
+        for text in
+            ["id,PROPX,PROPY,Latitude,Longtitude\n1,570000,160000,44.95,-93.10\n", "X,Latitude,Longtitude,Y\n570000,44.95,-93.10,160000\n"]
+        {
+            let (dataset, report) = read_csv(text, "permits").unwrap();
+            assert_eq!(dataset.features[0].geometry, Some(Geometry::Point(Coord::new(-93.10, 44.95))));
+            assert!(report.messages.is_empty(), "{:?}", report.messages);
+            let columns = csv_columns(text, None, None).unwrap();
+            assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longtitude"), Some("Latitude")));
+        }
     }
 
     /// A projected system must never treat an earlier geographic pair as easting/northing when

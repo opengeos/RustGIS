@@ -105,10 +105,12 @@ the columns again); `info.fileColumns` lists them for scripts. Add Data finds th
 geometry, and EWKT's `SRID=`). With no projected coordinate system or explicit column choices,
 a specific longitude/latitude pair is preferred over generic X/Y when it gives in-range,
 non-0,0 positions on at least as many rows as the first pair gives finite positions.
-That pair is used for the whole file.
+That pair is used for the whole file. Automatic detection keeps X/Y and longitude/latitude
+separate. If it finds coordinate-like names but no complete pair or WKT column, the file opens
+as a table and the notice names the candidates so you can choose x and y.
 The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
-`Longitutde`/`Lattitude` are recognised too. The dialog checks the first 1,000 rows of delimited
-text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you
+`Longitutde`, `Longtitude` and `Lattitude` are recognised too. The dialog checks the first 1,000 rows
+of delimited text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you
 leave the coordinate-system box or press Enter; columns you picked stay picked. With a projected
 coordinate system, defaults prefer X/Y or easting/northing columns when the file also has
 longitude/latitude columns.

@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::RustGisApp;
 use crate::theme::{Tokens, semibold};
+use crate::{RustGisApp, i18n};
 
 #[derive(Default)]
 pub struct Dialogs {
@@ -717,7 +717,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
         }
         if let Some(e) = &app.dialogs.error {
-            ui.label(egui::RichText::new(e).color(t.red));
+            let translated = i18n::file_size_error(e, i18n::fmt);
+            ui.label(egui::RichText::new(translated.as_deref().unwrap_or(e)).color(t.red));
         }
         if let Some(i) = &app.dialogs.info {
             ui.label(egui::RichText::new(i).color(t.green));
