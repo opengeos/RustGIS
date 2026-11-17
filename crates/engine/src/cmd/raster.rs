@@ -563,7 +563,6 @@ pub(crate) fn say_losses(s: &mut Session, losses: Vec<(String, String)>) {
 
 /// Opens a raster file by path.
 pub fn add_path(s: &mut Session, path: &str, name: Option<&str>, page: Option<&str>, scan: bool) -> CmdResult {
-    let page = pdf_page(path, page);
     let mut r = match super::reads::take(s, &read_key(path, page, scan)) {
         Some(r) => r,
         None => read_raster_as(path, page, scan),
@@ -582,10 +581,43 @@ pub fn add_path(s: &mut Session, path: &str, name: Option<&str>, page: Option<&s
     add_raster(s, &name, rl)
 }
 
-/// The page `"layer"` asks for when `path` is a PDF's (its number, trimmed); `None` otherwise,
-/// where a raster has no pages.
-pub(crate) fn pdf_page<'a>(path: &str, page: Option<&'a str>) -> Option<&'a str> {
-    page.map(str::trim).filter(|p| !p.is_empty() && raster::is_pdf_name(path))
+/// The page `"layer"` asks for when `path` is a PDF's: its number, given as text or as a whole
+/// number (a JSON number); `None` when not given, or for a raster that has no pages. Any other
+/// value is refused rather than read as the first page.
+pub(crate) fn pdf_page(path: &str, p: &Value) -> Result<Option<String>, String> {
+    if !raster::is_pdf_name(path) {
+        return Ok(None);
+    }
+    match p.get("layer") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(t.trim().to_string()).filter(|t| !t.is_empty())),
+        Some(Value::Number(n)) if n.as_u64().is_some() => Ok(n.as_u64().map(|n| n.to_string())),
+        Some(other) => Err(format!("\"layer\": {other} isn't a page number")),
+    }
+}
+
+/// Whether a whole file downloaded from `url` is a PDF page to draw off the frame before it is
+/// added (`layer.addDownload` with `p`): its file name, page and whether it is placed by its
+/// coordinates (not `"as": "scan"`). `None` for anything else, or a page that can't be read here,
+/// which `layer.addDownload` reads (or refuses) as it adds it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_page(url: &str, p: &Value, bytes: &[u8]) -> Option<(String, Option<String>, bool)> {
+    let plain =
+        ["service", "coverage", "geolibreProject", "geolibreLayer"].iter().all(|k| p.get(k).is_none_or(|v| v.is_null() || v == false));
+    if !raster::PDF_PAGES || !plain {
+        return None;
+    }
+    let name = super::layer::url_file_name(url, bytes).ok().filter(|n| raster::is_pdf_name(n))?;
+    let page = pdf_page(&name, p).ok()?;
+    let scan = wants_scan(p, &name).ok()?;
+    Some((name, page, !scan))
+}
+
+/// Draws a downloaded PDF's page off the frame ([`download_page`]), for
+/// [`crate::Session::download_landed_page`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_download_page(name: &str, bytes: &[u8], page: Option<&str>, place: bool) -> Result<Raster, String> {
+    raster::read_bytes_page(name, bytes, page, place).map_err(|e| format!("{name}: {e}"))
 }
 
 /// The raster at `path` (a PDF's `page`), read whole; for a `scan`, as the file holds it, without
@@ -690,6 +722,19 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Adds a file's contents (an upload, a download) as its name's extension says.
 pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: Vec<u8>, zoom: Option<bool>) -> CmdResult {
+    add_named_bytes_read(s, p, name, bytes, zoom, None)
+}
+
+/// [`add_named_bytes`], with a PDF's page drawn already off the frame (a download's,
+/// [`read_download_page`]) instead of here.
+pub(crate) fn add_named_bytes_read(
+    s: &mut Session,
+    p: &Value,
+    name: String,
+    bytes: Vec<u8>,
+    zoom: Option<bool>,
+    drawn: Option<Raster>,
+) -> CmdResult {
     // A geotagged photo (an upload, a drop): a point in the photo layer, so several uploads
     // gather in one.
     let scan = wants_scan(p, &name)?;
@@ -706,8 +751,11 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
     }
     if raster::is_raster_name(&name) {
         // A PDF's page, kept so the project reads the same page from its copy again.
-        let page = pdf_page(&name, ps(p, "layer")).map(str::to_string);
-        let mut r = raster::read_bytes_page(&name, &bytes, page.as_deref()).map_err(|e| format!("{name}: {e}"))?;
+        let page = pdf_page(&name, p)?;
+        let mut r = match drawn {
+            Some(r) => r,
+            None => raster::read_bytes_page(&name, &bytes, page.as_deref(), !scan).map_err(|e| format!("{name}: {e}"))?,
+        };
         if scan {
             r = r.into_scan().map_err(|e| format!("{name}: {e}"))?;
         }

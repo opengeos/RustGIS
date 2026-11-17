@@ -44787,6 +44787,23 @@ fn a_pdf_is_added_back_as_a_raster() {
         let (_, placed, ..) = added(&mut s, json!({"path": single, "as": "scan"}));
         assert!(!placed);
         assert!(s.run("layer.addData", &json!({"path": series, "layer": "999"})).unwrap_err().contains(&format!("from 1 to {pages}")));
+        // A page given as a number is the same page; anything else is refused, not page 1.
+        let (_, _, _, numbered, _) = added(&mut s, json!({"path": series, "layer": 2, "name": "numbered"}));
+        assert_eq!(numbered, second);
+        assert!(s.run("layer.addData", &json!({"path": series, "layer": [2]})).unwrap_err().contains("isn't a page number"));
+        // A download's page, drawn off the frame by the app, is added as drawn.
+        let bytes = std::fs::read(&series).unwrap();
+        let url = "https://example.org/maps/atlas.pdf";
+        let asked = json!({"url": url, "layer": "2"});
+        let (name, page, place) = crate::cmd::raster::download_page(url, &asked, &bytes).unwrap();
+        assert_eq!((name.as_str(), page.as_deref(), place), ("atlas.pdf", Some("2"), true));
+        assert!(crate::cmd::raster::download_page("https://example.org/a.tif", &asked, &bytes).is_none());
+        let drawn = crate::cmd::raster::read_download_page(&name, &bytes, page.as_deref(), place).unwrap();
+        let id = s.download_started();
+        assert!(s.download_landed_page(id, bytes, drawn));
+        let r = s.run("layer.addDownload", &json!({"id": id, "url": url, "layer": "2"})).unwrap();
+        let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+        assert_eq!((l.name.as_str(), l.raster.as_ref().unwrap().data.as_ref().unwrap().extent()), ("atlas page 2", second));
         // Uploaded (or downloaded) contents read alike.
         use base64::Engine;
         let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&single).unwrap());
@@ -44794,7 +44811,7 @@ fn a_pdf_is_added_back_as_a_raster() {
         let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
         assert!(l.raster.as_ref().unwrap().data.as_ref().unwrap().georeferenced, "{}", l.name);
         let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&series).unwrap());
-        let r = s.run("layer.addDataBytes", &json!({"fileName": "pages.pdf", "data": data, "layer": "2"})).unwrap();
+        let r = s.run("layer.addDataBytes", &json!({"fileName": "pages.pdf", "data": data, "layer": 2})).unwrap();
         let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
         assert_eq!((l.name.as_str(), l.raster.as_ref().unwrap().data.as_ref().unwrap().extent()), ("pages page 2", second));
         // Saved and opened again, page 2 is still page 2.

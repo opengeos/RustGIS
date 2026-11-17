@@ -1897,7 +1897,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     if rustgis_data::raster::is_raster_name(path) {
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty());
-        return super::raster::add_path(s, path, name, ps(p, "layer"), scan);
+        let page = super::raster::pdf_page(path, p)?;
+        return super::raster::add_path(s, path, name, page.as_deref(), scan);
     }
     // A Zarr store's folder: its first variable, or the one "layer" names.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2297,7 +2298,8 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
         return None;
     }
     if rustgis_data::raster::is_raster_name(&path) {
-        let page = super::raster::pdf_page(&path, ps(p, "layer")).map(str::to_string);
+        // A page that isn't one is refused when the command runs.
+        let page = super::raster::pdf_page(&path, p).ok()?;
         let key = super::raster::read_key(&path, page.as_deref(), scan);
         return Some(ahead(NAME, key, move || super::raster::read_raster_as(&path, page.as_deref(), scan)));
     }
@@ -5773,7 +5775,12 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
         url_file_name(&url, &bytes).map_err(|e| crate::sources::message_with_address(&url, &e))?
     };
     let left_out = parts_left_out(&url, &bytes, p);
-    let r = super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom"))?;
+    // A PDF's page the app drew off the frame as it landed (#2336).
+    #[cfg(not(target_arch = "wasm32"))]
+    let drawn = s.landed_pages.iter().position(|(d, _)| *d == id).map(|i| s.landed_pages.remove(i).1);
+    #[cfg(target_arch = "wasm32")]
+    let drawn = None;
+    let r = super::raster::add_named_bytes_read(s, p, name, bytes, b(p, "zoom"), drawn)?;
     if let Some(n) = left_out {
         s.notify(n, false);
     }

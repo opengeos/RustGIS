@@ -249,6 +249,10 @@ pub(crate) struct UnderWay {
     pub progress: Option<std::sync::Arc<rustgis_engine::render::rustgis_tiles::cache::Progress>>,
 }
 
+/// Where a PDF download's bytes and drawn page land ([`UiState::page_reads`]).
+#[cfg(not(target_arch = "wasm32"))]
+type PageRead = Slot<Result<(Vec<u8>, rustgis_engine::data::raster::Raster), String>>;
+
 /// See [`UiState::window_reads`].
 #[cfg(not(target_arch = "wasm32"))]
 type WindowRead =
@@ -859,6 +863,10 @@ pub struct UiState {
     /// its project was closed.
     #[cfg(not(target_arch = "wasm32"))]
     pub window_reads: Vec<WindowRead>,
+    /// PDF downloads whose page is being drawn on a thread before it is added (#2336): the
+    /// download, and where its bytes and page land.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) page_reads: Vec<(serviceui::Landed, PageRead)>,
     /// Service layers whose features are being read page by page (an ArcGIS layer's description
     /// first).
     pub service_pages: Vec<serviceui::PageRead>,
@@ -1061,6 +1069,8 @@ impl Default for UiState {
             cog_probes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             window_reads: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            page_reads: Vec::new(),
             service_pages: Vec::new(),
             link_zoomed: false,
             service: None,
@@ -5575,8 +5585,34 @@ impl RustGisApp {
         for (id, url, mut p, r) in landed {
             let origin = connectiontree::take_origin_key(&mut p);
             match r {
+                // A PDF's page is drawn on a thread first, so a large one doesn't hold the window.
+                #[cfg(not(target_arch = "wasm32"))]
+                Ok(bytes) if rustgis_engine::cmd::raster::download_page(&url, &p, &bytes).is_some() => {
+                    self.draw_page(serviceui::Landed { id, url, params: p, origin }, bytes);
+                }
                 Ok(bytes) => self.add_landed(serviceui::Landed { id, url, params: p, origin }, bytes),
                 Err(e) => self.landed_failed(id, &url, &p, e),
+            }
+        }
+        // PDF pages drawn on threads, added with their downloads' bytes.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut drawn = Vec::new();
+            for (landed, slot) in std::mem::take(&mut self.ui.page_reads) {
+                let read = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+                match read {
+                    Some(r) => drawn.push((landed, r)),
+                    None => self.ui.page_reads.push((landed, slot)),
+                }
+            }
+            for (landed, r) in drawn {
+                match r {
+                    Ok((bytes, page)) => {
+                        let current = self.session.download_landed_page(landed.id, bytes, page);
+                        self.add_download(landed, current);
+                    }
+                    Err(e) => self.landed_failed(landed.id, &landed.url, &landed.params, e),
+                }
             }
         }
         // Windows read on threads, added as a download is.
@@ -5616,7 +5652,9 @@ impl RustGisApp {
         };
         let downloads = self.ui.downloads.iter().map(|d| shown(d.id, &d.url, Some(&d.progress)));
         #[cfg(not(target_arch = "wasm32"))]
-        let downloads = downloads.chain(self.ui.window_reads.iter().map(|(id, url, ..)| shown(*id, url, None)));
+        let downloads = downloads
+            .chain(self.ui.window_reads.iter().map(|(id, url, ..)| shown(*id, url, None)))
+            .chain(self.ui.page_reads.iter().map(|(l, _)| shown(l.id, &l.url, None)));
         let mut under_way: Vec<_> = downloads.collect();
         under_way.sort_by_key(|d| d.id);
         under_way
@@ -5751,6 +5789,32 @@ impl RustGisApp {
         let id = claim.unwrap_or_else(|| self.session.download_started());
         self.ui.window_reads.push((id, url, q, slot, left));
         Ok(Value::Null)
+    }
+
+    /// Draws a downloaded PDF's page on a thread ([`rustgis_engine::cmd::raster::read_download_page`]),
+    /// to be added with its bytes once drawn ([`UiState::page_reads`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_page(&mut self, landed: serviceui::Landed, bytes: Vec<u8>) {
+        let Some((name, page, place)) = rustgis_engine::cmd::raster::download_page(&landed.url, &landed.params, &bytes) else {
+            return self.add_landed(landed, bytes);
+        };
+        let slot: PageRead = Slot::default();
+        let land = slot.clone();
+        let spawned = std::thread::Builder::new().name("pdf-page".into()).spawn(move || {
+            // On a thread no command's catch reaches: a bug must not leave it running forever.
+            let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rustgis_engine::cmd::raster::read_download_page(&name, &bytes, page.as_deref(), place)
+            }));
+            let read = read.unwrap_or_else(|_| Err(tl!("Drawing the PDF's page failed unexpectedly").to_string()));
+            *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(read.map(|r| (bytes, r)));
+        });
+        match spawned {
+            Ok(_) => self.ui.page_reads.push((landed, slot)),
+            Err(e) => {
+                let why = i18n::fmt("its page couldn't be drawn: {error}", &[("error", &e.to_string())]);
+                self.landed_failed(landed.id, &landed.url, &landed.params, why);
+            }
+        }
     }
 
     /// Adds a download that landed (`layer.addDownload`), named in Recent after the connection it

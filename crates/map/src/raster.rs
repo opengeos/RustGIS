@@ -540,7 +540,7 @@ impl RasterLayer {
                             _ => "The raster could not be downloaded.".to_string(),
                         }))
                         .and_then(|bytes| {
-                            rustgis_data::raster::read_bytes_page(&name, &bytes, page.as_deref())
+                            rustgis_data::raster::read_bytes_page(&name, &bytes, page.as_deref(), placement.is_none())
                                 .and_then(|r| placed(r, placement))
                                 .map(Arc::new)
                                 .map_err(|e| e.to_string())
@@ -553,8 +553,13 @@ impl RasterLayer {
         }
         // A scan goes back where it was laid (a GeoTIFF opened `as` a scan is one again).
         let r = if let Some(bytes) = &self.embedded {
-            rustgis_data::raster::read_bytes_page(self.file_name.as_deref().unwrap_or("raster.tif"), bytes, self.subdataset.as_deref())
-                .and_then(|r| placed(r, self.placement))
+            rustgis_data::raster::read_bytes_page(
+                self.file_name.as_deref().unwrap_or("raster.tif"),
+                bytes,
+                self.subdataset.as_deref(),
+                self.placement.is_none(),
+            )
+            .and_then(|r| placed(r, self.placement))
         } else if let Some(p) = &self.path {
             self.read_placed(p, self.subdataset.as_deref(), true)
         } else {

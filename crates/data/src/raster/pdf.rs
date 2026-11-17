@@ -29,8 +29,9 @@ pub const MAX_BYTES: u64 = 1 << 30;
 /// The most other pages a notice names.
 const NAMED_PAGES: usize = 20;
 
-/// Reads page `page` of the PDF at `path` (its number, from 1; the first when `None`).
-pub fn read_file(path: &Path, page: Option<&str>) -> Result<Raster> {
+/// Reads page `page` of the PDF at `path` (its number, from 1; the first when `None`), placed by
+/// its coordinates when `place` (else a scan, as `"as": "scan"` opens it).
+pub fn read_file(path: &Path, page: Option<&str>, place: bool) -> Result<Raster> {
     let meta = std::fs::metadata(path)?;
     if !meta.is_file() {
         return Err(DataError::Format(format!("{} is not a regular file", path.display())));
@@ -39,24 +40,25 @@ pub fn read_file(path: &Path, page: Option<&str>) -> Result<Raster> {
         return Err(DataError::Format(format!("the PDF is larger than {} MB, too large to open", MAX_BYTES >> 20)));
     }
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
-    let mut r = read_bytes(name, crate::provenance::read(path)?, page)?;
+    let mut r = read_bytes(name, crate::provenance::read(path)?, page, place)?;
     r.source = Some(path.display().to_string());
     Ok(r)
 }
 
 /// Reads page `page` (its number, from 1; the first when `None`) of a PDF's contents, named
-/// `name`. A page with a GeoPDF viewport is placed by it, else it is a scan. Other pages, other
-/// viewports, and a page drawn at less than [`DPI`] are said in `lost`.
+/// `name`. When `place`, a page with a GeoPDF viewport is placed by it; otherwise, or without
+/// one, it is a scan. Other pages, other viewports, and a page drawn at less than [`DPI`] are said
+/// in `lost`.
 ///
 /// Reading the file and drawing the page are each one step that can't be stopped: Cancel is looked
 /// at before, between and after them.
-pub fn read_bytes(name: &str, bytes: Vec<u8>, page: Option<&str>) -> Result<Raster> {
-    read_limited(name, bytes, page, max_samples())
+pub fn read_bytes(name: &str, bytes: Vec<u8>, page: Option<&str>, place: bool) -> Result<Raster> {
+    read_limited(name, bytes, page, place, max_samples())
 }
 
 /// [`read_bytes`], drawing the page in at most `max` samples (the tests' small limit exercises the
 /// reduction).
-fn read_limited(name: &str, bytes: Vec<u8>, page: Option<&str>, max: usize) -> Result<Raster> {
+fn read_limited(name: &str, bytes: Vec<u8>, page: Option<&str>, place: bool, max: usize) -> Result<Raster> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(DataError::Format(format!("the PDF is larger than {} MB, too large to open", MAX_BYTES >> 20)));
     }
@@ -91,13 +93,14 @@ fn read_limited(name: &str, bytes: Vec<u8>, page: Option<&str>, max: usize) -> R
     let (mut r, scale) = draw(page, &title, max)?;
     crate::progress::check()?;
     if count > 1 {
-        let others: Vec<String> = (1..=count).filter(|n| *n != number).map(|n| n.to_string()).collect();
-        let shown = others.iter().take(NAMED_PAGES).cloned().collect::<Vec<_>>().join(", ");
-        let more = others.len().saturating_sub(NAMED_PAGES);
+        // Only the pages named are written out, however many the file has.
+        let others = count - 1;
+        let shown: Vec<String> = (1..=count).filter(|n| *n != number).take(NAMED_PAGES).map(|n| n.to_string()).collect();
+        let more = others.saturating_sub(NAMED_PAGES);
         let tail = if more > 0 { format!(", and {more} more") } else { String::new() };
-        r.lost.push(format!("it has {} more pages ({shown}{tail}): add one with \"layer\"", others.len()));
+        r.lost.push(format!("it has {others} more pages ({}{tail}): add one with \"layer\"", shown.join(", ")));
     }
-    Ok(place(r, page, scale))
+    Ok(if place { place_by_viewport(r, page, scale) } else { r })
 }
 
 /// The page drawn on white, as red, green and blue bands, and the pixels a point spans: at
@@ -113,7 +116,8 @@ fn draw(page: &Page<'_>, name: &str, max: usize) -> Result<(Raster, f64)> {
     // Three samples a pixel kept (red, green, blue); the drawing's four bytes a pixel are a
     // fraction of what they take as `f32`.
     let fits = (max as f64 / 3.0 / (w * h)).sqrt();
-    let scale = wanted.min(MAX_SIDE / w).min(MAX_SIDE / h).min(fits);
+    let largest = MAX_SIDE / w.max(h);
+    let scale = wanted.min(largest).min(fits);
     if w * scale < 1.0 || h * scale < 1.0 {
         return Err(DataError::Format("the page is too large to draw".into()));
     }
@@ -133,7 +137,8 @@ fn draw(page: &Page<'_>, name: &str, max: usize) -> Result<(Raster, f64)> {
     let mut r = Raster::new(name, pw, ph, bands, unreferenced(pw, ph), Crs::LonLat, None, ColorHint::Rgb { alpha: false }, "UInt8")?;
     r.georeferenced = false;
     if scale < wanted * 0.999 {
-        r.lost.push(format!("its page is drawn at {:.0} dots an inch, not {DPI:.0}, to fit in memory", scale * 72.0));
+        let why = if fits <= largest { "to fit in memory" } else { "the largest size it can be drawn at" };
+        r.lost.push(format!("its page is drawn at {:.0} dots an inch, not {DPI:.0}, {why}", scale * 72.0));
     }
     Ok((r, scale))
 }
@@ -185,12 +190,12 @@ fn viewport(vp: &Dict<'_>, measure: &Dict<'_>) -> std::result::Result<Viewport, 
     let bbox: Vec<f64> = vp.get::<Array>(b"BBox".as_slice()).map(|a| a.iter::<f64>().collect()).unwrap_or_default();
     let bbox: [f64; 4] = bbox.try_into().map_err(|_| "its rectangle isn't four numbers".to_string())?;
     let gpts = measure.get::<Array>(b"GPTS".as_slice()).map(|a| pairs(&a)).unwrap_or_default();
-    // Where the points lie in the rectangle: the whole of it when not said.
+    // Where the points lie in the rectangle.
     let lpts = measure
         .get::<Array>(b"LPTS".as_slice())
         .or_else(|| measure.get::<Array>(b"Bounds".as_slice()))
         .map(|a| pairs(&a))
-        .unwrap_or_else(|| vec![(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]);
+        .ok_or("it doesn't say where its control points lie in it (/LPTS)")?;
     if gpts.len() < 3 || gpts.len() != lpts.len() {
         return Err("its control points are missing or don't pair up".into());
     }
@@ -225,7 +230,7 @@ fn viewport(vp: &Dict<'_>, measure: &Dict<'_>) -> std::result::Result<Viewport, 
 
 /// `r`, the drawn page at `scale` pixels a point, placed by the largest of its GeoPDF viewports:
 /// left a scan when it has none, or none that can be used (said in `lost`).
-fn place(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
+fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
     let (mut found, unread) = viewports(page);
     let unplaced = "it opens without coordinates";
     if found.is_empty() {
@@ -235,10 +240,12 @@ fn place(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
         return r;
     }
     found.sort_by(|a, b| b.area().total_cmp(&a.area()));
-    let others = found.len() - 1 + unread.len();
     let v = found.swap_remove(0);
-    if others > 0 {
-        r.lost.push(format!("it has {others} more map frames with coordinates (insets, say): it is placed by the largest"));
+    if !found.is_empty() {
+        r.lost.push(format!("it has {} more map frames with coordinates (insets, say): it is placed by the largest", found.len()));
+    }
+    if let Some(why) = unread.first() {
+        r.lost.push(format!("{} more of its map frames have coordinates that can't be used ({why}, the first)", unread.len()));
     }
     let to_pixels = Affine::scale(scale) * page.initial_transform(true).to_kurbo();
     let (wf, off) = match fit(&v, to_pixels, r.width, r.height) {
@@ -270,12 +277,17 @@ fn fit(v: &Viewport, to_pixels: Affine, w: u32, h: u32) -> std::result::Result<(
     let t = v.crs.transformer()?;
     let [x0, y0, x1, y1] = v.bbox;
     let mut points = Vec::with_capacity(v.gpts.len());
+    let mut first: Option<f64> = None;
     for (&(lat, lon), &(lx, ly)) in v.gpts.iter().zip(&v.lpts) {
         let on = Coord::new(lon, lat);
-        let wgs84 = match &v.def {
+        let mut wgs84 = match &v.def {
             Some(def) => crs::lonlat_from_datum_of(def, on).ok_or("a control point is off the Earth")?,
             None => on,
         };
+        // The frame's longitudes on one turn of the Earth: across 180°, 179° and -179° are 2°
+        // apart, not 358°.
+        let reference = *first.get_or_insert(wgs84.x);
+        wgs84.x = reference + (wgs84.x - reference + 180.0).rem_euclid(360.0) - 180.0;
         let ground = t.from_lonlat(wgs84).ok_or("a control point is outside its coordinate system")?;
         let p = to_pixels * Point::new(x0 + lx * (x1 - x0), y0 + ly * (y1 - y0));
         points.push(((p.x, p.y), (ground.x, ground.y)));
@@ -365,57 +377,79 @@ mod tests {
         out.into_bytes()
     }
 
-    /// A viewport over the whole of a 72 × 36 point page, its corners at 10–12° E, 40–41° N.
-    fn geo(gcs: &str) -> String {
+    /// A viewport over `bbox` on the page, its corners at 10–12° E, 40–41° N.
+    fn vp(gcs: &str, bbox: &str) -> String {
         format!(
-            "/VP [<< /Type /Viewport /BBox [0 0 72 36] /Measure << /Type /Measure /Subtype /GEO \
-             /GPTS [41 10 41 12 40 12 40 10] /LPTS [0 1 1 1 1 0 0 0] /GCS << {gcs} >> >> >>]"
+            "<< /Type /Viewport /BBox [{bbox}] /Measure << /Type /Measure /Subtype /GEO \
+             /GPTS [41 10 41 12 40 12 40 10] /LPTS [0 1 1 1 1 0 0 0] /GCS << {gcs} >> >> >>"
         )
+    }
+
+    /// A viewport over the whole of a 72 × 36 point page.
+    fn geo(gcs: &str) -> String {
+        format!("/VP [{}]", vp(gcs, "0 0 72 36"))
     }
 
     #[test]
     fn a_page_without_coordinates_is_a_scan_drawn_at_150_dpi() {
-        let r = read_bytes("plain", tiny_pdf("0 0 72 36", ""), None).unwrap();
+        let r = read_bytes("plain", tiny_pdf("0 0 72 36", ""), None, true).unwrap();
         assert_eq!((r.width, r.height, r.bands.len(), r.georeferenced), (150, 75, 3, false));
         assert!(r.lost.is_empty(), "{:?}", r.lost);
         // The blue square at the bottom left, white elsewhere.
         let at = |band: usize, col: usize, row: usize| r.bands[band].data[row * 150 + col];
         assert_eq!((at(0, 2, 72), at(1, 2, 72), at(2, 2, 72)), (0.0, 0.0, 255.0));
         assert_eq!((at(0, 100, 10), at(2, 100, 10)), (255.0, 255.0));
-        let e = read_bytes("plain", tiny_pdf("0 0 72 36", ""), Some("2")).unwrap_err().to_string();
+        let e = read_bytes("plain", tiny_pdf("0 0 72 36", ""), Some("2"), true).unwrap_err().to_string();
         assert!(e.contains("from 1 to 1"), "{e}");
     }
 
     #[test]
     fn a_geopdf_page_is_placed_by_its_viewport() {
         let wgs84 = r#"/Type /GEOGCS /EPSG 4326 /WKT (GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]])"#;
-        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo(wgs84)), None).unwrap();
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo(wgs84)), None, true).unwrap();
         assert!(r.georeferenced && r.lost.is_empty(), "{:?}", r.lost);
         let e = r.extent();
         for (got, want) in [(e.min_x, 10.0), (e.max_x, 12.0), (e.min_y, 40.0), (e.max_y, 41.0)] {
             assert!((got - want).abs() < 1e-9, "{e:?}");
         }
         // A code RustGIS doesn't know: its WKT is read instead.
-        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo(&wgs84.replace("4326", "999999"))), None).unwrap();
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo(&wgs84.replace("4326", "999999"))), None, true).unwrap();
         assert!(r.georeferenced, "{:?}", r.lost);
+        // A second, smaller frame (an inset) is counted, and the larger places the page; read as
+        // a scan, nothing is said of either.
+        let both = format!("/VP [{} {}]", vp(wgs84, "0 0 72 36"), vp(wgs84, "0 0 10 10"));
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &both), None, true).unwrap();
+        assert!(
+            r.georeferenced && r.lost == ["it has 1 more map frames with coordinates (insets, say): it is placed by the largest"],
+            "{:?}",
+            r.lost
+        );
+        assert!((r.extent().max_x - 12.0).abs() < 1e-9, "placed by the larger");
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &both), None, false).unwrap();
+        assert!(!r.georeferenced && r.lost.is_empty(), "{:?}", r.lost);
+        // A frame across 180°: two degrees wide, not mirrored over the rest of the world.
+        let across = geo(wgs84).replace("/GPTS [41 10 41 12 40 12 40 10]", "/GPTS [41 179 41 -179 40 -179 40 179]");
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &across), None, true).unwrap();
+        let wide = r.transform.pixel_width * f64::from(r.width);
+        assert!(r.georeferenced && (wide - 2.0).abs() < 1e-6, "{wide}° wide, {:?}", r.lost);
         // No system at all: a scan, and said.
-        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo("/Type /GEOGCS")), None).unwrap();
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo("/Type /GEOGCS")), None, true).unwrap();
         assert!(!r.georeferenced && r.lost[0].contains("doesn't say its coordinate system"), "{:?}", r.lost);
     }
 
     #[test]
     fn hostile_pdfs_are_refused_or_drawn_small_never_a_panic() {
-        assert!(read_bytes("x", b"not a pdf".to_vec(), None).unwrap_err().to_string().contains("not a PDF"));
+        assert!(read_bytes("x", b"not a pdf".to_vec(), None, true).unwrap_err().to_string().contains("not a PDF"));
         // Cut short: whatever it reads, it doesn't panic.
         let whole = tiny_pdf("0 0 72 36", "");
         for cut in [10, whole.len() / 2, whole.len() - 8] {
-            let _ = read_bytes("cut", whole[..cut].to_vec(), None);
+            let _ = read_bytes("cut", whole[..cut].to_vec(), None, true);
         }
         // A page ten million points on a side is drawn within the limit, and says so.
-        let r = read_limited("huge", tiny_pdf("0 0 10000000 10000000", ""), None, 30_000).unwrap();
+        let r = read_limited("huge", tiny_pdf("0 0 10000000 10000000", ""), None, true, 30_000).unwrap();
         assert!(r.width * r.height * 3 <= 30_000 && r.width >= 1, "{} × {}", r.width, r.height);
         assert!(r.lost[0].contains("dots an inch, not 150"), "{:?}", r.lost);
         // A page box of no area: drawn at a size the renderer gives it, or refused, never a panic.
-        let _ = read_bytes("flat", tiny_pdf("0 0 72 0", ""), None);
+        let _ = read_bytes("flat", tiny_pdf("0 0 72 0", ""), None, true);
     }
 }

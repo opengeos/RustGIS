@@ -116,13 +116,14 @@ pub const PDF_PAGES: bool = cfg!(feature = "pdf");
 /// Why a PDF isn't read in a build without the `pdf` feature (the browser, phones).
 pub const PDF_ELSEWHERE: &str = "PDFs are read in the desktop app, the command line and Python, not here: open it there";
 
-/// Reads page `page` of a PDF file (its number; the first when `None`), or says it isn't read here.
-fn read_pdf_page(path: &Path, page: Option<&str>) -> Result<Raster> {
+/// Reads page `page` of a PDF file (its number; the first when `None`), placed by its coordinates
+/// when `place` (a scan otherwise), or says it isn't read here.
+fn read_pdf_page(path: &Path, page: Option<&str>, place: bool) -> Result<Raster> {
     #[cfg(feature = "pdf")]
-    return pdf::read_file(path, page);
+    return pdf::read_file(path, page, place);
     #[cfg(not(feature = "pdf"))]
     {
-        let _ = (path, page);
+        let _ = (path, page, place);
         Err(DataError::Unsupported(PDF_ELSEWHERE.into()))
     }
 }
@@ -1186,7 +1187,8 @@ pub fn read_path(path: &Path) -> Result<Raster> {
     read_path_placing(path, true)
 }
 
-/// [`read_path_with`] without the world file beside a picture: the picture as the file holds it,
+/// [`read_path_with`] without the world file beside a picture, or a PDF page's own coordinates:
+/// the picture as the file holds it,
 /// for one opened as a scan (`"as": "scan"`, or a layer laid over a placement reopened), so a
 /// world file that is there, or turns up later, doesn't place or resample it. A GDAL file's
 /// `subdataset` and `crs`, a Zarr store's variable, are read as [`read_path_with`] reads them.
@@ -1209,9 +1211,10 @@ fn read_path_placing(path: &Path, world: bool) -> Result<Raster> {
     }
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    // A PDF's first page, placed by its own coordinates when it has them (never a world file).
+    // A PDF's first page, placed by its own coordinates when it has them (never a world file),
+    // unless it is read as a scan.
     if is_pdf_name(&path.to_string_lossy()) {
-        return read_pdf_page(path, None);
+        return read_pdf_page(path, None, world);
     }
     // The `.aux.xml` sidecar, read first: a no-data value it gives (for a file that has none) keeps
     // those pixels out of the rounded count as they are read.
@@ -1348,6 +1351,9 @@ pub fn read_path_with(path: &Path, subdataset: Option<&str>, crs: Option<&str>) 
     read_path_with_placing(path, subdataset, crs, true)
 }
 
+/// [`read_path_with`], placing a picture by its world file, and a PDF page by its own coordinates,
+/// when `world` (a scan's reads pass `false`): a Zarr store's variable, a PDF's page or a GDAL
+/// file's subdataset by `subdataset`, else the file as [`read_path_placing`] reads it.
 fn read_path_with_placing(path: &Path, subdataset: Option<&str>, crs: Option<&str>, world: bool) -> Result<Raster> {
     // A Zarr store's variable and slice (`t2m[time=3]`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -1356,7 +1362,7 @@ fn read_path_with_placing(path: &Path, subdataset: Option<&str>, crs: Option<&st
     }
     // A PDF's page, by its number.
     if subdataset.is_some() && is_pdf_name(&path.to_string_lossy()) {
-        return read_pdf_page(path, subdataset);
+        return read_pdf_page(path, subdataset, world);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if (subdataset.is_some() || crs.is_some()) && gdal::is_gdal_raster_name(&path.to_string_lossy()) {
@@ -1637,20 +1643,25 @@ fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Rast
     Raster::new(name, width, height, bands, transform, Crs::LonLat, None, ColorHint::Rgb { alpha: true }, "UInt8")
 }
 
-/// [`read_bytes`], and for a PDF its page `page` (its number; the first when `None`): an upload
-/// or download of a PDF, and a project's copy of one reopened at the page it was added at.
-pub fn read_bytes_page(file_name: &str, bytes: &[u8], page: Option<&str>) -> Result<Raster> {
+/// [`read_bytes`], and for a PDF its page `page` (its number; the first when `None`), placed by
+/// its coordinates when `place` (a scan otherwise): an upload or download of a PDF, and a
+/// project's copy of one reopened at the page it was added at.
+pub fn read_bytes_page(file_name: &str, bytes: &[u8], page: Option<&str>, place: bool) -> Result<Raster> {
     if !is_pdf_name(file_name) {
         return read_bytes(file_name, bytes);
     }
     #[cfg(feature = "pdf")]
     {
+        // Refused before the contents are copied.
+        if bytes.len() as u64 > pdf::MAX_BYTES {
+            return Err(DataError::Format(format!("the PDF is larger than {} MB, too large to open", pdf::MAX_BYTES >> 20)));
+        }
         let name = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
-        pdf::read_bytes(name, bytes.to_vec(), page)
+        pdf::read_bytes(name, bytes.to_vec(), page, place)
     }
     #[cfg(not(feature = "pdf"))]
     {
-        let _ = page;
+        let _ = (page, place);
         Err(DataError::Unsupported(PDF_ELSEWHERE.into()))
     }
 }
@@ -1658,7 +1669,7 @@ pub fn read_bytes_page(file_name: &str, bytes: &[u8], page: Option<&str>) -> Res
 /// Reads a raster from a file's name and bytes (a browser upload); a PDF's first page.
 pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
     if is_pdf_name(file_name) {
-        return read_bytes_page(file_name, bytes, None);
+        return read_bytes_page(file_name, bytes, None, true);
     }
     let p = Path::new(file_name);
     let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
