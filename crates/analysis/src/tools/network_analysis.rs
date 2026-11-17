@@ -44,8 +44,12 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
     rows.sort_unstable();
     rows.dedup();
     let mut notes = Vec::new();
-    let no_line =
-        rows.iter().filter(|&&r| !matches!(ds.features.get(r).and_then(|f| f.geometry.as_ref()), Some(Geometry::Line(_)))).count();
+    // A line joins the network through its segments: one with no part of two vertices has none.
+    let has_segment = |r: usize| match ds.features.get(r).and_then(|f| f.geometry.as_ref()) {
+        Some(Geometry::Line(parts)) => parts.iter().any(|part| part.len() >= 2),
+        _ => false,
+    };
+    let no_line = rows.iter().filter(|&&r| !has_segment(r)).count();
     if no_line > 0 {
         notes.push(format!("{tool}: {no_line} feature(s) of '{}' have no line, and were left out of the network", ds.name));
     }
@@ -55,7 +59,7 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
         for &r in &rows {
             crate::control::check()?;
             // Only lines join the network; what has no line is counted once, above.
-            if !matches!(ds.features.get(r).and_then(|f| f.geometry.as_ref()), Some(Geometry::Line(_))) {
+            if !has_segment(r) {
                 continue;
             }
             match ds.value(r, fi).as_f64() {
@@ -355,8 +359,10 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     }
     let targets = at_node.len();
     let rows = AtomicUsize::new(0);
-    // Each thread's search, and at most its rows, candidates and marks over every destination.
-    let per_destination = size_of::<(usize, f64, f64)>() + size_of::<usize>() + 1;
+    // Each thread's search, and at most its rows, candidates and marks over every destination:
+    // twice the rows and candidates for the room a growing vector takes, and half the rows again
+    // for the sort's scratch.
+    let per_destination = 5 * size_of::<(usize, f64, f64)>() / 2 + 2 * size_of::<usize>() + 1;
     let scratch = Search::bytes(graph).saturating_add(destinations.len().saturating_mul(per_destination));
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, scratch));
     crate::control::begin(origins.len());
@@ -641,9 +647,10 @@ mod tests {
         let mut gaps = roads();
         gaps.push(None, vec![Value::Float(1.0)]);
         gaps.push(Some(Geometry::Point(c(0.0, 0.0))), vec![Value::Null]);
+        gaps.push(Some(Geometry::Line(vec![vec![c(0.5, 0.5)]])), vec![Value::Null]);
         let inputs = map(vec![gaps, points("shops", &[Some(c(0.005, 0.0))])]);
         let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "1", "costField": "cost"})).unwrap();
-        assert!(r.messages.iter().any(|m| m.contains("2 feature(s) of 'roads' have no line, and were left out")), "{:?}", r.messages);
+        assert!(r.messages.iter().any(|m| m.contains("3 feature(s) of 'roads' have no line, and were left out")), "{:?}", r.messages);
         assert!(!r.messages.iter().any(|m| m.contains("no number in cost")), "a feature with no line is counted once: {:?}", r.messages);
         let mut costs = roads();
         costs.features[3].attrs[0] = Value::Null;
