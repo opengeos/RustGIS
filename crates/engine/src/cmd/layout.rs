@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
@@ -346,6 +347,7 @@ pub(crate) fn element_list(l: &Layout) -> Vec<Value> {
 }
 
 /// One of `layout.publication`'s profiles.
+#[derive(Clone, Copy, Debug)]
 pub struct PublicationProfile {
     pub id: &'static str,
     pub label: &'static str,
@@ -357,33 +359,33 @@ pub struct PublicationProfile {
     pub height: f64,
 }
 
-/// `layout.publication`'s profiles: sheets for printing, on every page size `layout.new` offers
-/// ([`PAGES`], in its order), portrait then landscape; figures for a journal or a thesis.
-pub const PUBLICATION_PROFILES: &[PublicationProfile] = &[
-    PublicationProfile { id: "letter-portrait", label: "Letter portrait sheet", sheet: true, width: 215.9, height: 279.4 },
-    PublicationProfile { id: "letter-landscape", label: "Letter landscape sheet", sheet: true, width: 279.4, height: 215.9 },
-    PublicationProfile { id: "legal-portrait", label: "Legal portrait sheet", sheet: true, width: 215.9, height: 355.6 },
-    PublicationProfile { id: "legal-landscape", label: "Legal landscape sheet", sheet: true, width: 355.6, height: 215.9 },
-    PublicationProfile { id: "tabloid-portrait", label: "Tabloid portrait sheet", sheet: true, width: 279.4, height: 431.8 },
-    PublicationProfile { id: "tabloid-landscape", label: "Tabloid landscape sheet", sheet: true, width: 431.8, height: 279.4 },
-    PublicationProfile { id: "a5-portrait", label: "A5 portrait sheet", sheet: true, width: 148.0, height: 210.0 },
-    PublicationProfile { id: "a5-landscape", label: "A5 landscape sheet", sheet: true, width: 210.0, height: 148.0 },
-    PublicationProfile { id: "a4-portrait", label: "A4 portrait sheet", sheet: true, width: 210.0, height: 297.0 },
-    PublicationProfile { id: "a4-landscape", label: "A4 landscape sheet", sheet: true, width: 297.0, height: 210.0 },
-    PublicationProfile { id: "a3-portrait", label: "A3 portrait sheet", sheet: true, width: 297.0, height: 420.0 },
-    PublicationProfile { id: "a3-landscape", label: "A3 landscape sheet", sheet: true, width: 420.0, height: 297.0 },
-    PublicationProfile { id: "a2-portrait", label: "A2 portrait sheet", sheet: true, width: 420.0, height: 594.0 },
-    PublicationProfile { id: "a2-landscape", label: "A2 landscape sheet", sheet: true, width: 594.0, height: 420.0 },
-    PublicationProfile { id: "a1-portrait", label: "A1 portrait sheet", sheet: true, width: 594.0, height: 841.0 },
-    PublicationProfile { id: "a1-landscape", label: "A1 landscape sheet", sheet: true, width: 841.0, height: 594.0 },
-    PublicationProfile { id: "a0-portrait", label: "A0 portrait sheet", sheet: true, width: 841.0, height: 1189.0 },
-    PublicationProfile { id: "a0-landscape", label: "A0 landscape sheet", sheet: true, width: 1189.0, height: 841.0 },
+/// `layout.publication`'s figures, for a journal or a thesis: the map edge to edge, its title and
+/// sources left to the caption.
+const FIGURES: &[PublicationProfile] = &[
     PublicationProfile { id: "figure-1col", label: "Journal figure, 1 column (90 mm)", sheet: false, width: 90.0, height: 0.0 },
     PublicationProfile { id: "figure-1.5col", label: "Journal figure, 1.5 columns (140 mm)", sheet: false, width: 140.0, height: 0.0 },
     PublicationProfile { id: "figure-2col", label: "Journal figure, 2 columns (190 mm)", sheet: false, width: 190.0, height: 0.0 },
     PublicationProfile { id: "thesis-full", label: "Thesis figure, full page (160 × 225 mm)", sheet: false, width: 160.0, height: 225.0 },
     PublicationProfile { id: "thesis-half", label: "Thesis figure, half page (160 × 110 mm)", sheet: false, width: 160.0, height: 110.0 },
 ];
+
+/// `layout.publication`'s profiles: a sheet for printing on every page size `layout.new` offers
+/// ([`PAGES`], in its order), portrait then landscape (`a4-portrait`, "A4 portrait sheet"), then
+/// the [`FIGURES`]. Built once from the two lists, so a page size added to `PAGES` is a sheet too;
+/// its names live for the program, as a constant's would.
+pub static PUBLICATION_PROFILES: LazyLock<Vec<PublicationProfile>> = LazyLock::new(|| {
+    let name = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+    let sheets = PAGES.iter().flat_map(|&(size, label, w, h)| {
+        [("portrait", w, h), ("landscape", h, w)].map(|(orientation, width, height)| PublicationProfile {
+            id: name(format!("{size}-{orientation}")),
+            label: name(format!("{label} {orientation} sheet")),
+            sheet: true,
+            width,
+            height,
+        })
+    });
+    sheets.chain(FIGURES.iter().copied()).collect()
+});
 
 /// `layout.publication`'s styles for a sheet, by the name `"style"` takes, with their names in
 /// English: the default first.

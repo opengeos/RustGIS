@@ -1163,13 +1163,28 @@ fn publication_sheet(size: &str, orientation: &str) -> Option<&'static rustgis_e
     rustgis_engine::cmd::layout::PUBLICATION_PROFILES.iter().find(|p| p.sheet && p.id == id)
 }
 
+/// A page size as the menus name it: `A4 (210 × 297 mm)`, its name translated.
+fn page_label(label: &str, w: f64, h: f64) -> String {
+    format!("{} ({w:.0} × {h:.0} mm)", tl!(label))
+}
+
+/// A sheet's styles as buttons, each making `profile` in it.
+fn publication_style_buttons(app: &mut RustGisApp, ui: &mut Ui, profile: &rustgis_engine::cmd::layout::PublicationProfile) {
+    for (style, name) in rustgis_engine::cmd::layout::PUBLICATION_STYLES {
+        let (name, about) = publication_style(style).unwrap_or_else(|| (tl!(*name), ""));
+        if ui.button(name).on_hover_text(about).clicked() {
+            publication_layout(app, profile, Some(style));
+            ui.close();
+        }
+    }
+}
+
 fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Project", |ui| {
         big(ui, app, "new_map", "New\nMap", "Add a new map to the project.", "map.new", Value::Null, false, false);
         big_menu(ui, app, "new_layout", "New\nLayout", "Add a page layout for printing and exporting the map.", |ui, app| {
             for (id, label, w, h) in rustgis_engine::map::layout::PAGES {
-                let text = format!("{} ({w:.0} × {h:.0} mm)", tl!(*label));
-                if ui.button(text).clicked() {
+                if ui.button(page_label(label, *w, *h)).clicked() {
                     let _ = app.run("layout.new", json!({"page": id}));
                     app.ui.tab = "Publish".into();
                     ui.close();
@@ -1180,21 +1195,15 @@ fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
                 // A sheet on each page size, as listed above; its styles under each orientation, so
                 // the list stays as short as the sizes (a figure leaves the style to its caption).
                 for (id, label, w, h) in rustgis_engine::map::layout::PAGES {
-                    ui.menu_button(format!("{} ({w:.0} × {h:.0} mm)", tl!(*label)), |ui| {
-                        for (i, orientation) in ["portrait", "landscape"].into_iter().enumerate() {
-                            let Some(profile) = publication_sheet(id, orientation) else { continue };
-                            if i > 0 {
-                                ui.separator();
-                            }
-                            let heading = if orientation == "portrait" { tl!("Portrait") } else { tl!("Landscape") };
-                            ui.label(egui::RichText::new(heading).small().weak());
-                            for (style, name) in rustgis_engine::cmd::layout::PUBLICATION_STYLES {
-                                let (name, about) = publication_style(style).unwrap_or_else(|| (tl!(*name), ""));
-                                if ui.button(name).on_hover_text(about).clicked() {
-                                    publication_layout(app, profile, Some(style));
-                                    ui.close();
-                                }
-                            }
+                    ui.menu_button(page_label(label, *w, *h), |ui| {
+                        if let Some(portrait) = publication_sheet(id, "portrait") {
+                            ui.label(egui::RichText::new(tl!("Portrait")).small().weak());
+                            publication_style_buttons(app, ui, portrait);
+                        }
+                        if let Some(landscape) = publication_sheet(id, "landscape") {
+                            ui.separator();
+                            ui.label(egui::RichText::new(tl!("Landscape")).small().weak());
+                            publication_style_buttons(app, ui, landscape);
                         }
                     });
                 }
@@ -3161,7 +3170,7 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 let landscape = layout.width > layout.height;
                 let (pw, ph) = if landscape { (h.max(*w), h.min(*w)) } else { (*w, *h) };
                 let on = (layout.width - pw).abs() < 0.5 && (layout.height - ph).abs() < 0.5;
-                if ui.radio(on, format!("{} ({w:.0} × {h:.0} mm)", tl!(*label))).clicked() {
+                if ui.radio(on, page_label(label, *w, *h)).clicked() {
                     let _ = app.run(
                         "layout.page",
                         json!({"layout": li, "page": id, "orientation": if landscape { "landscape" } else { "portrait" }}),

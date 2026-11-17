@@ -9251,6 +9251,28 @@ fn frame_x_mid(s: &Session, li: usize, frame: u32) -> f64 {
     s.project.layouts[li].element(frame).map(|e| e.x + e.w / 2.0).unwrap()
 }
 
+/// Piauí's long NDVI source, which a sheet's footer wraps where its box is narrower.
+const PIAUI_SOURCE: &str =
+    "NDVI: MOD13Q1 v6.1 (NASA LP DAAC), 16-day composites at 250 m, read through the Brazil Data Cube (INPE) and averaged to 1 km";
+
+/// A publication layout of Piauí on `profile`, named after it, with a long source, a subtitle and
+/// a note.
+fn piaui_publication(s: &mut Session, profile: &str) -> Result<Value, String> {
+    s.run(
+        "layout.publication",
+        &json!({"profile": profile, "extent": [-46.8, -11.6, -38.5, -2.2], "name": profile, "title": "PIAUÍ",
+                "subtitle": "Greening and browning of vegetation: NDVI trend, 2001–2025", "sources": [PIAUI_SOURCE, "Boundaries: IBGE 2022"],
+                "note": "Only cells with a significant trend (p < 0.05) are coloured."}),
+    )
+}
+
+/// The scale Piauí fits `frame` at within the graticule's label strips (9 mm beside its sides, 6 mm
+/// along its top and bottom).
+fn piaui_fits(s: &Session, frame: &rustgis_map::layout::Element) -> f64 {
+    let extent = rustgis_geom::Extent::new(-46.8, -11.6, -38.5, -2.2);
+    rustgis_map::layout::fit_scale(s.map(), &extent, frame.w - 18.0, frame.h - 12.0).unwrap().1
+}
+
 /// `layout.publication` (#682): every profile builds a layout that fits its page, the map frame
 /// at a round scale that still fits the extent, the footer boxed in two columns below the map
 /// with long lines wrapped, the tokens filled from the map; a figure leaves its title to the
@@ -9263,8 +9285,6 @@ fn publication_layouts_fit_their_pages() {
     let mut s = world();
     let piaui = json!([-46.8, -11.6, -38.5, -2.2]);
     let mut narrower = 0;
-    let long =
-        "NDVI: MOD13Q1 v6.1 (NASA LP DAAC), 16-day composites at 250 m, read through the Brazil Data Cube (INPE) and averaged to 1 km";
     let profiles = [
         "a4-portrait",
         "a4-landscape",
@@ -9287,16 +9307,10 @@ fn publication_layouts_fit_their_pages() {
         "thesis-half",
     ];
     for profile in profiles {
-        let r = s
-            .run(
-                "layout.publication",
-                &json!({"profile": profile, "extent": piaui, "name": profile, "title": "PIAUÍ", "subtitle": "Greening and browning of vegetation: NDVI trend, 2001–2025",
-                        "sources": [long, "Boundaries: IBGE 2022"], "note": "Only cells with a significant trend (p < 0.05) are coloured."}),
-            )
-            .unwrap_or_else(|e| panic!("{profile}: {e}"));
+        let r = piaui_publication(&mut s, profile).unwrap_or_else(|e| panic!("{profile}: {e}"));
         let l = s.project.layouts.last().unwrap();
         assert_eq!(r["name"], profile);
-        let sheet = !profile.starts_with("figure") && !profile.starts_with("thesis");
+        let sheet = crate::cmd::layout::PUBLICATION_PROFILES.iter().find(|p| p.id == profile).unwrap().sheet;
         for e in &l.elements {
             assert!(
                 e.x >= -1e-9 && e.y >= -1e-9 && e.x + e.w <= l.width + 1e-6 && e.y + e.h <= l.height + 1e-6,
@@ -9335,10 +9349,9 @@ fn publication_layouts_fit_their_pages() {
         // A round scale, two significant figures, at which the extent still fits.
         let unit = 10f64.powf(scale.log10().floor() - 1.0);
         assert!(((scale / unit) - (scale / unit).round()).abs() < 1e-6, "{profile}: 1:{scale}");
-        let extent = rustgis_geom::Extent::new(-46.8, -11.6, -38.5, -2.2);
         // Fitted within the graticule's label strips (9 mm beside the frame's sides, 6 mm along its
         // top and bottom), so the labels cover none of the extent.
-        let (_, fits) = rustgis_map::layout::fit_scale(s.map(), &extent, frame.w - 18.0, frame.h - 12.0).unwrap();
+        let fits = piaui_fits(&s, frame);
         assert!(fits <= *scale && *scale < fits * 1.1, "{profile}: 1:{scale} for 1:{fits}: {}", r["warnings"]);
         assert_eq!(grid.step, 2.0, "{profile}: Piauí's 9.4° take a 2° graticule");
         let text = |name: &str| {
@@ -9356,9 +9369,11 @@ fn publication_layouts_fit_their_pages() {
             assert!(sources.x + sources.w <= foot.x + foot.w + 1e-6);
             let lines = text("Sources").unwrap();
             let pt = 7.0 * l.width.min(l.height) as f32 / 210.0;
-            // Wrapped where it is wider than its box: not on a page as wide as Legal's landscape.
-            let wraps = crate::render::report::width_mm(long, pt, false) > sources.w;
-            assert!(lines.lines().count() >= if wraps { 3 } else { 2 }, "{profile}: {lines}");
+            // Wrapped where it is wider than its box, else a line each: on a page as wide as
+            // Legal's landscape it fits one.
+            let count = lines.lines().count();
+            let wraps = crate::render::report::width_mm(PIAUI_SOURCE, pt, false) > sources.w;
+            assert!(if wraps { count >= 3 } else { count == 2 }, "{profile}: {lines}");
             for line in lines.lines() {
                 assert!(crate::render::report::width_mm(line, pt, false) <= sources.w + 1e-6, "{profile}: {line}");
             }
@@ -9822,24 +9837,14 @@ fn publication_layouts_take_a_style() {
 #[test]
 fn a_publication_on_a5_portrait_keeps_its_legend_at_a_smaller_scale() {
     let mut s = world();
-    let piaui = json!([-46.8, -11.6, -38.5, -2.2]);
-    let long =
-        "NDVI: MOD13Q1 v6.1 (NASA LP DAAC), 16-day composites at 250 m, read through the Brazil Data Cube (INPE) and averaged to 1 km";
-    let r = s
-        .run(
-            "layout.publication",
-            &json!({"profile": "a5-portrait", "extent": piaui, "title": "PIAUÍ", "subtitle": "Greening and browning of vegetation: NDVI trend, 2001–2025",
-                    "sources": [long, "Boundaries: IBGE 2022"], "note": "Only cells with a significant trend (p < 0.05) are coloured."}),
-        )
-        .unwrap();
+    let r = piaui_publication(&mut s, "a5-portrait").unwrap();
     let l = s.project.layouts.last().unwrap();
     assert_eq!((l.width, l.height), (148.0, 210.0));
     for e in &l.elements {
         assert!(e.x >= -1e-9 && e.y >= -1e-9 && e.x + e.w <= l.width + 1e-6 && e.y + e.h <= l.height + 1e-6, "{} is off the page", e.name);
     }
     let frame = l.elements.iter().find(|e| e.kind.code() == "mapFrame").unwrap();
-    let extent = rustgis_geom::Extent::new(-46.8, -11.6, -38.5, -2.2);
-    let (_, fits) = rustgis_map::layout::fit_scale(s.map(), &extent, frame.w - 18.0, frame.h - 12.0).unwrap();
+    let fits = piaui_fits(&s, frame);
     let scale = r["scale"].as_f64().unwrap();
     assert!(fits <= scale && scale <= fits * 2.0, "1:{scale} for 1:{fits}");
     assert_eq!(r["veiled"], true, "{r}");
