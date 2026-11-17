@@ -2866,6 +2866,9 @@ fn qgis_sources_import_as_their_layers() {
     .concat();
     let qgs = format!(r#"<qgis version="4.2.3"><projectlayers>{layers}</projectlayers></qgis>"#);
     let mut s = world();
+    // A tile layer of the user's own on the twin tiles stays: the import makes a map of its own.
+    s.run("map.addTiles", &json!({"url": "https://twin.invalid/{z}/{x}/{y}.png", "name": "mine", "overlay": true})).unwrap();
+    let mine = s.project.active_map;
     let before = s.connections.connections.len();
     let out = s.run("project.importQgis", &json!({"text": qgs, "dir": dir.display().to_string()})).unwrap();
     let notes = serde_json::to_string(&out["notes"]).unwrap();
@@ -2931,6 +2934,7 @@ fn qgis_sources_import_as_their_layers() {
     let said = |layer: &str, text: &str| {
         out["notes"].as_array().unwrap().iter().any(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text))
     };
+    assert!(s.project.maps[mine].tiles.iter().any(|t| t.name == "mine"), "{notes}");
     assert!(said("zm", "its geometry's Z and M values: RustGIS keeps x and y"), "{notes}");
     assert!(said("zm", "its fields of a name an earlier field has (1)"), "{notes}");
     assert!(said("lost", "the layer `nosuch` it selects from isn't in the project"), "{notes}");

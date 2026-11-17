@@ -720,8 +720,13 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
             let missing = match layers.get(i).map(|l| &l.source) {
                 Some(Source::Virtual { from: Some(source::VirtualFrom::Layer(id)), .. }) => {
                     match layers.iter().find(|l| &l.id == id).map(|l| &l.source) {
-                        None => Some(format!("with id `{}`", id.chars().take(100).collect::<String>())),
-                        Some(Source::Virtual { from: Some(source::VirtualFrom::Missing(base)), .. }) => Some(base.clone()),
+                        None => {
+                            let shown: String = id.chars().take(100).collect();
+                            let more = if id.chars().count() > 100 { "…" } else { "" };
+                            Some(format!("the layer with id `{shown}{more}` it selects from isn't in the project"))
+                        }
+                        // On one itself on a missing layer: the same reason.
+                        Some(Source::Virtual { from: Some(source::VirtualFrom::Missing(why)), .. }) => Some(why.clone()),
                         Some(_) => None,
                     }
                 }

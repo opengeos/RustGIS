@@ -64,8 +64,8 @@ pub enum Source {
 pub enum VirtualFrom {
     Source(Box<Source>),
     Layer(String),
-    /// None of its sources, nor of the project's layers: what it selects from, as said
-    /// (`` `t` ``, a table name; ``with id `x` ``, a project layer's id).
+    /// None of its sources, nor of the project's layers: why, as said ("the layer `t` it
+    /// selects from isn't in the project").
     Missing(String),
 }
 
@@ -306,7 +306,7 @@ fn memory(datasource: &str) -> Source {
     } else if matches!(geometry.trim(), "" | "none" | "nogeometry") {
         (GeometryType::None, None)
     } else {
-        (GeometryType::None, Some(geometry.chars().take(40).collect()))
+        (GeometryType::None, Some(cut_said(&geometry, 40)))
     };
     let (mut fields, mut as_text, mut texts, mut cut, mut unnamed, mut taken) =
         (Vec::<Field>::new(), Vec::new(), 0usize, 0usize, 0usize, 0usize);
@@ -343,11 +343,20 @@ fn memory(datasource: &str) -> Source {
         };
         texts += usize::from(ty.is_none());
         if ty.is_none() && as_text.len() < 32 {
-            as_text.push(format!("{} ({})", name.chars().take(100).collect::<String>(), base.chars().take(40).collect::<String>()));
+            as_text.push(format!("{} ({})", cut_said(name, 100), cut_said(&base, 40)));
         }
         fields.push(Field::new(name, ty.unwrap_or(FieldType::Text)));
     }
     Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, unknown_geometry }
+}
+
+/// `text` to say in a note: its first `n` characters, and "…" when it goes on.
+fn cut_said(text: &str, n: usize) -> String {
+    let mut out: String = text.chars().take(n).collect();
+    if text.chars().count() > n {
+        out.push('…');
+    }
+    out
 }
 
 /// The most layers a virtual layer's sources are looked through for (each one is read).
@@ -358,7 +367,7 @@ const MAX_VIRTUAL_LAYERS: usize = 64;
 fn virtual_layer(datasource: &str, dir: &str) -> Source {
     let raw = datasource.strip_prefix('?').unwrap_or(datasource);
     let decode = rustgis_data::address::percent_decode;
-    let (mut named, mut query_text) = (Vec::new(), None);
+    let (mut named, mut query_text, mut past) = (Vec::new(), None, 0usize);
     // Every pair is looked at (the query may come last); at most MAX_VIRTUAL_LAYERS sources read.
     for kv in raw.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
@@ -377,6 +386,8 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
                 let (id, name) = v.split_once(':').unwrap_or((&v, ""));
                 named.push((name.to_string(), Some(VirtualFrom::Layer(id.to_string()))));
             }
+            // Past those looked through: counted, for the note.
+            "layer" | "layer_ref" => past += 1,
             _ => {}
         }
     }
@@ -393,7 +404,12 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
             let from = match named.into_iter().find(|(n, _)| lone || n.eq_ignore_ascii_case(&table)) {
                 Some((_, from)) => from,
                 // Selecting from a name none of its sources has.
-                None => Some(VirtualFrom::Missing(format!("`{}`", table.chars().take(100).collect::<String>()))),
+                None if past > 0 => Some(VirtualFrom::Missing(format!(
+                    "the layer `{}` it selects from isn't among the first {MAX_VIRTUAL_LAYERS} of its {} sources, which RustGIS looks through",
+                    cut_said(&table, 100),
+                    MAX_VIRTUAL_LAYERS + past
+                ))),
+                None => Some(VirtualFrom::Missing(format!("the layer `{}` it selects from isn't in the project", cut_said(&table, 100)))),
             };
             // (One longer than RustGIS reads is left as it is, for the project to note.)
             (from, filter.map(|f| if f.len() > rustgis_data::query::MAX_LEN { f } else { unqualified(&f, &table) }))
@@ -1014,7 +1030,14 @@ mod tests {
         ) else {
             panic!()
         };
-        assert_eq!((from, filter), (Some(VirtualFrom::Missing("`other`".into())), None));
+        assert_eq!((from, filter), (Some(VirtualFrom::Missing("the layer `other` it selects from isn't in the project".into())), None));
+        // One past the sources looked through: said so, not as missing from the project.
+        let many: String = (0..=MAX_VIRTUAL_LAYERS).map(|i| format!("layer=ogr:a{i}.geojson:t{i}&")).collect();
+        let last = format!("?{many}query=SELECT%20*%20FROM%20t{MAX_VIRTUAL_LAYERS}");
+        let Source::Virtual { from: Some(VirtualFrom::Missing(why)), .. } = read("virtual", &last, dir) else { panic!() };
+        assert!(why.contains("isn't among the first 64 of its 65 sources"), "{why}");
+        assert_eq!(cut_said("abcdef", 3), "abc…");
+        assert_eq!(cut_said("abc", 3), "abc");
         // Its one source with no name: the table, whatever the query calls it.
         let Source::Virtual { from, .. } = read("virtual", "?layer=ogr:..%2Fdata%2Fsample.gpkg&query=SELECT%20*%20FROM%20pts", dir) else {
             panic!()

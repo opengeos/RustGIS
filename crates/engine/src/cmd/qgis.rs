@@ -64,8 +64,9 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
 /// and no part of it runs on its own yet. Its work is bounded by the project: at most
 /// [`qgis::MAX_LAYERS`] layers, each read once by the command that adds it (a file's layers, and
 /// a virtual layer on one, each read their file), archives added without waiting for their
-/// metadata, annotation pictures within [`MAX_PICTURE_BYTES`]. Running the whole import off the
-/// window, with progress and Cancel, is for the import as a whole.
+/// metadata, annotation pictures within [`MAX_PICTURE_BYTES`]. A local archive's file is looked
+/// for on this thread (`is_file`), which a slow network share can hold up. Running the whole
+/// import off the window, with progress and Cancel, is for the import as a whole.
 fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     // The folder relative paths start from: `dir` (a blank one is none, so they don't start
@@ -452,7 +453,7 @@ fn add_layer(
             let shown: String = query.chars().take(200).collect();
             let more = if query.chars().count() > 200 { "…" } else { "" };
             let why = match from {
-                Some(qgis::VirtualFrom::Missing(base)) => format!("the layer {base} it selects from isn't in the project"),
+                Some(qgis::VirtualFrom::Missing(why)) => why.clone(),
                 Some(_) => {
                     "on a layer RustGIS doesn't read as a file's layer (a CSV, memory, database or web layer, or another virtual layer)"
                         .into()
