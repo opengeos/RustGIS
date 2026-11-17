@@ -1288,9 +1288,22 @@ impl Live {
         if self.generation.load(Ordering::Acquire) != generation && self.key.is_some() {
             let again = self.key.as_deref().and_then(rebuilt);
             let mut kept = self.again.write().unwrap_or_else(|e| e.into_inner());
-            if let Some(t) = again {
-                *kept = Some(t);
-                self.rebuilt.store(true, Ordering::Release);
+            match again {
+                Some(t) => {
+                    *kept = Some(t);
+                    self.rebuilt.store(true, Ordering::Release);
+                }
+                // Said once: it goes on with the transformation it had, without the grid.
+                None => {
+                    let mut failed = REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner());
+                    let (to_say, said) = &mut *failed;
+                    if let Some(key) = &self.key
+                        && said.len() < 256
+                        && said.insert(key.clone())
+                    {
+                        to_say.push(key.clone());
+                    }
+                }
             }
             self.generation.store(generation, Ordering::Release);
         }
@@ -1446,6 +1459,32 @@ fn record_warning(message: String) {
 
 /// A transformer RustGIS didn't keep ([`MAX_BUILT`]) needed a missing grid: [`record_warning`].
 static UNNAMED_NEEDS_GRID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The systems (by the key they are kept under) whose transformer couldn't be built again when
+/// grids arrived: they go on with the transformation they had ([`Live::now`]), and are said once.
+/// (Those to say, and every one said or to be said this run: each is said once.)
+static REBUILD_FAILED: std::sync::Mutex<(Vec<String>, std::collections::BTreeSet<String>)> =
+    std::sync::Mutex::new((Vec::new(), std::collections::BTreeSet::new()));
+
+/// How many coordinate systems couldn't be built again with grids that arrived since this was
+/// last asked, and the first of them as said ("EPSG:4267", or a definition's start): for the
+/// session to say they go on without them.
+pub fn take_rebuild_failures() -> (usize, Vec<String>) {
+    let keys = std::mem::take(&mut REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner()).0);
+    let shown = keys
+        .iter()
+        .take(3)
+        .map(|k| match k.strip_prefix("EPSG ") {
+            Some(code) => format!("EPSG:{code}"),
+            None => {
+                let k = k.strip_prefix("WKT ").unwrap_or(k);
+                let cut: String = k.chars().take(40).collect();
+                if k.chars().count() > 40 { format!("{cut}…") } else { cut }
+            }
+        })
+        .collect();
+    (keys.len(), shown)
+}
 
 /// Whether a coordinate system RustGIS can't name, one of more than [`MAX_BUILT`] used this run,
 /// needed a missing datum grid since this was last asked: for the session to say so.
@@ -1867,6 +1906,27 @@ impl Transformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kept transformer that can't be built again when grids arrive goes on as it was, said
+    /// once however many grids arrive; one that is built again isn't said.
+    #[test]
+    fn a_transformer_that_cant_be_built_again_goes_on_and_is_said() {
+        let Some(Transformer { kind: Kind::Terrio(live), .. }) = epsg_transformer(4267) else { panic!("EPSG:4267") };
+        // Kept under a key that no longer builds, and from another grid generation than now's.
+        let stale = Live::new(Some("WKT not a definition".into()), grid_generation().wrapping_add(1), live.peek());
+        assert!(matches!(stale.now(), Now::First(_)), "goes on with the transformation it had");
+        let (failed, shown) = take_rebuild_failures();
+        assert!(failed >= 1 && shown.iter().any(|s| s == "not a definition"), "{failed} {shown:?}");
+        // Said once: not again in this generation, nor when more grids arrive.
+        let _ = stale.now();
+        stale.generation.store(grid_generation().wrapping_add(2), std::sync::atomic::Ordering::SeqCst);
+        let _ = stale.now();
+        assert!(!take_rebuild_failures().1.iter().any(|s| s == "not a definition"));
+        // One that is built again: nothing said.
+        let fine = Live::new(Some("EPSG 4267".into()), grid_generation().wrapping_add(1), live.peek());
+        assert!(matches!(fine.now(), Now::Again(_)));
+        assert!(!take_rebuild_failures().1.iter().any(|s| s == "EPSG:4267"));
+    }
 
     /// Only PROJ's own grid server, a grid file itself and an open licence: a definition read
     /// from a file names any grid PROJ knows, some of them elsewhere (rdtrans2008.gsb, on

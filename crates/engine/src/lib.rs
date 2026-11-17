@@ -2255,8 +2255,9 @@ impl Session {
         }
         for n in &news {
             // Its download is over: one tried again (the setting turned on again) is said again.
-            let (crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. }) = n;
-            self.grid_downloads_said.remove(name);
+            if let crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. } = n {
+                self.grid_downloads_said.remove(name);
+            }
         }
         // A grid that arrived can bring up the next ones the systems in use need.
         if news.iter().any(|n| matches!(n, crate::grids::News::Got { .. })) {
@@ -2646,6 +2647,19 @@ impl Session {
             // A few named, each cut, and the rest counted: the notice stays short however many.
             self.notify(format!("{}{tail}", grid_notes_text(labels.len(), &names_said(&labels))), false);
             self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
+        }
+        let (failed, shown) = rustgis_data::raster::crs::take_rebuild_failures();
+        if failed > 0 {
+            let more = if failed > shown.len() { format!(" and {} more", failed - shown.len()) } else { String::new() };
+            let (systems, they, them) =
+                if failed == 1 { ("coordinate system", "it goes", "it") } else { ("coordinate systems", "they go", "them") };
+            self.notify(
+                format!(
+                    "{failed} {systems} couldn't be built again with the datum grids that arrived, so {they} on without {them}: {}{more}",
+                    shown.join(", ")
+                ),
+                true,
+            );
         }
         if rustgis_data::raster::crs::take_unnamed_grid_need() {
             self.notify(
