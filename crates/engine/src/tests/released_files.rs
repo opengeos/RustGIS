@@ -3,12 +3,22 @@
 use crate::{Project, Session};
 use rustgis_map::{Marker, Projection, Renderer, Rgba};
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 #[test]
 fn released_projects_and_preferences_still_open() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/releases");
-    for version in ["v0.2.0", "v0.3.0", "v0.4.0", "v0.5.0", "v0.6.0"] {
+    let versions = std::fs::read_dir(&fixtures)
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            let version = name.strip_suffix(".rgis").or_else(|| name.strip_suffix(".prefs.json"))?;
+            version.starts_with('v').then(|| version.to_owned())
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(!versions.is_empty(), "no release fixtures in {}", fixtures.display());
+    for version in versions.iter().map(String::as_str) {
         let prefs = super::read_at(&fixtures.join(format!("{version}.prefs.json"))).unwrap();
         assert_eq!(prefs.get("ribbon_minimized"), Some(&json!("true")), "{version}");
         if matches!(version, "v0.2.0" | "v0.3.0") {
@@ -19,8 +29,14 @@ fn released_projects_and_preferences_still_open() {
             assert!(connections.connections.is_empty() && connections.unread().is_empty(), "{version}");
         }
 
+        let path = fixtures.join(format!("{version}.rgis"));
+        let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // v0.7.0 was the first release to write format 2.
+        let format = if matches!(version, "v0.2.0" | "v0.3.0" | "v0.4.0" | "v0.5.0" | "v0.6.0") { 1 } else { 2 };
+        assert_eq!(written.get("format"), Some(&json!(format)), "{version}");
+
         let mut s = Session::new(Project::default());
-        s.run("project.open", &json!({"path": fixtures.join(format!("{version}.rgis"))})).unwrap();
+        s.run("project.open", &json!({"path": path})).unwrap();
         // These inline datasets need no repair. An unexpected loss notice is a regression too.
         assert_eq!(
             s.notices_since(0).iter().map(|n| (n.text.as_str(), n.error)).collect::<Vec<_>>(),
@@ -36,7 +52,8 @@ fn released_projects_and_preferences_still_open() {
         assert!((center.x - 2.0).abs() < 1e-10 && (center.y - 3.0).abs() < 1e-10, "{version}");
         assert!((map.camera.scale() - 250_000.0).abs() < 1e-6, "{version}");
         // These releases changed where a newly added layer goes; preserve each saved order.
-        let order = if matches!(version, "v0.5.0" | "v0.6.0") { [(2, "Routes"), (1, "Places")] } else { [(1, "Places"), (2, "Routes")] };
+        let order =
+            if matches!(version, "v0.2.0" | "v0.3.0" | "v0.4.0") { [(1, "Places"), (2, "Routes")] } else { [(2, "Routes"), (1, "Places")] };
         assert_eq!(map.layers.iter().map(|l| (l.id, l.name.as_str())).collect::<Vec<_>>(), order, "{version}");
 
         let places = map.layer(1).unwrap();
