@@ -223,14 +223,16 @@ fn nearest_segment(segs: &[Segment], nodes: &[Coord], p: Coord, within: Option<f
         })
         .filter_map(|(i, (a, b, _, _))| {
             let (a, b) = (*nodes.get(*a)?, *nodes.get(*b)?);
+            // The whole turns between the point and the segment's middle: none within 180° of it,
+            // so only a segment near the antimeridian (or stored past ±180°) sees the point moved
+            // to its side, for the window test as for the projection.
+            let turn = 360.0 * ((0.5 * (a.x + b.x) - p.x) / 360.0).round();
             if let Some([x0, x1, y0, y1]) = window
-                && (a.x.max(b.x) < x0 || a.x.min(b.x) > x1 || a.y.max(b.y) < y0 || a.y.min(b.y) > y1)
+                && (a.x.max(b.x) - turn < x0 || a.x.min(b.x) - turn > x1 || a.y.max(b.y) < y0 || a.y.min(b.y) > y1)
             {
                 return None;
             }
-            // The point's longitude on the segment's side of ±180°: unchanged within 180° of its
-            // middle, so only segments near the antimeridian see a point just across it.
-            let px = p.x + 360.0 * ((0.5 * (a.x + b.x) - p.x) / 360.0).round();
+            let px = p.x + turn;
             let (dx, dy) = ((b.x - a.x) * k, b.y - a.y);
             let len2 = dx * dx + dy * dy;
             let t = if len2 > 0.0 { (((px - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
@@ -1339,6 +1341,17 @@ mod tests {
         near.push(Some(Geometry::Point(c(0.0, 85.0))), vec![]);
         let (found, bounded) = within_counted(&near, &[0], c(0.01, 85.0), 10_000.0);
         assert!(found.len() == 1 && bounded == 0, "{found:?} {bounded}");
+    }
+
+    /// A point is placed on a segment stored past ±180° (at 370°, the same meridian as 10°), as a
+    /// route's end is, not passed over by the snap window.
+    #[test]
+    fn a_segment_stored_past_180_degrees_is_found_by_the_window() {
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(370.0, 0.0), Coord::new(370.01, 0.0)]])), vec![]);
+        let graph = Graph(Arc::new(Network::build(&ds, &[0], None).unwrap()));
+        let placed = graph.place(Coord::new(10.005, 0.0001), 100.0).unwrap();
+        assert!(placed.is_some_and(|p| p.seg == 0), "{placed:?}");
     }
 
     /// Repeated pairs reuse topology without retaining endpoint edits; every graph input
