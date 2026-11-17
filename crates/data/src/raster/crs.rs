@@ -50,14 +50,20 @@ pub enum Crs {
 }
 
 /// How a [`Crs`] is saved: a custom system by its PROJ definition, never by its number in a run's
-/// table.
+/// table. One read from WKT keeps that WKT beside it (`wkt`), which this release reads first;
+/// older releases ignore the field and read the PROJ definition, as they always have.
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 enum SavedCrs {
     LonLat,
     WebMercator,
     Epsg(u16),
-    Proj { proj4: String, label: String },
+    Proj {
+        proj4: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wkt: Option<String>,
+    },
 }
 
 impl From<Crs> for SavedCrs {
@@ -67,7 +73,7 @@ impl From<Crs> for SavedCrs {
             Crs::WebMercator => SavedCrs::WebMercator,
             Crs::Epsg(e) => SavedCrs::Epsg(e),
             Crs::Custom(_) => match c.custom_def() {
-                Some(d) => SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone() },
+                Some(d) => SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone(), wkt: d.wkt.clone() },
                 None => SavedCrs::LonLat,
             },
         }
@@ -81,17 +87,16 @@ impl TryFrom<SavedCrs> for Crs {
             SavedCrs::LonLat => Crs::LonLat,
             SavedCrs::WebMercator => Crs::WebMercator,
             SavedCrs::Epsg(e) => Crs::Epsg(e),
-            SavedCrs::Proj { proj4, label } => {
-                Crs::custom(CustomCrs { proj4, label, geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() })?
-            }
+            SavedCrs::Proj { proj4, label, wkt } => Crs::custom(CustomCrs { proj4, label, wkt, ..CustomCrs::default() })?,
         })
     }
 }
 
 /// A coordinate system a file defines itself.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CustomCrs {
-    /// The PROJ definition (`+proj=aea +lat_1=29.5 …`).
+    /// The PROJ definition (`+proj=aea +lat_1=29.5 …`). Empty for a system read from WKT that
+    /// PROJ writes no PROJ string for and RustGIS wrote none for before ([`Self::wkt`]).
     pub proj4: String,
     /// What to call it: the file's citation, or the projection's name.
     pub label: String,
@@ -100,6 +105,11 @@ pub struct CustomCrs {
     pub geokeys: Vec<u16>,
     pub doubles: Vec<f64>,
     pub ascii: String,
+    /// The WKT it was read from, which terrio-crs transforms with when given: a PROJ definition
+    /// can't hold all of it (the order and direction of its axes, its angle unit, a registry
+    /// datum's transformation), so `proj4` is then only its closest PROJ string, for what reads one
+    /// (notes, older releases).
+    pub wkt: Option<String>,
 }
 
 /// The most custom systems one run keeps.
@@ -201,7 +211,7 @@ impl Crs {
         // Room in the table first, so a definition refused for want of it isn't built (and kept).
         {
             let t = custom_table().lock().unwrap_or_else(|e| e.into_inner());
-            if !t.iter().any(|d| d.proj4 == def.proj4) {
+            if !t.iter().any(|d| d.proj4 == def.proj4 && d.wkt == def.wkt) {
                 if t.len() >= MAX_CUSTOM {
                     return Err("too many coordinate systems defined by files".into());
                 }
@@ -210,10 +220,10 @@ impl Crs {
                 }
             }
         }
-        transformer_of(&def.proj4).map(|_| ()).map_err(|e| format!("{}: {e}", def.proj4))?;
+        def.transformer().map(|_| ()).map_err(|e| format!("{}: {e}", def.proj4))?;
         let mut t = custom_table().lock().unwrap_or_else(|e| e.into_inner());
         let index = |i: usize| u32::try_from(i).map(Crs::Custom).map_err(|_| "too many coordinate systems defined by files".to_string());
-        if let Some(i) = t.iter().position(|d| d.proj4 == def.proj4) {
+        if let Some(i) = t.iter().position(|d| d.proj4 == def.proj4 && d.wkt == def.wkt) {
             // Keys a file brings fill in a system first known without them (from a saved project).
             if let Some(slot) = t.get_mut(i)
                 && slot.geokeys.is_empty()
@@ -269,7 +279,14 @@ impl Crs {
             let proj4 = format!("+proj{}", t.get(5..).unwrap_or(""));
             validate_proj_string(&proj4)?;
             return Crs::register(
-                CustomCrs { proj4, label: TYPED_LABEL.to_string(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() },
+                CustomCrs {
+                    proj4,
+                    label: TYPED_LABEL.to_string(),
+                    geokeys: Vec::new(),
+                    doubles: Vec::new(),
+                    ascii: String::new(),
+                    wkt: None,
+                },
                 true,
             );
         }
@@ -359,6 +376,15 @@ impl Crs {
         stated("+vunits=", "+vto_meter=").or_else(|| if geographic { None } else { stated("+units=", "+to_meter=") }).flatten()
     }
 
+    /// The system as text that [`Crs::parse`] reads back as this very system: a custom one by the
+    /// WKT it was read from (or its PROJ definition, without one), else its name.
+    pub fn definition_text(self) -> String {
+        match self.custom_def() {
+            Some(d) => d.wkt.clone().unwrap_or_else(|| d.proj4.clone()),
+            None => self.label(),
+        }
+    }
+
     /// Whether converting to WGS 84 leaves out a datum shift, so positions in longitude/latitude
     /// may be off by up to a few hundred metres: a custom system with an ellipsoid (`+ellps`, `+a`
     /// or `+R`) but no `+towgs84`, `+datum` or `+nadgrids`. That is what reading a WKT datum with
@@ -368,17 +394,73 @@ impl Crs {
     /// back in the same system, positions come back exact. False for another body's system
     /// ([`Crs::is_planetary`]): it has no shift to WGS 84 at all, and its own notice says so.
     pub fn lacks_datum_shift(self) -> bool {
+        let Some(def) = self.custom_def() else { return false };
+        // Web Mercator's sphere, of WGS 84's major axis, is a projection's, not a datum's: in a
+        // Mercator only, as a datum on that sphere elsewhere is unknown (and reading it says so).
+        // Typed or read from WKT, it converts exactly as Web Mercator does.
+        let keys: Vec<&str> = def.proj4.split_whitespace().collect();
+        let axis = |key: &str| keys.iter().find_map(|k| k.strip_prefix(key)?.parse::<f64>().ok()).is_some_and(|v| v == 6_378_137.0);
+        let sphere = keys.contains(&"+proj=merc") && (axis("+R=") || (axis("+a=") && axis("+b=")));
+        !sphere && self.datum_unshifted()
+    }
+
+    /// Whether the system's datum has no shift to WGS 84, as [`Crs::lacks_datum_shift`] but for
+    /// Web Mercator's sphere too: what reading a WKT notes. For a system read from WKT, terrio-crs's
+    /// operations are sampled at a spread of places, once a run per WKT ([`Crs::sampled_unshifted`]).
+    pub(crate) fn datum_unshifted(self) -> bool {
         let Some(def) = self.custom_def().filter(|_| !self.is_planetary()) else { return false };
         let keys: Vec<&str> = def.proj4.split_whitespace().collect();
         let has = |prefix: &str| keys.iter().any(|k| k.starts_with(prefix));
+        // Read from WKT, by the transformations terrio-crs uses (its PROJ string may leave out a
+        // shift it applies): only ballparks, around its central meridian. A datum's
+        // transformations hold in its area of use only, which isn't known here, so a spread of
+        // places stands in for it.
+        if let Some(wkt) = def.wkt.as_deref() {
+            // Sampled once a run per WKT (thousands of places for a geographic system): reading
+            // and every export ask. Bounded as the custom table is.
+            static SAID: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> = std::sync::OnceLock::new();
+            let said = SAID.get_or_init(Default::default);
+            if let Some(unshifted) = said.lock().unwrap_or_else(|e| e.into_inner()).get(wkt) {
+                return *unshifted;
+            }
+            let unshifted = self.sampled_unshifted(wkt);
+            let mut said = said.lock().unwrap_or_else(|e| e.into_inner());
+            if said.len() < MAX_CUSTOM {
+                said.insert(wkt.to_string(), unshifted);
+            }
+            return unshifted;
+        }
         let shifted = has("+towgs84=") || has("+datum=") || has("+nadgrids=");
-        // Web Mercator's sphere, of WGS 84's major axis, is a projection's, not a datum's: in a
-        // Mercator only, as a datum on that sphere elsewhere is unknown (and reading it says so).
-        let axis = |key: &str| keys.iter().find_map(|k| k.strip_prefix(key)?.parse::<f64>().ok()).is_some_and(|v| v == 6_378_137.0);
-        let sphere = keys.contains(&"+proj=merc") && (axis("+R=") || (axis("+a=") && axis("+b=")));
-        let wgs84 = keys.contains(&"+ellps=WGS84") || keys.contains(&"+ellps=GRS80") || sphere;
+        let wgs84 = keys.contains(&"+ellps=WGS84") || keys.contains(&"+ellps=GRS80");
         let ellipsoid = has("+ellps=") || has("+a=") || has("+R=");
         ellipsoid && !wgs84 && !shifted
+    }
+
+    /// [`Crs::datum_unshifted`] for a system read from `wkt`: no operation but ballparks at a spread
+    /// of places.
+    fn sampled_unshifted(self, wkt: &str) -> bool {
+        // No operation at all is a datum taken for WGS 84 (by its ellipsoid), which only one the
+        // file names as WGS 84 (or one read as it) is.
+        if super::wkt::names_wgs84_datum(wkt) {
+            return false;
+        }
+        let Ok(t) = self.transformer() else { return false };
+        // Around its central meridian, or all round for a system without one (geographic).
+        let lons: Vec<f64> = match t.params().filter(|_| !t.is_geographic()) {
+            Some(p) => [-10.0, -5.0, 0.0, 5.0, 10.0].map(|d| p.lon_0 + p.prime_meridian + d).to_vec(),
+            None => (-180..180).map(f64::from).collect(),
+        };
+        // Every degree for a geographic system: a datum's one transformation may cover an
+        // island only (Monte Mario (Rome)'s, Sardinia, 8-10°E); every 5° of latitude around a
+        // central meridian.
+        let step = if t.is_geographic() { 1 } else { 5 };
+        // And the centre of the datum's area, by its EPSG code or Esri name: a transformation may
+        // cover a place smaller than the spacing (Grenada 1953's, an island of 0.3°).
+        let places: Vec<Coord> = super::wkt::datum_area_centre(wkt)
+            .into_iter()
+            .chain((-90 / step..=90 / step).flat_map(|i| lons.iter().map(move |&lon| Coord::new(lon, f64::from(i * step)))))
+            .collect();
+        places.into_iter().all(|at| !t.shift_at(at))
     }
 
     /// Whether the system is another body's than the Earth's: a custom one whose ellipsoid's
@@ -394,12 +476,16 @@ impl Crs {
         match self {
             Crs::LonLat => Ok(Transformer { kind: Kind::LonLat }),
             Crs::WebMercator => Ok(Transformer { kind: Kind::Merc }),
-            // By the code's PROJ definition, with its datum shift, as a WKT naming the same
-            // system is read: both put a place at the same point.
+            // From terrio-crs's EPSG catalog, as a WKT naming the same system is read: both put a
+            // place at the same point, where PROJ 9.8.1 does. A code it can't build goes by its
+            // bundled PROJ definition.
             Crs::Epsg(c) => match epsg_proj4(c) {
                 Some(def) => {
                     note_used(def, || format!("EPSG:{c}"));
-                    let t = transformer_of(def).map_err(|e| format!("EPSG:{c}: {e}"))?;
+                    let t = match epsg_transformer(c) {
+                        Some(t) => t,
+                        None => transformer_of(def).map_err(|e| format!("EPSG:{c}: {e}"))?,
+                    };
                     probe_grid(def, || area_centre(c));
                     Ok(t)
                 }
@@ -407,11 +493,131 @@ impl Crs {
             },
             _ => {
                 let def = self.custom_def().ok_or("an unknown custom coordinate system")?;
-                note_used(&def.proj4, || def.label.clone());
-                transformer_of(&def.proj4).map_err(|e| format!("{}: {e}", def.label))
+                note_used(&def.grid_key(), || def.label.clone());
+                def.transformer().map_err(|e| format!("{}: {e}", def.label))
             }
         }
     }
+}
+
+impl CustomCrs {
+    /// What its transformer's notes are kept under ([`needs_a_missing_grid`]): its WKT's key when
+    /// it has one ([`transformer_of_wkt`]), else its PROJ definition.
+    pub(crate) fn grid_key(&self) -> String {
+        match &self.wkt {
+            Some(wkt) => format!("WKT {wkt}"),
+            None => self.proj4.clone(),
+        }
+    }
+
+    /// Its transformer: by its WKT when it has one, else by its PROJ definition.
+    fn transformer(&self) -> Result<Transformer, String> {
+        match &self.wkt {
+            Some(wkt) => transformer_of_wkt(wkt),
+            None => transformer_of(&self.proj4),
+        }
+    }
+}
+
+/// [`transformer_of`] for a system terrio-crs reads from WKT (`SpatialRef::from_wkt`), which
+/// applies its axes, angle unit and datum transformation as PROJ 9.8.1 does.
+pub fn transformer_of_wkt(wkt: &str) -> Result<Transformer, String> {
+    // Kept beside the PROJ definitions, under a key no definition has.
+    let key = format!("WKT {wkt}");
+    if let Some(t) = built().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return t.clone();
+    }
+    let flushing = FLUSHING.try_with(|l| l.replace(Some(key.clone()))).ok().flatten();
+    let t = build_wkt(wkt);
+    let mut map = built().lock().unwrap_or_else(|e| e.into_inner());
+    let t = if map.len() < MAX_BUILT || map.contains_key(&key) { map.entry(key).or_insert(t).clone() } else { t };
+    drop(map);
+    let _ = FLUSHING.try_with(|l| l.replace(flushing));
+    t
+}
+
+/// [`transformer_of_wkt`]'s transformer, built.
+fn build_wkt(wkt: &str) -> Result<Transformer, String> {
+    build_sr(&terrio_crs::SpatialRef::from_wkt(wkt))
+}
+
+/// The transformer of an EPSG code, from terrio-crs's EPSG catalog, which transforms the code's
+/// system as PROJ 9.8.1 does (its datum transformation included); `None` for a code terrio-crs
+/// doesn't hold or can't build, which is transformed by its bundled PROJ definition instead.
+fn epsg_transformer(code: u16) -> Option<Transformer> {
+    let key = format!("EPSG {code}");
+    if let Some(t) = built().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return t.clone().ok();
+    }
+    let flushing = FLUSHING.try_with(|l| l.replace(Some(key.clone()))).ok().flatten();
+    // A code the catalog gives another's definition goes by its bundled one ([`catalog_has_own`]).
+    let t = if catalog_has_own(code) {
+        if let Some(def) = epsg_proj4(code) {
+            let mut codes = epsg_built().lock().unwrap_or_else(|e| e.into_inner());
+            if codes.len() < MAX_BUILT && !codes.iter().any(|(c, _)| *c == code) {
+                codes.push((code, def));
+            }
+        }
+        terrio_crs::SpatialRef::from_epsg(u32::from(code)).map_err(|e| e.to_string()).and_then(|sr| build_sr(&sr))
+    } else {
+        Err(format!("EPSG:{code} is given another code's definition"))
+    };
+    let mut map = built().lock().unwrap_or_else(|e| e.into_inner());
+    let t = if map.len() < MAX_BUILT || map.contains_key(&key) { map.entry(key).or_insert(t).clone() } else { t };
+    drop(map);
+    let _ = FLUSHING.try_with(|l| l.replace(flushing));
+    t.ok()
+}
+
+/// Whether terrio-crs's EPSG catalog gives `code` its own definition. A deprecated code keeps its
+/// own, as PROJ 9.8.1 does, since data written with it holds its coordinates; terrio-crs gives its
+/// replacement's (GDAL's default), whose WKT names the replacement's code.
+pub(crate) fn catalog_has_own(code: u16) -> bool {
+    terrio_crs::epsg_wkt(u32::from(code)).is_some_and(|w| root_epsg_code(w) == Some(u32::from(code)))
+}
+
+/// The EPSG code a WKT's root names: its last `AUTHORITY["EPSG","…"]` (WKT 1) or `ID["EPSG",…]`
+/// (WKT 2), which close the root after its parts' own.
+fn root_epsg_code(wkt: &str) -> Option<u32> {
+    let at = [r#"AUTHORITY["EPSG",""#, r#"ID["EPSG","#].iter().filter_map(|k| wkt.rfind(k).map(|i| i + k.len())).max()?;
+    wkt[at..].trim_start_matches('"').split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// A transformer for a system terrio-crs holds as a `SpatialRef`.
+fn build_sr(sr: &terrio_crs::SpatialRef) -> Result<Transformer, String> {
+    // Another body's system goes to its own longitude/latitude, read as they are on the Earth
+    // ([`Crs::is_planetary`]): by its PROJ string, as before, since terrio-crs finds the
+    // geographic system of a WKT 2 one only through a WKT 1 `GEOGCS`.
+    if !sr.is_earth() {
+        let def = sr.to_proj4().ok_or("another body's coordinate system without a PROJ definition")?;
+        return transformer_of(&def.replace(" +type=crs", ""));
+    }
+    // The order and direction of its axes as terrio-crs applies them, which its PROJ string
+    // states (`+axis=wsu`); a geographic system's are longitude then latitude.
+    let def = sr.to_proj4().unwrap_or_default();
+    let axis = def.split_whitespace().find_map(|t| t.strip_prefix("+axis=")).unwrap_or("enu");
+    let geographic = sr.is_geographic();
+    let lat_first = !geographic && axis.starts_with(['n', 's']);
+    let west = axis.chars().take(2).any(|c| c == 'w');
+    let t = Transformer::of(sr, geographic, (lat_first, west))?;
+    let centre = t.params().map_or(Coord::new(0.0, 0.0), |p| Coord::new(p.lon_0 + p.prime_meridian, p.lat_0.clamp(-89.0, 89.0)));
+    if !t.is_geographic() && t.from_lonlat_unchecked(centre).is_none() {
+        return Err("it can't place its own centre".into());
+    }
+    Ok(t)
+}
+
+/// The geographic system of `sr` with the grid its PROJ string names (`+nadgrids`, from GDAL's
+/// `PROJ4` extension, which PROJ reads in place of the WKT): its WKT's geographic system lacks it.
+/// `None` without a grid.
+fn own_geographic(sr: &terrio_crs::SpatialRef) -> Option<terrio_crs::SpatialRef> {
+    let def = sr.to_proj4()?;
+    if !def.split_whitespace().any(|t| t.starts_with("+nadgrids=")) {
+        return None;
+    }
+    const DATUM: [&str; 9] = ["+datum=", "+ellps=", "+a=", "+b=", "+rf=", "+R=", "+towgs84=", "+nadgrids=", "+pm="];
+    let datum: Vec<&str> = def.split_whitespace().filter(|t| DATUM.iter().any(|k| t.starts_with(k))).collect();
+    terrio_crs::SpatialRef::from_proj4(&format!("+proj=longlat {} +no_defs +type=crs", datum.join(" "))).ok()
 }
 
 /// The transformers built this run, by definition, kept for the run: building one reads
@@ -802,6 +1008,12 @@ fn record_warning(message: String) {
     // names it, and otherwise the session says that a system it can't name needed one
     // ([`take_unnamed_grid_need`]).
     let def = FLUSHING.try_with(|l| l.borrow().clone()).ok().flatten().unwrap_or_default();
+    // An EPSG code's catalog transformer ([`epsg_transformer`]) is noted under the code's PROJ
+    // definition, as its probe ([`probe_grid`]) and [`definition_and_label`] name it.
+    let def = match def.strip_prefix("EPSG ").and_then(|c| c.parse::<u16>().ok()).and_then(epsg_proj4) {
+        Some(proj4) => proj4.to_string(),
+        None => def,
+    };
     if def.is_empty() {
         UNNAMED_NEEDS_GRID.store(true, std::sync::atomic::Ordering::Relaxed);
         return;
@@ -827,6 +1039,18 @@ thread_local! {
     static FLUSHING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+/// The EPSG codes whose catalog transformer was built for PROJ definition `def` ([`epsg_transformer`]).
+fn epsg_codes_of(def: &str) -> Vec<u16> {
+    epsg_built().lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, d)| *d == def).map(|(c, _)| *c).collect()
+}
+
+/// The EPSG codes built from the catalog, with their PROJ definitions: bounded as the transformers
+/// are ([`MAX_BUILT`]).
+fn epsg_built() -> &'static std::sync::Mutex<Vec<(u16, &'static str)>> {
+    static BUILT: std::sync::OnceLock<std::sync::Mutex<Vec<(u16, &'static str)>>> = std::sync::OnceLock::new();
+    BUILT.get_or_init(Default::default)
+}
+
 /// The definitions whose most accurate datum transformation needed a missing grid since the app
 /// started (a session says each once).
 fn needs_grid() -> &'static std::sync::Mutex<Vec<String>> {
@@ -842,12 +1066,14 @@ pub fn grid_note(crs: Crs) -> Option<String> {
     grid_note_of(&def, &label)
 }
 
-/// The PROJ definition a system is transformed by, and what a note calls it; `None` for WGS 84
-/// longitude/latitude and Web Mercator, which need no datum transformation.
+/// The key of the transformer a system is transformed by (its PROJ definition, or for a system
+/// read from WKT, `WKT {text}`), and what a note calls it; `None` for WGS 84 longitude/latitude
+/// and Web Mercator, which need no datum transformation.
 pub fn definition_and_label(crs: Crs) -> Option<(String, String)> {
     match crs {
         Crs::Epsg(c) => Some((epsg_proj4(c)?.to_string(), format!("EPSG:{c}"))),
-        Crs::Custom(_) => crs.custom_def().map(|d| (d.proj4.clone(), d.label.clone())),
+        // Under its transformer's key: a WKT's, else its PROJ definition ([`CustomCrs::grid_key`]).
+        Crs::Custom(_) => crs.custom_def().map(|d| (d.grid_key(), d.label.clone())),
         Crs::LonLat | Crs::WebMercator => None,
     }
 }
@@ -959,16 +1185,21 @@ pub fn grid_note_of(def: &str, label: &str) -> Option<String> {
 /// Whether a definition's most accurate datum transformation needed a grid RustGIS doesn't have,
 /// as far as it has been used or probed ([`probe_grid`]).
 pub fn needs_a_missing_grid(def: &str) -> bool {
+    // The definition's transformer, and an EPSG code's from the catalog that it names
+    // ([`epsg_transformer`], noted under the definition by [`record_warning`]).
+    let codes: Vec<String> = epsg_codes_of(def).into_iter().map(|c| format!("EPSG {c}")).collect();
     let map = built().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(Ok(Transformer { kind: Kind::Terrio(t) })) = map.get(def) {
-        let _ = FLUSHING.try_with(|l| *l.borrow_mut() = Some(def.to_string()));
-        t.to_lonlat.flush_warnings();
-        t.from_lonlat.flush_warnings();
-        if let Some((onto, unproject, _)) = &t.own {
-            onto.flush_warnings();
-            unproject.flush_warnings();
+    for key in std::iter::once(def).chain(codes.iter().map(String::as_str)) {
+        if let Some(Ok(Transformer { kind: Kind::Terrio(t) })) = map.get(key) {
+            let _ = FLUSHING.try_with(|l| *l.borrow_mut() = Some(key.to_string()));
+            t.to_lonlat.flush_warnings();
+            t.from_lonlat.flush_warnings();
+            if let Some((onto, unproject, _)) = &t.own {
+                onto.flush_warnings();
+                unproject.flush_warnings();
+            }
+            let _ = FLUSHING.try_with(|l| *l.borrow_mut() = None);
         }
-        let _ = FLUSHING.try_with(|l| *l.borrow_mut() = None);
     }
     drop(map);
     needs_grid().lock().unwrap_or_else(|e| e.into_inner()).iter().any(|d| d == def)
@@ -1034,11 +1265,14 @@ impl Transformer {
         };
         let params = sr.projection_params();
         // On WGS 84 itself there is no datum transformation to choose: the round trip to WGS 84 is
-        // the projection's own.
-        let own = (!geographic)
+        // the projection's own. Nor is there with a shift of the system's own (a `BOUNDCRS`'s, a
+        // `TOWGS84`): its geographic system, taken by its EPSG code, would go to WGS 84 by the
+        // code's transformation, not the file's, and every point would seem not to come back.
+        let own_shift = sr.to_wkt().is_some_and(|w| w.contains("BOUNDCRS[") || w.contains("TOWGS84["));
+        let own = (!geographic && !own_shift)
             .then(|| sr.geographic_wkt())
             .flatten()
-            .map(|g| terrio_crs::SpatialRef::from_wkt(&g))
+            .map(|g| own_geographic(sr).unwrap_or_else(|| terrio_crs::SpatialRef::from_wkt(&g)))
             .filter(|g| !g.same_as(&wgs84))
             .and_then(|g| {
                 let unproject = terrio_crs::Transformer::new(sr, &g).ok()?.with_warning_handler(record_warning);
@@ -1146,6 +1380,15 @@ impl Transformer {
         }
     }
 
+    /// Whether a datum transformation from WGS 84 is applied at `at` (longitude/latitude): one
+    /// other than PROJ's ballpark, which knows no shift for the datum there.
+    pub fn shift_at(&self, at: Coord) -> bool {
+        match &self.kind {
+            Kind::Terrio(t) => t.from_lonlat.operation_at(at.x, at.y, 0.0).ok().flatten().is_some_and(|o| !o.ballpark),
+            _ => false,
+        }
+    }
+
     /// The conversion's parameters (method, centre, offsets, unit, prime meridian), for a system
     /// terrio-crs computes that has some.
     pub fn params(&self) -> Option<&terrio_crs::ProjParams> {
@@ -1176,6 +1419,29 @@ impl Transformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A system read from WKT is saved with its WKT beside a PROJ string, so a newer release reads
+    /// the WKT and an older one, which ignores the field, the PROJ string; a project saved without
+    /// the field (by an older release) still opens. Where PROJ writes no PROJ string (South
+    /// Orientated with false offsets), the one RustGIS wrote before is saved.
+    #[test]
+    fn a_saved_system_keeps_its_wkt_and_a_proj_string() {
+        let lo19 = r#"PROJCS["Lo19 offset",GEOGCS["Hartebeesthoek94",DATUM["Hartebeesthoek94",SPHEROID["WGS 84",6378137,298.257223563],AUTHORITY["EPSG","6148"]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator_South_Orientated"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",19],PARAMETER["scale_factor",1],PARAMETER["false_easting",1000],PARAMETER["false_northing",2000],UNIT["metre",1]]"#;
+        for (wkt, at) in [(super::super::wkt::tests::NAD27_UTM17, Coord::new(-81.0, 35.0)), (lo19, Coord::new(19.5, -30.0))] {
+            let crs = super::super::wkt::crs_from_wkt(wkt).unwrap();
+            let json = serde_json::to_value(crs).unwrap();
+            let proj4 = json["Proj"]["proj4"].as_str().unwrap();
+            assert!(!proj4.is_empty() && json["Proj"]["wkt"].is_string(), "{json}");
+            assert_eq!(serde_json::from_value::<Crs>(json.clone()).unwrap(), crs);
+            // As an older release reads it: by its PROJ string alone, placing points alike.
+            let mut old = json.clone();
+            old["Proj"].as_object_mut().unwrap().remove("wkt");
+            let older: Crs = serde_json::from_value(old).unwrap();
+            assert!(older.custom_def().unwrap().wkt.is_none());
+            let (a, b) = (crs.transformer().unwrap().from_lonlat(at).unwrap(), older.transformer().unwrap().from_lonlat(at).unwrap());
+            assert!((a.x - b.x).hypot(a.y - b.y) < 0.01, "{wkt}: {a:?} {b:?}");
+        }
+    }
 
     #[test]
     fn utm_round_trip() {
@@ -1809,7 +2075,8 @@ mod tests {
         }
         // A file's own definition may carry `+nadgrids=@null` (Web Mercator as GDAL writes it).
         let merc = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs";
-        let file = CustomCrs { proj4: merc.into(), label: "m".into(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() };
+        let file =
+            CustomCrs { proj4: merc.into(), label: "m".into(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new(), wkt: None };
         assert!(Crs::custom(file).is_ok());
 
         let long_proj = format!("+proj={}", "a".repeat(1025));
@@ -1833,9 +2100,10 @@ mod tests {
         drop(table);
         // VN-2000 / TM-3 103-00: its datum shift (+towgs84) is applied.
         check(9205, (103.065, 21.855), (506_521.959, 2_417_609.479), 1.0);
-        // NAD27 / US National Atlas Equal Area: Washington, DC, without NAD27's datum shift (the
-        // gap table's definition takes none; see epsg_gap.rs).
-        check(9311, (-77.04, 38.89), (1_958_685.805, -405_348.265), 0.01);
+        // NAD27 / US National Atlas Equal Area: Washington, DC, with NAD27's datum shift as PROJ
+        // 9.8.1 applies it without grids ("NAD27 to WGS 84 (4)"; pyproj 3.8.0, network off,
+        // `Transformer.from_crs("EPSG:4326", "EPSG:9311", always_xy=True)`).
+        check(9311, (-77.04, 38.89), (1_958_660.023, -405_359.527), 0.01);
         // EPSG:10622 (an orthographic) has no implementation, so it is left out rather than
         // listed and refused.
         assert_eq!(Crs::from_epsg(10622), None);

@@ -12,7 +12,10 @@ use rustgis_data::vn2000_towgs84;
 /// A named projection: (id, label, PROJ definition).
 pub const PRESETS: &[(&str, &str, &str)] = &[
     ("equirectangular", "Equirectangular (Plate Carrée)", "+proj=eqc +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +no_defs"),
-    ("miller", "Miller Cylindrical", "+proj=mill +lon_0=0 +R_A +datum=WGS84 +units=m +no_defs"),
+    // ESRI:54003 as PROJ 9.8.1 transforms it (on WGS 84's authalic sphere, `ellps=WGS84`): with
+    // `+datum=WGS84` beside `+R_A`, a PROJ string goes to the sphere through geocentric
+    // coordinates, 27 km north at 50°N, and its inverse doesn't come back.
+    ("miller", "Miller Cylindrical", "+proj=mill +lon_0=0 +R_A +ellps=WGS84 +units=m +no_defs"),
     ("mollweide", "Mollweide (equal-area world)", "+proj=moll +lon_0=0 +datum=WGS84 +units=m +no_defs"),
     ("cylindricalEqualArea", "Lambert Cylindrical Equal Area", "+proj=cea +lon_0=0 +lat_ts=0 +datum=WGS84 +units=m +no_defs"),
     ("robinson", "Robinson", "+proj=robin +lon_0=0 +datum=WGS84 +units=m +no_defs"),

@@ -53,6 +53,12 @@
                 },
                 "proj4": {
                   "type": "string"
+                },
+                "wkt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
