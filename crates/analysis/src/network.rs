@@ -459,10 +459,10 @@ impl Graph {
     }
 
     /// Where a search from `p` starts: both ends of its segment, at the cost and length of the
-    /// way along it, labelled `source`.
-    pub(crate) fn starts(&self, p: &Placed, source: usize) -> [Start; 2] {
-        let (a, b, w) = self.0.segs.get(p.seg).map_or((0, 0, 1.0), |s| (s.0, s.1, s.2));
-        [Start { node: a, cost: p.to_a * w, length: p.to_a, source }, Start { node: b, cost: p.to_b * w, length: p.to_b, source }]
+    /// way along it, labelled `source`. None for a place not on this graph, so it reaches nothing.
+    pub(crate) fn starts(&self, p: &Placed, source: usize) -> Vec<Start> {
+        let Some(&(a, b, w, _)) = self.0.segs.get(p.seg) else { return Vec::new() };
+        vec![Start { node: a, cost: p.to_a * w, length: p.to_a, source }, Start { node: b, cost: p.to_b * w, length: p.to_b, source }]
     }
 
     /// The cheapest way to `to` found by `search`, as (cost, length): through either end of its
@@ -526,8 +526,9 @@ impl Search {
         }
     }
 
-    /// The least cost of reaching `node` in the last search: exact for every node it settled,
-    /// above `limit` (or infinite) for the rest.
+    /// The least cost of reaching `node` in the last search: exact for every node it settled. When
+    /// `settled` ended the search early, the others keep tentative costs; otherwise they are above
+    /// `limit` (or infinite).
     pub(crate) fn cost(&self, node: usize) -> f64 {
         self.cost.get(node).copied().unwrap_or(f64::INFINITY)
     }
@@ -542,7 +543,8 @@ impl Search {
         self.touched.iter().copied()
     }
 
-    /// The start `node` is reached from most cheaply (the first given, of equally cheap ones).
+    /// The start `node` is reached from most cheaply (of equally cheap ones, whichever the search
+    /// reached first, which depends on the network, not on the order the starts were given).
     pub(crate) fn source(&self, node: usize) -> Option<usize> {
         self.source.get(node).copied().filter(|s| *s != usize::MAX)
     }
