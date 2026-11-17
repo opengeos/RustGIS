@@ -591,8 +591,10 @@ pub(crate) fn pdf_page(path: &str, p: &Value) -> Result<Option<String>, String> 
     match p.get("layer") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(t)) => Ok(Some(t.trim().to_string()).filter(|t| !t.is_empty())),
-        Some(Value::Number(n)) if n.as_u64().is_some() => Ok(n.as_u64().map(|n| n.to_string())),
-        Some(other) => Err(format!("\"layer\": {other} isn't a page number")),
+        Some(other) => match other.as_u64() {
+            Some(n) => Ok(Some(n.to_string())),
+            None => Err(format!("\"layer\": {other} isn't a page number")),
+        },
     }
 }
 
@@ -602,8 +604,9 @@ pub(crate) fn pdf_page(path: &str, p: &Value) -> Result<Option<String>, String> 
 /// which `layer.addDownload` reads (or refuses) as it adds it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_page(url: &str, p: &Value, bytes: &[u8]) -> Option<(String, Option<String>, bool)> {
-    let plain =
-        ["service", "coverage", "geolibreProject", "geolibreLayer"].iter().all(|k| p.get(k).is_none_or(|v| v.is_null() || v == false));
+    let plain = ["service", "coverage", "geolibreProject", "geolibreLayer"]
+        .iter()
+        .all(|k| p.get(k).is_none_or(|v| v.is_null() || v.as_bool() == Some(false)));
     if !raster::PDF_PAGES || !plain {
         return None;
     }

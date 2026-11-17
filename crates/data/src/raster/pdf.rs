@@ -179,23 +179,28 @@ fn viewports(page: &Page<'_>) -> (Vec<Viewport>, Vec<String>) {
     (found, unread)
 }
 
-/// Pairs of numbers from an array.
-fn pairs(a: &Array) -> Vec<(f64, f64)> {
+/// Pairs of numbers from an array, or why it isn't one: an entry that isn't a number, or an odd
+/// count, would pair every later point with the wrong partner.
+fn pairs(a: &Array, what: &str) -> std::result::Result<Vec<(f64, f64)>, String> {
     let n: Vec<f64> = a.iter::<f64>().collect();
-    n.as_chunks::<2>().0.iter().map(|&[x, y]| (x, y)).collect()
+    let (paired, rest) = n.as_chunks::<2>();
+    if n.len() != a.raw_iter().count() || !rest.is_empty() {
+        return Err(format!("its {what} aren't pairs of numbers"));
+    }
+    Ok(paired.iter().map(|&[x, y]| (x, y)).collect())
 }
 
 /// One GeoPDF viewport, or why it can't be used.
 fn viewport(vp: &Dict<'_>, measure: &Dict<'_>) -> std::result::Result<Viewport, String> {
     let bbox: Vec<f64> = vp.get::<Array>(b"BBox".as_slice()).map(|a| a.iter::<f64>().collect()).unwrap_or_default();
     let bbox: [f64; 4] = bbox.try_into().map_err(|_| "its rectangle isn't four numbers".to_string())?;
-    let gpts = measure.get::<Array>(b"GPTS".as_slice()).map(|a| pairs(&a)).unwrap_or_default();
+    let gpts = measure.get::<Array>(b"GPTS".as_slice()).map(|a| pairs(&a, "control points (/GPTS)")).transpose()?.unwrap_or_default();
     // Where the points lie in the rectangle.
     let lpts = measure
         .get::<Array>(b"LPTS".as_slice())
         .or_else(|| measure.get::<Array>(b"Bounds".as_slice()))
-        .map(|a| pairs(&a))
-        .ok_or("it doesn't say where its control points lie in it (/LPTS)")?;
+        .ok_or_else(|| "it doesn't say where its control points lie in it (/LPTS)".to_string())
+        .and_then(|a| pairs(&a, "control points' places (/LPTS)"))?;
     if gpts.len() < 3 || gpts.len() != lpts.len() {
         return Err("its control points are missing or don't pair up".into());
     }
@@ -277,17 +282,20 @@ fn fit(v: &Viewport, to_pixels: Affine, w: u32, h: u32) -> std::result::Result<(
     let t = v.crs.transformer()?;
     let [x0, y0, x1, y1] = v.bbox;
     let mut points = Vec::with_capacity(v.gpts.len());
-    let mut first: Option<f64> = None;
+    let mut previous: Option<f64> = None;
     for (&(lat, lon), &(lx, ly)) in v.gpts.iter().zip(&v.lpts) {
         let on = Coord::new(lon, lat);
         let mut wgs84 = match &v.def {
             Some(def) => crs::lonlat_from_datum_of(def, on).ok_or("a control point is off the Earth")?,
             None => on,
         };
-        // The frame's longitudes on one turn of the Earth: across 180°, 179° and -179° are 2°
-        // apart, not 358°.
-        let reference = *first.get_or_insert(wgs84.x);
-        wgs84.x = reference + (wgs84.x - reference + 180.0).rem_euclid(360.0) - 180.0;
+        // The frame's longitudes continuous from point to point, in the order it gives them (round
+        // its edge): across 180°, 179° and -179° are 2° apart, not 358°, and a frame whose points
+        // step from -170° through 0° to 170° stays 340° wide.
+        if let Some(reference) = previous {
+            wgs84.x = reference + (wgs84.x - reference + 180.0).rem_euclid(360.0) - 180.0;
+        }
+        previous = Some(wgs84.x);
         let ground = t.from_lonlat(wgs84).ok_or("a control point is outside its coordinate system")?;
         let p = to_pixels * Point::new(x0 + lx * (x1 - x0), y0 + ly * (y1 - y0));
         points.push(((p.x, p.y), (ground.x, ground.y)));
@@ -432,6 +440,18 @@ mod tests {
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &across), None, true).unwrap();
         let wide = r.transform.pixel_width * f64::from(r.width);
         assert!(r.georeferenced && (wide - 2.0).abs() < 1e-6, "{wide}° wide, {:?}", r.lost);
+        // A frame round most of the world, its points stepping across it: 340° wide.
+        let wide = geo(wgs84).replace(
+            "/GPTS [41 10 41 12 40 12 40 10] /LPTS [0 1 1 1 1 0 0 0]",
+            "/GPTS [41 -170 41 0 41 170 40 170 40 0 40 -170] /LPTS [0 1 0.5 1 1 1 1 0 0.5 0 0 0]",
+        );
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &wide), None, true).unwrap();
+        let span = r.transform.pixel_width * f64::from(r.width);
+        assert!(r.georeferenced && (span - 340.0).abs() < 1e-6, "{span}° wide, {:?}", r.lost);
+        // A control point that isn't a number: no placing by pairs out of step, and said.
+        let bad = geo(wgs84).replace("/GPTS [41 10 41 12", "/GPTS [41 /Ten 41 12");
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &bad), None, true).unwrap();
+        assert!(!r.georeferenced && r.lost[0].contains("aren't pairs of numbers"), "{:?}", r.lost);
         // No system at all: a scan, and said.
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &geo("/Type /GEOGCS")), None, true).unwrap();
         assert!(!r.georeferenced && r.lost[0].contains("doesn't say its coordinate system"), "{:?}", r.lost);
