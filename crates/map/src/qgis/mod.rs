@@ -31,7 +31,7 @@ use crate::effects::Blend;
 use crate::symbology::{Labeling, LineStroke, MarkerRotation, Renderer};
 pub use annotation::{Annotation, MAX_ITEMS as MAX_ANNOTATIONS};
 pub use expr::{reads_measure, to_sql};
-pub use source::{Source, is_drive_relative, is_relative};
+pub use source::{MAX_MEMORY_FIELDS, Source, VirtualFrom, is_drive_relative, is_relative};
 pub use structure::{MAX_BOOKMARKS, MAX_RELATIONS, ProjectBookmark, ProjectRelation};
 
 /// The most XML nodes a project or style is read with (a large project's file is some hundred
@@ -601,22 +601,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
         let source = source::read(&provider, &datasource, dir);
         let kind = ml.attribute("type").unwrap_or_default().to_string();
         let vector = kind == "vector";
-        let definition_query = match &source {
-            Source::File { subset: Some(q), .. } => match expr::to_sql(q) {
-                // A definition query is read with no map scale, so one reading it would take no
-                // feature.
-                Some(_) if expr::reads_scale(q) => {
-                    report.skipped(&name, "its filter (subset string), which reads the map's scale, which a filter has none of");
-                    None
-                }
-                Some(sql) => Some(sql),
-                None => {
-                    report.skipped(&name, "its filter (subset string), which is too long to read");
-                    None
-                }
-            },
-            _ => None,
-        };
+        let definition_query = definition_query(&source, &name, report);
         let style = read_style_node(ml, &name, report);
         let annotations = if kind == "annotation" { annotation::read(ml, dir, &name, report) } else { Vec::new() };
         layers.push((
@@ -642,6 +627,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     // In the layer tree's order; layers it doesn't hold go below.
     layers.sort_by_key(|(at, _)| at.unwrap_or(usize::MAX));
     project.layers = layers.into_iter().map(|(_, l)| l).collect();
+    resolve_virtual_layers(&mut project.layers, report);
     group_notes(&tree, &blended, &effects, report);
     if !unkept.is_empty() {
         let names = unkept.iter().take(8).map(String::as_str).collect::<Vec<_>>().join(", ");
@@ -654,6 +640,58 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     project.groups = tree.groups.into_iter().map(|g| g.group).collect();
     Ok(project)
 }
+
+/// A layer's filter (its subset string) as a RustGIS definition query, when it reads as one.
+fn definition_query(source: &Source, name: &str, report: &mut Report) -> Option<String> {
+    let Source::File { subset: Some(q), .. } = source else { return None };
+    match expr::to_sql(q) {
+        // A definition query is read with no map scale, so one reading it would take no feature.
+        Some(_) if expr::reads_scale(q) => {
+            report.skipped(name, "its filter (subset string), which reads the map's scale, which a filter has none of");
+            None
+        }
+        Some(sql) => Some(sql),
+        None => {
+            report.skipped(name, "its filter (subset string), which is too long to read");
+            None
+        }
+    }
+}
+
+/// Virtual layers that select every column of one layer, with or without a `WHERE` clause, read
+/// as that layer's file with the clause as its filter (with the layer's own filter too, when it
+/// is another of the project's layers). A virtual layer on another such one is read once that
+/// one is, whatever their order, up to [`MAX_VIRTUAL_CHAIN`] deep. The rest are left as they are,
+/// for the import to note.
+fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
+    for _ in 0..MAX_VIRTUAL_CHAIN {
+        let mut changed = false;
+        for i in 0..layers.len() {
+            let Some(Source::Virtual { from: Some(from), filter, .. }) = layers.get(i).map(|l| &l.source) else { continue };
+            let base = match from {
+                source::VirtualFrom::Source(s) => Some((**s).clone()),
+                // Another layer of the project, as it reads (its file, with its own filter).
+                source::VirtualFrom::Layer(id) => layers.iter().find(|l| &l.id == id).map(|l| l.source.clone()),
+            };
+            let Some(Source::File { path, layer, subset, ignored }) = base else { continue };
+            let subset = match (subset, filter.clone()) {
+                (Some(a), Some(b)) => Some(format!("({a}) AND ({b})")),
+                (a, b) => a.or(b),
+            };
+            let resolved = Source::File { path, layer, subset, ignored };
+            let Some(l) = layers.get_mut(i) else { continue };
+            l.definition_query = definition_query(&resolved, &l.name, report);
+            l.source = resolved;
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// How many virtual layers on virtual layers are followed.
+const MAX_VIRTUAL_CHAIN: usize = 8;
 
 /// Reads a QGIS layer style (a `.qml` file's text) for the layer named `layer` (for the notes).
 pub fn read_style(text: &str, layer: &str, report: &mut Report) -> Result<Style, String> {
