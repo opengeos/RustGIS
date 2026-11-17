@@ -6,8 +6,8 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Releases recorded in the fixtures' README as having no file of a kind ("project" or "prefs").
-/// Any other missing companion file fails the test.
+/// Releases with no file of a kind ("project" or "prefs"). Only an entry here excuses a missing
+/// file; the README's note on the skip is for readers, and the test doesn't read it.
 const SKIPS: &[(&str, &str)] = &[];
 
 fn present_or_skipped(fixtures: &Path, version: &str, kind: &str, file: &str) -> bool {
@@ -19,7 +19,7 @@ fn present_or_skipped(fixtures: &Path, version: &str, kind: &str, file: &str) ->
 #[test]
 fn released_projects_and_preferences_still_open() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/releases");
-    let versions = std::fs::read_dir(&fixtures)
+    let files = std::fs::read_dir(&fixtures)
         .unwrap()
         .filter_map(|entry| {
             let name = entry.unwrap().file_name().into_string().unwrap();
@@ -27,14 +27,16 @@ fn released_projects_and_preferences_still_open() {
             version.starts_with('v').then(|| version.to_owned())
         })
         .collect::<BTreeSet<_>>();
-    assert!(!versions.is_empty(), "no release fixtures in {}", fixtures.display());
-    // The README's table records every release captured, so deleting a release's files fails here.
-    let recorded = std::fs::read_to_string(fixtures.join("README.md"))
+    // The README's table lists every release captured. Each row is checked below, so a release whose
+    // files were deleted fails unless both kinds are in SKIPS; a file needs its row.
+    let versions = std::fs::read_to_string(fixtures.join("README.md"))
         .unwrap()
         .lines()
         .filter_map(|line| line.strip_prefix("| v").and_then(|rest| rest.split_once(' ')).map(|(v, _)| format!("v{v}")))
         .collect::<BTreeSet<_>>();
-    assert_eq!(versions, recorded, "fixture files and the README's release table disagree");
+    assert!(!versions.is_empty(), "no releases in the table in {}", fixtures.join("README.md").display());
+    let unrecorded = files.difference(&versions).collect::<Vec<_>>();
+    assert!(unrecorded.is_empty(), "release fixtures without a README row: {unrecorded:?}");
     for version in versions.iter().map(String::as_str) {
         if present_or_skipped(&fixtures, version, "prefs", &format!("{version}.prefs.json")) {
             let prefs = super::read_at(&fixtures.join(format!("{version}.prefs.json"))).unwrap();
