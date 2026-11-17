@@ -44,6 +44,11 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
     rows.sort_unstable();
     rows.dedup();
     let mut notes = Vec::new();
+    let no_line =
+        rows.iter().filter(|&&r| !matches!(ds.features.get(r).and_then(|f| f.geometry.as_ref()), Some(Geometry::Line(_)))).count();
+    if no_line > 0 {
+        notes.push(format!("{tool}: {no_line} feature(s) of '{}' have no line, and were left out of the network", ds.name));
+    }
     if let Some(fi) = cost_field {
         // As a route reads them: no number costs the length alone, zero or less closes the line.
         let (mut missing, mut closed) = (0usize, 0usize);
@@ -332,38 +337,54 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     }
     let (graph, unit_m) = (&net.graph, net.unit_m);
     let limit = cutoff.map_or(f64::INFINITY, |c| c * unit_m);
-    // Both ends of every destination's segment: once all are settled, nothing nearer is left.
-    let mut target = vec![false; graph.nodes()];
-    let mut targets = 0usize;
-    for (_, d) in &destinations {
+    // The destinations at each end of their segments, and on each segment: a search visits only
+    // those it reached, whatever the number of destinations. Once both ends of every destination's
+    // segment are settled, nothing nearer is left.
+    let mut at_node: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut on_segment: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (j, (_, d)) in destinations.iter().enumerate() {
         let Some(sg) = graph.segment(d.seg) else { continue };
-        for n in [sg.a, sg.b] {
-            if let Some(t) = target.get_mut(n).filter(|t| !**t) {
-                *t = true;
-                targets += 1;
-            }
+        at_node.entry(sg.a).or_default().push(j);
+        if sg.b != sg.a {
+            at_node.entry(sg.b).or_default().push(j);
         }
+        on_segment.entry(d.seg).or_default().push(j);
     }
+    let targets = at_node.len();
     let rows = AtomicUsize::new(0);
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, Search::bytes(graph.nodes())));
     crate::control::begin(origins.len());
     let found = crate::parallel::try_map_each_on(
         &origins,
         threads,
-        || Search::new(graph),
-        |search, _, (_, o)| {
+        || (Search::new(graph), vec![false; destinations.len()]),
+        |(search, seen), _, (_, o)| {
             let mut settled = 0usize;
             search.run(graph, &graph.starts(o, 0), limit, false, |u| {
-                if target.get(u).copied().unwrap_or(false) {
+                if at_node.contains_key(&u) {
                     settled += 1;
                 }
                 settled == targets
             })?;
-            let mut row: Vec<(usize, f64, f64)> = destinations
-                .iter()
-                .enumerate()
-                .filter_map(|(j, (_, d))| {
-                    let (cost, length) = graph.reach(search, o, d);
+            // A destination within the limit is reached through an end of its segment that costs
+            // no more, or lies on the origin's own segment.
+            let near = search.reached().filter(|&n| search.cost(n) <= limit).filter_map(|n| at_node.get(&n));
+            let mut candidates = Vec::new();
+            for &j in near.chain(on_segment.get(&o.seg)).flatten() {
+                if let Some(s) = seen.get_mut(j).filter(|s| !**s) {
+                    *s = true;
+                    candidates.push(j);
+                }
+            }
+            for &j in &candidates {
+                if let Some(s) = seen.get_mut(j) {
+                    *s = false;
+                }
+            }
+            let mut row: Vec<(usize, f64, f64)> = candidates
+                .into_iter()
+                .filter_map(|j| {
+                    let (cost, length) = graph.reach(search, o, &destinations.get(j)?.1);
                     (cost.is_finite() && cost <= limit).then_some((j, cost, length))
                 })
                 .collect();
@@ -590,6 +611,12 @@ mod tests {
         for bad in [json!("0"), json!("-1, 2"), json!("a"), json!([])] {
             assert!(service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": bad})).is_err(), "{bad}");
         }
+        let mut gaps = roads();
+        gaps.push(None, vec![Value::Float(1.0)]);
+        gaps.push(Some(Geometry::Point(c(0.0, 0.0))), vec![Value::Float(1.0)]);
+        let inputs = map(vec![gaps, points("shops", &[Some(c(0.005, 0.0))])]);
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "1"})).unwrap();
+        assert!(r.messages.iter().any(|m| m.contains("2 feature(s) of 'roads' have no line, and were left out")), "{:?}", r.messages);
         let mut costs = roads();
         costs.features[3].attrs[0] = Value::Null;
         costs.features[2].attrs[0] = Value::Float(0.0);

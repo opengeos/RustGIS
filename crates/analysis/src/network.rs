@@ -532,6 +532,11 @@ impl Search {
         self.length.get(node).copied().unwrap_or(f64::INFINITY)
     }
 
+    /// The nodes the last search gave a cost: every node it settled, and some beyond `limit`.
+    pub(crate) fn reached(&self) -> impl Iterator<Item = usize> + '_ {
+        self.touched.iter().copied()
+    }
+
     /// The start `node` is reached from most cheaply (the first given, of equally cheap ones).
     pub(crate) fn source(&self, node: usize) -> Option<usize> {
         self.source.get(node).copied().filter(|s| *s != usize::MAX)
