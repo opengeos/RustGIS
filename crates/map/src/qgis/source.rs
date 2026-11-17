@@ -140,8 +140,15 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 let kept: Vec<String> = conninfo(datasource)
                     .into_iter()
                     .filter(|(k, _)| matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode"))
-                    // Quoted, as QGIS writes it, when a value holds a space or a quote.
-                    .map(|(k, v)| if v.is_empty() || v.contains([' ', '\'']) { format!("{k}='{v}'") } else { format!("{k}={v}") })
+                    // Quoted, as QGIS writes it, when a value holds a space or a quote (its
+                    // backslashes and quotes escaped, as libpq reads them back).
+                    .map(|(k, v)| {
+                        if v.contains([' ', '\'']) {
+                            format!("{k}='{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
+                        } else {
+                            format!("{k}={v}")
+                        }
+                    })
                     .collect();
                 let connection = kept.join(" ");
                 // What QGIS writes about the table (or the password) rather than the connection.
@@ -682,6 +689,11 @@ mod tests {
         assert_eq!(dropped, ["sslrootcert", "authcfg"]);
         let Source::Postgres { dropped, .. } = read("postgres", "dbname=gis password=ab secret host=db table=t", dir) else { panic!() };
         assert!(dropped.is_empty(), "{dropped:?}");
+        // Kept values: an empty one as it is, one with a quote quoted and escaped.
+        let Source::Postgres { connection, .. } = read("postgres", r"dbname='gis' host=db port= user='o\'brien' table=t", dir) else {
+            panic!()
+        };
+        assert_eq!(connection, r"dbname=gis host=db port= user='o\'brien'");
         // An apostrophe inside an unquoted value doesn't open a quote.
         let Source::Postgres { table, .. } = read("postgres", "user=o'brien table=t", dir) else { panic!() };
         assert_eq!(table, "t");

@@ -339,7 +339,20 @@ fn add_layer(
                 return Ok(None);
             }
             let before = s.active_layer;
-            let added = s.run_part("map.addTiles", &json!({"url": path, "name": name, "kind": kind, "overlay": true}))?;
+            // Without waiting for its metadata (it lands as the map draws), as Add Data adds a
+            // local archive: an import of many archives doesn't hold the window a second for each.
+            // (The import runs only in the user's own dispatch, which may read files and the web.)
+            let q = json!({"url": path, "name": name, "kind": kind, "overlay": true});
+            // (As run_part would, a refused add leaves the map's tile layers as they were: it may
+            // drop the same archive's layer before it finds the map full.)
+            let tiles = s.map().tiles.clone();
+            let added = match super::tiles::add_with_metadata_wait(s, &q, web_time::Duration::ZERO) {
+                Ok(added) => added,
+                Err(e) => {
+                    s.map_mut().tiles = tiles;
+                    return Err(e);
+                }
+            };
             web_settings(s, &added, before, layer, report);
             if *vector {
                 note_vector_tile_style(name, false, report);
@@ -462,6 +475,12 @@ fn database_note(
     report: &mut Report,
 ) {
     let saved = saved_database_connection(s, what, connection, made);
+    // Why none could be saved, when making one was tried and refused.
+    let (saved, refused) = match saved {
+        Ok(c) => (Some(c), String::new()),
+        Err(Some(e)) => (None, format!(" (no connection could be saved: {e})")),
+        Err(None) => (None, String::new()),
+    };
     // Where a login would go, so a project can't hide it behind a connection's name.
     let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
     // Its settings the saved connection leaves out, by name (`sslrootcert`, `authcfg`, …).
@@ -474,43 +493,44 @@ fn database_note(
         Some(c) => format!(
             "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it{left}"
         ),
-        None => format!("the {what} table {table} ({connection}): connect to the database to add it"),
+        None => format!("the {what} table {table} ({connection}): connect to the database to add it{refused}"),
     };
     report.skipped(name, text);
 }
 
 /// The name of the saved connection to the database `connection` names (QGIS's `key=value`
 /// text): one already saved, else one made now (at most [`MAX_IMPORTED_CONNECTIONS`] an import).
-/// `None` in the browser (which reads no databases), for a connection RustGIS can't address (a
-/// `service=` one), or when none can be made.
-fn saved_database_connection(s: &mut Session, what: &str, connection: &str, made: &mut usize) -> Option<String> {
+/// `Err(None)` in the browser (which reads no databases), for a connection RustGIS can't address
+/// (a `service=` one, a value it would have to escape), or past the import's limit; `Err(Some)`
+/// with why, when making one was refused.
+fn saved_database_connection(s: &mut Session, what: &str, connection: &str, made: &mut usize) -> Result<String, Option<String>> {
     let room = *made < MAX_IMPORTED_CONNECTIONS;
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (s, what, connection, made, room);
-        None
+        Err(None)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // A value QGIS quoted (it holds a space or a quote) isn't put into an address.
         if connection.contains('\'') {
-            return None;
+            return Err(None);
         }
         let kv: Vec<(&str, &str)> = connection.split(' ').filter_map(|p| p.split_once('=')).collect();
         let get = |k: &str| kv.iter().find(|(n, _)| *n == k).map(|(_, v)| *v).filter(|v| !v.is_empty());
-        let host = get("host")?;
+        let host = get("host").ok_or(None)?;
         // A service's settings (pg_service.conf) aren't in the address: no connection is made.
         if get("service").is_some() {
-            return None;
+            return Err(None);
         }
         // Values an address would have to escape (a backslash, a control character) aren't
         // guessed at.
         if kv.iter().any(|(_, v)| v.chars().any(|c| c.is_control())) {
-            return None;
+            return Err(None);
         }
         let (kind, address) = if what == "PostGIS" {
             if kv.iter().any(|(_, v)| v.contains('\\')) {
-                return None;
+                return Err(None);
             }
             let parts: Vec<String> =
                 ["host", "port", "dbname", "user", "sslmode"].iter().filter_map(|k| get(k).map(|v| format!("{k}={v}"))).collect();
@@ -520,13 +540,13 @@ fn saved_database_connection(s: &mut Session, what: &str, connection: &str, made
             let (host, instance) = host.split_once('\\').map_or((host, None), |(h, i)| (h, Some(i)));
             let (host, port) = host.split_once(',').map_or((host, get("port")), |(h, p)| (h, Some(p)));
             if host.is_empty() {
-                return None;
+                return Err(None);
             }
             let (user, db) = (get("user"), get("dbname").unwrap_or_default());
             // Parts that would need escaping in an address (a DOMAIN\user, say) aren't guessed at.
             let plain = |p: &str| !p.contains(['@', '/', '?', '#', ':', '%', '\\', '&', '=']);
             if ![user.unwrap_or_default(), host, port.unwrap_or_default(), db, instance.unwrap_or_default()].into_iter().all(plain) {
-                return None;
+                return Err(None);
             }
             let user = user.map(|u| format!("{u}@")).unwrap_or_default();
             let port = port.map(|p| format!(":{p}")).unwrap_or_default();
@@ -534,14 +554,14 @@ fn saved_database_connection(s: &mut Session, what: &str, connection: &str, made
             ("sqlserver", format!("mssql://{user}{host}{port}/{db}{instance}"))
         };
         if let Some(c) = s.connections.matching_database(kind, &address).first() {
-            return Some(c.name.clone());
+            return Ok(c.name.clone());
         }
         if !room {
-            return None;
+            return Err(Some(format!("an import makes at most {MAX_IMPORTED_CONNECTIONS}")));
         }
-        let new = s.run_part("connection.new", &json!({"kind": kind, "address": address})).ok()?;
+        let new = s.run_part("connection.new", &json!({"kind": kind, "address": address})).map_err(Some)?;
         *made += 1;
-        new.get("name").and_then(Value::as_str).map(str::to_string)
+        new.get("name").and_then(Value::as_str).map(str::to_string).ok_or(None)
     }
 }
 

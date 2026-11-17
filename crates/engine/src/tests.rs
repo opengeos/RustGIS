@@ -2907,6 +2907,45 @@ fn qgis_sources_import_as_their_layers() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Sources that carry over whole give no notes: a GPX file's tracks, a memory layer of kinds
+/// RustGIS has, and a virtual layer that filters a file's layer.
+#[test]
+fn qgis_sources_that_carry_over_whole_are_not_noted() {
+    let dir = std::env::temp_dir().join(format!("rustgis-qgis-clean-sources-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("trip.gpx"),
+        r#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>b</name><trkseg><trkpt lat="47.4" lon="8.5"/><trkpt lat="47.5" lon="8.6"/></trkseg></trk></gpx>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("pts.geojson"),
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"value":30},"geometry":{"type":"Point","coordinates":[8.5,47.4]}}]}"#,
+    )
+    .unwrap();
+    let layer = |id: &str, provider: &str, source: &str| {
+        format!(
+            r#"<maplayer type="vector"><id>{id}</id><datasource>{source}</datasource><layername>{id}</layername><provider>{provider}</provider></maplayer>"#
+        )
+    };
+    let layers = [
+        layer("track", "gpx", "./trip.gpx?type=track"),
+        layer(
+            "scratch",
+            "memory",
+            "memory?geometry=Point&amp;crs=EPSG:4326&amp;field=name:string(20,0)&amp;field=n:integer(10,0)&amp;field=d:date",
+        ),
+        layer("big", "virtual", "?layer=ogr:.%2Fpts.geojson:p&amp;query=SELECT%20*%20FROM%20p%20WHERE%20p.value%20%3E%2020"),
+    ]
+    .concat();
+    let qgs = format!(r#"<qgis version="4.2.3"><projectlayers>{layers}</projectlayers></qgis>"#);
+    let mut s = world();
+    let out = s.run("project.importQgis", &json!({"text": qgs, "dir": dir.display().to_string()})).unwrap();
+    assert_eq!(out["notes"], json!([]), "{}", out["notes"]);
+    assert_eq!(out["layers"].as_array().map(Vec::len), Some(3), "{out}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// An import makes at most 16 saved connections, and none whose address it would have to guess
 /// at (a quoted value, a Windows user), each table still noted.
 #[test]
@@ -2933,6 +2972,8 @@ fn qgis_database_connections_are_bounded_and_never_guessed() {
     assert_eq!(s.connections.connections.len(), before + 16, "{notes}");
     assert_eq!(notes.matches("log in to the saved connection").count(), 16, "{notes}");
     assert_eq!(notes.matches("connect to the database to add it").count(), 8, "{notes}");
+    // Those past the limit say why no connection was saved; those not guessed at don't.
+    assert_eq!(notes.matches("(no connection could be saved: an import makes at most 16)").count(), 4, "{notes}");
     let addresses: Vec<&str> = s.connections.connections.iter().map(|c| c.address.as_str()).collect();
     assert!(!addresses.iter().any(|a| ["my gis", "CORP", "a\\b", "host=,"].iter().any(|t| a.contains(t))), "{addresses:?}");
 }
