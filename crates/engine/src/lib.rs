@@ -2347,6 +2347,7 @@ impl Session {
         // once, keeping the same counted notice channel as retained resident expressions.
         let mut landed = Vec::new();
         let mut dates = Vec::new();
+        let mut not_utf8 = Vec::new();
         let mut source_errors = Vec::new();
         let mut source_error_count = 0;
         for map in &mut self.project.maps {
@@ -2387,9 +2388,9 @@ impl Session {
                     ));
                 }
                 if let Some(note) = layer.source.as_mut().and_then(|source| source.take_not_utf8()) {
-                    dates.push(format!(
-                        "{}: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}",
-                        layer.name
+                    not_utf8.push(notice_text::NoticeText::format(
+                        "{name}: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}",
+                        [("name", layer.name.clone().into()), ("note", note.into())],
                     ));
                 }
                 if layer.source.as_mut().is_some_and(|source| source.take_display_window()) {
@@ -2402,6 +2403,9 @@ impl Session {
         }
         for note in dates {
             self.notify(note, false);
+        }
+        for note in not_utf8 {
+            self.notify_text(note, false);
         }
         if let Some(message) = notice_text::NoticeText::source_errors(source_error_count, source_errors, source_error_count) {
             self.notify_text(message, true);

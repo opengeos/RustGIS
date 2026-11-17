@@ -1448,10 +1448,16 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
             s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("valid UTF-8")).collect()
         };
         let mark = s.notice_mark();
-        for _ in 0..2 {
-            s.map_mut().sync_sources(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0), 1000.0, true);
-            s.notice_landed_rasters();
-        }
+        let view = rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0);
+        s.map_mut().sync_sources(&view, 1000.0, true);
+        s.notice_landed_rasters();
+        // A second read of the same opening lands its batch again and says nothing more.
+        let layer = s.map_mut().layer_mut(id).unwrap();
+        layer.dataset.features.clear();
+        layer.source.as_mut().unwrap().reset();
+        s.map_mut().sync_sources(&view, 1000.0, true);
+        s.notice_landed_rasters();
+        assert!(!s.map().layer(id).unwrap().dataset.features.is_empty(), "{name}: the second read lands");
         let expected = if said {
             vec![format!("big5: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}")]
         } else {
