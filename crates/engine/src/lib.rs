@@ -803,6 +803,8 @@ pub struct Session {
     /// The datum grids the map's layers were last projected with
     /// ([`rustgis_data::raster::crs::grid_generation`]).
     grid_generation: u64,
+    /// The datum grids whose download was said ([`Self::want_grids_in_use`]).
+    grid_downloads_said: std::collections::HashSet<String>,
     /// Whether this front end has the Download Datum Grids setting (the desktop and web apps), so
     /// a note about a missing grid can point to it; the command line and Python have none.
     pub offers_grid_downloads: bool,
@@ -1258,6 +1260,7 @@ impl Session {
             crs_used_elsewhere: Vec::new(),
             grid_notes_checked: None,
             grid_generation: rustgis_data::raster::crs::grid_generation(),
+            grid_downloads_said: Default::default(),
             offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
@@ -2230,6 +2233,9 @@ impl Session {
         for n in &news {
             let (text, error) = crate::grids::news_text(n);
             self.notify(text, error);
+            // Its download is over: one tried again (the setting turned on again) is said again.
+            let (crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. }) = n;
+            self.grid_downloads_said.remove(name);
         }
         // A grid that arrived can bring up the next ones the systems in use need.
         if news.iter().any(|n| matches!(n, crate::grids::News::Got { .. })) {
@@ -2658,8 +2664,11 @@ impl Session {
                 }
             }
         }
-        if !coming.is_empty() {
-            self.notify(format!("Downloading the datum grids {} from PROJ's grid server", names_said(&coming)), false);
+        // Each grid's download said once: a later ask finds those still coming.
+        let new: Vec<String> = coming.iter().filter(|n| !self.grid_downloads_said.contains(*n)).cloned().collect();
+        if !new.is_empty() {
+            self.notify(format!("Downloading the datum grids {} from PROJ's grid server", names_said(&new)), false);
+            self.grid_downloads_said.extend(new);
         }
         coming
     }

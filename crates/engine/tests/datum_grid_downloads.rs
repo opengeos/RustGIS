@@ -169,5 +169,26 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     assert!(!s.notices.iter().any(|n| n.text.contains("grid")), "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
     grids::set_enabled(false);
 
+    // A download is said once, however often the session asks while it is under way.
+    MODE.store(SLOW, Ordering::SeqCst);
+    grids::set_enabled(true);
+    let mut s = Session::new(Project::default());
+    let mut ds = rustgis_data::Dataset::new("nad27", rustgis_data::GeometryType::Point, Vec::new());
+    ds.crs = Some(Crs::Epsg(4267));
+    rustgis_engine::cmd::layer::add_dataset(&mut s, ds);
+    assert!(s.want_grids_in_use().contains(&"us_noaa_WO.tif".to_string()));
+    assert!(s.want_grids_in_use().contains(&"us_noaa_WO.tif".to_string()), "still coming");
+    let downloading = s.notices.iter().filter(|n| n.text.starts_with("Downloading the datum grids")).count();
+    assert_eq!(downloading, 1, "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+    // Its end, before the folder goes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !grids::take_news().iter().any(|n| matches!(n, News::Failed { name, .. } if name == "us_noaa_WO.tif"))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50)); // test-wait: the slow download ends on its own thread.
+    }
+    grids::set_enabled(false);
+    MODE.store(GRIDS, Ordering::SeqCst);
+
     let _ = std::fs::remove_dir_all(&root);
 }

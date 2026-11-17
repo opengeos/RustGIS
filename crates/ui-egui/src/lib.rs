@@ -1469,6 +1469,9 @@ impl RustGisApp {
         let mut s = session;
         // A time slider move doesn't wait for a Zarr step to be read (#1291 step 3).
         s.zarr_off_frame = cfg!(not(target_arch = "wasm32"));
+        // This front end has the Download Datum Grids setting, so a note about a missing grid can
+        // point to it.
+        s.offers_grid_downloads = true;
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
         }
@@ -1629,8 +1632,6 @@ impl RustGisApp {
         self.ui.ask_layers = self.services.load_pref.as_ref().and_then(|load| load("ask_file_layers")).is_none_or(|v| v != "off");
         self.ui.download_grids = self.services.load_pref.as_ref().and_then(|load| load("download_datum_grids")).is_some_and(|v| v == "on");
         rustgis_engine::grids::set_enabled(self.ui.download_grids);
-        // This front end has the setting, so a note about a missing grid can point to it.
-        self.session.offers_grid_downloads = true;
         // A stored projection this version can't use means Web Mercator.
         if let Some(code) = self.services.load_pref.as_ref().and_then(|load| load("start_projection"))
             && let Ok(p) = rustgis_engine::map::Projection::from_code(&code)
