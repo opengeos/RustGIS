@@ -35000,6 +35000,36 @@ fn ogc_group_refresh_keeps_children_across_rotated_keys_and_rejects_bad_answers(
     assert_eq!(s.map().layers.len(), 2);
 }
 
+/// A refresh that drops the field a layer's markers are sized by clears the mapping and says so;
+/// one that keeps it keeps the mapping without a word.
+#[test]
+fn ogc_refresh_clears_a_size_mapping_whose_field_goes() {
+    use ogc_server::{ITEMS, Server, fixture_features};
+    let server = Server::group_fixture();
+    let features = |properties: Value| {
+        let mut doc: Value = serde_json::from_str(fixture_features()).unwrap();
+        doc["features"][0]["properties"] = properties;
+        doc.to_string()
+    };
+    server.set(ITEMS, &features(json!({"name":"Place", "value":12})));
+    let mut s = Session::new(Project::default());
+    let group = s.run("service.import", &json!({"url":server.root()})).unwrap()["group"].clone();
+    let layer = s.map().layer_by_name("Places").unwrap().id;
+    s.run("layer.symbology", &json!({"layer":layer, "type":"unique", "field":"name"})).unwrap();
+    s.run("layer.sizeBy", &json!({"layer":layer, "field":"value", "min":0, "max":20})).unwrap();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("keep their class sizes (1: Places)")).count();
+    s.run("service.refresh", &json!({"group":group})).unwrap();
+    assert!(s.map().layer(layer).unwrap().size_by.is_some());
+    assert_eq!(said(&s), 0);
+    server.set(ITEMS, &features(json!({"name":"Place"})));
+    s.run("service.refresh", &json!({"group":group})).unwrap();
+    let l = s.map().layer(layer).unwrap();
+    assert!(l.size_by.is_none() && matches!(l.renderer, rustgis_map::Renderer::Unique { .. }), "the colours stay");
+    assert_eq!(said(&s), 1);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.map().layer(layer).unwrap().size_by.is_some(), "undo brings it back");
+}
+
 #[test]
 fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
     use ogc_server::{ITEMS, Server, fixture_features};
