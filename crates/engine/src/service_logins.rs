@@ -597,6 +597,10 @@ pub(crate) fn bind_logged_in(s: &Session, connection: &str, url: &str) -> Result
         {
             logins::bind(&active.binding, url).map_err(str::to_string)?;
         }
+        // The expiry stands until a new login replaces the token: nothing falls back to anonymous.
+        if c.auth == "arcgis" && s.web_logins.failed.get(&c.id).copied() == Some(TOKEN_EXPIRED) {
+            return Err(TOKEN_EXPIRED.into());
+        }
         return Ok(url.to_string());
     }
     let Some(active) = s.web_logins.active.get(&c.id) else { return Ok(url.to_string()) };

@@ -82,6 +82,10 @@ pub(crate) enum Polled {
 /// Starts generating a token for the saved connection `c`. Nothing is sent when anything about
 /// the request is wrong. The endpoint must be an https:// address at the connection's own origin.
 pub(crate) fn start(s: &mut Session, c: &Connection, endpoint: &str, password: &str, remember: bool) -> Result<(), String> {
+    // A generation left from a replaced project (its connection ids are reused) is not this one's.
+    if s.web_logins.pending.get(&c.id).is_some_and(|op| s.check_continuation(&op.owner).is_err()) {
+        cancel_for(s, &c.id);
+    }
     if s.web_logins.pending.contains_key(&c.id) {
         return Err(ALREADY.into());
     }

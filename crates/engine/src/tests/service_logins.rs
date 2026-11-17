@@ -3398,6 +3398,8 @@ mod arcgis_tokens {
         assert!(!s.database_logins.has_session_password(&id));
         assert!(logins::apply(&address).is_err());
         assert_eq!(web::request(&mut s, Some(&id), &format!("{origin}/a")).unwrap_err(), web::TOKEN_EXPIRED);
+        // Once ended, a legend at its origin is still refused, until a login replaces it.
+        assert_eq!(web::bind_logged_in(&s, &id, &format!("{origin}/legend")).unwrap_err(), web::TOKEN_EXPIRED);
         web::resolve(&mut s, None);
         assert_eq!(requests(&mut s).as_array().unwrap().len(), 1);
         // Nothing is saved, so a login with nothing typed asks for a token: the expired one isn't offered again.
@@ -3405,6 +3407,7 @@ mod arcgis_tokens {
         // A new token logs in again.
         s.run("connection.login", &json!({"id":id,"token":"renewed-token-757","expiresAt":FUTURE})).unwrap();
         assert!(logins::apply(&bound(&mut s, &id, &format!("{origin}/a"))).unwrap().unwrap().url.ends_with("?token=renewed-token-757"));
+        assert!(web::bind_logged_in(&s, &id, &format!("{origin}/legend")).is_ok());
     }
 
     #[test]
@@ -3691,6 +3694,17 @@ mod arcgis_tokens {
         assert!(s.web_logins.pending.is_empty());
         let address = web::request(&mut s, Some(&id), &format!("{origin}/a"));
         assert!(address.is_err(), "no login was made from it: {address:?}");
+
+        // A generation left behind by a replaced project never blocks a new one for the same id.
+        s.run("connection.generateToken", &json!({"id":id,"tokenEndpoint":endpoint,"password":"password-757"})).unwrap();
+        let (_, stale) = server.take();
+        s.run("project.new", &json!({})).unwrap();
+        s.run("connection.generateToken", &json!({"id":id,"tokenEndpoint":endpoint,"password":"password-757"})).unwrap();
+        assert!(!stale(), "the replaced project's request was stopped");
+        let (done, fresh) = server.take();
+        assert!(fresh());
+        done(Ok(token("new-project-token-757")));
+        assert_eq!(s.run("connection.tokenStatus", &json!({"id":id})).unwrap()["loggedIn"], true);
 
         // Dropping the session cancels what is under way.
         let mut dropped = session(None);
