@@ -58,8 +58,9 @@ pub struct ArcgisSource {
     info: SourceInfo,
     /// The object id field, by name (it orders the pages and samples the features).
     oid: String,
-    /// Its place among the fields read.
-    oid_at: usize,
+    /// Its place among the fields read; none for a layer opened empty, whose answer may name no
+    /// fields (a page with features then reads as the layer having changed).
+    oid_at: Option<usize>,
     /// The features a page asks for.
     page: usize,
     /// Whether the layer's queries take standardized SQL (`MOD`), to sample a view.
@@ -132,7 +133,11 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
 
     let name = d.get("name").and_then(serde_json::Value::as_str).filter(|n| !n.trim().is_empty()).unwrap_or("layer").to_string();
     let first = crate::esripbf::read_page(&f, &name).inspect_err(|_| remote.forget_answer(&first))?;
-    let oid_at = first.object_id_field.ok_or_else(|| refuse("its answers hold no object ids"))?;
+    // An empty answer may name no fields; one with features must name its object ids.
+    let oid_at = first.object_id_field;
+    if oid_at.is_none() && !first.dataset.features.is_empty() {
+        return Err(refuse("its answers hold no object ids"));
+    }
     let mut info = SourceInfo {
         name,
         format: FORMAT,
@@ -446,7 +451,7 @@ impl ArcgisSource {
     ) -> Result<(Vec<Feature>, bool, usize)> {
         let page = crate::esripbf::read_page(bytes, &self.info.name).inspect_err(|_| self.remote.forget_answer(url))?;
         // An empty page may name no fields: there is nothing in it to misread.
-        if !page.dataset.features.is_empty() && (page.dataset.fields != self.info.fields || page.object_id_field != Some(self.oid_at)) {
+        if !page.dataset.features.is_empty() && (page.dataset.fields != self.info.fields || page.object_id_field != self.oid_at) {
             self.remote.forget_answer(url);
             return Err(DataError::Format(crate::diagnostics::message_with_address(
                 &self.query,
@@ -458,7 +463,7 @@ impl ArcgisSource {
         let sent = page.dataset.features.len();
         let mut out = Vec::with_capacity(sent);
         for mut f in page.dataset.features.into_vec() {
-            match f.attrs.get(self.oid_at) {
+            match self.oid_at.and_then(|at| f.attrs.get(at)) {
                 Some(Value::Int(id)) if *id >= 0 => {
                     f.id = *id as u64;
                     out.push(f);

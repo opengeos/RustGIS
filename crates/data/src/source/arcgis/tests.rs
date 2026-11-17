@@ -83,7 +83,9 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         if step > 1 && !sql {
             return Some(br#"{"error":{"code":400,"message":"Unable to complete operation."}}"#.to_vec());
         }
+        let none = value("where").is_some_and(|w| w.contains("1=0"));
         let ids: Vec<u64> = (1..=FEATURES)
+            .filter(|_| !none)
             .filter(|id| id % step == 0)
             .filter(|id| {
                 let (x, y) = position(*id);
@@ -350,4 +352,21 @@ fn a_budgeted_view_stays_within_its_bytes_as_it_is_read_and_spread_over_it() {
     );
     let rows: HashSet<u64> = b.features.iter().map(|f| (f.id - 1) / 20).collect();
     assert!(rows.len() >= 10, "{rows:?}");
+}
+
+#[test]
+fn a_layer_matching_nothing_opens_and_reads_empty() {
+    let (query, _) = service_with("live-empty.test", Opts { empty_without_fields: true, ..Opts::default() });
+    let src = open_blocking(&query.replace("where=1%3D1", "where=1%3D0")).unwrap();
+    assert_eq!(src.info.count, Some(0));
+    let b = read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap();
+    assert!(b.complete && b.features.is_empty() && b.matched == 0);
+    let mut visited = 0;
+    let all = src
+        .visit_chunks(None, 4 << 10, &mut |c| {
+            visited += c.len();
+            Ok(())
+        })
+        .unwrap();
+    assert!(all.complete && visited == 0);
 }
