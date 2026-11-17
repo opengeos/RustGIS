@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::esripbf::tests::encode::{answer, feature, field, geometry, lonlat, number, transform, uint};
+use crate::esripbf::tests::encode::{answer, feature, field, geometry, lonlat, number, text, transform, uint};
 
 /// A points layer of 400 features on a 20 by 20 grid, 0.05° apart from (-100, 40): object id `i`
 /// (from 1) at column `(i - 1) % 20`, row `(i - 1) / 20`.
@@ -40,11 +40,13 @@ struct Opts {
     ignores_offset: bool,
     /// An empty page names no fields.
     empty_without_fields: bool,
+    /// Each feature has a text field of 1.5 to 10.5 KB, by its object id.
+    padded: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { page: 30, sql: true, description: None, z: false, ignores_offset: false, empty_without_fields: false }
+        Opts { page: 30, sql: true, description: None, z: false, ignores_offset: false, empty_without_fields: false, padded: false }
     }
 }
 
@@ -58,7 +60,7 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields } = opts;
+    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -104,6 +106,9 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         let mut parts = vec![number(7, 0), lonlat(), transform(false, 0.01, 0.0, 0.0)];
         if !(sent.is_empty() && empty_without_fields) {
             parts.push(field("OBJECTID", 6));
+            if padded {
+                parts.push(field("NOTE", 4));
+            }
         }
         if z {
             parts.insert(1, number(10, 1));
@@ -117,7 +122,14 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             if z {
                 at.push(100);
             }
-            parts.push(if geometry_too { feature(&[uint(id), geometry(&[], &at)]) } else { feature(&[uint(id)]) });
+            let mut values = vec![uint(id)];
+            if padded {
+                values.push(text(&"x".repeat((id % 7 + 1) as usize * 1500)));
+            }
+            if geometry_too {
+                values.push(geometry(&[], &at));
+            }
+            parts.push(feature(&values));
         }
         Some(answer(&parts))
     });
@@ -369,4 +381,20 @@ fn a_layer_matching_nothing_opens_and_reads_empty() {
         })
         .unwrap();
     assert!(all.complete && visited == 0);
+}
+
+#[test]
+fn a_view_larger_than_the_answers_kept_is_read_in_part_without_running_out_of_rounds() {
+    // 400 features of 1.5 to 10.5 KB: about 2.4 MB of uneven answers, past what a service keeps
+    // in tests (2 MB). The service offers pages of 30, up to 315 KB; they are asked for shorter,
+    // under the largest answer (64 KB).
+    let (query, _) = service_with("live-large.test", Opts { page: 30, padded: true, ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    assert!(src.page < 30 && src.page * 10_600 < remote::MAX_ANSWER as usize, "{}", src.page);
+    let b = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
+    assert!(!b.complete && b.matched == FEATURES && !b.features.is_empty() && b.features.len() < FEATURES as usize);
+    assert_eq!(b.features.iter().map(|f| f.id).collect::<HashSet<_>>().len(), b.features.len());
+    // Read again, it asks for what it read before.
+    let again = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
+    assert_eq!(ids(&again), ids(&b));
 }

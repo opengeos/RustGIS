@@ -39,7 +39,8 @@ pub const NOT_LIVE: &str = "can't be read a view at a time";
 const CELLS_A_SIDE: f64 = 4.0;
 /// The finest grid level (cells about 2 cm wide).
 const DEEPEST: i32 = 30;
-/// The longest page asked for, whatever the layer allows.
+/// The longest page asked for, whatever the layer allows (shorter for large features: see
+/// [`open_now`]).
 const LONGEST_PAGE: usize = 4_000;
 /// The most pages one read asks for in all: past it the view is sampled more thinly (or, where
 /// the service can't sample, read in part).
@@ -117,6 +118,11 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     // Asked for together: one round.
     let (d, c, f) = (remote.answer(&description)?, remote.answer(&counted)?, remote.answer(&first)?);
     let (Some(d), Some(c), Some(f)) = (d, c, f) else { return Err(remote::need()) };
+    // A page short enough that its answer stays well under the largest one taken: the answer of
+    // one feature (with the fields it names) at a quarter of it, so that pages of larger features
+    // still fit.
+    let per_feature = f.len().max(256);
+    let fits = (usize::try_from(remote::MAX_ANSWER).unwrap_or(usize::MAX) / per_feature.saturating_mul(4)).max(1);
 
     let d = json(&remote, &description, &d, crate::ogc::DESCRIPTION_MAX, "description")?;
     let paging = crate::ogc::arcgis_paging(&d).ok_or_else(|| refuse("the layer doesn't say it can be read in pages"))?;
@@ -124,7 +130,7 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     if !crate::ogc::supports_pbf(&d) {
         return Err(refuse("the layer doesn't answer in protocol buffers"));
     }
-    let page = paging.size.unwrap_or(1_000).clamp(1, LONGEST_PAGE);
+    let page = paging.size.unwrap_or(1_000).clamp(1, LONGEST_PAGE).min(fits);
     let sample = d.get("useStandardizedQueries").and_then(serde_json::Value::as_bool) == Some(true);
 
     let c = json(&remote, &counted, &c, MAX_COUNT_ANSWER, "count")?;
@@ -328,8 +334,9 @@ impl ArcgisSource {
         // Where the service can't sample: each cell's first features, its share of the limit.
         let share = if self.sample { usize::MAX } else { limit.div_ceil(cells.len()) };
         let mut budget = MAX_READ_PAGES;
-        // The answers a read holds at once stay within half of what a service keeps, or the
-        // pages it needs would push each other out: past it, the view is read in part.
+        // The answers a read holds at once stay within half of what a service keeps, and a round
+        // fetches no more than the other half (`remote::ROUND_ANSWERS`), so the pages a pass
+        // needs never push each other out: past it, the view is read in part.
         let room = remote::KEEP_ANSWERS / 2;
         let (mut held, mut present, mut present_bytes) = (0usize, 0usize, 0usize);
         // Features kept within `bytes` as they come: every other one dropped, and every other

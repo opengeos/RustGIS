@@ -39,13 +39,28 @@ const ROUND_BUDGET: u64 = READ_BUDGET.saturating_mul(2);
 /// Files kept, with what was fetched of them.
 const MAX_FILES: usize = 32;
 /// The most bytes of whole answers a service keeps (least recently used ones are dropped past it),
-/// as [`KEEP`] bounds a file's parts.
-pub const KEEP_ANSWERS: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 256 << 20 };
+/// as [`KEEP`] bounds a file's parts. Small in tests, so that they can fill it.
+pub const KEEP_ANSWERS: usize = if cfg!(test) {
+    2 << 20
+} else if cfg!(target_arch = "wasm32") {
+    96 << 20
+} else {
+    256 << 20
+};
 /// The most bytes one answer may have ([`Want::Upto`]).
-pub const MAX_ANSWER: u64 = if cfg!(target_arch = "wasm32") { 16 << 20 } else { 32 << 20 };
-/// The most answers one round of a read asks for, so that a round's answers stay within
-/// [`ROUND_BUDGET`]: the rest are asked for by the next round.
-pub const ROUND_ANSWERS: usize = (ROUND_BUDGET / MAX_ANSWER) as usize;
+pub const MAX_ANSWER: u64 = if cfg!(test) {
+    64 << 10
+} else if cfg!(target_arch = "wasm32") {
+    4 << 20
+} else {
+    8 << 20
+};
+/// The most answers one round of a read asks for: the rest are asked for by the next round.
+pub const ROUND_ANSWERS: usize = if cfg!(target_arch = "wasm32") { 12 } else { 16 };
+// A read holds at most half of what a service keeps (`arcgis`), and a round's answers at their
+// largest fit the other half: what a read needs at once is never pushed out by its own answers.
+const _: () = assert!((ROUND_ANSWERS as u64) * MAX_ANSWER <= (KEEP_ANSWERS as u64) / 2);
+const _: () = assert!((ROUND_ANSWERS as u64) * MAX_ANSWER <= ROUND_BUDGET);
 
 /// The error of a read that needs bytes not fetched yet (it is run again once they are).
 pub const NEED: &str = "waiting for the file's bytes";
