@@ -1439,24 +1439,21 @@ impl Session {
             "web":{"selected":self.database_logins.web_selections(),"active":self.web_logins.active_ids()}
         })
     }
-    /// Token generation belongs to a login identity, not its display name or service path.
-    /// Other connections and all active credentials retain the full account checks.
+    /// What a continuation compares of the accounts. A token generation belongs to a login
+    /// identity, not to its display name or service path, and it holds identity only: no
+    /// connection's session secret (a live token included) stays in it, since `poll` checks the
+    /// target's login identity itself. Everything else, including which logins are active, keeps
+    /// the full check, so logging in or out of another connection while one is pending ends it.
     pub(super) fn continuation_accounts(&self, node: &Node) -> Value {
         let mut accounts = self.policy_accounts();
-        if node.id() == "connection.generateToken"
-            && let Some(id) = node.params.get("id").and_then(Value::as_str)
-            && let Some(rows) = accounts.get_mut("connections").and_then(Value::as_array_mut)
-        {
+        if node.id() != "connection.generateToken" {
+            return accounts;
+        }
+        let id = node.params.get("id").and_then(Value::as_str);
+        if let Some(rows) = accounts.get_mut("connections").and_then(Value::as_array_mut) {
             for row in rows {
                 if row.pointer("/definition/id").and_then(Value::as_str) != Some(id) {
                     continue;
-                }
-                if let Some(c) = self.connections.find(id)
-                    && c.auth == "arcgis"
-                    && crate::connections::SERVICE_KINDS.contains(&c.kind.as_str())
-                {
-                    row["definition"]["name"] = Value::Null;
-                    row["definition"]["address"] = json!(crate::connections::login_origin(c));
                 }
             }
         }

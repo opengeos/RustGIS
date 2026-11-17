@@ -1177,7 +1177,8 @@ two ways.
   `{"pending":true}` until it lands, then `connection.login`'s result with `"pending":false`;
   `connection.cancelToken {"id":"c1"}` stops it, leaving any earlier login. Only the caller that
   started it can ask or cancel, and a replaced project, a changed login (user, method or origin), a
-  logout, a removal, a pasted token or a closed form ends it. Failures say a fixed sentence, never the
+  logout, a removal, a pasted token, a closed form, or logging in or out of another connection ends
+  it. Failures say a fixed sentence, never the
   server's text. The password is in that one request and is kept nowhere: not in the form once sent,
   the connection, the session, the saved login, History, recordings or notices.
   **Test** requires a saved connection, generates through the same commands with Remember off, and
