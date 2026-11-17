@@ -10347,7 +10347,8 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
     let l = s.project.layouts.last().unwrap();
     assert!(r["locator"].is_string() && l.elements.iter().any(|e| e.name == "Scale Bar"));
     let warnings = r["warnings"].to_string();
-    assert!(!warnings.contains("the whole globe"), "{warnings}");
+    // Neither whole-globe notice (no scale bar, no locator).
+    assert!(!warnings.contains("the map shows the whole globe"), "{warnings}");
 }
 
 /// A publication's globe locator near a pole shows the globe whole in its circle (#2337): sized on
@@ -10369,6 +10370,15 @@ fn a_globe_locator_near_a_pole_fits_its_circle() {
         assert!(across <= locator.w.min(locator.h), "{case}: a disc {across:.0} mm across in a {:.0} mm circle", locator.w);
     };
     let said = |r: &Value, start: &str| r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).any(|w| w.starts_with(start));
+    // The locator centred where the map frame is.
+    let centred_with_the_map = |s: &Session, case: &str| {
+        let l = s.project.layouts.last().unwrap();
+        let centre = |n: &str| match l.elements.iter().find(|e| e.name == n).map(|e| &e.kind) {
+            Some(ElementKind::MapFrame { center, .. }) => *center,
+            _ => panic!("{case}: no {n}"),
+        };
+        assert_eq!(centre("Locator"), centre("Map Frame"), "{case}");
+    };
     const MOVED: &str = "the globe locator is centred at";
     const CLIPPED: &str = "the globe locator is too small";
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [10.0, 76.0, 30.0, 81.0]})).unwrap();
@@ -10379,12 +10389,7 @@ fn a_globe_locator_near_a_pole_fits_its_circle() {
     let r =
         s.run("layout.publication", &json!({"profile": "figure-1col", "extent": [10.0, 83.0, 30.0, 84.0], "locator": "globe"})).unwrap();
     assert!(said(&r, CLIPPED) && !said(&r, MOVED), "a figure's locator: {}", r["warnings"]);
-    let l = s.project.layouts.last().unwrap();
-    let centre = |n: &str| match l.elements.iter().find(|e| e.name == n).map(|e| &e.kind) {
-        Some(ElementKind::MapFrame { center, .. }) => *center,
-        _ => panic!("no {n}"),
-    };
-    assert_eq!(centre("Locator"), centre("Map Frame"));
+    centred_with_the_map(&s, "a figure's locator");
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     s.run("map.goToXY", &json!({"lon": 20.0, "lat": 84.0})).unwrap();
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "globe"})).unwrap();
@@ -10394,12 +10399,7 @@ fn a_globe_locator_near_a_pole_fits_its_circle() {
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
     fits(&s, "north-east Brazil");
     assert!(!said(&r, MOVED) && !said(&r, CLIPPED), "north-east Brazil: {}", r["warnings"]);
-    let l = s.project.layouts.last().unwrap();
-    let centre = |n: &str| match l.elements.iter().find(|e| e.name == n).map(|e| &e.kind) {
-        Some(ElementKind::MapFrame { center, .. }) => *center,
-        _ => panic!("no {n}"),
-    };
-    assert_eq!(centre("Locator"), centre("Map Frame"));
+    centred_with_the_map(&s, "north-east Brazil");
 }
 
 /// Arrangements of a publication layout's surrounds (#1379): by name, corner by corner, the
