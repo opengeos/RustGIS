@@ -521,7 +521,12 @@ pub fn export_notes<'a>(
         // The file names its body: only a layer on another body says its longitude/latitude are
         // written as the file's.
         (true, true) => {
-            let axis = |c: raster::Crs| c.custom_def().and_then(|d| raster::planetary::proj4_axes(&d.proj4)).map(|(a, _)| a);
+            // From its PROJ string, else (a system PROJ writes none for) its WKT.
+            let axis = |c: raster::Crs| {
+                c.custom_def().and_then(|d| {
+                    raster::planetary::proj4_axes(&d.proj4).map(|(a, _)| a).or_else(|| d.wkt.as_deref().and_then(raster::wkt::semi_major))
+                })
+            };
             // Another body: its semi-major axis more than 1% from the target's.
             let other = |ds: &&Dataset| match (ds.crs.and_then(axis), axis(crs)) {
                 (Some(a), Some(b)) => ((a - b) / b).abs() > 0.01,

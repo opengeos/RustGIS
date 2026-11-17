@@ -331,6 +331,9 @@ mod tests {
         p.tables[0].crs = Some(rustgis_data::raster::wkt::crs_from_wkt(grads).unwrap());
         let saved = serde_json::to_value(&p).unwrap();
         assert_eq!(saved["requires"], json!(["crs-wkt"]));
+        // Saved again, the same: finding out serializes the payload, not the project with its
+        // header, so it doesn't ask again.
+        assert_eq!(serde_json::to_value(&p).unwrap(), saved);
         // Read back, the same.
         let again = Project::from_json(&saved.to_string()).unwrap();
         assert_eq!(serde_json::to_value(&again).unwrap()["requires"], json!(["crs-wkt"]));

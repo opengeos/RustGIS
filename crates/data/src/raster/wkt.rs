@@ -1671,6 +1671,12 @@ fn with_wgs84_datum(text: &str, geographic: bool) -> Option<String> {
     Some(format!("{}{datum}{}", &text[..=comma], &text[comma + 1..]))
 }
 
+/// The semi-major axis of WKT `text`'s ellipsoid (its first `SPHEROID` or `ELLIPSOID`), in the
+/// unit the file gives it.
+pub(crate) fn semi_major(text: &str) -> Option<f64> {
+    find_node(&parse(text).ok()?, &["SPHEROID", "ELLIPSOID"], 0)?.num(0)
+}
+
 /// The first node named one of `names`, depth first.
 fn find_node<'a>(n: &'a Node, names: &[&str], depth: usize) -> Option<&'a Node> {
     if names.iter().any(|k| n.name.eq_ignore_ascii_case(k)) {

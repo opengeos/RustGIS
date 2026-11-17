@@ -591,18 +591,19 @@ fn terrio_keys(d: &CustomCrs) -> Option<(Vec<u16>, Vec<f64>, String)> {
         sr.epsg = None;
     }
     let tags = sr.to_geokeys().ok()?.encode().ok()?;
-    Some((with_raster_type(&tags.directory), tags.doubles, tags.ascii))
+    Some((with_raster_type(&tags.directory)?, tags.doubles, tags.ascii))
 }
 
-/// Key directory `keys` with GTRasterTypeGeoKey (1025) as area (1), added in its place by id.
-fn with_raster_type(keys: &[u16]) -> Vec<u16> {
-    let (Some(head), Some(entries)) = (keys.get(..4), keys.get(4..)) else { return keys.to_vec() };
+/// Key directory `keys` with GTRasterTypeGeoKey (1025) as area (1), added in its place by id;
+/// `None` when the directory can't count its keys.
+fn with_raster_type(keys: &[u16]) -> Option<Vec<u16>> {
+    let (Some(head), Some(entries)) = (keys.get(..4), keys.get(4..)) else { return Some(keys.to_vec()) };
     let mut entries: Vec<[u16; 4]> = entries.as_chunks::<4>().0.iter().copied().filter(|e| e[0] != 1025).collect();
     entries.push([1025, 0, 1, 1]);
     entries.sort_by_key(|e| e[0]);
-    let mut out = vec![head[0], head[1], head[2], u16::try_from(entries.len()).unwrap_or(u16::MAX)];
+    let mut out = vec![head[0], head[1], head[2], u16::try_from(entries.len()).ok()?];
     out.extend(entries.iter().flatten());
-    out
+    Some(out)
 }
 
 /// The samples as `f32`, with their type's name. Their memory is reserved first: when it can't be
