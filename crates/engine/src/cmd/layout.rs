@@ -371,8 +371,8 @@ const FIGURES: &[PublicationProfile] = &[
 
 /// `layout.publication`'s profiles: a sheet for printing on every page size `layout.new` offers
 /// ([`PAGES`], in its order), portrait then landscape (`a4-portrait`, "A4 portrait sheet"), then
-/// the [`FIGURES`]. Built once from the two lists, so a page size added to `PAGES` is a sheet too;
-/// its names live for the program, as a constant's would.
+/// the journal and thesis figures. Built once from the two lists, so a page size added to `PAGES`
+/// is a sheet too; its names live for the program, as a constant's would.
 pub static PUBLICATION_PROFILES: LazyLock<Vec<PublicationProfile>> = LazyLock::new(|| {
     let name = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
     let sheets = PAGES.iter().flat_map(|&(size, label, w, h)| {
