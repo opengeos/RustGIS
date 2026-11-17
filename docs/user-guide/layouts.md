@@ -122,8 +122,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     globe whole. The globe nearly fills the frame, centred where the view looks, and the
     surrounds go in the room around it. It has no scale bar, since a globe's scale holds only at
     its centre. A sheet has no locator by default either, since it would only show the same globe
-    again, smaller; `"locator": "globe"` or `"inset"` still adds one. Warnings say both. With an
-    `extent`, a sheet on the globe is laid out as on a flat map.
+    again, smaller; `"locator": "globe"` or `"inset"` still adds one. Warnings say both. Near a
+    pole the frame can't draw the globe that small at the view's latitude, so the globe is
+    centred as near it as fits, and a warning says where. With an `extent`, a sheet on the globe
+    is laid out as on a flat map. On any sheet on the globe, the light space around the globe is
+    room for the surrounds, as the blank page is.
   - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
     it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule
     line, no web tiles, and no veil. Dark basemaps keep a white backing so the dark legend text

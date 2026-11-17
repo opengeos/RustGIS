@@ -1298,8 +1298,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let soft = Rgba::rgb(0x5E, 0x55, 0x47);
     let clear = Rgba::new(0, 0, 0, 0);
     let mut warnings: Vec<String> = Vec::new();
-    // A sheet's default locator would show the globe again, smaller; one asked for still comes.
-    if sheet && whole_globe && locator == Locator::None {
+    // A sheet's default locator would show the globe again, smaller; one asked for still comes,
+    // and "none" asked for is no news.
+    if sheet && whole_globe && p.get("locator").is_none_or(Value::is_null) {
         warnings.push("no locator: the map shows the whole globe; \"locator\": \"globe\" or \"inset\" adds one".into());
     }
     // Texts and boxes around the map, placed while its frame is worked out.
@@ -1847,8 +1848,18 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let (center, scale) = if whole_globe {
         // The globe seen whole fills the frame, centred where the view looks (#2337): fitting the
         // whole Earth's flat footprint instead drew it a fraction of the frame, around 0°, 0°.
-        let center = s.map().center_lonlat();
-        (center, globe_scale(s.map(), center, inner_w.min(inner_h) * WHOLE_GLOBE_FILL))
+        // Its size at a scale is the same at any latitude, so it is worked out on the equator,
+        // where the probe stays within the camera's resolutions.
+        let view = s.map().center_lonlat();
+        let scale = round_scale(globe_scale(s.map(), Coord::new(view.x, 0.0), inner_w.min(inner_h) * WHOLE_GLOBE_FILL));
+        let center = drawable_globe_center(s.map(), view, scale);
+        if center != view {
+            warnings.push(format!(
+                "the globe is centred at {:.1}° rather than the view's {:.1}° of latitude: nearer the pole, the frame can't draw it small enough to fit",
+                center.y, view.y
+            ));
+        }
+        (center, scale)
     } else {
         fit_scale(s.map(), &extent, inner_w, inner_h).ok_or("the extent can't be drawn on the map's projection")?
     };
@@ -5727,6 +5738,25 @@ fn shows_whole_globe(map: &rustgis_map::Map, p: &Value) -> bool {
 /// How much of the frame, inside its graticule's label strips, a globe seen whole spans: a little
 /// less than all of it, for the atmosphere's glow at its rim.
 const WHOLE_GLOBE_FILL: f64 = 0.94;
+
+/// Where a frame of `map` at 1:`scale` centres the globe seen whole: at `view`, or as near it on
+/// its meridian as the frame's camera can draw the globe that small. Towards a pole the camera's
+/// resolution for a scale grows as one over the cosine of the latitude, and past its coarsest
+/// ([`rustgis_map::camera::MAX_RES`]) the globe would be drawn larger than the frame (#2337).
+fn drawable_globe_center(map: &Map, view: Coord, scale: f64) -> Coord {
+    let fits =
+        |lat: f64| rustgis_map::layout::frame_camera(map, Coord::new(view.x, lat), scale, 0.0, 0.0).res < rustgis_map::camera::MAX_RES;
+    if fits(view.y) {
+        return view;
+    }
+    // The latitude in between that the camera still draws at the scale, found by halving.
+    let (mut fit, mut over) = (0.0f64, view.y.abs());
+    for _ in 0..40 {
+        let mid = (fit + over) / 2.0;
+        if fits(mid.copysign(view.y)) { fit = mid } else { over = mid }
+    }
+    Coord::new(view.x, fit.copysign(view.y))
+}
 
 /// Parses the publication's locator choice with its default: a globe on a sheet, none on a figure
 /// or where the map is itself the globe seen whole (it would only show it again, smaller).

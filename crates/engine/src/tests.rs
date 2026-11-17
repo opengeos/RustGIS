@@ -10311,14 +10311,36 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
         assert!(warnings.iter().any(|w| w.starts_with("no scale bar: the map shows the whole globe")), "{profile}: {warnings:?}");
         let sheet = !profile.starts_with("figure");
         assert_eq!(warnings.iter().any(|w| w.starts_with("no locator: the map shows the whole globe")), sheet, "{profile}: {warnings:?}");
-        // The legend sits off the globe: its centre outside the disc.
-        if let Some(legend) = named("Legend") {
+        // On a sheet the legend sits off the globe, in the room around it: its box's nearest point
+        // to the globe's centre is outside the disc. A square figure has no such room in its
+        // corners; there the legend may sit on the open sea, as on a flat map, but never on
+        // what the map draws.
+        assert!(!warnings.iter().any(|w| w.contains("on what the map shows")), "{profile}: {warnings:?}");
+        if let Some(legend) = named("Legend").filter(|_| sheet) {
             let (cx, cy) = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
-            let (lx, ly) = (legend.x + legend.w / 2.0, legend.y + legend.h / 2.0);
-            assert!((lx - cx).hypot(ly - cy) > across / 2.0, "{profile}: the legend at {lx:.0}, {ly:.0} over the globe");
+            let (nx, ny) = (cx.clamp(legend.x, legend.x + legend.w), cy.clamp(legend.y, legend.y + legend.h));
+            assert!((nx - cx).hypot(ny - cy) >= across / 2.0, "{profile}: the legend's corner at {nx:.0}, {ny:.0} is over the globe");
         }
     }
-    // A locator asked for still comes; an extent given keeps the scale bar and the locator.
+    // Looking at the Arctic, where the frame's camera can't draw the globe that small at the
+    // view's latitude: centred as near it as fits, said, the globe still within the frame.
+    s.run("map.goToXY", &json!({"lon": 20.0, "lat": 84.0})).unwrap();
+    for profile in ["figure-1col", "a4-portrait"] {
+        let r = s.run("layout.publication", &json!({"profile": profile})).unwrap();
+        let l = s.project.layouts.last().unwrap();
+        let frame = l.elements.iter().find(|e| e.name == "Map Frame").unwrap();
+        let ElementKind::MapFrame { center, scale, .. } = &frame.kind else { panic!() };
+        let cam = frame_camera(s.map(), *center, *scale, 0.0, 0.0);
+        let across = 2.0 * rustgis_map::globe::Globe::new(&cam, frame.w * PT_PER_MM, frame.h * PT_PER_MM).disc_radius() / PT_PER_MM;
+        assert!(across < frame.w.min(frame.h), "{profile}: a disc {across:.0} mm across in {:.0} × {:.0} mm", frame.w, frame.h);
+        assert!((center.x - 20.0).abs() < 1e-6 && center.y > 0.0 && center.y <= 84.0, "{profile}: {center:?}");
+        let said = r["warnings"].to_string();
+        assert_eq!(said.contains("rather than the view's 84.0°"), center.y < 84.0 - 1e-6, "{profile}: {said}");
+    }
+    // A locator asked for still comes, and "none" asked for is no news; an extent given keeps
+    // the scale bar and the locator.
+    let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "none"})).unwrap();
+    assert!(r["locator"].is_null() && !r["warnings"].to_string().contains("no locator"), "{}", r["warnings"]);
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "globe"})).unwrap();
     assert!(r["locator"].is_string());
     let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();

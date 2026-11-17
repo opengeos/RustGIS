@@ -1377,10 +1377,18 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
         let t = f64::from(i) / 8.0;
         edge_points.extend([(w * t, 0.0), (w * t, h), (0.0, h * t), (w, h * t)]);
     }
-    let lonlats: Vec<Coord> = edge_points.iter().filter_map(|&(sx, sy)| lonlat_at(sx, sy)).collect();
+    let mut lonlats: Vec<Coord> = edge_points.iter().filter_map(|&(sx, sy)| lonlat_at(sx, sy)).collect();
     // A frame whose edges reach past the globe's rim sees a whole hemisphere: its graticule is the
-    // whole Earth's, the lines behind the globe left out where they are drawn.
+    // whole Earth's, the lines behind the globe left out where they are drawn. A measured grid
+    // takes its bounds from the globe inside the frame too, its edges missing it.
     let rim = globe.is_some() && lonlats.len() < edge_points.len();
+    if rim {
+        for i in 0..=16 {
+            for j in 0..=16 {
+                lonlats.extend(lonlat_at(w * f64::from(i) / 16.0, h * f64::from(j) / 16.0));
+            }
+        }
+    }
     let world = Extent::new(-180.0, -90.0, 180.0, 90.0);
     let mut ext = if rim { world } else { Extent::EMPTY };
     for c in &lonlats {
@@ -1423,7 +1431,7 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
     // A tilted frame's lines break where they pass behind the eye, a globe's behind its horizon.
     let to_px = |c: Coord| {
         match &globe {
-            Some(g) => g.forward(c),
+            Some(on) => on.forward(c),
             None => map.to_map(c).and_then(|m| view.camera.try_to_screen(m, w, h)),
         }
         .map(|(x, y)| (x as f32 * ppp, y as f32 * ppp))
@@ -5656,6 +5664,61 @@ Elaboração: RustGIS",
         let named = Grid { crs: Some("EPSG:32733".into()), ..g.clone() };
         assert_eq!(measured_crs(&named, &map, c).map(|c| c.epsg()), Some(32733));
         assert_eq!(measured_crs(&Grid { crs: Some("EPSG:2056".into()), ..g }, &map, c), None);
+    }
+
+    #[test]
+    fn the_space_around_a_globe_is_free_in_its_coverage() {
+        // #2337: the light space a globe is drawn on leaves room for a layout's surrounds, as the
+        // blank basemap's white paper does (its ocean too, as open sea on a flat map); the
+        // atmosphere's glow at the globe's rim doesn't. Before, every cell was taken.
+        let mut map = Map::new("m");
+        map.set_projection(rustgis_map::Projection::Globe);
+        // A globe about 64 mm across in a frame 100 mm square.
+        let (gw, gh, cells) = frame_coverage(&mut map, Coord::new(0.0, 0.0), 2e8, 100.0, 100.0, 50).unwrap();
+        let cell = |x: u32, y: u32| cells[(y * gw + x) as usize];
+        assert!(cells.iter().any(|c| *c), "the glow at the rim is drawn");
+        for (x, y) in [(1, 1), (gw - 2, 1), (1, gh - 2), (gw - 2, gh - 2)] {
+            assert!(!cell(x, y), "the space at the corner ({x}, {y}) is free");
+        }
+    }
+
+    #[test]
+    fn a_measured_grid_on_the_globe_seen_whole_is_drawn() {
+        // #2337: with the whole globe inside the frame, no edge of it lands on the globe; the
+        // measured grid takes its bounds from the globe in the frame instead of drawing nothing.
+        use rustgis_map::layout::{Grid, GridKind};
+        let mut m = Map::new("m");
+        m.set_projection(rustgis_map::Projection::Globe);
+        let mut maps = vec![m];
+        let mut l = Layout::new("Layout", 100.0, 100.0);
+        let grid = Grid {
+            kind: GridKind::Measured,
+            crs: Some("EPSG:32632".into()),
+            step: 0.0,
+            color: Rgba::rgb(0xFF, 0, 0),
+            labels: false,
+            width: 1.0,
+            ..Grid::default()
+        };
+        l.add(
+            "Map",
+            (10.0, 10.0, 80.0, 80.0),
+            ElementKind::MapFrame {
+                map: "m".into(),
+                center: Coord::new(9.0, 45.0),
+                scale: 2e8,
+                shape: FrameShape::Rectangle,
+                grid: Some(grid),
+                extent_of: None,
+                extent_color: rustgis_map::layout::INDICATOR_COLOR,
+                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+                bearing: 0.0,
+                pitch: 0.0,
+            },
+        );
+        let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
+        assert!(count(&pm, (30.0, 30.0, 70.0, 70.0), red) > 20, "the measured grid's lines on the globe");
+        assert_eq!(count(&pm, (11.0, 11.0, 20.0, 20.0), red), 0, "none past the rim");
     }
 
     #[test]
