@@ -459,7 +459,11 @@ fn menu_items(menu: Menu) -> Vec<Item> {
 /// (`completion::menu`). Returns what to add for the one accepted: a function open (`round(`),
 /// unless it takes no arguments (`pi()`); a variable as it is.
 pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) -> Option<String> {
-    let find = |item: &str| menu_items(menu).into_iter().find(|i| shown(i) == item);
+    // The catalog, each entry as the list shows it, worked out once a frame and only while the list
+    // is open (or one is accepted).
+    let cell = std::cell::OnceCell::new();
+    let catalog = || cell.get_or_init(|| menu_items(menu).into_iter().map(|i| (shown(&i), i)).collect::<Vec<_>>());
+    let find = |item: &str| catalog().iter().find(|(s, _)| s == item).map(|(_, i)| i.clone());
     let help = |ui: &mut Ui, item: &str, width: f32| {
         if let Some(of) = find(item) {
             ui.add_space(GAP);
@@ -471,7 +475,7 @@ pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) 
         Item::Variable(i, _) => VARS.get(i).map(|v| tl!(v.description).to_string()),
         _ => None,
     };
-    let items = || menu_items(menu).iter().map(shown).collect();
+    let items = || catalog().iter().map(|(s, _)| s.clone()).collect();
     let (_, accepted) = crate::completion::menu(ui, label, items, |_| None, describe, help);
     find(&accepted?).map(|item| match item {
         Item::Function(f) if f.max > 0 => format!("{}(", f.name),

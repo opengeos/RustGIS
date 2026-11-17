@@ -514,7 +514,8 @@ struct MenuState {
 /// the item clicked, Escape or a press elsewhere closes the list; each item after its `icon`, with
 /// the `help` on the highlighted one, or the one under the pointer, beside it, and what it says
 /// (`describe`) given to a screen reader with each. The same from the keyboard: Tab to the button,
-/// Enter (or Space) opens it. Returns the button, and the item accepted.
+/// Enter (or Space) opens it, and Tab on to another widget closes it. Returns the button, and the
+/// item accepted.
 pub(crate) fn menu(
     ui: &mut Ui,
     label: impl Into<egui::WidgetText>,
@@ -536,6 +537,12 @@ pub(crate) fn menu(
     let toggled = button.clicked() && !(s.open && ui.input(|i| i.key_pressed(Key::Enter)));
     if toggled {
         s = MenuState { open: !s.open, ..MenuState::default() };
+        // The key that pressed the button (focused from the keyboard) is the list's: a dialog's
+        // Enter mustn't also take it and run the dialog with the clause half written.
+        ui.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Enter);
+            i.consume_key(Modifiers::NONE, Key::Space);
+        });
     }
     s.pass = pass;
     let items = if s.open { items() } else { Vec::new() };
@@ -566,7 +573,11 @@ pub(crate) fn menu(
             i.pointer.any_pressed()
                 && i.pointer.interact_pos().is_some_and(|p| !button.rect.contains(p) && !drawn.is_some_and(|r| r.contains(p)))
         });
-        if escape || elsewhere {
+        // The focus gone to another widget (Tab): the list closes, as a box's does, rather than take
+        // that widget's keys. Not on a press, whose widget may be an item of the list being
+        // clicked; nor while nothing has the focus (a click doesn't give it to the button).
+        let moved_on = ui.memory(|m| m.focused().is_some_and(|f| f != button.id)) && !ui.input(|i| i.pointer.any_pressed());
+        if escape || elsewhere || moved_on {
             s.open = false;
         } else if enter {
             accepted = Some(selected);

@@ -2836,26 +2836,68 @@ mod tests {
         h.run();
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closes it");
         assert_eq!(*h.state(), added, "adding nothing");
+        // Tab on with the list open: it closes, rather than take the next widget's keys.
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open again");
+        h.key_press(egui::Key::Tab);
+        h.run();
+        h.run();
+        assert!(!on_button(&h), "the focus moved on");
+        assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Tab closed it");
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert_eq!(*h.state(), added, "its keys are no longer the list's");
     }
 
-    /// In the app, Escape closes a clause's Functions list: the Escape shortcut (the Pan tool)
-    /// doesn't take it first.
+    /// In the app, Enter on Functions ▾ (focused from the keyboard) opens its list and is taken
+    /// by it: the dialog doesn't also run with the clause half written.
+    #[test]
+    fn enter_on_a_clause_menu_does_not_run_the_dialog() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.text = "pop_est >".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "Functions ▾").focus();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let first = format!("{}()", rustgis_engine::data::query::functions().next().unwrap().name);
+        assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "the list opened");
+        assert_eq!(h.state().dialogs.open, Some("selectByAttributes"), "the dialog is still open");
+        assert_eq!(h.state().dialogs.error, None, "and didn't run");
+    }
+
+    /// In the app (its whole frame, shortcuts included), Escape closes a clause's Functions list:
+    /// the Escape shortcut (the Explore tool) doesn't take it first, so the tool is left as it was.
     #[test]
     fn escape_closes_a_clause_list_in_the_app() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
+        app.run("tool.set", json!({"tool": "zoomIn"})).unwrap();
         app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
-        let mut h = app_harness(app);
-        h.run_steps(3);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
         h.get_by_role_and_label(Role::Button, "Functions ▾").click();
-        h.run();
+        h.run_steps(2);
         let first = format!("{}()", rustgis_engine::data::query::functions().next().unwrap().name);
         assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open");
         h.key_press(egui::Key::Escape);
-        h.run();
+        h.run_steps(2);
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closed it");
         assert_eq!(h.state().dialogs.open, Some("selectByAttributes"), "not the dialog");
+        assert_eq!(h.state().session.tool, rustgis_engine::Tool::ZoomIn, "nor switched the tool");
     }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the
