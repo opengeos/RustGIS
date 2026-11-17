@@ -50,6 +50,8 @@ struct Opts {
     caps: Option<usize>,
     /// Its counts are the largest number there is.
     huge_counts: bool,
+    /// Its last this many features are counted but never sent.
+    hidden: u64,
 }
 
 impl Default for Opts {
@@ -66,6 +68,7 @@ impl Default for Opts {
             bad_text: false,
             caps: None,
             huge_counts: false,
+            hidden: 0,
         }
     }
 }
@@ -80,7 +83,8 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps, huge_counts } = opts;
+    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps, huge_counts, hidden } =
+        opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -122,6 +126,7 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         }
         let offset: usize = if ignores_offset { 0 } else { value("resultOffset").map_or(0, |o| o.parse().unwrap()) };
         let size: usize = value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page).min(caps.unwrap_or(usize::MAX));
+        let ids: Vec<u64> = ids.into_iter().filter(|id| *id <= FEATURES - hidden).collect();
         let sent: Vec<u64> = ids.iter().skip(offset).take(size).copied().collect();
         let geometry_too = value("returnGeometry").as_deref() != Some("false");
         let mut parts = vec![number(7, 0), lonlat(), transform(false, 0.01, 0.0, 0.0)];
@@ -266,8 +271,10 @@ fn layers_that_cant_be_read_a_view_at_a_time_are_refused_to_be_downloaded() {
         assert!(matches!(&e, DataError::Unsupported(m) if m.contains(NOT_LIVE)), "{e}");
     }
     let (query, _) = service("live-window.test", 5, true, None);
-    let e = open_blocking(&format!("{query}&resultOffset=10")).unwrap_err();
-    assert!(e.to_string().contains(NOT_LIVE), "{e}");
+    for extra in ["&resultOffset=10", "&maxAllowableOffset=0.1", "&geometryPrecision=2"] {
+        let e = open_blocking(&format!("{query}{extra}")).unwrap_err();
+        assert!(e.to_string().contains(NOT_LIVE), "{extra}: {e}");
+    }
 }
 
 #[test]
@@ -525,4 +532,23 @@ fn counts_past_any_layer_never_overflow() {
     // An answer, read or refused, whatever it is: never a panic.
     let _ = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 });
     let _ = src.visit_chunks(None, 4 << 10, &mut |_| Ok(()));
+}
+
+#[test]
+fn features_counted_but_not_sent_are_said_and_leave_the_read_incomplete() {
+    let (query, _) = service_with("live-hidden.test", Opts { hidden: 10, ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    let mut visited = 0;
+    let all = src
+        .visit_chunks(None, 4 << 10, &mut |c| {
+            visited += c.len();
+            Ok(())
+        })
+        .unwrap();
+    assert!(!all.complete && visited == 390, "{visited}");
+    assert!(all.notes.iter().any(|n| n.contains("10 features more than it sent")), "{:?}", all.notes);
+    // A view read whole, but for what the service didn't send.
+    let b = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
+    assert!(!b.complete && b.features.len() == 390, "{}", b.features.len());
+    assert!(b.notes.iter().any(|n| n.contains("more than it sent")), "{:?}", b.notes);
 }

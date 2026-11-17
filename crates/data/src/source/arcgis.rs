@@ -113,6 +113,10 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     if WINDOWS.iter().any(|k| crate::ogc::query_value(&query, k).is_some()) {
         return Err(refuse("the query asks for a part of the layer of its own"));
     }
+    // A view is read at full precision: a query rounding geometry is read as it is, downloaded.
+    if ["quantizationParameters", "maxAllowableOffset", "geometryPrecision"].iter().any(|k| crate::ogc::query_value(&query, k).is_some()) {
+        return Err(refuse("the query rounds the layer's geometry"));
+    }
     let description = crate::ogc::arcgis_layer_url(&query);
     let counted = with(&query, &[("returnCountOnly", "true"), ("returnExtentOnly", "true"), ("outSR", "4326"), ("f", "json")]);
     let first = with(&features_query(&query), &[("resultRecordCount", "1")]);
@@ -169,6 +173,15 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
     Ok(ArcgisSource { remote, query, info, oid, oid_at, page: std::sync::atomic::AtomicUsize::new(page), sample })
+}
+
+/// What a read says of the features a service counted but didn't send (none when it sent them
+/// all): edited since it counted them, or a service that stops early.
+fn shortfall(short: u64) -> Option<String> {
+    (short > 0).then(|| {
+        let what = if short == 1 { "1 feature".to_string() } else { format!("{short} features") };
+        format!("the service counted {what} more than it sent (edited since, or it stopped early): they aren't read")
+    })
 }
 
 /// The geometry a layer's description names (`geometryType`); none for a table or a kind RustGIS
@@ -390,103 +403,116 @@ impl ArcgisSource {
         }
         // Where the service can't sample: each cell's first features, its share of the limit.
         let share = if self.sample { usize::MAX } else { limit.div_ceil(cells.len()) };
-        let mut budget = MAX_READ_PAGES;
         // The answers a read holds at once stay within half of what a service keeps, and a round
         // fetches no more than the other half (`remote::ROUND_ANSWERS`), so the pages a pass
         // needs never push each other out: past it, the view is read in part.
         // One answer below it, as the last answer counted may be larger than its guess.
         let room = (remote::KEEP_ANSWERS / 2).saturating_sub(usize::try_from(remote::MAX_ANSWER).unwrap_or(usize::MAX));
-        let (mut held, mut present, mut present_bytes) = (0usize, 0usize, 0usize);
-        // Features kept within `bytes` as they come: every other one dropped, and every other
-        // one after it, each time they pass it.
-        let (mut stride, mut counted, mut kept_bytes, mut thinned) = (1u64, 0u64, 0usize, false);
         // A kept feature's memory, its place in the list included (as the list holds it once
         // it is fitted to its length).
         let cost = |f: &Feature| std::mem::size_of::<Feature>().saturating_add(super::memory::feature_bytes(f));
-        let mut seen = HashSet::new();
         let mut features = Vec::new();
-        let (mut skipped, mut waiting, mut cut) = (0, false, false);
+        let (mut skipped, mut cut, mut thinned, mut short) = (0, false, false, 0u64);
         let mut losses = crate::esripbf::Losses::default();
-        for (cell, n) in cells.iter().zip(&counts) {
-            if *n == 0 {
-                continue;
-            }
-            let wanted = usize::try_from(n.div_ceil(step)).unwrap_or(usize::MAX).min(share);
-            let mut planned = wanted.div_ceil(page_len).max(1);
-            let (mut offset, mut asked, mut kept) = (0usize, 0usize, 0usize);
-            // A page of this cell isn't in yet: the offsets of those after it are guesses.
-            let mut gap = false;
-            while asked < planned {
-                // A page not in yet is taken to be as large as those that are.
-                let guess = present_bytes.checked_div(present).unwrap_or(256 << 10);
-                if budget == 0 || held.saturating_add(guess) > room {
-                    budget = 0;
-                    cut = true;
-                    break;
-                }
-                budget -= 1;
-                asked += 1;
-                let url = self.page_url(cell.as_ref(), step, offset, page_len);
-                let Some(answer) = self.remote.answer(&url)? else {
-                    // Asked for with the pages after it, as if it were full: when it isn't, those
-                    // are asked for again at the right offsets once it is in.
-                    held = held.saturating_add(guess);
-                    waiting = true;
-                    gap = true;
-                    offset = offset.saturating_add(page_len);
-                    continue;
-                };
-                held = held.saturating_add(answer.len());
-                present += 1;
-                present_bytes = present_bytes.saturating_add(answer.len());
-                if gap || waiting {
-                    // An earlier page isn't in: this one's offset may be wrong, and the read runs
-                    // again once it is, so it is read then (pages are decoded once, by the pass
-                    // that has them all).
-                    offset = offset.saturating_add(page_len);
+        // Two passes over the same plan: the first asks for every page without decoding any, and
+        // the second, once all are in, decodes each once.
+        for decode in [false, true] {
+            let mut budget = MAX_READ_PAGES;
+            let (mut held, mut present, mut present_bytes) = (0usize, 0usize, 0usize);
+            // Features kept within `bytes` as they come: every other one dropped, and every other
+            // one after it, each time they pass it.
+            let (mut stride, mut counted, mut kept_bytes) = (1u64, 0u64, 0usize);
+            (features, skipped, cut, thinned, short) = (Vec::new(), 0, false, false, 0);
+            losses = crate::esripbf::Losses::default();
+            let mut seen = HashSet::new();
+            let mut waiting = false;
+            for (cell, n) in cells.iter().zip(&counts) {
+                if *n == 0 {
                     continue;
                 }
-                let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
-                offset = offset.saturating_add(sent);
-                for f in got {
-                    let inside = match (&view, &f.geometry) {
-                        (Some(v), Some(g)) => g.extent().intersects(v),
-                        (Some(_), None) => false,
-                        (None, _) => true,
+                let wanted = usize::try_from(n.div_ceil(step)).unwrap_or(usize::MAX).min(share);
+                let mut planned = wanted.div_ceil(page_len).max(1);
+                let (mut offset, mut asked, mut kept, mut received) = (0usize, 0usize, 0usize, 0u64);
+                // A page of this cell isn't in yet (or isn't decoded in this pass): the offsets of
+                // those after it are guesses.
+                let mut gap = !decode;
+                while asked < planned {
+                    // A page not in yet is taken to be as large as those that are.
+                    let guess = present_bytes.checked_div(present).unwrap_or(256 << 10);
+                    if budget == 0 || held.saturating_add(guess) > room {
+                        budget = 0;
+                        cut = true;
+                        break;
+                    }
+                    budget -= 1;
+                    asked += 1;
+                    let url = self.page_url(cell.as_ref(), step, offset, page_len);
+                    let Some(answer) = self.remote.answer(&url)? else {
+                        // Asked for with the pages after it, as if it were full: when it isn't, those
+                        // are asked for again at the right offsets once it is in.
+                        held = held.saturating_add(guess);
+                        waiting = true;
+                        gap = true;
+                        offset = offset.saturating_add(page_len);
+                        continue;
                     };
-                    if !(inside && seen.insert(f.id)) {
+                    held = held.saturating_add(answer.len());
+                    present += 1;
+                    present_bytes = present_bytes.saturating_add(answer.len());
+                    if gap || waiting {
+                        // An earlier page isn't in (or this pass only asks): this one's offset may be
+                        // wrong, and the read runs again once it is, so it is read then (pages are
+                        // decoded once, by the pass that has them all).
+                        offset = offset.saturating_add(page_len);
                         continue;
                     }
-                    kept += 1;
-                    counted += 1;
-                    if counted % stride != 0 {
-                        continue;
+                    let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
+                    offset = offset.saturating_add(sent);
+                    received = received.saturating_add(sent as u64);
+                    for f in got {
+                        let inside = match (&view, &f.geometry) {
+                            (Some(v), Some(g)) => g.extent().intersects(v),
+                            (Some(_), None) => false,
+                            (None, _) => true,
+                        };
+                        if !(inside && seen.insert(f.id)) {
+                            continue;
+                        }
+                        kept += 1;
+                        counted += 1;
+                        if counted % stride != 0 {
+                            continue;
+                        }
+                        kept_bytes = kept_bytes.saturating_add(cost(&f));
+                        features.push(f);
+                        while kept_bytes > bytes && features.len() > 1 {
+                            super::memory::halve(&mut features);
+                            kept_bytes = features.iter().map(cost).fold(0, usize::saturating_add);
+                            stride = stride.saturating_mul(2);
+                            thinned = true;
+                        }
                     }
-                    kept_bytes = kept_bytes.saturating_add(cost(&f));
-                    features.push(f);
-                    while kept_bytes > bytes && features.len() > 1 {
-                        super::memory::halve(&mut features);
-                        kept_bytes = features.iter().map(cost).fold(0, usize::saturating_add);
-                        stride = stride.saturating_mul(2);
-                        thinned = true;
+                    if !more {
+                        // Every feature counted, unless the service sent fewer than it counted.
+                        if step == 1 && kept < share {
+                            short = short.saturating_add(n.saturating_sub(received));
+                        }
+                        break;
                     }
-                }
-                if !more {
-                    break;
-                }
-                if sent == 0 || kept >= share {
-                    cut = true;
-                    break;
-                }
-                if asked == planned {
-                    planned += 1;
+                    if sent == 0 || kept >= share {
+                        cut = true;
+                        break;
+                    }
+                    if asked == planned {
+                        planned += 1;
+                    }
                 }
             }
+            if waiting {
+                return Err(remote::need());
+            }
         }
-        if waiting {
-            return Err(remote::need());
-        }
-        let mut complete = step == 1 && !cut && !thinned;
+        let mut complete = step == 1 && !cut && !thinned && short == 0;
         if features.len() > limit {
             // A sample comes out a little over its share now and then: thinned evenly.
             let (n, limit) = (features.len() as u64, limit as u64);
@@ -495,7 +521,8 @@ impl ArcgisSource {
             complete = false;
         }
         let matched = if complete { features.len() as u64 } else { matched };
-        let notes = self.notes(losses, view.is_some());
+        let mut notes = self.notes(losses, view.is_some());
+        notes.extend(shortfall(short));
         Ok(Batch { features, matched, complete, skipped, notes, ..Batch::default() })
     }
 
@@ -607,7 +634,7 @@ impl FeatureSource for ArcgisSource {
                 count_of(&v).ok_or_else(|| answer_error(&self.remote, &counted, "the count isn't a number"))
             })?;
             crate::progress::begin(usize::try_from(total).unwrap_or(usize::MAX));
-            let (mut offset, mut skipped, mut visited) = (0usize, 0usize, 0u64);
+            let (mut offset, mut skipped, mut visited, mut received) = (0usize, 0usize, 0u64, 0u64);
             let mut losses = crate::esripbf::Losses::default();
             // Pages asked for together, then read in order: each next offset is known once the
             // page before it is full, as pages are.
@@ -665,6 +692,7 @@ impl FeatureSource for ArcgisSource {
                         }
                     }
                     crate::progress::step(sent).inspect_err(|_| forget(&urls))?;
+                    received = received.saturating_add(sent as u64);
                     if !more {
                         forget(&urls);
                         break 'pages;
@@ -693,8 +721,10 @@ impl FeatureSource for ArcgisSource {
                 }
             }
             chunks.flush()?;
-            let notes = self.notes(losses, view.is_some());
-            Ok(Batch { matched: visited, complete: true, skipped, notes, ..Batch::default() })
+            let mut notes = self.notes(losses, view.is_some());
+            let short = total.saturating_sub(received);
+            notes.extend(shortfall(short));
+            Ok(Batch { matched: visited, complete: short == 0, skipped, notes, ..Batch::default() })
         }
     }
 }
