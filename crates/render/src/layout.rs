@@ -1370,10 +1370,7 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
     // On a globe, through the globe as the frame draws it (#2337): through the flat camera the
     // lines would be laid out as a flat world around it.
     let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(&view.camera, w, h));
-    let lonlat_at = |sx: f64, sy: f64| match &globe {
-        Some(g) => g.inverse(sx, sy),
-        None => map.to_lonlat(view.camera.to_map(sx, sy, w, h)),
-    };
+    let lonlat_at = |sx: f64, sy: f64| crate::mapgrid::at(map, view, globe.as_ref(), sx, sy);
     // The frame's edges in longitude/latitude: its corners and points along each side.
     let mut edge_points = Vec::new();
     for i in 0..=8 {
@@ -2745,7 +2742,7 @@ pub fn frame_coverage_judged_on(
         }
     }
     // The space a globe is drawn on here: the blank basemap's, light.
-    let space = map.projection.is_globe().then(|| crate::globe_space(false));
+    let space = map.projection.is_globe().then(|| crate::globe_space(false)).map(|c| (c.r(), c.g(), c.b()));
     let outlines = context_layers(map, center, scale, judged);
     for l in map.layers.iter_mut().filter(|l| outlines.contains(&l.id)) {
         l.visible = false;
@@ -2764,10 +2761,10 @@ pub fn frame_coverage_judged_on(
     let (gw, gh) = (pm.width(), pm.height());
     // Anything not the blank basemap's paper, pure opaque white (the graticule set aside too): a
     // pale or translucent fill counts (only a fill of that very white, invisible on it, doesn't).
-    // On a globe, the space around it isn't drawn either:
-    // counted, it took every cell and the surrounds landed on the globe (#2337). The atmosphere's
-    // glow at the rim is, keeping them off the globe's edge.
-    let paper = |r: u8, g: u8, b: u8| (r, g, b) == (255, 255, 255) || space.is_some_and(|c| (r, g, b) == (c.r(), c.g(), c.b()));
+    // On a globe, the space around it is paper too: counted, it took every cell and the surrounds
+    // landed on the globe (#2337). The atmosphere's glow at the rim is not, which keeps them off
+    // the globe's edge.
+    let paper = |r: u8, g: u8, b: u8| (r, g, b) == (255, 255, 255) || space == Some((r, g, b));
     let drawn = pm.pixels().iter().map(|p| p.alpha() > 0 && !(p.alpha() == 255 && paper(p.red(), p.green(), p.blue()))).collect();
     Some((gw, gh, drawn))
 }
@@ -5690,8 +5687,12 @@ Elaboração: RustGIS",
         );
         let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
         assert!(count(&pm, (40.0, 40.0, 60.0, 60.0), red) > 50, "lines on the globe");
-        for corner in [(11.0, 11.0, 20.0, 20.0), (80.0, 11.0, 89.0, 20.0), (11.0, 80.0, 20.0, 89.0), (80.0, 80.0, 89.0, 89.0)] {
-            assert_eq!(count(&pm, corner, red), 0, "nothing past the rim at {corner:?}");
+        // Neither lines nor labels (dark) past the rim: in the corners and along the edges.
+        let ink = |p: tiny_skia::PremultipliedColorU8| red(p) || (p.alpha() > 0 && p.red() < 120 && p.green() < 120 && p.blue() < 120);
+        let corners = [(11.0, 11.0, 20.0, 20.0), (80.0, 11.0, 89.0, 20.0), (11.0, 80.0, 20.0, 89.0), (80.0, 80.0, 89.0, 89.0)];
+        let edges = [(25.0, 11.0, 75.0, 15.0), (25.0, 85.0, 75.0, 89.0), (11.0, 25.0, 15.0, 75.0), (85.0, 25.0, 89.0, 75.0)];
+        for r in corners.into_iter().chain(edges) {
+            assert_eq!(count(&pm, r, ink), 0, "nothing past the rim at {r:?}");
         }
     }
 

@@ -10290,7 +10290,8 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
     use rustgis_map::layout::{ElementKind, PT_PER_MM, frame_camera};
     let mut s = world();
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
-    let looked_at = s.map().to_lonlat(s.map().camera.center).unwrap();
+    // Looking at South America: the sheet's globe is centred there, not on 0°, 0°.
+    s.run("map.goToXY", &json!({"lon": -60.0, "lat": -15.0})).unwrap();
     for profile in ["a4-portrait", "a4-landscape", "a5-portrait", "a0-landscape", "figure-2col"] {
         let r = s.run("layout.publication", &json!({"profile": profile, "title": "World"})).unwrap();
         let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
@@ -10298,7 +10299,7 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
         let named = |n: &str| l.elements.iter().find(|e| e.name == n);
         let frame = named("Map Frame").unwrap();
         let ElementKind::MapFrame { center, scale, .. } = &frame.kind else { panic!() };
-        assert!((center.x - looked_at.x).abs() < 1e-6 && (center.y - looked_at.y).abs() < 1e-6, "{profile}: centred on the view");
+        assert!((center.x + 60.0).abs() < 0.01 && (center.y + 15.0).abs() < 0.01, "{profile}: centred on the view, not {center:?}");
         // The disc spans most of the frame's shorter side, and fits in it.
         let (w, h) = (frame.w * PT_PER_MM, frame.h * PT_PER_MM);
         let cam = frame_camera(s.map(), *center, *scale, 0.0, 0.0);

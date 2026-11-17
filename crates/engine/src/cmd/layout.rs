@@ -1299,7 +1299,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let clear = Rgba::new(0, 0, 0, 0);
     let mut warnings: Vec<String> = Vec::new();
     // A sheet's default locator would show the globe again, smaller; one asked for still comes.
-    if sheet && whole_globe && p.get("locator").is_none_or(Value::is_null) {
+    if sheet && whole_globe && locator == Locator::None {
         warnings.push("no locator: the map shows the whole globe; \"locator\": \"globe\" or \"inset\" adds one".into());
     }
     // Texts and boxes around the map, placed while its frame is worked out.
@@ -1847,9 +1847,8 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let (center, scale) = if whole_globe {
         // The globe seen whole fills the frame, centred where the view looks (#2337): fitting the
         // whole Earth's flat footprint instead drew it a fraction of the frame, around 0°, 0°.
-        let map = s.map();
-        let center = map.to_lonlat(map.camera.center).filter(|c| c.is_finite()).unwrap_or(Coord::new(0.0, 0.0));
-        (center, globe_scale(map, center, inner_w.min(inner_h) * WHOLE_GLOBE_FILL))
+        let center = s.map().center_lonlat();
+        (center, globe_scale(s.map(), center, inner_w.min(inner_h) * WHOLE_GLOBE_FILL))
     } else {
         fit_scale(s.map(), &extent, inner_w, inner_h).ok_or("the extent can't be drawn on the map's projection")?
     };
