@@ -592,7 +592,9 @@ pub(crate) fn bind_logged_in(s: &Session, connection: &str, url: &str) -> Result
     }
     if !logged_in(s, c) {
         // An expired token is refused, never read anonymously (or with a portal sign-in's token).
-        if let Some(active) = s.web_logins.active.get(&c.id).filter(|a| a.matches(c)) {
+        if c.auth == "arcgis"
+            && let Some(active) = s.web_logins.active.get(&c.id).filter(|a| a.matches(c))
+        {
             logins::bind(&active.binding, url).map_err(str::to_string)?;
         }
         return Ok(url.to_string());
