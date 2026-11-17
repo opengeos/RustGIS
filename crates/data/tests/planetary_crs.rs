@@ -1066,6 +1066,14 @@ fn exports_say_what_they_write_instead_of_another_body_s_system() {
     assert!(notes.is_empty(), "{notes:?}");
     let prj = raster::wkt::to_wkt(mars).unwrap();
     assert!(prj.contains("Mars") && prj.contains("3396190"), "{prj}");
+    // A Mars layer in another Mars system says nothing; a Moon layer beside it says that its
+    // longitude/latitude are written as Mars's.
+    let mut on_mars = craters(LONLAT);
+    on_mars.crs = Some(eqc);
+    assert!(rustgis_data::export_notes([(&on_mars, extent(&on_mars))], "out.shp", mars).is_empty());
+    let notes = rustgis_data::export_notes([&layer, &moon].map(|ds| (ds, extent(ds))), "out.shp", mars);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("moon is on another body") && notes[0].contains(&format!("written as {}", mars.label())), "{notes:?}");
     // A Mars system known only by a PROJ definition has no name to write: said.
     let by_def = Crs::parse("+proj=longlat +R=3396190 +no_defs").unwrap();
     assert!(by_def.is_planetary());
@@ -1182,4 +1190,13 @@ fn geotiff_axes_in_a_unit_that_is_not_sized_are_not_taken_for_metres() {
     // Axes that are the Earth's in metres whatever unit is declared: read as before.
     let r = raster::read_bytes("earth.tif", &geotiff(-1_000_000.0, &keys, &[6_378_137.0], "")).unwrap();
     assert!(!r.crs.is_planetary() && r.lost.is_empty(), "{:?}", r.lost);
+    // Kilometres (9036) with both axes in one value: each converted once, a sphere of 3396.19 km.
+    let mut shared = keys.clone();
+    shared[3] += 1;
+    shared[19] = 9036;
+    let at = shared.chunks(4).position(|e| e[0] == 2057).unwrap() * 4 + 4;
+    shared.splice(at..at, [2058, 34736, 1, 0]);
+    let r = raster::read_bytes("shared.tif", &geotiff(-1_000_000.0, &shared, &[3_396.19], "")).unwrap();
+    let def = r.crs.custom_def().unwrap().proj4.clone();
+    assert!(r.crs.is_planetary() && (def.contains("+a=3396190 ") || def.contains("+R=3396190 ")), "{def}");
 }

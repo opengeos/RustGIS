@@ -85,6 +85,7 @@ pub const CAPABILITIES: &[&str] = &[
     "picture-markers",
     "layout-element-ink",
     "field-generation",
+    "crs-wkt",
 ];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.

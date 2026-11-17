@@ -433,16 +433,22 @@ fn axes_in_metres(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(Vec<u16
         err(format!("the file's ellipsoid axes are in a unit{unit} that isn't supported"))
     })?;
     if to_m != 1.0 {
-        // GeogSemiMajorAxis and GeogSemiMinorAxis, then GeogLinearUnits as metres.
-        let at = |k: u16| key_entries(&keys).and_then(|e| e.iter().find(|e| e[0] == k && e[1] == 34736).map(|e| usize::from(e[3])));
-        for i in [at(2057), at(2058)].into_iter().flatten() {
-            if let Some(v) = doubles.get_mut(i) {
-                *v *= to_m;
-            }
-        }
+        // GeogSemiMajorAxis and GeogSemiMinorAxis, each in metres in a value of its own after the
+        // others (keys may share one value, which would be converted twice, or another key's),
+        // then GeogLinearUnits as metres.
         for entry in keys.get_mut(4..).into_iter().flat_map(|k| k.as_chunks_mut::<4>().0) {
-            if let [2052, 0, _, value] = entry {
-                *value = 9001;
+            match entry {
+                [2057 | 2058, 34736, _, offset] => {
+                    let metres = doubles.get(usize::from(*offset)).map(|v| v * to_m);
+                    if let Some(metres) = metres
+                        && let Ok(at) = u16::try_from(doubles.len())
+                    {
+                        doubles.push(metres);
+                        *offset = at;
+                    }
+                }
+                [2052, 0, _, value] => *value = 9001,
+                _ => {}
             }
         }
     }
@@ -536,7 +542,10 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
         (None, Some(c)) => return Err(err(format!("the file's own projection (coordinate transformation {c}) isn't supported"))),
         (None, None) => return Err(err("the file's own projection isn't described in its keys")),
     };
-    if let Some(crs) = sr.epsg.and_then(Crs::from_epsg) {
+    // Not when the keys give a shift of their own (an ESRI PE citation's TOWGS84): that would be
+    // set aside for the code's, as a WKT with its own shift isn't read as the code beside it.
+    let own_shift = sr.to_wkt().is_some_and(|w| w.contains("TOWGS84[") || w.contains("BOUNDCRS["));
+    if let Some(crs) = sr.epsg.filter(|_| !own_shift).and_then(Crs::from_epsg) {
         return Ok(crs);
     }
     let text = |k| match geokey(keys, doubles, ascii, k) {
@@ -3755,6 +3764,24 @@ mod tests {
         let mut odd = keys;
         odd[27] = 99; // ProjCoordTransGeoKey
         assert!(custom_crs(&odd, &doubles, "").is_err());
+    }
+
+    /// An ESRI PE citation with a shift of its own (British National Grid with another TOWGS84) is
+    /// read by that WKT, as the `.prj` is, not as EPSG:27700 with the code's shift; without one it
+    /// is the code.
+    #[test]
+    fn a_citation_with_its_own_shift_is_not_its_epsg_code() {
+        let bng = r#"PROJCS["British_National_Grid",GEOGCS["GCS_OSGB_1936",DATUM["D_OSGB_1936",SPHEROID["Airy_1830",6377563.396,299.3249646],TOWGS84[375,-111,431,0,0,0,0]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",400000.0],PARAMETER["False_Northing",-100000.0],PARAMETER["Central_Meridian",-2.0],PARAMETER["Scale_Factor",0.9996012717],PARAMETER["Latitude_Of_Origin",49.0],UNIT["Meter",1.0]]"#;
+        let keys = |ascii: &str| vec![1, 1, 0, 3, 1024, 0, 1, 1, 1026, 34737, u16::try_from(ascii.len()).unwrap(), 0, 3072, 0, 1, 32767];
+        let cited = format!("ESRI PE String = {bng}|");
+        let crs = custom_crs(&keys(&cited), &[], &cited).unwrap();
+        assert_ne!(crs, Crs::Epsg(27700));
+        let prj = crate::raster::wkt::crs_from_wkt(bng).unwrap();
+        let at = rustgis_geom::Coord::new(400_000.0, 300_000.0);
+        let (a, b) = (crs.transformer().unwrap().to_lonlat(at).unwrap(), prj.transformer().unwrap().to_lonlat(at).unwrap());
+        assert!((a.x - b.x).abs() < 1e-12 && (a.y - b.y).abs() < 1e-12, "{a:?} {b:?}");
+        let plain = format!("ESRI PE String = {}|", bng.replace(",TOWGS84[375,-111,431,0,0,0,0]", ""));
+        assert_eq!(custom_crs(&keys(&plain), &[], &plain).unwrap(), Crs::Epsg(27700));
     }
 
     /// MODIS's sinusoidal grid (coordinate transformation 24), as a MOD13Q1 tile's GeoKeys give

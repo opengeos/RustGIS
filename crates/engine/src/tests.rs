@@ -28740,6 +28740,13 @@ fn a_web_zarr_keeps_its_geographic_system_through_its_geotiff() {
         let raster = s.map().layer(id).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
         assert!(raster.crs.is_geographic() && raster.crs.is_planetary() == planetary, "{name}: {:?}", raster.crs);
         assert_eq!(raster.crs == rustgis_data::raster::Crs::LonLat, !planetary, "{name}");
+        // Mars's own ellipsoid, in degrees, not a sphere or another body's.
+        if planetary {
+            let def = raster.crs.custom_def().unwrap().proj4.clone();
+            assert!(def.starts_with("+proj=longlat ") && def.contains("+a=3396190 ") && def.contains("+rf=169.8944472236"), "{def}");
+            let at = raster.crs.transformer().unwrap().to_lonlat(rustgis_geom::Coord::new(-79.05, 43.05)).unwrap();
+            assert!((at.x + 79.05).abs() < 1e-12 && (at.y - 43.05).abs() < 1e-12, "{at:?}");
+        }
         assert_eq!(raster.bands[0].data, [1.0, 2.0, 3.0, 4.0], "{name}");
     }
 }

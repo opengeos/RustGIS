@@ -518,7 +518,17 @@ pub fn export_notes<'a>(
     let other_bodies: Vec<&Dataset> = layers.iter().map(|(ds, _)| *ds).filter(|ds| ds.crs.is_some_and(raster::Crs::is_planetary)).collect();
     let named = raster::wkt::writes_its_own_wkt(crs);
     let (in_planetary_system, as_earth) = match (crs.is_planetary(), named) {
-        (true, true) => (Vec::new(), Vec::new()),
+        // The file names its body: only a layer on another body says its longitude/latitude are
+        // written as the file's.
+        (true, true) => {
+            let axis = |c: raster::Crs| c.custom_def().and_then(|d| raster::planetary::proj4_axes(&d.proj4)).map(|(a, _)| a);
+            // Another body: its semi-major axis more than 1% from the target's.
+            let other = |ds: &&Dataset| match (ds.crs.and_then(axis), axis(crs)) {
+                (Some(a), Some(b)) => ((a - b) / b).abs() > 0.01,
+                _ => ds.crs != Some(crs),
+            };
+            (Vec::new(), other_bodies.into_iter().filter(other).collect())
+        }
         (true, false) => (other_bodies, Vec::new()),
         (false, _) => (Vec::new(), other_bodies),
     };

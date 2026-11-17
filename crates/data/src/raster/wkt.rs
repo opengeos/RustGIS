@@ -585,6 +585,28 @@ fn with_projection_note(note: Option<String>, root: &Node, crs: Crs) -> Option<S
     }
 }
 
+/// Degrees in a unit of a geographic system's coordinates, from its WKT `text`: WKT1's `UNIT`, or
+/// WKT2's `ANGLEUNIT` of the system or of its first axis (not its prime meridian's), of a bound
+/// system's source or a compound one's first part. 1 when it
+/// gives none or isn't WKT this reader parses.
+pub(crate) fn angle_unit_degrees(text: &str) -> f64 {
+    let Ok(mut root) = parse(text) else { return 1.0 };
+    // A bound system's source, a compound one's first (horizontal) part.
+    while let Some(inner) = match root.name.to_ascii_uppercase().as_str() {
+        "BOUNDCRS" => root.child("SOURCECRS").and_then(|s| s.nodes().next()).cloned(),
+        "COMPOUNDCRS" | "COMPD_CS" => {
+            root.nodes().find(|n| n.name.to_ascii_uppercase().ends_with("CRS") || n.name.to_ascii_uppercase().ends_with("CS")).cloned()
+        }
+        _ => None,
+    } {
+        root = inner;
+    }
+    let unit = root
+        .child_of(&["UNIT", "ANGLEUNIT"])
+        .or_else(|| root.nodes().find(|n| n.name.eq_ignore_ascii_case("AXIS")).and_then(|a| a.child("ANGLEUNIT")));
+    unit.and_then(|u| u.num(0)).filter(|f| *f > 0.0).map_or(1.0, f64::to_degrees)
+}
+
 /// Whether `text` is a geographic or projected system in WKT this reader can parse (whether or not
 /// it then reads the system).
 pub fn parses(text: &str) -> bool {
@@ -1310,6 +1332,13 @@ fn projected(p: &Node, text: &str) -> Result<Crs, String> {
 fn terrio_custom(n: &Node, text: &str) -> Result<Crs, String> {
     let sr = terrio_crs::SpatialRef::from_wkt(text);
     // What is said when terrio-crs can't read it: its projection, by the name the file gives it.
+    // With the reason, when terrio-crs reads the definition (it writes it as a PROJ string) but
+    // can't transform it (a latitude of origin past a pole): that projection is supported.
+    let refused = |e: &str| {
+        let reason = e.strip_prefix("coordinate reference system: ").unwrap_or(e);
+        (sr.to_proj4().is_some() && !reason.contains("unsupported projection"))
+            .then(|| format!("the coordinate system {} can't be read: {}", clip(n.title()), clip(reason)))
+    };
     let unread = || match n.child("PROJECTION").map(Node::title).map(str::trim) {
         // As PROJ 9.8.1: a geographic system needs its datum (ISO 19162).
         _ if geogcs(n).is_some_and(|g| g.child("DATUM").is_none()) => format!("the coordinate system {} has no datum", clip(n.title())),
@@ -1354,7 +1383,7 @@ fn terrio_custom(n: &Node, text: &str) -> Result<Crs, String> {
         t => t.to_string(),
     };
     // A table full of files' systems says so; a system terrio-crs can't transform is unread.
-    match Crs::custom(CustomCrs { proj4, label: label.clone(), wkt: Some(compact(text)), ..CustomCrs::default() }) {
+    match Crs::custom(CustomCrs { proj4: proj4.clone(), label: label.clone(), wkt: Some(compact(text)), ..CustomCrs::default() }) {
         Err(e) if e.starts_with("too many") => Err(e),
         Ok(crs) => Ok(crs),
         // GDAL's `PROJ4` extension, which PROJ reads in place of the WKT, can name a grid that
@@ -1365,7 +1394,11 @@ fn terrio_custom(n: &Node, text: &str) -> Result<Crs, String> {
         // (EPSG 1066) without its epoch as the coordinate frame shift ([`time_specific_as_frame`]),
         // and a system without a datum on WGS 84 ([`with_wgs84_datum`]): a projected one, or a
         // geographic one in degrees (with its own prime meridian; in another unit it was refused).
-        Err(_) => {
+        Err(e) => {
+            let e = e.strip_prefix(&format!("{proj4}: ")).unwrap_or(&e).to_string();
+            // Without the space the parser allows between a keyword and its bracket, so the
+            // keywords are found below.
+            let text = &compact(text);
             let degrees = n.child("UNIT").and_then(|u| u.num(0)).is_none_or(|f| (f - 1f64.to_radians()).abs() <= 1e-9);
             let bare = without_proj4_extension(text);
             let bare = unapplied_bound_source(bare.as_deref().unwrap_or(text)).or(bare);
@@ -1380,10 +1413,16 @@ fn terrio_custom(n: &Node, text: &str) -> Result<Crs, String> {
                     Crs::custom(CustomCrs { proj4, label, wkt: Some(compact(&bare)), ..CustomCrs::default() })
                         .map_err(|e| if e.starts_with("too many") { e } else { unread() })
                 }
-                None => Err(unread()),
+                None => Err(refused(&e).unwrap_or_else(unread)),
             }
         }
     }
+}
+
+/// Where the keyword `key` (in capitals, with its bracket) first is in WKT `t` without space between
+/// keywords and brackets ([`compact`]), in any case, as the parser reads keywords.
+fn find_key(t: &str, key: &str) -> Option<usize> {
+    t.to_ascii_uppercase().find(key)
 }
 
 /// WKT `text` without the space outside its quoted names (line breaks of a pretty-printed `.prj`),
@@ -1431,13 +1470,13 @@ fn unapplied_bound_source(text: &str) -> Option<String> {
     if !t.get(..9).is_some_and(|k| k.eq_ignore_ascii_case("BOUNDCRS[")) {
         return None;
     }
-    if let Some(transformation) = t.find("ABRIDGEDTRANSFORMATION[") {
+    if let Some(transformation) = find_key(t, "ABRIDGEDTRANSFORMATION[") {
         let end = node_end(t, transformation)?;
         if t[transformation..end].to_ascii_lowercase().contains("axis translation") {
             return None;
         }
     }
-    let source = t.find("SOURCECRS[")?;
+    let source = find_key(t, "SOURCECRS[")?;
     let source_end = node_end(t, source)?;
     Some(t[source + "SOURCECRS[".len()..source_end - 1].to_string())
 }
@@ -1457,8 +1496,8 @@ fn bound_method_as_frame(text: &str, methods: &[u32]) -> Option<String> {
     if !t.get(..9).is_some_and(|k| k.eq_ignore_ascii_case("BOUNDCRS[")) {
         return None;
     }
-    let transformation = t.find("ABRIDGEDTRANSFORMATION[")?;
-    let method = transformation + t[transformation..].find("METHOD[")?;
+    let transformation = find_key(t, "ABRIDGEDTRANSFORMATION[")?;
+    let method = transformation + find_key(&t[transformation..], "METHOD[")?;
     let end = node_end(t, method)?;
     let compact: String = t[method..end].chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
     methods
@@ -1525,6 +1564,7 @@ fn bound_as_read_before(text: &str) -> Option<String> {
 /// - A `BOUNDCRS` as RustGIS read it before ([`bound_as_read_before`]): its own transformation, not
 ///   its WKT1 source's `TOWGS84`, and a Helmert shift's missing parameters as 0.
 pub(crate) fn legacy_proj4(text: &str) -> Option<String> {
+    let text = &compact(text);
     let proj4 = |w: &str| terrio_crs::SpatialRef::from_wkt(w).to_proj4().map(|d| d.replace(" +type=crs", ""));
     let bound = bound_as_read_before(text);
     let text = bound.as_deref().unwrap_or(text);
@@ -1639,7 +1679,7 @@ fn find_node<'a>(n: &'a Node, names: &[&str], depth: usize) -> Option<&'a Node> 
 fn without_proj4_extension(text: &str) -> Option<String> {
     let mut out = text.to_string();
     let mut found = false;
-    while let Some(at) = out.find(r#"EXTENSION["PROJ4""#) {
+    while let Some(at) = find_key(&out, r#"EXTENSION["PROJ4""#) {
         // Its end: the bracket that closes it, outside quotes.
         let end = node_end(&out, at)?;
         // With the comma before it.
@@ -2041,7 +2081,7 @@ fn national_datum(datum: Option<&Node>) -> Option<&'static str> {
 /// a name it doesn't know. With its geographic system `geog`, that system as the file gives it (its
 /// name, prime meridian and unit: Bern 1898 (Bern) is EPSG:4801 on the Bern meridian only); else the
 /// datum on Greenwich in degrees, under the name Esri writes for it (`D_` as `GCS_`), as PROJ finds a
-/// few by that name only (`GCS_Greenland_1996`, whose datum no system is on).
+/// few by that name only (`GCS_Greenland_1996`, whose Esri datum name alone isn't known).
 fn esri_datum_code(datum: &Node, geog: Option<&Node>) -> Option<u32> {
     fn write(n: &Node, out: &mut String) {
         out.push_str(&n.name);
@@ -3588,6 +3628,12 @@ pub(crate) mod tests {
         let root = tree(bern).unwrap();
         let geog = geogcs(&root).unwrap();
         assert_eq!(esri_datum_code(geog.child("DATUM").unwrap(), Some(geog)), Some(4801));
+        // A datum not known by its Esri name, identified by its system's name as PROJ does (GR96,
+        // 4747).
+        let greenland = r#"GEOGCS["GCS_Greenland_1996",DATUM["D_Greenland_1996",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+        let root = tree(greenland).unwrap();
+        let geog = geogcs(&root).unwrap();
+        assert_eq!(esri_datum_code(geog.child("DATUM").unwrap(), Some(geog)), Some(4747));
     }
 
     /// Monte Mario (Rome), EPSG:4806, as GDAL writes it to a `.prj` (`Monte_Mario_(Rome)`) and as
@@ -4225,6 +4271,39 @@ pub(crate) mod tests {
         // Krovak's scale), and the parallel itself is an angle.
         assert!(!angular(&norm("Scale_Factor_On_Pseudo_Standard_Parallel")));
         assert!(angular(&norm("Pseudo_Standard_Parallel_1")));
+    }
+
+    /// A geographic system in grads (NTF (Paris), EPSG:4807, as GDAL writes it without its axes)
+    /// has latitudes up to 100 grads, placed as PROJ 9.8.1 places them (pyproj 3.8.0, network
+    /// off, `Transformer.from_crs(CRS(wkt), "EPSG:4326", always_xy=True)`): 95 grads is 85.5°N.
+    /// Past 100 grads is no place.
+    #[test]
+    fn a_latitude_in_grads_is_checked_against_the_pole_in_grads() {
+        let wkt = r#"GEOGCS["NTF (Paris)",DATUM["Nouvelle_Triangulation_Francaise_Paris",SPHEROID["Clarke 1880 (IGN)",6378249.2,293.466021293627,AUTHORITY["EPSG","7011"]],AUTHORITY["EPSG","6807"]],PRIMEM["Paris",2.33722917,AUTHORITY["EPSG","8903"]],UNIT["grad",0.0157079632679489,AUTHORITY["EPSG","9105"]]]"#;
+        let t = read_wkt(wkt).unwrap().0.transformer().unwrap();
+        for (lat, want) in [
+            (95.0, Coord::new(3.231_474_345_668_997, 85.501_260_988_238_16)),
+            (99.9, Coord::new(2.944_914_606_011_862_3, 89.911_525_507_638_56)),
+        ] {
+            let c = t.to_lonlat(Coord::new(1.0, lat)).unwrap_or_else(|| panic!("{lat} grads"));
+            assert!((c.x - want.x).abs() < 1e-9 && (c.y - want.y).abs() < 1e-9, "{lat} grads: {c:?}");
+        }
+        assert!(t.to_lonlat(Coord::new(1.0, 100.5)).is_none());
+        assert!((super::angle_unit_degrees(wkt) - 0.9).abs() < 1e-12);
+        // Of a bound system's source, not its prime meridian's degrees.
+        let bound = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NTF (Paris)",DATUM["x",ELLIPSOID["Clarke 1880 (IGN)",6378249.2,293.466021293627]],PRIMEM["Paris",2.33722917,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["lon",east],AXIS["lat",north],ANGLEUNIT["grad",0.0157079632679489]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["t",METHOD["Geocentric translations",ID["EPSG",9603]],PARAMETER["X-axis translation",-168],PARAMETER["Y-axis translation",-60],PARAMETER["Z-axis translation",320]]]"#;
+        assert!((super::angle_unit_degrees(bound) - 0.9).abs() < 1e-12);
+    }
+
+    /// A projection terrio-crs reads but whose parameters it refuses is said so, with the reason,
+    /// not as an unsupported projection; one it doesn't read is unsupported, as before.
+    #[test]
+    fn a_refused_parameter_is_not_an_unsupported_projection() {
+        let tm = r#"PROJCS["x",GEOGCS["x",DATUM["D_x",SPHEROID["S",6378206.4,294.978698213898]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",95],UNIT["metre",1]]"#;
+        let e = read_wkt(tm).unwrap_err();
+        assert!(e.starts_with("the coordinate system x can't be read: ") && e.contains("lat_0"), "{e}");
+        let e = read_wkt(&tm.replace("Transverse_Mercator", "Foo_Bar")).unwrap_err();
+        assert_eq!(e, "the Foo_Bar projection isn't supported");
     }
 
     /// Krovak East North (EPSG:5514) in Esri WKT with its angles in grads, as WKT1 allows, places
@@ -5062,6 +5141,11 @@ pub(crate) mod tests {
             if code == 1066 {
                 let crs = crs_from_wkt(&method(code)).unwrap();
                 assert!(places_alike(crs, frame_place, Coord::new(-0.128_7, 51.504)), "{code}");
+                // So with space before the brackets and keywords in small letters, as the parser
+                // allows.
+                let spaced = method(code).replace("ABRIDGEDTRANSFORMATION[", "abridgedTransformation [\n ").replace("METHOD[", "Method [");
+                let crs = crs_from_wkt(&spaced).unwrap_or_else(|e| panic!("{e}"));
+                assert!(places_alike(crs, frame_place, Coord::new(-0.128_7, 51.504)), "{spaced}");
                 continue;
             }
             let crs = crs_from_wkt(&method(code)).unwrap();

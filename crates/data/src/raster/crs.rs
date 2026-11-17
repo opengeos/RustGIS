@@ -73,11 +73,36 @@ impl From<Crs> for SavedCrs {
             Crs::WebMercator => SavedCrs::WebMercator,
             Crs::Epsg(e) => SavedCrs::Epsg(e),
             Crs::Custom(_) => match c.custom_def() {
-                Some(d) => SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone(), wkt: d.wkt.clone() },
+                Some(d) => {
+                    if d.wkt_needed() {
+                        WKT_SAVED.with(|s| s.set(true));
+                    }
+                    SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone(), wkt: d.wkt.clone() }
+                }
                 None => SavedCrs::LonLat,
             },
         }
     }
+}
+
+thread_local! {
+    /// Set when a system is saved whose PROJ definition doesn't stand in for its WKT
+    /// ([`CustomCrs::wkt_needed`]), for [`saves_wkt`].
+    static WKT_SAVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether saving `value` saves a system whose PROJ definition doesn't place points as its WKT
+/// does ([`CustomCrs::wkt_needed`]): an older release reads only the definition, so a saved file
+/// with one requires `crs-wkt`. Written to nowhere to find out, and only when this run has such a
+/// system.
+pub fn saves_wkt(value: &impl Serialize) -> bool {
+    let table: Vec<std::sync::Arc<CustomCrs>> = custom_table().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !table.iter().any(|d| d.wkt_needed()) {
+        return false;
+    }
+    WKT_SAVED.with(|s| s.set(false));
+    let _ = serde_json::to_writer(std::io::sink(), value);
+    WKT_SAVED.with(|s| s.replace(false))
 }
 
 impl TryFrom<SavedCrs> for Crs {
@@ -510,6 +535,27 @@ impl CustomCrs {
         }
     }
 
+    /// Whether its PROJ definition, which older releases read, doesn't place points as its WKT
+    /// does, within a centimetre (a millionth of a degree for angles), at the centre of its
+    /// geographic system's area of use (else its own centre) and a few degrees around it: angles in grads, axes or a datum transformation the definition can't
+    /// hold, or no definition. Worked out once a run per system.
+    pub fn wkt_needed(&self) -> bool {
+        let Some(wkt) = self.wkt.as_deref() else { return false };
+        static NEEDED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String), bool>>> =
+            std::sync::OnceLock::new();
+        let needed = NEEDED.get_or_init(Default::default);
+        let key = (self.proj4.clone(), wkt.to_string());
+        if let Some(n) = needed.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return *n;
+        }
+        let n = !places_as_wkt(&self.proj4, wkt);
+        let mut needed = needed.lock().unwrap_or_else(|e| e.into_inner());
+        if needed.len() < MAX_CUSTOM {
+            needed.insert(key, n);
+        }
+        n
+    }
+
     /// Its transformer: by its WKT when it has one, else by its PROJ definition.
     fn transformer(&self) -> Result<Transformer, String> {
         match &self.wkt {
@@ -517,6 +563,29 @@ impl CustomCrs {
             None => transformer_of(&self.proj4),
         }
     }
+}
+
+/// Whether PROJ definition `proj4` places points as `wkt` does ([`CustomCrs::wkt_needed`]).
+fn places_as_wkt(proj4: &str, wkt: &str) -> bool {
+    if proj4.is_empty() {
+        return false;
+    }
+    let (Ok(by_def), Ok(by_wkt)) = (transformer_of(proj4), transformer_of_wkt(wkt)) else { return false };
+    let tolerance = if by_wkt.is_geographic() { 1e-6 } else { 0.01 };
+    // Where its data are: the centre of its geographic system's area of use (a datum's
+    // transformations are chosen by place), else the projection's centre.
+    let area = terrio_crs::SpatialRef::from_wkt(wkt).geographic_code().and_then(|c| u16::try_from(c).ok()).and_then(area_centre);
+    let centre = area.unwrap_or_else(|| by_wkt.params().map_or(Coord::new(0.0, 0.0), |p| Coord::new(p.lon_0 + p.prime_meridian, p.lat_0)));
+    let mut compared = false;
+    for (dx, dy) in [(0.0, 0.0), (2.0, 2.0), (-2.0, -2.0), (3.0, -1.0), (-1.0, 3.0)] {
+        let at = Coord::new(centre.x + dx, (centre.y + dy).clamp(-85.0, 85.0));
+        match (by_def.from_lonlat(at), by_wkt.from_lonlat(at)) {
+            (Some(a), Some(b)) if (a.x - b.x).hypot(a.y - b.y) <= tolerance => compared = true,
+            (None, None) => {}
+            _ => return false,
+        }
+    }
+    compared
 }
 
 /// [`transformer_of`] for a system terrio-crs reads from WKT (`SpatialRef::from_wkt`), which
@@ -917,8 +986,10 @@ struct Terrio {
     /// area of use) may differ there and back near the edge of that area, by tens of metres, and
     /// that is no fold.
     own: Option<(terrio_crs::Transformer, terrio_crs::Transformer, terrio_crs::Transformer)>,
-    /// Its coordinates are degrees.
+    /// Its coordinates are angles: longitude and latitude, in [`Terrio::unit`].
     geographic: bool,
+    /// Degrees in a unit of a geographic system's coordinates (0.9 in grads; 1 otherwise).
+    unit: f64,
     /// Its coordinates are north first (`+axis=neu`).
     lat_first: bool,
     /// Its east-west coordinate points west (`+axis=wnu`, `wsu`): -1, else 1.
@@ -1281,7 +1352,19 @@ impl Transformer {
             });
         let method = |names: &[&str]| params.as_ref().is_some_and(|p| !geographic && names.contains(&p.method.as_str()));
         let (wraps, eck4) = (method(&WRAPPING), method(&["eck4"]));
-        let t = Terrio { to_lonlat, from_lonlat, own, geographic, lat_first, lon_sign: if west { -1.0 } else { 1.0 }, params, wraps, eck4 };
+        let unit = if geographic { sr.to_wkt().map_or(1.0, |w| super::wkt::angle_unit_degrees(&w)) } else { 1.0 };
+        let t = Terrio {
+            to_lonlat,
+            from_lonlat,
+            own,
+            geographic,
+            unit,
+            lat_first,
+            lon_sign: if west { -1.0 } else { 1.0 },
+            params,
+            wraps,
+            eck4,
+        };
         Ok(Transformer { kind: Kind::Terrio(std::sync::Arc::new(t)) })
     }
 
@@ -1291,9 +1374,10 @@ impl Transformer {
             Kind::LonLat => c,
             Kind::Merc => merc_to_lonlat(c),
             Kind::Terrio(t) => {
-                // A latitude past a pole is no place (terrio-crs would fold it back to one).
+                // A latitude past a pole is no place (terrio-crs would fold it back to one): past
+                // 90°, in the system's unit (100 grads).
                 let lat = if t.lat_first { c.x } else { c.y };
-                if !c.is_finite() || (t.geographic && lat.abs() > 90.0 + 1e-9) {
+                if !c.is_finite() || (t.geographic && (lat * t.unit).abs() > 90.0 + 1e-9) {
                     return None;
                 }
                 let at = t.unproject(&t.to_lonlat, &t.from_lonlat, c)?;
@@ -1319,7 +1403,7 @@ impl Transformer {
         if let Kind::Terrio(t) = &self.kind
             && t.geographic
         {
-            let lon = t.lon_sign * if t.lat_first { c.y } else { c.x };
+            let lon = t.lon_sign * t.unit * if t.lat_first { c.y } else { c.x };
             let greenwich = lon + t.params.as_ref().map_or(0.0, |p| p.prime_meridian);
             out.x += 360.0 * ((greenwich - out.x) / 360.0).round();
         }

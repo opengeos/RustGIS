@@ -6042,25 +6042,29 @@ mod tests {
         let (_, rep) = read_path(&clean).unwrap();
         assert!(!said(&rep.messages), "{:?}", rep.messages);
     }
-    /// An ESRI .prj without an authority retains the national datum shift (issue #807).
+    /// An ESRI .prj without an authority retains the national datum shift: Monte Mario in Milan
+    /// (#807), and PRS92 in Manila, known by its Esri datum name (#2258). Positions are the
+    /// corpus's PROJ 9.8.1 references for the row's WKT.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shapefile_esri_national_datum() {
         use shapefile::dbase::{Record, TableWriterBuilder};
         let dir = tempfile::tempdir().unwrap();
-        let shp = dir.path().join("milan.shp");
-        {
-            let mut writer = shapefile::Writer::from_path(&shp, TableWriterBuilder::new()).unwrap();
-            writer
-                .write_shape_and_record(&shapefile::Point::new(1_514_881.490_594_152, 5_034_556.812_441_661), &Record::default())
-                .unwrap();
+        for code in ["3003", "3123"] {
+            let row = include_str!("raster/esri_datum_corpus.tsv").lines().find(|l| l.starts_with(&format!("{code}\t"))).unwrap();
+            let f: Vec<&str> = row.split('\t').collect();
+            let [x, y, lon, lat] = [1, 2, 3, 4].map(|i| f[i].parse::<f64>().unwrap());
+            let shp = dir.path().join(format!("{code}.shp"));
+            {
+                let mut writer = shapefile::Writer::from_path(&shp, TableWriterBuilder::new()).unwrap();
+                writer.write_shape_and_record(&shapefile::Point::new(x, y), &Record::default()).unwrap();
+            }
+            std::fs::write(shp.with_extension("prj"), f[5]).unwrap();
+            let (ds, report) = read_path(&shp).unwrap();
+            let c = ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
+            assert!((c.x - lon).abs() < 1e-7 && (c.y - lat).abs() < 1e-7, "EPSG:{code}: {c:?}");
+            assert!(report.messages.is_empty(), "EPSG:{code}: {:?}", report.messages);
         }
-        let row = include_str!("raster/esri_datum_corpus.tsv").lines().find(|l| l.starts_with("3003\t")).unwrap();
-        std::fs::write(shp.with_extension("prj"), row.split('\t').nth(5).unwrap()).unwrap();
-        let (ds, report) = read_path(&shp).unwrap();
-        let c = ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
-        assert!((c.x - 9.19).abs() < 1e-7 && (c.y - 45.4642).abs() < 1e-7, "{c:?}");
-        assert!(report.messages.is_empty(), "{:?}", report.messages);
     }
 
     /// Tiny gzip fixtures exercise the public byte/path readers, concatenation and corruption.

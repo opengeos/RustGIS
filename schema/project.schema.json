@@ -1080,7 +1080,8 @@
           "layout-element-background",
           "picture-markers",
           "layout-element-ink",
-          "field-generation"
+          "field-generation",
+          "crs-wkt"
         ],
         "type": "string"
       },
@@ -1158,7 +1159,8 @@
     "layout-element-background",
     "picture-markers",
     "layout-element-ink",
-    "field-generation"
+    "field-generation",
+    "crs-wkt"
   ],
   "x-rustgis-reads-format": 2,
   "x-rustgis-writes-format": 2
