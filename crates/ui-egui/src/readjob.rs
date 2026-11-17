@@ -1460,6 +1460,29 @@ mod tests {
         assert!(l.is_streamed() && !l.labels.enabled);
     }
 
+    /// A size mapping set after a read on a thread is recorded naming its layer, as a step from
+    /// the panes is, not by the id the read was bound to (#2130 review).
+    #[test]
+    fn a_size_mapping_read_on_a_thread_is_recorded_by_layer_name() {
+        use rustgis_engine::data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let mut ds =
+            Dataset::new("towns", GeometryType::Point, vec![Field::new("k", FieldType::Text), Field::new("n", FieldType::Integer)]);
+        for (k, n) in [("a", 1), ("b", 5)] {
+            ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![V::Text(k.into()), V::Int(n)]);
+        }
+        let id = rustgis_engine::cmd::layer::add_dataset(&mut app.session, ds);
+        app.run("layer.symbology", json!({"layer": id, "type": "unique", "field": "k"})).unwrap();
+        app.reads_off_frame = true;
+        app.ws.recording = Some(Vec::new());
+        app.run("layer.sizeBy", json!({"layer": id, "field": "n"})).unwrap();
+        landed(&mut app, 60);
+        assert!(app.session.map().layer(id).unwrap().size_by.is_some());
+        let steps = app.ws.recording.clone().unwrap();
+        let step = steps.iter().find(|s| s.command == "layer.sizeBy").expect("recorded");
+        assert_eq!(step.params["layer"], json!("towns"));
+    }
+
     /// Task steps cannot bypass the worker through direct or scripted table writes.
     #[test]
     fn a_task_refuses_table_writes_before_scanning_rows() {

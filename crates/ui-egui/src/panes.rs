@@ -6081,12 +6081,18 @@ fn size_by_rows(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Laye
     let mut keep_pending = is_pending;
     if is_pending {
         ui.horizontal(|ui| {
-            if ui.button(tl!("Use field range")).clicked() {
-                let _ = app.run(
-                    "layer.sizeBy",
-                    json!({"layer": l.id, "field": by.field,
-                    "minSize": by.min_size, "maxSize": by.max_size, "scaling": by.scaling.code()}),
-                );
+            // Once asked, the scan is under way with its own Cancel (the status bar's): the draft
+            // closes, so its Cancel can't look like it stops the scan.
+            if ui.button(tl!("Use field range")).clicked()
+                && app
+                    .run(
+                        "layer.sizeBy",
+                        json!({"layer": l.id, "field": by.field,
+                        "minSize": by.min_size, "maxSize": by.max_size, "scaling": by.scaling.code()}),
+                    )
+                    .is_ok()
+            {
+                keep_pending = false;
             }
             if ui.add_enabled(by.min.is_finite() && by.max.is_finite() && by.max > by.min, egui::Button::new(tl!("Apply"))).clicked() {
                 let _ = app.run(

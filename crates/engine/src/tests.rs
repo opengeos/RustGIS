@@ -1904,8 +1904,20 @@ fn a_classified_point_layer_is_sized_by_a_field() {
     assert_eq!(s.undo_depth(), depth);
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Cities").unwrap().size_by.as_ref().map(|b| b.max_size), Some(24.0));
+    // A web style has no size mapping: said, and nothing said once there is none.
+    let dir = std::env::temp_dir().join(format!("rustgis-size-by-style-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cities.json").display().to_string();
+    let web_style_says = |s: &mut Session| {
+        let mark = s.notice_mark();
+        s.run("share.webStyle", &json!({"layer": "Cities", "path": path})).unwrap();
+        s.notices_since(mark).iter().any(|n| n.text.contains("sizes by pop_max aren't in it"))
+    };
+    assert!(web_style_says(&mut s));
     s.run("layer.sizeBy", &json!({"layer": "Cities", "field": null})).unwrap();
     assert!(s.map().layer_by_name("Cities").unwrap().size_by.is_none());
+    assert!(!web_style_says(&mut s));
+    std::fs::remove_dir_all(&dir).ok();
     let err = s.run("layer.sizeBy", &json!({"layer": "Cities", "maxSize": 30})).unwrap_err();
     assert!(err.contains("no size mapping"), "{err}");
     // A saved project's mapping is read back (the schema fixture `size_by.rgis`).
