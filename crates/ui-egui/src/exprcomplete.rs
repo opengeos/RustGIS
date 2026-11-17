@@ -618,6 +618,36 @@ mod tests {
         })
     }
 
+    /// A function is added open, ready for its arguments, unless it takes none: then it's added
+    /// whole, `pi()`.
+    #[test]
+    fn a_function_without_arguments_is_added_whole() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        for (f, end) in [(query::functions().find(|f| f.max == 0).unwrap(), "()"), (query::functions().find(|f| f.max > 0).unwrap(), "(")] {
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(720.0, 600.0)).allow_missing_glyphs().build_ui_state(
+                |ui, got: &mut Option<String>| {
+                    if let Some(item) = menus(ui) {
+                        *got = Some(item);
+                    }
+                },
+                None,
+            );
+            h.run();
+            h.get_by_role_and_label(Role::Button, "Functions ▾").click();
+            h.run();
+            // Highlighted from the keyboard: the row may lie past the ten in view.
+            let at = menu_items(Menu::Functions).iter().position(|(s, _)| *s == format!("{}()", f.name)).unwrap();
+            for _ in 0..at {
+                h.key_press(Key::ArrowDown);
+                h.run();
+            }
+            h.key_press(Key::Enter);
+            h.run();
+            assert_eq!(h.state().as_deref(), Some(format!("{}{end}", f.name).as_str()), "{}", f.name);
+        }
+    }
+
     #[test]
     fn catalog_rows_describe_functions_and_variables_to_accessibility_clients() {
         use egui::accesskit::Role;

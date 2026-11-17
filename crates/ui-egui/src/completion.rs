@@ -555,8 +555,10 @@ pub(crate) fn menu(
     // The focus going to another widget (Tab), or gone to one already: the list closes, as a box's
     // does, before it takes any key that widget's. Not on a press, whose widget may be an item of
     // the list being clicked; nor while nothing has the focus (a click doesn't give it to the
-    // button).
-    let leaving = ui.input(|i| i.key_pressed(Key::Tab)) || ui.memory(|m| m.focused().is_some_and(|f| f != button.id));
+    // button); nor while it's on a row of the list itself (a screen reader focuses a row before
+    // it activates it).
+    let in_list = |f: Id| ui.ctx().read_response(f).is_some_and(|r| r.layer_id == egui::LayerId::new(egui::Order::Foreground, id));
+    let leaving = ui.input(|i| i.key_pressed(Key::Tab)) || ui.memory(|m| m.focused()).is_some_and(|f| f != button.id && !in_list(f));
     if s.open && !toggled && leaving && !ui.input(|i| i.pointer.any_pressed()) {
         s.open = false;
     }
@@ -762,6 +764,32 @@ mod tests {
         assert!(list.contains(egui::pos2(list.center().x, top(&h, "item15") + row / 2.0)), "scrolled to the highlight");
         let scrolled = h.ctx.data(|d| d.get_temp::<super::MenuState>(id)).and_then(|s| s.scrolled_to);
         assert_eq!(scrolled, Some(15), "scrolled to the highlight once");
+    }
+
+    /// A screen reader focuses a row and then, in a later frame, activates it: the list stays open
+    /// on the focus (still on a widget of its own) and takes the row activated.
+    #[test]
+    fn a_row_focused_by_a_screen_reader_can_be_activated() {
+        use egui_kittest::kittest::Queryable;
+        let items: Vec<String> = (0..3).map(|i| format!("item{i:02}")).collect();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, got: &mut Option<String>| {
+                if let (_, Some(item)) = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, |_, _, _| {}) {
+                    *got = Some(item);
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        h.get_by_label("item02").focus();
+        h.run();
+        assert!(h.query_by_label("item02").is_some_and(|n| n.is_focused()), "the row has the focus");
+        h.get_by_label("item02").click();
+        h.run();
+        assert_eq!(h.state().as_deref(), Some("item02"), "the focused row was taken");
+        assert!(h.query_by_label("item00").is_none(), "and the list closed");
     }
 
     /// A list holding no items takes no arrow, Enter nor Tab (there's no highlight to move or
