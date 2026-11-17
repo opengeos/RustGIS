@@ -51,7 +51,9 @@ pub fn read_file(path: &Path, page: Option<&str>, place: bool) -> Result<Raster>
 /// in `lost`.
 ///
 /// Reading the file and drawing the page are each one step that can't be stopped: Cancel is looked
-/// at before, between and after them.
+/// at before, between and after them where the run asks for it ([`crate::progress`], as the read
+/// queue's does). A download's page the app draws on a thread of its own is given up by the app
+/// instead, before its turn, or dropped once drawn.
 pub fn read_bytes(name: &str, bytes: Vec<u8>, page: Option<&str>, place: bool) -> Result<Raster> {
     read_limited(name, bytes, page, place, max_samples())
 }
@@ -244,35 +246,45 @@ fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
         }
         return r;
     }
+    // The largest first; one that can't be fitted or placed gives way to the next.
     found.sort_by(|a, b| b.area().total_cmp(&a.area()));
-    let v = found.swap_remove(0);
-    if !found.is_empty() {
-        r.lost.push(format!("it has {} more map frames with coordinates (insets, say): it is placed by the largest", found.len()));
-    }
-    if let Some(why) = unread.first() {
-        r.lost.push(format!("{} more of its map frames have coordinates that can't be used ({why}, the first)", unread.len()));
-    }
+    let (count, mut failed) = (found.len(), Vec::new());
     let to_pixels = Affine::scale(scale) * page.initial_transform(true).to_kurbo();
-    let (wf, off) = match fit(&v, to_pixels, r.width, r.height) {
-        Ok(fitted) => fitted,
-        Err(why) => {
-            r.lost.push(format!("its map frame's coordinates can't be used ({why}): {unplaced}"));
-            return r;
-        }
-    };
-    let off_note = (off > 1.0).then(|| format!("its map frame's corners don't lie on one flat grid: placed to within {off:.0} pixels"));
-    match r.placed_by_world_file(&wf, v.crs) {
-        Ok(mut r) => {
-            r.lost.extend(v.note);
-            r.lost.extend(off_note);
-            r
-        }
-        Err((r, why)) => {
-            let mut r = *r;
-            r.lost.push(format!("its map frame's coordinates can't be used ({why}): {unplaced}"));
-            r
-        }
+    for v in found {
+        let (wf, off) = match fit(&v, to_pixels, r.width, r.height) {
+            Ok(fitted) => fitted,
+            Err(why) => {
+                failed.push(why);
+                continue;
+            }
+        };
+        r = match r.placed_by_world_file(&wf, v.crs) {
+            Ok(mut placed) => {
+                let others = count - 1;
+                if others > 0 {
+                    let by = if failed.is_empty() { "the largest" } else { "the largest that can be used" };
+                    placed.lost.push(format!("it has {others} more map frames with coordinates (insets, say): it is placed by {by}"));
+                }
+                let unusable = failed.len() + unread.len();
+                if let Some(why) = failed.first().or(unread.first()) {
+                    placed.lost.push(format!("{unusable} of its map frames have coordinates that can't be used ({why}, the first)"));
+                }
+                placed.lost.extend(v.note);
+                if off > 1.0 {
+                    placed.lost.push(format!("its map frame's corners don't lie on one flat grid: placed to within {off:.0} pixels"));
+                }
+                return placed;
+            }
+            Err((back, why)) => {
+                failed.push(why);
+                *back
+            }
+        };
     }
+    if let Some(why) = failed.first() {
+        r.lost.push(format!("its map frame's coordinates can't be used ({why}): {unplaced}"));
+    }
+    r
 }
 
 /// The world file placing a `w` × `h` drawing of the page by viewport `v` (`to_pixels` takes a
@@ -281,24 +293,32 @@ fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
 fn fit(v: &Viewport, to_pixels: Affine, w: u32, h: u32) -> std::result::Result<(world::WorldFile, f64), String> {
     let t = v.crs.transformer()?;
     let [x0, y0, x1, y1] = v.bbox;
-    let mut points = Vec::with_capacity(v.gpts.len());
-    let mut previous: Option<f64> = None;
+    // Each control point's pixel and its WGS 84 longitude/latitude.
+    let mut at = Vec::with_capacity(v.gpts.len());
     for (&(lat, lon), &(lx, ly)) in v.gpts.iter().zip(&v.lpts) {
         let on = Coord::new(lon, lat);
-        let mut wgs84 = match &v.def {
+        let wgs84 = match &v.def {
             Some(def) => crs::lonlat_from_datum_of(def, on).ok_or("a control point is off the Earth")?,
             None => on,
         };
-        // The frame's longitudes continuous from point to point, in the order it gives them (round
-        // its edge): across 180°, 179° and -179° are 2° apart, not 358°, and a frame whose points
-        // step from -170° through 0° to 170° stays 340° wide.
-        if let Some(reference) = previous {
-            wgs84.x = reference + (wgs84.x - reference + 180.0).rem_euclid(360.0) - 180.0;
-        }
-        previous = Some(wgs84.x);
-        let ground = t.from_lonlat(wgs84).ok_or("a control point is outside its coordinate system")?;
         let p = to_pixels * Point::new(x0 + lx * (x1 - x0), y0 + ly * (y1 - y0));
-        points.push(((p.x, p.y), (ground.x, ground.y)));
+        at.push(((p.x, p.y), wgs84));
+    }
+    // The frame's longitudes made continuous across it, taking the points left to right on the
+    // page, whatever order the file gives them in: across 180°, 179° and -179° are 2° apart, not
+    // 358°, and a frame with points at -170°, 0° and 170° stays 340° wide.
+    at.sort_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)));
+    let mut previous: Option<f64> = None;
+    for (_, c) in &mut at {
+        if let Some(reference) = previous {
+            c.x = reference + (c.x - reference + 180.0).rem_euclid(360.0) - 180.0;
+        }
+        previous = Some(c.x);
+    }
+    let mut points = Vec::with_capacity(at.len());
+    for (p, wgs84) in at {
+        let ground = t.from_lonlat(wgs84).ok_or("a control point is outside its coordinate system")?;
+        points.push((p, (ground.x, ground.y)));
     }
     let [a, b, c] = solve(&points, |g| g.0).ok_or("its control points lie in a line")?;
     let [d, e, f] = solve(&points, |g| g.1).ok_or("its control points lie in a line")?;
@@ -448,6 +468,21 @@ mod tests {
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &wide), None, true).unwrap();
         let span = r.transform.pixel_width * f64::from(r.width);
         assert!(r.georeferenced && (span - 340.0).abs() < 1e-6, "{span}° wide, {:?}", r.lost);
+        // The same frame with its pairs in another order: still 340° wide.
+        let shuffled = geo(wgs84).replace(
+            "/GPTS [41 10 41 12 40 12 40 10] /LPTS [0 1 1 1 1 0 0 0]",
+            "/GPTS [41 -170 40 170 41 0 40 0 41 170 40 -170] /LPTS [0 1 1 0 0.5 1 0.5 0 1 1 0 0]",
+        );
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &shuffled), None, true).unwrap();
+        let span = r.transform.pixel_width * f64::from(r.width);
+        assert!(r.georeferenced && (span - 340.0).abs() < 1e-6, "{span}° wide, {:?}", r.lost);
+        // A larger frame whose points lie in a line gives way to a smaller one that places it.
+        let flat = vp(wgs84, "0 0 72 36").replace("/LPTS [0 1 1 1 1 0 0 0]", "/LPTS [0 0 0.3 0.3 0.6 0.6 1 1]");
+        let both = format!("/VP [{flat} {}]", vp(wgs84, "0 0 10 10"));
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &both), None, true).unwrap();
+        assert!(r.georeferenced, "{:?}", r.lost);
+        assert!(r.lost.iter().any(|t| t.contains("placed by the largest that can be used")), "{:?}", r.lost);
+        assert!(r.lost.iter().any(|t| t.starts_with("1 of its map frames have coordinates that can't be used")), "{:?}", r.lost);
         // A control point that isn't a number: no placing by pairs out of step, and said.
         let bad = geo(wgs84).replace("/GPTS [41 10 41 12", "/GPTS [41 /Ten 41 12");
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &bad), None, true).unwrap();

@@ -535,7 +535,7 @@ fn sources_opening(app: &RustGisApp) -> bool {
 /// Whether windows or PDF pages are being read off the frame (none in the browser).
 fn window_reads_under_way(app: &RustGisApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
-    return !app.ui.window_reads.is_empty() || !app.ui.page_reads.is_empty();
+    return !app.ui.window_reads.is_empty() || !app.ui.page_reads.is_empty() || !app.ui.page_queue.is_empty();
     #[cfg(target_arch = "wasm32")]
     {
         let _ = app;

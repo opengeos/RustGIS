@@ -868,6 +868,11 @@ pub struct UiState {
     /// closed). They take their turns with the windows' reads, and count against their limit.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) page_reads: Vec<(serviceui::Landed, PageRead, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
+    /// PDF downloads waiting for a place among [`UiState::page_reads`] (past
+    /// [`MAX_WINDOW_READS`] reads under way), oldest first: the download, its bytes, and its page
+    /// to draw ([`rustgis_engine::cmd::raster::download_page`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) page_queue: Vec<(serviceui::Landed, Vec<u8>, (String, Option<String>, bool))>,
     /// Service layers whose features are being read page by page (an ArcGIS layer's description
     /// first).
     pub service_pages: Vec<serviceui::PageRead>,
@@ -1072,6 +1077,8 @@ impl Default for UiState {
             window_reads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             page_reads: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            page_queue: Vec::new(),
             service_pages: Vec::new(),
             link_zoomed: false,
             service: None,
@@ -5622,6 +5629,11 @@ impl RustGisApp {
                     Err(e) => self.landed_failed(landed.id, &landed.url, &landed.params, e),
                 }
             }
+            // Those waiting take the places freed, oldest first.
+            while !self.ui.page_queue.is_empty() && self.ui.page_reads.len() + self.ui.window_reads.len() < MAX_WINDOW_READS {
+                let (landed, bytes, page) = self.ui.page_queue.remove(0);
+                self.draw_page(landed, bytes, page);
+            }
         }
         // Windows read on threads, added as a download is.
         #[cfg(not(target_arch = "wasm32"))]
@@ -5662,7 +5674,8 @@ impl RustGisApp {
         #[cfg(not(target_arch = "wasm32"))]
         let downloads = downloads
             .chain(self.ui.window_reads.iter().map(|(id, url, ..)| shown(*id, url, None)))
-            .chain(self.ui.page_reads.iter().map(|(l, ..)| shown(l.id, &l.url, None)));
+            .chain(self.ui.page_reads.iter().map(|(l, ..)| shown(l.id, &l.url, None)))
+            .chain(self.ui.page_queue.iter().map(|(l, ..)| shown(l.id, &l.url, None)));
         let mut under_way: Vec<_> = downloads.collect();
         under_way.sort_by_key(|d| d.id);
         under_way
@@ -5692,6 +5705,12 @@ impl RustGisApp {
             let i = self.ui.page_reads.iter().position(|(l, ..)| l.id == id)?;
             let (landed, _, left) = self.ui.page_reads.remove(i);
             left.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some((landed.url, landed.params))
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let cancelled = cancelled.or_else(|| {
+            let i = self.ui.page_queue.iter().position(|(l, ..)| l.id == id)?;
+            let (landed, ..) = self.ui.page_queue.remove(i);
             Some((landed.url, landed.params))
         });
         let Some((url, mut p)) = cancelled else { return };
@@ -5729,7 +5748,8 @@ impl RustGisApp {
         seen: Option<[f64; 4]>,
     ) -> Result<Value, String> {
         let asked = rustgis_engine::cmd::layer::window_asked_in(&self.session, p, seen).and_then(|asked| {
-            if self.ui.window_reads.len() >= MAX_WINDOW_READS {
+            // PDF pages being drawn take places too.
+            if self.ui.window_reads.len() + self.ui.page_reads.len() >= MAX_WINDOW_READS {
                 return Err(i18n::fmt(
                     "{url}: {count} windows are being read already: ask again once one has been added",
                     &[("url", &rustgis_engine::sources::address_in_message(&url)), ("count", &MAX_WINDOW_READS.to_string())],
@@ -5809,21 +5829,19 @@ impl RustGisApp {
     }
 
     /// Draws a downloaded PDF's page on a thread ([`rustgis_engine::cmd::raster::read_download_page`]),
-    /// to be added with its bytes once drawn ([`UiState::page_reads`]).
-    #[cfg(not(target_arch = "wasm32"))]
-    /// `page`: its file name, page and whether it is placed ([`download_page`]). Drawn one at a
-    /// time with the windows' reads, at most [`MAX_WINDOW_READS`] waiting; one the OS gives no
-    /// thread is drawn here instead (slower, but added).
+    /// to be added with its bytes once drawn ([`UiState::page_reads`]). `page`: its file name, page
+    /// and whether it is placed ([`download_page`]). Drawn one at a time with the windows' reads;
+    /// past [`MAX_WINDOW_READS`] under way, it waits in [`UiState::page_queue`]. Where the OS gives
+    /// no thread, it is drawn here instead (slower, but the download isn't lost). Cancel takes it
+    /// off the list and gives up its turn; a drawing under way (one step the renderer can't stop)
+    /// finishes, its page dropped.
     ///
     /// [`download_page`]: rustgis_engine::cmd::raster::download_page
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_page(&mut self, landed: serviceui::Landed, bytes: Vec<u8>, (name, page, place): (String, Option<String>, bool)) {
         if self.ui.page_reads.len() + self.ui.window_reads.len() >= MAX_WINDOW_READS {
-            let why = i18n::fmt(
-                "{count} windows and PDF pages are being read already: add it again once one has been added",
-                &[("count", &MAX_WINDOW_READS.to_string())],
-            );
-            return self.landed_failed(landed.id, &landed.url, &landed.params, why);
+            self.ui.page_queue.push((landed, bytes, (name, page, place)));
+            return;
         }
         let slot: PageRead = Slot::default();
         let land = slot.clone();
@@ -6272,7 +6290,7 @@ impl RustGisApp {
         }
         // A window's read, or a PDF page's drawing, lands with nothing to wake the frame.
         #[cfg(not(target_arch = "wasm32"))]
-        if !self.ui.window_reads.is_empty() || !self.ui.page_reads.is_empty() {
+        if !self.ui.window_reads.is_empty() || !self.ui.page_reads.is_empty() || !self.ui.page_queue.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         // Zarr steps the time slider moved to, read off the frame, show once they land.
@@ -7556,6 +7574,7 @@ mod record_tests {
             pdf.push_str(&format!("{a:010} 00000 n \n"));
         }
         pdf.push_str(&format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"));
+        let late = pdf.clone().into_bytes();
         let mut app = RustGisApp::with_sample();
         app.run("ui.addUrl", json!({"url": "https://cancel.invalid/sheet.pdf", "name": "Cancelled sheet"})).unwrap();
         // The page waits for its turn while this test holds it.
@@ -7575,6 +7594,19 @@ mod record_tests {
             std::thread::sleep(std::time::Duration::from_millis(20)); // test-wait: the given-up draw's thread lands into a slot no list holds
         }
         assert!(app.session.map().layer_by_name("Cancelled sheet").is_none());
+        // A page drawn already when Cancel comes isn't added either.
+        app.run("ui.addUrl", json!({"url": "https://cancel.invalid/late.pdf", "name": "Late sheet"})).unwrap();
+        held.lock().unwrap().pop().unwrap()(Ok(late));
+        app.poll_data_downloads();
+        assert_eq!(app.ui.page_reads.len(), 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.ui.page_reads.first().is_some_and(|(_, slot, _)| slot.lock().unwrap().is_none()) {
+            assert!(std::time::Instant::now() < deadline, "the page wasn't drawn");
+            std::thread::sleep(std::time::Duration::from_millis(20)); // test-wait: the drawing thread's result, which has no signal of its own
+        }
+        app.cancel_download(app.downloads_under_way()[0].id);
+        app.poll_data_downloads();
+        assert!(app.session.map().layer_by_name("Late sheet").is_none() && app.ui.page_reads.is_empty());
     }
 
     /// The next window is read only once the frame has taken the last: a frame that stalls holds
