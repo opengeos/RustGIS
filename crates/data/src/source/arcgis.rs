@@ -148,6 +148,11 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     if first.losses.with_zm > 0 {
         info.drop_zm(None);
     }
+    // What the first feature's answer left out or assumed (fields it couldn't read, the coordinate
+    // system); each read says what its own features lost ([`Batch::notes`]).
+    let mut lost = first.losses;
+    lost.with_zm = 0;
+    info.notes.extend(first.report.messages.iter().cloned().chain(lost.messages()));
     if !sample {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
@@ -163,7 +168,8 @@ fn with(query: &str, values: &[(&str, &str)]) -> String {
 /// The layer's query asking for features in protocol buffers, in longitude/latitude, with every
 /// field unless it names its own.
 fn features_query(query: &str) -> String {
-    let q = with(query, &[("outSR", "4326"), ("f", "pbf")]);
+    // With geometry, whatever the query said: a view is chosen by it.
+    let q = with(query, &[("outSR", "4326"), ("f", "pbf"), ("returnGeometry", "true")]);
     if crate::ogc::query_value(&q, "outFields").is_some_and(|f| !f.is_empty()) { q } else { with(&q, &[("outFields", "*")]) }
 }
 
@@ -223,14 +229,14 @@ fn cells(view: &Extent) -> Vec<Extent> {
     out
 }
 
-/// A view kept within the world; `None` when it isn't a view (not finite, or empty).
-fn world_view(e: &Extent) -> Option<Extent> {
-    let all = [e.min_x, e.min_y, e.max_x, e.max_y];
-    if all.iter().any(|v| !v.is_finite()) {
-        return None;
+/// A view kept within the world; `None` when it lies outside it (nothing is in it). A view that
+/// isn't finite, or whose minimum is past its maximum, is refused: it is no view at all.
+fn world_view(e: &Extent) -> Result<Option<Extent>> {
+    if [e.min_x, e.min_y, e.max_x, e.max_y].iter().any(|v| !v.is_finite()) || e.min_x > e.max_x || e.min_y > e.max_y {
+        return Err(DataError::Format(format!("the view {e:?} isn't an extent of finite longitudes and latitudes")));
     }
     let v = Extent::new(e.min_x.max(-180.0), e.min_y.max(-90.0), e.max_x.min(180.0), e.max_y.min(90.0));
-    (v.min_x <= v.max_x && v.min_y <= v.max_y).then_some(v)
+    Ok((v.min_x <= v.max_x && v.min_y <= v.max_y).then_some(v))
 }
 
 /// The smallest power of two `k` for which every k-th of `matched` features fits in `limit`.
@@ -281,57 +287,10 @@ impl ArcgisSource {
         )
     }
 
-    /// A count's answer, or `None` when it isn't fetched yet (noted as missing).
-    fn count(&self, cell: Option<&Extent>) -> Result<Option<u64>> {
-        let url = self.count_url(cell);
-        let Some(bytes) = self.remote.answer(&url)? else { return Ok(None) };
-        let v = json(&self.remote, &url, &bytes, MAX_COUNT_ANSWER, "count")?;
-        count_of(&v).map(Some).ok_or_else(|| answer_error(&self.remote, &url, "the count isn't a number"))
-    }
-
-    /// A page read: its features with their object ids as their ids (one without is skipped),
-    /// whether the service holds more, and how many features it sent.
-    fn page_of(&self, url: &str, bytes: &[u8], skipped: &mut usize) -> Result<(Vec<Feature>, bool, usize)> {
-        let page = crate::esripbf::read_page(bytes, &self.info.name).inspect_err(|_| self.remote.forget_answer(url))?;
-        if page.dataset.fields != self.info.fields || page.object_id_field != Some(self.oid_at) {
-            self.remote.forget_answer(url);
-            return Err(DataError::Format(crate::diagnostics::message_with_address(
-                &self.query,
-                "the layer's fields changed since it was added; add it again",
-            )));
-        }
-        *skipped = skipped.saturating_add(page.report.skipped);
-        let sent = page.dataset.features.len();
-        let mut out = Vec::with_capacity(sent);
-        for mut f in page.dataset.features.into_vec() {
-            match f.attrs.get(self.oid_at) {
-                Some(Value::Int(id)) if *id >= 0 => {
-                    f.id = *id as u64;
-                    out.push(f);
-                }
-                _ => *skipped = skipped.saturating_add(1),
-            }
-        }
-        Ok((out, page.exceeded_transfer_limit, sent))
-    }
-}
-
-impl FeatureSource for ArcgisSource {
-    fn info(&self) -> &SourceInfo {
-        &self.info
-    }
-
-    fn remote(&self) -> Option<Arc<Remote>> {
-        Some(self.remote.clone())
-    }
-
-    /// The features of the view, as the module says: complete when every one was read, otherwise
-    /// every k-th by object id (or the first, where the service can't sample), `matched` the count
-    /// of the view. Without an extent, every feature in object id order, as
-    /// [`FeatureSource::visit_chunks`] visits them.
-    fn read(&self, req: &Request) -> Result<Batch> {
+    /// [`FeatureSource::read`], keeping the features read within `bytes` as they come.
+    fn read_within(&self, req: &Request, bytes: usize) -> Result<Batch> {
         let view = match req.extent {
-            Some(e) => match world_view(&e) {
+            Some(e) => match world_view(&e)? {
                 Some(v) => Some(v),
                 None => return Ok(Batch { complete: true, ..Batch::default() }),
             },
@@ -364,9 +323,20 @@ impl FeatureSource for ArcgisSource {
         // Where the service can't sample: each cell's first features, its share of the limit.
         let share = if self.sample { usize::MAX } else { limit.div_ceil(cells.len()) };
         let mut budget = MAX_READ_PAGES;
+        // The answers a read holds at once stay within half of what a service keeps, or the
+        // pages it needs would push each other out: past it, the view is read in part.
+        let room = remote::KEEP_ANSWERS / 2;
+        let (mut held, mut present, mut present_bytes) = (0usize, 0usize, 0usize);
+        // Features kept within `bytes` as they come: every other one dropped, and every other
+        // one after it, each time they pass it.
+        let (mut stride, mut counted, mut kept_bytes, mut thinned) = (1u64, 0u64, 0usize, false);
+        // A kept feature's memory, its place in the list included (as the list holds it once
+        // it is fitted to its length).
+        let cost = |f: &Feature| std::mem::size_of::<Feature>().saturating_add(super::memory::feature_bytes(f));
         let mut seen = HashSet::new();
         let mut features = Vec::new();
         let (mut skipped, mut waiting, mut cut) = (0, false, false);
+        let mut losses = crate::esripbf::Losses::default();
         for (cell, n) in cells.iter().zip(&counts) {
             if *n == 0 {
                 continue;
@@ -377,27 +347,34 @@ impl FeatureSource for ArcgisSource {
             // A page of this cell isn't in yet: the offsets of those after it are guesses.
             let mut gap = false;
             while asked < planned {
-                if budget == 0 {
+                // A page not in yet is taken to be as large as those that are.
+                let guess = present_bytes.checked_div(present).unwrap_or(256 << 10);
+                if budget == 0 || held.saturating_add(guess) > room {
+                    budget = 0;
                     cut = true;
                     break;
                 }
                 budget -= 1;
                 asked += 1;
                 let url = self.page_url(cell.as_ref(), step, offset);
-                let Some(bytes) = self.remote.answer(&url)? else {
+                let Some(answer) = self.remote.answer(&url)? else {
                     // Asked for with the pages after it, as if it were full: when it isn't, those
                     // are asked for again at the right offsets once it is in.
+                    held = held.saturating_add(guess);
                     waiting = true;
                     gap = true;
                     offset = offset.saturating_add(self.page);
                     continue;
                 };
+                held = held.saturating_add(answer.len());
+                present += 1;
+                present_bytes = present_bytes.saturating_add(answer.len());
                 if gap {
                     // An earlier page isn't in: this one's offset may be wrong, read it later.
                     offset = offset.saturating_add(self.page);
                     continue;
                 }
-                let (got, more, sent) = self.page_of(&url, &bytes, &mut skipped)?;
+                let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
                 offset = offset.saturating_add(sent);
                 for f in got {
                     let inside = match (&view, &f.geometry) {
@@ -405,9 +382,21 @@ impl FeatureSource for ArcgisSource {
                         (Some(_), None) => false,
                         (None, _) => true,
                     };
-                    if inside && seen.insert(f.id) {
-                        kept += 1;
-                        features.push(f);
+                    if !(inside && seen.insert(f.id)) {
+                        continue;
+                    }
+                    kept += 1;
+                    counted += 1;
+                    if counted % stride != 0 {
+                        continue;
+                    }
+                    kept_bytes = kept_bytes.saturating_add(cost(&f));
+                    features.push(f);
+                    while kept_bytes > bytes && features.len() > 1 {
+                        super::memory::halve(&mut features);
+                        kept_bytes = features.iter().map(cost).fold(0, usize::saturating_add);
+                        stride = stride.saturating_mul(2);
+                        thinned = true;
                     }
                 }
                 if !more {
@@ -425,7 +414,7 @@ impl FeatureSource for ArcgisSource {
         if waiting {
             return Err(remote::need());
         }
-        let mut complete = step == 1 && !cut;
+        let mut complete = step == 1 && !cut && !thinned;
         if features.len() > limit {
             // A sample comes out a little over its share now and then: thinned evenly.
             let (n, limit) = (features.len() as u64, limit as u64);
@@ -434,20 +423,78 @@ impl FeatureSource for ArcgisSource {
             complete = false;
         }
         let matched = if complete { features.len() as u64 } else { matched };
-        Ok(Batch { features, matched, complete, skipped, ..Batch::default() })
+        Ok(Batch { features, matched, complete, skipped, notes: losses.messages(), ..Batch::default() })
     }
 
-    /// A read, made smaller to fit `bytes`: a sample is asked for once, at the size the view
+    /// A count's answer, or `None` when it isn't fetched yet (noted as missing).
+    fn count(&self, cell: Option<&Extent>) -> Result<Option<u64>> {
+        let url = self.count_url(cell);
+        let Some(bytes) = self.remote.answer(&url)? else { return Ok(None) };
+        let v = json(&self.remote, &url, &bytes, MAX_COUNT_ANSWER, "count")?;
+        count_of(&v).map(Some).ok_or_else(|| answer_error(&self.remote, &url, "the count isn't a number"))
+    }
+
+    /// A page read: its features with their object ids as their ids (one without is skipped),
+    /// whether the service holds more, and how many features it sent. What its features lost is
+    /// added to `losses`.
+    fn page_of(
+        &self,
+        url: &str,
+        bytes: &[u8],
+        skipped: &mut usize,
+        losses: &mut crate::esripbf::Losses,
+    ) -> Result<(Vec<Feature>, bool, usize)> {
+        let page = crate::esripbf::read_page(bytes, &self.info.name).inspect_err(|_| self.remote.forget_answer(url))?;
+        // An empty page may name no fields: there is nothing in it to misread.
+        if !page.dataset.features.is_empty() && (page.dataset.fields != self.info.fields || page.object_id_field != Some(self.oid_at)) {
+            self.remote.forget_answer(url);
+            return Err(DataError::Format(crate::diagnostics::message_with_address(
+                &self.query,
+                "the layer's fields changed since it was added; add it again",
+            )));
+        }
+        *skipped = skipped.saturating_add(page.report.skipped);
+        losses.add(&page.losses);
+        let sent = page.dataset.features.len();
+        let mut out = Vec::with_capacity(sent);
+        for mut f in page.dataset.features.into_vec() {
+            match f.attrs.get(self.oid_at) {
+                Some(Value::Int(id)) if *id >= 0 => {
+                    f.id = *id as u64;
+                    out.push(f);
+                }
+                _ => *skipped = skipped.saturating_add(1),
+            }
+        }
+        Ok((out, page.exceeded_transfer_limit, sent))
+    }
+}
+
+impl FeatureSource for ArcgisSource {
+    fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    fn remote(&self) -> Option<Arc<Remote>> {
+        Some(self.remote.clone())
+    }
+
+    /// The features of the view, as the module says: complete when every one was read, otherwise
+    /// every k-th by object id (or the first, where the service can't sample), `matched` the count
+    /// of the view. Without an extent, the whole layer is the view: every feature in object id
+    /// order (as [`FeatureSource::visit_chunks`] visits them) when they fit the limit, otherwise a
+    /// sample as above. What the features read lost is said in [`Batch::notes`].
+    fn read(&self, req: &Request) -> Result<Batch> {
+        self.read_within(req, usize::MAX)
+    }
+
+    /// A read, kept within `bytes` as it is read: a sample is asked for once, at the size the view
     /// takes, not probed first, as each size asks the service for other pages.
     fn read_budgeted(&self, req: &Request, bytes: usize) -> Result<Batch> {
-        let mut batch = self.read(req)?;
+        let mut batch = self.read_within(req, bytes)?;
         batch.features.shrink_to_fit();
-        while super::memory::features_bytes(&batch.features) > bytes {
-            if batch.features.len() <= 1 {
-                return Err(DataError::Format("one feature exceeds the view memory budget; load it explicitly for full processing".into()));
-            }
-            super::memory::halve(&mut batch.features);
-            batch.complete = false;
+        if batch.features.len() == 1 && super::memory::features_bytes(&batch.features) > bytes {
+            return Err(DataError::Format("one feature exceeds the view memory budget; load it explicitly for full processing".into()));
         }
         Ok(batch)
     }
@@ -470,7 +517,7 @@ impl FeatureSource for ArcgisSource {
         {
             let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
             let view = match extent {
-                Some(e) => match world_view(&e) {
+                Some(e) => match world_view(&e)? {
                     Some(v) => Some(v),
                     None => return Ok(Batch { complete: true, ..Batch::default() }),
                 },
@@ -487,13 +534,14 @@ impl FeatureSource for ArcgisSource {
             })?;
             crate::progress::begin(usize::try_from(total).unwrap_or(usize::MAX));
             let (mut offset, mut skipped, mut visited) = (0usize, 0usize, 0u64);
+            let mut losses = crate::esripbf::Losses::default();
             loop {
                 crate::progress::check()?;
                 let url = self.page_url(view.as_ref(), 1, offset);
                 let answer = fetch(url.clone())?;
                 // Not kept: the layer is read once, through.
                 self.remote.forget_answer(&url);
-                let (got, more, sent) = self.page_of(&url, &answer, &mut skipped)?;
+                let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
                 drop(answer);
                 for f in got {
                     if view.as_ref().is_none_or(|v| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(v))) {
@@ -512,9 +560,16 @@ impl FeatureSource for ArcgisSource {
                     )));
                 }
                 offset = offset.saturating_add(sent);
+                // A service that ignores the offset would send pages for ever.
+                if offset as u64 > total.saturating_add(self.page as u64) {
+                    return Err(DataError::Format(crate::diagnostics::message_with_address(
+                        &self.query,
+                        &format!("the service kept sending pages past the {total} features it counted"),
+                    )));
+                }
             }
             chunks.flush()?;
-            Ok(Batch { matched: visited, complete: true, skipped, ..Batch::default() })
+            Ok(Batch { matched: visited, complete: true, skipped, notes: losses.messages(), ..Batch::default() })
         }
     }
 }

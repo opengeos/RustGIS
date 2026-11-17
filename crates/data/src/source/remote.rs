@@ -38,10 +38,14 @@ pub const MAX_ROUNDS: usize = 48;
 const ROUND_BUDGET: u64 = READ_BUDGET.saturating_mul(2);
 /// Files kept, with what was fetched of them.
 const MAX_FILES: usize = 32;
-/// The most bytes of whole answers a service keeps (least recently used ones are dropped past it).
-const KEEP_ANSWERS: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 256 << 20 };
-/// The most answers one round of a read asks for: the rest are asked for by the next round.
-pub const ROUND_ANSWERS: usize = 32;
+/// The most bytes of whole answers a service keeps (least recently used ones are dropped past it),
+/// as [`KEEP`] bounds a file's parts.
+pub const KEEP_ANSWERS: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 256 << 20 };
+/// The most bytes one answer may have ([`Want::Upto`]).
+pub const MAX_ANSWER: u64 = if cfg!(target_arch = "wasm32") { 16 << 20 } else { 32 << 20 };
+/// The most answers one round of a read asks for, so that a round's answers stay within
+/// [`ROUND_BUDGET`]: the rest are asked for by the next round.
+pub const ROUND_ANSWERS: usize = (ROUND_BUDGET / MAX_ANSWER) as usize;
 
 /// The error of a read that needs bytes not fetched yet (it is run again once they are).
 pub const NEED: &str = "waiting for the file's bytes";
@@ -106,6 +110,8 @@ pub enum Want {
     Tail(u64),
     /// The whole file: one that can't be read in place ([`READ_WHOLE`]), downloaded instead.
     Whole,
+    /// The whole answer to a query ([`Remote::answer`]), refused past this many bytes.
+    Upto(u64),
 }
 
 /// Why a fetch brought no bytes.
@@ -689,7 +695,7 @@ fn step_in<T: Send + 'static>(
                     (Job::Part(Want::Range(a, b)), Ok(bytes)) => remote2.insert(*a, b - a, bytes),
                     (Job::Part(Want::Tail(n)), Ok(bytes)) => remote2.insert_tail(*n, bytes),
                     // (Reads ask for ranges and tails; a whole file is all of its bytes from the start.)
-                    (Job::Part(Want::Whole), Ok(bytes)) => remote2.insert(0, bytes.len() as u64, bytes),
+                    (Job::Part(Want::Whole | Want::Upto(_)), Ok(bytes)) => remote2.insert(0, bytes.len() as u64, bytes),
                     (Job::Answer(url), Ok(bytes)) => remote2.insert_answer(url, bytes),
                     // A request dropped unfetched (the view moved on) is asked for again next round.
                     (_, Err(Failed::Dropped)) => {}
@@ -728,7 +734,7 @@ fn step_in<T: Send + 'static>(
                 .map_err(|e| e.to_string())
                 .and_then(|()| crate::login_address::check(url).map_err(String::from))
             {
-                Ok(()) => fetch(url, Want::Whole, landed),
+                Ok(()) => fetch(url, Want::Upto(MAX_ANSWER), landed),
                 Err(e) => landed(Err(Failed::Other(e))),
             },
         }
@@ -882,7 +888,11 @@ pub(crate) mod testing {
                 .find(|(p, _)| url.starts_with(p.as_str()))
                 .map(|(_, h)| h.clone());
             if let Some(h) = handler {
-                done(h(url).ok_or_else(|| Failed::Other("HTTP 404".into())));
+                let answer = h(url).ok_or_else(|| Failed::Other("HTTP 404".into()));
+                done(match (w, answer) {
+                    (Want::Upto(n), Ok(a)) if a.len() as u64 > n => Err(Failed::Other("the answer is too large".into())),
+                    (_, answer) => answer,
+                });
                 return;
             }
             let file = served().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned();
@@ -900,6 +910,11 @@ pub(crate) mod testing {
                 Want::Range(a, b) => f.get(a as usize..(b as usize).min(f.len())).map(<[u8]>::to_vec).unwrap_or_default(),
                 Want::Tail(n) => f.get(f.len().saturating_sub(n as usize)..).map(<[u8]>::to_vec).unwrap_or_default(),
                 Want::Whole => f.to_vec(),
+                Want::Upto(n) if f.len() as u64 > n => {
+                    done(Err(Failed::Other("the answer is too large".into())));
+                    return;
+                }
+                Want::Upto(_) => f.to_vec(),
             };
             sent.fetch_add(r.len(), Ordering::Relaxed);
             done(Ok(r));

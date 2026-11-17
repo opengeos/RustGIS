@@ -25,6 +25,8 @@ pub fn install() {
                 Want::Tail(n) => format!("{DOWNLOAD}{url}{TAIL}{n}"),
                 // Up to the download limit, like a file added by its address.
                 Want::Whole => format!("{DOWNLOAD}{url}"),
+                // A query's answer, up to its own limit.
+                Want::Upto(n) => crate::cache::download_address(url, usize::try_from(n).unwrap_or(usize::MAX)),
             };
             crate::cache::fetch_counted(marked, Box::new(move |r| done(r.map_err(|e| failed(&e)))));
         });
