@@ -1089,8 +1089,8 @@ impl Chunks {
     }
 
     /// The bytes the first chunk decodes to at `bits` a sample, each row padded to whole bytes: as
-    /// the tiff crate holds it, cropped to the image, then as the LZW and LERC readers hold it, with
-    /// a tile's padding. The first chunk is the largest (only the last strip and the edge tiles are
+    /// the tiff crate holds it, cropped to the image, then with a tile's padding, as the LZW and
+    /// LERC readers hold it. The first chunk is the largest (only the last strip and the edge tiles are
     /// smaller), and one always read, since it holds the image's first pixel.
     fn first_bytes(&self, bits: u16) -> (u64, u64) {
         let size = |cols: u32, rows: u32| {
@@ -1200,10 +1200,6 @@ fn decoding_limit() -> usize {
     max_samples().saturating_mul(4)
 }
 
-/// The most bytes the LZW and LERC chunk readers decode one chunk to.
-const CHUNK_DECODER_BYTES: usize =
-    if super::lzw::MAX_CHUNK_BYTES > super::lerc::MAX_CHUNK_BYTES { super::lzw::MAX_CHUNK_BYTES } else { super::lerc::MAX_CHUNK_BYTES };
-
 /// Fewest chunks worth decoding on more than one thread.
 #[cfg(not(target_arch = "wasm32"))]
 const PARALLEL_CHUNKS: u64 = 16;
@@ -1228,12 +1224,21 @@ fn decimate<R: Read + Seek>(
     let k = k.max(1);
     let (ow, oh) = (w.div_ceil(k) as usize, h.div_ceil(k) as usize);
     let chunks = Chunks::new(dec, w, h, nbands, planar);
-    // A chunk larger than every decoder takes (the tiff crate's limit, and the LZW and LERC
-    // readers' own) can't be read: said before the bands are set aside, which can be gigabytes
-    // for a header claiming a vast image (a few hundred bytes of file, found by fuzzing, #1952).
+    // A chunk larger than its decoder takes can't be read: said before the bands are set aside,
+    // which can be gigabytes for a header claiming a vast image (a few hundred bytes of file, found
+    // by fuzzing, #1952). LERC chunks go to its reader only, which holds 8 bytes a sample with a
+    // tile's padding; LZW ones to the tiff crate, then to our reader, which keeps the padding too;
+    // the rest to the tiff crate only, which holds a chunk cropped to the image.
     let (cropped, padded) = chunks.first_bytes(bits(dec));
-    if cropped > decoding_limit() as u64 && padded > CHUNK_DECODER_BYTES as u64 {
-        return Err(err(format!("a strip or tile of {} × {} pixels is too large to read ({} MB)", chunks.cw, chunks.ch, cropped >> 20)));
+    let refused = if super::lerc::is_lerc(dec) {
+        let lerc = chunks.first_bytes(64).1;
+        (lerc > super::lerc::MAX_CHUNK_BYTES as u64).then_some(lerc)
+    } else {
+        (cropped > decoding_limit() as u64 && (!lzw(dec) || padded > super::lzw::MAX_CHUNK_BYTES as u64)).then_some(cropped)
+    };
+    if let Some(bytes) = refused {
+        let (cols, rows) = (chunks.cw.min(w), chunks.ch.min(h));
+        return Err(err(format!("a strip or tile of {cols} × {rows} pixels is too large to read ({} MB)", bytes >> 20)));
     }
     let mut bands = (0..nbands).map(|_| super::filled(ow, oh, f32::NAN)).collect::<Result<Vec<_>>>()?;
     #[cfg(not(target_arch = "wasm32"))]
