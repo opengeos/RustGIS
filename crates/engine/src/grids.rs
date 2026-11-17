@@ -68,10 +68,26 @@ struct State {
     running: usize,
     /// Times the setting was turned on ([`turns`]).
     turns: u64,
-    news: Vec<News>,
+    /// What the downloads did, numbered, the last [`NEWS_KEPT`]: each session says what came
+    /// after the last it said ([`news_since`]), so every session of the process hears each.
+    news: std::collections::VecDeque<(u64, News)>,
+    /// The number of the last news.
+    told: u64,
 }
 
+/// How much news is kept for sessions that haven't asked yet.
+const NEWS_KEPT: usize = 256;
+
 impl State {
+    /// Records what a download did, for every session to say.
+    fn tell(&mut self, news: News) {
+        self.told += 1;
+        self.news.push_back((self.told, news));
+        while self.news.len() > NEWS_KEPT {
+            self.news.pop_front();
+        }
+    }
+
     /// The setting turned on: this run's failures are tried again, and the limits start over.
     fn turned_on(&mut self) {
         self.turns += 1;
@@ -130,9 +146,29 @@ pub fn turns() -> u64 {
     lock().turns
 }
 
-/// What the downloads did since this was last asked.
+/// What the downloads did after the news numbered `seen` (a session's own count, from
+/// [`news_told`] when it started), and moves `seen` to the last.
+pub fn news_since(seen: &mut u64) -> Vec<News> {
+    let s = lock();
+    let out = s.news.iter().filter(|(n, _)| *n > *seen).map(|(_, news)| news.clone()).collect();
+    *seen = s.told;
+    out
+}
+
+/// The number of the last news: a session starting now says what comes after it.
+pub fn news_told() -> u64 {
+    lock().told
+}
+
+/// What the downloads did since this was last asked here (one reader's count shared by every
+/// caller: for tests; a session reads with [`news_since`]).
+#[doc(hidden)]
 pub fn take_news() -> Vec<News> {
-    std::mem::take(&mut lock().news)
+    static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut seen = SEEN.load(Ordering::SeqCst);
+    let out = news_since(&mut seen);
+    SEEN.store(seen, Ordering::SeqCst);
+    out
 }
 
 /// Starts downloading, in the background, the grids `crs` needs that RustGIS doesn't have, and
@@ -232,7 +268,7 @@ impl State {
         };
         if let Some(error) = refused {
             self.failed.insert(name.to_string());
-            self.news.push(News::Failed { name: name.to_string(), error });
+            self.tell(News::Failed { name: name.to_string(), error });
             return Claim::Settled;
         }
         self.started += 1;
@@ -252,7 +288,7 @@ impl State {
             } else if self.bytes >= MAX_BYTES {
                 self.busy.remove(&grid.name);
                 self.failed.insert(grid.name.clone());
-                self.news.push(News::Failed { name: grid.name, error: limit_text() });
+                self.tell(News::Failed { name: grid.name, error: limit_text() });
             } else {
                 self.running += 1;
                 return Some(grid);
@@ -281,11 +317,11 @@ fn finish(name: &str, outcome: Result<usize, String>) {
         Ok(bytes) => {
             s.bytes += bytes;
             s.got.insert(name.to_string());
-            s.news.push(News::Got { name: name.to_string(), bytes });
+            s.tell(News::Got { name: name.to_string(), bytes });
         }
         Err(error) => {
             s.failed.insert(name.to_string());
-            s.news.push(News::Failed { name: name.to_string(), error });
+            s.tell(News::Failed { name: name.to_string(), error });
         }
     }
     s.running = s.running.saturating_sub(1);
@@ -305,7 +341,7 @@ fn plain(name: &str) -> bool {
 }
 
 /// Whether `bytes` are a datum grid file, as PROJ's grid server gives them: a GeoTIFF (classic or
-/// BigTIFF, either byte order; the server's grids are all GeoTIFFs, [`claim`]). Anything else (an
+/// BigTIFF, either byte order; [`claim`] asks only for `.tif` names). Anything else (an
 /// error page a network answered with) isn't kept, or it would count as the grid from then on.
 /// Every part of it is checked to lie within the bytes, so a cut-off answer isn't kept either.
 fn a_grid(bytes: &[u8]) -> bool {
@@ -634,7 +670,7 @@ mod tests {
         // A state of the test's own: the process's is the other tests' in this binary.
         let mut s = State { started: MAX_GRIDS, ..Default::default() };
         assert!(matches!(s.claim("a.tif", true), Claim::Settled));
-        let news = std::mem::take(&mut s.news);
+        let news: Vec<News> = std::mem::take(&mut s.news).into_iter().map(|(_, n)| n).collect();
         assert!(matches!(&news[..], [News::Failed { name, error }] if name == "a.tif" && error.contains("at most 16 grids")), "{news:?}");
         assert!(matches!(s.claim("a.tif", true), Claim::Settled), "not asked again");
         s.turned_on();
@@ -668,15 +704,21 @@ mod tests {
         // A name that isn't a plain file name: refused before the server is asked.
         let mut s = State::default();
         assert!(matches!(s.claim("a b.tif", true), Claim::Settled));
-        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("plain file name")));
+        assert!(
+            matches!(&s.news.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()[..], [News::Failed { error, .. }] if error.contains("plain file name"))
+        );
         // Nowhere to keep it: not downloaded, and said.
         let mut s = State::default();
         assert!(matches!(s.claim("c.tif", false), Claim::Settled));
-        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("no folder")));
+        assert!(
+            matches!(&s.news.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()[..], [News::Failed { error, .. }] if error.contains("no folder"))
+        );
         // A name not a GeoTIFF's (a deformation model): not asked for.
         let mut s = State::default();
         assert!(matches!(s.claim("nz_linz_nzgd2000-20180701.json", true), Claim::Settled));
-        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("GeoTIFF grids only")));
+        assert!(
+            matches!(&s.news.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()[..], [News::Failed { error, .. }] if error.contains("GeoTIFF grids only"))
+        );
         // Hostile sizes don't overflow.
         let mut big = b"II+\0\x08\0\0\0".to_vec();
         big.extend_from_slice(&u64::MAX.to_le_bytes());

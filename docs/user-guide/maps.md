@@ -651,7 +651,7 @@ without `us_noaa_conus.tif`: up to about 10 m off), and says so once.
 
 **Settings › Datum Grids › Download Datum Grids** (off by default, in the desktop and web apps)
 downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly licensed GeoTIFF
-grids, the form all its grids have there):
+grids, not the server's other files such as deformation models):
 
 - On the desktop, a file read then waits for its systems' grids before its features are placed, up
   to two minutes in all, and stops waiting when you cancel it; the download goes on. In the web

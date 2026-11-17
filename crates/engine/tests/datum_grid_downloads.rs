@@ -135,16 +135,22 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     canceller.join().unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     assert!(read.is_err(), "a cancelled read says so");
+    // Every session of the process says it (two engines in one Python process, say), each once.
     let mut session = Session::new(Project::default());
     session.offers_grid_downloads = true;
-    let said =
-        |s: &Session| s.notices.iter().any(|n| n.error && n.text.contains("us_noaa_WO.tif") && n.text.contains("couldn't be downloaded"));
+    let mut other = Session::new(Project::default());
+    let said = |s: &Session| {
+        s.notices.iter().filter(|n| n.error && n.text.contains("us_noaa_WO.tif") && n.text.contains("couldn't be downloaded")).count()
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !said(&session) && std::time::Instant::now() < deadline {
+    while said(&session) == 0 && std::time::Instant::now() < deadline {
         session.notice_landed_rasters();
         std::thread::sleep(std::time::Duration::from_millis(50)); // test-wait: the slow download ends on its own thread.
     }
-    assert!(said(&session), "{:?}", session.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+    assert_eq!(said(&session), 1, "{:?}", session.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+    other.notice_landed_rasters();
+    other.notice_landed_rasters();
+    assert_eq!(said(&other), 1, "{:?}", other.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
 
     // Off again: the grids already downloaded stay in use, and nothing more is asked for.
     grids::set_enabled(false);
@@ -191,6 +197,25 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     assert!(s.want_grids_in_use().contains(&"us_noaa_WO.tif".to_string()), "still coming");
     let downloading = s.notices.iter().filter(|n| n.text.starts_with("Downloading the datum grids")).count();
     assert_eq!(downloading, 1, "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+    // A session started with the setting already on (as after a restart): a download its
+    // missing-grid note names isn't announced again when it asks for the grids itself.
+    let mut fresh = Session::new(Project::default());
+    fresh.offers_grid_downloads = true;
+    let mut ds = rustgis_data::Dataset::new("nad27", rustgis_data::GeometryType::Point, Vec::new());
+    ds.crs = Some(Crs::Epsg(4267));
+    rustgis_engine::cmd::layer::add_dataset(&mut fresh, ds);
+    fresh.notice_landed_rasters();
+    assert!(
+        fresh.notices.iter().any(|n| n.text.contains("RustGIS is downloading") && n.text.contains("us_noaa_WO.tif")),
+        "{:?}",
+        fresh.notices.iter().map(|n| &n.text).collect::<Vec<_>>()
+    );
+    let _ = fresh.want_grids_in_use();
+    assert!(
+        !fresh.notices.iter().any(|n| n.text.starts_with("Downloading the datum grids")),
+        "{:?}",
+        fresh.notices.iter().map(|n| &n.text).collect::<Vec<_>>()
+    );
     // Its end, before the folder goes.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !grids::take_news().iter().any(|n| matches!(n, News::Failed { name, .. } if name == "us_noaa_WO.tif"))

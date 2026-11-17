@@ -807,6 +807,8 @@ pub struct Session {
     grid_downloads_said: std::collections::HashSet<String>,
     /// [`crate::grids::turns`] when [`Self::grid_downloads_said`] was last cleared.
     grid_turns: u64,
+    /// The last datum grid download news this session said ([`crate::grids::news_since`]).
+    grid_news_seen: u64,
     /// Whether this front end has the Download Datum Grids setting (the desktop and web apps), so
     /// a note about a missing grid can point to it; the command line and Python have none.
     pub offers_grid_downloads: bool,
@@ -1264,6 +1266,7 @@ impl Session {
             grid_generation: rustgis_data::raster::crs::grid_generation(),
             grid_downloads_said: Default::default(),
             grid_turns: 0,
+            grid_news_seen: crate::grids::news_told(),
             offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
@@ -2232,7 +2235,7 @@ impl Session {
     pub fn notice_landed_rasters(&mut self) {
         // Datum grids that have arrived move what the map draws in a system they shift: its
         // layers are projected again, and drawn.
-        let news = crate::grids::take_news();
+        let news = crate::grids::news_since(&mut self.grid_news_seen);
         for (text, error) in crate::grids::news_texts(&news) {
             self.notify(text, error);
         }
@@ -2607,6 +2610,7 @@ impl Session {
                 String::new()
             } else if crate::grids::enabled() && !coming.is_empty() {
                 // Said here: not again by the next ask while they are under way.
+                self.sync_grid_turns();
                 self.grid_downloads_said.extend(coming.iter().cloned());
                 format!(". RustGIS is downloading {}", names_said(&coming))
             } else if crate::grids::enabled() && found.iter().all(|(d, _)| behind.iter().any(|(b, _)| b == d)) {
@@ -2634,6 +2638,16 @@ impl Session {
                 "A coordinate system that RustGIS can't name, one of the thousands used this run, needed a datum grid RustGIS doesn't have yet, so the next transformation was used; places may be metres off",
                 false,
             );
+        }
+    }
+
+    /// Forgets the downloads said when the setting was turned on again since: those dropped when
+    /// it was turned off are said again when asked for again.
+    fn sync_grid_turns(&mut self) {
+        let turns = crate::grids::turns();
+        if turns != self.grid_turns {
+            self.grid_turns = turns;
+            self.grid_downloads_said.clear();
         }
     }
 
@@ -2677,13 +2691,8 @@ impl Session {
                 }
             }
         }
-        // Each grid's download said once: a later ask finds those still coming. Turned on again,
-        // those dropped when it was turned off are said again.
-        let turns = crate::grids::turns();
-        if turns != self.grid_turns {
-            self.grid_turns = turns;
-            self.grid_downloads_said.clear();
-        }
+        // Each grid's download said once: a later ask finds those still coming.
+        self.sync_grid_turns();
         let new: Vec<String> = coming.iter().filter(|n| !self.grid_downloads_said.contains(*n)).cloned().collect();
         if !new.is_empty() {
             self.notify(format!("Downloading the datum grids {} from PROJ's grid server", names_said(&new)), false);
