@@ -856,7 +856,7 @@ pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, 
         },
         |(_, hsva)| hsva,
     );
-    let alpha = hsva.a;
+    let before = hsva;
     // egui creates the popup from the context, not this Ui's scoped style.
     // Borrow linear numeric editing only while a transparent picker is open. The units chosen
     // when an edit begins hold until it ends (the pointer let go, no number being typed), so they
@@ -891,7 +891,7 @@ pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, 
             ui.ctx().set_style_of(theme, style);
         }
     }
-    let shown = picked_colour(hsva, alpha, color);
+    let shown = picked_colour(hsva, before, color);
     // egui's round trip through its own colour model can report a change that isn't one, every
     // frame the popup is open: only a colour that differs is picked.
     let picked = (response.changed() && shown != color).then_some(shown);
@@ -900,12 +900,13 @@ pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, 
     (response, picked)
 }
 
-/// The colour a picker left at `hsva` for `old`, whose opacity was `alpha` when it opened: an
-/// opacity-only edit keeps `old`'s own channels (the numeric alpha editor also rounds RGB through
-/// Color32); any other is the picker's colour, unpremultiplied.
-pub fn picked_colour(hsva: egui::ecolor::Hsva, alpha: f32, old: rustgis_engine::map::Rgba) -> rustgis_engine::map::Rgba {
+/// The colour a picker left at `hsva` for `old`, which it showed as `before`: the picker's colour
+/// when its red, green or blue changed, else `old`'s own channels at the picker's opacity, as an
+/// opacity-only edit leaves channels the picker may not hold exactly (at opacity 0, its own
+/// colour model can't). Both may change in one frame (two accessibility requests).
+pub fn picked_colour(hsva: egui::ecolor::Hsva, before: egui::ecolor::Hsva, old: rustgis_engine::map::Rgba) -> rustgis_engine::map::Rgba {
     let rgb = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
-    if hsva.a != alpha { old.with_alpha(rgb.a()) } else { rgb }
+    if hsva.to_srgb() != before.to_srgb() { rgb } else { old.with_alpha(rgb.a()) }
 }
 
 #[cfg(test)]

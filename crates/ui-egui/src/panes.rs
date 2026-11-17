@@ -8761,11 +8761,22 @@ mod tests {
         let old = Rgba::new(0x4D, 0x4D, 0x4D, 0);
         let mut hsva = egui::ecolor::Hsva::from_srgb([200, 30, 40]);
         hsva.a = 0.0;
-        let picked = crate::widgets::picked_colour(hsva, 0.0, old);
+        let mut shown = egui::ecolor::Hsva::from_srgb([0x4D, 0x4D, 0x4D]);
+        shown.a = 0.0;
+        let picked = crate::widgets::picked_colour(hsva, shown, old);
         assert_eq!((picked.r(), picked.g(), picked.b(), picked.a()), (200, 30, 40, 0), "the RGB picked at zero opacity is kept");
         let mut raised = egui::ecolor::Hsva::from_srgb([200, 30, 40]);
         raised.a = 1.0;
-        assert_eq!(crate::widgets::picked_colour(raised, 0.0, picked), picked.with_alpha(255), "raising the opacity shows it");
+        assert_eq!(crate::widgets::picked_colour(raised, hsva, picked), picked.with_alpha(255), "raising the opacity shows it");
+        // A new colour and opacity in the same frame (two accessibility requests) keep both.
+        let red = Rgba::new(255, 0, 0, 255);
+        let mut before = egui::ecolor::Hsva::from_srgb([255, 0, 0]);
+        before.a = 1.0;
+        let mut blue = egui::ecolor::Hsva::from_srgb([0, 0, 255]);
+        blue.a = 0.5;
+        let both = crate::widgets::picked_colour(blue, before, red);
+        assert_eq!((both.r(), both.g(), both.b()), (0, 0, 255), "the new colour is kept with the new opacity");
+        assert!(both.a() > 0 && both.a() < 255, "and the new opacity: {}", both.a());
     }
 
     /// The Unique Values list shows as many classes as can be drawn from a QGIS rule style
