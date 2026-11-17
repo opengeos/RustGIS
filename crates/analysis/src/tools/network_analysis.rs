@@ -54,6 +54,10 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
         let (mut missing, mut closed) = (0usize, 0usize);
         for &r in &rows {
             crate::control::check()?;
+            // Only lines join the network; what has no line is counted once, above.
+            if !matches!(ds.features.get(r).and_then(|f| f.geometry.as_ref()), Some(Geometry::Line(_))) {
+                continue;
+            }
             match ds.value(r, fi).as_f64() {
                 Some(w) if w.is_finite() && w > 0.0 => {}
                 Some(_) => closed += 1,
@@ -65,7 +69,10 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
             notes.push(format!("{tool}: {missing} line(s) of '{}' have no number in {field}, and cost their length", ds.name));
         }
         if closed > 0 {
-            notes.push(format!("{tool}: {closed} line(s) of '{}' cost zero or less in {field}, and are closed", ds.name));
+            notes.push(format!(
+                "{tool}: {closed} line(s) of '{}' cost zero or less (or no finite number) in {field}, and are closed",
+                ds.name
+            ));
         }
     }
     let graph = Graph::of(ds, &rows, cost_field)?;
@@ -346,7 +353,7 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     }
     let targets = at_node.len();
     let rows = AtomicUsize::new(0);
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, Search::bytes(graph.nodes())));
+    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_each(origins.len(), 2, Search::bytes(graph)));
     crate::control::begin(origins.len());
     let found = crate::parallel::try_map_each_on(
         &origins,
@@ -610,10 +617,11 @@ mod tests {
         }
         let mut gaps = roads();
         gaps.push(None, vec![Value::Float(1.0)]);
-        gaps.push(Some(Geometry::Point(c(0.0, 0.0))), vec![Value::Float(1.0)]);
+        gaps.push(Some(Geometry::Point(c(0.0, 0.0))), vec![Value::Null]);
         let inputs = map(vec![gaps, points("shops", &[Some(c(0.005, 0.0))])]);
-        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "1"})).unwrap();
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "1", "costField": "cost"})).unwrap();
         assert!(r.messages.iter().any(|m| m.contains("2 feature(s) of 'roads' have no line, and were left out")), "{:?}", r.messages);
+        assert!(!r.messages.iter().any(|m| m.contains("no number in cost")), "a feature with no line is counted once: {:?}", r.messages);
         let mut costs = roads();
         costs.features[3].attrs[0] = Value::Null;
         costs.features[2].attrs[0] = Value::Float(0.0);
@@ -621,7 +629,7 @@ mod tests {
         let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "5", "costField": "cost"})).unwrap();
         assert!(r.messages.iter().any(|m| m.contains("1 line(s) of 'roads' have no number in cost")), "{:?}", r.messages);
         assert!(
-            r.messages.iter().any(|m| m.contains("1 line(s) of 'roads' cost zero or less in cost, and are closed")),
+            r.messages.iter().any(|m| m.contains("1 line(s) of 'roads' cost zero or less (or no finite number) in cost, and are closed")),
             "{:?}",
             r.messages
         );

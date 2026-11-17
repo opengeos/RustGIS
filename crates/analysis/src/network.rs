@@ -509,9 +509,13 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    /// The bytes a search over `nodes` nodes holds, for sharing memory between threads.
-    pub(crate) fn bytes(nodes: usize) -> usize {
-        nodes.saturating_mul(3 * size_of::<f64>() + 1 + 2 * size_of::<usize>())
+    /// The most bytes a search over `graph` holds, for sharing memory between threads: its arrays
+    /// by node, and its queue, which may take an entry for each way along each segment and for
+    /// each start, kept between searches at up to twice that as it grows.
+    pub(crate) fn bytes(graph: &Graph) -> usize {
+        let per_node = graph.nodes().saturating_mul(3 * size_of::<f64>() + 1 + 2 * size_of::<usize>());
+        let queue = graph.segments().saturating_mul(2).saturating_add(2).saturating_mul(2 * size_of::<State>());
+        per_node.saturating_add(queue)
     }
 
     pub(crate) fn new(graph: &Graph) -> Self {
@@ -543,8 +547,8 @@ impl Search {
         self.touched.iter().copied()
     }
 
-    /// The start `node` is reached from most cheaply (of equally cheap ones, whichever the search
-    /// reached first, which depends on the network, not on the order the starts were given).
+    /// The start `node` is reached from most cheaply: of equally cheap ones, the first to reach it,
+    /// which depends on the network, and for starts at one node on the order they were given.
     pub(crate) fn source(&self, node: usize) -> Option<usize> {
         self.source.get(node).copied().filter(|s| *s != usize::MAX)
     }
