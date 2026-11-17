@@ -366,7 +366,7 @@ fn definition(st: &State) -> Value {
     p
 }
 
-fn secrets(st: &State, p: &mut Value) {
+fn secrets(st: &State, p: &mut Value) -> Result<(), String> {
     if DATABASE_KINDS.contains(&st.kind.as_str()) && !st.password.is_empty() {
         p["password"] = json!(st.password);
     }
@@ -378,8 +378,8 @@ fn secrets(st: &State, p: &mut Value) {
         }
     }
     if WEB_KINDS.contains(&st.kind.as_str()) && st.auth == "arcgis" {
-        // What was typed has been checked by the caller; a token in generate mode isn't typed.
-        if let Ok(Some(token)) = pasted_token(st) {
+        // What was typed is refused with its reason, never dropped to log in with another login.
+        if let Some(token) = pasted_token(st)? {
             p["token"] = json!(token.token.expose());
             if let Some(at) = token.expires_at {
                 p["expiresAt"] = json!(at);
@@ -393,6 +393,7 @@ fn secrets(st: &State, p: &mut Value) {
             p["allowInsecure"] = json!(st.allow_insecure);
         }
     }
+    Ok(())
 }
 
 /// The ArcGIS token typed in the form (pasted mode) with its expiry, checked: `None` when no token
@@ -540,8 +541,10 @@ pub fn start_test(app: &mut RustGisApp) {
         if let Some(address) = &query_address {
             p["address"] = json!(address);
         }
-    } else {
-        secrets(&app.ui.connection, &mut p);
+    } else if let Err(e) = secrets(&app.ui.connection, &mut p) {
+        clear_secrets(&mut app.ui.connection);
+        app.dialogs.error = Some(e);
+        return;
     }
     if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
         match app.run("connection.test", p) {
@@ -994,7 +997,7 @@ fn save(app: &mut RustGisApp) -> Result<(), String> {
         return Ok(());
     }
     let mut login = json!({"id": id});
-    secrets(&app.ui.connection, &mut login);
+    secrets(&app.ui.connection, &mut login)?;
     let database = DATABASE_KINDS.contains(&app.ui.connection.kind.as_str());
     if database || service && store {
         login["remember"] = json!(app.ui.connection.remember);

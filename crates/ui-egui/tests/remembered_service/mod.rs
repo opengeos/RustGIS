@@ -579,6 +579,31 @@ mod arcgis_token {
     }
 
     #[test]
+    fn arcgis_token_test_with_an_expiry_but_no_token_says_so_instead_of_using_the_saved_login() {
+        let mut h = with_store(Some(Arc::new(MemorySecrets::new())));
+        let id = h
+            .state_mut()
+            .run(
+                "connection.new",
+                json!({"kind":"arcgis","name":"Orphan expiry","address":"https://widget-arcgis-orphan.example/arcgis/rest/services","auth":"arcgis","user":"alice"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        h.state_mut().run("connection.login", json!({"id":id,"token":TOKEN})).unwrap();
+        h.state_mut().run("ui.connection", json!({"id":id})).unwrap();
+        settle(&mut h);
+        h.state_mut().ui.connection.token_expires = FUTURE.to_string();
+        settle(&mut h);
+        h.get_by_role_and_label(Role::Button, "Test").click();
+        settle(&mut h);
+        assert!(h.state().dialogs.error.as_deref().unwrap().contains("this expiry is for"), "{:?}", h.state().dialogs.error);
+        assert!(h.state().ui.connection.test.is_none(), "no test ran with the saved login");
+        assert!(h.state().ui.connection.token_expires.is_empty());
+    }
+
+    #[test]
     fn arcgis_token_form_cancels_its_request_and_closing_it_does_too() {
         if crate::in_own_process("remembered_service::arcgis_token::arcgis_token_form_cancels_its_request_and_closing_it_does_too") {
             return;

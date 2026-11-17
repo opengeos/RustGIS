@@ -1452,8 +1452,16 @@ impl Session {
         let id = node.params.get("id").and_then(Value::as_str);
         if let Some(rows) = accounts.get_mut("connections").and_then(Value::as_array_mut) {
             for row in rows {
-                if row.pointer("/definition/id").and_then(Value::as_str) != Some(id) {
-                    continue;
+                let Some(row) = row.as_object_mut() else { continue };
+                row.insert("password".into(), Value::Null);
+                let target = row.get("definition").and_then(|d| d.get("id")).and_then(Value::as_str) == id;
+                let keeps_origin = id
+                    .and_then(|id| self.connections.find(id))
+                    .filter(|c| c.auth == "arcgis" && crate::connections::SERVICE_KINDS.contains(&c.kind.as_str()));
+                if let (true, Some(c), Some(definition)) = (target, keeps_origin, row.get_mut("definition").and_then(Value::as_object_mut))
+                {
+                    definition.insert("name".into(), Value::Null);
+                    definition.insert("address".into(), json!(crate::connections::login_origin(c)));
                 }
             }
         }

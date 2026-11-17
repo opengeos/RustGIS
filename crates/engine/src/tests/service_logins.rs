@@ -3330,6 +3330,29 @@ mod arcgis_tokens {
     }
 
     #[test]
+    fn arcgis_token_generation_retains_no_session_token_of_any_connection() {
+        let origin = "https://retention-arcgis757.example.test";
+        let endpoint = format!("{origin}/arcgis/tokens/generateToken");
+        let _server = Held::at(&endpoint);
+        let mut s = session(None);
+        let id = arcgis(&mut s, origin);
+        let other = new(
+            &mut s,
+            json!({"kind":"arcgis","address":"https://retention-other-arcgis757.example.test/rest","auth":"arcgis","user":"bob"}),
+        );
+        s.run("connection.login", &json!({"id":id,"token":"target-session-token-757"})).unwrap();
+        s.run("connection.login", &json!({"id":other,"token":"other-session-token-757"})).unwrap();
+        s.run("connection.generateToken", &json!({"id":id,"tokenEndpoint":endpoint,"password":"retention-password-757"})).unwrap();
+        let owner = s.web_logins.pending.get(&id).unwrap().owner();
+        for private in ["retention-password-757", "target-session-token-757", "other-session-token-757"] {
+            assert!(!owner.mentions(private), "{private} is retained by the pending generation");
+        }
+        // Logging out of the other connection still ends it: the login set is part of its authority.
+        s.run("connection.logout", &json!({"id":other})).unwrap();
+        assert!(s.run("connection.tokenStatus", &json!({"id":id})).is_err());
+    }
+
+    #[test]
     fn arcgis_token_generation_by_name_survives_rename_and_same_origin_path_edit() {
         let origin = "https://named-generation-arcgis757.example.test";
         let endpoint = format!("{origin}/arcgis/tokens/generateToken");
