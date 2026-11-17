@@ -116,12 +116,12 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
         if layer.geometry_type() != rustgis_data::GeometryType::Point {
             report.approximated(&name, "proportional sizing is supported only for point markers; using a fixed width");
         } else if mode == "single" || mode.is_empty() {
-            if layer.dataset.field_index(field).is_some() {
+            if layer.dataset.field_index(field).and_then(|fi| layer.dataset.fields.get(fi)).is_some_and(|f| f.ty.is_numeric()) {
                 layer.renderer = Renderer::Proportional { field: field.into(), base: symbol, min, max, min_size, max_size };
                 sized = true;
                 report.approximated(&name, "proportional sizes use area scaling instead of MapLibre linear radius scaling");
             } else {
-                report.approximated(&name, format!("size field {field} is absent; using a fixed size"));
+                report.approximated(&name, format!("size field {field} is absent or not numeric; using a fixed size"));
             }
         } else if !matches!(layer.renderer, Renderer::Unique { .. } | Renderer::Graduated { .. }) {
             report.approximated(&name, "proportional size of a style drawn with the base symbol: size fixed");

@@ -279,6 +279,13 @@ mod style_tests {
             assert!(l.size_by.is_none() && matches!(l.renderer, crate::Renderer::Graduated { .. }));
             assert!(report.notes.iter().any(|n| n.text.contains("fixed size")), "{field}");
         }
+        // A single symbol sized by a text field keeps its fixed size, and says so.
+        let (mut l, mut report) = (layer(), Report::default());
+        let mut text = style("kind", 100.0);
+        text["style"]["vectorStyleMode"] = json!("single");
+        style::apply(&mut l, &text, &mut report);
+        assert!(!matches!(l.renderer, crate::Renderer::Proportional { .. }));
+        assert!(report.notes.iter().any(|n| n.text.contains("not numeric")), "{:?}", report.notes);
         // Both renderer paths report when either radii or value bounds are clamped.
         for mode in ["single", "graduated"] {
             let (mut l, mut report) = (layer(), Report::default());

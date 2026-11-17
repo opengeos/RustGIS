@@ -78,7 +78,7 @@ layer.sizeBy={"layer":"Earthquakes","field":null}
 
 A project, map or layer file containing this setting declares format 2 and the
 `classified-point-size` capability. Readers that cannot keep it refuse the file. Files without
-the setting retain their previous format; removing the last mapping removes the requirement.
+the setting don't list it; removing the last mapping removes the requirement.
 
 A point's **Shape** is a circle, square, triangle, diamond or star, or a **Character**: any
 character of an installed font, picked under **Font**, as map signs often are (a symbol font's
