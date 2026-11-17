@@ -551,6 +551,7 @@ fn database_note(
         Err(None) => (None, String::new()),
     };
     // Where a login would go, so a project can't hide it behind a connection's name.
+    // (A saved connection's text has no quoted values: the first `host=` setting is its host.)
     let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
     // Its settings the saved connection, or the connection text, leaves out, by name
     // (`sslrootcert`, `authcfg`, …).

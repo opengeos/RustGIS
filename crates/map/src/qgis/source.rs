@@ -379,7 +379,9 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
                 let (provider, source, name) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default(), parts.next());
                 // (A virtual layer on a virtual layer isn't read as a file's layer: left as it is.)
                 let from = (provider != "virtual").then(|| read(&provider, &source, dir));
-                named.push((name.unwrap_or_default(), from.map(|f| VirtualFrom::Source(Box::new(f)))));
+                // One with no name is `vtabN` to QGIS, N its place among the sources from 1.
+                let name = name.filter(|n| !n.is_empty()).unwrap_or_else(|| format!("vtab{}", named.len() + 1));
+                named.push((name, from.map(|f| VirtualFrom::Source(Box::new(f)))));
             }
             "layer_ref" if named.len() < MAX_VIRTUAL_LAYERS => {
                 let v = decode(v);
@@ -399,9 +401,7 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
     }
     let (from, filter) = match select_all(&query) {
         Some((table, filter)) => {
-            // Its one source with no name is the table whatever the query calls it.
-            let lone = named.len() == 1 && named.first().is_some_and(|(n, _)| n.is_empty());
-            let from = match named.into_iter().find(|(n, _)| lone || n.eq_ignore_ascii_case(&table)) {
+            let from = match named.into_iter().find(|(n, _)| n.eq_ignore_ascii_case(&table)) {
                 Some((_, from)) => from,
                 // Selecting from a name none of its sources has.
                 None if past > 0 => Some(VirtualFrom::Missing(format!(
@@ -1038,10 +1038,16 @@ mod tests {
         assert!(why.contains("isn't among its sources RustGIS looks through, the first 64 of the 65 it names"), "{why}");
         assert_eq!(cut_said("abcdef", 3), "abc…");
         assert_eq!(cut_said("abc", 3), "abc");
-        // Its one source with no name: the table, whatever the query calls it.
-        let Source::Virtual { from, .. } = read("virtual", "?layer=ogr:..%2Fdata%2Fsample.gpkg&query=SELECT%20*%20FROM%20pts", dir) else {
-            panic!()
+        // A source with no name is `vtab1` (QGIS's name for it), and nothing else.
+        let unnamed = |table: &str| {
+            let Source::Virtual { from, .. } =
+                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg&query=SELECT%20*%20FROM%20{table}"), dir)
+            else {
+                panic!()
+            };
+            from
         };
-        assert!(matches!(from, Some(VirtualFrom::Source(_))), "{from:?}");
+        assert!(matches!(unnamed("vtab1"), Some(VirtualFrom::Source(_))));
+        assert!(matches!(unnamed("pts"), Some(VirtualFrom::Missing(_))));
     }
 }

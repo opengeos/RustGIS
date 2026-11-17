@@ -745,14 +745,35 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
     // Still on another layer after that: the virtual layers select from each other in a ring, or
     // go deeper than RustGIS follows (the base at the end of a deep chain is a file's layer by
     // now, unresolved only because the passes ran out).
-    for i in 0..layers.len() {
-        let ring = match layers.get(i).map(|l| &l.source) {
-            Some(Source::Virtual { from: Some(source::VirtualFrom::Layer(id)), .. }) => {
-                matches!(layers.iter().find(|l| &l.id == id).map(|l| &l.source), Some(Source::Virtual { .. } | Source::File { .. }))
-            }
-            _ => false,
-        };
-        if let (true, Some(Source::Virtual { from, filter, .. })) = (ring, layers.get_mut(i).map(|l| &mut l.source)) {
+    // Followed link by link: to a file's layer (the passes ran out) or round to a layer already
+    // passed (a ring); at most one link past those followed, a longer chain being too deep
+    // whatever its end. One ending elsewhere (a CSV, memory or database layer, a grouping
+    // query) keeps its own reason.
+    let rings: Vec<bool> = {
+        let by_id: std::collections::HashMap<&str, usize> = layers.iter().enumerate().map(|(i, l)| (l.id.as_str(), i)).collect();
+        (0..layers.len())
+            .map(|i| {
+                let mut passed: Vec<&str> = Vec::new();
+                let mut at = layers.get(i);
+                loop {
+                    match at.map(|l| (&l.id, &l.source)) {
+                        Some((id, Source::Virtual { from: Some(source::VirtualFrom::Layer(next)), .. })) => {
+                            if passed.contains(&id.as_str()) || passed.len() > MAX_VIRTUAL_CHAIN {
+                                break true;
+                            }
+                            passed.push(id);
+                            at = by_id.get(next.as_str()).and_then(|&j| layers.get(j));
+                        }
+                        // (Reached from a virtual layer: the chain's end the passes didn't reach.)
+                        Some((_, Source::File { .. })) => break !passed.is_empty(),
+                        _ => break false,
+                    }
+                }
+            })
+            .collect()
+    };
+    for (l, ring) in layers.iter_mut().zip(rings) {
+        if let (true, Source::Virtual { from, filter, .. }) = (ring, &mut l.source) {
             *from = Some(source::VirtualFrom::Missing(format!(
                 "the virtual layers it selects from select from each other, or go deeper than the {MAX_VIRTUAL_CHAIN} RustGIS follows"
             )));
