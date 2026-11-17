@@ -1424,7 +1424,7 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
                 && let Some((zone, _)) = rustgis_map::layout::utm_zone_of(&crs.epsg().to_string())
             {
                 let size = |s: &str| (text::measure(s, MGRS_LABEL_PT, true), MGRS_LABEL_PT * 1.33 * 1.2);
-                squares = mgrs_squares(map, view, zone, &tr, size);
+                squares = mgrs_squares(map, view, globe.as_ref(), zone, &tr, size);
             }
         }
     }
@@ -1524,23 +1524,26 @@ const MGRS_LABEL_PT: f32 = 10.0;
 const MGRS_SAMPLES: u32 = 32;
 
 /// Where a measured grid in UTM zone `zone` (`tr` its transformer) names its MGRS 100 km squares on
-/// a frame showing `map` in `view`: each square of the zone, and of each latitude band, that shows,
-/// by its grid zone designation and letters (`32T MT`), at the middle of what shows of it, in the
-/// frame's points. Only where all of the label, `size(text)` points across and down, stays in its
-/// square and well inside the frame, clear of the edge labels. Squares the zone's eastings reach
-/// past its edges (a frame across two zones) are named in the other zone, so not here.
+/// a frame showing `map` in `view` (through `globe` on a globe, as its lines): each square of the
+/// zone, and of each latitude band, that shows, by its grid zone designation and letters
+/// (`32T MT`), at the middle of what shows of it, in the frame's points. Only where all of the
+/// label, `size(text)` points across and down, stays in its square and well inside the frame,
+/// clear of the edge labels. Squares the zone's eastings reach past its edges (a frame across two
+/// zones) are named in the other zone, so not here.
 fn mgrs_squares(
     map: &Map,
     view: &View,
+    globe: Option<&rustgis_map::globe::Globe>,
     zone: u8,
     tr: &rustgis_data::raster::Transformer,
     size: impl Fn(&str) -> (f32, f32),
 ) -> Vec<(String, f32, f32)> {
     use rustgis_geom::utm;
     let (w, h) = (view.width, view.height);
-    // The square, and band, a place on the frame is in: none outside the zone.
+    // The square, and band, a place on the frame is in: none outside the zone. On a globe, the
+    // place the globe draws there, as the grid's lines (#2337).
     let square = |sx: f64, sy: f64| -> Option<(i64, i64, char)> {
-        let c = map.to_lonlat(view.camera.to_map(sx, sy, w, h))?;
+        let c = crate::mapgrid::at(map, view, globe, sx, sy)?;
         // (A copy of the world past ±180° is the same place.)
         let c = Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y);
         if utm::utm_zone(c)? != zone {
@@ -5619,12 +5622,12 @@ Elaboração: RustGIS",
         };
         let at = |v: &View, x: f32, y: f32| map.to_lonlat(v.camera.to_map(f64::from(x), f64::from(y), v.width, v.height)).unwrap();
         let near = view(Coord::new(8.73, 47.5), 25_000.0, 80.0);
-        let one = mgrs_squares(&map, &near, 32, &tr, size);
+        let one = mgrs_squares(&map, &near, None, 32, &tr, size);
         assert_eq!(one.len(), 1, "{one:?}");
         assert_eq!(one[0].0, "32T MT");
         assert!((f64::from(one[0].1) - near.width / 2.0).abs() < 2.0 && (f64::from(one[0].2) - near.height / 2.0).abs() < 2.0);
         let wide = view(Coord::new(8.73, 47.5), 2_000_000.0, 80.0);
-        let many = mgrs_squares(&map, &wide, 32, &tr, size);
+        let many = mgrs_squares(&map, &wide, None, 32, &tr, size);
         assert!(many.len() >= 2, "{many:?}");
         for (text, x, y) in &many {
             let named = rustgis_geom::to_mgrs(at(&wide, *x, *y), 0).unwrap().to_string();
@@ -5632,12 +5635,12 @@ Elaboração: RustGIS",
         }
         // Across the edge with zone 33 at 12° E: only zone 32's squares, west of it.
         let edge = view(Coord::new(11.0, 47.5), 2_000_000.0, 80.0);
-        let west = mgrs_squares(&map, &edge, 32, &tr, size);
+        let west = mgrs_squares(&map, &edge, None, 32, &tr, size);
         assert!(!west.is_empty() && west.iter().all(|(t, x, y)| t.starts_with("32") && at(&edge, *x, *y).x < 12.0), "{west:?}");
-        assert!(mgrs_squares(&map, &view(Coord::new(8.73, 47.5), 25_000.0, 15.0), 32, &tr, size).is_empty());
+        assert!(mgrs_squares(&map, &view(Coord::new(8.73, 47.5), 25_000.0, 15.0), None, 32, &tr, size).is_empty());
         // Across the Equator, a northern zone's grid names the southern squares too, as MGRS does.
         let equator = view(Coord::new(9.0, 0.0), 2_000_000.0, 80.0);
-        let both = mgrs_squares(&map, &equator, 32, &tr, size);
+        let both = mgrs_squares(&map, &equator, None, 32, &tr, size);
         for band in ["32N ", "32M "] {
             assert!(both.iter().any(|(t, ..)| t.starts_with(band)), "{band}: {both:?}");
         }
@@ -5664,6 +5667,37 @@ Elaboração: RustGIS",
         let named = Grid { crs: Some("EPSG:32733".into()), ..g.clone() };
         assert_eq!(measured_crs(&named, &map, c).map(|c| c.epsg()), Some(32733));
         assert_eq!(measured_crs(&Grid { crs: Some("EPSG:2056".into()), ..g }, &map, c), None);
+    }
+
+    #[test]
+    fn mgrs_labels_on_the_globe_name_the_squares_it_draws() {
+        // #2337: on a globe, a label names the square the globe draws under it, not the one the
+        // flat map would show at that place in the frame.
+        let mut map = Map::new("m");
+        map.set_projection(rustgis_map::Projection::Globe);
+        let tr = rustgis_data::raster::Crs::from_epsg(32632).unwrap().transformer().unwrap();
+        // Small labels at 1:20,000,000, where the globe's curve parts it from the flat map: the
+        // two agree at the middle of the frame and drift apart away from it.
+        let size = |_: &str| (6.0_f32, 4.0_f32);
+        let view = View {
+            width: 120.0 * PT_PER_MM,
+            height: 120.0 * PT_PER_MM,
+            pixels_per_point: 1.0,
+            camera: frame_camera(&map, Coord::new(9.0, 47.5), 20_000_000.0, 0.0, 0.0),
+            sky: false,
+        };
+        let globe = rustgis_map::globe::Globe::new(&view.camera, view.width, view.height);
+        // The square the globe draws at a label's place, if any.
+        let under =
+            |x: f32, y: f32| globe.inverse(f64::from(x), f64::from(y)).and_then(|c| rustgis_geom::to_mgrs(c, 0)).map(|m| m.to_string());
+        let squares = mgrs_squares(&map, &view, Some(&globe), 32, &tr, size);
+        assert!(squares.len() >= 2, "{squares:?}");
+        for (text, x, y) in &squares {
+            assert_eq!(under(*x, *y).as_ref(), Some(text));
+        }
+        // Through the flat camera, as before, some labels sit on another square of the globe.
+        let flat = mgrs_squares(&map, &view, None, 32, &tr, size);
+        assert!(flat.iter().any(|(text, x, y)| under(*x, *y).as_ref() != Some(text)), "{flat:?}");
     }
 
     #[test]
