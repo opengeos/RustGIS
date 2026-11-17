@@ -145,17 +145,22 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     let extent = c.get("extent").and_then(lonlat_extent).unwrap_or_default();
 
     let name = d.get("name").and_then(serde_json::Value::as_str).filter(|n| !n.trim().is_empty()).unwrap_or("layer").to_string();
-    let first = crate::esripbf::read_page(&f, &name).inspect_err(|_| remote.forget_answer(&first))?;
+    // A layer matching nothing may answer with no bytes at all: a page of nothing.
+    let first = if f.is_empty() && count == 0 {
+        None
+    } else {
+        Some(crate::esripbf::read_page(&f, &name).inspect_err(|_| remote.forget_answer(&first))?)
+    };
     // An empty answer may name no fields; one with features must name its object ids.
-    let oid_at = first.object_id_field;
-    if oid_at.is_none() && !first.dataset.features.is_empty() {
+    let oid_at = first.as_ref().and_then(|p| p.object_id_field);
+    if oid_at.is_none() && first.as_ref().is_some_and(|p| !p.dataset.features.is_empty()) {
         return Err(refuse("its answers hold no object ids"));
     }
     let mut info = SourceInfo {
         name,
         format: FORMAT,
         geometry_type,
-        fields: first.dataset.fields.clone(),
+        fields: first.as_ref().map(|p| p.dataset.fields.clone()).unwrap_or_default(),
         extent,
         count: Some(count),
         crs: "EPSG:4326".into(),
@@ -163,12 +168,12 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
         notes: Vec::new(),
         zm_dropped: false,
     };
-    if first.losses.with_zm > 0 {
+    if first.as_ref().is_some_and(|p| p.losses.with_zm > 0) {
         info.drop_zm(None);
     }
     // What the first answer left out of the layer's fields; Z values are said once here, as for
     // the other sources, and each read says what its own features lost ([`Batch::notes`]).
-    info.notes.extend(first.report.messages.iter().cloned());
+    info.notes.extend(first.iter().flat_map(|p| p.report.messages.iter().cloned()));
     if !sample {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
@@ -330,8 +335,19 @@ impl ArcgisSource {
         if self.info.zm_dropped {
             losses.with_zm = 0;
         }
-        let notes = losses.messages();
-        if view { notes.into_iter().map(|n| format!("{n}, counted in the pages read for the view")).collect() } else { notes }
+        if !view {
+            return losses.messages();
+        }
+        // Features without usable coordinates are left out of a view, not kept.
+        let unplaced = std::mem::take(&mut losses.unprojected);
+        let mut notes: Vec<String> =
+            losses.messages().into_iter().map(|n| format!("{n}, counted in the pages read for the view")).collect();
+        if unplaced > 0 {
+            notes.push(format!(
+                "{unplaced} features have coordinates outside their coordinate system, so are left out of the view, counted in the pages read for it"
+            ));
+        }
+        notes
     }
 
     /// The features a page asks for now.
@@ -395,14 +411,15 @@ impl ArcgisSource {
         let limit = super::clamp_limit(req.limit);
         let page = page_len as u64;
         let pages_at = |step: u64| counts.iter().map(|n| n.div_ceil(step).div_ceil(page)).fold(0u64, u64::saturating_add);
-        // Counts are the service's: summed without overflowing.
-        let counted = counts.iter().fold(0u64, |a, n| a.saturating_add(*n));
-        let mut step = if self.sample { step_for(counted, limit) } else { 1 };
+        // From the view's own count (each feature once; a feature crossing cells is in each
+        // cell's count), within the page budget, which the cells' counts set.
+        let mut step = if self.sample { step_for(matched, limit) } else { 1 };
         while self.sample && step < MAX_STEP && pages_at(step) > MAX_READ_PAGES as u64 {
             step *= 2;
         }
-        // Where the service can't sample: each cell's first features, its share of the limit.
-        let share = if self.sample { usize::MAX } else { limit.div_ceil(cells.len()) };
+        // Where the service can't sample and the view holds more than the limit: each cell's
+        // first features, its share of it.
+        let share = if self.sample || matched <= limit as u64 { usize::MAX } else { limit.div_ceil(cells.len()) };
         // The answers a read holds at once stay within half of what a service keeps, and a round
         // fetches no more than the other half (`remote::ROUND_ANSWERS`), so the pages a pass
         // needs never push each other out: past it, the view is read in part.
@@ -499,7 +516,13 @@ impl ArcgisSource {
                         }
                         break;
                     }
-                    if sent == 0 || kept >= share {
+                    if sent == 0 {
+                        return Err(DataError::Format(crate::diagnostics::message_with_address(
+                            &self.query,
+                            "the service said it held more features but sent none",
+                        )));
+                    }
+                    if kept >= share {
                         cut = true;
                         break;
                     }
@@ -713,8 +736,9 @@ impl FeatureSource for ArcgisSource {
                             &format!("the service kept sending pages past the {total} features it counted"),
                         )));
                     }
-                    if sent < page_len {
-                        // A short page: the rest of the window starts at the wrong offsets.
+                    if sent != page_len {
+                        // A page shorter or longer than asked for: the rest of the window starts
+                        // at the wrong offsets.
                         forget(&urls);
                         continue 'pages;
                     }

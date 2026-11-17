@@ -52,6 +52,10 @@ struct Opts {
     huge_counts: bool,
     /// Its last this many features are counted but never sent.
     hidden: u64,
+    /// It sends this many features more a page than asked for.
+    over: usize,
+    /// An answer of no features is no bytes at all.
+    empty_body: bool,
 }
 
 impl Default for Opts {
@@ -69,6 +73,8 @@ impl Default for Opts {
             caps: None,
             huge_counts: false,
             hidden: 0,
+            over: 0,
+            empty_body: false,
         }
     }
 }
@@ -83,8 +89,22 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps, huge_counts, hidden } =
-        opts;
+    let Opts {
+        page,
+        sql,
+        description,
+        z,
+        ignores_offset,
+        empty_without_fields,
+        padded,
+        small_first,
+        bad_text,
+        caps,
+        huge_counts,
+        hidden,
+        over,
+        empty_body,
+    } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -125,9 +145,13 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             return Some(format!(r#"{{"count":{n}{extent}}}"#).into_bytes());
         }
         let offset: usize = if ignores_offset { 0 } else { value("resultOffset").map_or(0, |o| o.parse().unwrap()) };
-        let size: usize = value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page).min(caps.unwrap_or(usize::MAX));
+        let size: usize =
+            value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page).min(caps.unwrap_or(usize::MAX)).saturating_add(over);
         let ids: Vec<u64> = ids.into_iter().filter(|id| *id <= FEATURES - hidden).collect();
         let sent: Vec<u64> = ids.iter().skip(offset).take(size).copied().collect();
+        if sent.is_empty() && empty_body {
+            return Some(Vec::new());
+        }
         let geometry_too = value("returnGeometry").as_deref() != Some("false");
         let mut parts = vec![number(7, 0), lonlat(), transform(false, 0.01, 0.0, 0.0)];
         if !(sent.is_empty() && empty_without_fields) {
@@ -231,6 +255,9 @@ fn a_service_that_cant_sample_gives_its_first_features_and_says_so() {
     assert!(src.info.notes.iter().any(|n| n.contains("standardized SQL")), "{:?}", src.info.notes);
     let b = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 50 }).unwrap();
     assert!(!b.complete && b.matched == FEATURES && !b.features.is_empty() && b.features.len() <= 50);
+    // A view within the limit is read whole, whatever its cells hold.
+    let all = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
+    assert!(all.complete && all.features.len() == FEATURES as usize, "{}", all.features.len());
 }
 
 #[test]
@@ -551,4 +578,27 @@ fn features_counted_but_not_sent_are_said_and_leave_the_read_incomplete() {
     let b = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
     assert!(!b.complete && b.features.len() == 390, "{}", b.features.len());
     assert!(b.notes.iter().any(|n| n.contains("more than it sent")), "{:?}", b.notes);
+}
+
+#[test]
+fn a_visit_of_pages_longer_than_asked_for_reads_each_feature_once() {
+    let (query, _) = service_with("live-over.test", Opts { over: 4, ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    let mut seen = Vec::new();
+    let all = src
+        .visit_chunks(None, 4 << 10, &mut |c| {
+            seen.extend(c.iter().map(|f| f.id));
+            Ok(())
+        })
+        .unwrap();
+    assert!(all.complete && seen.into_iter().eq(1..=FEATURES));
+}
+
+#[test]
+fn a_layer_matching_nothing_may_answer_with_no_bytes() {
+    let (query, _) = service_with("live-nobytes.test", Opts { empty_body: true, ..Opts::default() });
+    let src = open_blocking(&query.replace("where=1%3D1", "where=1%3D0")).unwrap();
+    assert_eq!(src.info.count, Some(0));
+    let b = read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap();
+    assert!(b.complete && b.features.is_empty());
 }
