@@ -3611,6 +3611,11 @@ mod tests {
         // Its dots show in a feature of no fill, as the point's image does.
         assert!(dots(m).draws(none) && !dots(Marker::Circle).draws(none));
         assert!(!dots(Marker::Picture(Picture::default())).draws(none));
+        let mut sizeless = dots(m);
+        if let crate::fills::FillPattern::Dots { size, .. } = &mut sizeless.pattern {
+            *size = 0.0;
+        }
+        assert!(!sizeless.draws(none), "an image of no size");
         assert!(!crate::fills::fills_have_pictures(&[dots(Marker::Circle), crate::fills::FillLayer::default()], |_| true));
     }
 
