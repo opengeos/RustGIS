@@ -794,8 +794,9 @@ fn errors_say_why_they_are_null() {
         ("exp(1000)", Fault::Overflow),
         ("10 ^ 400", Fault::Overflow),
         ("(0 - 8) ^ 0.5", Fault::NotANumber),
-        ("name * 2", Fault::TextArithmetic),
-        ("sqrt(name)", Fault::TextArithmetic),
+        ("name * 2", Fault::Text),
+        ("sqrt(name)", Fault::Text),
+        ("to_real(name)", Fault::Text),
         ("round(pop / 0) + 1", Fault::DivisionByZero),
         ("nullif(pop / 0, 1)", Fault::DivisionByZero),
         ("'(' || (pop / 0) || ')'", Fault::DivisionByZero),
@@ -813,9 +814,25 @@ fn errors_say_why_they_are_null() {
         ("nullif(pop, pop)", 0),
         // The division's null was replaced; the result is null because `pop` is.
         ("coalesce(1 / 0, 0) / pop", 3),
+        // An error that only decided a condition, a CASE's arm or what nullif compares with.
+        ("if((1 / 0 IS NULL) AND NULL, 1)", 0),
+        ("CASE 1 / 0 WHEN 1 THEN 2 ELSE NULL END", 0),
+        ("nullif(NULL, 1 / 0)", 0),
     ] {
         assert_eq!(why(text, row), (Value::Null, None), "{text}");
     }
     assert_eq!(why("coalesce(pop / 0, 7)", 0), (Value::Int(7), None));
+    // The arm a CASE takes keeps its own error.
+    assert_eq!(why("CASE 1 / 0 WHEN 1 THEN 2 ELSE sqrt(-1) END", 0), (Value::Null, Some(Fault::NegativeRoot)));
+    assert_eq!(why("(1 / 0 IS NULL) AND NULL", 0), (Value::Null, None));
+    assert_eq!(arith(Arith::Mod, &Value::Int(i64::MIN), &Value::Int(-1)), Ok(Value::Int(0)));
+    // A stored infinity or NaN isn't joined as text: `+` on it is null, and says why.
+    let mut odd = Dataset::new("odd", GeometryType::None, vec![Field::new("x", FieldType::Double)]);
+    odd.push(None, vec![Value::Float(f64::INFINITY)]);
+    odd.push(None, vec![Value::Float(f64::NAN)]);
+    for row in [0, 1] {
+        let e = parse("x + 1", &odd).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(value_or_fault(&e, &odd, row, &Env::default()), (Value::Null, Some(Fault::NotANumber)), "row {row}");
+    }
     assert_eq!(why("sqrt(0)", 0), (Value::Float(0.0), None));
 }

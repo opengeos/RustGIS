@@ -1579,7 +1579,10 @@ impl Calc {
                     (Some(x), Some(y), '*') => (Value::Float(x * y), None),
                     (Some(_), Some(0.0), '/') => (Value::Null, Some(Fault::DivisionByZero)),
                     (Some(x), Some(y), '/') => (Value::Float(x / y), None),
-                    (_, _, '+') if !va.is_null() && !vb.is_null() => (Value::Text(format!("{va}{vb}")), None),
+                    // A stored NaN or infinity isn't text to join.
+                    (_, _, '+') if !va.is_null() && !vb.is_null() && !va.is_non_finite() && !vb.is_non_finite() => {
+                        (Value::Text(format!("{va}{vb}")), None)
+                    }
                     _ if va.is_null() || vb.is_null() => (Value::Null, None),
                     _ => (Value::Null, Some(Fault::of_non_number(&va).or(Fault::of_non_number(&vb)).unwrap_or(Fault::NotANumber))),
                 }
@@ -1648,6 +1651,11 @@ mod tests {
                 assert_eq!(notices, said, "{expression}, table {table}");
             }
         }
+        // The earlier calculator doesn't join a stored infinity as text either.
+        let mut ds = Dataset::new("odd", GeometryType::None, vec![Field::new("Pop Est", FieldType::Double)]);
+        ds.push(None, vec![Value::Float(f64::INFINITY)]);
+        let calc = Calc::parse("Pop Est + 1", &ds).unwrap();
+        assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
     }
 
     /// Calculate Field never adds fields: layer and table callers get the same next step.

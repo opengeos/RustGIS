@@ -146,10 +146,11 @@ pub enum Fault {
     Overflow,
     /// A result that isn't a number (`(-8) ^ 0.5`), or a stored one that isn't (NaN, infinity).
     NotANumber,
-    /// `-`, `*`, `/`, `%` or `^`, or a number function, on text that isn't a number.
-    TextArithmetic,
-    /// Arithmetic, or a number function, on a date.
-    DateArithmetic,
+    /// Text that isn't a number where one is needed: `-`, `*`, `/`, `%` or `^`, or a number
+    /// argument (`sqrt(name)`, `to_real('abc')`).
+    Text,
+    /// A date where a number is needed: arithmetic, or a number argument.
+    Date,
 }
 
 impl Fault {
@@ -161,8 +162,8 @@ impl Fault {
             Fault::Logarithm => "the logarithm of zero or a negative number",
             Fault::Overflow => "a result too large to represent",
             Fault::NotANumber => "a result that isn't a number",
-            Fault::TextArithmetic => "arithmetic on text",
-            Fault::DateArithmetic => "arithmetic on a date",
+            Fault::Text => "text that isn't a number",
+            Fault::Date => "a date used as a number",
         }
     }
 
@@ -171,8 +172,8 @@ impl Fault {
         match v {
             Value::Null => None,
             _ if v.as_f64().is_some() => None,
-            Value::Text(_) => Some(Fault::TextArithmetic),
-            Value::Date(_) | Value::DateTime(_) => Some(Fault::DateArithmetic),
+            Value::Text(_) => Some(Fault::Text),
+            Value::Date(_) | Value::DateTime(_) => Some(Fault::Date),
             _ => Some(Fault::NotANumber),
         }
     }
@@ -1605,10 +1606,11 @@ fn arith(op: Arith, a: &Value, b: &Value) -> Result<Value, Fault> {
     // Arithmetic on dates, which the parser refuses on a date field, is null from anything else
     // that gives a date (`coalesce(issued, closed) + 1`).
     if a.temporal_key().is_some() || b.temporal_key().is_some() {
-        return Err(Fault::DateArithmetic);
+        return Err(Fault::Date);
     }
     let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
-        if op == Arith::Add {
+        // A stored NaN or infinity isn't text to join (`inf + 1` isn't `inf1`).
+        if op == Arith::Add && !a.is_non_finite() && !b.is_non_finite() {
             return Ok(text(format!("{a}{b}")));
         }
         return Err(Fault::of_non_number(a).or(Fault::of_non_number(b)).unwrap_or(Fault::NotANumber));
@@ -1619,8 +1621,8 @@ fn arith(op: Arith, a: &Value, b: &Value) -> Result<Value, Fault> {
             Arith::Sub => i.checked_sub(*j),
             Arith::Mul => i.checked_mul(*j),
             Arith::Mod if *j == 0 => return Err(Fault::DivisionByZero),
-            // Only `i64::MIN % -1` overflows.
-            Arith::Mod => return i.checked_rem(*j).map(Value::Int).ok_or(Fault::Overflow),
+            // Exact with a divisor that isn't 0: `i64::MIN % -1` is 0.
+            Arith::Mod => return Ok(Value::Int(i.wrapping_rem(*j))),
             _ => None,
         };
         if let Some(v) = exact {
@@ -1698,18 +1700,33 @@ impl<'a> Eval<'a> {
         v.as_f64()
     }
 
-    /// Whether the condition `e` holds, as [`cond`](Self::cond), for choosing a branch: an error
-    /// in it picks the other branch and isn't kept as the result's.
-    fn branch(&self, e: &'a Expr) -> Option<bool> {
+    /// `f`, whose errors only decide something (a branch, an arm, what `nullif` compares with)
+    /// and so aren't kept as the result's.
+    fn deciding<T>(&self, f: impl FnOnce() -> T) -> T {
         let kept = self.fault.get();
-        let hit = self.cond(e);
+        let out = f();
         self.fault.set(kept);
-        hit
+        out
+    }
+
+    /// Whether the condition `e` holds, for choosing a branch ([`deciding`](Self::deciding)).
+    fn branch(&self, e: &'a Expr) -> Option<bool> {
+        self.deciding(|| self.cond(e))
     }
 
     /// SQL's three-valued logic: `None` is "unknown", what a comparison with a null gives. `NOT`
-    /// leaves it unknown, so `NOT (pop > 100)` doesn't match a row whose `pop` is null.
+    /// leaves it unknown, so `NOT (pop > 100)` doesn't match a row whose `pop` is null. An error
+    /// inside `e` stays the row's only while `e` is unknown, as [`value`](Self::value) keeps one.
     fn cond(&self, e: &'a Expr) -> Option<bool> {
+        let outer = self.fault.take();
+        let hit = self.cond_of(e);
+        let inner = self.fault.get();
+        self.fault.set(if hit.is_none() { outer.or(inner) } else { outer });
+        hit
+    }
+
+    /// [`cond`](Self::cond), before keeping or dropping the errors met inside it.
+    fn cond_of(&self, e: &'a Expr) -> Option<bool> {
         let (ds, row) = (self.ds, self.row);
         match e {
             Expr::And(terms) => {
@@ -1842,16 +1859,11 @@ impl<'a> Eval<'a> {
                 Cow::Owned(text(s))
             }
             Expr::Case { subject, arms, otherwise } => {
-                let subject = subject.as_ref().map(|s| self.value(s));
+                // The subject only picks the arm.
+                let subject = subject.as_ref().map(|s| self.deciding(|| self.value(s)));
                 for (when, then) in arms {
                     let hit = match &subject {
-                        Some(s) => {
-                            // As in a condition, an error in a value compared with only picks the arm.
-                            let kept = self.fault.get();
-                            let hit = compare(s, Op::Eq, &self.value(when));
-                            self.fault.set(kept);
-                            hit
-                        }
+                        Some(s) => self.deciding(|| compare(s, Op::Eq, &self.value(when))),
                         None => self.branch(when),
                     };
                     if hit == Some(true) {
@@ -1901,7 +1913,8 @@ impl<'a> Eval<'a> {
                 Value::Null
             }
             Func::NullIf => {
-                let (a, b) = (arg(0), arg(1));
+                // `b` is only compared with.
+                let (a, b) = (arg(0), self.deciding(|| arg(1)));
                 if compare(&a, Op::Eq, &b) == Some(true) {
                     Value::Null
                 } else {
