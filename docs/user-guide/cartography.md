@@ -393,7 +393,7 @@ legend shows the symbol's colour.
 the choropleth's colours visible.
 
 1. On the choropleth layer, use **Select By Attributes** with `FLAG = 1`, then **Data ›
-   Selection › Layer From Selection**. Clear the selection on the original layer.
+   Selection › Make Layer From Selected Features**. Clear the selection on the original layer.
 2. Keep the new layer above the choropleth and rename it **Unreliable estimates (hatched)**.
    In its **Symbology › Fills**, add one fill and set **Draw** to **Hatch lines**. Set the line
    colour and spacing so the choropleth shows through. Set **Outline width** to 0 if the

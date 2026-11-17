@@ -408,7 +408,9 @@ The time filter pads one-digit hours and uses the feed's local service-day times
 `24:30:00` is after midnight on that service day. The result counts timed rows per `stop_id`,
 including repeat visits by a trip. Stops with no departures in the window have no row. The SQL
 pane previews the first 200 rows. This query uses the times in `stop_times.txt`. Frequency-based trips need a
-separate calculation using [`frequencies.txt`](https://gtfs.org/documentation/schedule/reference/#frequenciestxt).
+separate calculation using [`frequencies.txt`](https://gtfs.org/documentation/schedule/reference/#frequenciestxt),
+and their `trip_id`s left out of this query: their stop times are a template, which it would
+count as one departure.
 
 ### PostgreSQL and PostGIS
 
