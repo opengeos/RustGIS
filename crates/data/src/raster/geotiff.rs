@@ -581,15 +581,12 @@ pub fn describes(crs: Crs) -> bool {
 /// hold goes in an ESRI PE citation. The key directory (with the raster type as area), its
 /// double parameters and its ASCII parameters; `None` when it can't be written at all.
 fn terrio_keys(d: &CustomCrs) -> Option<(Vec<u16>, Vec<f64>, String)> {
-    let mut sr = match &d.wkt {
+    // A system with a shift of its own keeps it: terrio-crs writes its own keys or its declared
+    // code with GeogTOWGS84GeoKey (2062), never a code it is only identified as.
+    let sr = match &d.wkt {
         Some(w) => terrio_crs::SpatialRef::from_wkt(w),
         None => terrio_crs::SpatialRef::from_proj4(&format!("{} +type=crs", d.proj4)).ok()?,
     };
-    // A system with a shift of its own isn't written as the code it is identified as, whose keys
-    // would leave the shift out (opengeos/terrio#1012): its own keys carry it (TOWGS84, 2062).
-    if d.wkt.as_deref().is_some_and(|w| shift_differs(w, sr.epsg)) {
-        sr.epsg = None;
-    }
     let tags = sr.to_geokeys().ok()?.encode().ok()?;
     Some((with_raster_type(&tags.directory)?, tags.doubles, tags.ascii))
 }
@@ -3816,15 +3813,21 @@ mod tests {
         // points as the `.prj` does.
         let (k, d, a) = terrio_keys(&prj.custom_def().unwrap()).unwrap();
         assert!(!k.chunks(4).any(|e| e == [3072, 0, 1, 27700]), "{k:?}");
+        assert!(k.chunks(4).skip(1).any(|e| e[0] == 2062), "{k:?}");
         let back = custom_crs(&k, &d, &a).unwrap();
         let c = back.transformer().unwrap().to_lonlat(at).unwrap();
         assert!((c.x - b.x).abs() < 1e-9 && (c.y - b.y).abs() < 1e-9, "{c:?} {b:?}");
-        // A shift equal to the code's is the code: written as it (Lambert 93 on RGF93 with a
-        // shift of zero, as Esri writes it).
+        // A shift of zero on another datum than WGS 84 (Lambert 93 on RGF93, as Esri writes it)
+        // is written as user-defined keys with that shift, as GDAL 3.10.3 writes them too (no
+        // 2154), and as RustGIS wrote it before: read back, it places points as the `.prj` does.
         let l93 = r#"PROJCS["RGF93_Lambert_93",GEOGCS["GCS_RGF_1993",DATUM["D_RGF_1993",SPHEROID["GRS_1980",6378137.0,298.257222101],TOWGS84[0,0,0,0,0,0,0]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",700000.0],PARAMETER["False_Northing",6600000.0],PARAMETER["Central_Meridian",3.0],PARAMETER["Standard_Parallel_1",44.0],PARAMETER["Standard_Parallel_2",49.0],PARAMETER["Latitude_Of_Origin",46.5],UNIT["Meter",1.0]]"#;
         let l93 = crate::raster::wkt::crs_from_wkt(l93).unwrap();
-        let (k, _, _) = terrio_keys(&l93.custom_def().unwrap_or_else(|| panic!("{l93:?}"))).unwrap();
-        assert!(k.chunks(4).any(|e| e == [3072, 0, 1, 2154]), "{k:?}");
+        let (k, d, a) = terrio_keys(&l93.custom_def().unwrap_or_else(|| panic!("{l93:?}"))).unwrap();
+        assert!(k.chunks(4).any(|e| e == [3072, 0, 1, 32767]), "{k:?}");
+        let at = rustgis_geom::Coord::new(652_469.0, 6_862_035.0);
+        let (back, prj) = (custom_crs(&k, &d, &a).unwrap().transformer().unwrap(), l93.transformer().unwrap());
+        let (c, e) = (back.to_lonlat(at).unwrap(), prj.to_lonlat(at).unwrap());
+        assert!((c.x - e.x).abs() < 1e-9 && (c.y - e.y).abs() < 1e-9, "{c:?} {e:?}");
     }
 
     /// MODIS's sinusoidal grid (coordinate transformation 24), as a MOD13Q1 tile's GeoKeys give
