@@ -2813,10 +2813,11 @@ impl RustGisApp {
         // Read before the command runs: removing or renaming the active layer changes it.
         let active = match &dispatch {
             _ if self.ws.recording.is_none() => None,
-            // A read on a thread is bound to its layer's id (`readjob`): the step names the layer,
-            // as every step does, so it replays on that layer by name.
+            // A read on a thread bound to its layer's id (`readjob`): the step names the layer, as
+            // every step does, so it replays on that layer by name. One given no layer names the
+            // layer it acts on, as a command run here does.
             #[cfg(not(target_arch = "wasm32"))]
-            AppDispatch::Read(_) => self.layer_named(&params),
+            AppDispatch::Read(_) => self.layer_named(&params).or_else(|| self.layer_acted_on(id, &params)),
             _ => self.layer_acted_on(id, &params),
         };
         // A step being edited is known by its place in the task: Undo or Redo of a move or a

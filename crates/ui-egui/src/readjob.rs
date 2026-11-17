@@ -152,6 +152,19 @@ fn run_presented(
         let r = app.run(command, p);
         return answered(app, then, r);
     }
+    // A field conversion given no layer or table works on the active layer: bound to it now, so
+    // it lands on that layer and its recorded step names it, whichever layer is active by then.
+    if command == "edit.convertField"
+        && ["layer", "table"].iter().all(|k| p.get(*k).is_none_or(Value::is_null))
+        && let Ok(id) = app.session.layer_id(&p)
+    {
+        if p.is_null() {
+            p = json!({});
+        }
+        if let Some(params) = p.as_object_mut() {
+            params.insert("layer".into(), json!(id));
+        }
+    }
     let layer = matches!(
         command,
         "layer.loadAll"
@@ -2261,6 +2274,7 @@ mod tests {
         let p = json!({"field":"opened", "type":"date", "format":"%d/%m/%Y"});
         app.session.active_layer = app.session.map().layer_by_name("Cities").map(|l| l.id);
         let depth = app.session.undo_depth();
+        app.ws.recording = Some(Vec::new());
         assert_eq!(app.run_by_user("edit.convertField", p.clone()).unwrap()["started"], "Convert Field");
         assert_eq!(app.session.undo_depth(), depth);
         app.session.active_layer = app.session.map().layers.iter().find(|l| l.name != "Cities").map(|l| l.id);
@@ -2268,6 +2282,9 @@ mod tests {
         let ds = &app.session.map().layer_by_name("Cities").unwrap().dataset;
         assert_eq!(ds.value(0, ds.field_index("opened").unwrap()).to_string(), "2026-05-03");
         assert_eq!(app.session.undo_depth(), depth + 1);
+        // Its step names the layer it was asked for, not the one active when it landed.
+        let steps = app.ws.recording.take().unwrap();
+        assert_eq!(steps.iter().find(|s| s.command == "edit.convertField").map(|s| s.params["layer"].clone()), Some(json!("Cities")));
         app.run("edit.undo", json!({})).unwrap();
         app.session.active_layer = app.session.map().layer_by_name("Cities").map(|l| l.id);
         app.run_by_user("edit.convertField", p).unwrap();
