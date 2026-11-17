@@ -2262,7 +2262,7 @@ impl Session {
                 }
                 if let Some(note) = layer.source.as_mut().and_then(|source| source.take_null_text()) {
                     dates.push(format!(
-                        "{}: some text values '<Null>' in it show as empty (Load All Features counts them all); so far, {note}",
+                        "{}: some text values written as Null in it show as empty (Load All Features counts them all); so far, {note}",
                         layer.name
                     ));
                 }

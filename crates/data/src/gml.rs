@@ -827,10 +827,10 @@ mod tests {
         assert_eq!(ds.value(0, code), &Value::Text(" R-1".into()));
         assert_eq!(ds.value(1, code), &Value::Null);
         assert_eq!(ds.value(2, code), &Value::Text("Laid out".into()), "an indented value loses its layout");
-        assert!(report.messages.iter().any(|m| m == "s: 1 value '<Null>' was read as empty, in 'code'"), "{:?}", report.messages);
+        assert!(report.messages.iter().any(|m| m == "s: 1 value written as Null was read as empty, in 'code'"), "{:?}", report.messages);
         let clean = gml.replace("&lt;Null&gt;", "B-2");
         let layers = read("s.gml", clean.as_bytes()).unwrap();
-        assert!(layers[0].1.messages.iter().all(|m| !m.contains("<Null>")), "no marker, no notice: {:?}", layers[0].1.messages);
+        assert!(layers[0].1.messages.iter().all(|m| !m.contains("written as Null")), "no marker, no notice: {:?}", layers[0].1.messages);
     }
 
     #[test]

@@ -2122,11 +2122,13 @@ pub(crate) fn read_rows(
             .enumerate()
             .map(|(k, (&i, f))| {
                 let text = unguard(r.get(i).map(|s| s.as_str()).unwrap_or(""));
-                if Value::is_null_marker(&text) {
+                let marker = Value::is_null_marker(&text);
+                if marker {
                     crate::source::null_text_at(&mut null_text, k);
                 }
                 let value = Value::parse_file(&text, f.ty);
-                if f.ty.is_temporal() && !text.trim().is_empty() && value.is_null() {
+                // The marker is counted once, as one, not also as a date that isn't one.
+                if f.ty.is_temporal() && !marker && !text.trim().is_empty() && value.is_null() {
                     crate::source::unread_date(&mut unread_dates, k);
                 }
                 value
@@ -2977,6 +2979,12 @@ fn dbf_attrs(record: &shapefile::dbase::Record, fields: &[Field], counts: &mut D
         .enumerate()
         .zip(unread_dates.iter_mut().zip(nonfinite.iter_mut()))
         .map(|((k, f), (unread, nonfinite))| match record.get(&f.name) {
+            // `<Null>` is a missing value's marker, in a date column too; other text keeps its
+            // leading spaces (the reader drops only the padding after it).
+            Some(FieldValue::Character(Some(s))) if Value::is_null_marker(s) => {
+                crate::source::null_text_at(null_text, k);
+                Value::Null
+            }
             Some(FieldValue::Character(Some(s))) if f.ty == FieldType::Date => match crate::dbf::date(s.as_bytes()) {
                 Ok(d) => d.map_or(Value::Null, Value::Date),
                 Err(()) => {
@@ -2984,12 +2992,6 @@ fn dbf_attrs(record: &shapefile::dbase::Record, fields: &[Field], counts: &mut D
                     Value::Null
                 }
             },
-            // `<Null>` is a missing value's marker; other text keeps its leading spaces (the
-            // reader drops only the padding after it).
-            Some(FieldValue::Character(Some(s))) if Value::is_null_marker(s) => {
-                crate::source::null_text_at(null_text, k);
-                Value::Null
-            }
             Some(FieldValue::Character(Some(s))) => Value::Text(s.clone()),
             Some(FieldValue::Numeric(Some(n))) if n.is_finite() => Value::Float(*n),
             Some(FieldValue::Numeric(Some(_))) => {
@@ -5626,6 +5628,32 @@ mod tests {
         assert_eq!(to_csv(&back).unwrap(), once, "export/import is stable");
     }
 
+    /// `<Null>` in a `.dbf` date column is counted once, as the marker, not also as a date that
+    /// isn't one, whole and streamed.
+    #[test]
+    fn a_null_marker_in_a_date_column_is_not_an_unread_date() {
+        let mut ds = Dataset::new("permits", GeometryType::Point, vec![Field::new("issued", FieldType::Date)]);
+        for day in ["2026-01-02", "2026-01-03"] {
+            ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::parse(day, FieldType::Date)]);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let shp = dir.path().join("permits.shp");
+        write_path(&ds, &shp).unwrap();
+        let dbf = shp.with_extension("dbf");
+        let mut table = std::fs::read(&dbf).unwrap();
+        let at = table.windows(8).position(|w| w == b"20260103").unwrap();
+        table[at..at + 8].copy_from_slice(b"<Null>  ");
+        std::fs::write(&dbf, table).unwrap();
+        let whole = read_shapefile_in(&shp, "permits", None).unwrap();
+        let streamed = crate::source::materialize(&crate::source::shp::ShpSource::open_path(&shp, "permits").unwrap()).unwrap();
+        for (read, (back, report)) in [("whole", whole), ("streamed", streamed)] {
+            assert_eq!(back.features[1].attrs[0], Value::Null, "{read}");
+            let said = "permits: 1 value written as Null was read as empty, in 'issued'";
+            assert!(report.messages.iter().any(|m| m == said), "{read}: {:?}", report.messages);
+            assert!(!report.messages.iter().any(|m| m.contains("date")), "{read}: {:?}", report.messages);
+        }
+    }
+
     /// Text cells read as the file has them (#2059): spaces kept, all-space text kept, an empty cell
     /// null, `<Null>` null and counted; a number column still reads past the spaces, and `<Null>`
     /// doesn't make it text.
@@ -5652,11 +5680,11 @@ mod tests {
             assert_eq!(column(2), [text("a"), Value::Null, text("b"), text("c")], "{what}");
             assert_eq!(ds.fields[3].ty, FieldType::Double, "{what}: `<Null>` doesn't type a column");
             assert_eq!(column(3), [Value::Float(1.5), Value::Null, Value::Float(2.5), Value::Float(3.5)], "{what}");
-            let said = "3 values '<Null>' were read as empty, in 'code', 'note', 'x'";
+            let said = "3 values written as Null were read as empty, in 'code', 'note', 'x'";
             assert!(report.messages.iter().any(|m| m == said), "{what}: {:?}", report.messages);
         }
         let (_, report) = read_csv("code\n 2535\n", "t").unwrap();
-        assert!(report.messages.iter().all(|m| !m.contains("<Null>")), "{:?}", report.messages);
+        assert!(report.messages.iter().all(|m| !m.contains("written as Null")), "{:?}", report.messages);
     }
 
     #[test]

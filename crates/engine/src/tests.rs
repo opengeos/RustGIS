@@ -1288,7 +1288,7 @@ fn a_streamed_shapefile_says_null_markers_once_and_in_its_exports() {
         let id = added["layer"].as_u64().unwrap() as u32;
         assert!(s.map().layer(id).unwrap().is_streamed(), "{name} is read in place");
         let nulls = |s: &Session, mark| -> Vec<String> {
-            s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("'<Null>'")).collect()
+            s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("written as Null")).collect()
         };
         let mark = s.notice_mark();
         for _ in 0..2 {
@@ -1297,7 +1297,7 @@ fn a_streamed_shapefile_says_null_markers_once_and_in_its_exports() {
         }
         let expected: &[&str] = if said {
             &[
-                "zoning: some text values '<Null>' in it show as empty (Load All Features counts them all); so far, 1 value '<Null>' was read as empty, in 'ZONING'",
+                "zoning: some text values written as Null in it show as empty (Load All Features counts them all); so far, 1 value written as Null was read as empty, in 'ZONING'",
             ]
         } else {
             &[]
@@ -1315,7 +1315,7 @@ fn a_streamed_shapefile_says_null_markers_once_and_in_its_exports() {
             assert_eq!(notes.len(), usize::from(said), "{name} {command}: {:?}", s.notices_since(mark));
             if said {
                 assert!(
-                    notes[0].ends_with("zoning: 1 value '<Null>' was read as empty, in 'ZONING', so they're empty in the export"),
+                    notes[0].ends_with("zoning: 1 value written as Null was read as empty, in 'ZONING', so they're empty in the export"),
                     "{}",
                     notes[0]
                 );

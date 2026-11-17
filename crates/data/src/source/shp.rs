@@ -529,7 +529,11 @@ impl Table {
         let mut out = Vec::with_capacity(self.columns.len());
         for (k, c) in self.columns.iter().enumerate() {
             let b = row.get(1 + c.offset..1 + c.offset + c.len).unwrap_or(&[]);
-            out.push(if c.ty == b'D' {
+            out.push(if c.ty == b'D' && std::str::from_utf8(b).is_ok_and(Value::is_null_marker) {
+                // `<Null>` is a missing value's marker, counted as one, not as a date that isn't.
+                super::null_text_at(null_text, k);
+                Value::Null
+            } else if c.ty == b'D' {
                 crate::dbf::date(b)
                     .unwrap_or_else(|()| {
                         super::unread_date(unread_dates, k);

@@ -2411,7 +2411,7 @@ fn shapefile_text_keeps_its_leading_spaces_and_counts_null_markers() {
     let values: Vec<Value> = whole.features.iter().map(|f| f.attrs[0].clone()).collect();
     assert_eq!(values, [Value::Text(" 2535".into()), Value::Null, Value::Text("plain".into()), Value::Null]);
     assert_eq!(inplace.features, whole.features);
-    let said = "codes: 2 values '<Null>' were read as empty, in 'code'";
+    let said = "codes: 2 values written as Null were read as empty, in 'code'";
     assert!(whole_report.messages.iter().any(|m| m == said), "{:?}", whole_report.messages);
     assert!(report.messages.iter().any(|m| m == said), "{:?}", report.messages);
 
@@ -2422,7 +2422,7 @@ fn shapefile_text_keeps_its_leading_spaces_and_counts_null_markers() {
     write_shapefile(&clean, &p);
     let (_, whole_report) = crate::io::read_path(&p).unwrap();
     let (_, report) = materialize(open_path(&p, None).unwrap().as_ref()).unwrap();
-    assert!(whole_report.messages.iter().chain(&report.messages).all(|m| !m.contains("<Null>")), "{:?}", report.messages);
+    assert!(whole_report.messages.iter().chain(&report.messages).all(|m| !m.contains("written as Null")), "{:?}", report.messages);
 }
 
 #[test]

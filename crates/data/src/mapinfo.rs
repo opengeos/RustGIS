@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(ds.value(0, 0), &Value::Text(" 2535 ".into()));
         assert_eq!(ds.value(0, 1), &Value::Int(7));
         assert_eq!(ds.value(1, 0), &Value::Null);
-        assert_eq!(report.messages, ["1 value '<Null>' was read as empty, in 'code'"]);
+        assert_eq!(report.messages, ["1 value written as Null was read as empty, in 'code'"]);
         let (_, clean) = read(mif, Some("\" 2535 \", 7 \n\"b\",8\n"), "t").unwrap();
         assert!(clean.messages.is_empty(), "no marker, no notice: {:?}", clean.messages);
     }

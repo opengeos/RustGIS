@@ -310,13 +310,14 @@ pub fn unread_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<St
 }
 
 /// What a read says of text values `<Null>` it read as null ([`crate::Value::is_null_marker`],
-/// [`Batch::null_text`]), naming the first five fields. `None` when there were none.
+/// [`Batch::null_text`]), naming the first five fields. `None` when there were none. It names the
+/// marker as `Null`, without its brackets: notices are redacted, which takes `<Null>` for a tag.
 pub fn null_text_note(fields: &[crate::Field], counts: &[usize]) -> Option<String> {
     let total: usize = counts.iter().sum();
     if total == 0 {
         return None;
     }
-    let what = if total == 1 { "1 value '<Null>' was".to_string() } else { format!("{total} values '<Null>' were") };
+    let what = if total == 1 { "1 value written as Null was".to_string() } else { format!("{total} values written as Null were") };
     Some(format!("{what} read as empty, in {}", crate::io::named_fields(fields, counts)))
 }
 
