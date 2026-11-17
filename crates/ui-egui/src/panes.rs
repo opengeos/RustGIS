@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Session;
 use rustgis_engine::analysis::{ParamKind, tools};
+use rustgis_engine::cmd::layer::hidden_fill_opacity;
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::{Normalizer, RasterLegend, RasterStyle, Rock, relief_ambient};
 use rustgis_engine::map::symbology::{
@@ -4643,7 +4644,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(6.0);
     }
     match &l.renderer {
-        Renderer::Single(s) => symbol_editor(app, ui, *s, rustgis_engine::cmd::layer::hidden_fill_opacity(&l, None), g, t),
+        Renderer::Single(s) => symbol_editor(app, ui, *s, hidden_fill_opacity(&l, None), g, t),
         Renderer::Unique { field, classes, ramp, expression, .. } => {
             field_combo(app, ui, "Field", if expression.is_some() { tl!("(expression)") } else { field.as_str() }, &all, "unique");
             // Or by an expression's values: blank goes back to the field.
@@ -4695,7 +4696,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         Renderer::Proportional { field, base, .. } => {
             field_combo(app, ui, "Field", field, &numeric, "proportional");
-            symbol_editor(app, ui, *base, rustgis_engine::cmd::layer::hidden_fill_opacity(&l, None), g, t);
+            symbol_editor(app, ui, *base, hidden_fill_opacity(&l, None), g, t);
             legend_list(app, ui, &l, t);
         }
     }
@@ -5353,35 +5354,12 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     p
                 };
                 ui.horizontal(|ui| {
-                    // Construct hue independently of alpha: Color32 discards hidden RGB at zero.
                     // A fill No Fill hides shows the opacity Restore Fill gives back, so a colour
                     // picked here is drawn (#2308).
                     let fill = e.symbol.fill;
-                    let fill = rustgis_engine::cmd::layer::hidden_fill_opacity(l, Some(class_ref)).map_or(fill, |a| fill.with_alpha(a));
-                    let mut hsva = egui::ecolor::Hsva::from_srgb([fill.r(), fill.g(), fill.b()]);
-                    hsva.a = f32::from(fill.a()) / 255.0;
-                    let alpha = hsva.a;
-                    // egui creates the popup from the context, not this Ui's scoped style.
-                    // Borrow linear numeric editing only while a transparent picker is open.
-                    let styles = (fill.a() == 0 && egui::Popup::is_any_open(ui.ctx()))
-                        .then(|| [egui::Theme::Light, egui::Theme::Dark].map(|theme| (theme, ui.ctx().style_of(theme))));
-                    if styles.is_some() {
-                        ui.ctx().global_style_mut(|style| style.visuals.numeric_color_space = egui::style::NumericColorSpace::Linear);
-                    }
-                    let response = egui::color_picker::color_edit_button_hsva(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend);
-                    if let Some(styles) = styles {
-                        // The popup's numeric-mode button can change both themes; restore both
-                        // immediately so no other picker or later frame inherits the override.
-                        for (theme, style) in styles {
-                            ui.ctx().set_style_of(theme, style);
-                        }
-                    }
-                    let picked = response.on_hover_text(tl!("Class color")).changed().then(|| {
-                        let edited = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
-                        // The numeric alpha editor also rounds RGB through Color32; an
-                        // opacity-only edit must keep the class's original channels exactly.
-                        if hsva.a != alpha { fill.with_alpha(edited.a()) } else { edited }
-                    });
+                    let fill = hidden_fill_opacity(l, Some(class_ref)).map_or(fill, |a| fill.with_alpha(a));
+                    let (response, picked) = crate::widgets::rgba_button(ui, fill);
+                    response.on_hover_text(tl!("Class color"));
                     if let Some(color) = picked {
                         // Keep FF too: six-digit polygon colours deliberately preserve translucency.
                         let params = with("color", json!(color.hex8()));
@@ -5512,8 +5490,6 @@ fn manual_breaks(app: &mut RustGisApp, ui: &mut Ui, field: &str, breaks: &[f64],
 }
 
 /// `hidden`: the opacity of a fill No Fill hides, which its swatch shows ([`hidden_fill_opacity`]).
-///
-/// [`hidden_fill_opacity`]: rustgis_engine::cmd::layer::hidden_fill_opacity
 fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, hidden: Option<u8>, g: GeometryType, t: &Tokens) {
     egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -5527,11 +5503,10 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, hidden: Option<u8
             if g != GeometryType::Polyline {
                 // The same name as the ribbon's Drawing group gives this `layer.color` button.
                 ui.label(tl!("Fill"));
-                let mut c = c32(hidden.map_or(s.fill, |a| s.fill.with_alpha(a)));
-                let resp = crate::widgets::color_button(ui, &mut c);
-                if resp.changed() {
+                let (resp, picked) = crate::widgets::rgba_button(ui, hidden.map_or(s.fill, |a| s.fill.with_alpha(a)));
+                if let Some(c) = picked {
                     crate::widgets::one_step_per_press(app, &resp);
-                    let _ = app.run("layer.color", json!({"color": rgba(c).hex8()}));
+                    let _ = app.run("layer.color", json!({"color": c.hex8()}));
                 }
                 ui.end_row();
             }

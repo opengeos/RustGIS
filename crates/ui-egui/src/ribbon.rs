@@ -4706,12 +4706,11 @@ fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map:
             // here is drawn (#2308).
             let fill = layer.renderer.base_symbol().fill;
             let shown = rustgis_engine::cmd::layer::hidden_fill_opacity(layer, None);
-            let mut c = crate::theme::c32(shown.map_or(fill, |a| fill.with_alpha(a)));
             ui.horizontal(|ui| {
-                let resp = crate::widgets::color_button(ui, &mut c);
-                if resp.changed() {
+                let (resp, picked) = crate::widgets::rgba_button(ui, shown.map_or(fill, |a| fill.with_alpha(a)));
+                if let Some(c) = picked {
                     crate::widgets::one_step_per_press(app, &resp);
-                    let _ = app.run("layer.color", json!({"color": crate::theme::rgba(c).hex8()}));
+                    let _ = app.run("layer.color", json!({"color": c.hex8()}));
                 }
                 // A line has no inside: its colour is the line's (the outline is the "Outline" width below).
                 let name = if layer.geometry_type() == GeometryType::Polyline { tl!("Color") } else { tl!("Fill") };
@@ -5787,6 +5786,48 @@ mod tests {
         assert_eq!(after.r().to_string(), red, "the colour picked");
         assert_eq!(after.a(), before.a(), "drawn at the opacity No Fill hid");
         assert!(h.state().session.map().layer(id).unwrap().no_fill.is_none());
+    }
+
+    /// A fill transparent before No Fill shows so in the Fill swatch, as Restore Fill gives it back,
+    /// and keeps the colour picked there: its hue isn't lost at 0 opacity (#2308).
+    #[test]
+    fn a_transparent_fill_picked_after_no_fill_keeps_its_colour() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.color", json!({"color": "#33669900"})).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let fill = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill;
+        h.get_by_label("No Fill").click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        // A transparent picker edits linear values: a new red, half way up.
+        type_into(&mut h, 0, "0.5");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let after = fill(h.state());
+        assert_eq!((after.r(), after.g(), after.b(), after.a()), (188, 0x66, 0x99, 0), "the new red, the rest kept, still transparent");
+        assert!(h.state().session.map().layer(id).unwrap().no_fill.is_none());
+    }
+
+    /// Opening the Fill swatch and leaving it open picks nothing, for a colour egui's own colour
+    /// model doesn't round-trip exactly too: No Fill stays on, and there is no step to undo.
+    #[test]
+    fn opening_the_fill_swatch_picks_nothing() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.color", json!({"color": "#0000fcff"})).unwrap();
+        h.state_mut().run("layer.noFill", json!(null)).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let undo = h.state().session.undo_depth();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        for _ in 0..5 {
+            h.step();
+        }
+        assert!(h.state().session.map().layer(id).unwrap().no_fill.is_some(), "No Fill stays on");
+        assert_eq!(h.state().session.undo_depth(), undo, "nothing to undo");
     }
 
     /// Focuses the harness's `nth` number to type into it, and types `text` over its value.

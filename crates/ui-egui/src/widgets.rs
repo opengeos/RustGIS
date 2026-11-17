@@ -840,6 +840,49 @@ pub fn color_button(ui: &mut Ui, color: &mut egui::Color32) -> Response {
     egui::color_picker::color_edit_button_srgba(ui, color, egui::color_picker::Alpha::OnlyBlend)
 }
 
+/// A colour button for a symbol's fill, which may be transparent: its hue survives an opacity of
+/// 0, where `Color32` (and [`color_button`]) loses it. The colour picked, if one was.
+pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, Option<rustgis_engine::map::Rgba>) {
+    // The picker's own state while it shows this colour, as egui keeps it for its buttons: the hue
+    // stays where it was on black or grey, which have none of their own.
+    let id = ui.next_auto_id().with("rgba_button");
+    let kept = ui.data(|d| d.get_temp::<([u8; 4], egui::ecolor::Hsva)>(id)).filter(|(c, _)| *c == color.0);
+    let mut hsva = kept.map_or_else(
+        || {
+            // Construct hue independently of alpha: Color32 discards hidden RGB at zero.
+            let mut hsva = egui::ecolor::Hsva::from_srgb([color.r(), color.g(), color.b()]);
+            hsva.a = f32::from(color.a()) / 255.0;
+            hsva
+        },
+        |(_, hsva)| hsva,
+    );
+    let alpha = hsva.a;
+    // egui creates the popup from the context, not this Ui's scoped style.
+    // Borrow linear numeric editing only while a transparent picker is open.
+    let styles = (color.a() == 0 && egui::Popup::is_any_open(ui.ctx()))
+        .then(|| [egui::Theme::Light, egui::Theme::Dark].map(|theme| (theme, ui.ctx().style_of(theme))));
+    if styles.is_some() {
+        ui.ctx().global_style_mut(|style| style.visuals.numeric_color_space = egui::style::NumericColorSpace::Linear);
+    }
+    let response = egui::color_picker::color_edit_button_hsva(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend);
+    if let Some(styles) = styles {
+        // The popup's numeric-mode button can change both themes; restore both
+        // immediately so no other picker or later frame inherits the override.
+        for (theme, style) in styles {
+            ui.ctx().set_style_of(theme, style);
+        }
+    }
+    let edited = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
+    // The numeric alpha editor also rounds RGB through Color32; an
+    // opacity-only edit must keep the original channels exactly.
+    let shown = if hsva.a != alpha { color.with_alpha(edited.a()) } else { edited };
+    ui.data_mut(|d| d.insert_temp(id, (shown.0, hsva)));
+    // egui's round trip through its own colour model can report a change that isn't one, every
+    // frame the popup is open: only a colour that differs is picked.
+    let picked = (response.changed() && shown != color).then_some(shown);
+    (response, picked)
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
@@ -861,6 +904,10 @@ mod tests {
         }));
         assert!(!offers_additive(|ui, c| {
             super::color_button(ui, c);
+        }));
+        assert!(!offers_additive(|ui, c| {
+            let [r, g, b, a] = c.to_srgba_unmultiplied();
+            super::rgba_button(ui, rustgis_engine::map::Rgba([r, g, b, a]));
         }));
     }
 
