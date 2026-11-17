@@ -10350,6 +10350,41 @@ fn a_publication_of_the_whole_globe_fills_its_frame() {
     assert!(!warnings.contains("the whole globe"), "{warnings}");
 }
 
+/// A publication's globe locator near a pole shows the globe whole in its circle (#2337): sized on
+/// the equator and centred as near the area as the camera draws it, not at the area's latitude,
+/// where the camera stops at its coarsest resolution and the disc came out larger than the circle.
+/// On a flat map with an Arctic extent, and on the globe seen whole with a locator asked for.
+#[test]
+fn a_globe_locator_near_a_pole_fits_its_circle() {
+    use rustgis_map::layout::{ElementKind, PT_PER_MM, frame_camera};
+    let mut s = world();
+    let fits = |s: &Session, case: &str| {
+        let l = s.project.layouts.last().unwrap();
+        let locator = l.elements.iter().find(|e| e.name == "Locator").unwrap_or_else(|| panic!("{case}: no locator"));
+        let ElementKind::MapFrame { map, center, scale, .. } = &locator.kind else { panic!() };
+        let m = s.project.maps.iter().find(|m| &m.name == map).unwrap();
+        let cam = frame_camera(m, *center, *scale, 0.0, 0.0);
+        assert!(cam.res < rustgis_map::camera::MAX_RES, "{case}: the camera at its coarsest, 1:{scale} at {center:?}");
+        let across = 2.0 * rustgis_map::globe::Globe::new(&cam, locator.w * PT_PER_MM, locator.h * PT_PER_MM).disc_radius() / PT_PER_MM;
+        assert!(across <= locator.w.min(locator.h), "{case}: a disc {across:.0} mm across in a {:.0} mm circle", locator.w);
+    };
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [10.0, 76.0, 30.0, 81.0]})).unwrap();
+    fits(&s, "Svalbard on a flat map");
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 20.0, "lat": 84.0})).unwrap();
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "globe"})).unwrap();
+    fits(&s, "the whole globe at 84° N");
+    // Away from the poles the locator stays centred on the area, as before.
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+    fits(&s, "north-east Brazil");
+    let l = s.project.layouts.last().unwrap();
+    let centre = |n: &str| match l.elements.iter().find(|e| e.name == n).map(|e| &e.kind) {
+        Some(ElementKind::MapFrame { center, .. }) => *center,
+        _ => panic!("no {n}"),
+    };
+    assert_eq!(centre("Locator"), centre("Map Frame"));
+}
+
 /// Arrangements of a publication layout's surrounds (#1379): by name, corner by corner, the
 /// favourite (`layout.arrangement`, kept by the app) and `best`, the default, which keeps the
 /// favourite unless another keeps more surrounds in their own corners. Bad ones are refused before
