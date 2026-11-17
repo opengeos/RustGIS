@@ -2844,6 +2844,12 @@ fn qgis_sources_import_as_their_layers() {
         layer("escaped", "vector", "postgres", r"dbname='gis' host=db.invalid port=5432 user='me' password='p4ss\' table=x' sslmode=disable table=public.z"),
         layer("web mbtiles", "vector-tile", "mbtilesvectortiles", "type=mbtiles&amp;url=https://e.invalid/t.mbtiles"),
         layer("share", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=file://server/share/t.pmtiles"),
+        layer("gone", "vector-tile", "mbtilesvectortiles", "type=mbtiles&amp;url=.%2Fnope.mbtiles"),
+        layer("look one", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=https://same.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.pbf"),
+        layer("look two", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=https://same.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.pbf"),
+        // Two layers of one name (each with its own id, as QGIS writes them) on the same tiles.
+        layer("osm_1", "raster", "wms", "type=xyz&amp;url=https://twin.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>osm_1<", "<layername>osm<"),
+        layer("osm_2", "raster", "wms", "type=xyz&amp;url=https://twin.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>osm_2<", "<layername>osm<"),
     ]
     .concat();
     let qgs = format!(r#"<qgis version="4.2.3"><projectlayers>{layers}</projectlayers></qgis>"#);
@@ -2898,6 +2904,18 @@ fn qgis_sources_import_as_their_layers() {
     assert!(!notes.contains("/k/ca.pem"), "{notes}");
     assert!(notes.contains("its geometry (geometrycollection), of a kind RustGIS hasn't: a table without geometry"), "{notes}");
     assert!(notes.contains("the tile archive on a network share"), "{notes}");
+    assert!(notes.contains("nope.mbtiles: no file there"), "{notes}");
+    // Two layers on the same tiles: the one on top takes the other's place, said; the other
+    // isn't listed as added.
+    let said = |layer: &str, text: &str| {
+        out["notes"].as_array().unwrap().iter().any(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text))
+    };
+    assert!(said("look two", "the layer: the same tiles as look one, which takes its place"), "{notes}");
+    assert!(said("osm", "the layer: the same tiles as osm, which takes its place"), "{notes}");
+    let listed: Vec<&str> = out["layers"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(listed.contains(&"look one") && !listed.contains(&"look two"), "{listed:?}");
+    assert_eq!(listed.iter().filter(|n| **n == "osm").count(), 1, "{listed:?}");
+    assert_eq!(s.map().tiles.iter().filter(|t| t.name == "osm").count(), 1);
     assert!(m.tiles.iter().all(|t| t.name != "web mbtiles" && t.name != "share"), "{notes}");
     // Imported again: the saved connections are used, none made twice.
     let pg_name = pg.name.clone();
@@ -2920,7 +2938,7 @@ fn qgis_sources_that_carry_over_whole_are_not_noted() {
     .unwrap();
     std::fs::write(
         dir.join("pts.geojson"),
-        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"value":30},"geometry":{"type":"Point","coordinates":[8.5,47.4]}}]}"#,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"value":30},"geometry":{"type":"Point","coordinates":[8.5,47.4]}},{"type":"Feature","properties":{"value":10},"geometry":{"type":"Point","coordinates":[8.6,47.4]}}]}"#,
     )
     .unwrap();
     let layer = |id: &str, provider: &str, source: &str| {
@@ -2943,6 +2961,11 @@ fn qgis_sources_that_carry_over_whole_are_not_noted() {
     let out = s.run("project.importQgis", &json!({"text": qgs, "dir": dir.display().to_string()})).unwrap();
     assert_eq!(out["notes"], json!([]), "{}", out["notes"]);
     assert_eq!(out["layers"].as_array().map(Vec::len), Some(3), "{out}");
+    // The filter, its field written with the table, keeps one feature of the two.
+    let big = s.map().layer_by_name("big").unwrap();
+    let q = rustgis_data::query::parse(big.definition_query.as_deref().unwrap(), &big.dataset).unwrap();
+    let kept: Vec<usize> = (0..big.dataset.features.len()).filter(|&i| rustgis_data::query::eval(&q, &big.dataset, i)).collect();
+    assert_eq!(kept.len(), 1, "{:?}", big.definition_query);
     std::fs::remove_dir_all(&dir).ok();
 }
 

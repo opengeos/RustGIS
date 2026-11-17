@@ -139,7 +139,8 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 // The password stays out of what the import keeps or reports.
                 let kept: Vec<String> = conninfo(datasource)
                     .into_iter()
-                    .filter(|(k, _)| matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode"))
+                    // (An empty one says nothing, and would need quotes to read back: left out.)
+                    .filter(|(k, v)| !v.is_empty() && matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode"))
                     // Quoted, as QGIS writes it, when a value holds a space or a quote (its
                     // backslashes and quotes escaped, as libpq reads them back).
                     .map(|(k, v)| {
@@ -154,7 +155,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 // What QGIS writes about the table (or the password) rather than the connection.
                 const TABLE_OR_SECRET: [&str; 9] =
                     ["password", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity", "selectatid", "sql"];
-                let dropped = conninfo(datasource)
+                let mut dropped: Vec<String> = conninfo(datasource)
                     .into_iter()
                     .map(|(k, _)| k)
                     .filter(|k| {
@@ -165,9 +166,14 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                             && !matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode")
                             && !TABLE_OR_SECRET.iter().any(|t| t.eq_ignore_ascii_case(k))
                     })
-                    .take(16)
                     .map(|k| k.chars().take(40).collect())
                     .collect();
+                // The first 16 by name, the rest counted.
+                if dropped.len() > 16 {
+                    let more = dropped.len() - 16;
+                    dropped.truncate(16);
+                    dropped.push(format!("and {more} more"));
+                }
                 if provider == "mssql" {
                     Source::SqlServer { connection, table, dropped }
                 } else {
@@ -693,7 +699,10 @@ mod tests {
         let Source::Postgres { connection, .. } = read("postgres", r"dbname='gis' host=db port= user='o\'brien' table=t", dir) else {
             panic!()
         };
-        assert_eq!(connection, r"dbname=gis host=db port= user='o\'brien'");
+        assert_eq!(connection, r"dbname=gis host=db user='o\'brien'");
+        let many: String = (0..20).map(|i| format!("opt{i}=x ")).collect();
+        let Source::Postgres { dropped, .. } = read("postgres", &format!("{many}host=db table=t"), dir) else { panic!() };
+        assert_eq!((dropped.len(), dropped.last().map(String::as_str)), (17, Some("and 4 more")));
         // An apostrophe inside an unquoted value doesn't open a quote.
         let Source::Postgres { table, .. } = read("postgres", "user=o'brien table=t", dir) else { panic!() };
         assert_eq!(table, "t");

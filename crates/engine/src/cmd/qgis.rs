@@ -59,6 +59,13 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
     crate::project::read_file(std::path::Path::new(path), MAX_FILE)
 }
 
+/// Imports a QGIS project as a new map. On the thread that runs it, as opening a project is: it
+/// adds layers to the session one after another, each through the command that adds its kind,
+/// and no part of it runs on its own yet. Its work is bounded by the project: at most
+/// [`qgis::MAX_LAYERS`] layers, each read once by the command that adds it (a file's layers, and
+/// a virtual layer on one, each read their file), archives added without waiting for their
+/// metadata, annotation pictures within [`MAX_PICTURE_BYTES`]. Running the whole import off the
+/// window, with progress and Cancel, is for the import as a whole.
 fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     // The folder relative paths start from: `dir` (a blank one is none, so they don't start
@@ -130,7 +137,26 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
                 added.push(name);
                 if let Some(index) = index {
                     let ids = s.map().layers.iter().map(|l| l.id).filter(|id| !before.contains(id)).collect();
-                    came_in.push(CameIn { index, ids, tile: s.map().tiles.len() > tiles });
+                    // A web tile layer on the same tiles as one added before takes its place (the
+                    // map keeps one tile layer of the same tiles): that one isn't on the map, nor
+                    // among those added, said under its name.
+                    let key = tile_key(&layer.source);
+                    if let Some(k) = &key {
+                        for c in came_in.iter_mut().filter(|c| c.key.as_ref() == Some(k)) {
+                            c.tile = false;
+                            c.key = None;
+                            let Some(gone) = project.layers.get(c.index) else { continue };
+                            if let Some(at) = added.iter().position(|a| *a == gone.name) {
+                                added.remove(at);
+                            }
+                            report.skipped(
+                                &gone.name,
+                                format!("the layer: the same tiles as {}, which takes its place (RustGIS keeps one tile layer of the same tiles)", layer.name),
+                            );
+                        }
+                    }
+                    let tile = key.is_some() || s.map().tiles.len() > tiles;
+                    came_in.push(CameIn { index, ids, tile, key });
                 }
             }
             Ok(None) => {}
@@ -167,6 +193,20 @@ struct CameIn {
     ids: Vec<u32>,
     /// A web tile layer was added for it.
     tile: bool,
+    /// The tiles it was added as (see [`tile_key`]), while its tile layer is on the map.
+    key: Option<(String, &'static str)>,
+}
+
+/// The tiles a web tile layer is added as: its address and kind, as the map tells tile layers of
+/// the same tiles apart. (`map.addTiles` replaces an overlay of the same address and kind with the
+/// same look or name, `tiles.rs`'s `add_with_metadata_wait`; imported ones are overlays with no
+/// look of their own, so two on the same tiles always merge. A change there changes this.)
+fn tile_key(source: &Source) -> Option<(String, &'static str)> {
+    match source {
+        Source::Xyz { url, vector, .. } => Some((url.clone(), if *vector { "vector" } else { "raster" })),
+        Source::Archive { path, kind, .. } => Some((path.clone(), kind)),
+        _ => None,
+    }
 }
 
 /// Makes the project's layer tree groups as layer groups, nested as in QGIS, and puts each layer
@@ -336,6 +376,19 @@ fn add_layer(
                         "the tile archive {at}: RustGIS reads MBTiles files on this computer, and PMTiles archives there or on the web"
                     ),
                 );
+                return Ok(None);
+            }
+            // A file that isn't there is noted, not added to fail as it draws; the browser reads
+            // no file by its path.
+            #[cfg(not(target_arch = "wasm32"))]
+            if !path.contains("://") && !std::path::Path::new(path).is_file() {
+                report.skipped(name, format!("the tile archive {path}: no file there"));
+                return Ok(None);
+            }
+            #[cfg(target_arch = "wasm32")]
+            if !path.contains("://") {
+                report
+                    .skipped(name, format!("the tile archive {path}, a file the browser doesn't read by its path (add it with Add Data)"));
                 return Ok(None);
             }
             let before = s.active_layer;
