@@ -1097,7 +1097,10 @@ impl Chunks {
             let row_bits = u64::from(cols).saturating_mul(self.samples as u64).saturating_mul(u64::from(bits));
             row_bits.div_ceil(8).saturating_mul(u64::from(rows))
         };
-        (size(self.cw.min(self.w), self.ch.min(self.h)), size(self.cw, self.ch))
+        // The tiff crate gives a bottom tile of every band after the first, when the bands are stored
+        // apart, its padding rows too (see `place`); a strip's rows are within the image already.
+        let rows = if self.planes > 1 { self.ch } else { self.ch.min(self.h) };
+        (size(self.cw.min(self.w), rows), size(self.cw, self.ch))
     }
 
     /// Where chunk `c` of a plane lies: its corner, then the columns and rows of it the image
@@ -1229,15 +1232,18 @@ fn decimate<R: Read + Seek>(
     // by fuzzing, #1952). LERC chunks go to its reader only, which holds 8 bytes a sample with a
     // tile's padding; LZW ones to the tiff crate, then to our reader, which keeps the padding too;
     // the rest to the tiff crate only, which holds a chunk cropped to the image.
-    let (cropped, padded) = chunks.first_bytes(bits(dec));
+    let sample_bits = bits(dec);
+    let (cropped, padded) = chunks.first_bytes(sample_bits);
+    // The LZW reader takes 8- to 64-bit samples only.
+    let lzw_reads = lzw(dec) && matches!(sample_bits, 8 | 16 | 32 | 64);
     let refused = if super::lerc::is_lerc(dec) {
         let lerc = chunks.first_bytes(64).1;
-        (lerc > super::lerc::MAX_CHUNK_BYTES as u64).then_some(lerc)
+        (lerc > super::lerc::MAX_CHUNK_BYTES as u64).then_some(((chunks.cw, chunks.ch), lerc))
     } else {
-        (cropped > decoding_limit() as u64 && (!lzw(dec) || padded > super::lzw::MAX_CHUNK_BYTES as u64)).then_some(cropped)
+        let tiff = (chunks.cw.min(w), if chunks.planes > 1 { chunks.ch } else { chunks.ch.min(h) });
+        (cropped > decoding_limit() as u64 && (!lzw_reads || padded > super::lzw::MAX_CHUNK_BYTES as u64)).then_some((tiff, cropped))
     };
-    if let Some(bytes) = refused {
-        let (cols, rows) = (chunks.cw.min(w), chunks.ch.min(h));
+    if let Some(((cols, rows), bytes)) = refused {
         return Err(err(format!("a strip or tile of {cols} × {rows} pixels is too large to read ({} MB)", bytes >> 20)));
     }
     let mut bands = (0..nbands).map(|_| super::filled(ow, oh, f32::NAN)).collect::<Result<Vec<_>>>()?;
@@ -2283,6 +2289,10 @@ mod tests {
         assert_eq!(chunk_grid(1, 4_160_741_449, 1, 4_160_741_449, 1).first_bytes(1), (4_160_741_449, 4_160_741_449));
         // A 1024 × 1024 byte image in one 65536-pixel tile: 1 MB cropped, 4 GB padded.
         assert_eq!(chunk_grid(1024, 1024, 65536, 65536, 1).first_bytes(8), (1 << 20, 1 << 32));
+        // Bands stored apart: the tiff crate keeps a tile's full height for the later planes.
+        let mut planar = chunk_grid(1024, 1024, 1024, 65536, 1);
+        planar.planes = 2;
+        assert_eq!(planar.first_bytes(8), (1 << 26, 1 << 26));
     }
 
     /// An image `u32` can just count the width (or height) of, in chunks of 2^20 pixels, every 2^20th
