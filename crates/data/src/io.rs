@@ -5640,17 +5640,21 @@ mod tests {
         let shp = dir.path().join("permits.shp");
         write_path(&ds, &shp).unwrap();
         let dbf = shp.with_extension("dbf");
-        let mut table = std::fs::read(&dbf).unwrap();
-        let at = table.windows(8).position(|w| w == b"20260103").unwrap();
-        table[at..at + 8].copy_from_slice(b"<Null>  ");
-        std::fs::write(&dbf, table).unwrap();
-        let whole = read_shapefile_in(&shp, "permits", None).unwrap();
-        let streamed = crate::source::materialize(&crate::source::shp::ShpSource::open_path(&shp, "permits").unwrap()).unwrap();
-        for (read, (back, report)) in [("whole", whole), ("streamed", streamed)] {
-            assert_eq!(back.features[1].attrs[0], Value::Null, "{read}");
-            let said = "permits: 1 value written as Null was read as empty, in 'issued'";
-            assert!(report.messages.iter().any(|m| m == said), "{read}: {:?}", report.messages);
-            assert!(!report.messages.iter().any(|m| m.contains("date")), "{read}: {:?}", report.messages);
+        let original = std::fs::read(&dbf).unwrap();
+        // Padded with spaces, or with NULs as some writers do.
+        for marker in [b"<Null>  ", b"<Null>\0\0"] {
+            let mut table = original.clone();
+            let at = table.windows(8).position(|w| w == b"20260103").unwrap();
+            table[at..at + 8].copy_from_slice(marker);
+            std::fs::write(&dbf, table).unwrap();
+            let whole = read_shapefile_in(&shp, "permits", None).unwrap();
+            let streamed = crate::source::materialize(&crate::source::shp::ShpSource::open_path(&shp, "permits").unwrap()).unwrap();
+            for (read, (back, report)) in [("whole", whole), ("streamed", streamed)] {
+                assert_eq!(back.features[1].attrs[0], Value::Null, "{read}");
+                let said = "permits: 1 value written as Null was read as empty, in 'issued'";
+                assert!(report.messages.iter().any(|m| m == said), "{read}: {:?}", report.messages);
+                assert!(!report.messages.iter().any(|m| m.contains("date")), "{read}: {:?}", report.messages);
+            }
         }
     }
 
