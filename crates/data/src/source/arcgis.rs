@@ -132,6 +132,8 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
         return Err(refuse("the layer doesn't answer in protocol buffers"));
     }
     let page = paging.size.unwrap_or(1_000).clamp(1, LONGEST_PAGE).min(fits);
+    // A view is chosen by geometry: a table is downloaded instead.
+    let geometry_type = geometry_of(&d).ok_or_else(|| refuse("the layer names no geometry (it is a table)"))?;
     let sample = d.get("useStandardizedQueries").and_then(serde_json::Value::as_bool) == Some(true);
 
     let c = json(&remote, &counted, &c, MAX_COUNT_ANSWER, "count")?;
@@ -148,7 +150,7 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     let mut info = SourceInfo {
         name,
         format: FORMAT,
-        geometry_type: first.dataset.geometry_type,
+        geometry_type,
         fields: first.dataset.fields.clone(),
         extent,
         count: Some(count),
@@ -167,6 +169,17 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
     Ok(ArcgisSource { remote, query, info, oid, oid_at, page: std::sync::atomic::AtomicUsize::new(page), sample })
+}
+
+/// The geometry a layer's description names (`geometryType`); none for a table or a kind RustGIS
+/// doesn't read.
+fn geometry_of(description: &serde_json::Value) -> Option<crate::GeometryType> {
+    Some(match description.get("geometryType")?.as_str()? {
+        "esriGeometryPoint" | "esriGeometryMultipoint" => crate::GeometryType::Point,
+        "esriGeometryPolyline" => crate::GeometryType::Polyline,
+        "esriGeometryPolygon" | "esriGeometryEnvelope" => crate::GeometryType::Polygon,
+        _ => return None,
+    })
 }
 
 /// `query` with each value of `values` set, in order (so the same read asks for the same address,
@@ -369,7 +382,9 @@ impl ArcgisSource {
         let limit = super::clamp_limit(req.limit);
         let page = page_len as u64;
         let pages_at = |step: u64| counts.iter().map(|n| n.div_ceil(step).div_ceil(page)).fold(0u64, u64::saturating_add);
-        let mut step = if self.sample { step_for(counts.iter().sum::<u64>(), limit) } else { 1 };
+        // Counts are the service's: summed without overflowing.
+        let counted = counts.iter().fold(0u64, |a, n| a.saturating_add(*n));
+        let mut step = if self.sample { step_for(counted, limit) } else { 1 };
         while self.sample && step < MAX_STEP && pages_at(step) > MAX_READ_PAGES as u64 {
             step *= 2;
         }

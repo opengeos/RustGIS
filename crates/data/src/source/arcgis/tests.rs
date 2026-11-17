@@ -48,6 +48,8 @@ struct Opts {
     bad_text: bool,
     /// It sends at most this many features a page, whatever is asked for.
     caps: Option<usize>,
+    /// Its counts are the largest number there is.
+    huge_counts: bool,
 }
 
 impl Default for Opts {
@@ -63,6 +65,7 @@ impl Default for Opts {
             small_first: false,
             bad_text: false,
             caps: None,
+            huge_counts: false,
         }
     }
 }
@@ -77,7 +80,7 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps } = opts;
+    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first, bad_text, caps, huge_counts } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -89,7 +92,7 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             return Some(match description {
                 Some(d) => d.as_bytes().to_vec(),
                 None => format!(
-                    r#"{{"name":"Points","objectIdField":"OBJECTID","maxRecordCount":{page},"supportedQueryFormats":"JSON, geoJSON, PBF",
+                    r#"{{"name":"Points","objectIdField":"OBJECTID","maxRecordCount":{page},"supportedQueryFormats":"JSON, geoJSON, PBF","geometryType":"esriGeometryPoint",
                     "useStandardizedQueries":{sql},"advancedQueryCapabilities":{{"supportsPagination":true}}}}"#
                 )
                 .into_bytes(),
@@ -114,7 +117,8 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         if value("returnCountOnly").as_deref() == Some("true") {
             let extent = r#","extent":{"xmin":-100,"ymin":40,"xmax":-99.05,"ymax":40.95,"spatialReference":{"wkid":4326}}"#;
             let extent = if value("returnExtentOnly").is_some() { extent } else { "" };
-            return Some(format!(r#"{{"count":{}{extent}}}"#, ids.len()).into_bytes());
+            let n = if huge_counts { u64::MAX } else { ids.len() as u64 };
+            return Some(format!(r#"{{"count":{n}{extent}}}"#).into_bytes());
         }
         let offset: usize = if ignores_offset { 0 } else { value("resultOffset").map_or(0, |o| o.parse().unwrap()) };
         let size: usize = value("resultRecordCount").map_or(page, |o| o.parse().unwrap()).min(page).min(caps.unwrap_or(usize::MAX));
@@ -254,7 +258,9 @@ fn layers_that_cant_be_read_a_view_at_a_time_are_refused_to_be_downloaded() {
     let unpaged = r#"{"objectIdField":"OBJECTID","maxRecordCount":5,"supportedQueryFormats":"JSON, PBF"}"#;
     let geojson_only = r#"{"objectIdField":"OBJECTID","maxRecordCount":5,"supportedQueryFormats":"JSON, geoJSON",
         "advancedQueryCapabilities":{"supportsPagination":true}}"#;
-    for (host, d) in [("live-unpaged.test", unpaged), ("live-geojson.test", geojson_only)] {
+    let table = r#"{"objectIdField":"OBJECTID","maxRecordCount":5,"supportedQueryFormats":"JSON, PBF",
+        "advancedQueryCapabilities":{"supportsPagination":true}}"#;
+    for (host, d) in [("live-unpaged.test", unpaged), ("live-geojson.test", geojson_only), ("live-table.test", table)] {
         let (query, _) = service(host, 5, true, Some(d));
         let e = open_blocking(&query).unwrap_err();
         assert!(matches!(&e, DataError::Unsupported(m) if m.contains(NOT_LIVE)), "{e}");
@@ -403,7 +409,8 @@ fn a_budgeted_view_stays_within_its_bytes_as_it_is_read_and_spread_over_it() {
 fn a_layer_matching_nothing_opens_and_reads_empty() {
     let (query, _) = service_with("live-empty.test", Opts { empty_without_fields: true, ..Opts::default() });
     let src = open_blocking(&query.replace("where=1%3D1", "where=1%3D0")).unwrap();
-    assert_eq!(src.info.count, Some(0));
+    // Its geometry from the layer's description, as no feature says it.
+    assert_eq!((src.info.count, src.info.geometry_type), (Some(0), crate::GeometryType::Point));
     let b = read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap();
     assert!(b.complete && b.features.is_empty() && b.matched == 0);
     let mut visited = 0;
@@ -508,4 +515,14 @@ fn a_visit_reads_short_pages_in_order() {
     })
     .unwrap();
     assert!(seen.into_iter().eq(1..=FEATURES));
+}
+
+#[test]
+fn counts_past_any_layer_never_overflow() {
+    let (query, _) = service_with("live-huge.test", Opts { huge_counts: true, ..Opts::default() });
+    let src = open_blocking(&query).unwrap();
+    assert_eq!(src.info.count, Some(u64::MAX));
+    // An answer, read or refused, whatever it is: never a panic.
+    let _ = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 });
+    let _ = src.visit_chunks(None, 4 << 10, &mut |_| Ok(()));
 }

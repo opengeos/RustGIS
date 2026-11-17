@@ -148,8 +148,9 @@ pub enum Failed {
     PastEnd,
     /// The server doesn't answer byte-range requests: the file is downloaded whole instead.
     NoRanges,
-    /// The answer is larger than [`Want::Upto`] allows: a read asks for a smaller one.
-    TooLarge,
+    /// The download is larger than its limit (an answer past [`Want::Upto`], which a read asks
+    /// for again smaller), with the fetcher's message.
+    TooLarge(String),
     /// Anything else, with its message.
     Other(String),
 }
@@ -742,7 +743,7 @@ fn step_in<T: Send + 'static>(
                     (Job::Part(Want::Whole | Want::Upto(_)), Ok(bytes)) => remote2.insert(0, bytes.len() as u64, bytes),
                     (Job::Answer(url), Ok(bytes)) => remote2.insert_answer(url, bytes),
                     // Said to the read by `Remote::answer`, which asks for a smaller one.
-                    (Job::Answer(url), Err(Failed::TooLarge)) => remote2.note_too_large(url),
+                    (Job::Answer(url), Err(Failed::TooLarge(_))) => remote2.note_too_large(url),
                     // A request dropped unfetched (the view moved on) is asked for again next round.
                     (_, Err(Failed::Dropped)) => {}
                     // A range past the end of the file.
@@ -752,7 +753,7 @@ fn step_in<T: Send + 'static>(
                             Failed::NoRanges => format!("the server doesn't answer byte-range requests ({READ_WHOLE})"),
                             Failed::PastEnd => "the last bytes asked for past the end of the file".into(),
                             Failed::Dropped => "the request was dropped".into(),
-                            Failed::TooLarge => "the file is larger than a download may be".into(),
+                            Failed::TooLarge(e) => e,
                             Failed::Other(e) => e,
                         };
                         let mut r = round2.lock().unwrap_or_else(|e| e.into_inner());
@@ -937,7 +938,7 @@ pub(crate) mod testing {
             if let Some(h) = handler {
                 let answer = h(url).ok_or_else(|| Failed::Other("HTTP 404".into()));
                 done(match (w, answer) {
-                    (Want::Upto(n), Ok(a)) if a.len() as u64 > n => Err(Failed::TooLarge),
+                    (Want::Upto(n), Ok(a)) if a.len() as u64 > n => Err(Failed::TooLarge("the answer is too large".into())),
                     (_, answer) => answer,
                 });
                 return;
@@ -958,7 +959,7 @@ pub(crate) mod testing {
                 Want::Tail(n) => f.get(f.len().saturating_sub(n as usize)..).map(<[u8]>::to_vec).unwrap_or_default(),
                 Want::Whole => f.to_vec(),
                 Want::Upto(n) if f.len() as u64 > n => {
-                    done(Err(Failed::TooLarge));
+                    done(Err(Failed::TooLarge("the answer is too large".into())));
                     return;
                 }
                 Want::Upto(_) => f.to_vec(),

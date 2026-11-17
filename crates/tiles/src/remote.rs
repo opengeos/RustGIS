@@ -43,7 +43,7 @@ fn failed(e: &str) -> Failed {
     } else if e.ends_with(&format!(": {NO_RANGES}")) {
         Failed::NoRanges
     } else if is_larger_than(e) {
-        Failed::TooLarge
+        Failed::TooLarge(e.to_string())
     } else {
         Failed::Other(e.to_string())
     }
@@ -68,8 +68,10 @@ mod tests {
         assert_eq!(failed("HTTP 416"), Failed::PastEnd);
         assert_eq!(failed("http status: 416"), Failed::PastEnd);
         assert_eq!(failed(&format!("https://x.org/a.parquet: {NO_RANGES}")), Failed::NoRanges);
-        assert_eq!(failed("larger than 8388608 bytes"), Failed::TooLarge);
-        assert_eq!(failed("https://x.org/query?f=pbf: larger than 3 bytes"), Failed::TooLarge);
+        // Its message is kept, for a file's error.
+        for e in ["larger than 8388608 bytes", "https://x.org/query?f=pbf: larger than 3 bytes"] {
+            assert_eq!(failed(e), Failed::TooLarge(e.into()), "{e}");
+        }
         for e in ["larger than many bytes", "https://x.org/larger than 3 bytes/a.fgb: timed out", "larger than  bytes"] {
             assert_eq!(failed(e), Failed::Other(e.into()), "{e}");
         }
