@@ -285,7 +285,7 @@ pub(super) fn service_area(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Str
         let Some(f) = ds.features.get(row) else { continue };
         reached.insert(facility);
         let mut attrs: Vec<Value> = (0..ds.fields.len()).map(|i| f.attrs.get(i).cloned().unwrap_or(Value::Null)).collect();
-        let fid = facilities.get(facility).map_or(Value::Null, |(id, _)| i64::try_from(*id).map_or(Value::Null, Value::Int));
+        let fid = facilities.get(facility).map_or(Value::Null, |(id, _)| Value::Int(id.cast_signed()));
         let from = if band == 0 { 0.0 } else { breaks.get(band - 1).copied().unwrap_or(0.0) };
         attrs.extend([fid, Value::Float(from), Value::Float(breaks.get(band).copied().unwrap_or(0.0))]);
         out.push(Some(Geometry::Line(lines)), attrs);
@@ -329,12 +329,6 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     let origins = place(inp, p, "origins", &mut net, TOOL)?;
     let destinations = place(inp, p, "destinations", &mut net, TOOL)?;
     let per_origin = count.map_or(destinations.len(), |n| n.min(destinations.len()));
-    if cutoff.is_none() && origins.len().saturating_mul(per_origin) > MAX_PAIRS {
-        return Err(format!(
-            "{TOOL}: {} origins by {per_origin} destinations is more than {MAX_PAIRS} rows; set a Cutoff or Destinations to Find",
-            origins.len()
-        ));
-    }
     let (graph, unit_m) = (&net.graph, net.unit_m);
     let limit = cutoff.map_or(f64::INFINITY, |c| c * unit_m);
     // The destinations at each end of their segments, and on each segment: a search visits only
@@ -388,6 +382,8 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
                     (cost.is_finite() && cost <= limit).then_some((j, cost, length))
                 })
                 .collect();
+            // Counted before the cheapest few are kept: those beyond them are reached.
+            let unreached = destinations.len() - row.len();
             row.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
             row.truncate(per_origin);
             if rows.fetch_add(row.len(), Ordering::Relaxed).saturating_add(row.len()) > MAX_PAIRS {
@@ -395,7 +391,7 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
                     "{TOOL}: the matrix would hold more than {MAX_PAIRS} rows; set a lower Cutoff or Destinations to Find"
                 ));
             }
-            Ok(row)
+            Ok((row, unreached))
         },
     )?;
     crate::control::finish();
@@ -406,11 +402,12 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
         GeometryType::None,
         fields.into_iter().chain(["cost", "length"].map(|n| Field::new(n, FieldType::Double))).collect(),
     );
-    let id = |v: u64| i64::try_from(v).map_or(Value::Null, Value::Int);
+    // Ids stored wrapped (a GeoPackage's negative ones) read back as they were written.
+    let id = |v: u64| Value::Int(v.cast_signed());
     let mut unreached = 0usize;
-    for ((oid, _), row) in origins.iter().zip(&found) {
+    for ((oid, _), (row, missed)) in origins.iter().zip(&found) {
         crate::control::check()?;
-        unreached += per_origin - row.len();
+        unreached += missed;
         for (rank, &(j, cost, length)) in row.iter().enumerate() {
             let did = destinations.get(j).map_or(Value::Null, |(d, _)| id(*d));
             out.push(None, vec![id(*oid), did, Value::Int(rank as i64 + 1), Value::Float(cost / unit_m), Value::Float(length / unit_m)]);
@@ -628,6 +625,44 @@ mod tests {
             "{:?}",
             r.messages
         );
+    }
+
+    /// A point just across ±180° from a line is moved onto it, about 110 m away, not left out as
+    /// if it were the whole Earth's width away.
+    #[test]
+    fn a_point_across_the_antimeridian_snaps_to_the_line_beside_it() {
+        let mut lines = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        lines.push(Some(Geometry::Line(vec![vec![c(-180.0, 0.0), c(-179.99, 0.0)]])), vec![]);
+        let inputs = map(vec![lines, points("shops", &[Some(c(179.999, 0.0))])]);
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "0.5"})).unwrap();
+        assert_eq!(r.messages.len(), 1, "{:?}", r.messages);
+        assert!(!dataset(&r).features.is_empty());
+    }
+
+    /// Ids stored wrapped, as a GeoPackage's negative ones are, are written back as they were;
+    /// and an origin that reaches one destination but not another says so even when only the
+    /// nearest is kept.
+    #[test]
+    fn od_rows_keep_negative_ids_and_count_pairs_past_the_kept_ones() {
+        let mut from = points("from", &[Some(c(0.0, 0.0))]);
+        from.features[0].id = (-2i64).cast_unsigned();
+        let to = points("to", &[Some(c(0.01, 0.0)), Some(c(1.005, 1.0))]);
+        let inputs = map(vec![roads(), from, to]);
+        let r = od_cost_matrix(&inputs, &json!({"network": "roads", "origins": "from", "destinations": "to", "count": 1})).unwrap();
+        let out = dataset(&r);
+        assert_eq!(out.features.len(), 1);
+        assert_eq!(field(out, &out.features[0], "origin_fid"), -2.0);
+        assert!(r.messages.iter().any(|m| m.contains("1 origin–destination pair(s) aren't connected")), "{:?}", r.messages);
+        let r = service_area(
+            &map(vec![roads(), {
+                let mut shops = points("shops", &[Some(c(0.005, 0.0))]);
+                shops.features[0].id = (-7i64).cast_unsigned();
+                shops
+            }]),
+            &json!({"network": "roads", "facilities": "shops", "breaks": "1"}),
+        )
+        .unwrap();
+        assert!(dataset(&r).features.iter().all(|f| field(dataset(&r), f, "facility_fid") == -7.0));
     }
 
     /// Every origin's row the same, bit for bit, on one thread or several.

@@ -228,9 +228,12 @@ fn nearest_segment(segs: &[Segment], nodes: &[Coord], p: Coord, within: Option<f
             {
                 return None;
             }
+            // The point's longitude on the segment's side of ±180°: unchanged within 180° of its
+            // middle, so only segments near the antimeridian see a point just across it.
+            let px = p.x + 360.0 * ((0.5 * (a.x + b.x) - p.x) / 360.0).round();
             let (dx, dy) = ((b.x - a.x) * k, b.y - a.y);
             let len2 = dx * dx + dy * dy;
-            let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            let t = if len2 > 0.0 { (((px - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
             let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
             Some((i, t, q, haversine_m(q, p)))
         })
