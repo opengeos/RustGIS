@@ -5,7 +5,8 @@ downloaded from
 [opengeos/RustGIS](https://github.com/opengeos/RustGIS/releases).
 Never regenerate, reformat or resave them. All releases below support both file
 types. Record a skip here when a release has no such format, and add it to `SKIPS` in
-`crates/engine/src/tests/released_files.rs`.
+`crates/engine/src/tests/released_files.rs`. The test checks this table against
+the files, so a release's row and its files are added or kept together.
 
 | Writer | Release archive | Archive SHA-256 |
 |---|---|---|

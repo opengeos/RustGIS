@@ -28,6 +28,13 @@ fn released_projects_and_preferences_still_open() {
         })
         .collect::<BTreeSet<_>>();
     assert!(!versions.is_empty(), "no release fixtures in {}", fixtures.display());
+    // The README's table records every release captured, so deleting a release's files fails here.
+    let recorded = std::fs::read_to_string(fixtures.join("README.md"))
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("| v").and_then(|rest| rest.split_once(' ')).map(|(v, _)| format!("v{v}")))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(versions, recorded, "fixture files and the README's release table disagree");
     for version in versions.iter().map(String::as_str) {
         if present_or_skipped(&fixtures, version, "prefs", &format!("{version}.prefs.json")) {
             let prefs = super::read_at(&fixtures.join(format!("{version}.prefs.json"))).unwrap();

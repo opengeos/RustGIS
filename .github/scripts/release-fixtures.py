@@ -77,8 +77,8 @@ def capture_prefs(desktop, env):
                     data = prefs.read_bytes()
                     try:
                         saved = json.loads(data)
-                    except json.JSONDecodeError:
-                        saved = {}  # caught mid-write: read again on the next pass
+                    except ValueError:  # JSON or UTF-8 caught mid-write: read again on the next pass
+                        saved = {}
                     if saved.get("ribbon_minimized") == "true":
                         return data
                 time.sleep(0.1)
