@@ -1157,12 +1157,21 @@ fn frame_viewport(
 /// frame's extent, as an extent indicator shows it.
 fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Coord], color: Rgba, width: f32) {
     let ppp = view.pixels_per_point as f32;
+    // On a globe, through the globe as the frame draws it, breaking behind its horizon (#2348):
+    // through the flat camera the outline lands off the area once it is away from the centre.
+    let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(&view.camera, view.width, view.height));
     let mut pb = PathBuilder::new();
     let mut first = true;
     for c in ring {
-        let Some(m) = map.to_map(*c) else { continue };
-        // A tilted frame's outline breaks where it passes behind the eye.
-        let Some((x, y)) = view.camera.try_to_screen(m, view.width, view.height) else {
+        let at = match &globe {
+            Some(g) => g.forward(*c),
+            None => match map.to_map(*c) {
+                // A tilted frame's outline breaks where it passes behind the eye.
+                Some(m) => view.camera.try_to_screen(m, view.width, view.height),
+                None => continue,
+            },
+        };
+        let Some((x, y)) = at else {
             first = true;
             continue;
         };
@@ -5254,6 +5263,55 @@ Elaboração: RustGIS",
         assert_eq!(inset_pixels(&thin, INDICATOR_COLOR), 0, "no red once restyled");
         let (t, w) = (inset_pixels(&thin, blue), inset_pixels(&thick, blue));
         assert!(t > 0 && w > 3 * t, "a wider outline covers more: {t} at 1 pt, {w} at 6 pt");
+    }
+
+    /// On a globe, the extent indicator is drawn where the globe shows the area, also away from
+    /// the disc's centre (#2348): through the flat camera, Svalbard 18° north of the centre came out
+    /// half as far again up, nearly 5 mm off on a 50 mm locator.
+    #[test]
+    fn an_extent_indicator_on_a_globe_lands_on_the_area() {
+        use rustgis_map::layout::{INDICATOR_COLOR, INDICATOR_WIDTH, frame_camera};
+        let (area, at, scale) = (Coord::new(20.0, 78.0), Coord::new(20.0, 60.0), 2e8);
+        let mut globe = Map::new("g");
+        globe.set_projection(rustgis_map::Projection::Globe);
+        let maps = || [Map::new("m"), globe.clone()];
+        let frame = |map: &str, center, scale, extent_of| ElementKind::MapFrame {
+            map: map.into(),
+            center,
+            scale,
+            shape: FrameShape::Rectangle,
+            grid: None,
+            extent_of,
+            extent_color: INDICATOR_COLOR,
+            extent_width: INDICATOR_WIDTH,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let mut l = Layout::new("Layout", 100.0, 100.0);
+        let main = l.add("Main", (60.0, 60.0, 30.0, 30.0), frame("m", area, 2e7, None));
+        l.add("Locator", (5.0, 5.0, 50.0, 50.0), frame("g", at, scale, Some(main)));
+        let pm = render(&l, &mut maps(), 96.0, &PageInfo::default()).unwrap();
+        // Where the globe draws the area, in pixels on the page.
+        let side = 50.0 * PT_PER_MM;
+        let g = rustgis_map::globe::Globe::new(&frame_camera(&globe, at, scale, 0.0, 0.0), side, side);
+        let (x, y) = g.forward(area).unwrap();
+        // At 96 dpi a layout point is a pixel.
+        let expected = (5.0 * PT_PER_MM + x, 5.0 * PT_PER_MM + y);
+        // The red pixels' middle, inside the locator.
+        let px_mm = PT_PER_MM;
+        let red: Vec<(f64, f64)> = ((5.0 * px_mm) as u32..(55.0 * px_mm) as u32)
+            .flat_map(|y| ((5.0 * px_mm) as u32..(55.0 * px_mm) as u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let (r, g, b) = rgb(&pm, x, y);
+                r > 180 && g < 90 && b < 90
+            })
+            .map(|(x, y)| (f64::from(x), f64::from(y)))
+            .collect();
+        assert!(!red.is_empty(), "no extent indicator on the globe");
+        let n = red.len() as f64;
+        let mid = (red.iter().map(|p| p.0).sum::<f64>() / n, red.iter().map(|p| p.1).sum::<f64>() / n);
+        let off = ((mid.0 - expected.0).powi(2) + (mid.1 - expected.1).powi(2)).sqrt() / px_mm;
+        assert!(off < 1.5, "the indicator's middle {mid:?} is {off:.1} mm from the area at {expected:?}");
     }
 
     fn rgb(pm: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {

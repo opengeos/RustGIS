@@ -1948,8 +1948,20 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             // small, as the whole globe's frame is (#2337): at the area's own latitude near a pole
             // the camera stops at its coarsest resolution, and the disc came out larger than its
             // circle, clipped. Further from the pole, the area is still on the disc and outlined.
+            // A locator too small for the globe to fit even on the equator (a figure's, under
+            // about 30 mm) keeps the area in the middle, as the disc is clipped wherever it is.
             let globe = globe_scale(&m, Coord::new(center.x, 0.0), side * 0.92);
-            let at = drawable_globe_center(&m, center, globe);
+            let fits = |at: Coord| rustgis_map::layout::frame_camera(&m, at, globe, 0.0, 0.0).res < rustgis_map::camera::MAX_RES;
+            let at = if fits(Coord::new(center.x, 0.0)) { drawable_globe_center(&m, center, globe) } else { center };
+            if at != center {
+                warnings.push(format!(
+                    "the globe locator is centred at {:.1}° rather than the area's {:.1}° of latitude: nearer the pole, it can't draw the globe small enough to fit",
+                    at.y, center.y
+                ));
+            }
+            if !fits(at) {
+                warnings.push("the globe locator is too small to show the whole globe: its circle clips it".into());
+            }
             // Each polygon simplified to a tenth of a millimetre on the disc (its scale in metres),
             // so the project keeps a sketch of the layers for it, not a second full copy of them.
             let tolerance_m = globe * 1e-4;
