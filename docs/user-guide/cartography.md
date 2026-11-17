@@ -64,7 +64,8 @@ to apply its detected bounds, or enter the **Values** drawn smallest and largest
 **Scaling**: **By area**, as Proportional Symbols grow, or **By radius**, the size in a straight
 line with the value, as GeoLibre and MapLibre size circles. Values past either end take that end's
 size; a feature whose value is empty or not a number keeps its class's size. A final size of zero
-draws no marker. A web style or web layer shared from it draws the classes' sizes, and says so.
+draws no marker. A web style or web layer shared from it draws the classes' sizes, and says so;
+while its points are aggregated into bins, the bins are drawn instead, and that is said too.
 The legend lists the
 classes, then the smallest, middle and largest size. Switching to another renderer keeps the
 setting unused, for when you switch back; a **Size** by expression, if set, wins over it. By

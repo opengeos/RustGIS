@@ -1914,6 +1914,15 @@ fn a_classified_point_layer_is_sized_by_a_field() {
         s.notices_since(mark).iter().any(|n| n.text.contains("sizes by pop_max aren't in it"))
     };
     assert!(web_style_says(&mut s));
+    // Bins drawn instead of the points: said, whichever comes second.
+    let bins_said = |s: &mut Session, command: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(command, &p).unwrap();
+        s.notices_since(mark).iter().any(|n| n.text.contains("aggregated into bins"))
+    };
+    assert!(bins_said(&mut s, "layer.aggregation", json!({"layer": "Cities", "shape": "hexagon"})));
+    assert!(bins_said(&mut s, "layer.sizeBy", json!({"layer": "Cities", "maxSize": 24})));
+    assert!(!bins_said(&mut s, "layer.aggregation", json!({"layer": "Cities", "shape": "none"})));
     s.run("layer.sizeBy", &json!({"layer": "Cities", "field": null})).unwrap();
     assert!(s.map().layer_by_name("Cities").unwrap().size_by.is_none());
     assert!(!web_style_says(&mut s));

@@ -1342,12 +1342,16 @@ impl Layer {
 
     /// A legend's colour classes with the sizes of [`Layer::size_by`] after them, where it applies:
     /// the smallest, middle and largest value, drawn as the first class is. No size rows for a field
-    /// the layer doesn't have, which the map can't size by either, or under a Size expression.
+    /// the layer doesn't have, which the map can't size by either, under a Size expression, or while
+    /// its points are aggregated into bins, which are drawn instead of them.
     pub fn with_size_legend(&self, mut entries: Vec<symbology::LegendEntry>) -> Vec<symbology::LegendEntry> {
         // Not under a Size expression either: where it gives a value it wins, so the rows would
         // show sizes the map doesn't draw.
         let sized = self.size_by.as_ref().filter(|s| {
-            symbol_by::SizeBy::applies_to(self) && self.dataset.field_index(&s.field).is_some() && self.symbol_by.size.is_none()
+            symbol_by::SizeBy::applies_to(self)
+                && self.aggregation.is_none()
+                && self.dataset.field_index(&s.field).is_some()
+                && self.symbol_by.size.is_none()
         });
         if let Some(s) = sized {
             let like = entries.first().map_or_else(|| self.renderer.base_symbol(), |e| e.symbol);

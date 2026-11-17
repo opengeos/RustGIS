@@ -836,7 +836,25 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     let by = SizeBy { field, min, max, min_size, max_size, scaling };
     let out = json!({"field": by.field, "min": by.min, "max": by.max, "minSize": by.min_size, "maxSize": by.max_size, "scaling": by.scaling.code()});
     l.size_by = Some(by);
+    size_hidden_notice(s, id);
     Ok(out)
+}
+
+/// Says when a layer's size mapping doesn't show because its points are aggregated into bins,
+/// which are drawn instead of them. Called by `layer.sizeBy` and `layer.aggregation`, whichever
+/// comes second, as for a diagram ([`super::diagram::hidden_notice`]).
+pub(crate) fn size_hidden_notice(s: &mut Session, id: u32) {
+    let text = s.map().layer(id).filter(|l| l.aggregation.is_some() && rustgis_map::symbol_by::SizeBy::applies_to(l)).and_then(|l| {
+        let by = l.size_by.as_ref()?;
+        Some(format!(
+            "Layer '{}': its sizes by {} don't show while its points are aggregated into bins; turn Aggregation off to see them",
+            crate::project::short_name(&l.name),
+            by.field
+        ))
+    });
+    if let Some(text) = text {
+        s.notify(text, false);
+    }
 }
 
 /// A size range prepared on shared rows; landing refuses edits to those rows or their fields.

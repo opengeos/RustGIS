@@ -643,6 +643,10 @@ mod tests {
         l.size_by = Some(SizeBy { field: "gone".into(), ..by.clone() });
         assert_eq!(l.with_size_legend(l.renderer.legend()).len(), 6);
         l.size_by = Some(by.clone());
+        // Nor do bins, drawn instead of the points while they're aggregated.
+        l.aggregation = Some(crate::effects::Aggregation { hexagons: true, size: 24.0 });
+        assert_eq!(l.with_size_legend(l.renderer.legend()).len(), 6);
+        l.aggregation = None;
         // Size samples use the first class's own marks, scaled just as on the map.
         let mark = LineStroke {
             markers: Some(crate::symbology::LineMarkers { size: 14.0, offset_along: 3.5, ..Default::default() }),
