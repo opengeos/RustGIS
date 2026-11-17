@@ -25,6 +25,10 @@ const MAX_GRID: usize = 512 << 20;
 const MAX_GRIDS: usize = 16;
 const MAX_BYTES: usize = 2 << 30;
 
+/// How many grids are downloaded at once: a few, so one slow (a large grid, or a fetch that
+/// doesn't answer) doesn't hold up the others.
+const AT_ONCE: usize = 3;
+
 /// How long a download may take before it is given up.
 #[cfg(not(target_arch = "wasm32"))]
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
@@ -56,12 +60,20 @@ struct State {
     /// Downloads started, and bytes they brought, since the setting was turned on.
     started: usize,
     bytes: usize,
+    /// Grids claimed and not yet started: [`AT_ONCE`] are downloaded at a time, so at most that
+    /// many grids' bytes ([`MAX_GRID`]) are held at once, and the 2 GB counts what arrived.
+    queue: std::collections::VecDeque<MissingGrid>,
+    /// Downloads under way.
+    running: usize,
+    /// Times the setting was turned on ([`turns`]).
+    turns: u64,
     news: Vec<News>,
 }
 
 impl State {
     /// The setting turned on: this run's failures are tried again, and the limits start over.
     fn turned_on(&mut self) {
+        self.turns += 1;
         self.failed.clear();
         self.started = 0;
         self.bytes = 0;
@@ -103,11 +115,18 @@ pub fn set_enabled(on: bool) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     crs::set_grid_waiter(if on { Some(wait_for) } else { None });
+    // Off: those not started yet aren't (they are asked for again when it is turned on).
+    next();
 }
 
 /// Whether datum grids are downloaded.
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::SeqCst)
+}
+
+/// How many times downloads were turned on this run: a download said before is said again after.
+pub fn turns() -> u64 {
+    lock().turns
 }
 
 /// What the downloads did since this was last asked.
@@ -119,6 +138,11 @@ pub fn take_news() -> Vec<News> {
 /// gives the names of those it started or that were already on their way: none when downloads are
 /// off, and none for a grid that failed or arrived this run.
 pub fn want(crs: Crs) -> Vec<String> {
+    want_in(crs, false)
+}
+
+/// [`want`]; `first`: ahead of the grids queued before, for a read waiting for them.
+fn want_in(crs: Crs, first: bool) -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
@@ -127,13 +151,39 @@ pub fn want(crs: Crs) -> Vec<String> {
         match claim(&grid.name) {
             Claim::Mine => {
                 coming.push(grid.name.clone());
-                start(grid);
+                let mut s = lock();
+                if first {
+                    s.queue.push_front(grid);
+                } else {
+                    s.queue.push_back(grid);
+                }
             }
-            Claim::Coming => coming.push(grid.name),
+            Claim::Coming => {
+                // A read waiting for it: moved ahead, if not started yet.
+                if first {
+                    let mut s = lock();
+                    if let Some(g) = s.queue.iter().position(|g| g.name == grid.name).and_then(|i| s.queue.remove(i)) {
+                        s.queue.push_front(g);
+                    }
+                }
+                coming.push(grid.name);
+            }
             Claim::Settled => {}
         }
     }
+    next();
     coming
+}
+
+/// Starts the grids queued, as many as may run at once.
+fn next() {
+    loop {
+        let grid = lock().take_next(enabled());
+        let Some(grid) = grid else { break };
+        start(grid);
+    }
+    // Those dropped or refused on the way: their waiters see it.
+    state().1.notify_all();
 }
 
 /// What [`claim`] found of a grid.
@@ -166,13 +216,13 @@ impl State {
         if self.failed.contains(name) || self.got.contains(name) {
             return Claim::Settled;
         }
-        let refused = if !can_keep {
+        // Checked before anything is asked of the server: only PROJ's plain names are.
+        let refused = if !plain(name) {
+            Some("its name isn't a plain file name".to_string())
+        } else if !can_keep {
             Some("RustGIS has no folder to keep it in".to_string())
         } else if self.started >= MAX_GRIDS || self.bytes >= MAX_BYTES {
-            Some(format!(
-                "RustGIS downloads at most {MAX_GRIDS} grids each time the setting is turned on, and starts none once {} GB have arrived",
-                MAX_BYTES >> 30
-            ))
+            Some(limit_text())
         } else {
             None
         };
@@ -185,6 +235,35 @@ impl State {
         self.busy.insert(name.to_string());
         Claim::Mine
     }
+
+    /// The next grid queued to start, if fewer than [`AT_ONCE`] are under way. With downloads
+    /// `on` no longer, the queue is dropped (each asked for again when they are turned on);
+    /// once 2 GB have arrived, those queued are refused.
+    fn take_next(&mut self, on: bool) -> Option<MissingGrid> {
+        while !on || self.running < AT_ONCE {
+            let Some(grid) = self.queue.pop_front() else { break };
+            if !on {
+                self.busy.remove(&grid.name);
+                self.started = self.started.saturating_sub(1);
+            } else if self.bytes >= MAX_BYTES {
+                self.busy.remove(&grid.name);
+                self.failed.insert(grid.name.clone());
+                self.news.push(News::Failed { name: grid.name, error: limit_text() });
+            } else {
+                self.running += 1;
+                return Some(grid);
+            }
+        }
+        None
+    }
+}
+
+/// Why a grid past the limits isn't downloaded.
+fn limit_text() -> String {
+    format!(
+        "RustGIS downloads at most {MAX_GRIDS} grids each time the setting is turned on, and starts none once {} GB have arrived",
+        MAX_BYTES >> 30
+    )
 }
 
 /// Records how `name`'s download went, and wakes those waiting for it.
@@ -202,9 +281,11 @@ fn finish(name: &str, outcome: Result<usize, String>) {
             s.news.push(News::Failed { name: name.to_string(), error });
         }
     }
+    s.running = s.running.saturating_sub(1);
     drop(s);
     state().1.notify_all();
     rustgis_map::source::wake();
+    next();
 }
 
 /// Whether a grid's name can be a file name in the grid folder: PROJ's grid names are plain
@@ -236,20 +317,10 @@ fn a_grid(bytes: &[u8]) -> bool {
         })
     };
     match bytes.get(..4) {
-        // TIFF: the first directory (its entry count, and its entries) is within the file.
-        Some(b"II*\0") | Some(b"MM\0*") => {
-            let big = bytes[0] == b'M';
-            let Some(ifd) = int(4, 4, big) else { return false };
-            let Some(entries) = usize::try_from(ifd).ok().and_then(|i| int(i, 2, big)) else { return false };
-            ifd >= 8 && ifd + 2 + entries * 12 + 4 <= n && entries > 0
-        }
-        // BigTIFF: the same, with 8-byte offsets and counts.
-        Some(b"II+\0") | Some(b"MM\0+") => {
-            let big = bytes[0] == b'M';
-            let Some(ifd) = int(8, 8, big) else { return false };
-            let Some(entries) = usize::try_from(ifd).ok().and_then(|i| int(i, 8, big)) else { return false };
-            ifd >= 16 && entries > 0 && entries.checked_mul(20).and_then(|e| e.checked_add(ifd + 16)).is_some_and(|end| end <= n)
-        }
+        // TIFF and BigTIFF: every directory, and the strips or tiles each points to, within the
+        // file, so one cut off anywhere is refused.
+        Some(b"II*\0") | Some(b"MM\0*") => tiff_whole(&int, n, bytes[0] == b'M', false),
+        Some(b"II+\0") | Some(b"MM\0+") => tiff_whole(&int, n, bytes[0] == b'M', true),
         // NTv2: its overview header (11 records of 16 bytes), then at least one grid's header.
         _ if bytes.starts_with(b"NUM_OREC") => n >= 2 * 176,
         // CTable2: its 160-byte header, then the shifts it says it has (8 bytes each).
@@ -261,6 +332,96 @@ fn a_grid(bytes: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a TIFF of `n` bytes (`int` reads its integers: at, width, big-endian) holds every
+/// directory it chains and every strip or tile they point to. The work is bounded by the file's
+/// size: each directory is visited once, each part tag counted once a directory, and no more
+/// values are read in all than the file has bytes.
+fn tiff_whole(int: &dyn Fn(usize, usize, bool) -> Option<u64>, n: u64, big: bool, bigtiff: bool) -> bool {
+    // Classic: 2-byte entry counts, 12-byte entries, 4-byte offsets; BigTIFF: 8, 20, 8.
+    let (count_w, entry_w, off_w, header) = if bigtiff { (8, 20, 8, 16) } else { (2, 12, 4, 8) };
+    let Some(mut ifd) = int(if bigtiff { 8 } else { 4 }, off_w, big) else { return false };
+    let mut seen = HashSet::new();
+    let mut budget = n;
+    while ifd != 0 {
+        // PROJ's grids have a directory per subgrid: a few hundred at most, each once.
+        if seen.len() >= 4096 || ifd < header || !seen.insert(ifd) {
+            return false;
+        }
+        let Ok(at) = usize::try_from(ifd) else { return false };
+        let Some(entries) = int(at, count_w, big) else { return false };
+        let Some(entries_at) = usize::try_from(entries).ok().and_then(|e| e.checked_mul(entry_w)) else { return false };
+        let Some(next_at) = at.checked_add(count_w).and_then(|a| a.checked_add(entries_at)) else { return false };
+        let Some(following) = int(next_at, off_w, big) else { return false };
+        // Entries walked count too (directories may overlap).
+        let Some(left) = budget.checked_sub(entries) else { return false };
+        budget = left;
+        if entries == 0 {
+            return false;
+        }
+        // Where strip (273, 279) or tile (324, 325) offsets and byte counts are: values at, how
+        // many, their width.
+        let mut parts: [Option<(usize, usize, usize)>; 4] = [None; 4];
+        for e in 0..entries as usize {
+            let entry = at + count_w + e * entry_w;
+            let (Some(tag), Some(ty), Some(count)) = (int(entry, 2, big), int(entry + 2, 2, big), int(entry + 4, off_w, big)) else {
+                return false;
+            };
+            let slot = match tag {
+                273 => 0,
+                279 => 1,
+                324 => 2,
+                325 => 3,
+                _ => continue,
+            };
+            let width = match ty {
+                3 => 2,
+                4 => 4,
+                16 => 8,
+                _ => return false,
+            };
+            let Some((count, size)) = usize::try_from(count).ok().and_then(|c| Some((c, c.checked_mul(width)?))) else { return false };
+            let value_at = entry + 4 + off_w;
+            let values_at = if size <= off_w {
+                value_at
+            } else {
+                match int(value_at, off_w, big).and_then(|o| usize::try_from(o).ok()) {
+                    Some(o) => o,
+                    None => return false,
+                }
+            };
+            // Within the file, and each tag once.
+            if values_at.checked_add(size).is_none_or(|end| end as u64 > n) || parts[slot].is_some() {
+                return false;
+            }
+            parts[slot] = Some((values_at, count, width));
+        }
+        let mut any = false;
+        for (offsets, counts) in [(parts[0], parts[1]), (parts[2], parts[3])] {
+            match (offsets, counts) {
+                (None, None) => {}
+                (Some((oa, oc, ow)), Some((ca, cc, cw))) if oc == cc => {
+                    any |= oc > 0;
+                    // No more values read in all than the file has bytes.
+                    let Some(left) = budget.checked_sub(2 * oc as u64) else { return false };
+                    budget = left;
+                    for i in 0..oc {
+                        let (Some(o), Some(c)) = (int(oa + i * ow, ow, big), int(ca + i * cw, cw, big)) else { return false };
+                        if o.checked_add(c).is_none_or(|end| end > n) {
+                            return false;
+                        }
+                    }
+                }
+                _ => return false,
+            }
+        }
+        if !any {
+            return false;
+        }
+        ifd = following;
+    }
+    !seen.is_empty()
 }
 
 /// Makes the downloaded bytes of `name` available: kept in the grid folder on a computer, then
@@ -280,7 +441,9 @@ fn keep(name: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Downloads `grid` on a thread of its own.
+/// Downloads `grid` on a thread of its own. The download has no Cancel: it is no read's step (a
+/// read stops waiting for it when cancelled), and ends within [`DOWNLOAD_TIMEOUT`] and
+/// [`MAX_GRID`] bytes; what it brought, or why not, is said.
 #[cfg(not(target_arch = "wasm32"))]
 fn start(grid: MissingGrid) {
     let name = grid.name.clone();
@@ -329,15 +492,28 @@ fn start(grid: MissingGrid) {
 /// Gets the grids `crs` needs before a file in it is read ([`crs::set_grid_waiter`]): each one
 /// missing is downloaded on a thread of its own, or was already on its way, and the read waits for
 /// them, then asks again, as the next operation's grids come up where the first's don't reach. It
-/// waits at most [`WAIT`] in all, and stops waiting when its read is cancelled; the downloads go
+/// waits at most [`WAIT`] in all, for all the systems of one read, and stops waiting when its read is cancelled; the downloads go
 /// on, and what they bring is said and used from then on.
 #[cfg(not(target_arch = "wasm32"))]
-fn wait_for(crs: Crs) {
-    let deadline = web_time::Instant::now() + WAIT;
+fn wait_for(crs: Crs, read: u64) {
+    thread_local! {
+        /// The read waited for on this thread, and when its wait ends: one for all its systems.
+        static DEADLINE: std::cell::Cell<Option<(u64, web_time::Instant)>> = const { std::cell::Cell::new(None) };
+    }
+    let deadline = DEADLINE
+        .try_with(|d| match d.get() {
+            Some((r, at)) if r == read => at,
+            _ => {
+                let at = web_time::Instant::now() + WAIT;
+                d.set(Some((read, at)));
+                at
+            }
+        })
+        .unwrap_or_else(|_| web_time::Instant::now() + WAIT);
     let control = rustgis_analysis::control::current();
     // A few rounds at most: each brings the grids the operation chosen after the last needs.
     for _ in 0..4 {
-        let coming = want(crs);
+        let coming = want_in(crs, true);
         if coming.is_empty() {
             return;
         }
@@ -357,23 +533,60 @@ fn wait_for(crs: Crs) {
     }
 }
 
-/// What the session says of a download: the grid, its size and what it changes; or why it failed.
-pub fn news_text(news: &News) -> (String, bool) {
-    match news {
-        News::Got { name, bytes } => (
+/// What the session says of downloads: one notice for the grids that arrived (each with its size)
+/// and what they change, and one for those that couldn't be had and why, however many.
+pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
+    let mut got = Vec::new();
+    // By reason, in order: a reason given once for all its grids (the limit, for one).
+    let mut why: Vec<(&str, Vec<&str>)> = Vec::new();
+    let mut count = 0;
+    for n in news {
+        match n {
+            News::Got { name, bytes } => got.push(format!("{name} ({})", size_text(*bytes))),
+            News::Failed { name, error } => {
+                count += 1;
+                match why.iter_mut().find(|(e, _)| e == error) {
+                    Some((_, names)) => names.push(name),
+                    None => why.push((error, vec![name])),
+                }
+            }
+        }
+    }
+    // A few named per reason, the rest counted: the notice stays short however many.
+    let failed: Vec<String> = why
+        .iter()
+        .map(|(error, names)| {
+            let named = names.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            let more = if names.len() > 3 { format!(" and {} more", names.len() - 3) } else { String::new() };
+            format!("{named}{more} ({error})")
+        })
+        .collect();
+    let mut out = Vec::new();
+    if !got.is_empty() {
+        let (grids, it) = if got.len() == 1 { ("grid", "it") } else { ("grids", "them") };
+        out.push((
             format!(
-                "Downloaded the datum grid {name} ({}) from PROJ's grid server: places in the coordinate systems that use it are now where PROJ puts them with it. Layers opened before keep their places until they are opened again.",
-                size_text(*bytes)
+                "Downloaded the datum {grids} {} from PROJ's grid server: places in the coordinate systems that use {it} are now where PROJ puts them with {it}. Layers opened before keep their places until they are opened again.",
+                got.join(", ")
             ),
             false,
-        ),
-        News::Failed { name, error } => (
-            format!(
-                "The datum grid {name} couldn't be downloaded ({error}), so the next transformation is used without it; turn Download Datum Grids off and on again to try again."
-            ),
-            true,
-        ),
+        ));
     }
+    if !failed.is_empty() {
+        let text = if count == 1 {
+            format!(
+                "The datum grid {} couldn't be downloaded, so the next transformation is used without it; turn Download Datum Grids off and on again to try again.",
+                failed[0]
+            )
+        } else {
+            format!(
+                "{count} datum grids couldn't be downloaded: {}, so the next transformations are used without them; turn Download Datum Grids off and on again to try again.",
+                failed.join("; ")
+            )
+        };
+        out.push((text, true));
+    }
+    out
 }
 
 fn size_text(bytes: usize) -> String {
@@ -400,8 +613,9 @@ mod tests {
         for name in ["us_noaa_conus.tif", "us_noaa_ethpgn.tif"] {
             let bytes = std::fs::read(format!("{dir}{name}")).unwrap();
             assert!(a_grid(&bytes), "{name}");
-            // Cut off before its first directory ends: not kept.
+            // Cut off before its first directory ends, or in its last tile: not kept.
             assert!(!a_grid(&bytes[..16]), "{name}");
+            assert!(!a_grid(&bytes[..bytes.len() - 1]), "{name}");
         }
         // Only the leading bytes of one, or of another kind: not grids.
         for bad in [&b"II*\0"[..], b"II*\0\xff\xff\xff\x7f", b"II+\0", b"NUM_OREC", b"CTABLE V2", b"<html>"] {
@@ -431,6 +645,32 @@ mod tests {
         // Once 2 GB have arrived, none is started.
         let mut s = State { bytes: MAX_BYTES, ..Default::default() };
         assert!(matches!(s.claim("b.tif", true), Claim::Settled));
+        // Queued grids start a few at a time; with 2 GB arrived, those left are refused; with
+        // downloads off, those left are dropped, to be asked for again.
+        let grid = |name: &str| MissingGrid { name: name.into(), url: format!("https://cdn.proj.org/{name}") };
+        let mut s = State::default();
+        for name in ["q1.tif", "q2.tif", "q3.tif", "q4.tif", "q5.tif"] {
+            assert!(matches!(s.claim(name, true), Claim::Mine));
+            s.queue.push_back(grid(name));
+        }
+        for _ in 0..AT_ONCE {
+            assert!(s.take_next(true).is_some());
+        }
+        assert!(s.take_next(true).is_none(), "no more than {AT_ONCE} at once");
+        s.running -= 1;
+        s.bytes = MAX_BYTES;
+        assert!(s.take_next(true).is_none());
+        assert!(s.queue.is_empty() && s.failed.contains("q4.tif") && s.failed.contains("q5.tif"));
+        let mut s = State::default();
+        assert!(matches!(s.claim("q6.tif", true), Claim::Mine));
+        s.queue.push_back(grid("q6.tif"));
+        assert!(s.take_next(false).is_none());
+        assert!(s.queue.is_empty() && !s.busy.contains("q6.tif") && !s.failed.contains("q6.tif"));
+        assert!(matches!(s.claim("q6.tif", true), Claim::Mine), "asked for again");
+        // A name that isn't a plain file name: refused before the server is asked.
+        let mut s = State::default();
+        assert!(matches!(s.claim("a b.tif", true), Claim::Settled));
+        assert!(matches!(&s.news[..], [News::Failed { error, .. }] if error.contains("plain file name")));
         // Nowhere to keep it: not downloaded, and said.
         let mut s = State::default();
         assert!(matches!(s.claim("c.tif", false), Claim::Settled));
@@ -447,10 +687,31 @@ mod tests {
 
     #[test]
     fn news_says_the_grid_its_size_and_what_it_changes() {
-        let (text, error) = news_text(&News::Got { name: "us_noaa_conus.tif".into(), bytes: 173_029 });
-        assert!(!error && text.contains("us_noaa_conus.tif (174 KB)") && text.contains("opened again"), "{text}");
-        let (text, error) = news_text(&News::Failed { name: "a.tif".into(), error: "HTTP 404".into() });
-        assert!(error && text.contains("a.tif") && text.contains("HTTP 404"), "{text}");
+        let said = news_texts(&[News::Got { name: "us_noaa_conus.tif".into(), bytes: 173_029 }]);
+        assert!(
+            matches!(&said[..], [(text, false)] if text.contains("grid us_noaa_conus.tif (174 KB)") && text.contains("opened again")),
+            "{said:?}"
+        );
+        let said = news_texts(&[News::Failed { name: "a.tif".into(), error: "HTTP 404".into() }]);
+        assert!(matches!(&said[..], [(text, true)] if text.contains("a.tif (HTTP 404)")), "{said:?}");
+        // One notice of each kind, however many grids.
+        let said = news_texts(&[
+            News::Got { name: "a.tif".into(), bytes: 1000 },
+            News::Failed { name: "b.tif".into(), error: "HTTP 404".into() },
+            News::Got { name: "c.tif".into(), bytes: 2000 },
+            News::Failed { name: "d.tif".into(), error: "HTTP 500".into() },
+        ]);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].0.contains("grids a.tif (1 KB), c.tif (2 KB)") && !said[0].1, "{said:?}");
+        assert!(said[1].0.starts_with("2 datum grids couldn't be downloaded: b.tif (HTTP 404); d.tif (HTTP 500)") && said[1].1, "{said:?}");
+        // A reason given once for its grids, a few named.
+        let limit: Vec<News> = (0..5).map(|i| News::Failed { name: format!("g{i}.tif"), error: limit_text() }).collect();
+        let said = news_texts(&limit);
+        assert!(
+            said[0].0.starts_with("5 datum grids couldn't be downloaded: g0.tif, g1.tif, g2.tif and 2 more (RustGIS downloads at most"),
+            "{said:?}"
+        );
+        assert_eq!(said[0].0.matches("at most 16").count(), 1, "{said:?}");
         assert_eq!(size_text(12_345_678), "12.3 MB");
     }
 }

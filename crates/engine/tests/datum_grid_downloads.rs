@@ -37,11 +37,22 @@ fn server(url: &str, _max: usize, _timeout: std::time::Duration) -> Result<Vec<u
     std::fs::read(format!("{dir}{name}")).map_err(|_| "HTTP 404".to_string())
 }
 
+/// Removes a test's folder when dropped, a failed assertion included.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn a_read_waits_for_the_grids_its_system_needs() {
     let root = std::env::temp_dir().join(format!("rustgis-grid-downloads-{}", std::process::id()));
     // What a run with this process id that panicked may have left.
     let _ = std::fs::remove_dir_all(&root);
+    // And gone however the test ends.
+    let _scratch = Scratch(root.clone());
     // Only a folder of the test's own: none from this computer (PROJ's).
     crs::set_grid_folders(vec![root.join("datum-grids")]);
     grids::set_download(server);
@@ -91,8 +102,8 @@ fn a_read_waits_for_the_grids_its_system_needs() {
         failed.iter().any(|n| matches!(n, News::Failed { name, error } if name == "us_noaa_WO.tif" && error == "HTTP 404")),
         "{failed:?}"
     );
-    let (text, error) = grids::news_text(&failed[0]);
-    assert!(error && text.contains("couldn't be downloaded"), "{text}");
+    let said = grids::news_texts(&failed);
+    assert!(said.iter().any(|(text, error)| *error && text.contains("couldn't be downloaded")), "{said:?}");
     let _ = crs::waiting_for_grids(|| Crs::Epsg(4267).transformer()).unwrap();
     assert_eq!(ASKED.load(Ordering::SeqCst), asked);
 
@@ -189,6 +200,4 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     }
     grids::set_enabled(false);
     MODE.store(GRIDS, Ordering::SeqCst);
-
-    let _ = std::fs::remove_dir_all(&root);
 }

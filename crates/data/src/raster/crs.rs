@@ -852,8 +852,9 @@ fn downloadable(grid: &terrio_crs::GridUse) -> bool {
         && grid.url.as_deref().is_some_and(|u| u.strip_prefix("https://cdn.proj.org/").is_some_and(|n| n == grid.name))
 }
 
-/// What waits for the datum grids a system needs ([`set_grid_waiter`]).
-type GridWaiter = fn(Crs);
+/// What waits for the datum grids a system needs ([`set_grid_waiter`]): the system, and the read
+/// it waits for (a number of this thread's own), so a read's systems share one wait.
+type GridWaiter = fn(Crs, u64);
 
 fn grid_waiter() -> &'static std::sync::RwLock<Option<GridWaiter>> {
     static WAITER: std::sync::RwLock<Option<GridWaiter>> = std::sync::RwLock::new(None);
@@ -865,6 +866,8 @@ thread_local! {
     static MAY_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The systems this read has already waited for: each is asked about once.
     static WAITED: std::cell::RefCell<Vec<Crs>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The read on this thread ([`waiting_for_grids`]), counted.
+    static READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Puts [`MAY_WAIT`] back as it was when dropped, a panic included.
@@ -896,6 +899,7 @@ pub fn waiting_for_grids<R>(f: impl FnOnce() -> R) -> R {
     let outer = !MAY_WAIT.try_with(std::cell::Cell::get).unwrap_or(false);
     if outer {
         let _ = WAITED.try_with(|w| w.borrow_mut().clear());
+        let _ = READ.try_with(|r| r.set(r.get().wrapping_add(1)));
     }
     let _may = MayWait::set(true);
     f()
@@ -929,7 +933,7 @@ fn wait_for_grids(crs: Crs) {
     let Some(waiter) = *grid_waiter().read().unwrap_or_else(|e| e.into_inner()) else { return };
     // The waiter asks for transformers itself: not again from inside it.
     let _may = MayWait::set(false);
-    waiter(crs);
+    waiter(crs, READ.try_with(std::cell::Cell::get).unwrap_or(0));
 }
 
 /// The middle of the area of use of `crs`: an EPSG code's own, else that of the geographic system

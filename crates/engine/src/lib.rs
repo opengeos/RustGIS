@@ -805,6 +805,8 @@ pub struct Session {
     grid_generation: u64,
     /// The datum grids whose download was said ([`Self::want_grids_in_use`]).
     grid_downloads_said: std::collections::HashSet<String>,
+    /// [`crate::grids::turns`] when [`Self::grid_downloads_said`] was last cleared.
+    grid_turns: u64,
     /// Whether this front end has the Download Datum Grids setting (the desktop and web apps), so
     /// a note about a missing grid can point to it; the command line and Python have none.
     pub offers_grid_downloads: bool,
@@ -1261,6 +1263,7 @@ impl Session {
             grid_notes_checked: None,
             grid_generation: rustgis_data::raster::crs::grid_generation(),
             grid_downloads_said: Default::default(),
+            grid_turns: 0,
             offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
@@ -2230,9 +2233,10 @@ impl Session {
         // Datum grids that have arrived move what the map draws in a system they shift: its
         // layers are projected again, and drawn.
         let news = crate::grids::take_news();
-        for n in &news {
-            let (text, error) = crate::grids::news_text(n);
+        for (text, error) in crate::grids::news_texts(&news) {
             self.notify(text, error);
+        }
+        for n in &news {
             // Its download is over: one tried again (the setting turned on again) is said again.
             let (crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. }) = n;
             self.grid_downloads_said.remove(name);
@@ -2602,6 +2606,8 @@ impl Session {
             let tail = if !self.offers_grid_downloads {
                 String::new()
             } else if crate::grids::enabled() && !coming.is_empty() {
+                // Said here: not again by the next ask while they are under way.
+                self.grid_downloads_said.extend(coming.iter().cloned());
                 format!(". RustGIS is downloading {}", names_said(&coming))
             } else if crate::grids::enabled() && found.iter().all(|(d, _)| behind.iter().any(|(b, _)| b == d)) {
                 ". None of the grids they need can be downloaded from PROJ's grid server now".to_string()
@@ -2609,8 +2615,15 @@ impl Session {
                 // A system only a command used (an export's target): its grids aren't asked for
                 // here, so whether they can be downloaded isn't known.
                 String::new()
-            } else {
+            } else if behind
+                .iter()
+                .any(|(d, crs)| found.iter().any(|(f, _)| f == d) && !rustgis_data::raster::crs::missing_grids(*crs).is_empty())
+            {
                 ". Settings › Datum Grids › Download Datum Grids gets them from PROJ's grid server".to_string()
+            } else {
+                // None PROJ's grid server has openly, or a system only a command used: the
+                // setting wouldn't (or can't be known to) bring them.
+                String::new()
             };
             // A few named, each cut, and the rest counted: the notice stays short however many.
             self.notify(format!("{}{tail}", grid_notes_text(labels.len(), &names_said(&labels))), false);
@@ -2664,7 +2677,13 @@ impl Session {
                 }
             }
         }
-        // Each grid's download said once: a later ask finds those still coming.
+        // Each grid's download said once: a later ask finds those still coming. Turned on again,
+        // those dropped when it was turned off are said again.
+        let turns = crate::grids::turns();
+        if turns != self.grid_turns {
+            self.grid_turns = turns;
+            self.grid_downloads_said.clear();
+        }
         let new: Vec<String> = coming.iter().filter(|n| !self.grid_downloads_said.contains(*n)).cloned().collect();
         if !new.is_empty() {
             self.notify(format!("Downloading the datum grids {} from PROJ's grid server", names_said(&new)), false);

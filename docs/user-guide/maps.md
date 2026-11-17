@@ -652,9 +652,10 @@ without `us_noaa_conus.tif`: up to about 10 m off), and says so once.
 **Settings › Datum Grids › Download Datum Grids** (off by default, in the desktop and web apps)
 downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly licensed grids):
 
-- On the desktop, a file read then waits for its system's grids before its features are placed, up
-  to two minutes, and stops waiting when you cancel it; the download goes on. In the web app a read
-  doesn't wait: a layer read before its grid arrives keeps its places until it is opened again.
+- On the desktop, a file read then waits for its systems' grids before its features are placed, up
+  to two minutes in all, and stops waiting when you cancel it; the download goes on. In the web
+  app a read doesn't wait: a layer read before its grid arrives keeps its places until it is
+  opened again.
 - Rasters, streamed layers and the map follow a grid as soon as it arrives. A layer opened before
   keeps its places until it is opened again.
 - Each download is said, with its size, and so is each that fails (not tried again until the
@@ -662,8 +663,9 @@ downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly
 - Turned off, grids already downloaded stay in use, and downloads already under way finish. On a
   computer, delete the `datum-grids` folder and start RustGIS again to stop using them (grids
   installed for PROJ are still used). The web app keeps a grid for the session only.
-- At most 16 grids are downloaded each time the setting is turned on, and none is started once
-  2 GB have arrived; past that, the grid is said to be not downloaded.
+- Grids are downloaded three at a time, those a file read waits for first: at most 16 each time
+  the setting is turned on, and none is started once 2 GB have arrived; past that, the grid is said
+  to be not downloaded. Turning the setting off drops those not started yet.
 
 RustGIS supports a subset of Esri's projected systems, checked against
 PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) and the
