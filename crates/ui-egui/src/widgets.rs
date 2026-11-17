@@ -858,9 +858,28 @@ pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, 
     );
     let alpha = hsva.a;
     // egui creates the popup from the context, not this Ui's scoped style.
-    // Borrow linear numeric editing only while a transparent picker is open.
-    let styles = (color.a() == 0 && egui::Popup::is_any_open(ui.ctx()))
-        .then(|| [egui::Theme::Light, egui::Theme::Dark].map(|theme| (theme, ui.ctx().style_of(theme))));
+    // Borrow linear numeric editing only while a transparent picker is open. The units chosen
+    // when an edit begins hold until it ends (the pointer let go, no number being typed), so they
+    // don't change in the middle of a drag or of typing that moves the opacity to or from 0.
+    // This button's own popup, as egui names it, not any popup.
+    let open = egui::Popup::is_id_open(ui.ctx(), ui.auto_id_with("popup"));
+    let linear_id = id.with("linear");
+    // An edit is a press held down, or typing into one number: the same one, as focus can pass
+    // straight to another; the button itself keeping focus isn't one.
+    let button = ui.next_auto_id();
+    let typing = ui.ctx().memory(|m| m.focused()).filter(|f| *f != button);
+    let pressed = ui.input(|i| i.pointer.any_down());
+    let held = ui
+        .data(|d| d.get_temp::<(Option<egui::Id>, bool)>(linear_id))
+        .filter(|(was, _)| pressed || (typing.is_some() && *was == typing))
+        .map(|(_, linear)| linear);
+    let linear = open && held.unwrap_or(color.a() == 0);
+    if open {
+        ui.data_mut(|d| d.insert_temp(linear_id, (typing, linear)));
+    } else {
+        ui.data_mut(|d| d.remove::<(Option<egui::Id>, bool)>(linear_id));
+    }
+    let styles = linear.then(|| [egui::Theme::Light, egui::Theme::Dark].map(|theme| (theme, ui.ctx().style_of(theme))));
     if styles.is_some() {
         ui.ctx().global_style_mut(|style| style.visuals.numeric_color_space = egui::style::NumericColorSpace::Linear);
     }
@@ -872,15 +891,21 @@ pub fn rgba_button(ui: &mut Ui, color: rustgis_engine::map::Rgba) -> (Response, 
             ui.ctx().set_style_of(theme, style);
         }
     }
-    let edited = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
-    // The numeric alpha editor also rounds RGB through Color32; an
-    // opacity-only edit must keep the original channels exactly.
-    let shown = if hsva.a != alpha { color.with_alpha(edited.a()) } else { edited };
-    ui.data_mut(|d| d.insert_temp(id, (shown.0, hsva)));
+    let shown = picked_colour(hsva, alpha, color);
     // egui's round trip through its own colour model can report a change that isn't one, every
     // frame the popup is open: only a colour that differs is picked.
     let picked = (response.changed() && shown != color).then_some(shown);
+    // Kept for the colour the caller holds next frame: the one picked, else this one.
+    ui.data_mut(|d| d.insert_temp(id, (picked.unwrap_or(color).0, hsva)));
     (response, picked)
+}
+
+/// The colour a picker left at `hsva` for `old`, whose opacity was `alpha` when it opened: an
+/// opacity-only edit keeps `old`'s own channels (the numeric alpha editor also rounds RGB through
+/// Color32); any other is the picker's colour, unpremultiplied.
+pub fn picked_colour(hsva: egui::ecolor::Hsva, alpha: f32, old: rustgis_engine::map::Rgba) -> rustgis_engine::map::Rgba {
+    let rgb = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
+    if hsva.a != alpha { old.with_alpha(rgb.a()) } else { rgb }
 }
 
 #[cfg(test)]

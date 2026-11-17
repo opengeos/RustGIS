@@ -5830,6 +5830,89 @@ mod tests {
         assert_eq!(h.state().session.undo_depth(), undo, "nothing to undo");
     }
 
+    /// Dragging a transparent fill's opacity up in its picker only raises it: the picker's numbers
+    /// keep their units while the drag makes the colour opaque.
+    #[test]
+    fn dragging_a_transparent_fills_opacity_up_raises_it() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.color", json!({"color": "#33669900"})).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let alpha = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill.a();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        // R, G, B, then A.
+        let at = h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(3).unwrap().rect().center();
+        let mut seen = vec![alpha(h.state())];
+        drag_by(&mut h, at, |app| seen.push(alpha(app)));
+        seen.push(alpha(h.state()));
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]) && seen.last() > seen.first(), "{seen:?}");
+    }
+
+    /// Typing a transparent fill's opacity, key by key, keeps the picker's units: the number typed
+    /// is the one set, though the colour turns opaque half way through.
+    #[test]
+    fn typing_a_transparent_fills_opacity_keeps_its_units() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.color", json!({"color": "#33669900"})).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let alpha = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill.a();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        // R, G, B, then A, in linear units while transparent.
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(3).unwrap().focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        for key in ["0", ".", "5", "5"] {
+            h.event(egui::Event::Text(key.into()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(alpha(h.state()), 140, "0.55 of 255");
+        // Now opaque: the next number, focused straight from this one, is in bytes.
+        let red = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill.r();
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("200".into()));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!((red(h.state()), alpha(h.state())), (200, 140), "a red of 200, in bytes");
+    }
+
+    /// Units held for one number don't carry to the next, focused straight from it: an opaque
+    /// fill's opacity typed to 0 makes the red typed next a linear one.
+    #[test]
+    fn the_next_number_takes_the_units_for_the_colour_it_finds() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.color", json!({"color": "#336699ff"})).unwrap();
+        h.run();
+        let id = h.state().session.active_layer.unwrap();
+        let fill = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().fill;
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        let typed = |h: &mut egui_kittest::Harness<'static, RustGisApp>, nth: usize, text: &str| {
+            h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(nth).unwrap().focus();
+            h.run();
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.event(egui::Event::Text(text.into()));
+            h.run();
+        };
+        // A, in bytes while opaque, then R straight after, with no Enter between.
+        typed(&mut h, 3, "0");
+        assert_eq!(fill(h.state()).a(), 0);
+        typed(&mut h, 0, "1");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!((fill(h.state()).r(), fill(h.state()).a()), (255, 0), "a full red, in linear units, still transparent");
+    }
+
     /// Focuses the harness's `nth` number to type into it, and types `text` over its value.
     fn type_into(h: &mut egui_kittest::Harness<'static, RustGisApp>, nth: usize, text: &str) {
         h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(nth).unwrap().focus();

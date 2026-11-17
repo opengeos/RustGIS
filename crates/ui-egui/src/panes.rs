@@ -4987,19 +4987,7 @@ fn diagram_section(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, numeric: &[Stri
 /// fully transparent colour keeps its colour through an edit; and an opacity-only edit keeps
 /// `old`'s channels, which the picker's rounding would change.
 fn diagram_colour(ui: &mut Ui, old: rustgis_engine::map::Rgba) -> (egui::Response, Option<rustgis_engine::map::Rgba>) {
-    let mut hsva = egui::ecolor::Hsva::from_srgb([old.r(), old.g(), old.b()]);
-    hsva.a = f32::from(old.a()) / 255.0;
-    let alpha = hsva.a;
-    let resp = egui::color_picker::color_edit_button_hsva(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend);
-    let picked = resp.changed().then(|| picked_colour(hsva, alpha, old));
-    (resp, picked)
-}
-
-/// The colour a picker left at `hsva` for `old`, whose opacity was `alpha` when it opened: an
-/// opacity-only edit keeps `old`'s own channels; any other is the picker's colour, unpremultiplied.
-fn picked_colour(hsva: egui::ecolor::Hsva, alpha: f32, old: rustgis_engine::map::Rgba) -> rustgis_engine::map::Rgba {
-    let rgb = rustgis_engine::map::Rgba(hsva.to_srgba_unmultiplied());
-    if hsva.a != alpha { old.with_alpha(rgb.a()) } else { rgb }
+    crate::widgets::rgba_button(ui, old)
 }
 
 /// A number dragged or typed in the Diagram section. It is held in the UI's memory while the drag
@@ -8773,11 +8761,11 @@ mod tests {
         let old = Rgba::new(0x4D, 0x4D, 0x4D, 0);
         let mut hsva = egui::ecolor::Hsva::from_srgb([200, 30, 40]);
         hsva.a = 0.0;
-        let picked = picked_colour(hsva, 0.0, old);
+        let picked = crate::widgets::picked_colour(hsva, 0.0, old);
         assert_eq!((picked.r(), picked.g(), picked.b(), picked.a()), (200, 30, 40, 0), "the RGB picked at zero opacity is kept");
         let mut raised = egui::ecolor::Hsva::from_srgb([200, 30, 40]);
         raised.a = 1.0;
-        assert_eq!(picked_colour(raised, 0.0, picked), picked.with_alpha(255), "raising the opacity shows it");
+        assert_eq!(crate::widgets::picked_colour(raised, 0.0, picked), picked.with_alpha(255), "raising the opacity shows it");
     }
 
     /// The Unique Values list shows as many classes as can be drawn from a QGIS rule style
