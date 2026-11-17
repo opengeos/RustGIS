@@ -5610,6 +5610,8 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let mut rounded = Rounded::new(requests.len());
     rounded.count_texts(ds, &rs, &requests, as_numbers)?;
     for group in stats::group_rows(ds, &rs, &cases) {
+        // A count by case fields alone has no statistic to check Cancel between groups.
+        crate::control::check()?;
         let mut row = group.key;
         row.push(stats::count(group.rows.len()));
         row.extend(statistic_values(ds, &group.rows, &requests, as_numbers, separator, &mut rounded)?);

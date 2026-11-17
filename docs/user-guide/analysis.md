@@ -896,9 +896,10 @@ fields (one field, or several as a list such as `["county", "year"]`). Rows are 
 values; records with no value form a group of their own, first. Statistics follow record order
 (`FIRST`, `LAST`, `CONCATENATE`) and use only the selected records when the table has a
 selection. Each row has the case fields, then `FREQUENCY` (the group's records), then a field
-`<STAT>_<field>` for each statistic asked for. With case fields and no statistics, each row
-holds only the case fields and `FREQUENCY`: a count of records by group. Name the statistics in
-`statistics`, a list of up to 256 (field, statistic) pairs in the order the fields should appear:
+`<STAT>_<field>` for each statistic asked for. With case fields, no statistics and no
+Statistics Field, each row holds only the case fields and `FREQUENCY`: a count of records by
+group. Name the statistics in `statistics`, a list of up to 256 (field, statistic) pairs in the
+order the fields should appear:
 
 ```text
 gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
@@ -959,8 +960,8 @@ dataset's field definitions and exclude its sentinel first: set a **Definition Q
 1. Clear any selection and definition query to include all records. Add a **Text** field named
    `issue_month`, turn editing on, and use **Calculate Field** with `substr(issue_date, 1, 7)`.
    A date such as `2026-03-05` becomes `2026-03`, keeping different years separate.
-2. Run **Summary Statistics** on the permits, with **Case Fields** = `issue_month` and no
-   statistics.
+2. Run **Summary Statistics** on the permits, with **Case Fields** = `issue_month`, no
+   statistics and **Statistics Field** left empty.
 3. Read `FREQUENCY` as the number of permits per month. A null date and an empty-text date form
    separate groups with null and empty-text keys; if both forms occur, there are two groups. The
    output contains months present in the data; it does not fill in missing months with zero.
