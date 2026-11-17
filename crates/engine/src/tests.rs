@@ -1869,8 +1869,8 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
 }
 
 /// An image is a marker along a line, a mark at a point and a dot fill's marker, as it is a
-/// point's (#2266); given again it is found where it's kept, and anything else is refused before
-/// the image is kept.
+/// point's (#2266), kept the first time and found where it's kept when given again; a call refused
+/// for its layer, its class or what it names with the image keeps none.
 #[test]
 fn an_image_marks_a_line_a_point_and_a_dot_fill() {
     use base64::Engine;
@@ -1883,21 +1883,25 @@ fn an_image_marks_a_line_a_point_and_a_dot_fill() {
             .unwrap();
         base64::engine::general_purpose::STANDARD.encode(&png)
     };
-    let b64 = png([12, 34, 56]);
-    let picture = Marker::Picture(Picture::new(&b64));
+    // Each command is first given an image nothing kept yet, then the same image again.
+    let (b64, dots) = (png([12, 34, 56]), png([65, 66, 67]));
+    assert_eq!((Picture::kept(&b64), Picture::kept(&dots)), (None, None));
     let mut s = world();
     let depth = s.undo_depth();
     let mark_of = |s: &Session, layer: &str| s.map().layer_by_name(layer).unwrap().line_strokes[0].markers.map(|m| m.mark);
     // Along a line, with or without "mark": "image"; at a point, as one of its marks.
     for markers in [json!({"image": b64, "size": 12}), json!({"mark": "image", "image": b64})] {
         s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1}, {"markers": markers}]})).unwrap();
+        let picture = Marker::Picture(Picture::kept(&b64).expect("kept by the command"));
         assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes[1].markers.map(|m| m.mark), Some(LineMark::Marker(picture)));
     }
+    let picture = Marker::Picture(Picture::new(&b64));
     s.run("layer.lineStrokes", &json!({"layer": "Cities", "strokes": [{"markers": {"image": b64}}]})).unwrap();
     assert_eq!(mark_of(&s, "Cities"), Some(LineMark::Marker(picture)));
     // A dot fill's marker.
-    for fill in [json!({"pattern": "dots", "image": b64, "size": 6}), json!({"pattern": "dots", "marker": "image", "image": b64})] {
+    for fill in [json!({"pattern": "dots", "image": dots, "size": 6}), json!({"pattern": "dots", "marker": "image", "image": dots})] {
         s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [fill]})).unwrap();
+        let picture = Marker::Picture(Picture::kept(&dots).expect("kept by the command"));
         let f = s.map().layer_by_name("Countries").unwrap().fill_layers.clone();
         assert!(matches!(f[0].pattern, FillPattern::Dots { marker, .. } if marker == picture), "{f:?}");
     }
@@ -1931,6 +1935,9 @@ fn an_image_marks_a_line_a_point_and_a_dot_fill() {
         ("Countries", json!({"pattern": "dots", "marker": "star", "image": unkept}), "only one"),
         ("Countries", json!({"pattern": "dots", "char": "x", "image": unkept}), "only one"),
         ("Rivers", json!({"pattern": "dots", "image": unkept}), "containing polygons"),
+        // Another pattern would drop it.
+        ("Countries", json!({"pattern": "hatch", "image": unkept}), "an image is a dots fill's marker"),
+        ("Countries", json!({"image": unkept}), "an image is a dots fill's marker"),
     ] {
         let err = s.run("layer.fillLayers", &json!({"layer": layer, "fills": [fill]})).unwrap_err();
         assert!(err.contains(says), "{err}");
@@ -1938,7 +1945,7 @@ fn an_image_marks_a_line_a_point_and_a_dot_fill() {
     // A class the layer doesn't have, as the wrong layer.
     s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 99, "strokes": [{"markers": {"image": unkept}}]})).unwrap_err();
     s.run("layer.fillLayers", &json!({"layer": "Countries", "index": 99, "fills": [{"pattern": "dots", "image": unkept}]})).unwrap_err();
-    assert_eq!(Picture::kept(&unkept), None, "no refused call kept its image");
+    assert_eq!(Picture::kept(&unkept), None, "none of these refused calls kept its image");
     assert_eq!(s.undo_depth(), depth + 5);
 }
 

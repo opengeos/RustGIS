@@ -84,13 +84,13 @@ fn spread_name(s: Spread) -> &'static str {
 
 /// Runs `layer.fillLayers` with `fills` for the class picked (`None`: the layer's).
 pub(crate) fn set_fills(app: &mut RustGisApp, class: Option<&ClassRef>, fills: &[FillLayer]) {
-    let mut replaced = false;
+    let mut replaced = 0;
     let fills: Vec<FillLayer> = fills
         .iter()
         .map(|f| match f.pattern {
             FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, offset } => {
                 let (marker, lost) = crate::panes::drawn_marker(marker);
-                replaced |= lost;
+                replaced += usize::from(lost);
                 FillLayer { pattern: FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, offset }, ..*f }
             }
             _ => *f,
@@ -103,8 +103,8 @@ pub(crate) fn set_fills(app: &mut RustGisApp, class: Option<&ClassRef>, fills: &
         Some(ClassRef::Other) => p["other"] = json!(true),
         None => {}
     }
-    if app.run("layer.fillLayers", p).is_ok() && replaced {
-        crate::panes::notify_image_replaced(app);
+    if app.run("layer.fillLayers", p).is_ok() {
+        crate::panes::notify_image_replaced(app, replaced);
     }
 }
 

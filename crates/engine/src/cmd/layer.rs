@@ -1407,6 +1407,10 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
                 Some(v) => number(v).map(|x| [x, x]).ok_or_else(|| format!("fill {n}: {k} is a number or [across, down]")),
             }
         };
+        // An image is a dots fill's marker: another pattern would drop it.
+        if o.get("image").is_some_and(|v| !v.is_null()) && o.get("pattern").and_then(Value::as_str) != Some("dots") {
+            return Err(format!("fill {n}: an image is a dots fill's marker"));
+        }
         let pattern = match o.get("pattern").filter(|v| !v.is_null()).map(|v| v.as_str()) {
             None | Some(Some("solid")) => FillPattern::Solid,
             Some(Some("hatch")) => FillPattern::Hatch {
