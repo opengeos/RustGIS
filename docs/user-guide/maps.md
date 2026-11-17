@@ -641,10 +641,27 @@ System** dialog, which also takes a projected EPSG code (such as `3035`, `32633`
 `ESRI:102033` for South America Albers Equal Area Conic, or `ESRI:54030` for World Robinson). A
 code whose projection method RustGIS can't compute is refused with the reason, rather than drawn
 in another projection. Projections and datum transformations are computed by
-[terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.8 computes them. Datum shift grids
-aren't used yet, neither those installed for PROJ nor downloaded: a datum whose most accurate
-transformation needs one takes the next PROJ lists (a NAD27 code: NAD27 to WGS 84 (4), about
-10 m), and says so once.
+[terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.8 computes them. On the desktop, the
+command line, Python and the phone apps, datum shift grids are read from RustGIS's own grid folder
+(`datum-grids` in its app data), then from those PROJ and terrio use on the computer
+(`TERRIO_GRID_DIR`, `PROJ_DATA`, `PROJ_LIB`, PROJ's user folder, terrio's download cache), so grids
+installed for PROJ count; a grid a definition names by its path is never read. A datum whose most
+accurate transformation needs a grid that isn't there takes the next PROJ lists (a NAD27 code
+without `us_noaa_conus.tif`: up to about 10 m off), and says so once.
+
+**Settings › Datum Grids › Download Datum Grids** (off by default, in the desktop and web apps)
+downloads such grids from PROJ's grid server (`cdn.proj.org`; only PROJ's openly licensed grids):
+
+- On the desktop, a file read then waits for its system's grids before its features are placed, up
+  to two minutes, and stops waiting when you cancel it; the download goes on. In the web app a read
+  doesn't wait: a layer read before its grid arrives keeps its places until it is opened again.
+- Rasters, streamed layers and the map follow a grid as soon as it arrives. A layer opened before
+  keeps its places until it is opened again.
+- Each download is said, with its size, and so is each that fails (not tried again until the
+  setting is turned off and on). An answer that isn't a grid file is refused.
+- Turned off, grids already downloaded stay in use; delete the `datum-grids` folder to stop using
+  them. The web app keeps a grid for the session only.
+
 RustGIS supports a subset of Esri's projected systems, checked against
 PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) and the
 two-point oblique Mercators (`ESRI:53025`, `ESRI:54025`) are refused as unknown codes. The presets:

@@ -13,6 +13,7 @@ mod construction;
 pub mod durable;
 pub mod extensions;
 pub mod geometry_calc;
+pub mod grids;
 pub mod model;
 mod notice_text;
 #[cfg(not(target_arch = "wasm32"))]
@@ -799,6 +800,12 @@ pub struct Session {
     pub(crate) crs_used_elsewhere: Vec<(String, String)>,
     /// When the frame path last looked for missing datum grids ([`Session::say_grid_notes`]).
     grid_notes_checked: Option<web_time::Instant>,
+    /// The datum grids the map's layers were last projected with
+    /// ([`rustgis_data::raster::crs::grid_generation`]).
+    grid_generation: u64,
+    /// Whether this front end has the Download Datum Grids setting (the desktop and web apps), so
+    /// a note about a missing grid can point to it; the command line and Python have none.
+    pub offers_grid_downloads: bool,
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
@@ -1250,6 +1257,8 @@ impl Session {
             crs_notes_said: Vec::new(),
             crs_used_elsewhere: Vec::new(),
             grid_notes_checked: None,
+            grid_generation: rustgis_data::raster::crs::grid_generation(),
+            offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
             table_layer: None,
@@ -2215,6 +2224,22 @@ impl Session {
     /// each frame. Also reports streamed vector read failures once, naming their linked file
     /// and how to repair it when one is available.
     pub fn notice_landed_rasters(&mut self) {
+        // Datum grids that have arrived move what the map draws in a system they shift: its
+        // layers are projected again, and drawn.
+        let news = crate::grids::take_news();
+        for n in &news {
+            let (text, error) = crate::grids::news_text(n);
+            self.notify(text, error);
+        }
+        // A grid that arrived can bring up the next ones the systems in use need.
+        if news.iter().any(|n| matches!(n, crate::grids::News::Got { .. })) {
+            self.want_grids_in_use();
+        }
+        let grids = rustgis_data::raster::crs::grid_generation();
+        if grids != self.grid_generation {
+            self.grid_generation = grids;
+            self.touch_all_geometry();
+        }
         cmd::terrain_blocks::landed(self);
         self.notice_landed_pixels();
         // From frames too: a system a frame first drew needs no command after it to be said.
@@ -2543,6 +2568,8 @@ impl Session {
                 }
             }
         }
+        // The systems behind them, by definition, for downloading the grids a note says are missing.
+        let behind = self.systems_in_use();
         used.extend(codes.into_iter().filter_map(|code| rustgis_map::projection::lookup(code).ok()));
         used.extend(systems.into_iter().filter_map(definition_and_label));
         // By definition: two typed systems share a label ("Custom PROJ").
@@ -2556,8 +2583,31 @@ impl Session {
         // and the custom systems a run keeps.
         if !found.is_empty() {
             let labels: Vec<String> = found.iter().map(|(_, label)| label.clone()).collect();
+            // What gets the grids: the downloads started for them, when the user has them on,
+            // else where to turn them on, where this front end has the setting.
+            let mut coming: Vec<String> = Vec::new();
+            for (_, crs) in behind.iter().filter(|(def, _)| found.iter().any(|(d, _)| d == def)) {
+                for name in crate::grids::want(*crs) {
+                    if !coming.contains(&name) {
+                        coming.push(name);
+                    }
+                }
+            }
+            let tail = if !self.offers_grid_downloads {
+                String::new()
+            } else if crate::grids::enabled() && !coming.is_empty() {
+                format!(". RustGIS is downloading {}", names_said(&coming))
+            } else if crate::grids::enabled() && found.iter().all(|(d, _)| behind.iter().any(|(b, _)| b == d)) {
+                ". None of the grids they need can be downloaded from PROJ's grid server now".to_string()
+            } else if crate::grids::enabled() {
+                // A system only a command used (an export's target): its grids aren't asked for
+                // here, so whether they can be downloaded isn't known.
+                String::new()
+            } else {
+                ". Settings › Datum Grids › Download Datum Grids gets them from PROJ's grid server".to_string()
+            };
             // A few named, each cut, and the rest counted: the notice stays short however many.
-            self.notify(grid_notes_text(labels.len(), &names_said(&labels)), false);
+            self.notify(format!("{}{tail}", grid_notes_text(labels.len(), &names_said(&labels))), false);
             self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
         }
         if rustgis_data::raster::crs::take_unnamed_grid_need() {
@@ -2566,6 +2616,52 @@ impl Session {
                 false,
             );
         }
+    }
+
+    /// The coordinate systems the project's maps are drawn in and their layers are in, with the
+    /// definitions their transformers are kept under.
+    fn systems_in_use(&self) -> Vec<(String, rustgis_data::raster::Crs)> {
+        use rustgis_data::raster::crs::definition_and_label;
+        let mut out: Vec<(String, rustgis_data::raster::Crs)> = Vec::new();
+        let mut add = |def: String, crs: rustgis_data::raster::Crs| {
+            if !out.iter().any(|(d, _)| *d == def) {
+                out.push((def, crs));
+            }
+        };
+        for map in &self.project.maps {
+            if let rustgis_map::Projection::Custom(code) = &map.projection
+                && let (Ok((def, _)), Ok(crs)) = (rustgis_map::projection::lookup(code), rustgis_data::raster::Crs::parse(code))
+            {
+                add(def, crs);
+            }
+            for layer in &map.layers {
+                let raster = layer.raster.as_ref().and_then(|r| r.data.as_ref()).map(|r| r.crs);
+                for crs in layer.dataset.crs.into_iter().chain(raster) {
+                    if let Some((def, _)) = definition_and_label(crs) {
+                        add(def, crs);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Starts downloading the datum grids the systems in use need, when downloads are on (the
+    /// setting turned on, a grid that arrived and brings up the next), and says which: the names of
+    /// those on their way.
+    pub fn want_grids_in_use(&mut self) -> Vec<String> {
+        let mut coming: Vec<String> = Vec::new();
+        for (_, crs) in self.systems_in_use() {
+            for name in crate::grids::want(crs) {
+                if !coming.contains(&name) {
+                    coming.push(name);
+                }
+            }
+        }
+        if !coming.is_empty() {
+            self.notify(format!("Downloading the datum grids {} from PROJ's grid server", names_said(&coming)), false);
+        }
+        coming
     }
 
     /// [`Self::say_grid_notes`] from the frame path: at most once a second, as a frame comes many

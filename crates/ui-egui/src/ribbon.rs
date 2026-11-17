@@ -3752,6 +3752,15 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         worldview_menu(app, ui);
     });
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
+    group(ui, "Datum Grids", |ui| {
+        let mut on = app.ui.download_grids;
+        let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tl!(
+            "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: delete the datum-grids folder in RustGIS's app data to stop using them."
+        ));
+        if resp.clicked() {
+            let _ = app.run("ui.datumGrids", json!({"on": on}));
+        }
+    });
     // The browser has no threads to set.
     if !cfg!(target_arch = "wasm32") {
         group(ui, "Performance", |ui| threads_menu(app, ui));
