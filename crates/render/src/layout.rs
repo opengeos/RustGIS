@@ -1367,14 +1367,25 @@ pub(crate) fn nice_step(span: f64, smallest: f64) -> f64 {
 fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> Vec<(Edge, [f32; 4])> {
     let ppp = view.pixels_per_point as f32;
     let (w, h) = (view.width, view.height);
+    // On a globe, through the globe as the frame draws it (#2337): through the flat camera the
+    // lines would be laid out as a flat world around it.
+    let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(&view.camera, w, h));
+    let lonlat_at = |sx: f64, sy: f64| match &globe {
+        Some(g) => g.inverse(sx, sy),
+        None => map.to_lonlat(view.camera.to_map(sx, sy, w, h)),
+    };
     // The frame's edges in longitude/latitude: its corners and points along each side.
     let mut edge_points = Vec::new();
     for i in 0..=8 {
         let t = f64::from(i) / 8.0;
         edge_points.extend([(w * t, 0.0), (w * t, h), (0.0, h * t), (w, h * t)]);
     }
-    let lonlats: Vec<Coord> = edge_points.iter().filter_map(|&(sx, sy)| map.to_lonlat(view.camera.to_map(sx, sy, w, h))).collect();
-    let mut ext = Extent::EMPTY;
+    let lonlats: Vec<Coord> = edge_points.iter().filter_map(|&(sx, sy)| lonlat_at(sx, sy)).collect();
+    // A frame whose edges reach past the globe's rim sees a whole hemisphere: its graticule is the
+    // whole Earth's, the lines behind the globe left out where they are drawn.
+    let rim = globe.is_some() && lonlats.len() < edge_points.len();
+    let world = Extent::new(-180.0, -90.0, 180.0, 90.0);
+    let mut ext = if rim { world } else { Extent::EMPTY };
     for c in &lonlats {
         ext.expand(*c);
     }
@@ -1390,16 +1401,16 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
         GridKind::Graticule => {
             // Over the extent of the frame's corners and midpoints, as it always was (its step and
             // lines unchanged for the layouts made before measured grids).
-            let mut corners = Extent::EMPTY;
+            let mut corners = if rim { world } else { Extent::EMPTY };
             for (sx, sy) in [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h), (w / 2.0, 0.0), (w / 2.0, h), (0.0, h / 2.0), (w, h / 2.0)] {
-                if let Some(c) = map.to_lonlat(view.camera.to_map(sx, sy, w, h)) {
+                if let Some(c) = lonlat_at(sx, sy) {
                     corners.expand(c);
                 }
             }
             graticule_lines(g, corners, comma, &mut lines);
         }
         GridKind::Measured => {
-            let center = map.to_lonlat(view.camera.to_map(w / 2.0, h / 2.0, w, h)).unwrap_or_else(|| ext.center());
+            let center = lonlat_at(w / 2.0, h / 2.0).unwrap_or_else(|| ext.center());
             let Some(crs) = measured_crs(g, map, center) else { return Vec::new() };
             let Ok(tr) = crs.transformer() else { return Vec::new() };
             measured_lines(g, &tr, &lonlats, comma, &mut lines);
@@ -1412,12 +1423,14 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
             }
         }
     }
-    // A tilted frame's lines break where they pass behind the eye.
+    // A tilted frame's lines break where they pass behind the eye, a globe's behind its horizon.
     let to_px = |c: Coord| {
-        map.to_map(c)
-            .and_then(|m| view.camera.try_to_screen(m, w, h))
-            .map(|(x, y)| (x as f32 * ppp, y as f32 * ppp))
-            .filter(|(x, y)| x.is_finite() && y.is_finite())
+        match &globe {
+            Some(g) => g.forward(c),
+            None => map.to_map(c).and_then(|m| view.camera.try_to_screen(m, w, h)),
+        }
+        .map(|(x, y)| (x as f32 * ppp, y as f32 * ppp))
+        .filter(|(x, y)| x.is_finite() && y.is_finite())
     };
     let (pw, ph) = (pm.width() as f32, pm.height() as f32);
     let paint_line = paint(g.color, 1.0);
@@ -2731,6 +2744,8 @@ pub fn frame_coverage_judged_on(
             self.map.label_lock_line_anchors = std::mem::take(&mut self.anchors);
         }
     }
+    // The space a globe is drawn on here: the blank basemap's, light.
+    let space = map.projection.is_globe().then(|| crate::globe_space(false));
     let outlines = context_layers(map, center, scale, judged);
     for l in map.layers.iter_mut().filter(|l| outlines.contains(&l.id)) {
         l.visible = false;
@@ -2749,7 +2764,11 @@ pub fn frame_coverage_judged_on(
     let (gw, gh) = (pm.width(), pm.height());
     // Anything not the blank basemap's paper, pure opaque white (the graticule set aside too): a
     // pale or translucent fill counts (only a fill of that very white, invisible on it, doesn't).
-    let drawn = pm.pixels().iter().map(|p| p.alpha() > 0 && (p.red(), p.green(), p.blue(), p.alpha()) != (255, 255, 255, 255)).collect();
+    // On a globe, the space around it isn't drawn either:
+    // counted, it took every cell and the surrounds landed on the globe (#2337). The atmosphere's
+    // glow at the rim is, keeping them off the globe's edge.
+    let paper = |r: u8, g: u8, b: u8| (r, g, b) == (255, 255, 255) || space.is_some_and(|c| (r, g, b) == (c.r(), c.g(), c.b()));
+    let drawn = pm.pixels().iter().map(|p| p.alpha() > 0 && !(p.alpha() == 255 && paper(p.red(), p.green(), p.blue()))).collect();
     Some((gw, gh, drawn))
 }
 
@@ -5640,6 +5659,40 @@ Elaboração: RustGIS",
         let named = Grid { crs: Some("EPSG:32733".into()), ..g.clone() };
         assert_eq!(measured_crs(&named, &map, c).map(|c| c.epsg()), Some(32733));
         assert_eq!(measured_crs(&Grid { crs: Some("EPSG:2056".into()), ..g }, &map, c), None);
+    }
+
+    #[test]
+    fn a_grid_on_the_globe_is_drawn_on_it() {
+        // #2337: a frame of a map on the globe draws its graticule through the globe, not as a
+        // flat world around it: none of it beyond the globe's rim, in the frame's corners.
+        use rustgis_map::layout::Grid;
+        let mut m = Map::new("m");
+        m.set_projection(rustgis_map::Projection::Globe);
+        let mut maps = vec![m];
+        let mut l = Layout::new("Layout", 100.0, 100.0);
+        let grid = Grid { step: 30.0, color: Rgba::rgb(0xFF, 0, 0), labels: true, width: 1.0, ..Grid::default() };
+        l.add(
+            "Map",
+            (10.0, 10.0, 80.0, 80.0),
+            ElementKind::MapFrame {
+                map: "m".into(),
+                center: Coord::new(0.0, 0.0),
+                // A globe about 64 mm across, in the middle of the 80 mm frame.
+                scale: 2e8,
+                shape: FrameShape::Rectangle,
+                grid: Some(grid),
+                extent_of: None,
+                extent_color: rustgis_map::layout::INDICATOR_COLOR,
+                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+                bearing: 0.0,
+                pitch: 0.0,
+            },
+        );
+        let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
+        assert!(count(&pm, (40.0, 40.0, 60.0, 60.0), red) > 50, "lines on the globe");
+        for corner in [(11.0, 11.0, 20.0, 20.0), (80.0, 11.0, 89.0, 20.0), (11.0, 80.0, 20.0, 89.0), (80.0, 80.0, 89.0, 89.0)] {
+            assert_eq!(count(&pm, corner, red), 0, "nothing past the rim at {corner:?}");
+        }
     }
 
     #[test]

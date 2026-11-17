@@ -10281,6 +10281,52 @@ fn publication_layouts_locate_their_area() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A publication of a map on the globe, with no extent, shows the globe seen whole (#2337): its
+/// disc fills the frame, centred where the view looks, with no scale bar (true at its centre
+/// only) and, by default, no locator (the same globe again); the legend sits off the globe. An
+/// extent given, or a locator asked for, keep the sheet as on a flat map.
+#[test]
+fn a_publication_of_the_whole_globe_fills_its_frame() {
+    use rustgis_map::layout::{ElementKind, PT_PER_MM, frame_camera};
+    let mut s = world();
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    let looked_at = s.map().to_lonlat(s.map().camera.center).unwrap();
+    for profile in ["a4-portrait", "a4-landscape", "a5-portrait", "a0-landscape", "figure-2col"] {
+        let r = s.run("layout.publication", &json!({"profile": profile, "title": "World"})).unwrap();
+        let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let l = s.project.layouts.last().unwrap();
+        let named = |n: &str| l.elements.iter().find(|e| e.name == n);
+        let frame = named("Map Frame").unwrap();
+        let ElementKind::MapFrame { center, scale, .. } = &frame.kind else { panic!() };
+        assert!((center.x - looked_at.x).abs() < 1e-6 && (center.y - looked_at.y).abs() < 1e-6, "{profile}: centred on the view");
+        // The disc spans most of the frame's shorter side, and fits in it.
+        let (w, h) = (frame.w * PT_PER_MM, frame.h * PT_PER_MM);
+        let cam = frame_camera(s.map(), *center, *scale, 0.0, 0.0);
+        let across = 2.0 * rustgis_map::globe::Globe::new(&cam, w, h).disc_radius() / PT_PER_MM;
+        let short = frame.w.min(frame.h);
+        assert!(across > 0.75 * short && across < short, "{profile}: a disc {across:.0} mm across in {short:.0} mm (1:{scale})");
+        assert!(named("Scale Bar").is_none() && named("Locator").is_none(), "{profile}");
+        assert!(r["locator"].is_null(), "{profile}");
+        assert!(warnings.iter().any(|w| w.starts_with("no scale bar: the map shows the whole globe")), "{profile}: {warnings:?}");
+        let sheet = !profile.starts_with("figure");
+        assert_eq!(warnings.iter().any(|w| w.starts_with("no locator: the map shows the whole globe")), sheet, "{profile}: {warnings:?}");
+        // The legend sits off the globe: its centre outside the disc.
+        if let Some(legend) = named("Legend") {
+            let (cx, cy) = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
+            let (lx, ly) = (legend.x + legend.w / 2.0, legend.y + legend.h / 2.0);
+            assert!((lx - cx).hypot(ly - cy) > across / 2.0, "{profile}: the legend at {lx:.0}, {ly:.0} over the globe");
+        }
+    }
+    // A locator asked for still comes; an extent given keeps the scale bar and the locator.
+    let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "locator": "globe"})).unwrap();
+    assert!(r["locator"].is_string());
+    let r = s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+    let l = s.project.layouts.last().unwrap();
+    assert!(r["locator"].is_string() && l.elements.iter().any(|e| e.name == "Scale Bar"));
+    let warnings = r["warnings"].to_string();
+    assert!(!warnings.contains("the whole globe"), "{warnings}");
+}
+
 /// Arrangements of a publication layout's surrounds (#1379): by name, corner by corner, the
 /// favourite (`layout.arrangement`, kept by the app) and `best`, the default, which keeps the
 /// favourite unless another keeps more surrounds in their own corners. Bad ones are refused before
