@@ -60,7 +60,7 @@ jobs:
             '.isDraft == false and ([.assets[] | select(.state == "uploaded").name] | contains([$archive, "SHA256SUMS"]))' \
             <<<"$release" >/dev/null; then
             if [[ "$GITHUB_EVENT_NAME" == release ]]; then
-              echo "Waiting for the Release workflow to attach the assets."
+              echo "::notice::Waiting for the Release workflow to attach the assets; this workflow runs again when it succeeds. If Release fails, run this workflow by hand for $VERSION once the assets are attached."
               exit 0
             fi
             echo "::error::Published Linux archive or SHA256SUMS is missing for $VERSION"

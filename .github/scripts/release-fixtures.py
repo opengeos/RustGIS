@@ -75,7 +75,11 @@ def capture_prefs(desktop, env):
             while time.monotonic() < deadline and app.poll() is None:
                 if prefs.exists():
                     data = prefs.read_bytes()
-                    if json.loads(data).get("ribbon_minimized") == "true":
+                    try:
+                        saved = json.loads(data)
+                    except json.JSONDecodeError:
+                        saved = {}  # caught mid-write: read again on the next pass
+                    if saved.get("ribbon_minimized") == "true":
                         return data
                 time.sleep(0.1)
             raise RuntimeError("The release did not persist the collapsed ribbon after Ctrl+F1")
@@ -92,7 +96,8 @@ def isolated_env(work):
     """Keep each writer's configuration and caches separate from the other writer and the host."""
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith("RUSTGIS_") and key not in ("GH_TOKEN", "GITHUB_TOKEN", "WAYLAND_DISPLAY")
+        if not key.startswith(("RUSTGIS_", "ACTIONS_"))
+        and key not in ("GH_TOKEN", "GITHUB_TOKEN", "WAYLAND_DISPLAY")
     }
     for kind in ("CONFIG", "DATA", "CACHE", "STATE"):
         directory = work / kind.lower()

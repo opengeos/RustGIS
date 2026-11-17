@@ -6,6 +6,16 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// Releases recorded in the fixtures' README as having no file of a kind ("project" or "prefs").
+/// Any other missing companion file fails the test.
+const SKIPS: &[(&str, &str)] = &[];
+
+fn present_or_skipped(fixtures: &Path, version: &str, kind: &str, file: &str) -> bool {
+    let present = fixtures.join(file).exists();
+    assert!(present || SKIPS.contains(&(version, kind)), "{version}: {file} is missing and no skip is recorded");
+    present
+}
+
 #[test]
 fn released_projects_and_preferences_still_open() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/releases");
@@ -19,16 +29,21 @@ fn released_projects_and_preferences_still_open() {
         .collect::<BTreeSet<_>>();
     assert!(!versions.is_empty(), "no release fixtures in {}", fixtures.display());
     for version in versions.iter().map(String::as_str) {
-        let prefs = super::read_at(&fixtures.join(format!("{version}.prefs.json"))).unwrap();
-        assert_eq!(prefs.get("ribbon_minimized"), Some(&json!("true")), "{version}");
-        if matches!(version, "v0.2.0" | "v0.3.0") {
-            assert_eq!(prefs.len(), 1, "{version}");
-        } else {
-            assert_eq!(prefs.len(), 2, "{version}");
-            let connections = crate::connections::Connections::from_json(prefs["connections"].as_str().unwrap());
-            assert!(connections.connections.is_empty() && connections.unread().is_empty(), "{version}");
+        if present_or_skipped(&fixtures, version, "prefs", &format!("{version}.prefs.json")) {
+            let prefs = super::read_at(&fixtures.join(format!("{version}.prefs.json"))).unwrap();
+            assert_eq!(prefs.get("ribbon_minimized"), Some(&json!("true")), "{version}");
+            if matches!(version, "v0.2.0" | "v0.3.0") {
+                assert_eq!(prefs.len(), 1, "{version}");
+            } else {
+                assert_eq!(prefs.len(), 2, "{version}");
+                let connections = crate::connections::Connections::from_json(prefs["connections"].as_str().unwrap());
+                assert!(connections.connections.is_empty() && connections.unread().is_empty(), "{version}");
+            }
         }
 
+        if !present_or_skipped(&fixtures, version, "project", &format!("{version}.rgis")) {
+            continue;
+        }
         let path = fixtures.join(format!("{version}.rgis"));
         let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // v0.7.0 was the first release to write format 2.

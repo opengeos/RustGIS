@@ -4,7 +4,8 @@ These are the original bytes written by the published Linux x86-64 binaries
 downloaded from
 [opengeos/RustGIS](https://github.com/opengeos/RustGIS/releases).
 Never regenerate, reformat or resave them. All releases below support both file
-types. Record a skip here when a release has no such format.
+types. Record a skip here when a release has no such format, and add it to `SKIPS` in
+`crates/engine/src/tests/released_files.rs`.
 
 | Writer | Release archive | Archive SHA-256 |
 |---|---|---|
