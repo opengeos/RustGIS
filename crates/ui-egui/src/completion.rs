@@ -562,13 +562,16 @@ pub(crate) fn menu(
     if s.open && !toggled && leaving && !ui.input(|i| i.pointer.any_pressed()) {
         s.open = false;
     }
+    // A row focused (by a screen reader) takes Enter itself, as its own click: that row, not the
+    // highlighted one.
+    let on_row = ui.memory(|m| m.focused()).is_some_and(|f| f != button.id && in_list(f));
     // Not the keys that opened it (Enter would accept the first item at once).
     if s.open && n > 0 && !toggled {
         let (up, down, enter, escape) = ui.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowUp),
                 i.consume_key(Modifiers::NONE, Key::ArrowDown),
-                i.consume_key(Modifiers::NONE, Key::Enter),
+                !on_row && i.consume_key(Modifiers::NONE, Key::Enter),
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
@@ -603,6 +606,10 @@ pub(crate) fn menu(
             popup(ui, id, corner, room, |ui| clicked = rows(ui, &items, selected, pointer_leads, scrolled_to, icon, describe, help));
         s.drawn = Some(drawn);
         accepted = clicked;
+        // The focused row has taken its Enter: a dialog's Enter mustn't also take it.
+        if on_row {
+            ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+        }
         // Still open: the app's shortcuts leave the keys to it next pass (not after a click on an
         // item, which closed it).
         if accepted.is_none() {
@@ -789,6 +796,30 @@ mod tests {
         h.get_by_label("item02").click();
         h.run();
         assert_eq!(h.state().as_deref(), Some("item02"), "the focused row was taken");
+        assert!(h.query_by_label("item00").is_none(), "and the list closed");
+    }
+
+    /// Enter on a row a screen reader focused takes that row, not the highlighted one.
+    #[test]
+    fn enter_on_a_focused_row_takes_that_row() {
+        use egui_kittest::kittest::Queryable;
+        let items: Vec<String> = (0..3).map(|i| format!("item{i:02}")).collect();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, got: &mut Option<String>| {
+                if let (_, Some(item)) = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, |_, _, _| {}) {
+                    *got = Some(item);
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        h.get_by_label("item02").focus();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().as_deref(), Some("item02"), "the focused row, not the highlighted item00");
         assert!(h.query_by_label("item00").is_none(), "and the list closed");
     }
 

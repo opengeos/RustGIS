@@ -651,16 +651,19 @@ fn parse_scale(text: &str) -> Option<f64> {
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     // Behind a dialog (Save changes?, Recover unsaved work?, Command Search…) the keys are the
     // dialog's: Escape answers it rather than switching tools, and Ctrl+N can't start what it
-    // asks about. So are an open list's (a clause's Functions): Escape closes it.
-    if ctx.memory(|m| m.top_modal_layer()).is_some() || app.ui.shortcut_editor.capturing() || crate::completion::menu_is_open(ctx) {
+    // asks about.
+    if ctx.memory(|m| m.top_modal_layer()).is_some() || app.ui.shortcut_editor.capturing() {
         return;
     }
     crate::modelbuilder::shortcuts(app, ctx);
     // The search box (or a table cell) was typed in until egui took its focus away on Escape:
-    // that Escape clears the box (leaves the cell as it was), not the tool.
+    // that Escape clears the box (leaves the cell as it was), not the tool. An open list (a
+    // clause's Functions) keeps the same keys as a box, those without Ctrl (⌘): Escape closes it.
     let pass = ctx.cumulative_pass_nr();
-    let typing =
-        ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, pass) || crate::table::had_focus(&app.table, pass);
+    let typing = ctx.egui_wants_keyboard_input()
+        || crate::completion::menu_is_open(ctx)
+        || crate::searchbox::had_focus(&app.ui.search, pass)
+        || crate::table::had_focus(&app.table, pass);
     // A text field focused, not any widget (a button reached with Tab): it has an undo of its own.
     let text_field = ctx.text_edit_focused();
     // An element selected in the open layout, for the layout's own keys.

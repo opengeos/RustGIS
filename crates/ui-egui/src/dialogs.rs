@@ -2905,6 +2905,12 @@ mod tests {
         h.run_steps(2);
         let first = format!("{}()", rustgis_engine::data::query::functions().next().unwrap().name);
         assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open, and still open a frame later");
+        // A shortcut with Ctrl (⌘) isn't the list's: it still runs (Mod+Minus zooms out).
+        let res = h.state().session.map().camera.res;
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Minus);
+        h.run_steps(2);
+        assert!(h.state().session.map().camera.res > res, "zoomed out");
+        assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "with the list still open");
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closed it");

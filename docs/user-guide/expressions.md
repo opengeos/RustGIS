@@ -29,9 +29,10 @@ expression box suggests from. The highlighted item's help shows beside the list 
 narrow window), or the help of the item under the pointer: a function's signature, description
 and example, or a variable's description. The list shows ten items at a time and scrolls to the
 rest. Up and Down move the highlight, Enter or a click appends the item to the expression, and
-Escape or a click elsewhere closes the list; from the keyboard, Tab to the menu and press Enter
-to open it. A function opens its argument list, or inserts the complete call when it takes no
-arguments.
+Escape, Tab or a click elsewhere closes the list; from the keyboard, Tab to the menu and press
+Enter or Space to open it (Space again closes it). While the list is open, shortcuts with Ctrl
+(⌘) still work. A function opens its argument list, or inserts the complete call when it takes
+no arguments.
 
 ## Grammar
 
