@@ -1521,13 +1521,8 @@ fn bound_as_read_before(text: &str) -> Option<String> {
     if !t.get(..9).is_some_and(|k| k.eq_ignore_ascii_case("BOUNDCRS[")) {
         return None;
     }
-    let mut out = t.to_string();
     // The source's own TOWGS84 nodes, each with the comma before it.
-    while let Some(at) = out.to_ascii_uppercase().find("TOWGS84[") {
-        let end = node_end(&out, at)?;
-        let start = out[..at].trim_end().strip_suffix(',').map_or(at, |s| s.len());
-        out.replace_range(start..end, "");
-    }
+    let (mut out, _) = without_nodes(t, "TOWGS84[")?;
     let transformation = out.to_ascii_uppercase().find("ABRIDGEDTRANSFORMATION[")?;
     let end = node_end(&out, transformation)?;
     let upper: String = out[transformation..end].chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
@@ -1690,17 +1685,28 @@ fn find_node<'a>(n: &'a Node, names: &[&str], depth: usize) -> Option<&'a Node> 
 
 /// `text` without its `EXTENSION["PROJ4",…]` parts, or `None` if it has none.
 fn without_proj4_extension(text: &str) -> Option<String> {
-    let mut out = text.to_string();
-    let mut found = false;
-    while let Some(at) = find_key(&out, r#"EXTENSION["PROJ4""#) {
+    without_nodes(text, r#"EXTENSION["PROJ4""#).and_then(|(out, found)| found.then_some(out))
+}
+
+/// `text` without the nodes that start with `key` (upper case), each with the comma before it,
+/// and whether there were any: one pass over the text, however many there are. `None` when one
+/// isn't closed.
+fn without_nodes(text: &str, key: &str) -> Option<(String, bool)> {
+    // ASCII upper case keeps every byte where it is.
+    let upper = text.to_ascii_uppercase();
+    let (mut out, mut from, mut found) = (String::with_capacity(text.len()), 0, false);
+    while let Some(at) = upper[from..].find(key).map(|i| from + i) {
         // Its end: the bracket that closes it, outside quotes.
-        let end = node_end(&out, at)?;
-        // With the comma before it.
-        let start = out[..at].trim_end().strip_suffix(',').map_or(at, str::len);
-        out.replace_range(start..end, "");
-        found = true;
+        let end = node_end(text, at)?;
+        out.push_str(&text[from..at]);
+        let kept = out.trim_end().len();
+        if out[..kept].ends_with(',') {
+            out.truncate(kept - 1);
+        }
+        (from, found) = (end, true);
     }
-    found.then_some(out)
+    out.push_str(&text[from..]);
+    Some((out, found))
 }
 
 /// Whether a system named or projected as Web Mercator has Web Mercator's parameters: a Mercator
@@ -5027,6 +5033,17 @@ pub(crate) mod tests {
             let e = projected(&projected2(&malformed).unwrap(), "").unwrap_err();
             assert!(e.contains("unit or datum radius that isn't a finite number"), "{e}");
         }
+    }
+
+    /// Nodes are taken out with the comma before them, in one pass however many there are: a
+    /// `.prj` past terrio-crs's size cap with many `TOWGS84` nodes doesn't stall the read.
+    #[test]
+    fn nodes_are_taken_out_in_one_pass() {
+        assert_eq!(without_nodes("A[1,TOWGS84[1,2,3], B[2], towgs84[4]]", "TOWGS84["), Some(("A[1, B[2]]".to_string(), true)));
+        assert_eq!(without_nodes("A[1]", "TOWGS84["), Some(("A[1]".to_string(), false)));
+        assert_eq!(without_nodes("A[1,TOWGS84[1,2", "TOWGS84["), None);
+        let many = format!("BOUNDCRS[{}]", ",TOWGS84[0,0,0]".repeat(200_000));
+        assert_eq!(without_nodes(&many, "TOWGS84["), Some(("BOUNDCRS[]".to_string(), true)));
     }
 
     #[test]
