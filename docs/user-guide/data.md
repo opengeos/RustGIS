@@ -128,7 +128,8 @@ the project, from two fields of coordinates and their coordinate system. In a te
 To Point** with the polygon layer as **Input Table**. Set **X Field** to `INTPTLON` and **Y Field**
 to `INTPTLAT` (use `INTPTLON20` and `INTPTLAT20` when the fields have that suffix). The tool
 reads signed, zero-padded text directly, such as `-093.1445780` and `+44.9500000`.
-Use the coordinate system of the fields (NAD83, `EPSG:4269`, for TIGER/Line). The new layer
+Set the tool's **Coordinate System** (`crs`) to the fields' system: NAD83, `EPSG:4269`, for
+TIGER/Line. Left empty, it places them as WGS 84. The new layer
 keeps the attributes and places points at the published coordinates. Check the tool's messages
 for any rows kept without a point.
 
