@@ -423,6 +423,8 @@ fn axis_unit(keys: &[u16], doubles: &[f64], ascii: &str, a: f64) -> Option<f64> 
 /// 3.10 doesn't read them: it takes them for metres whatever GeogLinearUnits says, so the Earth's
 /// semi-major axis in feet would be another body's. Axes in a unit the keys don't size are an error.
 fn axes_in_metres(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(Vec<u16>, Vec<f64>)> {
+    // The axes are read from the file's values, not from the slots added below.
+    let original = doubles;
     let (mut keys, mut doubles) = (keys.to_vec(), doubles.to_vec());
     let Some(KeyValue::Double(a)) = geokey(&keys, &doubles, ascii, 2057) else { return Ok((keys, doubles)) };
     let to_m = axis_unit(&keys, &doubles, ascii, a).ok_or_else(|| {
@@ -439,13 +441,16 @@ fn axes_in_metres(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(Vec<u16
         for entry in keys.get_mut(4..).into_iter().flat_map(|k| k.as_chunks_mut::<4>().0) {
             match entry {
                 [2057 | 2058, 34736, _, offset] => {
-                    if let Some(metres) = doubles.get(usize::from(*offset)).map(|v| v * to_m) {
-                        // A slot past the last a key can address: the axes can't be put in metres.
-                        let at = u16::try_from(doubles.len())
-                            .map_err(|_| err("the file's ellipsoid axes can't be converted to metres: too many double parameters"))?;
-                        doubles.push(metres);
-                        *offset = at;
-                    }
+                    // An axis whose value is missing would stay in its unit, read as metres.
+                    let metres = original
+                        .get(usize::from(*offset))
+                        .map(|v| v * to_m)
+                        .ok_or_else(|| err("the file's ellipsoid axis points past its double parameters"))?;
+                    // A slot past the last a key can address: the axes can't be put in metres.
+                    let at = u16::try_from(doubles.len())
+                        .map_err(|_| err("the file's ellipsoid axes can't be converted to metres: too many double parameters"))?;
+                    doubles.push(metres);
+                    *offset = at;
                 }
                 [2052, 0, _, value] => *value = 9001,
                 _ => {}
@@ -3791,6 +3796,9 @@ mod tests {
             let e = axes_in_metres(&keys, &doubles, "").unwrap_err().to_string();
             assert!(e.contains("too many double parameters"), "{len}: {e}");
         }
+        // A semi-minor axis past the doubles isn't left in kilometres under a unit of metres.
+        let e = axes_in_metres(&keys, &[3396.19], "").unwrap_err().to_string();
+        assert!(e.contains("points past its double parameters"), "{e}");
     }
 
     /// An ESRI PE citation with a shift of its own (British National Grid with another TOWGS84) is
