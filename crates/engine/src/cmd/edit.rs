@@ -413,6 +413,65 @@ impl Cuts {
     }
 }
 
+/// The rows a notice lists by number, at most.
+const LISTED_ROWS: usize = 3;
+
+/// What writing a calculation's results into one field lost, for its notices: what the field cut
+/// ([`Cuts`]), results it can't hold (text that isn't a number or a date), and nulls an
+/// expression's error gave (a division by zero), by kind with the first rows of each.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WriteLosses {
+    cuts: Cuts,
+    unread: usize,
+    /// Each kind of error met, in the order met: how many rows, and the first [`LISTED_ROWS`].
+    errors: Vec<(rustgis_data::query::Fault, usize, Vec<usize>)>,
+}
+
+impl WriteLosses {
+    /// Row `row`'s result and the error that made it null, if one did, as a `ty` field holds it,
+    /// counting what that lost.
+    pub(crate) fn write(&mut self, row: usize, (v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Value {
+        let asked_null = v.asks_null();
+        let (v, cut) = coerce_cut(v, ty);
+        self.cuts.add(cut);
+        if let Some(fault) = fault.filter(|_| v.is_null()) {
+            match self.errors.iter_mut().find(|(f, ..)| *f == fault) {
+                Some((_, n, rows)) => {
+                    *n += 1;
+                    if rows.len() < LISTED_ROWS {
+                        rows.push(row);
+                    }
+                }
+                None => self.errors.push((fault, 1, vec![row])),
+            }
+        } else {
+            self.unread += usize::from(!asked_null && v.is_null() && cut == Cut::None);
+        }
+        v
+    }
+
+    /// The notices for what writing `field`, of type `ty`, lost, each starting with `by` (the
+    /// command or rule that wrote it). Rows are numbered from 1, as `@row_number` numbers them.
+    pub(crate) fn notices(&self, by: &str, field: &str, ty: FieldType) -> Vec<String> {
+        let rows = |n: usize| if n == 1 { "1 row".to_string() } else { format!("{n} rows") };
+        let mut out = self.cuts.notices(by, field);
+        if self.unread > 0 {
+            out.push(format!("{by}: '{field}' is null in {}, whose result isn't a {} value", rows(self.unread), ty.label()));
+        }
+        for (fault, n, listed) in &self.errors {
+            let numbers: Vec<String> = listed.iter().map(|r| r.saturating_add(1).to_string()).collect();
+            let (word, more) = (if listed.len() == 1 { "row" } else { "rows" }, if *n > listed.len() { "…" } else { "" });
+            out.push(format!(
+                "{by}: '{field}' is null in {} because of {} ({word} {}{more})",
+                rows(*n),
+                fault.describe(),
+                numbers.join(", ")
+            ));
+        }
+        out
+    }
+}
+
 /// [`coerce`], with a number past the 64-bit range null, and what it took from a number to put it
 /// in a whole-number field.
 pub(crate) fn coerce_cut(v: Value, ty: FieldType) -> (Value, Cut) {
@@ -1318,12 +1377,12 @@ fn land_table_edit(s: &mut Session, p: &Json, command: &str) -> Option<CmdResult
 /// Evaluates and writes a table on its worker, checking Cancel between rows. An expression's
 /// evaluation on one row and the shared row storage's first copy cannot be interrupted;
 /// cancellation never installs partial output.
-fn calculate_table(input: &Dataset, p: &Json) -> Result<(Dataset, Cuts, usize), String> {
+fn calculate_table(input: &Dataset, p: &Json) -> Result<(Dataset, WriteLosses), String> {
     let fi = input.field_index(ps(p, "field").ok_or("field is required")?).ok_or("no field")?;
     let ty = input.fields.get(fi).map(|f| f.ty).ok_or("no field")?;
     let expr = ps(p, "expression").map(str::trim).filter(|e| !e.is_empty()).ok_or("expression is required")?;
     let calc = Calculation::parse(expr, input)?;
-    let (out, cuts, unread) = evaluate(&calc, input, (0..input.features.len()).collect(), ty)?;
+    let (out, losses) = evaluate(&calc, input, (0..input.features.len()).collect(), ty)?;
     let mut result = input.clone();
     rustgis_data::progress::begin(out.len());
     for (r, v) in out {
@@ -1332,7 +1391,7 @@ fn calculate_table(input: &Dataset, p: &Json) -> Result<(Dataset, Cuts, usize), 
             *c = v;
         }
     }
-    Ok((result, cuts, unread))
+    Ok((result, losses))
 }
 
 /// Sets a field from an expression, on the selected rows or all of them (all of a standalone
@@ -1350,10 +1409,10 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let Target::Layer(id) = t else {
         editing_on(s)?;
         let (ty, field) = data(s, t)?.fields.get(fi).map(|f| (f.ty, f.name.clone())).ok_or("no field")?;
-        let (result, cuts, unread) = calculate_table(data(s, t)?, p)?;
+        let (result, losses) = calculate_table(data(s, t)?, p)?;
         let n = result.features.len();
         data_mut(s, t)?.features = result.features;
-        calculation_notices(s, &field, ty, cuts, unread);
+        calculation_notices(s, &field, ty, &losses);
         return Ok(json!({"rows": n}));
     };
     let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
@@ -1361,7 +1420,7 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let calc = Calculation::parse(&expr, &l.dataset)?;
     let rows: Vec<usize> = if l.selection.is_empty() { (0..l.dataset.features.len()).collect() } else { l.selection.clone() };
     let n = rows.len();
-    let (out, cuts, unread) = evaluate(&calc, &l.dataset, rows, ty)?;
+    let (out, losses) = evaluate(&calc, &l.dataset, rows, ty)?;
     let mut changes = Vec::new();
     for (r, v) in out {
         if let Some(f) = l.dataset.features.get_mut(r) {
@@ -1374,38 +1433,28 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     }
     super::design::apply(s, id, changes)?;
     let field = s.map().layer(id).and_then(|l| l.dataset.fields.get(fi)).map(|f| f.name.clone()).unwrap_or_default();
-    calculation_notices(s, &field, ty, cuts, unread);
+    calculation_notices(s, &field, ty, &losses);
     Ok(json!({"rows": n}))
 }
 
-/// `calc` on `rows` of `ds`, each result as a `ty` field holds it: the rows' new values, the
-/// results a whole-number or date field cut, and how many other results it can't hold (text
-/// that isn't a number or a date), which are null.
-fn evaluate(calc: &Calculation, ds: &Dataset, rows: Vec<usize>, ty: FieldType) -> Result<(Vec<(usize, Value)>, Cuts, usize), String> {
+/// `calc` on `rows` of `ds`, each result as a `ty` field holds it: the rows' new values, and what
+/// writing them loses ([`WriteLosses`]).
+fn evaluate(calc: &Calculation, ds: &Dataset, rows: Vec<usize>, ty: FieldType) -> Result<(Vec<(usize, Value)>, WriteLosses), String> {
     let mut out = Vec::with_capacity(rows.len());
-    let (mut cuts, mut unread) = (Cuts::default(), 0usize);
+    let mut losses = WriteLosses::default();
     rustgis_data::progress::begin(rows.len());
     for r in rows {
         rustgis_data::progress::step(1).map_err(|e| e.to_string())?;
-        let v = calc.eval(ds, r);
-        let asked_null = v.asks_null();
-        let (v, cut) = coerce_cut(v, ty);
-        unread += usize::from(!asked_null && v.is_null() && cut == Cut::None);
-        cuts.add(cut);
-        out.push((r, v));
+        out.push((r, losses.write(r, calc.eval_or_fault(ds, r), ty)));
     }
-    Ok((out, cuts, unread))
+    Ok((out, losses))
 }
 
 /// Says what Calculate Field's results lost in `field` ([`evaluate`]), even when a calculation
 /// rule writes the field afterwards: the rule may read the cut value, and says what it cuts itself.
-fn calculation_notices(s: &mut Session, field: &str, ty: FieldType, cuts: Cuts, unread: usize) {
-    for notice in cuts.notices("Calculate Field", field) {
+fn calculation_notices(s: &mut Session, field: &str, ty: FieldType, losses: &WriteLosses) {
+    for notice in losses.notices("Calculate Field", field, ty) {
         s.notify(notice, false);
-    }
-    if unread > 0 {
-        let rows = if unread == 1 { "1 row" } else { &format!("{unread} rows") };
-        s.notify(format!("Calculate Field: '{field}' is null in {rows}, whose result isn't a {} value", ty.label()), false);
     }
 }
 
@@ -1457,10 +1506,16 @@ impl Calculation {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn eval(&self, ds: &rustgis_data::Dataset, r: usize) -> Value {
+        self.eval_or_fault(ds, r).0
+    }
+
+    /// Row `r`'s result, with the error that made it null, if one did.
+    pub(crate) fn eval_or_fault(&self, ds: &rustgis_data::Dataset, r: usize) -> (Value, Option<rustgis_data::query::Fault>) {
         match self {
-            Calculation::Expr(e) => rustgis_data::query::value(e, ds, r, &rustgis_data::query::Env::default()),
-            Calculation::Calc(c) => c.eval(ds, r),
+            Calculation::Expr(e) => rustgis_data::query::value_or_fault(e, ds, r, &rustgis_data::query::Env::default()),
+            Calculation::Calc(c) => c.eval_or_fault(ds, r),
         }
     }
 }
@@ -1498,7 +1553,15 @@ impl Calc {
         Ok(Calc { a: term(lhs)?, op, b: rhs.map(term).transpose()? })
     }
 
+    #[cfg(test)]
     pub(crate) fn eval(&self, ds: &rustgis_data::Dataset, r: usize) -> Value {
+        self.eval_or_fault(ds, r).0
+    }
+
+    /// Row `r`'s result, with the error that made it null: dividing by zero, or `-`, `*`, `/` on
+    /// a value that isn't a number.
+    pub(crate) fn eval_or_fault(&self, ds: &rustgis_data::Dataset, r: usize) -> (Value, Option<rustgis_data::query::Fault>) {
+        use rustgis_data::query::Fault;
         let get = |t: &Term| -> Value {
             match t {
                 Term::Num(n) => Value::Float(*n),
@@ -1511,15 +1574,17 @@ impl Calc {
             (Some(b), Some(op)) => {
                 let vb = get(b);
                 match (va.as_f64(), vb.as_f64(), op) {
-                    (Some(x), Some(y), '+') => Value::Float(x + y),
-                    (Some(x), Some(y), '-') => Value::Float(x - y),
-                    (Some(x), Some(y), '*') => Value::Float(x * y),
-                    (Some(x), Some(y), '/') if y != 0.0 => Value::Float(x / y),
-                    (_, _, '+') if !va.is_null() && !vb.is_null() => Value::Text(format!("{va}{vb}")),
-                    _ => Value::Null,
+                    (Some(x), Some(y), '+') => (Value::Float(x + y), None),
+                    (Some(x), Some(y), '-') => (Value::Float(x - y), None),
+                    (Some(x), Some(y), '*') => (Value::Float(x * y), None),
+                    (Some(_), Some(0.0), '/') => (Value::Null, Some(Fault::DivisionByZero)),
+                    (Some(x), Some(y), '/') => (Value::Float(x / y), None),
+                    (_, _, '+') if !va.is_null() && !vb.is_null() => (Value::Text(format!("{va}{vb}")), None),
+                    _ if va.is_null() || vb.is_null() => (Value::Null, None),
+                    _ => (Value::Null, Some(Fault::of_non_number(&va).or(Fault::of_non_number(&vb)).unwrap_or(Fault::NotANumber))),
                 }
             }
-            _ => va,
+            _ => (va, None),
         }
     }
 }
@@ -1546,6 +1611,44 @@ fn split_op(e: &str) -> (&str, Option<char>, Option<&str>) {
 mod tests {
     use super::*;
     use rustgis_data::{Dataset, Field};
+
+    /// A null an expression's error wrote says so, by kind with its count and first rows, on a
+    /// layer and a table, from the language and from the earlier calculator; a clean run, and
+    /// nulls read from the data, say nothing.
+    #[test]
+    fn calculation_errors_are_said() {
+        for table in [false, true] {
+            let mut s = Session::new(crate::Project::default());
+            let fields = ["n", "Pop Est", "r"].map(|f| Field::new(f, FieldType::Double)).to_vec();
+            let mut ds = Dataset::new("calc", GeometryType::None, fields);
+            for n in [Value::Float(2.0), Value::Float(0.0), Value::Null, Value::Float(0.0), Value::Float(0.0), Value::Float(0.0)] {
+                ds.push(None, vec![n, Value::Float(5.0), Value::Null]);
+            }
+            let target = if table {
+                json!({"table": s.project.add_table(ds)})
+            } else {
+                let id = s.map_mut().add_dataset(ds);
+                json!({"layer": id})
+            };
+            for (expression, said) in [
+                ("1 / n", vec!["Calculate Field: 'r' is null in 4 rows because of a division by zero (rows 2, 4, 5…)"]),
+                ("Pop Est / n", vec!["Calculate Field: 'r' is null in 4 rows because of a division by zero (rows 2, 4, 5…)"]),
+                (
+                    "if(n = 2, sqrt(0 - n), n * 2)",
+                    vec!["Calculate Field: 'r' is null in 1 row because of the square root of a negative number (row 1)"],
+                ),
+                ("n * 2", vec![]),
+            ] {
+                let mut p = target.clone();
+                p["field"] = json!("r");
+                p["expression"] = json!(expression);
+                let mark = s.notice_mark();
+                s.run("edit.calculateField", &p).unwrap();
+                let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+                assert_eq!(notices, said, "{expression}, table {table}");
+            }
+        }
+    }
 
     /// Calculate Field never adds fields: layer and table callers get the same next step.
     #[test]

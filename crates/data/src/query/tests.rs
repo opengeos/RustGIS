@@ -773,3 +773,49 @@ fn the_user_guide_lists_what_the_catalogs_hold() {
         assert!(grammar.contains(&format!("\"{}\"", k.word())), "the grammar should use \"{}\"", k.word());
     }
 }
+
+/// Each error that gives null says which it was; a null read from a field, written, or left by
+/// a guarded branch, and an error whose null a later step replaced, say nothing.
+#[test]
+fn errors_say_why_they_are_null() {
+    let d = ds();
+    let why = |text: &str, row: usize| {
+        let e = parse(text, &d).unwrap_or_else(|e| panic!("{text}: {e}"));
+        value_or_fault(&e, &d, row, &Env::default())
+    };
+    for (text, fault) in [
+        ("pop / 0", Fault::DivisionByZero),
+        ("pop % 0", Fault::DivisionByZero),
+        ("1.5 % 0", Fault::DivisionByZero),
+        ("0 ^ -1", Fault::DivisionByZero),
+        ("sqrt(0 - pop)", Fault::NegativeRoot),
+        ("ln(0)", Fault::Logarithm),
+        ("log10(0 - 1)", Fault::Logarithm),
+        ("exp(1000)", Fault::Overflow),
+        ("10 ^ 400", Fault::Overflow),
+        ("(0 - 8) ^ 0.5", Fault::NotANumber),
+        ("name * 2", Fault::TextArithmetic),
+        ("sqrt(name)", Fault::TextArithmetic),
+        ("round(pop / 0) + 1", Fault::DivisionByZero),
+        ("nullif(pop / 0, 1)", Fault::DivisionByZero),
+        ("'(' || (pop / 0) || ')'", Fault::DivisionByZero),
+    ] {
+        assert_eq!(why(text, 0), (Value::Null, Some(fault)), "{text}");
+    }
+    // Null in, null out, without an error; what an expression asks for or guards against.
+    for (text, row) in [
+        ("pop / 2", 3),
+        ("null", 0),
+        ("if(pop > 0, 1)", 3),
+        ("if(pop / 0 > 1, 1, null)", 0),
+        ("CASE WHEN pop / 0 > 1 THEN 1 END", 0),
+        ("CASE pop WHEN 1 / 0 THEN 1 END", 0),
+        ("nullif(pop, pop)", 0),
+        // The division's null was replaced; the result is null because `pop` is.
+        ("coalesce(1 / 0, 0) / pop", 3),
+    ] {
+        assert_eq!(why(text, row), (Value::Null, None), "{text}");
+    }
+    assert_eq!(why("coalesce(pop / 0, 7)", 0), (Value::Int(7), None));
+    assert_eq!(why("sqrt(0)", 0), (Value::Float(0.0), None));
+}
