@@ -887,10 +887,17 @@ fn frame_outline_lonlat(map: &Map, cam: &rustgis_map::Camera, w: f64, h: f64) ->
         2 => ((1.0 - t) * w, h),
         _ => (0.0, (1.0 - t) * h),
     };
+    // A frame on the globe is read through the globe as it draws it (#2348), its edges off the
+    // disc left out: one that shows the globe whole has no edge on it, and no outline.
+    let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(cam, w, h));
     for side in 0..4 {
         for i in 0..n {
             let (sx, sy) = edge(i as f64 / n as f64, side);
-            if let Some(c) = map.to_lonlat(cam.to_map(sx, sy, w, h)) {
+            let at = match &globe {
+                Some(g) => g.inverse(sx, sy),
+                None => map.to_lonlat(cam.to_map(sx, sy, w, h)),
+            };
+            if let Some(c) = at {
                 ring.push(c);
             }
         }
@@ -5312,6 +5319,58 @@ Elaboração: RustGIS",
         let mid = (red.iter().map(|p| p.0).sum::<f64>() / n, red.iter().map(|p| p.1).sum::<f64>() / n);
         let off = ((mid.0 - expected.0).powi(2) + (mid.1 - expected.1).powi(2)).sqrt() / px_mm;
         assert!(off < 1.5, "the indicator's middle {mid:?} is {off:.1} mm from the area at {expected:?}");
+    }
+
+    /// A frame on the globe is outlined by what it shows of the globe (#2348): zoomed in on Iceland,
+    /// around Iceland on a globe locator; seen whole, with no edge on the disc, not at all (through
+    /// the flat camera its edges were read as a flat world, a line drawn across the locator).
+    #[test]
+    fn a_frame_on_the_globe_is_outlined_by_what_it_shows() {
+        use rustgis_map::layout::{INDICATOR_COLOR, INDICATOR_WIDTH, frame_camera};
+        let mut globe = Map::new("g");
+        globe.set_projection(rustgis_map::Projection::Globe);
+        let frame = |center, scale, extent_of| ElementKind::MapFrame {
+            map: "g".into(),
+            center,
+            scale,
+            shape: FrameShape::Rectangle,
+            grid: None,
+            extent_of,
+            extent_color: INDICATOR_COLOR,
+            extent_width: INDICATOR_WIDTH,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let (at, scale) = (Coord::new(-20.0, 55.0), 2e8);
+        // The red pixels inside the locator (5–55 mm), with the source frame on `center` at 1:`main`.
+        let red = |center: Coord, main: f64| {
+            let mut l = Layout::new("Layout", 100.0, 100.0);
+            // 40 mm across: near the equator, wider than the smallest globe the camera draws there.
+            let source = l.add("Main", (58.0, 58.0, 40.0, 40.0), frame(center, main, None));
+            l.add("Locator", (5.0, 5.0, 50.0, 50.0), frame(at, scale, Some(source)));
+            let pm = render(&l, &mut [globe.clone()], 96.0, &PageInfo::default()).unwrap();
+            let k = PT_PER_MM;
+            ((5.0 * k) as u32..(55.0 * k) as u32)
+                .flat_map(|y| ((5.0 * k) as u32..(55.0 * k) as u32).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let (r, g, b) = rgb(&pm, x, y);
+                    r > 180 && g < 90 && b < 90
+                })
+                .map(|(x, y)| (f64::from(x), f64::from(y)))
+                .collect::<Vec<_>>()
+        };
+        let iceland = red(Coord::new(-19.0, 65.0), 2e7);
+        assert!(!iceland.is_empty(), "no outline of the zoomed-in frame");
+        let n = iceland.len() as f64;
+        let mid = (iceland.iter().map(|p| p.0).sum::<f64>() / n, iceland.iter().map(|p| p.1).sum::<f64>() / n);
+        let side = 50.0 * PT_PER_MM;
+        let g = rustgis_map::globe::Globe::new(&frame_camera(&globe, at, scale, 0.0, 0.0), side, side);
+        let (x, y) = g.forward(Coord::new(-19.0, 65.0)).unwrap();
+        let expected = (5.0 * PT_PER_MM + x, 5.0 * PT_PER_MM + y);
+        let off = ((mid.0 - expected.0).powi(2) + (mid.1 - expected.1).powi(2)).sqrt() / PT_PER_MM;
+        assert!(off < 1.5, "the outline's middle {mid:?} is {off:.1} mm from Iceland at {expected:?}");
+        let whole = red(Coord::new(-20.0, 10.0), 4e8);
+        assert!(whole.is_empty(), "the globe seen whole outlined by {} red pixels", whole.len());
     }
 
     fn rgb(pm: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
