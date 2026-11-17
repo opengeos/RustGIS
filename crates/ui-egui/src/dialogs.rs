@@ -2836,18 +2836,21 @@ mod tests {
         h.run();
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closes it");
         assert_eq!(*h.state(), added, "adding nothing");
-        // Tab on with the list open: it closes, rather than take the next widget's keys.
+        // Tab on with the list open: it closes at once, and the very next Enter (the next frame)
+        // is the next widget's, Variables ▾, rather than the list's.
         h.key_press(egui::Key::Enter);
         h.run();
         assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open again");
         h.key_press(egui::Key::Tab);
-        h.run();
+        h.step();
+        h.key_press(egui::Key::Enter);
+        h.step();
         h.run();
         assert!(!on_button(&h), "the focus moved on");
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Tab closed it");
-        h.key_press(egui::Key::ArrowDown);
-        h.run();
-        assert_eq!(*h.state(), added, "its keys are no longer the list's");
+        let var = rustgis_engine::data::query::VARS[0].names[0];
+        assert!(h.query_by_role_and_label(Role::Button, var).is_some(), "Enter opened Variables ▾");
+        assert_eq!(*h.state(), added, "and added nothing");
     }
 
     /// In the app, Enter on Functions ▾ (focused from the keyboard) opens its list and is taken
@@ -2880,6 +2883,7 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         app.run("tool.set", json!({"tool": "zoomIn"})).unwrap();
         app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.text = "pop_est > 1".into();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
@@ -2889,10 +2893,18 @@ mod tests {
             app,
         );
         h.run_steps(4);
+        // Typing in the clause first: a click on the button doesn't leave the box's focus behind
+        // to close the list it opens.
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("pop_est > 1")).unwrap().click();
+        h.run_steps(2);
+        assert!(
+            h.query_all_by_role(Role::MultilineTextInput).any(|n| n.value().as_deref() == Some("pop_est > 1") && n.is_focused()),
+            "the clause has the focus"
+        );
         h.get_by_role_and_label(Role::Button, "Functions ▾").click();
         h.run_steps(2);
         let first = format!("{}()", rustgis_engine::data::query::functions().next().unwrap().name);
-        assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open");
+        assert!(h.query_by_role_and_label(Role::Button, &first).is_some(), "open, and still open a frame later");
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closed it");

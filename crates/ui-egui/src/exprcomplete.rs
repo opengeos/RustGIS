@@ -445,13 +445,18 @@ pub(crate) enum Menu {
     Variables,
 }
 
-/// The entries of `menu`: the language's own catalogs, as the parser reads them (one added to
-/// the language is listed with no change).
-fn menu_items(menu: Menu) -> Vec<Item> {
-    match menu {
-        Menu::Functions => query::functions().map(Item::Function).collect(),
-        Menu::Variables => VARS.iter().enumerate().filter_map(|(i, v)| Some(Item::Variable(i, v.names.first().copied()?))).collect(),
-    }
+/// The entries of `menu`, each as the list shows it: the language's own catalogs, as the parser
+/// reads them (one added to the language is listed with no change). Worked out once.
+fn menu_items(menu: Menu) -> &'static [(String, Item)] {
+    static FUNCTIONS: std::sync::OnceLock<Vec<(String, Item)>> = std::sync::OnceLock::new();
+    static VARIABLES: std::sync::OnceLock<Vec<(String, Item)>> = std::sync::OnceLock::new();
+    let (cell, items): (_, fn() -> Vec<Item>) = match menu {
+        Menu::Functions => (&FUNCTIONS, || query::functions().map(Item::Function).collect()),
+        Menu::Variables => {
+            (&VARIABLES, || VARS.iter().enumerate().filter_map(|(i, v)| Some(Item::Variable(i, v.names.first().copied()?))).collect())
+        }
+    };
+    cell.get_or_init(|| items().into_iter().map(|i| (shown(&i), i)).collect())
 }
 
 /// A button `label` that opens the list of `menu`, its entries shown as the suggestion list shows
@@ -459,27 +464,24 @@ fn menu_items(menu: Menu) -> Vec<Item> {
 /// (`completion::menu`). Returns what to add for the one accepted: a function open (`round(`),
 /// unless it takes no arguments (`pi()`); a variable as it is.
 pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) -> Option<String> {
-    // The catalog, each entry as the list shows it, worked out once a frame and only while the list
-    // is open (or one is accepted).
-    let cell = std::cell::OnceCell::new();
-    let catalog = || cell.get_or_init(|| menu_items(menu).into_iter().map(|i| (shown(&i), i)).collect::<Vec<_>>());
-    let find = |item: &str| catalog().iter().find(|(s, _)| s == item).map(|(_, i)| i.clone());
+    let catalog = menu_items(menu);
+    let find = |item: &str| catalog.iter().find(|(s, _)| s == item).map(|(_, i)| i);
     let help = |ui: &mut Ui, item: &str, width: f32| {
         if let Some(of) = find(item) {
             ui.add_space(GAP);
-            draw_help(ui, &of, None, width);
+            draw_help(ui, of, None, width);
         }
     };
-    let describe = |item: &str| match find(item)? {
+    let describe = |i: usize| match &catalog.get(i)?.1 {
         Item::Function(f) => Some(format!("{}\n{}", f.signature, tl!(f.description))),
-        Item::Variable(i, _) => VARS.get(i).map(|v| tl!(v.description).to_string()),
+        Item::Variable(i, _) => VARS.get(*i).map(|v| tl!(v.description).to_string()),
         _ => None,
     };
-    let items = || catalog().iter().map(|(s, _)| s.clone()).collect();
+    let items = || catalog.iter().map(|(s, _)| s.clone()).collect();
     let (_, accepted) = crate::completion::menu(ui, label, items, |_| None, describe, help);
     find(&accepted?).map(|item| match item {
         Item::Function(f) if f.max > 0 => format!("{}(", f.name),
-        item => shown(&item),
+        item => shown(item),
     })
 }
 

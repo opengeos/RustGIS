@@ -436,7 +436,7 @@ fn rows(
     pointer_leads: bool,
     scrolled_to: &mut Option<usize>,
     icon: impl Fn(&str) -> Option<&'static str>,
-    describe: impl Fn(&str) -> Option<String>,
+    describe: impl Fn(usize) -> Option<String>,
     help: impl FnOnce(&mut Ui, &str, f32),
 ) -> Option<usize> {
     let (layout, help_width) = help_layout(ui.ctx().content_rect().width());
@@ -454,7 +454,7 @@ fn rows(
                     let r = item_row(ui, item, i == selected, icon(item));
                     // What the help says, for a screen reader (worked out only when one is there).
                     if ui.ctx().has_accesskit_node(r.id)
-                        && let Some(d) = describe(item)
+                        && let Some(d) = describe(i)
                     {
                         ui.ctx().accesskit_node_builder(r.id, |node| node.set_description(d));
                     }
@@ -521,7 +521,7 @@ pub(crate) fn menu(
     label: impl Into<egui::WidgetText>,
     items: impl FnOnce() -> Vec<String>,
     icon: impl Fn(&str) -> Option<&'static str>,
-    describe: impl Fn(&str) -> Option<String>,
+    describe: impl Fn(usize) -> Option<String>,
     help: impl FnOnce(&mut Ui, &str, f32),
 ) -> (egui::Response, Option<String>) {
     let button = ui.button(label);
@@ -552,6 +552,14 @@ pub(crate) fn menu(
     let filter = egui::EventFilter { tab: false, horizontal_arrows: s.open, vertical_arrows: s.open, escape: s.open };
     ui.memory_mut(|m| m.set_focus_lock_filter(button.id, filter));
     let mut accepted = None;
+    // The focus going to another widget (Tab), or gone to one already: the list closes, as a box's
+    // does, before it takes any key that widget's. Not on a press, whose widget may be an item of
+    // the list being clicked; nor while nothing has the focus (a click doesn't give it to the
+    // button).
+    let leaving = ui.input(|i| i.key_pressed(Key::Tab)) || ui.memory(|m| m.focused().is_some_and(|f| f != button.id));
+    if s.open && !toggled && leaving && !ui.input(|i| i.pointer.any_pressed()) {
+        s.open = false;
+    }
     // Not the keys that opened it (Enter would accept the first item at once).
     if s.open && n > 0 && !toggled {
         let (up, down, enter, escape) = ui.input_mut(|i| {
@@ -573,11 +581,7 @@ pub(crate) fn menu(
             i.pointer.any_pressed()
                 && i.pointer.interact_pos().is_some_and(|p| !button.rect.contains(p) && !drawn.is_some_and(|r| r.contains(p)))
         });
-        // The focus gone to another widget (Tab): the list closes, as a box's does, rather than take
-        // that widget's keys. Not on a press, whose widget may be an item of the list being
-        // clicked; nor while nothing has the focus (a click doesn't give it to the button).
-        let moved_on = ui.memory(|m| m.focused().is_some_and(|f| f != button.id)) && !ui.input(|i| i.pointer.any_pressed());
-        if escape || elsewhere || moved_on {
+        if escape || elsewhere {
             s.open = false;
         } else if enter {
             accepted = Some(selected);
@@ -597,7 +601,11 @@ pub(crate) fn menu(
             popup(ui, id, corner, room, |ui| clicked = rows(ui, &items, selected, pointer_leads, scrolled_to, icon, describe, help));
         s.drawn = Some(drawn);
         accepted = clicked;
-        ui.data_mut(|d| d.insert_temp(open_id(), pass));
+        // Still open: the app's shortcuts leave the keys to it next pass (not after a click on an
+        // item, which closed it).
+        if accepted.is_none() {
+            ui.data_mut(|d| d.insert_temp(open_id(), pass));
+        }
     }
     if accepted.is_some() || !s.open {
         s.open = false;
