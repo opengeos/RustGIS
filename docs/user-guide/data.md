@@ -394,6 +394,8 @@ JOIN active AS a ON a.service_id = t.service_id
 WHERE lpad(s.departure_time, 8, '0') >= '07:00:00'
   AND lpad(s.departure_time, 8, '0') < '09:00:00'
   AND s.stop_id IS NOT NULL
+  -- With frequencies.txt in the feed, also leave out its template trips:
+  -- AND t.trip_id NOT IN (SELECT trip_id FROM read_csv('frequencies.txt', all_varchar = true))
 GROUP BY s.stop_id
 ORDER BY s.stop_id
 ```
@@ -410,7 +412,8 @@ including repeat visits by a trip. Stops with no departures in the window have n
 pane previews the first 200 rows. This query uses the times in `stop_times.txt`. Frequency-based trips need a
 separate calculation using [`frequencies.txt`](https://gtfs.org/documentation/schedule/reference/#frequenciestxt),
 and their `trip_id`s left out of this query: their stop times are a template, which it would
-count as one departure.
+count as one departure. When the feed has that file, remove the `-- ` before the
+`AND t.trip_id NOT IN …` line.
 
 ### PostgreSQL and PostGIS
 
