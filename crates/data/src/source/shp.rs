@@ -670,7 +670,7 @@ impl Table {
                         && matches!(v, Value::Text(_))
                         && std::str::from_utf8(padded(b)).is_err()
                     {
-                        super::unread_dates_by(counts, k, 1);
+                        super::not_utf8_at(counts, k);
                     }
                     v
                 }

@@ -170,10 +170,10 @@ fn page_name(page: u16) -> Option<&'static str> {
 }
 
 /// The end of each note of text that isn't UTF-8: why a `.dbf`'s text was read as UTF-8, and what
-/// names another encoding. It holds for a file that names no encoding, one that names UTF-8, and
-/// one whose code page RustGIS can't decode.
-pub(crate) const NO_OTHER_ENCODING: &str =
-    "no .cpg file or .dbf code page names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
+/// names another encoding. A `.cpg` comes before the code page, so text is read as UTF-8 only when
+/// no `.cpg` names another encoding RustGIS reads: the file names none, names UTF-8, or names a
+/// code page RustGIS can't decode.
+pub(crate) const NO_OTHER_ENCODING: &str = "no .cpg file names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
 
 /// What opening a `.dbf` read as UTF-8 says of its field names that aren't UTF-8 ([`not_utf8`]).
 /// `None` when there are none.

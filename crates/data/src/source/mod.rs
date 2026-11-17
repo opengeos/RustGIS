@@ -272,6 +272,11 @@ pub(crate) fn null_text_at(counts: &mut Vec<usize>, k: usize) {
     unread_dates_by(counts, k, 1);
 }
 
+/// Counts one more text value that isn't UTF-8 in the field at `k` ([`Batch::not_utf8`]).
+pub(crate) fn not_utf8_at(counts: &mut Vec<usize>, k: usize) {
+    unread_dates_by(counts, k, 1);
+}
+
 /// [`unread_date`], `n` more times.
 pub(crate) fn unread_dates_by(counts: &mut Vec<usize>, k: usize, n: usize) {
     if n == 0 {

@@ -66,8 +66,7 @@ fn named_parts(field: &[u8], text: &[u8], ldid: u8, cpg: Option<&[u8]>, rows: us
 }
 
 /// Why text was read as UTF-8, as the notes of text that isn't UTF-8 end.
-const NO_OTHER_ENCODING: &str =
-    "no .cpg file or .dbf code page names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
+const NO_OTHER_ENCODING: &str = "no .cpg file names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
 
 /// What a read of `places` says of `values` text values of its field `field` that aren't UTF-8.
 fn not_utf8_note(values: usize, field: &str) -> String {
