@@ -241,6 +241,19 @@ pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
     out
 }
 
+/// The tool parameters a graph sets that its tools don't read (#2307): the step still runs, on
+/// the tool's default, so they are kept apart from [`validate`]'s problems, which keep a graph
+/// from running and which the Model Builder can't clear for a key it doesn't show.
+pub fn unknown_params(g: &ModelGraph) -> Vec<Problem> {
+    g.nodes
+        .iter()
+        .take(MAX_NODES)
+        .filter(|n| n.kind == ModelNodeKind::Tool)
+        .filter_map(|n| Some((n, crate::cmd::gp::unknown_params_notice(tool_of(n)?, &n.params)?)))
+        .map(|(n, text)| problem("unknown-param", Some(&n.id), text))
+        .collect()
+}
+
 impl PortKind {
     /// The more specific of a node's known kind and its port's.
     fn max_kind(self, port: PortKind) -> PortKind {
@@ -699,6 +712,9 @@ fn run_into(s: &mut Session, g: &ModelGraph, report: &mut RunReport) -> Result<V
                 let params = Value::Object(params);
                 let before: HashSet<u32> = s.map().layers.iter().map(|l| l.id).collect();
                 let history = s.project.gp_history.len();
+                if let Some(spec) = tool_of(n) {
+                    crate::cmd::gp::warn_unknown_params(s, spec, &params);
+                }
                 match crate::cmd::gp::run_tool(s, tool, &params) {
                     Ok(r) => {
                         let ids: Vec<u32> = s.map().layers.iter().filter(|l| !before.contains(&l.id)).map(|l| l.id).collect();
