@@ -536,31 +536,7 @@ fn expression_at(script: &str, at: usize, session: &rustgis_engine::Session) -> 
         }
         Some(_) => return None,
         // In a `gp.run` line's `"params"`.
-        None => {
-            let brace = before.nested.filter(|n| n.key == "params")?.brace;
-            let (Named::Tool, name) = named_in(script, &h)? else {
-                return None;
-            };
-            let tool = rustgis_engine::analysis::tool(&name)?;
-            let params = script.get(byte_at(script, h.brace + brace)?..)?.split('\n').next()?;
-            let (start, key, false) = scan(params.get(..byte_at(params, at.checked_sub(h.brace + brace)?)?)?).value? else {
-                return None;
-            };
-            tool.params.iter().find(|p| p.name == key && p.kind == rustgis_engine::analysis::ParamKind::Expression)?;
-            // The input the tool reads it against, given before or after it, as for its fields.
-            let source = crate::panes::layer_for_param(tool, &key)?.name;
-            let data = scan(params).inputs.into_iter().rev().find(|(k, _)| k == source).and_then(|(_, input)| match input {
-                serde_json::Value::String(name) if !name.contains('\\') => {
-                    Some((crate::panes::input_dataset(session, &name)?, Of::ToolFields(name)))
-                }
-                serde_json::Value::Number(id) => {
-                    let id = u32::try_from(id.as_u64()?).ok()?;
-                    Some((&session.project.table(id)?.dataset, Of::TableFields(id)))
-                }
-                _ => None,
-            });
-            (h.brace + brace + start, data)
-        }
+        None => tool_expression_at(script, at, &h, before.nested.filter(|n| n.key == "params")?.brace, session)?,
     };
     let chars: Vec<char> = script.chars().collect();
     let (text, places) = unescape(chars.get(start..)?)?;
@@ -574,6 +550,43 @@ fn expression_at(script: &str, at: usize, session: &rustgis_engine::Session) -> 
     let from = start + places.get(offer.start())?;
     let of = Of::Expression(Box::new(InExpression { offer, text: start, data: data.map(|(_, of)| of) }));
     Some(Offer { start: from, end: at, items, of: Some(of) })
+}
+
+/// Where the expression being typed at char `at` of `script` starts (a char index), in a `gp.run`
+/// line's (`h`) `"params"` whose `{` is char `brace` of its object: the string of a parameter of
+/// kind `Expression` of the tool it runs; with the rows of the tool's input, given before or after
+/// it (by its name, escapes read, or a table's id), as for its fields. Without that input, or a
+/// tool with no layer parameter, none: the language's own words are offered.
+fn tool_expression_at<'a>(
+    script: &str,
+    at: usize,
+    h: &Hint,
+    brace: usize,
+    session: &'a rustgis_engine::Session,
+) -> Option<(usize, Option<(&'a rustgis_engine::data::Dataset, Of)>)> {
+    let (Named::Tool, name) = named_in(script, h)? else {
+        return None;
+    };
+    let tool = rustgis_engine::analysis::tool(&name)?;
+    let params = script.get(byte_at(script, h.brace + brace)?..)?.split('\n').next()?;
+    let (start, key, false) = scan(params.get(..byte_at(params, at.checked_sub(h.brace + brace)?)?)?).value? else {
+        return None;
+    };
+    tool.params.iter().find(|p| p.name == key && p.kind == rustgis_engine::analysis::ParamKind::Expression)?;
+    let source = crate::panes::layer_for_param(tool, &key).map(|p| p.name);
+    let input = source.and_then(|source| scan(params).inputs.into_iter().rev().find(|(k, _)| k == source));
+    let data = input.and_then(|(_, input)| match input {
+        serde_json::Value::String(raw) => {
+            let (name, _) = unescape(&raw.chars().collect::<Vec<_>>())?;
+            Some((crate::panes::input_dataset(session, &name)?, Of::ToolFields(name)))
+        }
+        serde_json::Value::Number(id) => {
+            let id = u32::try_from(id.as_u64()?).ok()?;
+            Some((&session.project.table(id)?.dataset, Of::TableFields(id)))
+        }
+        _ => None,
+    });
+    Some((h.brace + brace + start, data))
 }
 
 /// `script` with `item` of the expression's list accepted (`exprcomplete::written`), and where the
@@ -2489,6 +2502,18 @@ mod tests {
         assert!(items(end(r#"select.byAttributes {"layer": "Countries", "where": "a \"#)).is_empty(), "an escape begun");
         assert!(items(end(r#"layer.displayFilters {"layer": "Countries", "filters": [{"where": "pop_"#)).is_empty(), "nested");
         assert!(items(end(r#"gp.run {"tool": "buffer", "params": {"input": "Countries", "output": "pop_"#)).is_empty(), "a tool's text");
+    }
+
+    /// A `gp.run` tool's input named with escapes (`"Big \"cities\""`) is read as its name, so its
+    /// expression is offered that layer's fields.
+    #[test]
+    fn a_tools_input_named_with_escapes_gives_its_fields() {
+        let mut app = crate::RustGisApp::with_sample();
+        app.run("layer.rename", serde_json::json!({"layer": "Cities", "name": "Big \"cities\""})).unwrap();
+        let s = r#"gp.run {"tool": "selectByAttributes", "params": {"input": "Big \"cities\"", "where": "pop_"#;
+        let o = super::offer_at(s, s.chars().count(), &[], &app.session).unwrap();
+        assert!(matches!(&o.of, Some(super::Of::Expression(e)) if e.data == Some(super::Of::ToolFields("Big \"cities\"".into()))));
+        assert!(o.items.iter().any(|i| i == "pop_max"));
     }
 
     /// An expression's item goes in as the expression box puts it, escaped as the string's text:
