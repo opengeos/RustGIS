@@ -4169,6 +4169,8 @@ impl RustGisApp {
                         // Rasters GDAL reads (every one it is asked to read).
                         #[cfg(not(target_arch = "wasm32"))]
                         rustgis_engine::data::raster::gdal::EXTENSIONS,
+                        // PDF pages, GeoPDFs placed by their coordinates, where this build reads them (#2336).
+                        if rustgis_engine::data::raster::PDF_PAGES { &["pdf"][..] } else { &[][..] },
                     ]
                     .concat(),
                     tl!("Vector and raster data"),

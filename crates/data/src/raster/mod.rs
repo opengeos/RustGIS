@@ -21,6 +21,8 @@ mod lerc;
 mod lzw;
 mod mask;
 pub mod pam;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 pub mod planetary;
 pub mod wkt;
 pub mod world;
@@ -96,10 +98,33 @@ pub const MAX_ASCII_BYTES: u64 = 1 << 30;
 /// File extensions read as rasters.
 pub const READ_EXTENSIONS: &[&str] = &["tif", "tiff", "asc", "png", "jpg", "jpeg"];
 
-/// Whether a file name is a raster this module reads.
+/// Whether a file name is a raster this module reads: a PDF's page too (refused with
+/// [`PDF_ELSEWHERE`] where [`PDF_PAGES`] is false).
 pub fn is_raster_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    READ_EXTENSIONS.contains(&ext.as_str())
+    READ_EXTENSIONS.contains(&ext.as_str()) || ext == "pdf"
+}
+
+/// Whether a file name is a PDF's (`.pdf`): its pages are read as rasters ([`PDF_PAGES`]).
+pub fn is_pdf_name(name: &str) -> bool {
+    Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+/// Whether this build reads PDF pages (the `pdf` feature, #2336).
+pub const PDF_PAGES: bool = cfg!(feature = "pdf");
+
+/// Why a PDF isn't read in a build without the `pdf` feature (the browser, phones).
+pub const PDF_ELSEWHERE: &str = "PDFs are read in the desktop app, the command line and Python, not here: open it there";
+
+/// Reads page `page` of a PDF file (its number; the first when `None`), or says it isn't read here.
+fn read_pdf_page(path: &Path, page: Option<&str>) -> Result<Raster> {
+    #[cfg(feature = "pdf")]
+    return pdf::read_file(path, page);
+    #[cfg(not(feature = "pdf"))]
+    {
+        let _ = (path, page);
+        Err(DataError::Unsupported(PDF_ELSEWHERE.into()))
+    }
 }
 
 /// Whether a file name is JPEG 2000's (`.jp2`, `.j2k`): read through GDAL on the desktop, from a
@@ -1184,6 +1209,10 @@ fn read_path_placing(path: &Path, world: bool) -> Result<Raster> {
     }
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // A PDF's first page, placed by its own coordinates when it has them (never a world file).
+    if is_pdf_name(&path.to_string_lossy()) {
+        return read_pdf_page(path, None);
+    }
     // The `.aux.xml` sidecar, read first: a no-data value it gives (for a file that has none) keeps
     // those pixels out of the rounded count as they are read.
     let pam = pam::read(path);
@@ -1324,6 +1353,10 @@ fn read_path_with_placing(path: &Path, subdataset: Option<&str>, crs: Option<&st
     #[cfg(not(target_arch = "wasm32"))]
     if zarr::is_store(path) {
         return zarr::read_dir(path, subdataset.unwrap_or(""), crs);
+    }
+    // A PDF's page, by its number.
+    if subdataset.is_some() && is_pdf_name(&path.to_string_lossy()) {
+        return read_pdf_page(path, subdataset);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if (subdataset.is_some() || crs.is_some()) && gdal::is_gdal_raster_name(&path.to_string_lossy()) {
@@ -1604,8 +1637,29 @@ fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Rast
     Raster::new(name, width, height, bands, transform, Crs::LonLat, None, ColorHint::Rgb { alpha: true }, "UInt8")
 }
 
-/// Reads a raster from a file's name and bytes (a browser upload).
+/// [`read_bytes`], and for a PDF its page `page` (its number; the first when `None`): an upload
+/// or download of a PDF, and a project's copy of one reopened at the page it was added at.
+pub fn read_bytes_page(file_name: &str, bytes: &[u8], page: Option<&str>) -> Result<Raster> {
+    if !is_pdf_name(file_name) {
+        return read_bytes(file_name, bytes);
+    }
+    #[cfg(feature = "pdf")]
+    {
+        let name = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
+        pdf::read_bytes(name, bytes.to_vec(), page)
+    }
+    #[cfg(not(feature = "pdf"))]
+    {
+        let _ = page;
+        Err(DataError::Unsupported(PDF_ELSEWHERE.into()))
+    }
+}
+
+/// Reads a raster from a file's name and bytes (a browser upload); a PDF's first page.
 pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
+    if is_pdf_name(file_name) {
+        return read_bytes_page(file_name, bytes, None);
+    }
     let p = Path::new(file_name);
     let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
