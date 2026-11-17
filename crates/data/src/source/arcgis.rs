@@ -62,15 +62,16 @@ pub struct ArcgisSource {
     /// Its place among the fields read; none for a layer opened empty, whose answer may name no
     /// fields (a page with features then reads as the layer having changed).
     oid_at: Option<usize>,
-    /// The features a page asks for.
-    page: usize,
+    /// The features a page asks for: halved when an answer is larger than
+    /// [`remote::MAX_ANSWER`] (see [`ArcgisSource::shorten`]).
+    page: std::sync::atomic::AtomicUsize,
     /// Whether the layer's queries take standardized SQL (`MOD`), to sample a view.
     sample: bool,
 }
 
 impl std::fmt::Debug for ArcgisSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ArcgisSource").field("remote", &self.remote).field("page", &self.page).finish_non_exhaustive()
+        f.debug_struct("ArcgisSource").field("remote", &self.remote).field("page", &self.page()).finish_non_exhaustive()
     }
 }
 
@@ -167,7 +168,7 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     if !sample {
         info.notes.push("its queries don't take standardized SQL, so a view holding more features than are drawn shows the first ones by object id rather than a sample of all of them".into());
     }
-    Ok(ArcgisSource { remote, query, info, oid, oid_at, page, sample })
+    Ok(ArcgisSource { remote, query, info, oid, oid_at, page: std::sync::atomic::AtomicUsize::new(page), sample })
 }
 
 /// `query` with each value of `values` set, in order (so the same read asks for the same address,
@@ -290,16 +291,48 @@ impl ArcgisSource {
         with(&self.query_of(cell, 1), &[("returnCountOnly", "true"), ("f", "json")])
     }
 
-    /// A page of the features in `cell`, every `step`-th, from `offset`.
-    fn page_url(&self, cell: Option<&Extent>, step: u64, offset: usize) -> String {
+    /// A page of the features in `cell`, every `step`-th, `page` long from `offset`.
+    fn page_url(&self, cell: Option<&Extent>, step: u64, offset: usize, page: usize) -> String {
         with(
             &self.query_of(cell, step),
-            &[("orderByFields", &self.oid), ("resultOffset", &offset.to_string()), ("resultRecordCount", &self.page.to_string())],
+            &[("orderByFields", &self.oid), ("resultOffset", &offset.to_string()), ("resultRecordCount", &page.to_string())],
         )
     }
 
-    /// [`FeatureSource::read`], keeping the features read within `bytes` as they come.
+    /// The features a page asks for now.
+    fn page(&self) -> usize {
+        self.page.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Halves the page after an answer larger than [`remote::MAX_ANSWER`]; refused at one
+    /// feature, whose answer can't be made smaller.
+    fn shorten(&self) -> Result<()> {
+        let page = self.page();
+        if page <= 1 {
+            return Err(DataError::Format(crate::diagnostics::message_with_address(
+                &self.query,
+                &format!("one feature's answer is larger than {} MB", remote::MAX_ANSWER >> 20),
+            )));
+        }
+        // Another read may have shortened it already: never lengthened back.
+        self.page.fetch_min(page / 2, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// [`FeatureSource::read`], keeping the features read within `bytes` as they come: a read
+    /// whose page answers are too large is read again in shorter pages.
     fn read_within(&self, req: &Request, bytes: usize) -> Result<Batch> {
+        loop {
+            match self.read_pass(req, bytes) {
+                Err(e) if remote::is_too_large(&e) => self.shorten()?,
+                done => return done,
+            }
+        }
+    }
+
+    /// One [`ArcgisSource::read_within`] at the page length of the moment.
+    fn read_pass(&self, req: &Request, bytes: usize) -> Result<Batch> {
+        let page_len = self.page();
         let view = match req.extent {
             Some(e) => match world_view(&e)? {
                 Some(v) => Some(v),
@@ -325,7 +358,7 @@ impl ArcgisSource {
             return Ok(Batch { matched, complete: matched == 0, ..Batch::default() });
         }
         let limit = super::clamp_limit(req.limit);
-        let page = self.page as u64;
+        let page = page_len as u64;
         let pages_at = |step: u64| counts.iter().map(|n| n.div_ceil(step).div_ceil(page)).fold(0u64, u64::saturating_add);
         let mut step = if self.sample { step_for(counts.iter().sum::<u64>(), limit) } else { 1 };
         while self.sample && step < MAX_STEP && pages_at(step) > MAX_READ_PAGES as u64 {
@@ -337,7 +370,8 @@ impl ArcgisSource {
         // The answers a read holds at once stay within half of what a service keeps, and a round
         // fetches no more than the other half (`remote::ROUND_ANSWERS`), so the pages a pass
         // needs never push each other out: past it, the view is read in part.
-        let room = remote::KEEP_ANSWERS / 2;
+        // One answer below it, as the last answer counted may be larger than its guess.
+        let room = (remote::KEEP_ANSWERS / 2).saturating_sub(usize::try_from(remote::MAX_ANSWER).unwrap_or(usize::MAX));
         let (mut held, mut present, mut present_bytes) = (0usize, 0usize, 0usize);
         // Features kept within `bytes` as they come: every other one dropped, and every other
         // one after it, each time they pass it.
@@ -354,7 +388,7 @@ impl ArcgisSource {
                 continue;
             }
             let wanted = usize::try_from(n.div_ceil(step)).unwrap_or(usize::MAX).min(share);
-            let mut planned = wanted.div_ceil(self.page).max(1);
+            let mut planned = wanted.div_ceil(page_len).max(1);
             let (mut offset, mut asked, mut kept) = (0usize, 0usize, 0usize);
             // A page of this cell isn't in yet: the offsets of those after it are guesses.
             let mut gap = false;
@@ -368,14 +402,14 @@ impl ArcgisSource {
                 }
                 budget -= 1;
                 asked += 1;
-                let url = self.page_url(cell.as_ref(), step, offset);
+                let url = self.page_url(cell.as_ref(), step, offset, page_len);
                 let Some(answer) = self.remote.answer(&url)? else {
                     // Asked for with the pages after it, as if it were full: when it isn't, those
                     // are asked for again at the right offsets once it is in.
                     held = held.saturating_add(guess);
                     waiting = true;
                     gap = true;
-                    offset = offset.saturating_add(self.page);
+                    offset = offset.saturating_add(page_len);
                     continue;
                 };
                 held = held.saturating_add(answer.len());
@@ -383,7 +417,7 @@ impl ArcgisSource {
                 present_bytes = present_bytes.saturating_add(answer.len());
                 if gap {
                     // An earlier page isn't in: this one's offset may be wrong, read it later.
-                    offset = offset.saturating_add(self.page);
+                    offset = offset.saturating_add(page_len);
                     continue;
                 }
                 let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
@@ -549,8 +583,16 @@ impl FeatureSource for ArcgisSource {
             let mut losses = crate::esripbf::Losses::default();
             loop {
                 crate::progress::check()?;
-                let url = self.page_url(view.as_ref(), 1, offset);
-                let answer = fetch(url.clone())?;
+                let page_len = self.page();
+                let url = self.page_url(view.as_ref(), 1, offset, page_len);
+                let answer = match fetch(url.clone()) {
+                    // Asked for again from the same offset, in a shorter page.
+                    Err(e) if remote::is_too_large(&e) => {
+                        self.shorten()?;
+                        continue;
+                    }
+                    answer => answer?,
+                };
                 // Not kept: the layer is read once, through.
                 self.remote.forget_answer(&url);
                 let (got, more, sent) = self.page_of(&url, &answer, &mut skipped, &mut losses)?;
@@ -573,7 +615,7 @@ impl FeatureSource for ArcgisSource {
                 }
                 offset = offset.saturating_add(sent);
                 // A service that ignores the offset would send pages for ever.
-                if offset as u64 > total.saturating_add(self.page as u64) {
+                if offset as u64 > total.saturating_add(page_len as u64) {
                     return Err(DataError::Format(crate::diagnostics::message_with_address(
                         &self.query,
                         &format!("the service kept sending pages past the {total} features it counted"),

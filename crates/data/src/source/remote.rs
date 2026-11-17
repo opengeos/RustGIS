@@ -38,8 +38,9 @@ pub const MAX_ROUNDS: usize = 48;
 const ROUND_BUDGET: u64 = READ_BUDGET.saturating_mul(2);
 /// Files kept, with what was fetched of them.
 const MAX_FILES: usize = 32;
-/// The most bytes of whole answers a service keeps (least recently used ones are dropped past it),
-/// as [`KEEP`] bounds a file's parts. Small in tests, so that they can fill it.
+/// The most bytes of whole answers one [`Remote`] keeps (least recently used ones are dropped past
+/// it): a layer read by its query address, as [`KEEP`] bounds a file's parts, for each of up to
+/// [`MAX_FILES`] addresses kept. Small in tests, so that they can fill it.
 pub const KEEP_ANSWERS: usize = if cfg!(test) {
     2 << 20
 } else if cfg!(target_arch = "wasm32") {
@@ -64,6 +65,15 @@ const _: () = assert!((ROUND_ANSWERS as u64) * MAX_ANSWER <= ROUND_BUDGET);
 
 /// The error of a read that needs bytes not fetched yet (it is run again once they are).
 pub const NEED: &str = "waiting for the file's bytes";
+/// The error of an answer larger than [`MAX_ANSWER`] ([`Remote::answer`]): the read asks for a
+/// smaller one (see [`is_too_large`]).
+pub const TOO_LARGE: &str = "the answer is larger than an answer may be";
+
+/// Whether `e` says an answer was larger than [`MAX_ANSWER`] ([`TOO_LARGE`]).
+pub fn is_too_large(e: &DataError) -> bool {
+    matches!(e, DataError::Format(m) if m == TOO_LARGE)
+}
+
 /// Starts the error of a file that can't be read in place (no spatial index, no bounding-box
 /// covering, a server without ranges): it is downloaded whole instead.
 pub const READ_WHOLE: &str = "can't be read in place";
@@ -138,6 +148,8 @@ pub enum Failed {
     PastEnd,
     /// The server doesn't answer byte-range requests: the file is downloaded whole instead.
     NoRanges,
+    /// The answer is larger than [`Want::Upto`] allows: a read asks for a smaller one.
+    TooLarge,
     /// Anything else, with its message.
     Other(String),
 }
@@ -223,7 +235,12 @@ struct Store {
     answers_held: usize,
     /// Answers reads found missing: (the read's drive, the address).
     missing_answers: Vec<(u64, String)>,
+    /// Addresses whose answers were larger than [`MAX_ANSWER`], at most [`MAX_TOO_LARGE`].
+    too_large: std::collections::HashSet<String>,
 }
+
+/// The most addresses of answers too large a [`Remote`] remembers (all are forgotten past it).
+const MAX_TOO_LARGE: usize = 1024;
 
 thread_local! {
     /// The drive whose read runs on this thread (0: none), so each drive fetches what its own
@@ -386,8 +403,20 @@ impl Remote {
             a.used = tick;
             return Ok(Some(a.bytes.clone()));
         }
+        if s.too_large.contains(url) {
+            return Err(DataError::Format(TOO_LARGE.into()));
+        }
         s.missing_answers.push((drive_now(), url.to_string()));
         Ok(None)
+    }
+
+    /// Remembers that the answer to `url` was larger than [`MAX_ANSWER`].
+    fn note_too_large(&self, url: &str) {
+        let mut s = self.lock();
+        if s.too_large.len() >= MAX_TOO_LARGE {
+            s.too_large.clear();
+        }
+        s.too_large.insert(url.to_string());
     }
 
     /// Drops a held answer (one that couldn't be read, so a later read asks for it again).
@@ -712,6 +741,8 @@ fn step_in<T: Send + 'static>(
                     // (Reads ask for ranges and tails; a whole file is all of its bytes from the start.)
                     (Job::Part(Want::Whole | Want::Upto(_)), Ok(bytes)) => remote2.insert(0, bytes.len() as u64, bytes),
                     (Job::Answer(url), Ok(bytes)) => remote2.insert_answer(url, bytes),
+                    // Said to the read by `Remote::answer`, which asks for a smaller one.
+                    (Job::Answer(url), Err(Failed::TooLarge)) => remote2.note_too_large(url),
                     // A request dropped unfetched (the view moved on) is asked for again next round.
                     (_, Err(Failed::Dropped)) => {}
                     // A range past the end of the file.
@@ -721,6 +752,7 @@ fn step_in<T: Send + 'static>(
                             Failed::NoRanges => format!("the server doesn't answer byte-range requests ({READ_WHOLE})"),
                             Failed::PastEnd => "the last bytes asked for past the end of the file".into(),
                             Failed::Dropped => "the request was dropped".into(),
+                            Failed::TooLarge => "the file is larger than a download may be".into(),
                             Failed::Other(e) => e,
                         };
                         let mut r = round2.lock().unwrap_or_else(|e| e.into_inner());
@@ -905,7 +937,7 @@ pub(crate) mod testing {
             if let Some(h) = handler {
                 let answer = h(url).ok_or_else(|| Failed::Other("HTTP 404".into()));
                 done(match (w, answer) {
-                    (Want::Upto(n), Ok(a)) if a.len() as u64 > n => Err(Failed::Other("the answer is too large".into())),
+                    (Want::Upto(n), Ok(a)) if a.len() as u64 > n => Err(Failed::TooLarge),
                     (_, answer) => answer,
                 });
                 return;
@@ -926,7 +958,7 @@ pub(crate) mod testing {
                 Want::Tail(n) => f.get(f.len().saturating_sub(n as usize)..).map(<[u8]>::to_vec).unwrap_or_default(),
                 Want::Whole => f.to_vec(),
                 Want::Upto(n) if f.len() as u64 > n => {
-                    done(Err(Failed::Other("the answer is too large".into())));
+                    done(Err(Failed::TooLarge));
                     return;
                 }
                 Want::Upto(_) => f.to_vec(),

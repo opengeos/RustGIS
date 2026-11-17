@@ -42,11 +42,22 @@ struct Opts {
     empty_without_fields: bool,
     /// Each feature has a text field of 1.5 to 10.5 KB, by its object id.
     padded: bool,
+    /// With `padded`, the first feature's text is short (its answer says little of the rest).
+    small_first: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { page: 30, sql: true, description: None, z: false, ignores_offset: false, empty_without_fields: false, padded: false }
+        Opts {
+            page: 30,
+            sql: true,
+            description: None,
+            z: false,
+            ignores_offset: false,
+            empty_without_fields: false,
+            padded: false,
+            small_first: false,
+        }
     }
 }
 
@@ -60,7 +71,7 @@ fn service(host: &str, page: usize, sql: bool, description: Option<&'static str>
 
 /// [`service`], answering as `opts` says.
 fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
-    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded } = opts;
+    let Opts { page, sql, description, z, ignores_offset, empty_without_fields, padded, small_first } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
     let a = asked.clone();
@@ -124,7 +135,8 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
             }
             let mut values = vec![uint(id)];
             if padded {
-                values.push(text(&"x".repeat((id % 7 + 1) as usize * 1500)));
+                let len = if small_first && id == 1 { 10 } else { (id % 7 + 1) as usize * 1500 };
+                values.push(text(&"x".repeat(len)));
             }
             if geometry_too {
                 values.push(geometry(&[], &at));
@@ -388,13 +400,59 @@ fn a_view_larger_than_the_answers_kept_is_read_in_part_without_running_out_of_ro
     // 400 features of 1.5 to 10.5 KB: about 2.4 MB of uneven answers, past what a service keeps
     // in tests (2 MB). The service offers pages of 30, up to 315 KB; they are asked for shorter,
     // under the largest answer (64 KB).
-    let (query, _) = service_with("live-large.test", Opts { page: 30, padded: true, ..Opts::default() });
+    // With and without sampling SQL (a service without it reads each cell's first features).
+    for (host, sql) in [("live-large.test", true), ("live-large-nosql.test", false)] {
+        let (query, _) = service_with(host, Opts { page: 30, padded: true, sql, ..Opts::default() });
+        let src = open_blocking(&query).unwrap();
+        assert!(src.page() < 30 && src.page() * 10_600 < remote::MAX_ANSWER as usize, "{}", src.page());
+        let whole = Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 };
+        let b = read(&src, whole).unwrap();
+        assert!(!b.complete && b.matched == FEATURES && !b.features.is_empty() && b.features.len() < FEATURES as usize, "{host}");
+        assert_eq!(b.features.iter().map(|f| f.id).collect::<HashSet<_>>().len(), b.features.len());
+        // Read again, it asks for what it read before.
+        assert_eq!(ids(&read(&src, whole).unwrap()), ids(&b), "{host}");
+        // A view whose answers fit (its cells hold a few of the large features) is read whole.
+        let fits = read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap();
+        assert!(fits.complete && fits.features.len() == 16, "{host}: {}", fits.features.len());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_export_says_what_the_pages_lost_and_nothing_when_they_lost_nothing() {
+    let dir = std::env::temp_dir().join(format!("rustgis-arcgis-tests-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (host, z) in [("live-export-z.test", true), ("live-export-clean.test", false)] {
+        let (query, _) = service_with(host, Opts { z, ..Opts::default() });
+        let src = open_blocking(&query).unwrap();
+        let layer = crate::Dataset::new(src.info.name.clone(), src.info.geometry_type, src.info.fields.clone());
+        let path = dir.join(format!("{host}.geojson"));
+        let e = crate::export::write_source_in(&src, &layer, &path, crate::raster::Crs::LonLat).unwrap();
+        assert_eq!(e.written, FEATURES as usize);
+        let want = if z { vec![crate::zm_note(Some(FEATURES))] } else { Vec::new() };
+        assert_eq!(e.read_notes, want, "{host}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pages_whose_answers_are_too_large_are_asked_for_again_shorter() {
+    // The first feature is small, so the page is planned long (30); the others make an answer of
+    // 30 up to 315 KB, past the largest taken in tests (64 KB).
+    let (query, _) = service_with("live-shorten.test", Opts { page: 30, padded: true, small_first: true, ..Opts::default() });
     let src = open_blocking(&query).unwrap();
-    assert!(src.page < 30 && src.page * 10_600 < remote::MAX_ANSWER as usize, "{}", src.page);
+    assert_eq!(src.page(), 30);
+    // The whole grid: cells of many features, whose pages of 30 are too large (read by a source
+    // of its own, which shortens its own pages).
     let b = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
-    assert!(!b.complete && b.matched == FEATURES && !b.features.is_empty() && b.features.len() < FEATURES as usize);
-    assert_eq!(b.features.iter().map(|f| f.id).collect::<HashSet<_>>().len(), b.features.len());
-    // Read again, it asks for what it read before.
-    let again = read(&src, Request { extent: Some(Extent::new(-101.0, 39.0, -99.0, 41.0)), limit: 1000 }).unwrap();
-    assert_eq!(ids(&again), ids(&b));
+    assert!(!b.features.is_empty());
+    let mut visited = Vec::new();
+    src.visit_chunks(None, 64 << 10, &mut |c| {
+        visited.extend(c.iter().map(|f| f.id));
+        Ok(())
+    })
+    .unwrap();
+    assert!(visited.into_iter().eq(1..=FEATURES));
+    assert!(src.page() < 30 && src.page() >= 1, "{}", src.page());
 }
