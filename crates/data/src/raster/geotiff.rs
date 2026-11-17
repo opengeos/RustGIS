@@ -439,10 +439,10 @@ fn axes_in_metres(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(Vec<u16
         for entry in keys.get_mut(4..).into_iter().flat_map(|k| k.as_chunks_mut::<4>().0) {
             match entry {
                 [2057 | 2058, 34736, _, offset] => {
-                    let metres = doubles.get(usize::from(*offset)).map(|v| v * to_m);
-                    if let Some(metres) = metres
-                        && let Ok(at) = u16::try_from(doubles.len())
-                    {
+                    if let Some(metres) = doubles.get(usize::from(*offset)).map(|v| v * to_m) {
+                        // A slot past the last a key can address: the axes can't be put in metres.
+                        let at = u16::try_from(doubles.len())
+                            .map_err(|_| err("the file's ellipsoid axes can't be converted to metres: too many double parameters"))?;
                         doubles.push(metres);
                         *offset = at;
                     }
@@ -544,7 +544,7 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
     };
     // Not when the keys give a shift of their own (an ESRI PE citation's TOWGS84): that would be
     // set aside for the code's, as a WKT with its own shift isn't read as the code beside it.
-    let own_shift = sr.to_wkt().is_some_and(|w| w.contains("TOWGS84[") || w.contains("BOUNDCRS["));
+    let own_shift = sr.to_wkt().is_some_and(|w| shift_differs(&w, sr.epsg));
     if let Some(crs) = sr.epsg.filter(|_| !own_shift).and_then(Crs::from_epsg) {
         return Ok(crs);
     }
@@ -561,6 +561,15 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
         .map_err(err)
 }
 
+/// Whether WKT `wkt` gives a shift of its own (a `TOWGS84`, a `BOUNDCRS`) that places points
+/// otherwise than the EPSG `code` it is identified as ([`super::wkt::places_as`]); a shift equal to
+/// the code's is the code.
+fn shift_differs(wkt: &str, code: Option<u32>) -> bool {
+    let upper: String = wkt.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+    (upper.contains("TOWGS84[") || upper.contains("BOUNDCRS["))
+        && code.and_then(Crs::from_epsg).is_none_or(|c| !super::wkt::places_as(wkt, c))
+}
+
 /// Whether a raster in `crs` can be written as a GeoTIFF: an EPSG system always, a user-defined
 /// one when it came with GeoKeys or can be written as them (see [`terrio_keys`]).
 pub fn describes(crs: Crs) -> bool {
@@ -572,10 +581,15 @@ pub fn describes(crs: Crs) -> bool {
 /// hold goes in an ESRI PE citation. The key directory (with the raster type as area), its
 /// double parameters and its ASCII parameters; `None` when it can't be written at all.
 fn terrio_keys(d: &CustomCrs) -> Option<(Vec<u16>, Vec<f64>, String)> {
-    let sr = match &d.wkt {
+    let mut sr = match &d.wkt {
         Some(w) => terrio_crs::SpatialRef::from_wkt(w),
         None => terrio_crs::SpatialRef::from_proj4(&format!("{} +type=crs", d.proj4)).ok()?,
     };
+    // A system with a shift of its own isn't written as the code it is identified as, whose keys
+    // would leave the shift out (opengeos/terrio#1012): its own keys carry it (TOWGS84, 2062).
+    if d.wkt.as_deref().is_some_and(|w| shift_differs(w, sr.epsg)) {
+        sr.epsg = None;
+    }
     let tags = sr.to_geokeys().ok()?.encode().ok()?;
     Some((with_raster_type(&tags.directory), tags.doubles, tags.ascii))
 }
@@ -3766,6 +3780,21 @@ mod tests {
         assert!(custom_crs(&odd, &doubles, "").is_err());
     }
 
+    /// Axes in kilometres converted to metres in slots of their own; past the last slot a key can
+    /// address (65,535), refused rather than left in kilometres under a metre unit.
+    #[test]
+    fn axes_in_metres_need_room_for_their_slots() {
+        let keys = [1u16, 1, 0, 3, 2052, 0, 1, 9036, 2057, 34736, 1, 0, 2058, 34736, 1, 1];
+        let (k, d) = axes_in_metres(&keys, &[3396.19, 3376.2], "").unwrap();
+        assert_eq!((d[2], d[3], k[7]), (3_396_190.0, 3_376_200.0, 9001));
+        for len in [65_535, 65_536] {
+            let mut doubles = vec![0.0; len];
+            doubles[..2].copy_from_slice(&[3396.19, 3376.2]);
+            let e = axes_in_metres(&keys, &doubles, "").unwrap_err().to_string();
+            assert!(e.contains("too many double parameters"), "{len}: {e}");
+        }
+    }
+
     /// An ESRI PE citation with a shift of its own (British National Grid with another TOWGS84) is
     /// read by that WKT, as the `.prj` is, not as EPSG:27700 with the code's shift; without one it
     /// is the code.
@@ -3782,6 +3811,19 @@ mod tests {
         assert!((a.x - b.x).abs() < 1e-12 && (a.y - b.y).abs() < 1e-12, "{a:?} {b:?}");
         let plain = format!("ESRI PE String = {}|", bng.replace(",TOWGS84[375,-111,431,0,0,0,0]", ""));
         assert_eq!(custom_crs(&keys(&plain), &[], &plain).unwrap(), Crs::Epsg(27700));
+        // Read from its `.prj` and written as keys, it keeps its shift: read back, it places
+        // points as the `.prj` does.
+        let (k, d, a) = terrio_keys(&prj.custom_def().unwrap()).unwrap();
+        assert!(!k.chunks(4).any(|e| e == [3072, 0, 1, 27700]), "{k:?}");
+        let back = custom_crs(&k, &d, &a).unwrap();
+        let c = back.transformer().unwrap().to_lonlat(at).unwrap();
+        assert!((c.x - b.x).abs() < 1e-9 && (c.y - b.y).abs() < 1e-9, "{c:?} {b:?}");
+        // A shift equal to the code's is the code: written as it (Lambert 93 on RGF93 with a
+        // shift of zero, as Esri writes it).
+        let l93 = r#"PROJCS["RGF93_Lambert_93",GEOGCS["GCS_RGF_1993",DATUM["D_RGF_1993",SPHEROID["GRS_1980",6378137.0,298.257222101],TOWGS84[0,0,0,0,0,0,0]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",700000.0],PARAMETER["False_Northing",6600000.0],PARAMETER["Central_Meridian",3.0],PARAMETER["Standard_Parallel_1",44.0],PARAMETER["Standard_Parallel_2",49.0],PARAMETER["Latitude_Of_Origin",46.5],UNIT["Meter",1.0]]"#;
+        let l93 = crate::raster::wkt::crs_from_wkt(l93).unwrap();
+        let (k, _, _) = terrio_keys(&l93.custom_def().unwrap_or_else(|| panic!("{l93:?}"))).unwrap();
+        assert!(k.chunks(4).any(|e| e == [3072, 0, 1, 2154]), "{k:?}");
     }
 
     /// MODIS's sinusoidal grid (coordinate transformation 24), as a MOD13Q1 tile's GeoKeys give

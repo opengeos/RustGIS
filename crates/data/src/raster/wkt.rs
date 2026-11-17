@@ -350,8 +350,12 @@ fn has_bound_transformation(n: &Node, depth: usize) -> bool {
 /// own `AUTHORITY` ([`read_root`]).
 fn read_tree(root: &Node, code: Option<u32>, text: &str) -> Result<(Crs, Option<String>), String> {
     let (crs, note) = read_root(root, code, text)?;
-    // A projected system without a datum, read on WGS 84 as before ([`with_wgs84_datum`]).
-    let note = match geogcs(root).filter(|g| crs.custom_def().is_some() && g.child("DATUM").is_none()) {
+    // A system without a datum, read on WGS 84 as before ([`with_wgs84_datum`]; a geographic one
+    // on Greenwich as WGS 84 longitude/latitude), which PROJ 9.8.1 refuses.
+    // Not one read by its EPSG code (`AUTHORITY["EPSG","4326"]`), which is that code exactly.
+    let by_code = earth_code(root, code).is_some();
+    let note = match geogcs(root).filter(|g| (crs.custom_def().is_some() || (crs == Crs::LonLat && !by_code)) && g.child("DATUM").is_none())
+    {
         Some(_) => {
             let said = format!(
                 "the coordinate system {} has no datum and is read on WGS 84, so positions may be off by up to a few hundred metres",
@@ -497,8 +501,11 @@ fn read_root(root: &Node, code: Option<u32>, text: &str) -> Result<(Crs, Option<
 
 /// Whether WKT `text`, as terrio-crs reads it, places points as `crs` does: within a centimetre
 /// (or the degrees of one) at the centre of the area of use of its EPSG code. A file's shift to
-/// WGS 84 that is its code's transformation then reads as the code.
-fn places_as(text: &str, crs: Crs) -> bool {
+/// WGS 84 that is its code's transformation then reads as the code. Only there: the text RustGIS
+/// writes for some codes approximates them away from it (Guam's projection, EPSG:3993, 1.5 cm at
+/// 0.1°) and is read back as the code; and a shift on WGS 84 itself, which a WGS 84 or Web
+/// Mercator code's file may give, is none for PROJ 9.8.1 anywhere.
+pub(crate) fn places_as(text: &str, crs: Crs) -> bool {
     let (Ok(file), Ok(code)) = (super::crs::transformer_of_wkt(text), crs.transformer()) else { return false };
     let centre = match crs {
         Crs::Epsg(c) => super::crs::area_centre(c),
@@ -4114,10 +4121,15 @@ pub(crate) mod tests {
             assert!(places_alike(crs, alone, Coord::new(-79.0, 43.0)), "{bound}");
             assert_eq!(note, Some(format!("{said}; {then}")), "{bound}");
         }
-        // A geographic one is still read as WGS 84 longitude/latitude, as before, without a note.
+        // A geographic one is still read as WGS 84 longitude/latitude, as before, saying so.
         let no_datum = NAD27.replace(datum, "");
         assert_ne!(no_datum, NAD27);
-        assert_eq!(read_wkt(&no_datum).unwrap().0, Crs::LonLat);
+        let (crs, note) = read_wkt(&no_datum).unwrap();
+        assert_eq!(crs, Crs::LonLat);
+        assert!(note.is_some_and(|n| n.contains("has no datum and is read on WGS 84")));
+        // By its code, EPSG:4326 exactly: nothing said.
+        let coded = r#"GEOGCS["WGS 84",PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433],AUTHORITY["EPSG","4326"]]"#;
+        assert_eq!(read_wkt(coded).unwrap(), (Crs::LonLat, None));
         // With its own prime meridian, on WGS 84 from that meridian, as before, saying so; in
         // grads, refused, as before.
         let paris = r#"GEOGCS["x",PRIMEM["Paris",2.33722917],UNIT["degree",0.0174532925199433]]"#;
@@ -4293,6 +4305,18 @@ pub(crate) mod tests {
         // Of a bound system's source, not its prime meridian's degrees.
         let bound = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NTF (Paris)",DATUM["x",ELLIPSOID["Clarke 1880 (IGN)",6378249.2,293.466021293627]],PRIMEM["Paris",2.33722917,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["lon",east],AXIS["lat",north],ANGLEUNIT["grad",0.0157079632679489]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["t",METHOD["Geocentric translations",ID["EPSG",9603]],PARAMETER["X-axis translation",-168],PARAMETER["Y-axis translation",-60],PARAMETER["Z-axis translation",320]]]"#;
         assert!((super::angle_unit_degrees(bound) - 0.9).abs() < 1e-12);
+    }
+
+    /// A WGS 84 code with a shift of its own along the axis through (0, 0), which moves nothing
+    /// there: PROJ 9.8.1 applies no shift from WGS 84 to WGS 84 anywhere (pyproj 3.8.0,
+    /// `Transformer.from_crs(CRS(wkt), "EPSG:4326", always_xy=True).transform(0, 45)` is (0, 45)),
+    /// so it is WGS 84 longitude/latitude.
+    #[test]
+    fn a_wgs84_code_with_a_shift_of_its_own_is_read_as_proj_reads_it() {
+        let wkt = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563],TOWGS84[100,0,0,0,0,0,0]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433],AUTHORITY["EPSG","4326"]]"#;
+        let (crs, _) = read_wkt(wkt).unwrap();
+        let at = crs.transformer().unwrap().to_lonlat(Coord::new(0.0, 45.0)).unwrap();
+        assert!(at.x.abs() < 1e-9 && (at.y - 45.0).abs() < 1e-9, "{at:?}");
     }
 
     /// A projection terrio-crs reads but whose parameters it refuses is said so, with the reason,

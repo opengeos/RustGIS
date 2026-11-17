@@ -47813,6 +47813,30 @@ fn export_map_to_geotiff_keeps_the_maps_projection() {
     // Bern's centre in LV95 metres (about 2 600 000, 1 200 000) is near the middle of the image.
     let (cx, cy) = (r.transform.origin_x + 100.0 * r.transform.pixel_width, r.transform.origin_y + 100.0 * r.transform.pixel_height);
     assert!((cx - 2_600_000.0).abs() < 5_000.0 && (cy - 1_200_000.0).abs() < 5_000.0, "{cx} {cy}");
+    // A code on another datum (US National Atlas Equal Area on NAD27, EPSG:9311): the view's
+    // coordinates are where the reopened GeoTIFF's system puts each place, the map drawing with
+    // the same datum transformation as data in the code.
+    s.run("map.projection", &json!({"type": "EPSG:9311"})).unwrap();
+    s.run("map.goToXY", &json!({"lon": -100.0, "lat": 40.0, "scale": 2_000_000})).unwrap();
+    let laea = dir.join("laea.tif");
+    s.run("share.exportMap", &json!({"path": laea.display().to_string(), "width": 200, "height": 200})).unwrap();
+    let r = read(&laea);
+    assert_eq!(r.crs, Crs::Epsg(9311));
+    let projector = rustgis_map::projection::Projector::new("EPSG:9311").unwrap();
+    for place in [rustgis_geom::Coord::new(-100.0, 40.0), rustgis_geom::Coord::new(-100.3, 40.2)] {
+        let view = projector.forward(place).unwrap();
+        let file = r.crs.transformer().unwrap().from_lonlat(place).unwrap();
+        assert!((view.x - file.x).hypot(view.y - file.y) < 1e-3, "{view:?} {file:?}");
+        // At the pixel the export put it.
+        let (col, row) =
+            ((file.x - r.transform.origin_x) / r.transform.pixel_width, (file.y - r.transform.origin_y) / r.transform.pixel_height);
+        let (vcol, vrow) =
+            ((view.x - r.transform.origin_x) / r.transform.pixel_width, (view.y - r.transform.origin_y) / r.transform.pixel_height);
+        assert!(
+            (col - vcol).abs() < 1e-6 && (row - vrow).abs() < 1e-6 && (0.0..200.0).contains(&col) && (0.0..200.0).contains(&row),
+            "{col} {row}"
+        );
+    }
     // A local view (azimuthal equidistant about Bern) by its definition.
     s.run("map.projection", &json!({"type": "local:7.45,46.95"})).unwrap();
     let local = dir.join("local.tif");

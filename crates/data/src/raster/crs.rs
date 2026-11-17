@@ -536,9 +536,10 @@ impl CustomCrs {
     }
 
     /// Whether its PROJ definition, which older releases read, doesn't place points as its WKT
-    /// does, within a centimetre (a millionth of a degree for angles), at the centre of its
-    /// geographic system's area of use (else its own centre) and a few degrees around it: angles in grads, axes or a datum transformation the definition can't
-    /// hold, or no definition. Worked out once a run per system.
+    /// does, within a centimetre on the ground, at the centre of its geographic system's area of use
+    /// (else its own centre) and a few degrees around it: angles in grads, axes or a datum
+    /// transformation the definition can't hold, or no definition. Worked out once a run per
+    /// system.
     pub fn wkt_needed(&self) -> bool {
         let Some(wkt) = self.wkt.as_deref() else { return false };
         static NEEDED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String), bool>>> =
@@ -571,7 +572,6 @@ fn places_as_wkt(proj4: &str, wkt: &str) -> bool {
         return false;
     }
     let (Ok(by_def), Ok(by_wkt)) = (transformer_of(proj4), transformer_of_wkt(wkt)) else { return false };
-    let tolerance = if by_wkt.is_geographic() { 1e-6 } else { 0.01 };
     // Where its data are: the centre of its geographic system's area of use (a datum's
     // transformations are chosen by place), else the projection's centre.
     let area = terrio_crs::SpatialRef::from_wkt(wkt).geographic_code().and_then(|c| u16::try_from(c).ok()).and_then(area_centre);
@@ -579,8 +579,18 @@ fn places_as_wkt(proj4: &str, wkt: &str) -> bool {
     let mut compared = false;
     for (dx, dy) in [(0.0, 0.0), (2.0, 2.0), (-2.0, -2.0), (3.0, -1.0), (-1.0, 3.0)] {
         let at = Coord::new(centre.x + dx, (centre.y + dy).clamp(-85.0, 85.0));
+        // The place the WKT's coordinates of `at` are, by the definition: within a centimetre on
+        // the ground, whatever the coordinates' unit.
         match (by_def.from_lonlat(at), by_wkt.from_lonlat(at)) {
-            (Some(a), Some(b)) if (a.x - b.x).hypot(a.y - b.y) <= tolerance => compared = true,
+            (Some(_), Some(native)) => {
+                let Some(back) = by_def.to_lonlat(native) else { return false };
+                let dlon = (back.x - at.x + 540.0).rem_euclid(360.0) - 180.0;
+                let metres = (dlon * at.y.to_radians().cos()).hypot(back.y - at.y) * 111_195.0;
+                if metres > 0.01 {
+                    return false;
+                }
+                compared = true;
+            }
             (None, None) => {}
             _ => return false,
         }
