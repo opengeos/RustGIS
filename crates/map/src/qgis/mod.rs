@@ -742,6 +742,23 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
             break;
         }
     }
+    // Still on another layer after that: the virtual layers select from each other in a ring, or
+    // go deeper than RustGIS follows (the base at the end of a deep chain is a file's layer by
+    // now, unresolved only because the passes ran out).
+    for i in 0..layers.len() {
+        let ring = match layers.get(i).map(|l| &l.source) {
+            Some(Source::Virtual { from: Some(source::VirtualFrom::Layer(id)), .. }) => {
+                matches!(layers.iter().find(|l| &l.id == id).map(|l| &l.source), Some(Source::Virtual { .. } | Source::File { .. }))
+            }
+            _ => false,
+        };
+        if let (true, Some(Source::Virtual { from, filter, .. })) = (ring, layers.get_mut(i).map(|l| &mut l.source)) {
+            *from = Some(source::VirtualFrom::Missing(format!(
+                "the virtual layers it selects from select from each other, or go deeper than the {MAX_VIRTUAL_CHAIN} RustGIS follows"
+            )));
+            *filter = None;
+        }
+    }
 }
 
 /// How many virtual layers on virtual layers are followed.

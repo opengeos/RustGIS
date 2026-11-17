@@ -2856,6 +2856,20 @@ fn qgis_sources_import_as_their_layers() {
         layer("lost", "vector", "virtual", "?layer=ogr:.%2Fpts.geojson:p&amp;query=SELECT%20*%20FROM%20nosuch"),
         layer("orphan", "vector", "virtual", "?layer_ref=gone_1:g&amp;query=SELECT%20*%20FROM%20g"),
         layer("on orphan", "vector", "virtual", "?layer_ref=orphan:o&amp;query=SELECT%20*%20FROM%20o"),
+        layer("ring a", "vector", "virtual", "?layer_ref=ring b:b&amp;query=SELECT%20*%20FROM%20b"),
+        layer("deep 0", "vector", "virtual", "?layer_ref=deep 1:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 1", "vector", "virtual", "?layer_ref=deep 2:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 2", "vector", "virtual", "?layer_ref=deep 3:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 3", "vector", "virtual", "?layer_ref=deep 4:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 4", "vector", "virtual", "?layer_ref=deep 5:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 5", "vector", "virtual", "?layer_ref=deep 6:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 6", "vector", "virtual", "?layer_ref=deep 7:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 7", "vector", "virtual", "?layer_ref=deep 8:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 8", "vector", "virtual", "?layer_ref=deep 9:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 9", "vector", "virtual", "?layer_ref=deep 10:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 10", "vector", "virtual", "?layer_ref=deep 11:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("deep 11", "vector", "virtual", "?layer_ref=pts:p&amp;query=SELECT%20*%20FROM%20p"),
+        layer("ring b", "vector", "virtual", "?layer_ref=ring a:a&amp;query=SELECT%20*%20FROM%20a"),
         // A raster PMTiles archive: read as an archive, not as a tile address.
         layer("raster archive", "raster", "wms", "type=xyz&amp;url=.%2Fnone.pmtiles"),
         // Two tile layers on the same tiles, of the name of a file layer added before them.
@@ -2940,6 +2954,11 @@ fn qgis_sources_import_as_their_layers() {
     assert!(said("lost", "the layer `nosuch` it selects from isn't in the project"), "{notes}");
     assert!(said("orphan", "the layer with id `gone_1` it selects from isn't in the project"), "{notes}");
     assert!(said("on orphan", "the layer with id `gone_1` it selects from isn't in the project"), "{notes}");
+    assert!(said("ring a", "the virtual layers it selects from select from each other"), "{notes}");
+    // A chain deeper than RustGIS follows (each pass resolves one link, as they come after the
+    // layers they select from): those near the file come in, the farthest are said.
+    assert!(m.layer_by_name("deep 11").is_some(), "{notes}");
+    assert!(said("deep 0", "or go deeper than the 8 RustGIS follows"), "{notes}");
     assert!(said("look two", "the layer: the same tiles as look one, which takes its place"), "{notes}");
     assert!(said("osm", "the layer: the same tiles as osm, which takes its place"), "{notes}");
     let listed: Vec<&str> = out["layers"].as_array().unwrap().iter().filter_map(Value::as_str).collect();

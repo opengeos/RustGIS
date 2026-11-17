@@ -405,7 +405,7 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
                 Some((_, from)) => from,
                 // Selecting from a name none of its sources has.
                 None if past > 0 => Some(VirtualFrom::Missing(format!(
-                    "the layer `{}` it selects from isn't among the first {MAX_VIRTUAL_LAYERS} of its {} sources, which RustGIS looks through",
+                    "the layer `{}` it selects from isn't among its sources RustGIS looks through, the first {MAX_VIRTUAL_LAYERS} of the {} it names",
                     cut_said(&table, 100),
                     MAX_VIRTUAL_LAYERS + past
                 ))),
@@ -1035,7 +1035,7 @@ mod tests {
         let many: String = (0..=MAX_VIRTUAL_LAYERS).map(|i| format!("layer=ogr:a{i}.geojson:t{i}&")).collect();
         let last = format!("?{many}query=SELECT%20*%20FROM%20t{MAX_VIRTUAL_LAYERS}");
         let Source::Virtual { from: Some(VirtualFrom::Missing(why)), .. } = read("virtual", &last, dir) else { panic!() };
-        assert!(why.contains("isn't among the first 64 of its 65 sources"), "{why}");
+        assert!(why.contains("isn't among its sources RustGIS looks through, the first 64 of the 65 it names"), "{why}");
         assert_eq!(cut_said("abcdef", 3), "abc…");
         assert_eq!(cut_said("abc", 3), "abc");
         // Its one source with no name: the table, whatever the query calls it.
