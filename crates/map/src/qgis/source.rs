@@ -29,6 +29,8 @@ pub enum Source {
         /// The first 32 of them (with their kind), and how many there are.
         as_text: (Vec<String>, usize),
         cut: usize,
+        /// Fields with no name, which a layer can't have.
+        unnamed: usize,
     },
     /// A virtual layer (`virtual`): its query, and when the query is `SELECT * FROM t` on one
     /// layer it names, with or without a `WHERE` clause, that layer (`from`) and the clause
@@ -195,8 +197,16 @@ fn is_pmtiles(url: &str) -> bool {
 }
 
 /// The path of a `file:` address: `file:///abs/x` (`file:///C:/x` on Windows) or `file:./x`.
+/// `None` for any other address, and for a `file://` one with a host (`file://server/share/x`, a
+/// network share), which isn't a path here.
 fn file_url_path(url: &str) -> Option<&str> {
-    let path = url.strip_prefix("file://").or_else(|| url.strip_prefix("file:"))?;
+    let path = match url.strip_prefix("file://") {
+        // `file://C:/x`: a drive, written with two slashes.
+        Some(p) if p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && p.as_bytes().get(1) == Some(&b':') => p,
+        Some(p) if !p.starts_with('/') => return None,
+        Some(p) => p,
+        None => url.strip_prefix("file:")?,
+    };
     // `/C:/x`: a Windows drive's path.
     let b = path.as_bytes();
     let drive = b.first() == Some(&b'/') && b.get(1).is_some_and(u8::is_ascii_alphabetic) && b.get(2) == Some(&b':');
@@ -208,7 +218,8 @@ fn file_url_path(url: &str) -> Option<&str> {
 fn archive_path(url: &str, dir: &str) -> String {
     let url = url.trim();
     match file_url_path(url) {
-        Some(path) => absolute(path, dir),
+        // (Its parts are encoded as in any address.)
+        Some(path) => absolute(&rustgis_data::address::percent_decode(path), dir),
         None if url.contains("://") => url.to_string(),
         None => absolute(url, dir),
     }
@@ -242,7 +253,7 @@ fn memory(datasource: &str) -> Source {
     } else {
         GeometryType::None
     };
-    let (mut fields, mut as_text, mut texts, mut cut) = (Vec::new(), Vec::new(), 0usize, 0usize);
+    let (mut fields, mut as_text, mut texts, mut cut, mut unnamed) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
     for f in q.split('&').filter_map(|kv| kv.strip_prefix("field=")) {
         if fields.len() >= MAX_MEMORY_FIELDS {
             cut += 1;
@@ -253,6 +264,7 @@ fn memory(datasource: &str) -> Source {
         let (name, ty) = f.rsplit_once(':').unwrap_or((&f, "string"));
         let name = name.trim();
         if name.is_empty() {
+            unnamed += 1;
             continue;
         }
         let base = ty.split(['(', '[']).next().unwrap_or_default().trim().to_ascii_lowercase();
@@ -273,7 +285,7 @@ fn memory(datasource: &str) -> Source {
         }
         fields.push(Field::new(name, ty.unwrap_or(FieldType::Text)));
     }
-    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut }
+    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed }
 }
 
 /// The most layers a virtual layer's sources are looked through for (each one is read).
@@ -315,12 +327,43 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
     let (from, filter) = match select_all(&query) {
         Some((table, filter)) => {
             let from = named.into_iter().find(|(n, _)| n.eq_ignore_ascii_case(&table)).and_then(|(_, from)| from);
-            (from, filter)
+            // (One longer than RustGIS reads is left as it is, for the project to note.)
+            (from, filter.map(|f| if f.len() > rustgis_data::query::MAX_LEN { f } else { unqualified(&f, &table) }))
         }
         None => (None, None),
     };
     let filter = filter.filter(|_| from.is_some());
     Source::Virtual { query, from, filter }
+}
+
+/// A `WHERE` clause's fields named with their table (`t.value`, `"t"."value"`) as fields of the
+/// layer (`value`), outside quoted values; other names are left as they are.
+fn unqualified(clause: &str, table: &str) -> String {
+    // (Lowercasing ASCII keeps every character's byte offset.)
+    let lower = clause.to_ascii_lowercase();
+    let t = table.to_ascii_lowercase();
+    let prefixes = [format!("{t}."), format!("\"{t}\".")];
+    let mut out = String::with_capacity(clause.len());
+    // The quote a value ('…') or a name ("…") is open with, if any.
+    let (mut at, mut quote) = (0, None);
+    while let Some(c) = clause.get(at..).and_then(|r| r.chars().next()) {
+        let boundary = out.chars().next_back().is_none_or(|p| !(p.is_alphanumeric() || p == '_' || p == '"' || p == '.'));
+        if quote.is_none() && boundary {
+            let here = lower.get(at..).unwrap_or_default();
+            if let Some(p) = prefixes.iter().find(|p| here.starts_with(p.as_str())) {
+                at += p.len();
+                continue;
+            }
+        }
+        match quote {
+            Some(q) if c == q => quote = None,
+            None if c == '\'' || c == '"' => quote = Some(c),
+            _ => {}
+        }
+        out.push(c);
+        at += c.len_utf8();
+    }
+    out
 }
 
 /// `SELECT * FROM t [WHERE …][;]`, as the table (`t` or `"t"`) and the `WHERE` clause; `None` for
@@ -443,8 +486,28 @@ fn conninfo(s: &str) -> Vec<(String, String)> {
 
 /// A connection text's `table="schema"."table" (geom)`, as `schema.table` (or `table`).
 fn table_of(s: &str) -> Option<String> {
-    let at = s.find("table=")?;
-    let rest = s.get(at + 6..)?;
+    // The key itself, outside any quoted value (a password may hold `table=`).
+    let mut quote = false;
+    let mut escaped = false;
+    let mut at = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quote => escaped = true,
+            '\'' if quote => quote = false,
+            // A quote opens a value only right after its `=` (QGIS quotes whole values).
+            '\'' if s.get(..i).is_some_and(|b| b.ends_with('=')) => quote = true,
+            't' if !quote
+                && s.get(i..).is_some_and(|r| r.starts_with("table="))
+                && (i == 0 || s.get(..i).is_some_and(|b| b.ends_with(' '))) =>
+            {
+                at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let rest = s.get(at? + 6..)?;
     let end = rest.find(" (").or_else(|| rest.find(' ')).unwrap_or(rest.len());
     let t = rest.get(..end)?.replace('"', "");
     (!t.is_empty()).then_some(t)
@@ -568,6 +631,14 @@ mod tests {
         // A password stays behind.
         let pg = read("postgres", "dbname='gis' host=db port=5432 user='me' password='secret' table=\"public\".\"roads\" (geom)", dir);
         assert_eq!(pg, Source::Postgres { connection: "dbname=gis host=db port=5432 user=me".into(), table: "public.roads".into() });
+        // A table= inside a quoted value isn't the table.
+        let pg = read("postgres", r#"dbname='gis' password='x table=leak' table="dbo"."towns" (geom)"#, dir);
+        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "dbo.towns".into() });
+        let pg = read("postgres", r"dbname='gis' password='x\' table=leak' table=t", dir);
+        assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "t".into() });
+        // An apostrophe inside an unquoted value doesn't open a quote.
+        let Source::Postgres { table, .. } = read("postgres", "user=o'brien table=t", dir) else { panic!() };
+        assert_eq!(table, "t");
         // An escaped quote stays inside the password, which stays behind; a value with a space quoted.
         let pg = read("postgres", r"dbname='my gis' password='p\' user=x' table=t", dir);
         assert_eq!(pg, Source::Postgres { connection: "dbname='my gis'".into(), table: "t".into() });
@@ -627,6 +698,22 @@ mod tests {
         );
         let Source::Csv { path, .. } = read("delimitedtext", "file:///C:/maps/p.csv?xField=x", dir) else { panic!() };
         assert_eq!(path, "C:/maps/p.csv");
+        // An encoded file address is decoded once (QGIS encodes the address again as a parameter).
+        assert_eq!(
+            read("mbtilesvectortiles", "type=mbtiles&url=file:///maps/my%2520tiles.mbtiles", dir),
+            Source::Archive { path: "/maps/my tiles.mbtiles".into(), kind: "mbtiles", vector: true }
+        );
+        assert_eq!(
+            read("mbtilesvectortiles", "type=mbtiles&url=file://C:/maps/t.mbtiles", dir),
+            Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true }
+        );
+        // A network share's address isn't a path here: kept as it is, for the import to note.
+        assert_eq!(
+            read("xyzvectortiles", "type=xyz&url=file://server/share/t.pmtiles", dir),
+            Source::Archive { path: "file://server/share/t.pmtiles".into(), kind: "pmtiles", vector: true }
+        );
+        let Source::Csv { path, .. } = read("delimitedtext", "file://server/share/p.csv?xField=x", dir) else { panic!() };
+        assert_eq!(path, "file://server/share/p.csv");
         // A service's vector tiles are for the services' part.
         assert_eq!(
             read("arcgisvectortileservice", "serviceType=arcgis&type=xyz&url=https://e.org/VectorTileServer", dir),
@@ -650,11 +737,18 @@ mod tests {
         let crs = Some("EPSG:2056".to_string());
         assert_eq!(
             read("memory", "memory?geometry=Point&crs=EPSG:2056&field=name:string(20,0)&field=n:integer(255,0)", dir),
-            Source::Memory { geometry: GeometryType::Point, crs: crs.clone(), fields: fields.clone(), as_text: (Vec::new(), 0), cut: 0 }
+            Source::Memory {
+                geometry: GeometryType::Point,
+                crs: crs.clone(),
+                fields: fields.clone(),
+                as_text: (Vec::new(), 0),
+                cut: 0,
+                unnamed: 0
+            }
         );
         assert_eq!(
             read("memory", "MultiLineStringZ?crs=EPSG:2056&field=name:string(20)&field=n:integer", dir),
-            Source::Memory { geometry: GeometryType::Polyline, crs, fields, as_text: (Vec::new(), 0), cut: 0 }
+            Source::Memory { geometry: GeometryType::Polyline, crs, fields, as_text: (Vec::new(), 0), cut: 0, unnamed: 0 }
         );
         // A geometry alone, with or without QGIS 4's prefix.
         for source in ["Point", "memory?Point", "memory?geometry=Point"] {
@@ -689,6 +783,11 @@ mod tests {
         let Source::Memory { geometry, fields, .. } = read("memory", "None", dir) else { panic!() };
         assert_eq!((geometry, fields.len()), (GeometryType::None, 0));
         let many = format!("Point?{}", (0..MAX_MEMORY_FIELDS + 3).map(|i| format!("field=f{i}:integer")).collect::<Vec<_>>().join("&"));
+        let Source::Memory { fields: named, unnamed, .. } = read("memory", "Point?field=:string&field=a:string&field=%20:integer", dir)
+        else {
+            panic!()
+        };
+        assert_eq!((named.len(), unnamed), (1, 2));
         let Source::Memory { fields, cut, .. } = read("memory", &many, dir) else { panic!() };
         assert_eq!((fields.len(), cut), (MAX_MEMORY_FIELDS, 3));
     }
@@ -748,6 +847,24 @@ mod tests {
             };
             assert_eq!((from, filter), (None, None), "{q}");
         }
+        // Fields named with their table are the layer's fields; values keep their text.
+        let Source::Virtual { filter, .. } = read(
+            "virtual",
+            "?layer=ogr:a.gpkg:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20pts.value%20%3E%2020%20AND%20%22PTS%22.%22kind%22%20=%20'pts.x'%20AND%20xpts.v%20=%201",
+            dir,
+        ) else {
+            panic!()
+        };
+        assert_eq!(filter.as_deref(), Some(r#"value > 20 AND "kind" = 'pts.x' AND xpts.v = 1"#));
+        // A quote inside a quoted name doesn't end or open a value.
+        let Source::Virtual { filter, .. } = read(
+            "virtual",
+            "?layer=ogr:a.gpkg:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20%22it's%22%20=%201%20AND%20name%20=%20'pts.x'",
+            dir,
+        ) else {
+            panic!()
+        };
+        assert_eq!(filter.as_deref(), Some(r#""it's" = 1 AND name = 'pts.x'"#));
         // Words of a query in quotes are values, not the query's.
         let Source::Virtual { filter, .. } = read(
             "virtual",

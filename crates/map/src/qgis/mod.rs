@@ -674,12 +674,31 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
                 source::VirtualFrom::Layer(id) => layers.iter().find(|l| &l.id == id).map(|l| l.source.clone()),
             };
             let Some(Source::File { path, layer, subset, ignored }) = base else { continue };
-            let subset = match (subset, filter.clone()) {
+            let filter = filter.clone();
+            let Some(l) = layers.get_mut(i) else { continue };
+            // A filter longer than any RustGIS reads isn't kept (nor copied into each layer that
+            // selects from this one): the layer shows what the rest of its filter keeps, noted.
+            let max = rustgis_data::query::MAX_LEN;
+            let filter = match filter {
+                Some(f) if f.len() > max => {
+                    report.skipped(&l.name, "its filter (from its virtual layer's query), which is too long to read");
+                    None
+                }
+                f => f,
+            };
+            let subset = match (subset, filter) {
+                (Some(a), _) if a.len() > max => {
+                    report.skipped(&l.name, "the filter of the layer its virtual layer selects from, which is too long to read");
+                    None
+                }
+                (Some(a), Some(b)) if a.len() + b.len() + 11 > max => {
+                    report.skipped(&l.name, "its filter (from its virtual layer's query) with that of the layer it selects from, too long to read together: the latter alone kept");
+                    Some(a)
+                }
                 (Some(a), Some(b)) => Some(format!("({a}) AND ({b})")),
                 (a, b) => a.or(b),
             };
             let resolved = Source::File { path, layer, subset, ignored };
-            let Some(l) = layers.get_mut(i) else { continue };
             l.definition_query = definition_query(&resolved, &l.name, report);
             l.source = resolved;
             changed = true;

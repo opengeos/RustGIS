@@ -240,12 +240,14 @@ on the desktop, or **Project › New › QGIS Project…** (`project.importQgis=
 The QGIS Project picker filters for `.qgs` and `.qgz` files on both desktop and web.
 Its layers come in the layer tree's order, each from its file (GeoPackage, Shapefile, GeoJSON,
 GeoTIFF and the other formats RustGIS reads, a SpatiaLite table, a GPX file's waypoints, routes
-or tracks), a CSV of points or WKT geometry, XYZ tiles (raster or vector, from their address, an
-MBTiles file or a PMTiles archive) or a WMS layer, unchecked layers and groups hidden. A memory
+or tracks), a CSV of points or WKT geometry, XYZ tiles (raster or vector, from their address),
+an MBTiles file on this computer (raster or vector), a PMTiles archive of vector tiles (a file or
+a web address) or a WMS layer, unchecked layers and groups hidden. A memory
 layer comes in empty with its fields, as QGIS opens it (QGIS doesn't save its features). A
-virtual layer that selects every column of one layer (`SELECT * FROM t`, with or without a
-`WHERE` clause, or no query) comes in as that layer, the clause its filter; another query is
-noted. Vector tiles are drawn in RustGIS's colours, noted: QGIS's own vector tile style (and a
+virtual layer that selects every column of one file's layer (`SELECT * FROM t`, with or without
+a `WHERE` clause, its fields named with or without the table, or no query) comes in as that
+layer, the clause its filter; another query, or one on a layer that isn't a file's (a memory,
+CSV, database or web layer), is noted. Vector tiles are drawn in RustGIS's colours, noted: QGIS's own vector tile style (and a
 MapLibre style it was made from) isn't read. A PostGIS or SQL Server table isn't connected to on
 import. On the desktop, the notes name a saved connection to its database to log in to and add
 the table from: one already saved, else one made from the project's (without its password, at

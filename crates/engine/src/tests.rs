@@ -2839,6 +2839,10 @@ fn qgis_sources_import_as_their_layers() {
         layer("roads", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable table=\"public\".\"roads\" (geom)"),
         layer("sites", "vector", "mssql", "dbname='gis' host=sql.invalid\\main user='me' password='secret' table=\"dbo\".\"sites\" (geom)"),
         layer("named", "vector", "postgres", "service='prod' table=\"public\".\"x\" (geom)"),
+        layer("served", "vector", "postgres", "service='prod' host=db.invalid table=\"public\".\"y\" (geom)"),
+        layer("escaped", "vector", "postgres", r"dbname='gis' host=db.invalid port=5432 user='me' password='p4ss\' table=x' sslmode=disable table=public.z"),
+        layer("web mbtiles", "vector-tile", "mbtilesvectortiles", "type=mbtiles&amp;url=https://e.invalid/t.mbtiles"),
+        layer("share", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=file://server/share/t.pmtiles"),
     ]
     .concat();
     let qgs = format!(r#"<qgis version="4.2.3"><projectlayers>{layers}</projectlayers></qgis>"#);
@@ -2878,12 +2882,19 @@ fn qgis_sources_import_as_their_layers() {
     let sql = s.connections.connections.iter().find(|c| c.kind == "sqlserver").unwrap();
     assert_eq!(sql.address, "mssql://me@sql.invalid/gis?instance=main");
     assert!(!format!("{:?}", s.connections.connections).contains("secret"));
+    assert!(!notes.contains("secret") && !notes.contains("p4ss"), "{notes}");
+    assert!(notes.contains(&format!("log in to the saved connection '{}' (to db.invalid;", pg.name)), "{notes}");
     for (table, c) in
         [("PostGIS table public.towns", &pg.name), ("PostGIS table public.roads", &pg.name), ("SQL Server table dbo.sites", &sql.name)]
     {
         assert!(notes.contains(&format!("the {table}: log in to the saved connection '{c}'")), "{table}: {notes}");
     }
     assert!(notes.contains("the PostGIS table public.x (service=prod): connect to the database to add it"), "{notes}");
+    assert!(notes.contains("the PostGIS table public.y (service=prod host=db.invalid): connect to the database to add it"), "{notes}");
+    assert!(notes.contains("the PostGIS table public.z: log in to the saved connection"), "{notes}");
+    assert!(notes.contains("the tile archive at a web address"), "{notes}");
+    assert!(notes.contains("the tile archive on a network share"), "{notes}");
+    assert!(m.tiles.iter().all(|t| t.name != "web mbtiles" && t.name != "share"), "{notes}");
     // Imported again: the saved connections are used, none made twice.
     let pg_name = pg.name.clone();
     let mut again = s.run("project.importQgis", &json!({"text": qgs, "dir": dir.display().to_string()})).unwrap();

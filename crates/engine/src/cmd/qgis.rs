@@ -326,6 +326,18 @@ fn add_layer(
             return Ok(Some(name.to_string()));
         }
         Source::Archive { path, kind, vector } => {
+            // RustGIS opens an MBTiles file on this computer, and an archive on a network share
+            // by no address.
+            if path.starts_with("file://") || (*kind == "mbtiles" && path.contains("://")) {
+                let at = if path.starts_with("file://") { "on a network share" } else { "at a web address" };
+                report.skipped(
+                    name,
+                    format!(
+                        "the tile archive {at}: RustGIS reads MBTiles files on this computer, and PMTiles archives there or on the web"
+                    ),
+                );
+                return Ok(None);
+            }
             let before = s.active_layer;
             let added = s.run_part("map.addTiles", &json!({"url": path, "name": name, "kind": kind, "overlay": true}))?;
             web_settings(s, &added, before, layer, report);
@@ -334,7 +346,7 @@ fn add_layer(
             }
             return Ok(Some(name.to_string()));
         }
-        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut } => {
+        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed } => {
             // QGIS keeps none of a memory layer's features: it opens empty, with its fields.
             let mut ds = rustgis_data::Dataset::new(name, *geometry, fields.clone());
             if let Some(c) = layer.crs.as_deref().or(crs.as_deref()) {
@@ -347,6 +359,9 @@ fn add_layer(
             if *texts > 0 {
                 let more = if *texts > as_text.len() { ", …" } else { "" };
                 report.approximated(name, format!("its fields of kinds RustGIS hasn't, as text ({texts}: {}{more})", as_text.join(", ")));
+            }
+            if *unnamed > 0 {
+                report.skipped(name, format!("its fields with no name ({unnamed})"));
             }
             if *cut > 0 {
                 report.skipped(name, format!("its fields past the first {} ({cut})", qgis::MAX_MEMORY_FIELDS));
@@ -434,9 +449,11 @@ const MAX_IMPORTED_CONNECTIONS: usize = 16;
 /// there yet. No connection is made to the database itself.
 fn database_note(s: &mut Session, name: &str, what: &str, table: &str, connection: &str, made: &mut usize, report: &mut Report) {
     let saved = saved_database_connection(s, what, connection, made);
+    // Where a login would go, so a project can't hide it behind a connection's name.
+    let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
     let text = match saved {
         Some(c) => format!(
-            "the {what} table {table}: log in to the saved connection '{c}' (Data Sources › Connections), then add the table from it"
+            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it"
         ),
         None => format!("the {what} table {table} ({connection}): connect to the database to add it"),
     };
@@ -463,6 +480,10 @@ fn saved_database_connection(s: &mut Session, what: &str, connection: &str, made
         let kv: Vec<(&str, &str)> = connection.split(' ').filter_map(|p| p.split_once('=')).collect();
         let get = |k: &str| kv.iter().find(|(n, _)| *n == k).map(|(_, v)| *v).filter(|v| !v.is_empty());
         let host = get("host")?;
+        // A service's settings (pg_service.conf) aren't in the address: no connection is made.
+        if get("service").is_some() {
+            return None;
+        }
         // Values an address would have to escape (a backslash, a control character) aren't
         // guessed at.
         if kv.iter().any(|(_, v)| v.chars().any(|c| c.is_control())) {

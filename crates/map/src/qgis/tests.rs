@@ -2882,6 +2882,22 @@ fn a_virtual_layer_on_another_layer_takes_its_filter_too() {
     let p2 = read_project(&qgs, "/d", &mut report).unwrap();
     let Source::File { subset, .. } = &p2.layers.iter().find(|l| l.id == "top").unwrap().source else { panic!() };
     assert_eq!(subset.as_deref(), Some("(value > 2) AND (n < 9)"));
+    // A filter past any RustGIS reads isn't kept, noted.
+    let long = format!("value > {}", "9".repeat(rustgis_data::query::MAX_LEN));
+    let qgs = format!(
+        "<qgis><projectlayers>{}{}</projectlayers></qgis>",
+        layer(
+            "v",
+            "virtual",
+            &format!("?layer_ref=base:b&amp;query=SELECT%20*%20FROM%20b%20WHERE%20{}", long.replace(' ', "%20").replace('>', "%3E"))
+        ),
+        layer("base", "ogr", "./a.gpkg|layername=a"),
+    );
+    let mut report = Report::default();
+    let p3 = read_project(&qgs, "/d", &mut report).unwrap();
+    let v3 = p3.layers.iter().find(|l| l.id == "v").unwrap();
+    assert!(matches!(&v3.source, Source::File { subset: None, .. }) && v3.definition_query.is_none(), "{:?}", v3.source);
+    assert!(report.notes.iter().any(|n| n.layer == "v" && n.text.contains("too long to read")), "{:?}", report.notes);
     for id in ["lost", "web"] {
         let l = p.layers.iter().find(|l| l.id == id).unwrap();
         assert!(matches!(l.source, Source::Virtual { .. }), "{id}: {:?}", l.source);
