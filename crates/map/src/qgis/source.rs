@@ -31,6 +31,10 @@ pub enum Source {
         cut: usize,
         /// Fields with no name, which a layer can't have.
         unnamed: usize,
+        /// Fields of a name an earlier one has (case aside), which a layer can't tell apart.
+        taken: usize,
+        /// Its geometry has Z or M values (`PointZ`, `LineStringM`): RustGIS keeps x and y.
+        zm: bool,
         /// The geometry QGIS names, when it is one RustGIS hasn't (a collection, say): it comes
         /// in as a table.
         unknown_geometry: Option<String>,
@@ -60,6 +64,9 @@ pub enum Source {
 pub enum VirtualFrom {
     Source(Box<Source>),
     Layer(String),
+    /// None of its sources, nor of the project's layers: what it selects from, as said
+    /// (`` `t` ``, a table name; ``with id `x` ``, a project layer's id).
+    Missing(String),
 }
 
 /// The most fields a memory layer keeps.
@@ -98,9 +105,8 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 // An archive by its path (`file://` or a plain one, relative to the project) or
                 // by its web address.
                 (Some("mbtiles"), Some(url)) => Source::Archive { path: archive_path(&url, dir), kind: "mbtiles", vector },
-                (Some("xyz"), Some(url)) if vector && is_pmtiles(&url) => {
-                    Source::Archive { path: archive_path(&url, dir), kind: "pmtiles", vector }
-                }
+                // PMTiles, raster or vector: the archive reader reads both.
+                (Some("xyz"), Some(url)) if is_pmtiles(&url) => Source::Archive { path: archive_path(&url, dir), kind: "pmtiles", vector },
                 (Some("xyz"), Some(url)) => Source::Xyz { url, zmin: zoom("zmin"), zmax: zoom("zmax"), vector, style: get("styleUrl") },
                 (_, Some(url)) if provider == "wms" => match get("layers") {
                     Some(layer) => Source::Wms { url, layer, crs: get("crs") },
@@ -155,6 +161,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 // What QGIS writes about the table (or the password) rather than the connection.
                 const TABLE_OR_SECRET: [&str; 9] =
                     ["password", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity", "selectatid", "sql"];
+                let mut long = 0;
                 let mut dropped: Vec<String> = conninfo(datasource)
                     .into_iter()
                     .map(|(k, _)| k)
@@ -166,12 +173,17 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                             && !matches!(k.as_str(), "dbname" | "host" | "port" | "user" | "service" | "sslmode")
                             && !TABLE_OR_SECRET.iter().any(|t| t.eq_ignore_ascii_case(k))
                     })
-                    .map(|k| k.chars().take(40).collect())
+                    // A name longer than any libpq setting's: counted, not named.
+                    .filter(|k| {
+                        let fits = k.chars().count() <= 40;
+                        long += usize::from(!fits);
+                        fits
+                    })
                     .collect();
-                // The first 16 by name, the rest counted.
-                if dropped.len() > 16 {
-                    let more = dropped.len() - 16;
-                    dropped.truncate(16);
+                // The first 16 by name, the rest (and those too long to name) counted.
+                let more = dropped.len().saturating_sub(16) + long;
+                dropped.truncate(16);
+                if more > 0 {
                     dropped.push(format!("and {more} more"));
                 }
                 if provider == "mssql" {
@@ -283,6 +295,8 @@ fn memory(datasource: &str) -> Source {
         .find_map(|kv| kv.strip_prefix("geometry="))
         .map_or_else(|| head.to_string(), rustgis_data::address::percent_decode)
         .to_ascii_lowercase();
+    // `PointZ`, `LineStringM`, `PolygonZM`: a geometry's name with Z or M values.
+    let zm = ["z", "m"].iter().any(|s| geometry.trim().ends_with(s)) && !matches!(geometry.trim(), "" | "nogeometry");
     let (geometry, unknown_geometry) = if geometry.contains("polygon") || geometry.contains("surface") {
         (GeometryType::Polygon, None)
     } else if geometry.contains("line") || geometry.contains("curve") {
@@ -294,7 +308,10 @@ fn memory(datasource: &str) -> Source {
     } else {
         (GeometryType::None, Some(geometry.chars().take(40).collect()))
     };
-    let (mut fields, mut as_text, mut texts, mut cut, mut unnamed) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
+    let (mut fields, mut as_text, mut texts, mut cut, mut unnamed, mut taken) =
+        (Vec::<Field>::new(), Vec::new(), 0usize, 0usize, 0usize, 0usize);
+    // The names taken, case aside.
+    let mut names = std::collections::HashSet::new();
     for f in q.split('&').filter_map(|kv| kv.strip_prefix("field=")) {
         if fields.len() >= MAX_MEMORY_FIELDS {
             cut += 1;
@@ -306,6 +323,10 @@ fn memory(datasource: &str) -> Source {
         let name = name.trim();
         if name.is_empty() {
             unnamed += 1;
+            continue;
+        }
+        if !names.insert(name.to_ascii_lowercase()) {
+            taken += 1;
             continue;
         }
         let base = ty.split(['(', '[']).next().unwrap_or_default().trim().to_ascii_lowercase();
@@ -326,7 +347,7 @@ fn memory(datasource: &str) -> Source {
         }
         fields.push(Field::new(name, ty.unwrap_or(FieldType::Text)));
     }
-    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, unknown_geometry }
+    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, unknown_geometry }
 }
 
 /// The most layers a virtual layer's sources are looked through for (each one is read).
@@ -367,13 +388,19 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
     }
     let (from, filter) = match select_all(&query) {
         Some((table, filter)) => {
-            let from = named.into_iter().find(|(n, _)| n.eq_ignore_ascii_case(&table)).and_then(|(_, from)| from);
+            // Its one source with no name is the table whatever the query calls it.
+            let lone = named.len() == 1 && named.first().is_some_and(|(n, _)| n.is_empty());
+            let from = match named.into_iter().find(|(n, _)| lone || n.eq_ignore_ascii_case(&table)) {
+                Some((_, from)) => from,
+                // Selecting from a name none of its sources has.
+                None => Some(VirtualFrom::Missing(format!("`{}`", table.chars().take(100).collect::<String>()))),
+            };
             // (One longer than RustGIS reads is left as it is, for the project to note.)
             (from, filter.map(|f| if f.len() > rustgis_data::query::MAX_LEN { f } else { unqualified(&f, &table) }))
         }
         None => (None, None),
     };
-    let filter = filter.filter(|_| from.is_some());
+    let filter = filter.filter(|_| matches!(from, Some(VirtualFrom::Source(_) | VirtualFrom::Layer(_))));
     Source::Virtual { query, from, filter }
 }
 
@@ -818,6 +845,8 @@ mod tests {
                 as_text: (Vec::new(), 0),
                 cut: 0,
                 unnamed: 0,
+                taken: 0,
+                zm: false,
                 unknown_geometry: None
             }
         );
@@ -830,6 +859,8 @@ mod tests {
                 as_text: (Vec::new(), 0),
                 cut: 0,
                 unnamed: 0,
+                taken: 0,
+                zm: true,
                 unknown_geometry: None
             }
         );
@@ -873,6 +904,12 @@ mod tests {
             panic!()
         };
         assert_eq!((named.len(), unnamed), (1, 2));
+        // A name an earlier field has, case aside: left out and counted.
+        let Source::Memory { fields: named, taken, zm, .. } = read("memory", "PointZM?field=a:string&field=A:integer&field=b:integer", dir)
+        else {
+            panic!()
+        };
+        assert_eq!((named.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), taken, zm), (vec!["a", "b"], 1, true));
         let Source::Memory { fields, cut, .. } = read("memory", &many, dir) else { panic!() };
         assert_eq!((fields.len(), cut), (MAX_MEMORY_FIELDS, 3));
     }
@@ -923,7 +960,6 @@ mod tests {
             "SELECT * FROM pts WHERE id IN(SELECT id FROM(other))",
             "SELECT * FROM pts WHERE x = 1;  DELETE FROM y",
             "SELECT * FROM pts WHERE name = 'open",
-            "SELECT * FROM nosuch",
         ] {
             let Source::Virtual { from, filter, .. } =
                 read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg:pts&query={}", q.replace(' ', "%20")), dir)
@@ -970,5 +1006,19 @@ mod tests {
         // A virtual layer on a virtual layer isn't read as a file's layer.
         let nested = "?layer=virtual:%3Flayer%3Dogr%253Aa.gpkg%253At:v&query=SELECT%20*%20FROM%20v";
         assert_eq!(read("virtual", nested, dir), Source::Virtual { query: "SELECT * FROM v".into(), from: None, filter: None });
+        // Selecting from a name none of its sources has: that name, as missing.
+        let Source::Virtual { from, filter, .. } = read(
+            "virtual",
+            "?layer=ogr:..%2Fdata%2Fsample.gpkg%7Clayername%3Dpoints:pts&query=SELECT%20*%20FROM%20other%20WHERE%20a%20%3E%201",
+            dir,
+        ) else {
+            panic!()
+        };
+        assert_eq!((from, filter), (Some(VirtualFrom::Missing("`other`".into())), None));
+        // Its one source with no name: the table, whatever the query calls it.
+        let Source::Virtual { from, .. } = read("virtual", "?layer=ogr:..%2Fdata%2Fsample.gpkg&query=SELECT%20*%20FROM%20pts", dir) else {
+            panic!()
+        };
+        assert!(matches!(from, Some(VirtualFrom::Source(_))), "{from:?}");
     }
 }

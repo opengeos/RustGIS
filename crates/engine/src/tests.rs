@@ -2835,10 +2835,10 @@ fn qgis_sources_import_as_their_layers() {
         layer("big", "vector", "virtual", "?layer_ref=pts:p&amp;query=SELECT%20*%20FROM%20p%20WHERE%20value%20%3E%2020"),
         layer("counts", "vector", "virtual", "?layer_ref=pts:p&amp;query=SELECT%20kind,%20count(*)%20FROM%20p%20GROUP%20BY%20kind"),
         layer("tiles", "vector-tile", "xyzvectortiles", "type=xyz&amp;url=https://e.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.pbf&amp;zmax=14&amp;zmin=0"),
-        layer("towns", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable sslrootcert='/k/ca.pem' key='id' srid=2056 type=Point table=\"public\".\"towns\" (geom)"),
+        layer("towns", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable sslrootcert='/k/ca.pem' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=1 key='id' srid=2056 type=Point table=\"public\".\"towns\" (geom)"),
         layer("roads", "vector", "postgres", "dbname='gis' host=db.invalid port=5432 user='me' password='secret' sslmode=disable table=\"public\".\"roads\" (geom)"),
         layer("sites", "vector", "mssql", "dbname='gis' host=sql.invalid\\main user='me' password='secret' table=\"dbo\".\"sites\" (geom)"),
-        layer("named", "vector", "postgres", "service='prod' table=\"public\".\"x\" (geom)"),
+        layer("named", "vector", "postgres", "service='prod' sslrootcert='/k/x.pem' table=\"public\".\"x\" (geom)"),
         layer("bag", "vector", "memory", "GeometryCollection?crs=EPSG:4326&amp;field=a:integer"),
         layer("served", "vector", "postgres", "service='prod' host=db.invalid table=\"public\".\"y\" (geom)"),
         layer("escaped", "vector", "postgres", r"dbname='gis' host=db.invalid port=5432 user='me' password='p4ss\' table=x' sslmode=disable table=public.z"),
@@ -2850,6 +2850,18 @@ fn qgis_sources_import_as_their_layers() {
         // Two layers of one name (each with its own id, as QGIS writes them) on the same tiles.
         layer("osm_1", "raster", "wms", "type=xyz&amp;url=https://twin.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>osm_1<", "<layername>osm<"),
         layer("osm_2", "raster", "wms", "type=xyz&amp;url=https://twin.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>osm_2<", "<layername>osm<"),
+        // A memory layer with Z values and a repeated field name; virtual layers on a name
+        // none of their sources has, on a layer id the project lacks, and on the latter.
+        layer("zm", "vector", "memory", "PointZ?crs=EPSG:4326&amp;field=a:string&amp;field=A:integer"),
+        layer("lost", "vector", "virtual", "?layer=ogr:.%2Fpts.geojson:p&amp;query=SELECT%20*%20FROM%20nosuch"),
+        layer("orphan", "vector", "virtual", "?layer_ref=gone_1:g&amp;query=SELECT%20*%20FROM%20g"),
+        layer("on orphan", "vector", "virtual", "?layer_ref=orphan:o&amp;query=SELECT%20*%20FROM%20o"),
+        // A raster PMTiles archive: read as an archive, not as a tile address.
+        layer("raster archive", "raster", "wms", "type=xyz&amp;url=.%2Fnone.pmtiles"),
+        // Two tile layers on the same tiles, of the name of a file layer added before them.
+        layer("dup_1", "raster", "wms", "type=xyz&amp;url=https://dup.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>dup_1<", "<layername>dup<"),
+        layer("dup_2", "raster", "wms", "type=xyz&amp;url=https://dup.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>dup_2<", "<layername>dup<"),
+        layer("dup_3", "vector", "gpx", "./trip.gpx?type=track").replace("<layername>dup_3<", "<layername>dup<"),
     ]
     .concat();
     let qgs = format!(r#"<qgis version="4.2.3"><projectlayers>{layers}</projectlayers></qgis>"#);
@@ -2900,7 +2912,16 @@ fn qgis_sources_import_as_their_layers() {
     assert!(notes.contains("the PostGIS table public.y (service=prod host=db.invalid): connect to the database to add it"), "{notes}");
     assert!(notes.contains("the PostGIS table public.z: log in to the saved connection"), "{notes}");
     assert!(notes.contains("the tile archive at a web address"), "{notes}");
-    assert!(notes.contains("the saved connection leaves out these settings of the project's: sslrootcert"), "{notes}");
+    assert!(notes.contains("the saved connection leaves out these settings of the project's: sslrootcert, and 1 more"), "{notes}");
+    // No saved connection: the connection text's left-out settings are named too.
+    assert!(
+        notes.contains(
+            "(service=prod): connect to the database to add it; the connection text leaves out these settings of the project's: sslrootcert"
+        ),
+        "{notes}"
+    );
+    assert!(notes.contains("none.pmtiles: no file there"), "{notes}");
+    assert!(m.tiles.iter().all(|t| t.name != "raster archive"), "{notes}");
     assert!(!notes.contains("/k/ca.pem"), "{notes}");
     assert!(notes.contains("its geometry (geometrycollection), of a kind RustGIS hasn't: a table without geometry"), "{notes}");
     assert!(notes.contains("the tile archive on a network share"), "{notes}");
@@ -2910,11 +2931,19 @@ fn qgis_sources_import_as_their_layers() {
     let said = |layer: &str, text: &str| {
         out["notes"].as_array().unwrap().iter().any(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text))
     };
+    assert!(said("zm", "its geometry's Z and M values: RustGIS keeps x and y"), "{notes}");
+    assert!(said("zm", "its fields of a name an earlier field has (1)"), "{notes}");
+    assert!(said("lost", "the layer `nosuch` it selects from isn't in the project"), "{notes}");
+    assert!(said("orphan", "the layer with id `gone_1` it selects from isn't in the project"), "{notes}");
+    assert!(said("on orphan", "the layer with id `gone_1` it selects from isn't in the project"), "{notes}");
     assert!(said("look two", "the layer: the same tiles as look one, which takes its place"), "{notes}");
     assert!(said("osm", "the layer: the same tiles as osm, which takes its place"), "{notes}");
     let listed: Vec<&str> = out["layers"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     assert!(listed.contains(&"look one") && !listed.contains(&"look two"), "{listed:?}");
     assert_eq!(listed.iter().filter(|n| **n == "osm").count(), 1, "{listed:?}");
+    // The file layer named as the replaced tile layer stays listed: the tile layer on top and it.
+    assert_eq!(listed.iter().filter(|n| **n == "dup").count(), 2, "{listed:?}");
+    assert!(s.map().layer_by_name("dup").is_some(), "{notes}");
     assert_eq!(s.map().tiles.iter().filter(|t| t.name == "osm").count(), 1);
     assert!(m.tiles.iter().all(|t| t.name != "web mbtiles" && t.name != "share"), "{notes}");
     // Imported again: the saved connections are used, none made twice.

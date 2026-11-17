@@ -105,6 +105,8 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     // Bottom first, so each is added on top of the ones below it; the main annotation layer
     // over them all, as QGIS draws it.
     let mut added = Vec::new();
+    // The project layer each of `added` came from (none for the main annotations).
+    let mut added_from: Vec<Option<usize>> = Vec::new();
     let crs = project.crs.as_deref();
     let mut pictures = Pictures::default();
     // Saved connections made for the project's database layers.
@@ -135,6 +137,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             Ok(Some((name, d))) => {
                 drawn.push((layer.name.clone(), layer.visible, d));
                 added.push(name);
+                added_from.push(index);
                 if let Some(index) = index {
                     let ids = s.map().layers.iter().map(|l| l.id).filter(|id| !before.contains(id)).collect();
                     // A web tile layer on the same tiles as one added before takes its place (the
@@ -146,8 +149,10 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
                             c.tile = false;
                             c.key = None;
                             let Some(gone) = project.layers.get(c.index) else { continue };
-                            if let Some(at) = added.iter().position(|a| *a == gone.name) {
+                            // By the project layer it came from: names can repeat.
+                            if let Some(at) = added_from.iter().position(|i| *i == Some(c.index)) {
                                 added.remove(at);
+                                added_from.remove(at);
                             }
                             report.skipped(
                                 &gone.name,
@@ -203,7 +208,8 @@ struct CameIn {
 /// look of their own, so two on the same tiles always merge. A change there changes this.)
 fn tile_key(source: &Source) -> Option<(String, &'static str)> {
     match source {
-        Source::Xyz { url, vector, .. } => Some((url.clone(), if *vector { "vector" } else { "raster" })),
+        // Trimmed, as the map keeps the address.
+        Source::Xyz { url, vector, .. } => Some((url.trim().to_string(), if *vector { "vector" } else { "raster" })),
         Source::Archive { path, kind, .. } => Some((path.clone(), kind)),
         _ => None,
     }
@@ -412,7 +418,7 @@ fn add_layer(
             }
             return Ok(Some(name.to_string()));
         }
-        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, unknown_geometry } => {
+        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, unknown_geometry } => {
             // QGIS keeps none of a memory layer's features: it opens empty, with its fields.
             let mut ds = rustgis_data::Dataset::new(name, *geometry, fields.clone());
             if let Some(c) = layer.crs.as_deref().or(crs.as_deref()) {
@@ -432,6 +438,12 @@ fn add_layer(
             if *unnamed > 0 {
                 report.skipped(name, format!("its fields with no name ({unnamed})"));
             }
+            if *taken > 0 {
+                report.skipped(name, format!("its fields of a name an earlier field has ({taken})"));
+            }
+            if *zm {
+                report.approximated(name, "its geometry's Z and M values: RustGIS keeps x and y");
+            }
             if *cut > 0 {
                 report.skipped(name, format!("its fields past the first {} ({cut})", qgis::MAX_MEMORY_FIELDS));
             }
@@ -439,10 +451,13 @@ fn add_layer(
         Source::Virtual { query, from, .. } => {
             let shown: String = query.chars().take(200).collect();
             let more = if query.chars().count() > 200 { "…" } else { "" };
-            let why = if from.is_some() {
-                "on a layer RustGIS doesn't read as a file's layer (a CSV, memory, database or web layer, or another virtual layer)"
-            } else {
-                "RustGIS reads one that selects every column of one layer, with or without a WHERE clause, as that layer"
+            let why = match from {
+                Some(qgis::VirtualFrom::Missing(base)) => format!("the layer {base} it selects from isn't in the project"),
+                Some(_) => {
+                    "on a layer RustGIS doesn't read as a file's layer (a CSV, memory, database or web layer, or another virtual layer)"
+                        .into()
+                }
+                None => "RustGIS reads one that selects every column of one layer, with or without a WHERE clause, as that layer".into(),
             };
             report.skipped(name, format!("the virtual layer `{shown}{more}`: {why}"));
             return Ok(None);
@@ -536,17 +551,23 @@ fn database_note(
     };
     // Where a login would go, so a project can't hide it behind a connection's name.
     let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
-    // Its settings the saved connection leaves out, by name (`sslrootcert`, `authcfg`, …).
-    let left = if dropped.is_empty() {
-        String::new()
-    } else {
-        format!("; the saved connection leaves out these settings of the project's: {}", dropped.join(", "))
+    // Its settings the saved connection, or the connection text, leaves out, by name
+    // (`sslrootcert`, `authcfg`, …).
+    let left = |what: &str| {
+        if dropped.is_empty() {
+            String::new()
+        } else {
+            format!("; {what} leaves out these settings of the project's: {}", dropped.join(", "))
+        }
     };
     let text = match saved {
         Some(c) => format!(
-            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it{left}"
+            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it{}",
+            left("the saved connection")
         ),
-        None => format!("the {what} table {table} ({connection}): connect to the database to add it{refused}"),
+        None => {
+            format!("the {what} table {table} ({connection}): connect to the database to add it{refused}{}", left("the connection text"))
+        }
     };
     report.skipped(name, text);
 }

@@ -674,6 +674,7 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
             let base = match from {
                 source::VirtualFrom::Source(s) => Some(&**s),
                 source::VirtualFrom::Layer(id) => layers.iter().find(|l| &l.id == id).map(|l| &l.source),
+                source::VirtualFrom::Missing(_) => None,
             };
             let Some(Source::File { path, layer, subset, ignored }) = base else { continue };
             let (path, layer, ignored) = (path.clone(), layer.clone(), ignored.clone());
@@ -706,6 +707,31 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
             l.definition_query = definition_query(&resolved, &l.name, report);
             l.source = resolved;
             changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+    // One on a layer the project doesn't have (by its id), or on one that is itself on a missing
+    // layer: said as missing, not as unsupported.
+    for _ in 0..MAX_VIRTUAL_CHAIN {
+        let mut changed = false;
+        for i in 0..layers.len() {
+            let missing = match layers.get(i).map(|l| &l.source) {
+                Some(Source::Virtual { from: Some(source::VirtualFrom::Layer(id)), .. }) => {
+                    match layers.iter().find(|l| &l.id == id).map(|l| &l.source) {
+                        None => Some(format!("with id `{}`", id.chars().take(100).collect::<String>())),
+                        Some(Source::Virtual { from: Some(source::VirtualFrom::Missing(base)), .. }) => Some(base.clone()),
+                        Some(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            if let (Some(base), Some(Source::Virtual { from, filter, .. })) = (missing, layers.get_mut(i).map(|l| &mut l.source)) {
+                *from = Some(source::VirtualFrom::Missing(base));
+                *filter = None;
+                changed = true;
+            }
         }
         if !changed {
             break;

@@ -241,8 +241,8 @@ The QGIS Project picker filters for `.qgs` and `.qgz` files on both desktop and 
 Its layers come in the layer tree's order, each from its file (GeoPackage, Shapefile, GeoJSON,
 GeoTIFF and the other formats RustGIS reads, a SpatiaLite table, a GPX file's waypoints, routes
 or tracks), a CSV of points or WKT geometry, XYZ tiles (raster or vector, from their address),
-an MBTiles file on this computer (raster or vector), a PMTiles archive of vector tiles (a file or
-a web address) or a WMS layer, unchecked layers and groups hidden. A memory
+an MBTiles file on this computer (raster or vector), a PMTiles archive (raster or vector, a file
+or a web address) or a WMS layer, unchecked layers and groups hidden. A memory
 layer comes in empty with its fields, as QGIS opens it (QGIS doesn't save its features). A
 virtual layer that selects every column of one file's layer (`SELECT * FROM t`, with or without
 a `WHERE` clause, its fields named with or without the table, or no query) comes in as that
