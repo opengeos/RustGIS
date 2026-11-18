@@ -1888,6 +1888,7 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
         (json!({"layer": "Cities", "image": gif_base64()}), "PNG or JPEG image as base64"),
         (json!({"layer": "Cities", "image": ""}), "image is empty"),
         (json!({"layer": "Cities", "image": " ", "shape": "star"}), "image is empty"),
+        (json!({"layer": "Cities", "image": "", "shape": "star", "char": "x"}), "image is empty"),
         (json!({"layer": "Cities", "image": "A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4)}), "at most 2 MiB"),
         (json!({"layer": "Cities", "image": b64, "shape": "star"}), "only one"),
         (json!({"layer": "Cities", "image": b64, "char": "x"}), "only one"),
@@ -1985,6 +1986,15 @@ fn an_image_marks_a_line_a_point_and_a_dot_fill() {
     // A class the layer doesn't have, as the wrong layer.
     s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 99, "strokes": [{"markers": {"image": unkept}}]})).unwrap_err();
     s.run("layer.fillLayers", &json!({"layer": "Countries", "index": 99, "fills": [{"pattern": "dots", "image": unkept}]})).unwrap_err();
+    // An image checked in an earlier stroke or fill, the call refused for a later one.
+    let first = json!({"markers": {"image": unkept}});
+    for later in [json!({"markers": {"image": ""}}), json!({"cap": "pointed"}), json!({"markers": {"image": junk}})] {
+        s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [first, later]})).unwrap_err();
+    }
+    let first = json!({"pattern": "dots", "image": unkept});
+    for later in [json!({"pattern": "dots", "image": ""}), json!({"pattern": "zigzag"}), json!({"pattern": "dots", "image": junk})] {
+        s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [first, later]})).unwrap_err();
+    }
     assert_eq!(Picture::kept(&unkept), None, "none of these refused calls kept its image");
     assert_eq!(s.undo_depth(), depth + 5);
 }

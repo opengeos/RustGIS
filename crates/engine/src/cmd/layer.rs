@@ -404,11 +404,11 @@ pub fn commands() -> Vec<C> {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
             let (ch, font) = (character(p)?, ps(p, "font"));
+            // Refused before the image is kept: a call that changes nothing keeps nothing.
+            not_empty(p.get("image"))?;
             if shape.is_some() && ch.is_some() {
                 return Err("give a shape or a char, not both".into());
             }
-            // Refused before the image is kept: a call that changes nothing keeps nothing.
-            not_empty(p.get("image"))?;
             if p.get("image").is_some_and(|v| !v.is_null()) && (shape.is_some() || ch.is_some()) {
                 return Err("give a shape, a char or an image, only one".into());
             }
@@ -416,7 +416,9 @@ pub fn commands() -> Vec<C> {
             s.map().layer(id).ok_or("no such layer")?;
             // Decoded here, on the UI thread, as any command runs: at most 2 MiB of base64, whose
             // declared size is checked before the decoder, capped in memory, runs.
-            let image = picture(p)?;
+            let mut new = Vec::new();
+            let mut image = picture(p, &mut new)?;
+            keep_pictures(image.iter_mut(), new)?;
             with(s, p, |l| {
                 l.renderer.map_symbols(|sym| {
                     if let Some(m) = shape {
@@ -958,7 +960,7 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(c) = &class {
         l.renderer.class_strokes(c)?;
     }
-    let mut strokes = Vec::with_capacity(list.len());
+    let (mut strokes, mut new) = (Vec::with_capacity(list.len()), Vec::new());
     for (i, v) in list.iter().enumerate() {
         let o = v.as_object().ok_or_else(|| format!("stroke {} is not an object", i + 1))?;
         let color = match o.get("color") {
@@ -1022,12 +1024,18 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
         }
         let markers = match o.get("markers") {
             None | Some(Value::Null) => None,
-            Some(m) => Some(line_markers(m).map_err(|e| format!("stroke {}: markers: {e}", i + 1))?),
+            Some(m) => Some(line_markers(m, &mut new).map_err(|e| format!("stroke {}: markers: {e}", i + 1))?),
         };
         strokes.push(
             LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level, dash, markers }.clamped(),
         );
     }
+    // Every stroke checked: their new images are kept.
+    let slots = strokes.iter_mut().filter_map(|st: &mut LineStroke| match st.markers.as_mut().map(|m| &mut m.mark) {
+        Some(LineMark::Marker(Marker::Picture(p))) => Some(p),
+        _ => None,
+    });
+    keep_pictures(slots, new)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let n = strokes.len();
     match class {
@@ -1375,7 +1383,7 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(c) = &class {
         l.renderer.class_fills(c)?;
     }
-    let mut fills = Vec::with_capacity(list.len());
+    let (mut fills, mut new) = (Vec::with_capacity(list.len()), Vec::new());
     for (i, v) in list.iter().enumerate() {
         let n = i + 1;
         let o = v.as_object().ok_or_else(|| format!("fill {n} is not an object"))?;
@@ -1449,7 +1457,7 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
                         return Err(format!("fill {n}: give a marker or a char, not both"));
                     }
                     Some(c) => Marker::Char(Glyph::new(c, o.get("font").and_then(Value::as_str).unwrap_or_default())),
-                    None => match picture(v).map_err(|e| format!("fill {n}: {e}"))? {
+                    None => match picture(v, &mut new).map_err(|e| format!("fill {n}: {e}"))? {
                         Some(img) => Marker::Picture(img),
                         None => marker,
                     },
@@ -1556,6 +1564,12 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
         };
         fills.push(FillLayer { color: hex("color")?, pattern }.clamped());
     }
+    // Every fill checked: their new images are kept.
+    let slots = fills.iter_mut().filter_map(|f: &mut FillLayer| match &mut f.pattern {
+        FillPattern::Dots { marker: Marker::Picture(p), .. } => Some(p),
+        _ => None,
+    });
+    keep_pictures(slots, new)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // A fill in the symbol's colour, or the symbol's own fill ([]), asked for after No Fill: the
     // symbols' fills are shown again, or they would draw nothing (#1301). A class's fills show
@@ -1624,8 +1638,10 @@ fn not_empty(image: Option<&Value>) -> Result<(), String> {
 }
 
 /// An `image` (`layer.marker`'s, a line marker's, a dot fill's): a PNG or JPEG image as base64,
-/// which must decode.
-fn picture(p: &Value) -> Result<Option<Picture>, String> {
+/// which must decode. One kept already is returned; a new one is only checked, its base64 put in
+/// `new` and an empty picture returned in its place, for [`keep_pictures`] to keep once the whole
+/// call is checked: a call refused for a later stroke or fill keeps none of its images.
+fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, String> {
     const WHAT: &str = "image is a PNG or JPEG image as base64";
     let b64 = match p.get("image") {
         None | Some(Value::Null) => return Ok(None),
@@ -1643,15 +1659,24 @@ fn picture(p: &Value) -> Result<Option<Picture>, String> {
     if !rustgis_render::picture_marker_readable(b64) {
         return Err(WHAT.into());
     }
-    let picture = Picture::new(b64);
-    if picture.is_default() {
-        return Err("no more images can be kept this session: restart RustGIS to use another".into());
+    new.push(b64);
+    Ok(Some(Picture::default()))
+}
+
+/// Keeps the images [`picture`] checked (`new`, in the order it met them) in the empty pictures it
+/// left in their places (`slots`, in the same order).
+fn keep_pictures<'a>(slots: impl Iterator<Item = &'a mut Picture>, new: Vec<&str>) -> Result<(), String> {
+    for (slot, b64) in slots.filter(|p| p.is_default()).zip(new) {
+        *slot = Picture::new(b64);
+        if slot.is_default() {
+            return Err("no more images can be kept this session: restart RustGIS to use another".into());
+        }
     }
-    Ok(Some(picture))
+    Ok(())
 }
 
 /// A stroke's `markers`: what it draws along the line instead of a line, and where.
-fn line_markers(v: &Value) -> Result<LineMarkers, String> {
+fn line_markers<'a>(v: &'a Value, new: &mut Vec<&'a str>) -> Result<LineMarkers, String> {
     let o = v.as_object().ok_or("an object, such as {\"mark\": \"circle\", \"interval\": 12}")?;
     let num = |k: &str| -> Result<Option<f32>, String> {
         match o.get(k) {
@@ -1696,7 +1721,7 @@ fn line_markers(v: &Value) -> Result<LineMarkers, String> {
             return Err("give a shape or a char, not both".into());
         }
         (Some(c), font) => LineMark::Marker(Marker::Char(Glyph::new(c, font.and_then(Value::as_str).unwrap_or_default()))),
-        (None, _) => picture(v)?.map_or(mark, |img| LineMark::Marker(Marker::Picture(img))),
+        (None, _) => picture(v, new)?.map_or(mark, |img| LineMark::Marker(Marker::Picture(img))),
     };
     let bad_at = || format!("at is a placement or a list of them: {}", Placements::all_codes());
     let at = match o.get("at") {

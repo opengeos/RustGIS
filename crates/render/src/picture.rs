@@ -217,7 +217,16 @@ mod tests {
         for not in [gif, "iVBORw0KGgoAAAAé", "", "%%%", "bm90IGFuIGltYWdl"] {
             assert!(!png_or_jpeg(not) && !readable(not), "{not}");
         }
-        // Graphics' pictures keep what the decoder reads.
+    }
+
+    /// Graphics' pictures don't check the signature: they keep what the decoder reads.
+    #[test]
+    fn graphics_pictures_still_decode_what_the_decoder_reads() {
+        let mut bytes = Vec::new();
+        image::RgbImage::from_pixel(4, 2, image::Rgb([10, 20, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let png = base64::engine::general_purpose::STANDARD.encode(&bytes);
         assert_eq!(decode(&png).map(|p| (p.width(), p.height())), Some((4, 2)));
     }
 }
