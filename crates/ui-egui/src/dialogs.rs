@@ -3167,7 +3167,7 @@ mod tests {
     #[test]
     fn delimited_suggestions_use_whole_file_inference_until_picked() {
         use egui::accesskit::Role;
-        use egui_kittest::kittest::{NodeT, Queryable};
+        use egui_kittest::kittest::Queryable;
         let mut csv = String::from("Longitude,Latitude,X,Y\n");
         csv.push_str(&"-93,44,20,40\n".repeat(1_000));
         csv.push_str(",,21,41\n");
