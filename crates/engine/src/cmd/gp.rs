@@ -1312,7 +1312,10 @@ fn narrow_to_queries(
         }
         let dataset = full.get(&key).unwrap_or(&layer.dataset);
         let resolved = layer.resolve_rows(dataset, rustgis_map::rows::Policy::SelectionAndQuery, rows.get(&key).map(Vec::as_slice))?;
-        if let rustgis_map::rows::Rows::Subset(narrowed) = resolved {
+        if let Some(error) = resolved.query_error {
+            messages.push(format!("{}: its definition query couldn't be read ({error}); reading without that query", layer.name));
+        }
+        if let rustgis_map::rows::Rows::Subset(narrowed) = resolved.rows {
             if narrowed.is_empty() && !dataset.features.is_empty() {
                 return Err(format!("{}: its definition query hides every feature the tool would read", layer.name));
             }

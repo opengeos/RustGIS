@@ -797,8 +797,14 @@ fn tools_read_the_features_a_definition_query_keeps() {
         // The command refuses a query that doesn't read; a saved project can hold one.
         s.map_mut().layer_mut(id).unwrap().definition_query = Some(text.to_string());
         let out = format!("All {i}");
+        let mark = s.notice_mark();
         s.run("gp.run", &buffer(&out)).unwrap();
         assert_eq!(rows(&s, &out), cities, "{text:?}");
+        let query_notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
+        assert_eq!(query_notices.len(), usize::from(!text.is_empty()), "{query_notices:?}");
+        if !text.is_empty() {
+            assert!(query_notices[0].text.contains("no_such_field"), "{query_notices:?}");
+        }
     }
 
     // An overlay layer: Clip by the countries the query keeps is Clip by those countries selected.
@@ -53734,5 +53740,18 @@ fn row_resolver_buffer_and_both_clip_inputs() {
         // A different input query makes the Clip intersection empty, without widening either input.
         s.run("layer.definitionQuery", &json!({"layer": "policy points", "where": "n = 3"})).unwrap();
         assert!(run(&mut s, "clip", json!({"input": "policy points", "clip": "policy masks"})).is_empty());
+        // Empty resolved inputs must be refused before the legacy empty-list-means-all seam.
+        for (tool, empty_layer, params) in [
+            ("buffer", "policy points", json!({"input": "policy points", "distance": 1})),
+            ("clip", "policy points", json!({"input": "policy points", "clip": "policy masks"})),
+            ("clip", "policy masks", json!({"input": "policy points", "clip": "policy masks"})),
+        ] {
+            for name in ["policy points", "policy masks"] {
+                s.run("layer.definitionQuery", &json!({"layer": name, "where": "n >= 2"})).unwrap();
+            }
+            s.run("layer.definitionQuery", &json!({"layer": empty_layer, "where": "n > 3"})).unwrap();
+            let error = s.run("gp.run", &json!({"tool": tool, "params": params})).unwrap_err();
+            assert!(error.contains(&format!("{empty_layer}: its definition query hides every feature the tool would read")), "{error}");
+        }
     }
 }
