@@ -34,7 +34,7 @@ pub fn commands() -> Vec<C> {
         C::new("share.exportLayer", "Export Features", "Publish › Output", |s, p| super::exports::write_here(s, p, "share.exportLayer")).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
             .when(need_layer)
-            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx", "crs"?: "EPSG:… (or WKT) for a GeoPackage, Shapefile or FlatGeobuf (default: the system the layer was read in, else EPSG:4326)", "mode"?: "newFile (default: refuses an existing file) | addTable | replaceTable, for a GeoPackage", "tableName"?: "the GeoPackage table (default: the layer's name)"}"#),
+            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx", "crs"?: "EPSG:… (or WKT) for a GeoPackage, Shapefile or FlatGeobuf (default: the system the layer was read in, else EPSG:4326)", "mode"?: "newFile (default: refuses an existing file) | addTable | replaceTable, for a GeoPackage", "tableName"?: "the GeoPackage table (default: the layer's name)"} Applies the layer's definition query and reports how many features it leaves out."#),
         C::new("share.exportTable", "Export Table", "Publish › Output", |s, p| super::exports::write_here(s, p, "share.exportTable")).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .params(
             r#"{"table": name|id (a standalone table), "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx", "mode"?: "newFile (default: refuses an existing file) | addTable | replaceTable, for a GeoPackage", "tableName"?: "the GeoPackage table (default: the table's name)", "sort"?: [{"field": name, "descending"?: false}], "limit"?: "nonnegative integer: keep the first N rows after sorting"}"#,
@@ -608,8 +608,8 @@ fn placed_raster(name: &str, pm: tiny_skia::Pixmap, view: &View, crs: Crs) -> Re
     rustgis_data::raster::Raster::new(name, w, h, bands, transform, crs, None, color, "UInt8").map_err(|e| e.to_string())
 }
 
-/// `share.exportLayer`: writes a layer to a file by its extension. A streamed layer exports its
-/// whole source, a chunk at a time where the source and format allow (see `data::export`). Says
+/// `share.exportLayer`: writes the features the definition query keeps to a file by its extension.
+/// A streamed export reads the whole source, a chunk at a time where the source and format allow. Says
 /// what the file couldn't hold: features without drawable geometry, a missing `.prj`, Z or M
 /// values dropped on import, positions that are approximate or aren't longitude/latitude, field
 /// names a Shapefile cuts.
@@ -690,13 +690,13 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
     // A streamed layer exports its whole source, not the features read for the view: a chunk at
     // a time where the source and format allow, so its size isn't limited by memory.
     let chunks = if l.is_streamed() && rustgis_data::export::streams(&ext) && !from_target { l.chunk_export()? } else { None };
-    let (whole, unreadable) = if l.is_streamed() && chunks.is_none() {
-        l.load_all_counted().map(|(ds, n)| (Some(ds), n))?
-    } else {
-        (None, rustgis_map::Unreadable::default())
-    };
+    let (mut whole, unreadable) =
+        if l.is_streamed() && chunks.is_none() { l.load_all_counted()? } else { (l.dataset.clone(), rustgis_map::Unreadable::default()) };
+    let query = l.definition_query.as_deref();
+    let mut filtered =
+        if chunks.is_none() { rustgis_data::export::filter_dataset(&mut whole, query).map_err(|e| e.to_string())? } else { 0 };
     let unread = unreadable.rows;
-    let ds = chunks.as_ref().map(|(_, layer)| layer).or(whole.as_ref()).unwrap_or(&l.dataset);
+    let ds = chunks.as_ref().map_or(&whole, |(_, layer)| layer);
     // GeoJSON, KML and GPX are longitude/latitude; the others keep the layer's own system unless
     // told another.
     let crs = asked.unwrap_or_else(|| rustgis_data::io::default_export_crs(ds, &ext));
@@ -707,8 +707,9 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
     let parquet = matches!(ext.as_str(), "parquet" | "geoparquet");
     let (written, left_out, skipped, table, unfit, null_numbers, moved, csv, dates) = match &chunks {
         Some((src, layer)) => {
-            let (e, table) =
-                rustgis_data::export::write_source_to(src.as_ref(), layer, Path::new(&path), crs, &gpkg).map_err(|e| e.to_string())?;
+            let (e, table) = rustgis_data::export::write_source_filtered(src.as_ref(), layer, Path::new(&path), crs, &gpkg, query)
+                .map_err(|e| e.to_string())?;
+            filtered = e.filtered;
             // Counted as the chunks were written, as the layer holds none of them.
             let unfit = rustgis_data::source::parquet::unfit_note(&layer.fields, &e.unfit, path);
             let moved = rustgis_data::web_mercator_moved_note(path, &layer.name, e.beyond_web_mercator);
@@ -798,8 +799,13 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
     if let Some(note) = null_numbers_note(&path, null_numbers) {
         refused_notes.push(note.english());
     }
-    let then: Option<super::exports::Then> = if table.is_some() || null_numbers > 0 {
+    if let Some(note) = query_omissions_note(&path, &l.name, filtered) {
+        refused_notes.push(note.english());
+    }
+    let layer_name = l.name.clone();
+    let then: Option<super::exports::Then> = if table.is_some() || null_numbers > 0 || filtered > 0 {
         Some(Box::new(move |s: &mut Session, out: &mut Value| {
+            notify_query_omissions(s, &path, &layer_name, filtered);
             notify_null_numbers(s, &path, null_numbers);
             if let Some(t) = table {
                 report_table(s, &path, &gpkg, &default, Some(t), out);
@@ -820,6 +826,25 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
         owner: None,
         #[cfg(not(target_arch = "wasm32"))]
         crs_used: Vec::new(),
+    })
+}
+
+/// Reports rows excluded by the layer's definition query once the file has been written or offered for download.
+pub fn notify_query_omissions(s: &mut Session, path: &str, layer: &str, count: usize) {
+    if let Some(note) = query_omissions_note(path, layer, count) {
+        let mark = s.notice_mark();
+        s.notify_text(note, false);
+        s.retain_written_notices(mark);
+    }
+}
+
+/// The export's counted query notice, also included if delivery of a completed write is refused.
+fn query_omissions_note(path: &str, layer: &str, count: usize) -> Option<crate::notice_text::NoticeText> {
+    (count > 0).then(|| {
+        crate::notice_text::NoticeText::format(
+            "{path}: the definition query on {layer} left out {count} of the source features",
+            [("path", path.to_string().into()), ("layer", layer.to_string().into()), ("count", count.to_string().into())],
+        )
     })
 }
 

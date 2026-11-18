@@ -4844,14 +4844,12 @@ impl RustGisApp {
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 rustgis_engine::cmd::share::gpkg_table(p, &ext)?;
                 // A streamed layer exports its whole source, not the features read for the view.
-                let (whole, lost) = if l.is_streamed() {
-                    let (ds, lost) = l.load_all_counted()?;
-                    (Some(ds), lost)
-                } else {
-                    (None, Default::default())
-                };
+                let (mut dataset, lost) = if l.is_streamed() { l.load_all_counted()? } else { (l.dataset.clone(), Default::default()) };
+                let filtered =
+                    rustgis_engine::data::export::filter_dataset(&mut dataset, l.definition_query.as_deref()).map_err(|e| e.to_string())?;
+                let layer_name = l.name.clone();
                 // In the layer's own coordinate system, as share.exportLayer writes a file.
-                let ds = whole.as_ref().unwrap_or(&l.dataset);
+                let ds = &dataset;
                 use rustgis_engine::data::io;
                 let crs = io::default_export_crs(ds, &ext);
                 let written = io::write_bytes_in(ds, &ext, crs).map_err(|e| e.to_string());
@@ -4892,6 +4890,7 @@ impl RustGisApp {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
                 }
                 if self.download(&name, bytes) {
+                    rustgis_engine::cmd::share::notify_query_omissions(&mut self.session, &name, &layer_name, filtered);
                     for note in notes.into_iter().chain(dbf_notes).chain(construction_notes) {
                         self.session.notify(note, false);
                     }
@@ -8141,6 +8140,37 @@ mod download_service_tests {
         assert!(!app.download("archive.pmtiles", vec![1, 2, 3]));
         assert!(app.session.notices.iter().any(|n| n.error && n.text.contains("browser rejected download")));
         assert!(!app.session.notices.iter().any(|n| n.text.contains("Downloaded")));
+    }
+
+    /// The web download encodes the filtered rows and reports the count once the bytes are accepted.
+    #[test]
+    fn feature_download_respects_the_definition_query() {
+        let file = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let downloaded = file.clone();
+        let mut app = RustGisApp::with_sample().with_services(Services {
+            download: Some(Box::new(move |_, bytes| {
+                *downloaded.lock().unwrap() = bytes;
+                Ok(())
+            })),
+            ..Default::default()
+        });
+        let layer = app.session.map().layer_by_name("Cities").unwrap();
+        let (id, total) = (layer.id, layer.dataset.features.len());
+        for (query, count) in [("@row_number = 1", 1), ("", total)] {
+            app.run("layer.definitionQuery", json!({"layer": id, "where": query})).unwrap();
+            let mark = app.session.notice_mark();
+            app.run("ui.exportLayer", json!({"layer": id, "format": "geojson"})).unwrap();
+            let data: serde_json::Value = serde_json::from_slice(&file.lock().unwrap()).unwrap();
+            assert_eq!(data["features"].as_array().unwrap().len(), count);
+            let notes: Vec<_> = app.session.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
+            assert_eq!(notes.len(), usize::from(!query.is_empty()));
+            if let Some(note) = notes.first() {
+                assert_eq!(
+                    note.text,
+                    format!("Cities.geojson: the definition query on Cities left out {} of the source features", total - 1)
+                );
+            }
+        }
     }
 
     /// The web app's Shapefile download says which field names it changed, once the browser takes

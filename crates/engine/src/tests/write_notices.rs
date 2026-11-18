@@ -38,6 +38,59 @@ fn places() -> Session {
     s
 }
 
+/// The command and its background worker apply the query before writing, even when the layer
+/// reads in place. A whole-data writer and a chunk writer both say precisely what was omitted.
+#[test]
+fn export_features_respects_the_definition_query() {
+    use crate::cmd::exports::{export_land, export_start};
+
+    let dir = Files::new();
+    let mut s = places();
+    let id = s.map().layer_by_name("Places").unwrap().id;
+    s.map_mut()
+        .layer_mut(id)
+        .unwrap()
+        .dataset
+        .push(Some(Geometry::Point(rustgis_data::Coord::new(3.0, 4.0))), vec![Cell::Text("hidden".into())]);
+    let seed = dir.path().join("source.gpkg");
+    s.run("share.exportLayer", &json!({"layer": id, "path": seed})).unwrap();
+    s.run("layer.addData", &json!({"name": "Streamed", "path": seed, "layer": "Places", "stream": true})).unwrap();
+    assert!(s.map().layer_by_name("Streamed").unwrap().is_streamed());
+
+    for (layer, ext, background) in [("Places", "gpkg", false), ("Streamed", "shp", false), ("Streamed", "gpkg", true)] {
+        for (query, expected) in [("long_attribute_name = 'kept'", 1), ("", 2)] {
+            s.run("layer.definitionQuery", &json!({"layer": layer, "where": query})).unwrap();
+            let path = dir.path().join(format!("{layer}-{expected}.{ext}"));
+            let params = json!({"layer": layer, "path": path});
+            let mark = s.notice_mark();
+            let result = if background {
+                let work = export_start(&mut s, "share.exportLayer", &params).unwrap();
+                let started = work.started();
+                let done = std::thread::spawn(move || work.run(&rustgis_analysis::control::Control::new())).join().unwrap();
+                export_land(&mut s, started, done)
+            } else {
+                s.run("share.exportLayer", &params)
+            }
+            .unwrap();
+            assert_eq!(result["features"], expected);
+            assert_eq!(result["leftOut"], 0);
+            let (written, _) = rustgis_data::io::read_path(&path).unwrap();
+            assert_eq!(written.features.len(), expected);
+            assert_eq!(written.value(0, 0), &Cell::Text("kept".into()));
+            let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
+            if query.is_empty() {
+                assert!(notices.is_empty(), "{layer}: {notices:?}");
+            } else {
+                assert_eq!(notices.len(), 1);
+                assert_eq!(
+                    notices[0].text,
+                    format!("{}: the definition query on {layer} left out 1 of the source features", path.display())
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn write_notices_survive_nested_script_task_errors_and_panics() {
     for mode in ["success", "script", "nested", "task", "panic"] {

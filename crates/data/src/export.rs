@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use crate::io::{CsvWriter, GeoJsonWriter, GpkgTable, GpkgWritten, PROJECTED_FORMATS, check_projected, project_each, write_atomic_with};
+use crate::query::{self, Expr};
 use crate::raster::Crs;
 use crate::source::FeatureSource;
 use crate::{DataError, Dataset, Feature, Field, GeometryType, Result, Value};
@@ -30,6 +31,8 @@ pub struct Exported {
     pub written: usize,
     /// Features the format couldn't hold (a FlatGeobuf holds only features with geometry).
     pub left_out: usize,
+    /// Features excluded by a definition query before writing.
+    pub filtered: usize,
     /// Rows of the source that couldn't be read, so aren't in the export.
     pub skipped: usize,
     /// Non-finite attributes written as null in GeoJSON or GeoPackage, counted over all chunks.
@@ -84,12 +87,25 @@ pub fn write_source_to(
     crs: Crs,
     gpkg: &GpkgTable,
 ) -> Result<(Exported, Option<GpkgWritten>)> {
-    write_chunks_to(src, layer, path, crs, gpkg, CHUNK_BYTES)
+    write_chunks_to(src, layer, path, crs, gpkg, CHUNK_BYTES, None)
+}
+
+/// As [`write_source_to`], applying the layer's query before projecting or serializing each chunk.
+pub fn write_source_filtered(
+    src: &dyn FeatureSource,
+    layer: &Dataset,
+    path: &Path,
+    crs: Crs,
+    gpkg: &GpkgTable,
+    definition_query: Option<&str>,
+) -> Result<(Exported, Option<GpkgWritten>)> {
+    let query = definition_query.and_then(|text| query::parse_fields(text, layer).ok());
+    write_chunks_to(src, layer, path, crs, gpkg, CHUNK_BYTES, query.as_ref())
 }
 
 /// [`write_source_in`], `bytes` of features a chunk.
 fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: Crs, bytes: usize) -> Result<Exported> {
-    write_chunks_to(src, layer, path, crs, &GpkgTable::default(), bytes).map(|(e, _)| e)
+    write_chunks_to(src, layer, path, crs, &GpkgTable::default(), bytes, None).map(|(e, _)| e)
 }
 
 /// [`write_source_to`], `bytes` of features a chunk.
@@ -100,16 +116,49 @@ fn write_chunks_to(
     crs: Crs,
     gpkg: &GpkgTable,
     bytes: usize,
+    query: Option<&Expr>,
 ) -> Result<(Exported, Option<GpkgWritten>)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    write_chunks_as(src, layer, path, crs, gpkg, bytes, &ext)
+    write_chunks_as(src, layer, path, crs, gpkg, &ext, (bytes, query))
 }
 
 /// Writes a source in the explicitly chosen format (ignoring case), regardless of the destination's
 /// extension. Used by Data Interop, whose format parameter is independent of its path.
 pub fn write_source_as_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: Crs, format: &str) -> Result<Exported> {
     let format = format.to_ascii_lowercase();
-    write_chunks_as(src, layer, path, crs, &GpkgTable::default(), CHUNK_BYTES, &format).map(|(e, _)| e)
+    write_chunks_as(src, layer, path, crs, &GpkgTable::default(), &format, (CHUNK_BYTES, None)).map(|(e, _)| e)
+}
+
+/// Filters export rows in source order, preserving their positions for `@row_number`. A whole
+/// read or an in-memory layer counts its own progress; a chunk's source already counts the read.
+fn retain_matches(ds: &mut Dataset, expr: &Expr, offset: usize, count_progress: bool) -> Result<usize> {
+    let len = ds.features.len();
+    if count_progress {
+        crate::progress::begin(len);
+    }
+    let mut keep = Vec::new();
+    keep.try_reserve_exact(len).map_err(|_| DataError::Format("not enough memory to filter export rows".into()))?;
+    let mut filtered = 0;
+    for row in 0..len {
+        crate::progress::step(usize::from(count_progress))?;
+        let matches = query::eval_in_chunk(expr, ds, row, offset);
+        keep.push(matches);
+        filtered += usize::from(!matches);
+    }
+    if filtered > 0 {
+        let mut keep = keep.into_iter();
+        ds.features.retain(|_| keep.next().unwrap_or(false));
+    }
+    Ok(filtered)
+}
+
+/// Applies a layer's definition query to a whole dataset, using the same missing or invalid
+/// query behavior as drawing the layer. Returns the number of rows excluded.
+pub fn filter_dataset(ds: &mut Dataset, definition_query: Option<&str>) -> Result<usize> {
+    match definition_query.and_then(|text| query::parse_fields(text, ds).ok()) {
+        Some(expr) => retain_matches(ds, &expr, 0, true),
+        None => Ok(0),
+    }
 }
 
 /// Shared chunk writer for extension-based exports and explicit-format conversion.
@@ -119,8 +168,8 @@ fn write_chunks_as(
     path: &Path,
     crs: Crs,
     gpkg: &GpkgTable,
-    bytes: usize,
     ext: &str,
+    (bytes, query): (usize, Option<&Expr>),
 ) -> Result<(Exported, Option<GpkgWritten>)> {
     if !streams(ext) {
         return Err(DataError::Unsupported(format!(".{ext} written a chunk at a time")));
@@ -142,6 +191,7 @@ fn write_chunks_as(
     };
     let t = if crs == Crs::LonLat { None } else { Some(crs.transformer().map_err(DataError::Format)?) };
     let mut total = 0usize;
+    let mut filtered = 0usize;
     let mut skipped = 0usize;
     let mut beyond_web_mercator = 0usize;
     let mut null_numbers = 0usize;
@@ -155,6 +205,7 @@ fn write_chunks_as(
     let mut feed = |add: &mut dyn FnMut(&[Feature]) -> Result<()>| -> Result<()> {
         // A GeoPackage export that starts again feeds the features again, and counts them again.
         total = 0;
+        filtered = 0;
         beyond_web_mercator = 0;
         null_numbers = 0;
         csv = crate::io::CsvLosses::default();
@@ -164,6 +215,12 @@ fn write_chunks_as(
         // The source counts scanned rows; nested writers only check Cancel, so rows count once.
         crate::progress::begin(src.info().count.map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX)));
         let batch = src.visit_chunks(None, bytes, &mut |mut chunk| {
+            if let Some(expr) = query {
+                let mut input = layer.clone();
+                input.features = chunk.into();
+                filtered += retain_matches(&mut input, expr, total.saturating_add(filtered), false)?;
+                chunk = input.features.into_vec();
+            }
             // Counted from the longitude/latitude, before projecting. Every vertex is written:
             // the formats written in Web Mercator a chunk at a time (GeoPackage, FlatGeobuf)
             // leave out only features without geometry.
@@ -238,6 +295,7 @@ fn write_chunks_as(
         Exported {
             written,
             left_out,
+            filtered,
             skipped,
             null_numbers,
             unfit,
