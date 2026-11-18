@@ -432,10 +432,15 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     let id = |v: u64| Value::Int(v.cast_signed());
     // Summed wide: origins by destinations can pass a 32-bit count in the browser.
     let mut unreached = 0u64;
+    // One origin may have millions of rows: Cancel is looked at between them too.
+    let mut pace = crate::control::Pace::default();
     for ((oid, _), (row, missed)) in origins.iter().zip(&found) {
         crate::control::check()?;
         unreached = unreached.saturating_add(u64::try_from(*missed).unwrap_or(u64::MAX));
         for (rank, &(j, cost, length)) in row.iter().enumerate() {
+            if pace.stop(1) {
+                return Err(crate::control::Cancelled.into());
+            }
             let did = destinations.get(j).map_or(Value::Null, |(d, _)| id(*d));
             out.push(None, vec![id(*oid), did, Value::Int(rank as i64 + 1), Value::Float(cost / unit_m), Value::Float(length / unit_m)]);
         }

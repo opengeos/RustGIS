@@ -1368,6 +1368,8 @@ mod tests {
         assert!(on.is_some_and(|p| (p.at.x - 179.995).abs() < 1e-9), "{on:?}");
         let across = graph.place(Coord::new(-179.995, 0.0001), 50.0).unwrap();
         assert!(across.is_some_and(|p| (p.at.x + 179.995).abs() < 1e-9), "{across:?}");
+        let middle = graph.place(Coord::new(180.0, 0.0), 1000.0).unwrap();
+        assert!(middle.is_some_and(|p| p.at.x.abs() > 179.999 && p.at.y.abs() < 1e-9), "{middle:?}");
     }
 
     /// A point is placed on a segment stored past ±180° (at 370°, the same meridian as 10°), as a
