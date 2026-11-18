@@ -20937,9 +20937,14 @@ fn city_models_are_read_ahead_as_they_read_inline() {
     let mut s = Session::new(Project::default());
     let p = json!({"path": json_path.display().to_string(), "crs": "EPSG:28992"});
     assert!(!crate::cmd::reads::read_ahead(&mut s, "layer.addData", &p).unwrap().reads());
-    // Other GML and XML are read as the command runs.
+    // Other GML is read ahead too, so a large file takes the size read into memory; other XML is read as
+    // the command runs.
+    let collection = r#"<gml:FeatureCollection xmlns:gml="http://www.opengis.net/gml"/>"#;
     let other = dir.join("other.gml");
-    std::fs::write(&other, r#"<gml:FeatureCollection xmlns:gml="http://www.opengis.net/gml"/>"#).unwrap();
+    std::fs::write(&other, collection).unwrap();
+    assert!(crate::cmd::reads::read_ahead(&mut s, "layer.addData", &json!({"path": other.display().to_string()})).unwrap().reads());
+    let other = dir.join("other.xml");
+    std::fs::write(&other, collection).unwrap();
     assert!(!crate::cmd::reads::read_ahead(&mut s, "layer.addData", &json!({"path": other.display().to_string()})).unwrap().reads());
     let _ = std::fs::remove_dir_all(dir);
 }
