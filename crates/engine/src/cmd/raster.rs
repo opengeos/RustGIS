@@ -717,7 +717,8 @@ fn add_bytes<const LIMIT: usize>(s: &mut Session, p: &Value) -> CmdResult {
     let name = bytes_file_name(raw_name).ok_or("fileName is required")?.to_string();
     let data = ps(p, "data").ok_or("data is required")?;
     // Base64 is 4 characters per 3 bytes; refuse files past the upload limit before decoding.
-    if data.len() / 4 * 3 > LIMIT {
+    let padding = if data.ends_with("==") { 2 } else { usize::from(data.ends_with('=')) };
+    if (data.len() / 4 * 3).saturating_sub(padding) > LIMIT {
         return Err(rustgis_data::io::file_size_error(&name, LIMIT as u64));
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("data: {e}"))?;
@@ -1270,6 +1271,23 @@ fn like_name(p: &Value) -> Result<Option<&str>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The last padded quartet must count only the bytes it will decode into.
+    #[test]
+    fn add_data_bytes_accepts_padded_files_at_the_exact_limit() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        const CSV: &[u8] = b"X,Y\n1,2\n";
+        fn check<const LIMIT: usize>(bytes: &[u8]) {
+            let mut session = Session::new(crate::Project::default());
+            let params = |bytes: &[u8]| json!({"fileName": "points.csv", "data": STANDARD.encode(bytes)});
+            add_bytes::<LIMIT>(&mut session, &params(bytes)).unwrap();
+            let larger = [bytes, b" "].concat();
+            let error = add_bytes::<LIMIT>(&mut session, &params(&larger)).unwrap_err();
+            assert!(error.contains("is too large to open"), "{error}");
+        }
+        check::<{ CSV.len() }>(CSV);
+        check::<{ CSV.len() - 1 }>(&CSV[..CSV.len() - 1]);
+    }
 
     /// Exercise upload refusals with a reduced cap across formats with different recovery advice.
     #[test]

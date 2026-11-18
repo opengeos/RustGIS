@@ -6762,7 +6762,12 @@ mod tests {
         let path = path.to_str().unwrap();
         let mut session = Session::new(crate::Project::default());
         let check = |error: String| {
-            assert!(error.contains(&format!("{path} is too large to open (limit {} MiB)", limit >> 20)), "{error}");
+            let limit = (limit >> 20).to_string();
+            assert_eq!(
+                rustgis_data::io::file_size_error_args(&error),
+                Some((path, limit.as_str(), rustgis_data::io::FileSizeAdvice::Vector)),
+                "{error}"
+            );
             assert!(error.contains("Split it into smaller files") && error.contains("FlatGeobuf"), "{error}");
         };
         for command in ["layer.addData", "info.fileLayers"] {

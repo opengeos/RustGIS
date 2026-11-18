@@ -860,6 +860,7 @@ pub fn open_csv(app: &mut RustGisApp, name: &str, source: CsvSource) -> Result<V
     app.run("ui.dialog", json!({"name": "addCsv"}))?;
     let file = CsvFile { name: name.to_string(), source };
     app.dialogs.mode = "auto";
+    app.dialogs.csv_picked = false;
     let found = csv_columns(&file, "auto", &app.dialogs.text);
     show_columns(&mut app.dialogs, found);
     app.dialogs.csv = Some(file);
@@ -1092,7 +1093,7 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     });
     // Only untouched defaults follow a committed CRS edit (Enter also ends a single-line edit).
     // Parsing a PROJ string registers it, so never parse while the user is still typing.
-    // Another separator keeps the previous picks when its columns still exist.
+    // Another separator keeps explicit picks when their columns still exist.
     let crs = app.dialogs.text.trim();
     if (reread || (crs_committed && !app.dialogs.csv_picked))
         && let Some(file) = &app.dialogs.csv
@@ -1100,16 +1101,21 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let found = csv_columns(file, app.dialogs.mode, crs);
         let picked = [app.dialogs.a.clone(), app.dialogs.b.clone(), app.dialogs.c.clone()];
         show_columns(&mut app.dialogs, found);
-        if reread {
+        if reread && app.dialogs.csv_picked {
             keep_picked(&mut app.dialogs, picked);
         }
     }
     buttons(app, ui, "Add", |app| {
         let mut p = json!({});
-        for (key, v) in [("x", &app.dialogs.a), ("y", &app.dialogs.b), ("wkt", &app.dialogs.c), ("crs", &app.dialogs.text)] {
-            if !v.trim().is_empty() {
-                p[key] = json!(v.trim());
+        if app.dialogs.csv_picked {
+            for (key, v) in [("x", &app.dialogs.a), ("y", &app.dialogs.b), ("wkt", &app.dialogs.c)] {
+                if !v.trim().is_empty() {
+                    p[key] = json!(v.trim());
+                }
             }
+        }
+        if !app.dialogs.text.trim().is_empty() {
+            p["crs"] = json!(app.dialogs.text.trim());
         }
         if app.dialogs.mode != "auto" && !sheet {
             p["delimiter"] = json!(app.dialogs.mode);
@@ -3146,6 +3152,26 @@ mod tests {
             assert_eq!(h.state().dialogs.open, if pick == Some("None") { Some("addCsv") } else { None });
             assert!(h.state().dialogs.error.is_none());
         }
+    }
+
+    /// The dialog previews the first thousand rows and only submits explicit column picks.
+    #[test]
+    fn untouched_delimited_suggestions_leave_whole_file_inference_active() {
+        use egui_kittest::kittest::Queryable;
+        let mut csv = String::from("Longitude,Latitude,X,Y\n");
+        csv.push_str(&"-93,44,20,40\n".repeat(1_000));
+        csv.push_str(",,21,41\n");
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        open_csv(&mut app, "points.csv", CsvSource::Bytes(csv.into_bytes())).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        assert_eq!((&*h.state().dialogs.a, &*h.state().dialogs.b), ("Longitude", "Latitude"));
+        h.get_by_label("Add").click();
+        h.run_steps(3);
+        assert!(h.state().dialogs.error.is_none(), "{:?}", h.state().dialogs.error);
+        let features = &h.state().session.map().layers.last().unwrap().dataset.features;
+        assert_eq!(features.len(), 1_001);
+        assert!(features.last().unwrap().geometry.is_some());
     }
 
     /// The map stamp Add From Service checks: the UI changes the map through `map_mut` and

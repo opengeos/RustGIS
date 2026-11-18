@@ -116,7 +116,8 @@ of delimited text, or every row of a spreadsheet, to pick defaults. It recompute
 leave the coordinate-system box or press Enter; columns you picked stay picked. With a projected
 coordinate system, defaults prefer X/Y or easting/northing columns when the file also has
 longitude/latitude columns.
-Add Data checks all rows. Coordinates still outside degree ranges are counted in a
+If you leave the suggested columns untouched, Add Data checks all rows before choosing the pair.
+Coordinates still outside degree ranges are counted in a
 notice. Points placed at exactly 0,0 are also counted in a notice: these often mean missing
 coordinates, but the points are kept. A CSV without coordinate columns, or a layer without geometry, opens as a
 standalone table, listed under the map in Layers; right-click it to open or remove it. Tables
