@@ -1456,16 +1456,19 @@ fn record_warning(message: String) {
 static UNNAMED_NEEDS_GRID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The systems (by the key they are kept under) whose transformer couldn't be built again when
-/// grids arrived: they go on with the transformation they had ([`Live::now`]), and are said once.
-/// The systems whose transformer couldn't be built again when grids arrived, each once for the
-/// run, in order: every session reads them from its own place ([`rebuild_failures_since`]).
+/// grids arrived, each once for the run, in order: they go on with the transformation they had
+/// ([`Live::now`]), and every session reads them from its own place ([`rebuild_failures_since`]).
 /// The first [`REBUILD_KEPT`] by name, the rest counted.
 struct RebuildFailures {
     named: Vec<String>,
     said: std::collections::BTreeSet<String>,
-    /// Those past the named, counted: each failure of one, as its key isn't kept.
+    /// Those past the named, counted once each (by a fingerprint of their key, the first
+    /// [`REBUILD_COUNTED`]; past those, each failure).
     more: usize,
+    counted: std::collections::BTreeSet<u64>,
 }
+
+const REBUILD_COUNTED: usize = 1 << 16;
 
 const REBUILD_KEPT: usize = 256;
 
@@ -1478,13 +1481,22 @@ impl RebuildFailures {
             self.said.insert(key.to_string());
             self.named.push(key.to_string());
         } else {
-            self.more += 1;
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut h);
+            if self.counted.len() >= REBUILD_COUNTED || self.counted.insert(h.finish()) {
+                self.more += 1;
+            }
         }
     }
 }
 
-static REBUILD_FAILED: std::sync::Mutex<RebuildFailures> =
-    std::sync::Mutex::new(RebuildFailures { named: Vec::new(), said: std::collections::BTreeSet::new(), more: 0 });
+static REBUILD_FAILED: std::sync::Mutex<RebuildFailures> = std::sync::Mutex::new(RebuildFailures {
+    named: Vec::new(),
+    said: std::collections::BTreeSet::new(),
+    more: 0,
+    counted: std::collections::BTreeSet::new(),
+});
 
 /// Where a session has read the rebuild failures to ([`rebuild_failures_since`]): now's, for
 /// a session starting now.
@@ -1958,11 +1970,13 @@ mod tests {
         assert!(rebuild_failures_since(&mut other).1.iter().any(|s| s == "not a definition"));
         assert!(!rebuild_failures_since(&mut other).1.iter().any(|s| s == "not a definition"));
         // Past those kept by name, counted.
-        let mut f = RebuildFailures { named: Vec::new(), said: Default::default(), more: 0 };
+        let mut f = RebuildFailures { named: Vec::new(), said: Default::default(), more: 0, counted: Default::default() };
         for i in 0..REBUILD_KEPT + 3 {
             f.add(&format!("EPSG {i}"));
         }
+        // Each once, past the named too.
         f.add("EPSG 0");
+        f.add(&format!("EPSG {}", REBUILD_KEPT + 1));
         assert_eq!((f.named.len(), f.more), (REBUILD_KEPT, 3));
         // One that is built again: nothing said.
         let fine = Live::new(Some("EPSG 4267".into()), grid_generation().wrapping_add(1), live.peek());
