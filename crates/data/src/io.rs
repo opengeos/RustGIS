@@ -382,14 +382,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             report.messages.extend(notes);
             (ds, report)
         }
-        "shp" => {
-            check_size(path)?;
-            let dbf = path.with_extension("dbf");
-            if dbf.exists() {
-                check_size(&dbf)?;
-            }
-            read_shapefile(path, &name)?
-        }
+        "shp" => read_shapefile_in(path, &name, None)?,
         "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &crate::provenance::read(path)?)?
@@ -2521,11 +2514,6 @@ pub(crate) fn dbf_sidecar(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|| path.with_extension("dbf"))
 }
 
-/// Reads a loose Shapefile using its sidecar CRS, retaining the default reader's behavior.
-fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
-    read_shapefile_in(path, name, None)
-}
-
 /// Reads a Shapefile with an optional source CRS replacing its `.prj`, before any geometry is
 /// converted. This changes only interpretation; the files on disk are never modified.
 pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(Dataset, ReadReport)> {
@@ -2534,10 +2522,11 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
     if !dbf.is_file() {
         return Err(DataError::Format(format!("Shapefile: {} is missing", dbf.display())));
     }
-    check_size_with(&dbf, |name, limit| format!("{name}{FILE_SIZE_LIMIT_START}{}{SHAPEFILE_SIZE_LIMIT_END}", limit >> 20))?;
+    let sidecar_error = |name: &str, limit: u64| format!("{name}{FILE_SIZE_LIMIT_START}{}{SHAPEFILE_SIZE_LIMIT_END}", limit >> 20);
+    check_size_with(&dbf, sidecar_error)?;
     let shx = path.with_extension("shx");
     if shx.is_file() {
-        check_size(&shx)?;
+        check_size_with(&shx, sidecar_error)?;
     }
     let mut notes = Vec::new();
     let parts = ShapefileParts {
@@ -6530,16 +6519,23 @@ mod tests {
 
     /// An oversized Shapefile sidecar names the failing file and advises keeping the parts together.
     #[test]
-    fn oversized_shapefile_dbf_reports_whole_dataset_advice() {
+    fn oversized_shapefile_sidecar_reports_whole_dataset_advice() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("roads.shp");
-        let dbf = path.with_extension("dbf");
         std::fs::File::create(&path).unwrap();
-        std::fs::File::create(&dbf).unwrap().set_len(MAX_BYTES + 1).unwrap();
-        let error = read_shapefile_in(&path, "roads", None).unwrap_err().to_string();
+        std::fs::File::create(path.with_extension("dbf")).unwrap();
         let limit = (MAX_BYTES >> 20).to_string();
-        assert_eq!(file_size_error_args(&error), Some((dbf.to_str().unwrap(), limit.as_str(), FileSizeAdvice::Shapefile)));
-        assert!(error.contains("Split the whole Shapefile"), "{error}");
+        for ext in ["dbf", "shx"] {
+            let sidecar = path.with_extension(ext);
+            let file = std::fs::File::create(&sidecar).unwrap();
+            file.set_len(MAX_BYTES + 1).unwrap();
+            for result in [read_path(&path), read_shapefile_in(&path, "roads", Some(Crs::LonLat))] {
+                let error = result.unwrap_err().to_string();
+                assert_eq!(file_size_error_args(&error), Some((sidecar.to_str().unwrap(), limit.as_str(), FileSizeAdvice::Shapefile)));
+                assert!(error.contains("Split the whole Shapefile"), "{error}");
+            }
+            file.set_len(0).unwrap();
+        }
     }
 
     #[test]
