@@ -375,13 +375,13 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     // 1. the same picture without its resolution (a service may refuse a parameter it doesn't
     //    know); kept for a while only when that one draws and the server refused the first
     //    (a 4xx other than 408 or 429: not a server error, a timeout or a lost connection);
-    // 2. one at most 2048 pixels a side, with its resolution again, kept for a while (some
-    //    services draw no larger);
+    // 2. one at most 2048 pixels a side, with its resolution again (some services draw no
+    //    larger), kept for a while unless the larger one's answer was empty;
     // 3. the picture at a logical pixel's detail, as on a standard screen (a service may draw
     //    no picture as large as a HiDPI one); kept for a while, for HiDPI pictures as large,
     //    when the server refused the HiDPI one and the standard one draws.
     // Past those, its tiles are drawn (and say what fails).
-    let mut without = false;
+    let (mut without, mut smaller) = (false, false);
     // Kept to a standard screen's pictures while its HiDPI ones are as large as one the server
     // refused: a smaller view's may draw.
     let was_standard = {
@@ -393,9 +393,11 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                 None => Some((w, h)),
             }
         };
-        let k = kept();
-        let max = if k.small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR) { SMALL_SIDE } else { MAX_SIDE };
-        k.standard.get(&key).is_some_and(|(at, (rw, rh))| at.elapsed() < SMALL_FOR && size(max).is_some_and(|(w, h)| w >= *rw && h >= *rh))
+        let held = kept();
+        let max = if held.small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR) { SMALL_SIDE } else { MAX_SIDE };
+        held.standard
+            .get(&key)
+            .is_some_and(|(at, (rw, rh))| at.elapsed() < SMALL_FOR && size(max).is_some_and(|(w, h)| w >= *rw && h >= *rh))
     };
     let mut standard = was_standard;
     // The size of the HiDPI picture the server refused (without its resolution), which keeps the
@@ -405,7 +407,9 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     // The address (without its resolution) of the picture the server refused with it.
     let mut refused: Option<String> = None;
     for _ in 0..6 {
-        let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
+        // At most 2048 pixels: kept for a while after a refusal, or this frame after an empty
+        // answer (which keeps nothing).
+        let small = smaller || kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
         let sharp = detail > 1.0 && !standard;
         let plain = !sharp || without || kept().plain.get(&key).is_some_and(|at| at.elapsed() < PLAIN_FOR);
         let ask = if sharp { res } else { logical_res };
@@ -498,13 +502,17 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                     refused = Some(address.clone());
                 }
             }
-            State::Failed(e) if !small && pw.max(ph) > SMALL_SIDE && e != EMPTY => {
-                let mut k = kept();
-                if k.small.len() >= MAX_KEPT {
-                    k.small.clear();
+            State::Failed(e) if !small && pw.max(ph) > SMALL_SIDE => {
+                if e == EMPTY {
+                    smaller = true;
+                } else {
+                    let mut k = kept();
+                    if k.small.len() >= MAX_KEPT {
+                        k.small.clear();
+                    }
+                    k.small.insert(key.clone(), web_time::Instant::now());
                 }
-                k.small.insert(key.clone(), web_time::Instant::now());
-                // The smaller picture is asked with its resolution again: the size was refused.
+                // The smaller picture is asked with its resolution again: the size failed.
                 (without, refused) = (false, None);
             }
             State::Failed(e) if sharp => {

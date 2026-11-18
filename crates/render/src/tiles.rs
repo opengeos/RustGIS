@@ -960,6 +960,11 @@ pub(crate) mod tests {
                 {
                     // An empty answer for every picture over 1024 pixels.
                     done(Ok(Vec::new()));
+                } else if url.starts_with("https://one.test/empty2048/")
+                    && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 2048)
+                {
+                    // An empty answer for every picture over 2048 pixels.
+                    done(Ok(Vec::new()));
                 } else if url.starts_with("https://one.test/empty-all/") {
                     // Nothing here: an empty answer to every request.
                     done(Ok(Vec::new()));
@@ -1375,6 +1380,36 @@ pub(crate) mod tests {
             let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
             let p = pm.pixel(400, 100).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
             assert!(p == green && asked.len() == 3 && asked[2].contains("&WIDTH=768&"), "{p:?} {asked:?}");
+        }
+        // Empty answers over 2048 pixels: the picture of at most 2048 pixels is asked this frame
+        // and draws, and nothing is kept (the next view asks its full size first again).
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/empty2048/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 1500.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            let width = |u: &String| u.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok());
+            ASKED_ONE.lock().unwrap().clear();
+            let png = crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let p = pm.pixel(1500, 100).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
+            assert!(p == green && asked.len() == 3, "{p:?} {asked:?}");
+            assert!(width(&asked[2]).is_some_and(|w| (1..=2048).contains(&w)), "{asked:?}");
+            let view = View { camera: Camera { center: Coord::new(center.x + 200_000.0, center.y), ..view.camera }, ..view };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.first().and_then(width).is_some_and(|w| w > 2048), "{asked:?}");
         }
         // An empty answer to a standard screen's picture is "nothing here", as before: one
         // request, no tiles asked.

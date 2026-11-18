@@ -463,8 +463,9 @@ it's given `"singleImage": false` or a `"tileSize"`.
   connection or an empty answer doesn't count. One whose HiDPI picture the server refuses so and
   whose standard one draws is asked at a standard screen's detail for five minutes, while its
   HiDPI pictures would be at least as wide and as tall. The picture is at most 4096 pixels a side
-  (2048 for five minutes after a larger picture of the layer fails), coarser for a view larger
-  than that. A picture the service fails to draw leaves the layer drawn in tiles there.
+  (2048 for five minutes after a larger picture of the layer fails, other than with an empty
+  answer), coarser for a view larger than that. A picture the service fails to draw leaves the
+  layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
   in than its finest zoom its picture there is stretched, as its tiles are.
 - It is drawn so on a flat map, north up or turned, in Web Mercator or in a projection with an
