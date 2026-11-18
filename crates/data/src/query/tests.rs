@@ -797,6 +797,8 @@ fn errors_say_why_they_are_null() {
         ("name * 2", Fault::Text),
         ("sqrt(name)", Fault::Text),
         ("to_real(name)", Fault::Text),
+        ("clamp(10, pop, 0)", Fault::ClampBounds),
+        ("scale_exp(0, 0, 10, 1, 2, -1)", Fault::DivisionByZero),
         ("round(pop / 0) + 1", Fault::DivisionByZero),
         ("nullif(pop / 0, 1)", Fault::DivisionByZero),
         ("'(' || (pop / 0) || ')'", Fault::DivisionByZero),

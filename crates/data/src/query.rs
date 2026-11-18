@@ -151,6 +151,8 @@ pub enum Fault {
     Text,
     /// A date where a number is needed: arithmetic, or a number argument.
     Date,
+    /// `clamp(low, x, high)` with `low` above `high`.
+    ClampBounds,
 }
 
 impl Fault {
@@ -161,9 +163,10 @@ impl Fault {
             Fault::NegativeRoot => "the square root of a negative number",
             Fault::Logarithm => "the logarithm of zero or a negative number",
             Fault::Overflow => "a result too large to represent",
-            Fault::NotANumber => "a result that isn't a number",
+            Fault::NotANumber => "a value that isn't a finite number",
             Fault::Text => "text that isn't a number",
             Fault::Date => "a date used as a number",
+            Fault::ClampBounds => "a clamp whose low bound is above its high bound",
         }
     }
 
@@ -1979,6 +1982,7 @@ impl<'a> Eval<'a> {
                             x
                         };
                     }
+                    (Some(_), Some(_), Some(_)) => self.fail(Fault::ClampBounds),
                     _ => Value::Null,
                 }
             }
@@ -1987,6 +1991,10 @@ impl<'a> Eval<'a> {
                 match (n(0), n(1), n(2), n(3), n(4), exponent) {
                     (Some(x), Some(d0), Some(d1), Some(r0), Some(r1), Some(e)) => {
                         let t = if d1 == d0 { if x <= d0 { 0.0 } else { 1.0 } } else { ((x - d0) / (d1 - d0)).clamp(0.0, 1.0) };
+                        // As `0 ^ -1`: a negative exponent at the domain's start divides by zero.
+                        if t == 0.0 && e < 0.0 {
+                            return Cow::Owned(self.fail(Fault::DivisionByZero));
+                        }
                         self.or_fail(checked(r0 + (r1 - r0) * t.powf(e)))
                     }
                     _ => Value::Null,
