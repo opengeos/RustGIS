@@ -170,7 +170,8 @@ jobs:
     name: Report generated overlays
     needs: overlay
     # Only the reporting job has issue write access. Manual runs keep findings as artifacts.
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (needs.overlay.result == 'success' || needs.overlay.result == 'failure') }}
+    # A job that ran out of time ends cancelled, but the run isn't: that is a failure too.
+    if: ${{ !cancelled() && github.event_name == 'schedule' && needs.overlay.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -226,7 +227,7 @@ jobs:
           set -euo pipefail
           title="Nightly generated overlay check failed"
           open="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
-            | jq -sr --arg t "$title" '[.[][] | select(.pull_request | not) | select(.title == $t)][0].number // ""')"
+            | jq -sr --arg t "$title" '[.[][] | select(.pull_request | not) | select(.user.login == "github-actions[bot]") | select(.title == $t)][0].number // ""')"
           if [ "$RESULT" = success ]; then
             if [ -n "$open" ]; then
               gh issue close "$open" -R "$GITHUB_REPOSITORY" --comment "Fixed: the nightly overlay check on $GITHUB_SHA passed ($RUN)."
