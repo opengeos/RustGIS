@@ -71,7 +71,7 @@ fn too_large_said(len: u64, max: u64) -> String {
 
 /// A size in MiB, rounded `up` (a file's, so it never looks within the limit) or down (the
 /// limit's), or in bytes below one.
-fn size_said(bytes: u64, up: bool) -> String {
+pub(crate) fn size_said(bytes: u64, up: bool) -> String {
     let mib = if up { bytes.div_ceil(1 << 20) } else { bytes >> 20 };
     if bytes < 1 << 20 { format!("{bytes} bytes") } else { format!("{mib} MiB") }
 }
@@ -1489,7 +1489,7 @@ impl Collector {
         let planned = max_bytes().saturating_mul(MEMORY_PER_BYTE);
         if table > planned {
             return Err(DataError::Format(format!(
-                "{name}: its attribute table would take {} MiB ({} features × {} fields), more than the {} MiB planned for a file read into memory; open the file by its path to read it in place",
+                "{name}: its attribute table would take {} MiB ({} features × {} fields), more than the {} MiB planned for a file read into memory; fewer fields, or the file split, would fit",
                 table.div_ceil(1 << 20),
                 self.features.len(),
                 fields.len(),
@@ -4437,6 +4437,16 @@ mod tests {
         let csv = b"x,y\n1,2\n";
         let e = with_max_bytes(4, || read_bytes("a.csv", csv)).unwrap_err().to_string();
         assert!(e.contains("file is too large (8 bytes;") && e.contains("is 4 bytes"), "{e}");
+        // Compressed text within the size but expanding past it: refused by the size, without
+        // the hint about its encoding.
+        let gz = {
+            use std::io::Write;
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            encoder.write_all(&b"1,2\n".repeat(10_000)).unwrap();
+            encoder.finish().unwrap()
+        };
+        let e = with_max_bytes(1000.max(gz.len() as u64), || read_bytes("a.csv.gz", &gz)).unwrap_err().to_string();
+        assert!(e.contains("expanded to more than the limit") && e.contains("is 1000 bytes") && !e.contains("UTF-8"), "{e}");
         // The delimited reader's own guard, for callers that don't come through `read_bytes`.
         let e = with_max_bytes(4, || read_delimited_bytes("a.csv", csv, &CsvOptions::default())).unwrap_err().to_string();
         assert!(e.contains("file is too large (8 bytes;") && e.contains("is 4 bytes"), "{e}");

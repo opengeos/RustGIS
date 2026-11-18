@@ -312,9 +312,9 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize, spreads
             // the computer's memory where the caller's does) or the most one member may hold.
             let bound = MAX_ENTRY.min(budget);
             return Err(Failure::Member(format!(
-                "{name} is too large: it expands to {} MiB, past the {} MiB {}",
-                usize_.div_ceil(1 << 20),
-                bound >> 20,
+                "{name} is too large: it expands to {}, past the {} {}",
+                crate::io::size_said(usize_ as u64, true),
+                crate::io::size_said(bound as u64, false),
                 if budget < MAX_ENTRY { "left to expand from this archive" } else { "a member may expand to" }
             )));
         }
@@ -376,7 +376,11 @@ mod tests {
             invalid[bad_field] = 1;
             let archive = [archive.as_slice(), &invalid].concat();
             assert!(matches!(read_all_within(&archive, 5), Ok(entries) if entries[0].1 == b"hello"));
-            assert!(matches!(read_all_within(&archive, 4), Err(Failure::Member(m)) if m.contains("too large")));
+            // Its expanded size and the budget it passed.
+            assert!(matches!(
+                read_all_within(&archive, 4),
+                Err(Failure::Member(m)) if m.contains("too large: it expands to 5 bytes, past the 4 bytes left to expand")
+            ));
         }
     }
 

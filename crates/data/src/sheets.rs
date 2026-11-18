@@ -347,8 +347,7 @@ fn check_compound(bytes: &[u8]) -> Result<()> {
                 // Fixed, whatever the memory: spreadsheets keep their own limits.
                 if *len as u64 > crate::io::BYTES_FLOOR {
                     return Err(DataError::Format(format!(
-                        "spreadsheet: the XLS Workbook stream is too large ({} bytes; at most {} MiB)",
-                        len,
+                        "spreadsheet: the XLS Workbook stream is too large ({len} bytes; at most {} MiB)",
                         crate::io::BYTES_FLOOR >> 20
                     )));
                 }
