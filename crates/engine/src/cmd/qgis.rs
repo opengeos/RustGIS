@@ -426,7 +426,7 @@ fn add_layer(
             }
             return Ok(Some(name.to_string()));
         }
-        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, unknown_geometry } => {
+        Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, curved, unknown_geometry } => {
             // QGIS keeps none of a memory layer's features: it opens empty, with its fields.
             let mut ds = rustgis_data::Dataset::new(name, *geometry, fields.clone());
             if let Some(c) = layer.crs.as_deref().or(crs.as_deref()) {
@@ -448,6 +448,9 @@ fn add_layer(
             }
             if *taken > 0 {
                 report.skipped(name, format!("its fields of a name an earlier field has ({taken})"));
+            }
+            if let Some(kind) = curved {
+                report.approximated(name, format!("its geometry kind ({kind}): curves read as lines and polygons of their points"));
             }
             if *zm {
                 report.approximated(name, "its geometry's Z and M values: RustGIS keeps x and y");

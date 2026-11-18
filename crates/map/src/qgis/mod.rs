@@ -601,7 +601,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
         let source = source::read(&provider, &datasource, dir);
         let kind = ml.attribute("type").unwrap_or_default().to_string();
         let vector = kind == "vector";
-        let definition_query = definition_query(&source, &name, report);
+        let definition_query = definition_query(&source, &name, "subset string", report);
         let style = read_style_node(ml, &name, report);
         let annotations = if kind == "annotation" { annotation::read(ml, dir, &name, report) } else { Vec::new() };
         layers.push((
@@ -641,18 +641,19 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     Ok(project)
 }
 
-/// A layer's filter (its subset string) as a RustGIS definition query, when it reads as one.
-fn definition_query(source: &Source, name: &str, report: &mut Report) -> Option<String> {
+/// A layer's filter as a RustGIS definition query, when it reads as one. `what` says where it
+/// came from in the notes ("subset string", or a virtual layer's query).
+fn definition_query(source: &Source, name: &str, what: &str, report: &mut Report) -> Option<String> {
     let Source::File { subset: Some(q), .. } = source else { return None };
     match expr::to_sql(q) {
         // A definition query is read with no map scale, so one reading it would take no feature.
         Some(_) if expr::reads_scale(q) => {
-            report.skipped(name, "its filter (subset string), which reads the map's scale, which a filter has none of");
+            report.skipped(name, format!("its filter ({what}), which reads the map's scale, which a filter has none of"));
             None
         }
         Some(sql) => Some(sql),
         None => {
-            report.skipped(name, "its filter (subset string), which is too long to read");
+            report.skipped(name, format!("its filter ({what}), which is too long to read"));
             None
         }
     }
@@ -704,7 +705,8 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
                 (a, b) => a.or(b),
             };
             let resolved = Source::File { path, layer, subset, ignored };
-            l.definition_query = definition_query(&resolved, &l.name, report);
+            l.definition_query =
+                definition_query(&resolved, &l.name, "from its virtual layer's query and the layer it selects from", report);
             l.source = resolved;
             changed = true;
         }

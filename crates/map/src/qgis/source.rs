@@ -36,6 +36,8 @@ pub enum Source {
         taken: usize,
         /// Its geometry has Z or M values (`PointZ`, `LineStringM`): RustGIS keeps x and y.
         zm: bool,
+        /// A curved geometry kind (`CompoundCurve`, `MultiSurface`), read as lines or polygons.
+        curved: Option<String>,
         /// The geometry QGIS names, when it is one RustGIS hasn't (a collection, say): it comes
         /// in as a table.
         unknown_geometry: Option<String>,
@@ -309,6 +311,8 @@ fn memory(datasource: &str) -> Source {
         .to_ascii_lowercase();
     // `PointZ`, `LineStringM`, `PolygonZM`: a geometry's name with Z or M values.
     let zm = ["z", "m"].iter().any(|s| geometry.trim().ends_with(s)) && !matches!(geometry.trim(), "" | "nogeometry");
+    // Curves and surfaces RustGIS draws as lines and polygons of their points.
+    let curved = (geometry.contains("curve") || geometry.contains("surface")).then(|| cut_said(&geometry, 40));
     let (geometry, unknown_geometry) = if geometry.contains("polygon") || geometry.contains("surface") {
         (GeometryType::Polygon, None)
     } else if geometry.contains("line") || geometry.contains("curve") {
@@ -359,7 +363,7 @@ fn memory(datasource: &str) -> Source {
         }
         fields.push(Field::new(name, ty.unwrap_or(FieldType::Text)));
     }
-    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, unknown_geometry }
+    Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, curved, unknown_geometry }
 }
 
 /// `text` to say in a note: its first `n` characters, and "…" when it goes on.
@@ -892,6 +896,7 @@ mod tests {
                 unnamed: 0,
                 taken: 0,
                 zm: false,
+                curved: None,
                 unknown_geometry: None
             }
         );
@@ -906,6 +911,7 @@ mod tests {
                 unnamed: 0,
                 taken: 0,
                 zm: true,
+                curved: None,
                 unknown_geometry: None
             }
         );
@@ -955,6 +961,11 @@ mod tests {
             panic!()
         };
         assert_eq!((named.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), taken, zm), (vec!["a", "b"], 1, true));
+        // A curved kind: read as lines, and said.
+        let Source::Memory { geometry, curved, .. } = read("memory", "CompoundCurve?crs=EPSG:4326", dir) else { panic!() };
+        assert_eq!((geometry, curved.as_deref()), (GeometryType::Polyline, Some("compoundcurve")));
+        let Source::Memory { curved, .. } = read("memory", "LineString?crs=EPSG:4326", dir) else { panic!() };
+        assert_eq!(curved, None);
         let Source::Memory { fields, cut, .. } = read("memory", &many, dir) else { panic!() };
         assert_eq!((fields.len(), cut), (MAX_MEMORY_FIELDS, 3));
     }
