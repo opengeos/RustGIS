@@ -133,7 +133,7 @@ Rules shared by all of them:
   either side is false and `OR` true when either side is true, whatever the other side is.
 - **Errors give null**: a division by zero, the square root of a negative number, a result too
   large to represent. Where the result is stored (Calculate Field, calculation attribute rules),
-  a notice says how many rows an error made null, which error, and the first of those rows.
+  a notice says how many rows an error made null, which error, and the first three of those rows.
 - **`IN`** compares with each value as `=` does; a `NULL` in the list matches nothing, so
   `x NOT IN (1, NULL)` is true for 2.
 - **As a condition**, a value that isn't true or false counts as true when it is a non-zero

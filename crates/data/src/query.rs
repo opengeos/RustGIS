@@ -1609,8 +1609,11 @@ fn arith(op: Arith, a: &Value, b: &Value) -> Result<Value, Fault> {
         return Err(Fault::Date);
     }
     let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
-        // A stored NaN or infinity isn't text to join (`inf + 1` isn't `inf1`).
-        if op == Arith::Add && !a.is_non_finite() && !b.is_non_finite() {
+        // `+` joins text, but a stored NaN or infinity isn't text to join (`inf + 1` isn't `inf1`).
+        if op == Arith::Add {
+            if a.is_non_finite() || b.is_non_finite() {
+                return Err(Fault::NotANumber);
+            }
             return Ok(text(format!("{a}{b}")));
         }
         return Err(Fault::of_non_number(a).or(Fault::of_non_number(b)).unwrap_or(Fault::NotANumber));

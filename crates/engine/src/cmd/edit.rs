@@ -1569,21 +1569,31 @@ impl Calc {
                 Term::Field(i) => ds.value(r, *i).clone(),
             }
         };
+        // A number result: past the largest number a value holds, it is null, and says why.
+        let number = |f: f64| {
+            if f.is_finite() {
+                (Value::Float(f), None)
+            } else {
+                (Value::Null, Some(if f.is_nan() { Fault::NotANumber } else { Fault::Overflow }))
+            }
+        };
         let va = get(&self.a);
         match (&self.b, self.op) {
             (Some(b), Some(op)) => {
                 let vb = get(b);
                 match (va.as_f64(), vb.as_f64(), op) {
-                    (Some(x), Some(y), '+') => (Value::Float(x + y), None),
-                    (Some(x), Some(y), '-') => (Value::Float(x - y), None),
-                    (Some(x), Some(y), '*') => (Value::Float(x * y), None),
+                    (Some(x), Some(y), '+') => number(x + y),
+                    (Some(x), Some(y), '-') => number(x - y),
+                    (Some(x), Some(y), '*') => number(x * y),
                     (Some(_), Some(0.0), '/') => (Value::Null, Some(Fault::DivisionByZero)),
-                    (Some(x), Some(y), '/') => (Value::Float(x / y), None),
+                    (Some(x), Some(y), '/') => number(x / y),
                     // A stored NaN or infinity isn't text to join.
                     (_, _, '+') if !va.is_null() && !vb.is_null() && !va.is_non_finite() && !vb.is_non_finite() => {
                         (Value::Text(format!("{va}{vb}")), None)
                     }
                     _ if va.is_null() || vb.is_null() => (Value::Null, None),
+                    // `+` joins text; what it couldn't join is a stored NaN or infinity.
+                    (_, _, '+') => (Value::Null, Some(Fault::NotANumber)),
                     _ => (Value::Null, Some(Fault::of_non_number(&va).or(Fault::of_non_number(&vb)).unwrap_or(Fault::NotANumber))),
                 }
             }
@@ -1656,6 +1666,12 @@ mod tests {
         ds.push(None, vec![Value::Float(f64::INFINITY)]);
         let calc = Calc::parse("Pop Est + 1", &ds).unwrap();
         assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
+        // Nor stores one it overflows to: it is null, too large.
+        ds.push(None, vec![Value::Float(1e308)]);
+        let calc = Calc::parse("'pop ' + Pop Est", &ds).unwrap();
+        assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
+        let calc = Calc::parse("Pop Est * 10", &ds).unwrap();
+        assert_eq!(calc.eval_or_fault(&ds, 1), (Value::Null, Some(rustgis_data::query::Fault::Overflow)));
     }
 
     /// Calculate Field never adds fields: layer and table callers get the same next step.

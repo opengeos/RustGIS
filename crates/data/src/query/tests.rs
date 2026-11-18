@@ -830,9 +830,9 @@ fn errors_say_why_they_are_null() {
     let mut odd = Dataset::new("odd", GeometryType::None, vec![Field::new("x", FieldType::Double)]);
     odd.push(None, vec![Value::Float(f64::INFINITY)]);
     odd.push(None, vec![Value::Float(f64::NAN)]);
-    for row in [0, 1] {
-        let e = parse("x + 1", &odd).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(value_or_fault(&e, &odd, row, &Env::default()), (Value::Null, Some(Fault::NotANumber)), "row {row}");
+    for (text, row) in [("x + 1", 0), ("x + 1", 1), ("'pop ' + x", 0)] {
+        let e = parse(text, &odd).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(value_or_fault(&e, &odd, row, &Env::default()), (Value::Null, Some(Fault::NotANumber)), "{text}, row {row}");
     }
     assert_eq!(why("sqrt(0)", 0), (Value::Float(0.0), None));
 }
