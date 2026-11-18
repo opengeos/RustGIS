@@ -1489,7 +1489,7 @@ impl Collector {
         let planned = max_bytes().saturating_mul(MEMORY_PER_BYTE);
         if table > planned {
             return Err(DataError::Format(format!(
-                "{name}: its attribute table would take {} MiB ({} features × {} fields), more than the {} MiB planned for a file read into memory; fewer fields, or the file split, would fit",
+                "{name}: its attribute table would take {} MiB ({} features × {} fields), more than the {} MiB planned for a file read into memory; a file with fewer fields, or split into parts, would fit",
                 table.div_ceil(1 << 20),
                 self.features.len(),
                 fields.len(),

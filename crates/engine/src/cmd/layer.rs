@@ -2011,8 +2011,21 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
         match rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name) {
             Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)), None),
-            // Not a FeatureCollection: read whole below.
-            Err(rustgis_data::DataError::Unsupported(_)) => {}
+            // Not a FeatureCollection: read whole below, on this thread (the UI thread in the
+            // desktop app, as only small GeoJSON files are read ahead), so within the size every
+            // computer reads, as before #2408, not the larger limit: the window isn't held longer.
+            Err(rustgis_data::DataError::Unsupported(_)) => {
+                let floor = rustgis_data::io::BYTES_FLOOR;
+                if let Ok(m) = std::fs::metadata(path)
+                    && m.len() > floor
+                {
+                    return Err(format!(
+                        "{path}: a GeoJSON document that isn't a FeatureCollection is read whole, so at most {} MiB; it is {} MiB",
+                        floor >> 20,
+                        m.len().div_ceil(1 << 20)
+                    ));
+                }
+            }
             Err(e) => return Err(format!("{path}: {e}")),
         }
     }
@@ -2311,7 +2324,9 @@ fn read_shapefile_with(path: &str, name: &str, crs: rustgis_data::raster::Crs) -
 
 /// `read`, the read of the file at `path`, with the record of what it read: the files hashed
 /// just before ([`rustgis_data::sync::FileSync::around`]) and the digest of the rows read. Its
-/// work grows with the file, so the desktop app makes it off the UI thread ([`add_data_ahead`]).
+/// work grows with the file, so the desktop app makes it off the UI thread ([`add_data_ahead`]),
+/// except for a large GeoJSON document that isn't a FeatureCollection, read whole on the calling
+/// thread and so kept within [`rustgis_data::io::BYTES_FLOOR`] (`add_data`).
 /// When the files couldn't be hashed the layer has no record, and a note says it can't be
 /// compared with its file later.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2670,7 +2685,7 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8], local_file: b
     }
     if over_budget > 0 {
         notes.push(format!(
-            "{over_budget} ground overlays left out: their pictures together are more than the {} MiB read into memory on this computer",
+            "{over_budget} ground overlays left out: their pictures don't fit beside the archive in the {} MiB read into memory on this computer",
             rustgis_data::io::max_bytes() >> 20
         ));
     }
