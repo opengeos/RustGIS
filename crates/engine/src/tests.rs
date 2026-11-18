@@ -1839,13 +1839,28 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
     // A task that sets one names it too (once), and one that only sizes doesn't.
     let mut project = s.project.clone();
     project.styles.clear();
-    let task = |params: Value| {
-        serde_json::from_value(json!({"name": "Icons", "steps": [{"title": "Icon", "command": "layer.marker", "params": params}]})).unwrap()
+    let step = |command: &str, params: Value| {
+        serde_json::from_value(json!({"name": "Icons", "steps": [{"title": "Icon", "command": command, "params": params}]})).unwrap()
     };
+    let task = |params: Value| step("layer.marker", params);
     project.tasks = vec![task(json!({"size": 9}))];
     assert!(serde_json::to_value(&project).unwrap().get("requires").is_none());
     project.tasks = vec![task(json!({"image": b64})), task(json!({"image": b64}))];
     assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(["picture-markers"]));
+    // A stroke's markers or a dot fill set to an image by a step too (#2266); shapes don't.
+    for (command, plain, image) in [
+        (
+            "layer.lineStrokes",
+            json!({"strokes": [{"markers": {"mark": "star"}}]}),
+            json!({"strokes": [{"width": 1}, {"markers": {"image": b64}}]}),
+        ),
+        ("layer.fillLayers", json!({"fills": [{"pattern": "dots"}]}), json!({"fills": [{"pattern": "dots", "image": b64}]})),
+    ] {
+        project.tasks = vec![step(command, plain)];
+        assert!(serde_json::to_value(&project).unwrap().get("requires").is_none(), "{command}");
+        project.tasks = vec![step(command, image)];
+        assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(["picture-markers"]), "{command}");
+    }
     let depth = s.undo_depth();
     for (bad, says) in [
         (json!({"layer": "Cities", "image": 7}), "PNG or JPEG image as base64"),
@@ -1862,6 +1877,87 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
     }
     assert_eq!(s.undo_depth(), depth);
     assert_eq!(marker(&s), Marker::Circle);
+}
+
+/// An image is a marker along a line, a mark at a point and a dot fill's marker, as it is a
+/// point's (#2266), kept the first time and found where it's kept when given again; a call refused
+/// for its layer, its class or what it names with the image keeps none.
+#[test]
+fn an_image_marks_a_line_a_point_and_a_dot_fill() {
+    use base64::Engine;
+    use rustgis_map::fills::FillPattern;
+    use rustgis_map::{LineMark, Marker, Picture};
+    let png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([rgb[0], rgb[1], rgb[2], 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    };
+    // Each command is first given an image nothing kept yet, then the same image again.
+    let (b64, dots) = (png([12, 34, 56]), png([65, 66, 67]));
+    assert_eq!((Picture::kept(&b64), Picture::kept(&dots)), (None, None));
+    let mut s = world();
+    let depth = s.undo_depth();
+    let mark_of = |s: &Session, layer: &str| s.map().layer_by_name(layer).unwrap().line_strokes[0].markers.map(|m| m.mark);
+    // Along a line, with or without "mark": "image"; at a point, as one of its marks.
+    for markers in [json!({"image": b64, "size": 12}), json!({"mark": "image", "image": b64})] {
+        s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1}, {"markers": markers}]})).unwrap();
+        let picture = Marker::Picture(Picture::kept(&b64).expect("kept by the command"));
+        assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes[1].markers.map(|m| m.mark), Some(LineMark::Marker(picture)));
+    }
+    let picture = Marker::Picture(Picture::new(&b64));
+    s.run("layer.lineStrokes", &json!({"layer": "Cities", "strokes": [{"markers": {"image": b64}}]})).unwrap();
+    assert_eq!(mark_of(&s, "Cities"), Some(LineMark::Marker(picture)));
+    // A dot fill's marker.
+    for fill in [json!({"pattern": "dots", "image": dots, "size": 6}), json!({"pattern": "dots", "marker": "image", "image": dots})] {
+        s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [fill]})).unwrap();
+        let picture = Marker::Picture(Picture::kept(&dots).expect("kept by the command"));
+        let f = s.map().layer_by_name("Countries").unwrap().fill_layers.clone();
+        assert!(matches!(f[0].pattern, FillPattern::Dots { marker, .. } if marker == picture), "{f:?}");
+    }
+    assert_eq!(s.undo_depth(), depth + 5);
+    // Refused, changing nothing; on the wrong layer, or named with something else, before the
+    // image is kept.
+    let unkept = png([201, 202, 203]);
+    let junk = "bm90IGFuIGltYWdl";
+    // Kept, as a file gives one, but not an image: refused where it's kept.
+    let _ = Picture::new("bm90IGFuIGltYWdlIGVpdGhlcg==");
+    let too_long = "A".repeat(rustgis_map::symbology::MAX_PICTURE_BYTES + 4);
+    for (layer, markers, says) in [
+        ("Rivers", json!({"image": 7}), "PNG or JPEG image as base64"),
+        ("Rivers", json!({"image": junk}), "PNG or JPEG image as base64"),
+        ("Rivers", json!({"image": "bm90IGFuIGltYWdlIGVpdGhlcg=="}), "PNG or JPEG image as base64"),
+        ("Rivers", json!({"image": too_long}), "at most 2 MiB"),
+        ("Rivers", json!({"mark": "image"}), "needs its image"),
+        ("Rivers", json!({"mark": "circle", "image": unkept}), "only one"),
+        ("Rivers", json!({"mark": "hash", "image": unkept}), "only one"),
+        ("Rivers", json!({"char": "x", "image": unkept}), "only one"),
+        ("Countries", json!({"image": unkept}), "line and point layers"),
+    ] {
+        let err = s.run("layer.lineStrokes", &json!({"layer": layer, "strokes": [{"markers": markers}]})).unwrap_err();
+        assert!(err.contains(says), "{err}");
+    }
+    for (layer, fill, says) in [
+        ("Countries", json!({"pattern": "dots", "image": 7}), "PNG or JPEG image as base64"),
+        ("Countries", json!({"pattern": "dots", "image": junk}), "PNG or JPEG image as base64"),
+        ("Countries", json!({"pattern": "dots", "image": too_long}), "at most 2 MiB"),
+        ("Countries", json!({"pattern": "dots", "marker": "image"}), "needs its image"),
+        ("Countries", json!({"pattern": "dots", "marker": "star", "image": unkept}), "only one"),
+        ("Countries", json!({"pattern": "dots", "char": "x", "image": unkept}), "only one"),
+        ("Rivers", json!({"pattern": "dots", "image": unkept}), "containing polygons"),
+        // Another pattern would drop it.
+        ("Countries", json!({"pattern": "hatch", "image": unkept}), "an image is a dots fill's marker"),
+        ("Countries", json!({"image": unkept}), "an image is a dots fill's marker"),
+    ] {
+        let err = s.run("layer.fillLayers", &json!({"layer": layer, "fills": [fill]})).unwrap_err();
+        assert!(err.contains(says), "{err}");
+    }
+    // A class the layer doesn't have, as the wrong layer.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 99, "strokes": [{"markers": {"image": unkept}}]})).unwrap_err();
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "index": 99, "fills": [{"pattern": "dots", "image": unkept}]})).unwrap_err();
+    assert_eq!(Picture::kept(&unkept), None, "none of these refused calls kept its image");
+    assert_eq!(s.undo_depth(), depth + 5);
 }
 
 #[test]
@@ -45112,6 +45208,53 @@ fn layer_invert_ramp_refuses_a_graphics_layer() {
     let id = s.map().layers.iter().find(|l| l.graphics).map(|l| l.id).unwrap();
     let err = s.run("layer.invertRamp", &json!({"layer": id})).unwrap_err();
     assert!(err.contains("graphics layer"), "{err}");
+}
+
+#[test]
+fn calculate_field_bulk_edit_keeps_validation_archive_and_undo() {
+    use rustgis_data::Value as V;
+    let mut s = Session::new(Project::default());
+    let points = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"n": 1, "legacy": 0}, "geometry": {"type": "Point", "coordinates": [0, 0]}},
+        {"type": "Feature", "properties": {"n": 2, "legacy": 0}, "geometry": {"type": "Point", "coordinates": [1, 0]}},
+        {"type": "Feature", "properties": {"n": 3, "legacy": 0}, "geometry": {"type": "Point", "coordinates": [2, 0]}}
+    ]});
+    s.run("layer.addDataText", &json!({"fileName": "calc.geojson", "text": points.to_string()})).unwrap();
+    s.run("edit.addField", &json!({"layer": "calc", "name": "extra", "type": "long"})).unwrap();
+    let ds = &s.map().layer_by_name("calc").unwrap().dataset;
+    assert!(ds.features.iter().all(|row| row.attrs.capacity() < 4));
+    s.run("data.domain", &json!({"layer": "calc", "field": "legacy", "min": 1, "max": 5, "force": true})).unwrap();
+    s.run("data.domain", &json!({"layer": "calc", "field": "n", "min": 0, "max": 4})).unwrap();
+    s.run("data.archive", &json!({"layer": "calc"})).unwrap();
+    s.run("select.rows", &json!({"layer": "calc", "rows": [2, 0]})).unwrap();
+    let params = |expr| json!({"layer": "calc", "field": "n", "expression": expr});
+    let values = |s: &Session| {
+        let ds = &s.map().layer_by_name("calc").unwrap().dataset;
+        let n = ds.field_index("n").unwrap();
+        [0, 1, 2].map(|r| ds.value(r, n).clone())
+    };
+    let before = values(&s);
+    assert!(s.run("edit.calculateField", &params("n + 2")).unwrap_err().contains("domain"));
+    assert_eq!(values(&s), before);
+    assert!(s.map().layer_by_name("calc").unwrap().design.archive.as_ref().unwrap().is_empty());
+    assert_eq!(s.run("edit.calculateField", &params("n + 1")).unwrap()["rows"], 2);
+    assert_eq!(values(&s), [V::Int(2), V::Int(2), V::Int(4)]);
+    let layer = s.map().layer_by_name("calc").unwrap();
+    let archive = layer.design.archive.as_ref().unwrap();
+    let n = layer.dataset.field_index("n").unwrap();
+    assert_eq!(archive.len(), 2);
+    assert_eq!(
+        archive
+            .iter()
+            .map(|entry| (entry.before.as_ref().unwrap().attrs[n].clone(), entry.after.as_ref().unwrap().attrs[n].clone()))
+            .collect::<Vec<_>>(),
+        [(V::Int(1), V::Int(2)), (V::Int(3), V::Int(4))]
+    );
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(values(&s), before);
+    assert!(s.map().layer_by_name("calc").unwrap().design.archive.as_ref().unwrap().is_empty());
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(values(&s), [V::Int(2), V::Int(2), V::Int(4)]);
 }
 
 /// Calculate Field keeps a decimal result as it is in a decimal field, rather than rounding it to
