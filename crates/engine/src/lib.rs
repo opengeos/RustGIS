@@ -2269,7 +2269,8 @@ impl Session {
             }
         }
         // A grid that arrived can bring up the next ones the systems in use need.
-        if news.iter().any(|n| matches!(n, crate::grids::News::Got { .. })) {
+        // (Missed news may have held one: asking again is harmless, downloads aren't repeated.)
+        if news.iter().any(|n| matches!(n, crate::grids::News::Got { .. } | crate::grids::News::Missed(_))) {
             self.want_grids_in_use();
         }
         let grids = rustgis_data::raster::crs::grid_generation();
@@ -2687,7 +2688,8 @@ impl Session {
                     ("more", (failed - shown.len()).to_string().into()),
                 ],
             );
-            self.notify_text(text, true);
+            // As the note of a missing grid: it goes on as it was, places may be off.
+            self.notify_text(text, false);
         }
         if rustgis_data::raster::crs::take_unnamed_grid_need() {
             self.notify(
