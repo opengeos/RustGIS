@@ -103,8 +103,9 @@ ones from, with the coordinate system (such as `EPSG:2263`) and the separator (c
 the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
 (columns named like longitude/latitude, including GTFS `stop_lon`/`stop_lat`, easting/northing or
 geometry, and EWKT's `SRID=`). With no projected coordinate system or explicit column choices,
-a specific longitude/latitude pair is preferred over generic X/Y when it gives in-range,
-non-0,0 positions on at least as many rows as the first pair gives finite positions.
+RustGIS compares complete longitude/latitude and X/Y pairs regardless of column order.
+X/Y includes planar aliases such as easting/northing. Longitude/latitude wins if it gives in-range,
+non-0,0 positions on at least as many rows as X/Y gives finite positions. Otherwise X/Y wins.
 That pair is used for the whole file. Automatic detection keeps X/Y and longitude/latitude
 separate. If it finds coordinate-like names but no complete pair or WKT column, the file opens
 as a table and the notice names the candidates so you can choose x and y.

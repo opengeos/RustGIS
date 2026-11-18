@@ -1675,10 +1675,10 @@ pub fn sniff_delimiter(text: &str) -> u8 {
     seps.get(pick).copied().unwrap_or(b',')
 }
 
-/// Only complete pairs compete: X/Y and longitude/latitude in header order, then planar aliases.
-fn found_xy(headers: &[String]) -> Option<(usize, usize)> {
+/// Finds a complete X/Y pair, falling back to planar aliases.
+fn found_non_geographic_xy(headers: &[String]) -> Option<(usize, usize)> {
     let find = |name: &str| headers.iter().position(|h| h.trim().eq_ignore_ascii_case(name));
-    find("x").zip(find("y")).into_iter().chain(found_geographic_xy(headers)).min_by_key(|&(x, _)| x).or_else(|| found_planar_xy(headers))
+    find("x").zip(find("y")).or_else(|| found_planar_xy(headers))
 }
 
 /// A projected system prefers explicitly planar names over longitude/latitude, regardless of
@@ -1726,16 +1726,12 @@ fn unmatched_coordinates_note(headers: &[String]) -> Option<String> {
     })
 }
 
-/// Prefers a specific longitude/latitude pair when it has at least as many usable, nonzero
-/// degree positions as the first
-/// pair has finite positions. The choice covers the whole file;
-/// explicit columns and projected systems bypass this inference.
+/// Compares complete pairs regardless of header order. Longitude/latitude wins when it has
+/// at least as many in-range, non-0,0 positions as the X/Y or planar pair has finite positions.
+/// Explicit columns and projected systems bypass this inference.
 fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(usize, usize)>> {
-    let Some(xy) = found_xy(headers) else { return Ok(None) };
+    let Some(xy) = found_non_geographic_xy(headers) else { return Ok(found_geographic_xy(headers)) };
     let Some(geographic) = found_geographic_xy(headers) else { return Ok(Some(xy)) };
-    if xy == geographic {
-        return Ok(Some(xy));
-    }
     let degrees = |p: Coord| p.x.abs() <= 180.0 && p.y.abs() <= 90.0;
     let (mut positions, mut usable) = (0usize, 0usize);
     for row in rows {
@@ -1746,8 +1742,7 @@ fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(
             let p = Coord::new(x, y);
             p.is_finite().then_some(p)
         };
-        let first = point(xy);
-        positions += usize::from(first.is_some());
+        positions += usize::from(point(xy).is_some());
         usable += usize::from(point(geographic).is_some_and(|p| degrees(p) && (p.x != 0.0 || p.y != 0.0)));
     }
     Ok(Some(if usable >= positions { geographic } else { xy }))
@@ -3818,7 +3813,7 @@ impl CsvLosses {
             return None;
         }
         let header: Vec<String> = csv_coordinate_names(fields).into_iter().chain(fields.iter().map(|f| f.name.clone())).collect();
-        let found = found_geographic_xy(&header).or_else(|| found_xy(&header));
+        let found = found_geographic_xy(&header).or_else(|| found_non_geographic_xy(&header));
         if found == Some((0, 1)) {
             return None;
         }
@@ -5522,7 +5517,7 @@ mod tests {
         }
     }
 
-    /// A geographic alternative must cover at least as many rows as the first pair can place.
+    /// A geographic alternative must cover at least as many rows as X/Y can place.
     #[test]
     fn csv_coordinate_coverage() {
         for (rows, geographic) in [
@@ -5543,6 +5538,20 @@ mod tests {
                 ds.features[0].geometry,
                 Some(Geometry::Point(if geographic { Coord::new(3.0, 4.0) } else { Coord::new(1000.0, 2000.0) }))
             );
+        }
+    }
+
+    /// A sparse geographic pair gives way to complete X/Y columns in either header order.
+    #[test]
+    fn csv_coordinate_coverage_is_independent_of_header_order() {
+        for text in ["Longitude,Latitude,X,Y\n3,4,10,20\n,6,11,21\n", "X,Y,Longitude,Latitude\n10,20,3,4\n11,21,,6\n"] {
+            let columns = csv_columns(text, None, None).unwrap();
+            assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("X"), Some("Y")), "{text}");
+            let (dataset, report) = read_csv(text, "coverage").unwrap();
+            let points: Vec<_> = dataset.features.into_iter().map(|feature| feature.geometry).collect();
+            assert_eq!(points, [Some(Geometry::Point(Coord::new(10.0, 20.0))), Some(Geometry::Point(Coord::new(11.0, 21.0)))], "{text}");
+            assert_eq!(report.skipped, 0);
+            assert!(report.messages.is_empty(), "{:?}", report.messages);
         }
     }
 
