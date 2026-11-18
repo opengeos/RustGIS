@@ -147,8 +147,23 @@ fn write_chunks_to(
 /// Writes a source in the explicitly chosen format (ignoring case), regardless of the destination's
 /// extension. Used by Data Interop, whose format parameter is independent of its path.
 pub fn write_source_as_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: Crs, format: &str) -> Result<Exported> {
+    write_source_as_filtered(src, layer, path, crs, format, None)
+}
+
+/// Writes in the explicitly chosen format, applying the layer's query before writing each chunk.
+pub fn write_source_as_filtered(
+    src: &dyn FeatureSource,
+    layer: &Dataset,
+    path: &Path,
+    crs: Crs,
+    format: &str,
+    definition_query: Option<&str>,
+) -> Result<Exported> {
     let format = format.to_ascii_lowercase();
-    write_chunks_as(src, layer, path, crs, &GpkgTable::default(), &format, (CHUNK_BYTES, None)).map(|(e, _)| e)
+    let (query, report) = export_query(definition_query, layer);
+    let (mut exported, _) = write_chunks_as(src, layer, path, crs, &GpkgTable::default(), &format, (CHUNK_BYTES, query.as_ref()))?;
+    exported.query.parse_error = report.parse_error;
+    Ok(exported)
 }
 
 /// Filters export rows in source order, preserving their positions for `@row_number`. A whole

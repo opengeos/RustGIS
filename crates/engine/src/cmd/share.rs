@@ -844,7 +844,7 @@ pub fn notify_export_query(s: &mut Session, path: &str, layer: &str, report: &ru
 }
 
 /// Retains a completed export's query notice even if a later command rolls back the session.
-fn notify_written_query(s: &mut Session, note: Option<crate::notice_text::NoticeText>) {
+pub(crate) fn notify_written_query(s: &mut Session, note: Option<crate::notice_text::NoticeText>) {
     if let Some(note) = note {
         let mark = s.notice_mark();
         s.notify_text(note, false);
@@ -853,7 +853,11 @@ fn notify_written_query(s: &mut Session, note: Option<crate::notice_text::Notice
 }
 
 /// The export's query notice, also included if delivery of a completed write is refused.
-fn query_export_note(path: &str, layer: &str, report: &rustgis_data::export::QueryReport) -> Option<crate::notice_text::NoticeText> {
+pub(crate) fn query_export_note(
+    path: &str,
+    layer: &str,
+    report: &rustgis_data::export::QueryReport,
+) -> Option<crate::notice_text::NoticeText> {
     use crate::notice_text::NoticeText;
     if let Some(error) = &report.parse_error {
         return Some(NoticeText::format(
