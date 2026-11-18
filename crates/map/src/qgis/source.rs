@@ -406,7 +406,18 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
             "subsetstring" => subset = Some(decode(v)).filter(|s| !s.trim().is_empty()),
             "layer" if named.len() < MAX_VIRTUAL_LAYERS => {
                 // provider:source[:name[:encoding]], each part encoded.
-                let mut parts = v.split(':').map(decode);
+                let mut parts: Vec<String> = v.split(':').map(decode).collect();
+                // A Windows drive's colon (`C:/maps/a.gpkg`) is part of the source, as QGIS reads it.
+                if parts.get(1).is_some_and(|d| d.len() == 1 && d.chars().all(|c| c.is_ascii_alphabetic()))
+                    && parts.get(2).is_some_and(|p| p.starts_with(['/', '\\']))
+                {
+                    let rest = parts.remove(2);
+                    if let Some(drive) = parts.get_mut(1) {
+                        drive.push(':');
+                        drive.push_str(&rest);
+                    }
+                }
+                let mut parts = parts.into_iter();
                 let (provider, source, name) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default(), parts.next());
                 // (A virtual layer on a virtual layer isn't read as a file's layer: said as such.)
                 let from = if provider == "virtual" {
@@ -1096,6 +1107,13 @@ mod tests {
         assert!(why.contains("isn't among its sources RustGIS looks through, the first 64 of the 65 it names"), "{why}");
         assert_eq!(cut_said("abcdef", 3), "abc…");
         assert_eq!(cut_said("abc", 3), "abc");
+        // A Windows path's drive colon is the source's, not a separator.
+        let Source::Virtual { from: Some(VirtualFrom::Source(src)), .. } =
+            read("virtual", "?layer=ogr:C:/maps/pts.geojson:pts&query=SELECT%20*%20FROM%20pts", dir)
+        else {
+            panic!()
+        };
+        assert!(matches!(&*src, Source::File { path, .. } if path == "C:/maps/pts.geojson"), "{src:?}");
         // A source with no name is `vtab1` (QGIS's name for it), and nothing else.
         let unnamed = |table: &str| {
             let Source::Virtual { from, .. } =

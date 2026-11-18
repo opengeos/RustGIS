@@ -2878,6 +2878,8 @@ fn qgis_sources_import_as_their_layers() {
         layer("ring b", "vector", "virtual", "?layer_ref=ring a:a&amp;query=SELECT%20*%20FROM%20a"),
         // A raster PMTiles archive: read as an archive, not as a tile address.
         layer("raster archive", "raster", "wms", "type=xyz&amp;url=.%2Fnone.pmtiles"),
+        // A network share's archive, by its Windows path.
+        layer("unc share", "vector-tile", "mbtilesvectortiles", "type=mbtiles&amp;url=%5C%5Cserver%5Cshare%5Ct.mbtiles"),
         // Two tile layers on the same tiles, of the name of a file layer added before them.
         layer("dup_1", "raster", "wms", "type=xyz&amp;url=https://dup.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>dup_1<", "<layername>dup<"),
         layer("dup_2", "raster", "wms", "type=xyz&amp;url=https://dup.invalid/%7Bz%7D/%7Bx%7D/%7By%7D.png").replace("<layername>dup_2<", "<layername>dup<"),
@@ -2961,6 +2963,7 @@ fn qgis_sources_import_as_their_layers() {
     let said = |layer: &str, text: &str| {
         out["notes"].as_array().unwrap().iter().any(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text))
     };
+    assert!(said("unc share", "the tile archive on a network share"), "{notes}");
     assert!(s.project.maps[mine].tiles.iter().any(|t| t.name == "mine"), "{notes}");
     assert!(said("zm", "its geometry's Z and M values: RustGIS keeps x and y"), "{notes}");
     assert!(said("zm", "its fields of a name an earlier field has (1)"), "{notes}");

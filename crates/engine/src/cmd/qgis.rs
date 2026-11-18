@@ -376,8 +376,11 @@ fn add_layer(
         Source::Archive { path, kind, vector, zoom: (zmin, zmax) } => {
             // RustGIS opens an MBTiles file on this computer, and an archive on a network share
             // by no address.
-            if path.starts_with("file://") || (*kind == "mbtiles" && path.contains("://")) {
-                let at = if path.starts_with("file://") { "on a network share" } else { "at a web address" };
+            // (A share's path, `\\server\share\…` or `//server/share/…`, is refused before the
+            // file is looked for: looking reaches the server.)
+            let share = path.starts_with("file://") || path.starts_with("\\\\") || path.starts_with("//");
+            if share || (*kind == "mbtiles" && path.contains("://")) {
+                let at = if share { "on a network share" } else { "at a web address" };
                 report.skipped(
                     name,
                     format!(
@@ -403,13 +406,14 @@ fn add_layer(
             // Without waiting for its metadata (it lands as the map draws), as Add Data adds a
             // local archive: an import of many archives doesn't hold the window a second for each.
             // (The import runs only in the user's own dispatch, which may read files and the web.)
-            let mut q = json!({"url": path, "name": name, "kind": kind, "overlay": true});
-            // The zoom levels QGIS limits it to.
-            if let Some(z) = zmin {
-                q["minZoom"] = json!(z);
-            }
-            if let Some(z) = zmax {
-                q["maxZoom"] = json!(z);
+            let q = json!({"url": path, "name": name, "kind": kind, "overlay": true});
+            // The zoom levels QGIS limits it to: an archive shows its own levels in RustGIS.
+            if zmin.is_some() || zmax.is_some() {
+                let level = |z: &Option<u8>| z.map_or("…".to_string(), |z| z.to_string());
+                report.approximated(
+                    name,
+                    format!("its zoom levels {}–{}: RustGIS shows a tile archive at the levels it has", level(zmin), level(zmax)),
+                );
             }
             // (As run_part would, a refused add leaves the map's tile layers as they were: it may
             // drop the same archive's layer before it finds the map full.)
