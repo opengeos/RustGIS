@@ -356,7 +356,7 @@ pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
 
 /// What [`coerce_cut`] took from a number to put it in a whole-number field, or from a date-time
 /// to put it in a date field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Cut {
     /// Nothing.
     None,
@@ -426,29 +426,46 @@ pub(crate) struct WriteLosses {
     unread: usize,
     /// Each kind of error met, in the order met: how many rows, and the first [`LISTED_ROWS`].
     errors: Vec<(rustgis_data::query::Fault, usize, Vec<usize>)>,
-    /// The rows counted, for an edit that may write a row more than once ([`once_per_row`]);
-    /// none where each row is written once (Calculate Field), so nothing grows with the rows.
+    /// Each row and kind of loss counted, for an edit that may write a row more than once
+    /// ([`once_per_row`]); none where each row is written once (Calculate Field), so nothing
+    /// grows with the rows.
     ///
     /// [`once_per_row`]: WriteLosses::once_per_row
-    counted: Option<std::collections::HashSet<usize>>,
+    counted: Option<std::collections::HashSet<(usize, Loss)>>,
+}
+
+/// A kind of loss [`WriteLosses`] counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Loss {
+    Cut(Cut),
+    Unread,
+    Error(rustgis_data::query::Fault),
 }
 
 impl WriteLosses {
-    /// A tally for an edit that may write the same row more than once, counting it once.
+    /// A tally for an edit that may write the same row more than once, counting each kind of
+    /// loss once per row: a later write that loses something else is still counted.
     pub(crate) fn once_per_row() -> WriteLosses {
         WriteLosses { counted: Some(Default::default()), ..Default::default() }
     }
 
+    /// Whether `row`'s `loss` is yet to be counted, marking it counted.
+    fn first(&mut self, row: usize, loss: Loss) -> bool {
+        self.counted.as_mut().is_none_or(|c| c.insert((row, loss)))
+    }
+
     /// Row `row`'s result and the error that made it null, if one did, as a `ty` field holds it,
-    /// counting what that lost the first time `row` is written.
+    /// counting what that lost.
     pub(crate) fn write(&mut self, row: usize, (v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Value {
         let asked_null = v.asks_null();
         let (v, cut) = coerce_cut(v, ty);
-        if self.counted.as_mut().is_some_and(|c| !c.insert(row)) {
-            return v;
+        if cut != Cut::None && self.first(row, Loss::Cut(cut)) {
+            self.cuts.add(cut);
         }
-        self.cuts.add(cut);
         if let Some(fault) = fault.filter(|_| v.is_null()) {
+            if !self.first(row, Loss::Error(fault)) {
+                return v;
+            }
             match self.errors.iter_mut().find(|(f, ..)| *f == fault) {
                 Some((_, n, rows)) => {
                     *n += 1;
@@ -458,8 +475,8 @@ impl WriteLosses {
                 }
                 None => self.errors.push((fault, 1, vec![row])),
             }
-        } else {
-            self.unread += usize::from(!asked_null && v.is_null() && cut == Cut::None);
+        } else if !asked_null && v.is_null() && cut == Cut::None && self.first(row, Loss::Unread) {
+            self.unread += 1;
         }
         v
     }
@@ -1692,7 +1709,9 @@ mod tests {
         // Nor stores one it overflows to: it is null, too large.
         ds.push(None, vec![Value::Float(1e308)]);
         // A row an edit writes twice is counted once.
+        // A later write's different loss is still counted.
         let mut losses = WriteLosses::once_per_row();
+        losses.write(4, (Value::Float(1.0), None), FieldType::Double);
         for row in [4, 4] {
             losses.write(row, (Value::Null, Some(rustgis_data::query::Fault::DivisionByZero)), FieldType::Double);
         }

@@ -134,7 +134,7 @@ pub enum Var {
 
 /// Why an expression's value is null although nothing it read was: the errors that give null
 /// rather than stop the expression ([`value_or_fault`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fault {
     /// `x / 0`, `x % 0`, `0 ^ -1`.
     DivisionByZero,
