@@ -305,7 +305,9 @@ fn read_transform(t: &Json) -> Option<([f64; 2], [f64; 2])> {
     Some(([s.first()?.as_f64()?, s.get(1)?.as_f64()?], [tr.first()?.as_f64()?, tr.get(1)?.as_f64()?]))
 }
 
-/// Reads a TopoJSON topology into a layer per object.
+/// Reads a TopoJSON topology into a layer per object. Cancel is looked at between arcs and
+/// objects; parsing the whole document first, and an object's features once rebuilt, are steps
+/// without a look.
 pub fn read(file_name: &str, text: &str) -> Result<Vec<(Dataset, ReadReport)>> {
     read_with(file_name, text, MAX_COORDS)
 }
@@ -331,8 +333,7 @@ fn read_with(file_name: &str, text: &str, budget: usize) -> Result<Vec<(Dataset,
     let mut total = 0usize;
     let (mut arcs, mut arcs_lost) = (Vec::new(), Vec::new());
     for a in v.get("arcs").and_then(Json::as_array).map(Vec::as_slice).unwrap_or_default() {
-        // Read ahead, off the UI thread, a large file can be cancelled between arcs and objects
-        // (the GeoJSON reader each object goes through looks too).
+        // Read ahead, off the UI thread: a large file can be cancelled between arcs and objects.
         crate::progress::check()?;
         // An arc that isn't an array of positions can't be read either.
         let Some(positions) = a.as_array() else {

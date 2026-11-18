@@ -375,8 +375,7 @@ fn blocks(bytes: &[u8]) -> Result<Osm> {
     let mut i = 0usize;
     let mut saw_header = false;
     while i < bytes.len() {
-        // Read ahead, off the UI thread, a large extract can be cancelled between blocks (about
-        // 8,000 elements each) and between the ways and relations built from them.
+        // Read ahead, off the UI thread: a large extract can be cancelled between blocks.
         crate::progress::check()?;
         let len =
             bytes.get(i..i + 4).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes).ok_or_else(|| bad("a block length"))? as usize;
@@ -503,7 +502,9 @@ fn inside(p: Coord, ring: &[Coord]) -> bool {
     c
 }
 
-/// Reads an OSM PBF file into its points, lines and multipolygons layers.
+/// Reads an OSM PBF file into its points, lines and multipolygons layers. Cancel is looked at
+/// between blocks and between the ways and relations built from them; decoding one block is one
+/// step without a look.
 pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
     let stem = std::path::Path::new(file_name).file_name().and_then(|s| s.to_str()).unwrap_or("osm");
     let stem = stem.trim_end_matches(".pbf").trim_end_matches(".osm").to_string();

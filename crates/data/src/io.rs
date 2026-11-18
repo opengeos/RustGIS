@@ -4509,6 +4509,10 @@ mod tests {
             assert_eq!(max_bytes_for(Some(16 * GIB)), 512 << 20);
             assert_eq!(max_bytes_for(Some(64 * GIB)), 2 * GIB);
             assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_CEILING, "never above the ceiling");
+        } else {
+            // A phone or a 32-bit build: the floor, whatever the memory.
+            assert_eq!(max_bytes_for(Some(16 * GIB)), BYTES_FLOOR);
+            assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_FLOOR);
         }
         // The test limit is the calling thread's, and comes back after it, nested too.
         let real = max_bytes();
