@@ -571,8 +571,6 @@ impl Projector {
         let proj = def.split_whitespace().find_map(|t| t.strip_prefix("+proj=")).unwrap_or("");
         // Computed as rustgis-data computes the same definition, so data in the system lands
         // where the map puts it.
-        // Noted as used, so a background export of a map drawn in it says its missing grid.
-        rustgis_data::raster::crs::note_used(&def, || label.to_string());
         // An EPSG code by the same transformer as data in it (terrio-crs's catalog, with the datum
         // transformation PROJ 9.9.0 picks), so a layer in the map's own system lands where its
         // coordinates say; it also asks whether the code needs a datum grid RustGIS doesn't have
@@ -589,6 +587,10 @@ impl Projector {
             .and_then(|n| n.parse::<u32>().ok())
             .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def.as_str()))
             .and_then(rustgis_data::raster::crs::esri_wkt);
+        // Noted as used, so a background export of a map drawn in it says its missing grid: under
+        // the key its transformer is kept by (an ESRI code's WKT, `transformer_of_wkt`).
+        let key = esri.map_or_else(|| def.clone(), |wkt| format!("WKT {wkt}"));
+        rustgis_data::raster::crs::note_used(&key, || label.to_string());
         let t = match (epsg, esri) {
             // Without the code its error already starts with.
             (Some(c), _) => rustgis_data::raster::Crs::Epsg(c)

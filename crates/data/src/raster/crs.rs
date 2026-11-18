@@ -66,7 +66,9 @@ fn with_shift(def: String, geog: Option<u32>) -> String {
     let towgs84 = format!("+towgs84={}", shift.iter().map(f64::to_string).collect::<Vec<_>>().join(","));
     // Where GDAL writes it: after the ellipsoid, before the units.
     match def.find(" +units=").or_else(|| def.find(" +no_defs")) {
-        Some(at) => format!("{} {towgs84}{}", &def[..at], &def[at..]),
+        Some(at) => {
+            def.get(..at).zip(def.get(at..)).map_or_else(|| format!("{def} {towgs84}"), |(head, tail)| format!("{head} {towgs84}{tail}"))
+        }
         None => format!("{def} {towgs84}"),
     }
 }
@@ -2114,7 +2116,9 @@ impl Transformer {
                 // coordinates from there, not `out`: WGS 84 onto that datum may go by another
                 // transformation than the system's own (ESRI:31491 in the North Sea, outside the
                 // DHDN Helmert's area, where the system's is a ballpark), and the projection
-                // alone is what may fold.
+                // alone is what may fold. `out` itself isn't checked: it is the same projection
+                // of a place a datum shift away, so only a strip that wide along a fold (metres,
+                // or hundreds of metres for a ballpark) could be judged differently.
                 Some((onto, unproject, project)) => onto.transform(c.x, c.y).ok().and_then(|(x, y)| {
                     let (px, py) = project.transform(x, y).ok()?;
                     Some((Coord::new(x, y), t.unproject(unproject, project, Coord::new(px, py))?))

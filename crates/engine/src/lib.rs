@@ -2632,7 +2632,17 @@ impl Session {
                 }
             }
         }
-        used.extend(codes.into_iter().filter_map(|code| rustgis_map::projection::lookup(code).ok()));
+        // A map's projection under the key its transformer is kept by: an ESRI code's catalog WKT
+        // (as `Projector::new` builds it), else its PROJ definition.
+        used.extend(codes.into_iter().filter_map(|code| {
+            let (def, label) = rustgis_map::projection::lookup(code).ok()?;
+            let esri = label
+                .strip_prefix("ESRI:")
+                .and_then(|n| n.parse::<u32>().ok())
+                .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def.as_str()))
+                .and_then(rustgis_data::raster::crs::esri_wkt);
+            Some((esri.map_or(def, |wkt| format!("WKT {wkt}")), label))
+        }));
         used.extend(systems.into_iter().filter_map(definition_and_label));
         // By definition: two typed systems share a label ("Custom PROJ").
         let mut found: Vec<(String, String)> = Vec::new();
