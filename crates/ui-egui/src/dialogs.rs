@@ -1040,19 +1040,17 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             };
             let before = v.clone();
             let selected = if v.is_empty() { tl!("None").to_string() } else { v.clone() };
-            egui::ComboBox::from_id_salt(("csv_column", i))
-                .selected_text(selected)
-                .width(240.0)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(v, String::new(), tl!("None"));
-                    for c in &columns {
-                        ui.selectable_value(v, c.clone(), c.as_str());
-                    }
-                })
-                .response
-                .labelled_by(input_label.id);
+            let menu = egui::ComboBox::from_id_salt(("csv_column", i)).selected_text(selected).width(240.0).show_ui(ui, |ui| {
+                let mut picked = ui.selectable_value(v, String::new(), tl!("None")).clicked();
+                for c in &columns {
+                    picked |= ui.selectable_value(v, c.clone(), c.as_str()).clicked();
+                }
+                picked
+            });
+            menu.response.labelled_by(input_label.id);
+            // Selecting the suggested name also pins it as an explicit choice.
+            d.csv_picked |= menu.inner.unwrap_or(false);
             // x/y columns or a WKT column, not both.
-            d.csv_picked |= *v != before;
             if *v != before && !v.is_empty() {
                 if i == 2 {
                     (d.a, d.b) = (String::new(), String::new());
@@ -3156,22 +3154,31 @@ mod tests {
 
     /// The dialog previews the first thousand rows and only submits explicit column picks.
     #[test]
-    fn untouched_delimited_suggestions_leave_whole_file_inference_active() {
+    fn delimited_suggestions_use_whole_file_inference_until_picked() {
+        use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         let mut csv = String::from("Longitude,Latitude,X,Y\n");
         csv.push_str(&"-93,44,20,40\n".repeat(1_000));
         csv.push_str(",,21,41\n");
-        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
-        open_csv(&mut app, "points.csv", CsvSource::Bytes(csv.into_bytes())).unwrap();
-        let mut h = app_harness(app);
-        h.run_steps(3);
-        assert_eq!((&*h.state().dialogs.a, &*h.state().dialogs.b), ("Longitude", "Latitude"));
-        h.get_by_label("Add").click();
-        h.run_steps(3);
-        assert!(h.state().dialogs.error.is_none(), "{:?}", h.state().dialogs.error);
-        let features = &h.state().session.map().layers.last().unwrap().dataset.features;
-        assert_eq!(features.len(), 1_001);
-        assert!(features.last().unwrap().geometry.is_some());
+        for explicit in [false, true] {
+            let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+            open_csv(&mut app, "points.csv", CsvSource::Bytes(csv.as_bytes().to_vec())).unwrap();
+            let mut h = app_harness(app);
+            h.run_steps(3);
+            assert_eq!((&*h.state().dialogs.a, &*h.state().dialogs.b), ("Longitude", "Latitude"));
+            if explicit {
+                h.get_by_role_and_label(Role::ComboBox, "X column").click();
+                h.run_steps(2);
+                h.get_by_role_and_label(Role::Button, "Longitude").click();
+                h.run_steps(2);
+            }
+            h.get_by_label("Add").click();
+            h.run_steps(3);
+            assert!(h.state().dialogs.error.is_none(), "{:?}", h.state().dialogs.error);
+            let features = &h.state().session.map().layers.last().unwrap().dataset.features;
+            assert_eq!(features.len(), 1_001);
+            assert_eq!(features.last().unwrap().geometry.is_some(), !explicit);
+        }
     }
 
     /// The map stamp Add From Service checks: the UI changes the map through `map_mut` and
