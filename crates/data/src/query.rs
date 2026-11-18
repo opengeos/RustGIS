@@ -170,10 +170,11 @@ impl Fault {
         }
     }
 
-    /// The fault of using `v` as a number, when it isn't null and doesn't read as one.
+    /// The fault of using `v` as a number, when it isn't missing and doesn't read as one. Empty
+    /// or `<null>` text is missing, as a write reads it ([`Value::asks_null`]), not an error.
     pub fn of_non_number(v: &Value) -> Option<Fault> {
         match v {
-            Value::Null => None,
+            _ if v.asks_null() => None,
             _ if v.as_f64().is_some() => None,
             Value::Text(_) => Some(Fault::Text),
             Value::Date(_) | Value::DateTime(_) => Some(Fault::Date),
@@ -1619,7 +1620,8 @@ fn arith(op: Arith, a: &Value, b: &Value) -> Result<Value, Fault> {
             }
             return Ok(text(format!("{a}{b}")));
         }
-        return Err(Fault::of_non_number(a).or(Fault::of_non_number(b)).unwrap_or(Fault::NotANumber));
+        // Neither is at fault when the one that isn't a number is missing (empty text).
+        return Fault::of_non_number(a).or(Fault::of_non_number(b)).map_or(Ok(Value::Null), Err);
     };
     if let (Value::Int(i), Value::Int(j)) = (a, b) {
         let exact = match op {

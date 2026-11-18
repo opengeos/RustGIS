@@ -426,14 +426,19 @@ pub(crate) struct WriteLosses {
     unread: usize,
     /// Each kind of error met, in the order met: how many rows, and the first [`LISTED_ROWS`].
     errors: Vec<(rustgis_data::query::Fault, usize, Vec<usize>)>,
+    /// The rows counted: an edit may write a row more than once, and it is counted once.
+    counted: std::collections::HashSet<usize>,
 }
 
 impl WriteLosses {
     /// Row `row`'s result and the error that made it null, if one did, as a `ty` field holds it,
-    /// counting what that lost.
+    /// counting what that lost the first time `row` is written.
     pub(crate) fn write(&mut self, row: usize, (v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Value {
         let asked_null = v.asks_null();
         let (v, cut) = coerce_cut(v, ty);
+        if !self.counted.insert(row) {
+            return v;
+        }
         self.cuts.add(cut);
         if let Some(fault) = fault.filter(|_| v.is_null()) {
             match self.errors.iter_mut().find(|(f, ..)| *f == fault) {
@@ -1604,7 +1609,7 @@ impl Calc {
                     _ if va.is_null() || vb.is_null() => (Value::Null, None),
                     // `+` joins text; what it couldn't join is a stored NaN or infinity.
                     (_, _, '+') => (Value::Null, Some(Fault::NotANumber)),
-                    _ => (Value::Null, Some(Fault::of_non_number(&va).or(Fault::of_non_number(&vb)).unwrap_or(Fault::NotANumber))),
+                    _ => (Value::Null, Fault::of_non_number(&va).or(Fault::of_non_number(&vb))),
                 }
             }
             _ => (va, None),
@@ -1678,6 +1683,12 @@ mod tests {
         assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
         // Nor stores one it overflows to: it is null, too large.
         ds.push(None, vec![Value::Float(1e308)]);
+        // A row an edit writes twice is counted once.
+        let mut losses = WriteLosses::default();
+        for row in [4, 4] {
+            losses.write(row, (Value::Null, Some(rustgis_data::query::Fault::DivisionByZero)), FieldType::Double);
+        }
+        assert_eq!(losses.notices("Rule", "n", FieldType::Double), ["Rule: 'n' is null in 1 row because of a division by zero (row 5)"]);
         let calc = Calc::parse("'pop ' + Pop Est", &ds).unwrap();
         assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
         let calc = Calc::parse("Pop Est * 10", &ds).unwrap();

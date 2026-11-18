@@ -820,6 +820,9 @@ fn errors_say_why_they_are_null() {
         ("if((1 / 0 IS NULL) AND NULL, 1)", 0),
         ("CASE 1 / 0 WHEN 1 THEN 2 ELSE NULL END", 0),
         ("nullif(NULL, 1 / 0)", 0),
+        // Empty or `<null>` text is missing, not text that isn't a number.
+        ("'' * 2", 0),
+        ("sqrt('<null>')", 0),
     ] {
         assert_eq!(why(text, row), (Value::Null, None), "{text}");
     }
