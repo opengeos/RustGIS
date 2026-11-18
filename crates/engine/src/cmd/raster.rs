@@ -723,7 +723,11 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
     add_named_bytes(s, p, name, bytes, b(p, "zoom"))
 }
 
-/// Adds a file's contents (an upload, a download) as its name's extension says.
+/// Adds a file's contents (an upload, a download) as its name's extension says. A PDF's page is
+/// drawn here, on the caller's thread, unless it was drawn already ([`add_named_bytes_read`]): the
+/// desktop app's downloads land with theirs drawn off the frame ([`download_page`]) and its file
+/// drops are read by path on the read queue, so a caller here is the command line, Python or a
+/// script, with no window to hold.
 pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: Vec<u8>, zoom: Option<bool>) -> CmdResult {
     add_named_bytes_read(s, p, name, bytes, zoom, None)
 }

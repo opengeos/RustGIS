@@ -194,8 +194,11 @@ fn pairs(a: &Array, what: &str) -> std::result::Result<Vec<(f64, f64)>, String> 
 
 /// One GeoPDF viewport, or why it can't be used.
 fn viewport(vp: &Dict<'_>, measure: &Dict<'_>) -> std::result::Result<Viewport, String> {
-    let bbox: Vec<f64> = vp.get::<Array>(b"BBox".as_slice()).map(|a| a.iter::<f64>().collect()).unwrap_or_default();
-    let bbox: [f64; 4] = bbox.try_into().map_err(|_| "its rectangle isn't four numbers".to_string())?;
+    // Every entry a number, so one that isn't can't shift the corners.
+    let bbox = vp.get::<Array>(b"BBox".as_slice());
+    let numbers: Vec<f64> = bbox.as_ref().map(|a| a.iter::<f64>().collect()).unwrap_or_default();
+    let entries = bbox.as_ref().map_or(0, |a| a.raw_iter().count());
+    let bbox: [f64; 4] = numbers.try_into().ok().filter(|_| entries == 4).ok_or_else(|| "its rectangle isn't four numbers".to_string())?;
     let gpts = measure.get::<Array>(b"GPTS".as_slice()).map(|a| pairs(&a, "control points (/GPTS)")).transpose()?.unwrap_or_default();
     // Where the points lie in the rectangle.
     let lpts = measure
@@ -483,6 +486,10 @@ mod tests {
         assert!(r.georeferenced, "{:?}", r.lost);
         assert!(r.lost.iter().any(|t| t.contains("placed by the largest that can be used")), "{:?}", r.lost);
         assert!(r.lost.iter().any(|t| t.starts_with("1 of its map frames have coordinates that can't be used")), "{:?}", r.lost);
+        // A rectangle with a fifth entry: not read as four corners, and said.
+        let five = geo(wgs84).replace("/BBox [0 0 72 36]", "/BBox [0 0 72 36 /extra]");
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &five), None, true).unwrap();
+        assert!(!r.georeferenced && r.lost[0].contains("isn't four numbers"), "{:?}", r.lost);
         // A control point that isn't a number: no placing by pairs out of step, and said.
         let bad = geo(wgs84).replace("/GPTS [41 10 41 12", "/GPTS [41 /Ten 41 12");
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &bad), None, true).unwrap();

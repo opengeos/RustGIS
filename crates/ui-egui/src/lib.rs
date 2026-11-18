@@ -5424,6 +5424,10 @@ impl RustGisApp {
                     q[k] = v.clone();
                 }
             }
+            // A PDF's page may be given as a number too (#2336).
+            if let Some(n) = p.get("layer").filter(|v| v.is_u64()) {
+                q["layer"] = n.clone();
+            }
             // How the bytes are read, as `layer.addData` takes it (a command asking by
             // address, such as a plugin's: the dialog gives none of these).
             for k in ["x", "y", "wkt", "delimiter", "paperSpace", "blocks", "stream", "as"] {
@@ -5632,7 +5636,10 @@ impl RustGisApp {
             // Those waiting take the places freed, oldest first.
             while !self.ui.page_queue.is_empty() && self.ui.page_reads.len() + self.ui.window_reads.len() < MAX_WINDOW_READS {
                 let (landed, bytes, page) = self.ui.page_queue.remove(0);
-                self.draw_page(landed, bytes, page);
+                // Not started (no thread to be had): it waits at the front for a later frame.
+                if !self.draw_page(landed, bytes, page) {
+                    break;
+                }
             }
         }
         // Windows read on threads, added as a download is.
@@ -5831,18 +5838,20 @@ impl RustGisApp {
     /// Draws a downloaded PDF's page on a thread ([`rustgis_engine::cmd::raster::read_download_page`]),
     /// to be added with its bytes once drawn ([`UiState::page_reads`]). `page`: its file name, page
     /// and whether it is placed ([`download_page`]). Drawn one at a time with the windows' reads;
-    /// past [`MAX_WINDOW_READS`] under way, it waits in [`UiState::page_queue`]. Where the OS gives
-    /// no thread, it is drawn here instead (slower, but the download isn't lost). Cancel takes it
+    /// past [`MAX_WINDOW_READS`] under way, or where the OS gives no thread, it waits in
+    /// [`UiState::page_queue`] for a later frame (never drawn on the frame, and the download isn't
+    /// lost). Whether it started now. Cancel takes it
     /// off the list and gives up its turn; a drawing under way (one step the renderer can't stop)
     /// finishes, its page dropped.
     ///
     /// [`download_page`]: rustgis_engine::cmd::raster::download_page
     #[cfg(not(target_arch = "wasm32"))]
-    fn draw_page(&mut self, landed: serviceui::Landed, bytes: Vec<u8>, (name, page, place): (String, Option<String>, bool)) {
+    fn draw_page(&mut self, landed: serviceui::Landed, bytes: Vec<u8>, (name, page, place): (String, Option<String>, bool)) -> bool {
         if self.ui.page_reads.len() + self.ui.window_reads.len() >= MAX_WINDOW_READS {
             self.ui.page_queue.push((landed, bytes, (name, page, place)));
-            return;
+            return false;
         }
+        let asked = (name.clone(), page.clone(), place);
         let slot: PageRead = Slot::default();
         let land = slot.clone();
         let left = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5869,9 +5878,11 @@ impl RustGisApp {
             }
             Err(_) => {
                 let bytes = std::sync::Arc::try_unwrap(mine).unwrap_or_else(|shared| (*shared).clone());
-                self.add_landed(landed, bytes);
+                self.ui.page_queue.insert(0, (landed, bytes, asked));
+                return false;
             }
         }
+        true
     }
 
     /// Adds a download that landed (`layer.addDownload`), named in Recent after the connection it
@@ -7607,6 +7618,10 @@ mod record_tests {
         app.cancel_download(app.downloads_under_way()[0].id);
         app.poll_data_downloads();
         assert!(app.session.map().layer_by_name("Late sheet").is_none() && app.ui.page_reads.is_empty());
+        // A page asked for by number reaches the download as it was asked.
+        app.run("ui.addUrl", json!({"url": "https://cancel.invalid/paged.pdf", "layer": 2})).unwrap();
+        let asked = app.ui.downloads.last().map(|d| d.params.clone()).unwrap();
+        assert_eq!(asked["layer"], json!(2), "{asked}");
     }
 
     /// The next window is read only once the frame has taken the last: a frame that stalls holds
