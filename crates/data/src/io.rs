@@ -55,7 +55,11 @@ fn bytes_ceiling() -> u64 {
 /// where it follows the computer's memory, so a file refused here and opened elsewhere is
 /// understood.
 pub fn too_large(len: u64) -> String {
-    let max = max_bytes();
+    too_large_said(len, max_bytes())
+}
+
+/// [`too_large`] against the limit `max` taken when the read started.
+fn too_large_said(len: u64, max: u64) -> String {
     let follows = crate::memory::physical().is_some() && bytes_ceiling() > BYTES_FLOOR;
     let limit = if follows {
         format!("{} on this computer, a limit that follows its memory", size_said(max, false))
@@ -1476,7 +1480,23 @@ impl Collector {
     /// The dataset; `root` is the document's top level (for its `crs`, see [`declared_crs`]).
     fn finish(self, name: &str, root: &Map<String, Json>) -> Result<(Dataset, ReadReport)> {
         let mut report = ReadReport { skipped: self.skipped, ..ReadReport::default() };
-        let mut ds = Dataset::new(name, GeometryType::None, self.schema.fields());
+        let fields = self.schema.fields();
+        // Every feature gets a cell for every field, those it lacks too: many features with
+        // properties spread over many fields would take far more than the file. Refused when the
+        // table alone takes more than a file at the limit is planned to ([`MEMORY_PER_BYTE`]).
+        let cells = (self.features.len() as u64).saturating_mul(fields.len() as u64);
+        let table = cells.saturating_mul(std::mem::size_of::<Value>() as u64);
+        let planned = max_bytes().saturating_mul(MEMORY_PER_BYTE);
+        if table > planned {
+            return Err(DataError::Format(format!(
+                "{name}: its attribute table would take {} MiB ({} features × {} fields), more than the {} MiB planned for a file read into memory; open the file by its path to read it in place",
+                table.div_ceil(1 << 20),
+                self.features.len(),
+                fields.len(),
+                planned >> 20
+            )));
+        }
+        let mut ds = Dataset::new(name, GeometryType::None, fields);
         ds.features.reserve(self.features.len());
         if report.skipped > 0 {
             report.messages.push(format!("{} features had unreadable geometry", report.skipped));
@@ -1911,7 +1931,9 @@ impl<R: std::io::Read> std::io::Read for GzipText<R> {
         let size = buf.len().min(usize::try_from(self.left.saturating_add(1)).unwrap_or(usize::MAX));
         let n = self.decoder.read(buf.get_mut(..size).unwrap_or_default())?;
         if n as u64 > self.left {
-            return Err(std::io::Error::other(format!("expanded delimited text exceeds the {}-byte limit", self.limit)));
+            // At least this much expanded: what was read before and this read.
+            let expanded = (self.limit - self.left).saturating_add(n as u64);
+            return Err(std::io::Error::other(format!("expanded to more than the limit: {}", too_large_said(expanded, self.limit))));
         }
         self.left -= n as u64;
         Ok(n)
@@ -1994,8 +2016,15 @@ fn read_gzip_text_budget(
     }
     let result = read_csv_records(&mut rdr, name, opts, budget);
     crate::progress::check()?;
-    let (mut dataset, report) =
-        result.map_err(|e| DataError::Format(format!("{file_name}: {e}; if not UTF-8, decompress and add as .txt")))?;
+    // The encoding hint only where the text may not be UTF-8, not past the size limit.
+    let (mut dataset, report) = result.map_err(|e| {
+        let e = e.to_string();
+        if e.contains("expanded to more than the limit") {
+            DataError::Format(format!("{file_name}: {e}"))
+        } else {
+            DataError::Format(format!("{file_name}: {e}; if not UTF-8, decompress and add as .txt"))
+        }
+    })?;
     dataset.source = Some(file_name.to_string());
     Ok((dataset, report))
 }
@@ -2637,14 +2666,24 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
         let shp = parts.first().map(|(n, _)| n.clone()).unwrap_or_else(|| "layer.shp".into());
         let zip_name = format!("{}.zip", Path::new(&shp).file_stem().and_then(|s| s.to_str()).unwrap_or("layer"));
         let total = parts.iter().fold(0usize, |sum, (_, b)| sum.saturating_add(b.len()));
-        let too_large = || format!("{shp}: its data files hold {} MB in all; at most {} MB can be read together", total >> 20, limit >> 20);
+        // Said by the limit it passed: the size read into memory (which follows the computer's
+        // memory), or the most a zip expands to.
+        if total as u64 > max_bytes() {
+            problems.push(format!("{shp}: its data files together: {}", too_large(total as u64)));
+            continue;
+        }
         if total > limit {
-            problems.push(too_large());
+            problems.push(format!(
+                "{shp}: its data files hold {} MiB in all; at most {} MiB is expanded from a zip",
+                total.div_ceil(1 << 20),
+                limit >> 20
+            ));
             continue;
         }
         match crate::zip::write(&parts) {
             Ok(zip) if zip.len() as u64 <= max_bytes() => out.push((zip_name, zip)),
-            _ => problems.push(too_large()),
+            Ok(zip) => problems.push(format!("{shp}: zipped together: {}", too_large(zip.len() as u64))),
+            Err(e) => problems.push(format!("{shp}: its data files couldn't be zipped together: {e}")),
         }
     }
     (out, problems)
@@ -4398,6 +4437,19 @@ mod tests {
         let csv = b"x,y\n1,2\n";
         let e = with_max_bytes(4, || read_bytes("a.csv", csv)).unwrap_err().to_string();
         assert!(e.contains("file is too large (8 bytes;") && e.contains("is 4 bytes"), "{e}");
+        // The delimited reader's own guard, for callers that don't come through `read_bytes`.
+        let e = with_max_bytes(4, || read_delimited_bytes("a.csv", csv, &CsvOptions::default())).unwrap_err().to_string();
+        assert!(e.contains("file is too large (8 bytes;") && e.contains("is 4 bytes"), "{e}");
+        // Within the size, but forty features each with a field of its own: a table of 1,600
+        // cells, more than a file at the limit is planned to take.
+        let sparse: Vec<String> = (0..40).map(|i| format!(r#"{{"type":"Feature","properties":{{"f{i}":1}},"geometry":null}}"#)).collect();
+        let sparse = format!(r#"{{"type":"FeatureCollection","features":[{}]}}"#, sparse.join(","));
+        let cells = 1600 * std::mem::size_of::<Value>() as u64;
+        let max = (cells / MEMORY_PER_BYTE - 1).max(sparse.len() as u64);
+        assert!(max * MEMORY_PER_BYTE < cells, "the test's file is too large for its table");
+        let e = with_max_bytes(max, || read_bytes("a.geojson", sparse.as_bytes())).unwrap_err().to_string();
+        assert!(e.contains("attribute table would take") && e.contains("40 features × 40 fields"), "{e}");
+        assert!(with_max_bytes(cells, || read_bytes("a.geojson", sparse.as_bytes())).is_ok());
         let city = br#"<core:CityModel xmlns:core="http://www.opengis.net/citygml/2.0"></core:CityModel>"#;
         let e = with_max_bytes(8, || crate::citygml::read("a.gml", city, None)).unwrap_err().to_string();
         assert!(e.contains("file is too large"), "{e}");
@@ -6711,7 +6763,9 @@ mod tests {
         let (out, problems) = with_max_bytes(BYTES_FLOOR, || gather_shapefiles(big));
         assert_eq!(names(&out), ["rivers.zip"]);
         assert_eq!(problems.len(), 1);
-        assert!(problems[0].starts_with("huge.shp:") && problems[0].contains("MB"), "{problems:?}");
+        // Its size and the limit it passed, the size read into memory.
+        assert!(problems[0].starts_with("huge.shp: its data files together: file is too large (257 MiB;"), "{problems:?}");
+        assert!(problems[0].contains("the most read into memory is 256 MiB"), "{problems:?}");
     }
 
     /// A Shapefile's parts by the address of its `.shp` (#1238): beside it, in its case, the query

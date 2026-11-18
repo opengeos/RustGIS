@@ -53603,7 +53603,9 @@ fn files_read_whole_take_the_size_read_into_memory() {
         let mut s = Session::new(Project::default());
         for (command, params) in [("layer.addData", json!({"path": path})), ("info.fileLayers", json!({"path": path}))] {
             let e = rustgis_data::io::with_max_bytes(size - 1, || s.run(command, &params).unwrap_err());
-            assert!(e.contains("file is too large") && e.contains("the most read into memory is"), "{command} {path}: {e}");
+            // The file's size and the limit, both under a MiB so in bytes.
+            let said = format!("file is too large ({size} bytes; the most read into memory is {} bytes", size - 1);
+            assert!(e.contains(&said), "{command} {path}: {e}");
             assert!(rustgis_data::io::with_max_bytes(size, || s.run(command, &params)).is_ok(), "{command} {path}");
         }
     }

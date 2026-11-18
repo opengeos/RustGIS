@@ -126,6 +126,10 @@ pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<(Vec<(GroundOver
     let doc = crate::xml::parse(text.trim_start_matches('\u{feff}'), opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let mut out = Vec::new();
     let mut undrawn = 0usize;
+    // The pictures handed back are copies, one for each overlay naming one: together within the
+    // budget the archive was expanded within, so many overlays of one large picture aren't many
+    // copies of it. Past that an overlay is counted as not drawn.
+    let mut pictures_left = budget;
     let all = doc.descendants().filter(|n| n.is_element() && local(n) == "GroundOverlay").count();
     // Past the first 256, overlays are counted as not drawn.
     undrawn += all.saturating_sub(256);
@@ -151,13 +155,21 @@ pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<(Vec<(GroundOver
             continue;
         }
         // A KMZ's picture, by its path relative to the document.
-        let picture = is_kmz.then(|| {
+        let found = is_kmz.then(|| {
             let want = format!("{doc_dir}{}", href.trim_start_matches("./"));
             entries
                 .iter()
                 .find(|(n, _)| n.eq_ignore_ascii_case(&want) || n.eq_ignore_ascii_case(href.trim_start_matches("./")))
-                .map(|(_, b)| b.clone())
+                .map(|(_, b)| b)
         });
+        if let Some(Some(b)) = found {
+            let Some(left) = pictures_left.checked_sub(b.len()) else {
+                undrawn += 1;
+                continue;
+            };
+            pictures_left = left;
+        }
+        let picture = found.map(|b| b.cloned());
         let name = child_text(&g, "name").unwrap_or_else(|| "Ground overlay".into());
         out.push((GroundOverlay { name, href, bbox: [w, s, e, n], rotation }, picture.flatten()));
     }

@@ -196,8 +196,10 @@ mod native {
         /// the read, the record can only be older than what was read: a write while it ran, or
         /// after, leaves the file unlike the record, so it shows as changed and is never written
         /// over. That costs one more pass over the files than the read, about a second for every
-        /// 250 MB of them where SHA-256 runs at 250 MB/s: up to 16 for a part of the largest a reader
-        /// takes ([`crate::io::max_bytes`], 4 GiB at most). The callers run it off the UI thread. Errs,
+        /// 250 MB of them where SHA-256 runs at 250 MB/s: about 17 for a part of the largest a reader
+        /// takes ([`crate::io::max_bytes`], 4 GiB at most). Files read ahead run it off the UI thread; a
+        /// file read whole on the calling thread (a GeoJSON file that isn't a FeatureCollection,
+        /// read by `layer.addData`) hashes on it too, as it reads there. Errs,
         /// without reading, when the run is cancelled while the files are hashed.
         pub fn around<R>(path: &Path, read: impl FnOnce() -> R) -> Result<(R, Option<FileSync>)> {
             let before = match FileSync::read(path) {

@@ -308,7 +308,15 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize, spreads
         let data_at = add(&[local, 30, lnl, lxl]).ok_or_else(bad)?;
         let body = bytes.get(data_at..add(&[data_at, csize]).ok_or_else(bad)?).ok_or_else(bad)?;
         if usize_ > MAX_ENTRY || usize_ > budget {
-            return Err(Failure::Member(format!("{name} is too large")));
+            // Its expanded size, and the bound it passed: the archive's budget left (which follows
+            // the computer's memory where the caller's does) or the most one member may hold.
+            let bound = MAX_ENTRY.min(budget);
+            return Err(Failure::Member(format!(
+                "{name} is too large: it expands to {} MiB, past the {} MiB {}",
+                usize_.div_ceil(1 << 20),
+                bound >> 20,
+                if budget < MAX_ENTRY { "left to expand from this archive" } else { "a member may expand to" }
+            )));
         }
         // Inflate no more than the entry says it holds (and the archive's budget allows).
         let data = match method {

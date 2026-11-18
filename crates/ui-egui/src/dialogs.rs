@@ -1972,7 +1972,15 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         app.dialogs.c.clear();
         app.dialogs.info = None;
     }
-    if list {
+    // Only a GeoPackage is listed here, on the frame: its tables are listed in place, without
+    // reading their features. Another file (a KML, a zip) would be read whole to list it.
+    let gpkg = app.dialogs.a.trim().to_ascii_lowercase().ends_with(".gpkg");
+    if list && !gpkg {
+        app.dialogs.listed = None;
+        app.dialogs.list.clear();
+        app.dialogs.info = None;
+        app.dialogs.error = Some(tl!("List Tables lists a GeoPackage (.gpkg)").to_string());
+    } else if list {
         match app.run("info.fileLayers", json!({"path": app.dialogs.a})) {
             Ok(v) => {
                 app.dialogs.list = v["layers"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();

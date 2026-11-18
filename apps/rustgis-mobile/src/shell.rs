@@ -128,7 +128,7 @@ struct App<P: Phone> {
 enum Problem {
     /// The shortcut file `name` is over `SHORTCUT_FILE_MAX_BYTES`.
     ShortcutTooLarge { name: String },
-    /// The file `name` is over the size read into memory (`rustgis_data::io::max_bytes`), by
+    /// The file `name` is over the size a pick reads into memory ([`PICK_MAX_BYTES`]), by
     /// itself or `together` with the files picked with it and already read.
     TooLarge { name: String, together: bool },
     /// The copy of the file `name` couldn't be read.
@@ -214,7 +214,7 @@ impl<P: Phone> App<P> {
                     i18n::fmt("{name} wasn't opened: a shortcut file is at most {limit} bytes.", &[("name", &name), ("limit", &limit)])
                 }
                 Problem::TooLarge { name, together } => {
-                    let limit = (rustgis_engine::data::io::max_bytes() >> 20).to_string();
+                    let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {
                         "{name} wasn't opened: with the files picked with it, it is over {limit} MiB."
                     } else {
@@ -340,13 +340,19 @@ fn retire_unread(inbox: &Inbox, marks: Vec<String>) {
     inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(marks.into_iter().map(|mark| (mark, Vec::new())));
 }
 
+/// The most a pick reads into memory, in one file or the files picked together: fixed at the
+/// size every computer reads ([`rustgis_engine::data::io::BYTES_FLOOR`]), whatever the phone's
+/// memory. A phone reports all its memory, but an app may use much less of it before the system
+/// stops it, so the desktop's share of the memory isn't a phone's (#2408).
+const PICK_MAX_BYTES: u64 = rustgis_engine::data::io::BYTES_FLOOR;
+
 /// Reads one folder's files of a pick (name, copy) into `inbox`, marked for the dialog that
 /// asked, and removes the copies: their bytes are all that was wanted of them. `held` counts the
 /// bytes the pick has read so far, across its folders.
 fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems, held: &mut u64) {
     let mark = crate::mark(purpose);
     let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
-    let max = rustgis_engine::data::io::max_bytes();
+    let max = PICK_MAX_BYTES;
     let mut read = Vec::new();
     for (name, path) in files {
         let shortcut = mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
