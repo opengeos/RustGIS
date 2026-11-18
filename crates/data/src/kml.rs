@@ -130,9 +130,10 @@ pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<Overlays> {
     let mut out = Vec::new();
     let mut undrawn = 0usize;
     // The pictures handed back are copies, one for each overlay naming one: together within the
-    // budget the archive was expanded within, so many overlays of one large picture aren't many
-    // copies of it. Past that an overlay is left out, and counted.
-    let mut pictures_left = budget;
+    // budget the archive was expanded within, less the archive itself (held while they are
+    // copied), so many overlays of one large picture aren't many copies of it. Past that an
+    // overlay is left out, and counted.
+    let mut pictures_left = budget.saturating_sub(entries.iter().map(|(_, b)| b.len()).sum());
     let mut over_budget = 0usize;
     let all = doc.descendants().filter(|n| n.is_element() && local(n) == "GroundOverlay").count();
     // Past the first 256, overlays are counted as not drawn.
@@ -648,11 +649,10 @@ mod tests {
         let overlay = r#"<GroundOverlay><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>"#;
         let doc = format!(r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>{}</Document></kml>"#, overlay.repeat(5));
         let kmz = crate::zip::write(&[("doc.kml".to_string(), doc.clone().into_bytes()), ("p.png".to_string(), vec![7; 1000])]).unwrap();
-        // Room for the archive and two more copies of the picture.
-        let max = (doc.len() + 1000 + 1500) as u64;
+        // Room for the archive and two and a half copies of the picture: two are made.
+        let max = (doc.len() + 1000 + 2500) as u64;
         let (out, undrawn, over_budget) = crate::io::with_max_bytes(max, || ground_overlays("a.kmz", &kmz)).unwrap();
-        let copies = (max / 1000) as usize;
-        assert_eq!((out.len(), undrawn, over_budget), (copies, 0, 5 - copies));
+        assert_eq!((out.len(), undrawn, over_budget), (2, 0, 3));
         assert!(out.iter().all(|(_, p)| p.as_deref().is_some_and(|p| p.len() == 1000)));
         let (out, _, over_budget) = crate::io::with_max_bytes(1 << 20, || ground_overlays("a.kmz", &kmz)).unwrap();
         assert_eq!((out.len(), over_budget), (5, 0));

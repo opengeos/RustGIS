@@ -1933,7 +1933,11 @@ impl<R: std::io::Read> std::io::Read for GzipText<R> {
         if n as u64 > self.left {
             // At least this much expanded: what was read before and this read.
             let expanded = (self.limit - self.left).saturating_add(n as u64);
-            return Err(std::io::Error::other(format!("expanded to more than the limit: {}", too_large_said(expanded, self.limit))));
+            return Err(std::io::Error::other(format!(
+                "expanded to more than the limit, at least {}: {}",
+                size_said(expanded, true),
+                too_large_said(expanded, self.limit)
+            )));
         }
         self.left -= n as u64;
         Ok(n)
