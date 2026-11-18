@@ -902,12 +902,25 @@ fn gunzip(d: &[u8], want: usize) -> Result<Vec<u8>> {
     inflate(d.get(at..).ok_or_else(|| bad("a cut gzip header"))?, false, want)
 }
 
+/// Decodes within the chunk's existing byte limit without reserving its claimed length. The
+/// caller still checks for a short decoded chunk against the array metadata.
 fn unzstd(d: &[u8], want: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
     let dec = ruzstd::decoding::StreamingDecoder::new(d).map_err(|e| bad(format!("a zstd chunk: {e}")))?;
-    let mut out = Vec::with_capacity(want.min(64 << 20));
-    dec.take(want as u64 + 1).read_to_end(&mut out).map_err(|e| bad(format!("a zstd chunk: {e}")))?;
-    Ok(out)
+    super::decoded::read(dec, want, "a zstd chunk")
+}
+
+/// A short valid frame with a large expected chunk length must not reserve that length before
+/// the caller can report the mismatch. The coarse capacity bound catches the old 64 MiB reserve.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn a_short_zstd_frame_does_not_reserve_its_claimed_chunk_length() {
+    let raw = [0u8; 8];
+    let frame = zstd::encode_all(raw.as_slice(), 1).unwrap();
+    let bytes = unzstd(&frame, 64 << 20).unwrap();
+    assert_eq!(bytes, raw);
+    assert!(bytes.capacity() < 1 << 20, "reserved {} bytes for eight decoded bytes", bytes.capacity());
+    assert_eq!(unzstd(&frame, raw.len()).unwrap(), raw);
+    assert!(unzstd(&frame, raw.len() - 1).is_err());
 }
 
 /// The most bytes an LZ4 block can make from each byte of itself: a match's length grows by up to
