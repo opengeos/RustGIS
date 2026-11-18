@@ -571,8 +571,8 @@ For an index layer called **Tracts**, the command is:
 layer.symbolBy={"layer":"Tracts","strokeWidth":"if($id = @page_feature_id, 3, 0.6)","stroke":"if($id = @page_feature_id, '#174a7e', '#9ca3af')","fill":"if($id = @page_feature_id, '#8bbce8', '#e5e7eb')"}
 ```
 
-Use a style rather than a definition query: a definition query that uses a page variable leaves
-the layer empty in the map view, where the variables are null. Step through the pages to see the
+Use a style rather than a definition query: a definition query such as `$id = @page_feature_id`
+leaves the layer empty in the map view, where the variables are null. Step through the pages to see the
 style follow the index feature. The expression also works in a
 locator frame that shows the index layer. Feature IDs are local to each layer, so use the ID
 comparison on the index layer. Outside a series page the comparison never matches, and every

@@ -281,6 +281,10 @@ impl PartialOrd for Value {
         if let Some((a, b)) = self.temporal_keys(other) {
             return Some(a.cmp(&b));
         }
+        // Whole numbers order exactly: through f64, neighbours above 2^53 would tie.
+        if let (Value::Int(a), Value::Int(b)) = (self, other) {
+            return Some(a.cmp(b));
+        }
         match (self.as_f64(), other.as_f64()) {
             (Some(a), Some(b)) if !matches!(self, Value::Text(_)) || !matches!(other, Value::Text(_)) => a.partial_cmp(&b),
             _ => match (self, other) {

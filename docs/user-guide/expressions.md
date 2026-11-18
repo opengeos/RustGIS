@@ -94,8 +94,8 @@ operator: write `a < b AND b < c`, not `a < b < c`.
 
 The three page variables are available to symbols, labels, definition queries and display filters
 in every map frame on a series page. They are null outside a series page, including in the map
-view, tools and Calculate Field, so `$id = @page_feature_id` matches no feature there. A layer
-whose definition query uses a page variable therefore shows no features in the map view and the
+view, tools and Calculate Field, so `$id = @page_feature_id` matches no feature there. A definition
+query such as `$id = @page_feature_id` therefore hides every feature in the map view and the
 Layers pane; to mark a page's feature, style it with Symbols by Expression instead.
 
 An unknown field, variable or function is an error that names it.
