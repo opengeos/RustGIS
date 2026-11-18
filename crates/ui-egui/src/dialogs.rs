@@ -1994,13 +1994,18 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     let path = app.dialogs.a.trim().to_string();
     // Only a file of several layers is refused past the floor: it is read whole to list it. Others
     // are listed as before #2408 (a Shapefile or FlatGeobuf by name, a spreadsheet by its sheets).
+    // The browser has no file paths to measure; a file comes in there by upload, within its limit.
+    #[cfg(not(target_arch = "wasm32"))]
     let too_large = || {
         rustgis_engine::data::io::is_multi_layer_name(&path)
             && std::fs::metadata(&path).is_ok_and(|m| m.len() > rustgis_engine::data::io::BYTES_FLOOR)
     };
+    #[cfg(target_arch = "wasm32")]
+    let too_large = || false;
     if list && too_large() {
         app.dialogs.listed = None;
         app.dialogs.list.clear();
+        app.dialogs.c.clear();
         app.dialogs.info = None;
         app.dialogs.error = Some(crate::i18n::fmt(
             "List Tables reads a file of several layers (a KML, a zip) whole, up to {limit} MiB; add it with Add Data",

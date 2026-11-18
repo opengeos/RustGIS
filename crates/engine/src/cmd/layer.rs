@@ -2678,10 +2678,20 @@ fn add_reads(
 /// A KML or KMZ's ground overlays as rasters: pictures inside a KMZ, or files beside a KML on
 /// disk (by a relative path that stays in its folder). Overlays that can't be drawn are said.
 fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8], local_file: bool) -> Vec<(String, rustgis_data::raster::Raster)> {
-    let (found, undrawn, over_budget) = match rustgis_data::kml::ground_overlays(file_name, bytes) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+    match rustgis_data::kml::ground_overlays(file_name, bytes) {
+        Ok(overlays) => overlays_drawn(s, file_name, overlays, local_file),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The ground overlays of [`rustgis_data::kml::ground_overlays`] drawn, and those that can't be
+/// said in one notice.
+fn overlays_drawn(
+    s: &mut Session,
+    file_name: &str,
+    (found, undrawn, over_budget): rustgis_data::kml::Overlays,
+    local_file: bool,
+) -> Vec<(String, rustgis_data::raster::Raster)> {
     let mut out = Vec::new();
     let mut notes = Vec::new();
     let dir = local_file.then(|| Path::new(file_name).parent()).flatten().filter(|d| d.is_absolute());
@@ -6835,6 +6845,22 @@ pub(crate) fn external_dataset_selector(command: &str) -> bool {
 mod tests {
     use crate::Session;
     use serde_json::json;
+
+    /// Overlays left out for their pictures' size are said, with the budget; none, nothing said.
+    #[test]
+    fn overlays_left_out_for_their_pictures_are_said_and_none_otherwise() {
+        let mut s = Session::new(crate::Project::default());
+        let mark = s.notice_mark();
+        assert!(super::overlays_drawn(&mut s, "a.kmz", (Vec::new(), 0, 0), false).is_empty());
+        assert!(s.notices_since(mark).is_empty(), "nothing left out, nothing said");
+        let mark = s.notice_mark();
+        super::overlays_drawn(&mut s, "a.kmz", (Vec::new(), 0, 2), false);
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(
+            said,
+            ["a.kmz: 2 ground overlays left out: their pictures don't fit beside the archive in the 256 MiB a KMZ is expanded within"]
+        );
+    }
 
     /// Refuses a sparse KML before reading its bytes, with the same advice when listing its layers.
     #[test]

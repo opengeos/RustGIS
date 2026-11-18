@@ -4505,7 +4505,7 @@ mod tests {
         assert_eq!(max_bytes_for(None), BYTES_FLOOR);
         assert_eq!(max_bytes_for(Some(4 * GIB)), BYTES_FLOOR, "never below the floor");
         assert_eq!(max_bytes_for(Some(8 * GIB)), BYTES_FLOOR, "8 GiB plans for 2 GiB, 256 MiB of file");
-        if usize::BITS >= 64 {
+        if bytes_ceiling() > BYTES_FLOOR {
             assert_eq!(max_bytes_for(Some(16 * GIB)), 512 << 20);
             assert_eq!(max_bytes_for(Some(64 * GIB)), 2 * GIB);
             assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_CEILING, "never above the ceiling");

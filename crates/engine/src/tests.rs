@@ -53694,7 +53694,8 @@ fn a_city_models_volumes_come_in_extruded() {
 
 /// Files read as they are added, on the UI thread in the desktop app (a GeoJSON document that
 /// isn't a FeatureCollection, a KML), stay within 256 MiB whatever the memory (#2408), saying so.
-/// The KML is a sparse file; the GeoJSON is padded with spaces, which it may end in.
+/// The KML is a sparse file. The GeoJSON is padded with 256 MiB of spaces, which it may end in: a
+/// sparse file's NUL tail is a parse error before the size is looked at.
 #[test]
 fn files_read_on_the_calling_thread_stay_within_the_floor() {
     let dir = std::env::temp_dir().join(format!("rustgis-floor-{}", std::process::id()));

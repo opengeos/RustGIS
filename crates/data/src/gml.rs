@@ -502,6 +502,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     let mut over = 0usize;
     // Rings and parts left out of the geometries kept.
     for f in members {
+        // Read ahead, off the UI thread, a large file can be cancelled between features.
+        crate::progress::check()?;
         let name = local(&f).to_string();
         if !kinds.contains_key(&name) {
             if kinds.len() >= MAX_LAYERS {
@@ -1352,5 +1354,14 @@ mod tests {
         for cut in (0..WFS.len()).step_by(53) {
             let _ = read("x.gml", WFS.as_bytes().get(..cut).unwrap_or_default());
         }
+    }
+
+    /// Read ahead, off the UI thread, the read stops when it is cancelled.
+    #[test]
+    fn a_cancelled_read_stops() {
+        let probe = std::sync::Arc::new(crate::progress::tests::Counted::default());
+        probe.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _g = crate::progress::install(Some(probe));
+        assert!(matches!(read("a.gml", WFS.as_bytes()), Err(DataError::Cancelled)));
     }
 }
