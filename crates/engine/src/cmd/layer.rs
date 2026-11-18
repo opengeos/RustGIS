@@ -2145,7 +2145,9 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a LandXML;
         // RSS or Atom) is read here, on the UI thread there: within the size every computer reads,
         // as before #2408, so the window isn't held longer; said first, as it is the limit that
-        // applies. The others ([`read_ahead_whole`]) take the larger limit.
+        // applies. The others ([`read_ahead_whole`]) take the larger limit: the desktop app reads
+        // them ahead (`readjob`, for drops, pickers and Add Data), so this branch reads them for
+        // the command line, Python, MCP and the tests, which hold no window.
         if let Some(e) = past_read_as_added(path, meta.len()) {
             return Err(e);
         }

@@ -246,11 +246,16 @@ fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<V
 /// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
 /// track points. Other files give their one layer.
 pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
-    let max = max_bytes();
+    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // KML and KMZ, LandXML, RSS, Atom, GeoRSS and other XML that isn't a city model are read as
+    // they are added, on the desktop's UI thread, never ahead: within [`BYTES_FLOOR`] whatever the
+    // memory (#2408), wherever they come from.
+    let as_added = matches!(ext.as_str(), "kml" | "kmz" | "rss" | "atom" | "georss" | "landxml")
+        || (ext == "xml" && !crate::citygml::looks_like_citygml(bytes));
+    let max = if as_added { BYTES_FLOOR } else { max_bytes() };
     if bytes.len() as u64 > max {
         return Err(DataError::Format(file_size_error(file_name, max)));
     }
-    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let plain =
         |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect();
     let mut out: Vec<LayerRead> = match ext.as_str() {
@@ -1536,7 +1541,9 @@ impl Collector {
         let fields = self.schema.fields();
         // Every feature gets a cell for every field, those it lacks too: many features with
         // properties spread over many fields would take far more than the file. Refused when the
-        // table alone takes more than a file at the limit is planned to ([`MEMORY_PER_BYTE`]).
+        // table alone takes more than a file at the limit is planned to ([`MEMORY_PER_BYTE`]). In
+        // the browser that plan is 2 GiB, more than its memory may hold beside the document: this
+        // guards the desktop, and the browser no less than before #2408.
         let cells = (self.features.len() as u64).saturating_mul(fields.len() as u64);
         let table = cells.saturating_mul(std::mem::size_of::<Value>() as u64);
         let planned = max_bytes().saturating_mul(MEMORY_PER_BYTE);
@@ -2089,17 +2096,11 @@ fn read_gzip_text_budget(
             )));
         }
     }
-    let result = read_csv_records(&mut rdr, name, opts, budget);
+    // The encoding hint only on text that isn't UTF-8 (told by the reader), not past the size
+    // limit or the memory budget.
+    let result = read_csv_records(&mut rdr, name, opts, budget, Some("; if not UTF-8, decompress and add as .txt"));
     crate::progress::check()?;
-    // The encoding hint only where the text may not be UTF-8, not past the size limit.
-    let (mut dataset, report) = result.map_err(|e| {
-        let e = e.to_string();
-        if e.contains("expanded to more than the limit") {
-            DataError::Format(format!("{file_name}: {e}"))
-        } else {
-            DataError::Format(format!("{file_name}: {e}; if not UTF-8, decompress and add as .txt"))
-        }
-    })?;
+    let (mut dataset, report) = result.map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     dataset.source = Some(file_name.to_string());
     Ok((dataset, report))
 }
@@ -2113,13 +2114,19 @@ fn csv_memory_budget() -> usize {
 
 /// Collects records for type inference, charging text and row/cell objects before copying.
 /// The estimate includes the dataset built while these rows remain alive and room for vector
-/// capacity. Reader failures and a spent memory budget refuse the whole import.
+/// capacity. Reader failures and a spent memory budget refuse the whole import; text that isn't
+/// UTF-8 is refused with `utf8_hint` after the reader's error, where given.
 fn read_csv_records(
     reader: &mut csv::Reader<impl std::io::Read>,
     name: &str,
     opts: &CsvOptions,
     budget: &mut usize,
+    utf8_hint: Option<&str>,
 ) -> Result<(Dataset, ReadReport)> {
+    let refused = |e: csv::Error| {
+        let hint = if matches!(e.kind(), csv::ErrorKind::Utf8 { .. }) { utf8_hint.unwrap_or("") } else { "" };
+        DataError::Format(format!("CSV: {e}{hint}"))
+    };
     let cost = |r: &csv::StringRecord, columns: usize| {
         r.as_slice()
             .len()
@@ -2131,7 +2138,7 @@ fn read_csv_records(
     let allowance = *budget;
     let too_large =
         || DataError::Format(format!("CSV retained table exceeds the {allowance}-byte remaining memory budget; import a smaller file"));
-    let header = reader.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?;
+    let header = reader.headers().map_err(refused)?;
     let mut left = budget.checked_sub(cost(header, header.len())).ok_or_else(too_large)?;
     let headers: Vec<String> = header.iter().map(str::to_string).collect();
     let mut malformed = 0;
@@ -2143,9 +2150,7 @@ fn read_csv_records(
                 left = left.checked_sub(cost(&r, headers.len())).ok_or_else(too_large)?;
                 rows.push(r.iter().map(str::to_string).collect());
             }
-            Err(e) if e.is_io_error() || matches!(e.kind(), csv::ErrorKind::Utf8 { .. }) => {
-                return Err(DataError::Format(format!("CSV: {e}")));
-            }
+            Err(e) if e.is_io_error() || matches!(e.kind(), csv::ErrorKind::Utf8 { .. }) => return Err(refused(e)),
             Err(_) => malformed += 1,
         }
     }
@@ -2199,7 +2204,7 @@ fn read_csv_with_budget(text: &str, name: &str, opts: &CsvOptions, budget: &mut 
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(text));
     let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
-    read_csv_records(&mut rdr, name, opts, budget)
+    read_csv_records(&mut rdr, name, opts, budget, None)
 }
 
 /// Rows of text cells under a header row (delimited text, a spreadsheet's sheet) as a dataset, as
@@ -4538,6 +4543,13 @@ mod tests {
         assert!(with_max_bytes(max + 1, || read_bytes("a.geojson", geojson)).is_ok());
         let e = with_max_bytes(max, || read_layers("a.geojson", geojson)).err().map(|e| e.to_string()).unwrap_or_default();
         assert_eq!(e, file_size_error("a.geojson", max));
+        // A KML stays within the floor with the limit raised; a GPX, read ahead, doesn't.
+        let past_floor = vec![b' '; BYTES_FLOOR as usize + 1];
+        let raised =
+            || with_max_bytes(2 * BYTES_FLOOR, || (read_layers("a.kml", &past_floor).err(), read_layers("a.gpx", &past_floor).err()));
+        let (kml, gpx) = raised();
+        assert_eq!(kml.map(|e| e.to_string()), Some(file_size_error("a.kml", BYTES_FLOOR)));
+        assert!(gpx.is_some_and(|e| file_size_error_args(&e.to_string()).is_none()), "a GPX is parsed, not refused by its size");
         let csv = b"x,y\n1,2\n";
         let e = with_max_bytes(4, || read_bytes("a.csv", csv)).unwrap_err().to_string();
         assert_eq!(e, file_size_error("a.csv", 4));
@@ -4554,6 +4566,20 @@ mod tests {
         // The delimited reader's own guard, for callers that don't come through `read_bytes`.
         let e = with_max_bytes(4, || read_delimited_bytes("a.csv", csv, &CsvOptions::default())).unwrap_err().to_string();
         assert_eq!(e, file_size_error("a.csv", 4));
+        // The encoding hint on compressed text that isn't UTF-8 only, not on one past the memory
+        // budget.
+        let gzip = |text: &[u8]| {
+            use std::io::Write;
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder.write_all(text).unwrap();
+            encoder.finish().unwrap()
+        };
+        let latin1 = gzip(b"name,x,y\nZ\xfcrich,1,2\n");
+        let e = read_gzip_text_budget(latin1.as_slice(), "a.csv.gz", &CsvOptions::default(), &mut (1 << 20)).unwrap_err().to_string();
+        assert!(e.contains("if not UTF-8, decompress"), "{e}");
+        let utf8 = gzip(&b"1,2\n".repeat(10_000));
+        let e = read_gzip_text_budget(utf8.as_slice(), "a.csv.gz", &CsvOptions::default(), &mut 4096).unwrap_err().to_string();
+        assert!(e.contains("memory budget") && !e.contains("UTF-8"), "{e}");
         // Within the size, but forty features each with a field of its own: a table of 1,600
         // cells, more than a file at the limit is planned to take.
         let sparse: Vec<String> = (0..40).map(|i| format!(r#"{{"type":"Feature","properties":{{"f{i}":1}},"geometry":null}}"#)).collect();
@@ -6528,17 +6554,17 @@ mod tests {
         let bytes = gzip_csv(format!("a,b,c,d\n{}", ",,,\n".repeat(1000)).as_bytes());
         assert!(bytes.len() < 100);
         let mut reader = csv::ReaderBuilder::new().from_reader(GzipText::new(bytes.as_slice()));
-        let error = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut 4096).unwrap_err();
+        let error = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut 4096, None).unwrap_err();
         assert!(error.to_string().contains("memory budget"), "{error}");
         let mut reader = csv::ReaderBuilder::new().from_reader(GzipText::new(bytes.as_slice()));
-        let (table, report) = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut (1 << 20)).unwrap();
+        let (table, report) = read_csv_records(&mut reader, "small", &CsvOptions::default(), &mut (1 << 20), None).unwrap();
         assert_eq!(table.features.len(), 1000);
         assert!(report.messages.is_empty());
         // Missing fields still become dataset attributes, so charge the complete header width.
         let header = (0..100).map(|i| format!("f{i}")).collect::<Vec<_>>().join(",");
         let bytes = gzip_csv(format!("{header}\n{}", "x\n".repeat(100)).as_bytes());
         let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(GzipText::new(bytes.as_slice()));
-        let error = read_csv_records(&mut reader, "short", &CsvOptions::default(), &mut (64 << 10)).unwrap_err();
+        let error = read_csv_records(&mut reader, "short", &CsvOptions::default(), &mut (64 << 10), None).unwrap_err();
         assert!(error.to_string().contains("memory budget"), "{error}");
     }
 
