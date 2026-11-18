@@ -2690,6 +2690,10 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     };
     let code = projection.code();
     ui.label(egui::RichText::new(tl!(projection.label().as_str())).font(crate::theme::semibold(14.0)));
+    // A code is named as the catalog names it: `CH1903+ / LV95` under `EPSG:2056`.
+    if let Some(name) = rustgis_engine::data::raster::crs_search::name_of(&code).filter(|n| *n != projection.label()) {
+        ui.label(egui::RichText::new(name).size(13.0));
+    }
     if code == current {
         ui.label(egui::RichText::new(tl!("In use")).size(11.0).color(t.accent_text));
     }
