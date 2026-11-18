@@ -203,7 +203,6 @@ fn viewport(vp: &Dict<'_>, measure: &Dict<'_>) -> std::result::Result<Viewport, 
     // Where the points lie in the rectangle.
     let lpts = measure
         .get::<Array>(b"LPTS".as_slice())
-        .or_else(|| measure.get::<Array>(b"Bounds".as_slice()))
         .ok_or_else(|| "it doesn't say where its control points lie in it (/LPTS)".to_string())
         .and_then(|a| pairs(&a, "control points' places (/LPTS)"))?;
     if gpts.len() < 3 || gpts.len() != lpts.len() {
@@ -486,6 +485,11 @@ mod tests {
         assert!(r.georeferenced, "{:?}", r.lost);
         assert!(r.lost.iter().any(|t| t.contains("placed by the largest that can be used")), "{:?}", r.lost);
         assert!(r.lost.iter().any(|t| t.starts_with("1 of its map frames have coordinates that can't be used")), "{:?}", r.lost);
+        // Without /LPTS, /Bounds (the frame's outline) isn't taken for the points' places: a scan,
+        // and said.
+        let outline = geo(wgs84).replace("/LPTS [0 1 1 1 1 0 0 0]", "/Bounds [0 1 1 1 1 0 0 0]");
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &outline), None, true).unwrap();
+        assert!(!r.georeferenced && r.lost[0].contains("(/LPTS)"), "{:?}", r.lost);
         // A rectangle with a fifth entry: not read as four corners, and said.
         let five = geo(wgs84).replace("/BBox [0 0 72 36]", "/BBox [0 0 72 36 /extra]");
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &five), None, true).unwrap();

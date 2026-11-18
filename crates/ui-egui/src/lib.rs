@@ -5424,9 +5424,10 @@ impl RustGisApp {
                     q[k] = v.clone();
                 }
             }
-            // A PDF's page may be given as a number too (#2336).
-            if let Some(n) = p.get("layer").filter(|v| v.is_u64()) {
-                q["layer"] = n.clone();
+            // A PDF's page may be given as a number too (#2336): any other value is passed on as
+            // given, for `layer.addDownload` to refuse rather than open the first page.
+            if let Some(v) = p.get("layer").filter(|v| !v.is_null() && !v.is_string()) {
+                q["layer"] = v.clone();
             }
             // How the bytes are read, as `layer.addData` takes it (a command asking by
             // address, such as a plugin's: the dialog gives none of these).
@@ -5839,7 +5840,8 @@ impl RustGisApp {
     /// to be added with its bytes once drawn ([`UiState::page_reads`]). `page`: its file name, page
     /// and whether it is placed ([`download_page`]). Drawn one at a time with the windows' reads;
     /// past [`MAX_WINDOW_READS`] under way, or where the OS gives no thread, it waits in
-    /// [`UiState::page_queue`] for a later frame (never drawn on the frame, and the download isn't
+    /// [`UiState::page_queue`] and is tried again each frame: held, listed under way and
+    /// cancellable, until a thread can be had (never drawn on the frame, and the download isn't
     /// lost). Whether it started now. Cancel takes it
     /// off the list and gives up its turn; a drawing under way (one step the renderer can't stop)
     /// finishes, its page dropped.
@@ -7622,6 +7624,9 @@ mod record_tests {
         app.run("ui.addUrl", json!({"url": "https://cancel.invalid/paged.pdf", "layer": 2})).unwrap();
         let asked = app.ui.downloads.last().map(|d| d.params.clone()).unwrap();
         assert_eq!(asked["layer"], json!(2), "{asked}");
+        app.run("ui.addUrl", json!({"url": "https://cancel.invalid/odd.pdf", "layer": 2.5})).unwrap();
+        let asked = app.ui.downloads.last().map(|d| d.params.clone()).unwrap();
+        assert_eq!(asked["layer"], json!(2.5), "passed on, to be refused: {asked}");
     }
 
     /// The next window is read only once the frame has taken the last: a frame that stalls holds
