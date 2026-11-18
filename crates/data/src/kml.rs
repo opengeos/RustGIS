@@ -55,7 +55,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
     let owned;
     let text_bytes: &[u8] = if is_kmz {
         // Inflated within the size a file may be read at.
-        let budget = usize::try_from(crate::io::MAX_BYTES).unwrap_or(usize::MAX);
+        let budget = usize::try_from(crate::io::max_bytes()).unwrap_or(usize::MAX);
         let mut entries = crate::zip::read_matching_within(bytes, |n| n.to_ascii_lowercase().ends_with(".kml"), budget)
             .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
         // doc.kml by convention, else the shallowest .kml.
@@ -108,7 +108,7 @@ pub struct GroundOverlay {
 pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<(Vec<(GroundOverlay, Option<Vec<u8>>)>, usize)> {
     let is_kmz = std::path::Path::new(file_name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("kmz"))
         || bytes.starts_with(b"PK\x03\x04");
-    let budget = usize::try_from(crate::io::MAX_BYTES).unwrap_or(usize::MAX);
+    let budget = usize::try_from(crate::io::max_bytes()).unwrap_or(usize::MAX);
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let owned;
     let (doc_bytes, doc_dir): (&[u8], String) = if is_kmz {

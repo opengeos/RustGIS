@@ -128,7 +128,7 @@ struct App<P: Phone> {
 enum Problem {
     /// The shortcut file `name` is over `SHORTCUT_FILE_MAX_BYTES`.
     ShortcutTooLarge { name: String },
-    /// The file `name` is over the size read into memory (`rustgis_data::io::MAX_BYTES`), by
+    /// The file `name` is over the size read into memory (`rustgis_data::io::max_bytes`), by
     /// itself or `together` with the files picked with it and already read.
     TooLarge { name: String, together: bool },
     /// The copy of the file `name` couldn't be read.
@@ -214,7 +214,7 @@ impl<P: Phone> App<P> {
                     i18n::fmt("{name} wasn't opened: a shortcut file is at most {limit} bytes.", &[("name", &name), ("limit", &limit)])
                 }
                 Problem::TooLarge { name, together } => {
-                    let limit = (rustgis_engine::data::io::MAX_BYTES >> 20).to_string();
+                    let limit = (rustgis_engine::data::io::max_bytes() >> 20).to_string();
                     let template = if together {
                         "{name} wasn't opened: with the files picked with it, it is over {limit} MiB."
                     } else {
@@ -346,16 +346,17 @@ fn retire_unread(inbox: &Inbox, marks: Vec<String>) {
 fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems, held: &mut u64) {
     let mark = crate::mark(purpose);
     let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
+    let max = rustgis_engine::data::io::max_bytes();
     let mut read = Vec::new();
     for (name, path) in files {
         let shortcut = mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if shortcut && size > rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES as u64 {
             say(Problem::ShortcutTooLarge { name });
-        } else if held.saturating_add(size) > rustgis_engine::data::io::MAX_BYTES {
+        } else if held.saturating_add(size) > max {
             // Refused before it is read: no more than the cap is held in memory at once, in
             // one file or in the files picked together.
-            say(Problem::TooLarge { name, together: size <= rustgis_engine::data::io::MAX_BYTES });
+            say(Problem::TooLarge { name, together: size <= max });
         } else {
             match std::fs::read(&path) {
                 Ok(bytes) => {

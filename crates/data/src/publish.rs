@@ -148,7 +148,7 @@ struct Original {
 /// Reads the file at `p`, `None` when it isn't there; refuses one past what a reader takes.
 fn read_part(p: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::metadata(p) {
-        Ok(m) if m.len() > crate::io::MAX_BYTES => Err(DataError::Format(format!("{} is too large to read", p.display()))),
+        Ok(m) if m.len() > crate::io::max_bytes() => Err(DataError::Format(format!("{}: {}", p.display(), crate::io::too_large(m.len())))),
         Ok(_) => Ok(Some(std::fs::read(p)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),

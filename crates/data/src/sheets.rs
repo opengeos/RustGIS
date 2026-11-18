@@ -344,7 +344,7 @@ fn check_compound(bytes: &[u8]) -> Result<()> {
         if let Some((_, start, len)) = streams.iter().find(|(name, ..)| name.eq_ignore_ascii_case(want)) {
             let ids = if *len < 4096 { mini.read(*start, *len)? } else { main.read(*start, *len)? };
             if want == "Workbook" || (want == "Book" && !has_workbook) {
-                if *len as u64 > crate::io::MAX_BYTES {
+                if *len as u64 > crate::io::max_bytes() {
                     return Err(DataError::Format("spreadsheet: the XLS Workbook stream is too large".into()));
                 }
                 // Read only the chosen stream. In the mini stream a 64-byte sector is a slice

@@ -13812,6 +13812,10 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     assert!(limit("densityCells") >= rustgis_analysis::DENSITY_CELLS_FLOOR, "{env}");
     assert!(limit("bufferBytes") >= 512 << 20 && limit("threadScratchBytes") >= 256 << 20, "{env}");
     assert!(limit("projectBytes") as u64 == crate::project::max_bytes() && limit("projectBytes") >= 512 << 20, "{env}");
+    assert!(
+        limit("fileBytes") as u64 == rustgis_data::io::max_bytes() && limit("fileBytes") as u64 >= rustgis_data::io::BYTES_FLOOR,
+        "{env}"
+    );
     // Network route along the rivers: two points on the same river.
     let rivers = s.map().layer_by_name("Rivers").unwrap();
     let (a, b2) = match rivers.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).find_map(|g| match g {
@@ -32350,8 +32354,10 @@ fn dxf_drawings_by_path_and_upload() {
     assert_eq!(names, ["blocks lines"], "the line only");
     assert!(w.notices.iter().any(|n| n.text.contains("1 inserted blocks")), "{:?}", w.notices);
     // The text adapter must reject oversized drawings before parsing their records.
-    let oversized = " ".repeat(rustgis_data::io::MAX_BYTES as usize + 1);
-    let error = s.run("layer.addDataText", &json!({"fileName": "large.dxf", "text": oversized})).unwrap_err();
+    let oversized = " ".repeat(1 << 20);
+    let error = rustgis_data::io::with_max_bytes(1 << 19, || {
+        s.run("layer.addDataText", &json!({"fileName": "large.dxf", "text": oversized})).unwrap_err()
+    });
     assert!(error.contains("too large"), "{error}");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -33215,7 +33221,7 @@ fn shapefiles_too_large_to_load_whole_still_open() {
     // Grown sparse where the file system allows.
     for grown in ["dbf", "shp"] {
         let p = line_of_points_shp(&format!("wide-{grown}"), 20);
-        std::fs::OpenOptions::new().write(true).open(p.with_extension(grown)).unwrap().set_len(rustgis_data::io::MAX_BYTES + 1).unwrap();
+        std::fs::OpenOptions::new().write(true).open(p.with_extension(grown)).unwrap().set_len(rustgis_data::io::BYTES_FLOOR + 1).unwrap();
         let path = p.display().to_string();
         // With and without a coordinate system given for it.
         for params in [json!({"path": path}), json!({"path": path, "crs": "EPSG:4326"})] {
@@ -33225,9 +33231,12 @@ fn shapefiles_too_large_to_load_whole_still_open() {
             assert_eq!(r["streamed"], true, "{grown}: {r}");
             assert!(s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().is_streamed());
         }
-        // "stream": false still asks for the whole-file reader, which refuses it.
+        // "stream": false still asks for the whole-file reader, which refuses it where it takes
+        // no more than the floor (it would read it whole on a computer whose reader takes more).
         let mut s = Session::new(Project::default());
-        let e = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
+        let e = rustgis_data::io::with_max_bytes(rustgis_data::io::BYTES_FLOOR, || {
+            s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err()
+        });
         assert!(e.contains("too large"), "{grown}: {e}");
         remove_shp(&p);
     }
@@ -53570,4 +53579,33 @@ fn a_city_models_volumes_come_in_extruded() {
     let mut s = Session::new(Project::default());
     s.run("layer.addDataText", &json!({"fileName": "b.geojson", "text": geojson})).unwrap();
     assert!(s.map().layers.iter().all(|l| l.extrusion.is_none()), "only a reader that knows the type extrudes");
+}
+
+/// Add Data and List Layers take a file read whole up to the same size, the one that follows the
+/// computer's memory (#2408), whether it holds one layer or several, and say its size and the
+/// limit when it is past it.
+#[test]
+fn files_read_whole_take_the_size_read_into_memory() {
+    let dir = std::env::temp_dir().join(format!("rustgis-file-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let kml = dir.join("places.kml");
+    std::fs::write(
+        &kml,
+        r#"<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>A</name><Point><coordinates>8.5,47.4</coordinates></Point></Placemark></Document></kml>"#,
+    )
+    .unwrap();
+    let dxf = dir.join("lines.dxf");
+    std::fs::write(&dxf, "  0\nSECTION\n  2\nENTITIES\n  0\nLINE\n  8\nRoads\n 10\n0\n 20\n0\n 11\n1\n 21\n0\n  0\nENDSEC\n  0\nEOF\n")
+        .unwrap();
+    for file in [&kml, &dxf] {
+        let path = file.display().to_string();
+        let size = std::fs::metadata(file).unwrap().len();
+        let mut s = Session::new(Project::default());
+        for (command, params) in [("layer.addData", json!({"path": path})), ("info.fileLayers", json!({"path": path}))] {
+            let e = rustgis_data::io::with_max_bytes(size - 1, || s.run(command, &params).unwrap_err());
+            assert!(e.contains("file is too large") && e.contains("the most read into memory is"), "{command} {path}: {e}");
+            assert!(rustgis_data::io::with_max_bytes(size, || s.run(command, &params)).is_ok(), "{command} {path}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }

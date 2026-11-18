@@ -1982,11 +1982,13 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         return add_source(s, p, Origin::Path(path), None);
     }
     // A CityJSON model named .json, in the coordinate system given or with a layer picked: as a
-    // .city.json, all its layers (a .city.json is added below, as a file of several layers).
+    // .city.json, all its layers (a .city.json is added below, as a file of several layers). It is
+    // read whole to tell, here on the calling thread, so only up to the size every computer reads
+    // (a larger model is named `.city.json` to be read as one).
     if path.to_ascii_lowercase().ends_with(".json")
         && !rustgis_data::cityjson::is_cityjson_name(path)
         && ["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
-        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::MAX_BYTES)
+        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR)
     {
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         if rustgis_data::io::is_cityjson(path, &bytes) {
@@ -2121,8 +2123,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             return add_picked(s, p, &full, reads, !path.to_ascii_lowercase().ends_with(".zip"), Vec::new(), None);
         }
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
-            return Err(format!("{path} is too large to open"));
+        if meta.len() > rustgis_data::io::max_bytes() {
+            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
@@ -2194,8 +2196,8 @@ fn is_city_model_path(path: &str) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_layers_file(p: &Value, path: &str) -> LayersRead {
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-    if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
-        return Err(format!("{path} is too large to open"));
+    if meta.len() > rustgis_data::io::max_bytes() {
+        return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
     }
     let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
     let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
@@ -2222,8 +2224,15 @@ fn read_dxf_file(p: &Value, path: &str) -> LayersRead {
     use std::io::Read;
     let file = rustgis_data::provenance::open(path).map_err(|e| format!("{path}: {e}"))?;
     let mut bytes = Vec::new();
-    (&file).take(rustgis_data::io::MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-    if bytes.len() as u64 <= rustgis_data::io::MAX_BYTES {
+    let max = rustgis_data::io::max_bytes();
+    // One that says it is too large is refused before any of it is read.
+    if let Ok(meta) = file.metadata()
+        && meta.len() > max
+    {
+        return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
+    }
+    (&file).take(max + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 <= max {
         rustgis_data::provenance::buffer(Path::new(path), &file, &bytes);
     }
     let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
@@ -2238,8 +2247,8 @@ fn dxf_reads(
     bytes: &[u8],
     crs: Option<rustgis_data::raster::Crs>,
 ) -> Result<Vec<rustgis_data::io::LayerRead>, String> {
-    if bytes.len() as u64 > rustgis_data::io::MAX_BYTES {
-        return Err(format!("{name} is too large to open"));
+    if bytes.len() as u64 > rustgis_data::io::max_bytes() {
+        return Err(format!("{name}: {}", rustgis_data::io::too_large(bytes.len() as u64)));
     }
     let opts = rustgis_data::dxf::Options {
         crs,
@@ -2272,8 +2281,8 @@ fn read_whole(p: &Value, path: &str) -> WholeRead {
     let delimited = read_delimited(p, path, || {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         // The limit the text readers keep without options too.
-        if meta.len() > rustgis_data::io::MAX_BYTES {
-            return Err(format!("{path} is too large to open"));
+        if meta.len() > rustgis_data::io::max_bytes() {
+            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
         rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))
     })?;
@@ -2309,7 +2318,7 @@ fn read_shapefile_with(path: &str, name: &str, crs: rustgis_data::raster::Crs) -
 fn read_synced(path: &str, read: impl FnOnce() -> WholeRead) -> WholeRead {
     // A file past what the readers take (a Shapefile's `.dbf` too) is refused by the read: not
     // hashed first.
-    let over = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES);
+    let over = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.len() > rustgis_data::io::max_bytes());
     let shp = path.to_ascii_lowercase().ends_with(".shp");
     if over(Path::new(path)) || (shp && over(&Path::new(path).with_extension("dbf"))) {
         return read();
@@ -2788,21 +2797,22 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
     // A DXF drawing's own layers (the ones it draws on), picked with "layer".
     if rustgis_data::dxf::is_dxf_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > rustgis_data::io::MAX_BYTES {
-            return Err(format!("{path} is too large to open"));
+        if meta.len() > rustgis_data::io::max_bytes() {
+            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         let layers = rustgis_data::dxf::layers(path, &bytes).map_err(err)?;
         return Ok(json!({"count": layers.len(), "layers": layers}));
     }
-    // A CityJSON model named .json: all its layers, as Add Data adds them by name.
+    // A CityJSON model named .json: all its layers, as Add Data adds them by name. Read whole to
+    // tell, so only up to the size every computer reads, as Add Data does.
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let model_json = path.to_ascii_lowercase().ends_with(".json")
-        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::MAX_BYTES);
+        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR);
     if rustgis_data::io::is_multi_layer_name(path) || model_json {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
-            return Err(format!("{path} is too large to open"));
+        if meta.len() > rustgis_data::io::max_bytes() {
+            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         let zip = path.to_ascii_lowercase().ends_with(".zip");
@@ -3110,11 +3120,13 @@ fn lidar_renderer(src: &dyn rustgis_data::source::FeatureSource, seed: u32) -> O
 }
 
 /// The parameters with `"stream": true` for a Shapefile whose `.shp` or `.dbf` is past what the
-/// whole-file reader takes, when they don't say whether to stream; `None` otherwise.
+/// whole-file reader takes on every computer ([`rustgis_data::io::BYTES_FLOOR`]), when they don't
+/// say whether to stream; `None` otherwise. Read in place, it never needs memory for it whole, so a
+/// computer whose reader takes more streams it too.
 #[cfg(not(target_arch = "wasm32"))]
 fn past_cap_shapefile(path: &str, p: &Value) -> Option<Value> {
     let shp = Path::new(path);
-    let past = |f: &Path| std::fs::metadata(f).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES);
+    let past = |f: &Path| std::fs::metadata(f).is_ok_and(|m| m.len() > rustgis_data::io::BYTES_FLOOR);
     if !path.to_ascii_lowercase().ends_with(".shp") || b(p, "stream").is_some() || !(past(shp) || past(&shp.with_extension("dbf"))) {
         return None;
     }
@@ -3123,12 +3135,13 @@ fn past_cap_shapefile(path: &str, p: &Value) -> Option<Value> {
     Some(q)
 }
 
-/// An OpenStreetMap extract past what the native reader takes, opened through GDAL instead when it
-/// is installed (country-size extracts).
+/// An OpenStreetMap extract past what the native reader takes on every computer
+/// ([`rustgis_data::io::BYTES_FLOOR`]), opened through GDAL instead when it is installed
+/// (country-size extracts): GDAL converts it once to a file read in place.
 #[cfg(not(target_arch = "wasm32"))]
 fn large_osm(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".pbf")
-        && std::fs::metadata(path).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES)
+        && std::fs::metadata(path).is_ok_and(|m| m.len() > rustgis_data::io::BYTES_FLOOR)
         && rustgis_data::source::gdal::available()
 }
 
@@ -3954,10 +3967,14 @@ pub fn columns_in_file(path: &str, p: &Value) -> CmdResult {
     }
     // Add Data's limits: a spreadsheet is read whole, delimited text within the text readers' limit.
     let sheet = rustgis_data::sheets::is_sheet_name(path);
-    let limit = if sheet { super::raster::MAX_UPLOAD_BYTES as u64 } else { rustgis_data::io::MAX_BYTES };
+    let limit = if sheet { super::raster::MAX_UPLOAD_BYTES as u64 } else { rustgis_data::io::max_bytes() };
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
     if meta.len() > limit {
-        return Err(format!("{path} is too large to open"));
+        return Err(if sheet {
+            format!("{path} is too large to open")
+        } else {
+            format!("{path}: {}", rustgis_data::io::too_large(meta.len()))
+        });
     }
     if rustgis_data::io::is_gzip_text_name(path) {
         let reader = rustgis_data::provenance::open(path).map_err(|e| format!("{path}: {e}"))?;
