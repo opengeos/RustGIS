@@ -1025,7 +1025,12 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     let sheet = rustgis_engine::data::sheets::is_sheet_name(&name);
     let shown = std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(&name).to_string();
     ui.label(egui::RichText::new(shown).strong());
-    ui.label(egui::RichText::new(tl!("Columns named like longitude/latitude, easting/northing or geometry are picked for you.")).weak());
+    ui.label(
+        egui::RichText::new(tl!(
+            "Automatic chooses columns using the whole file. Open a list to see the preview suggestions or choose columns yourself."
+        ))
+        .weak(),
+    );
     let mut reread = false;
     let mut crs_committed = false;
     egui::Grid::new("csv").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
@@ -1039,7 +1044,13 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 _ => &mut d.c,
             };
             let before = v.clone();
-            let selected = if v.is_empty() { tl!("None").to_string() } else { v.clone() };
+            let selected = if !d.csv_picked {
+                tl!("Automatic").to_string()
+            } else if v.is_empty() {
+                tl!("None").to_string()
+            } else {
+                v.clone()
+            };
             let menu = egui::ComboBox::from_id_salt(("csv_column", i)).selected_text(selected).width(240.0).show_ui(ui, |ui| {
                 let mut picked = ui.selectable_value(v, String::new(), tl!("None")).clicked();
                 for c in &columns {
@@ -3156,7 +3167,7 @@ mod tests {
     #[test]
     fn delimited_suggestions_use_whole_file_inference_until_picked() {
         use egui::accesskit::Role;
-        use egui_kittest::kittest::Queryable;
+        use egui_kittest::kittest::{NodeT, Queryable};
         let mut csv = String::from("Longitude,Latitude,X,Y\n");
         csv.push_str(&"-93,44,20,40\n".repeat(1_000));
         csv.push_str(",,21,41\n");
@@ -3166,11 +3177,13 @@ mod tests {
             let mut h = app_harness(app);
             h.run_steps(3);
             assert_eq!((&*h.state().dialogs.a, &*h.state().dialogs.b), ("Longitude", "Latitude"));
+            assert_eq!(h.get_by_role_and_label(Role::ComboBox, "X column").value().as_deref(), Some("Automatic"));
             if explicit {
                 h.get_by_role_and_label(Role::ComboBox, "X column").click();
                 h.run_steps(2);
                 h.get_by_role_and_label(Role::Button, "Longitude").click();
                 h.run_steps(2);
+                assert_eq!(h.get_by_role_and_label(Role::ComboBox, "X column").value().as_deref(), Some("Longitude"));
             }
             h.get_by_label("Add").click();
             h.run_steps(3);
