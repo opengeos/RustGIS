@@ -5773,18 +5773,17 @@ fn drawable_globe_center(map: &Map, view: Coord, scale: f64) -> Coord {
 }
 
 /// Where a globe locator `side_mm` across at 1:`scale` centres the globe, and whether it shows it
-/// whole: as near `area` as the camera draws a globe that small ([`drawable_globe_center`]), the
-/// area still on the disc. A locator too small for the globe to fit even on the equator (under
-/// about 20 mm), or one whose nearest centre leaves the area behind the globe's rim, keeps the area
-/// in the middle, its circle clipping the globe (#2348).
+/// whole: as near `area` as the camera draws a globe that small ([`drawable_globe_center`], the
+/// equator when it draws it that small nowhere), the disc within the circle and the area on it.
+/// A locator too small for the globe even on the equator (under about 20 mm), or one whose nearest
+/// centre leaves the area behind the globe's rim, keeps the area in the middle, its circle
+/// clipping the globe (#2348). Whether it is whole is measured on the disc drawn, not on the
+/// camera's limit: a circle a little over the smallest globe holds it at that limit.
 pub(crate) fn globe_locator_center(map: &Map, area: Coord, scale: f64, side_mm: f64) -> (Coord, bool) {
-    let cam = |at: Coord| rustgis_map::layout::frame_camera(map, at, scale, 0.0, 0.0);
-    if cam(Coord::new(area.x, 0.0)).res >= rustgis_map::camera::MAX_RES {
-        return (area, false);
-    }
-    let at = drawable_globe_center(map, area, scale);
     let side = side_mm * rustgis_map::layout::PT_PER_MM;
-    if rustgis_map::globe::Globe::new(&cam(at), side, side).forward(area).is_some() { (at, true) } else { (area, false) }
+    let at = drawable_globe_center(map, area, scale);
+    let g = rustgis_map::globe::Globe::new(&rustgis_map::layout::frame_camera(map, at, scale, 0.0, 0.0), side, side);
+    if 2.0 * g.disc_radius() <= side && g.forward(area).is_some() { (at, true) } else { (area, false) }
 }
 
 /// Parses the publication's locator choice with its default: a globe on a sheet, none on a figure
