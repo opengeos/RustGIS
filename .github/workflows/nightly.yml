@@ -2,7 +2,9 @@ name: Nightly
 
 # The slow checks pull requests don't wait for: every platform's tests and the release build of
 # the apps, once a night on main. A night with no new commits since the last successful run is
-# skipped. A failure opens an issue (or comments on the open one); the next success closes it.
+# skipped for the build. Generated overlays run every night and report minimized disagreements
+# separately. A build failure opens an issue (or comments on the open one); the next success
+# closes it.
 #
 #   gh workflow run nightly.yml -R opengeos/RustGIS --ref main
 
@@ -126,6 +128,86 @@ jobs:
           PROPERTY_CASES=100000 cargo test --locked -p rustgis-geom --test geodesic_identities
           cargo test --locked -p rustgis-data --test extent_query_properties
           PROPERTY_CASES=20000 cargo test --locked -p rustgis-data --test date_properties
+
+  # Use a fresh seed even when the commit is the same as last night.
+  overlay:
+    name: Generated polygon overlays
+    if: github.repository == 'opengeos/RustGIS' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      findings: ${{ steps.findings.outputs.artifact-id }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Compare overlays and minimize disagreements
+        id: compare
+        env:
+          PROPERTY_CASES: "256"
+        run: |
+          set -euo pipefail
+          cargo test --locked -p rustgis-analysis --test reference --no-run --message-format=json > "$RUNNER_TEMP/reference-build.jsonl"
+          runner="$(jq -er 'select(.reason == "compiler-artifact" and .target.name == "reference" and .executable != null) | .executable' "$RUNNER_TEMP/reference-build.jsonl")"
+          PROPERTY_SEED="$(python3 -c 'import secrets; print(secrets.randbits(64))')"
+          export PROPERTY_SEED
+          time uv run crates/analysis/tests/reference/generate.py --overlay "$runner" --findings "$RUNNER_TEMP/overlay-findings"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: findings
+        if: failure() && steps.compare.outcome == 'failure'
+        with:
+          name: overlay-findings
+          path: ${{ runner.temp }}/overlay-findings
+          if-no-files-found: ignore
+
+  overlay-report:
+    name: Report new overlay disagreements
+    needs: overlay
+    # Only the reporting job has issue write access. Manual runs keep findings as artifacts.
+    if: failure() && github.event_name == 'schedule' && needs.overlay.outputs.findings != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: overlay-findings
+          path: findings
+      - name: Open issues for new minimized disagreements
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" \
+            | jq -r '.[] | select(.pull_request | not) | (.body // "") | split("\n")[] | select(startswith("<!-- overlay-finding:"))' > reported
+          for file in findings/*.json; do
+            tool="$(jq -er '.case.tools[0]' "$file")"
+            kind="$(jq -er '.kind' "$file")"
+            fingerprint="$(jq -er '.fingerprint' "$file")"
+            marker="<!-- overlay-finding:$fingerprint -->"
+            if grep -Fxq -- "$marker" reported; then continue; fi
+            {
+              echo "The [nightly run]($RUN) on $GITHUB_SHA found a generated $tool disagreement."
+              echo
+              jq -r '"Seed `PROPERTY_SEED=\(.seed)`, case index `\(.index)`. \(.detail)"' "$file"
+              echo
+              echo 'Save the minimized case below as JSON and pass it to the overlay replay command in crates/analysis/tests/reference/README.md.'
+              echo
+              echo '```json'
+              cat "$file"
+              echo '```'
+              echo "$marker"
+            } > issue.md
+            gh issue create -R "$GITHUB_REPOSITORY" --title "Generated overlay disagrees with GEOS ($tool, $kind)" --body-file issue.md
+            echo "$marker" >> reported
+          done
 
   report:
     name: Report
