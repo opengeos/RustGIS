@@ -53581,9 +53581,6 @@ fn a_city_models_volumes_come_in_extruded() {
     assert!(s.map().layers.iter().all(|l| l.extrusion.is_none()), "only a reader that knows the type extrudes");
 }
 
-/// Add Data and List Layers take a file read whole up to the same size, the one that follows the
-/// computer's memory (#2408), whether it holds one layer or several, and say its size and the
-/// limit when it is past it.
 /// Files read as they are added, on the UI thread in the desktop app (a GeoJSON document that
 /// isn't a FeatureCollection, a KML), stay within 256 MiB whatever the memory (#2408), saying so.
 /// The KML is a sparse file; the GeoJSON is padded with spaces, which it may end in.
@@ -53612,6 +53609,9 @@ fn files_read_on_the_calling_thread_stay_within_the_floor() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Add Data and List Layers take a file read whole up to the same size, the one that follows the
+/// computer's memory (#2408), whether it holds one layer or several, and say its size and the
+/// limit when it is past it.
 #[test]
 fn files_read_whole_take_the_size_read_into_memory() {
     let dir = std::env::temp_dir().join(format!("rustgis-file-limit-{}", std::process::id()));

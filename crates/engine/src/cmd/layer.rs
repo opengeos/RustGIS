@@ -2133,8 +2133,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
                 super::say_crs_note(s, crs);
             }
             let (full, reads) = read?;
-            // Whole for a city model only (its first layer says what the file does), not for a
-            // GML or GPX read ahead too.
+            // Whole for a city model only (its first layer says what the file does), not for the
+            // other files read ahead too.
             #[cfg(not(target_arch = "wasm32"))]
             let whole = is_city_model_path(path);
             #[cfg(target_arch = "wasm32")]
@@ -2142,13 +2142,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             return add_picked(s, p, &full, reads, whole, Vec::new(), None);
         }
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > rustgis_data::io::max_bytes() {
-            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
-        }
-        // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a LandXML)
-        // is read here, on the UI thread there: within the size every computer reads, as before
-        // #2408, so the window isn't held longer. Zips, city models, GML and GPX are read ahead
-        // ([`read_ahead_whole`]), so they take the larger limit.
+        // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a LandXML;
+        // RSS or Atom) is read here, on the UI thread there: within the size every computer reads,
+        // as before #2408, so the window isn't held longer; said first, as it is the limit that
+        // applies. The others ([`read_ahead_whole`]) take the larger limit.
         let floor = rustgis_data::io::BYTES_FLOOR;
         #[cfg(not(target_arch = "wasm32"))]
         let ahead = read_ahead_whole(path);
@@ -2160,6 +2157,9 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
                 floor >> 20,
                 meta.len().div_ceil(1 << 20)
             ));
+        }
+        if meta.len() > rustgis_data::io::max_bytes() {
+            return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
@@ -2208,13 +2208,12 @@ fn layers_key(path: &str) -> String {
 }
 
 /// Whether the desktop app reads a file of several layers whole ahead, off the UI thread
-/// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, a GML or a GPX file.
+/// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, a GML, GPX or TopoJSON file,
+/// an OpenStreetMap extract (`.pbf`, read by the built-in reader where GDAL isn't installed).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_ahead_whole(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    lower.ends_with(".zip")
-        || lower.ends_with(".gml")
-        || lower.ends_with(".gpx")
+    [".zip", ".gml", ".gpx", ".topojson", ".pbf"].iter().any(|e| lower.ends_with(e))
         || (rustgis_data::io::is_multi_layer_name(path) && is_city_model_path(path))
 }
 

@@ -44,11 +44,12 @@ fn max_bytes_for(memory: Option<u64>) -> u64 {
     memory.map_or(BYTES_FLOOR, |m| (m / crate::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, bytes_ceiling()))
 }
 
-/// The most [`max_bytes`] grows to in this build: [`BYTES_CEILING`] on a 64-bit build. A 32-bit
-/// build stays at [`BYTES_FLOOR`] whatever the memory: a file read whole takes several times its
-/// size in address space, which 4 GiB doesn't hold for a larger one.
+/// The most [`max_bytes`] grows to in this build: [`BYTES_CEILING`] on a 64-bit desktop build. A
+/// 32-bit build stays at [`BYTES_FLOOR`] whatever the memory: a file read whole takes several
+/// times its size in address space, which 4 GiB doesn't hold for a larger one. So does a phone:
+/// it reports all its memory, but an app may use much less of it before the system stops it.
 fn bytes_ceiling() -> u64 {
-    if usize::BITS >= 64 { BYTES_CEILING } else { BYTES_FLOOR }
+    if usize::BITS >= 64 && !cfg!(any(target_os = "android", target_os = "ios")) { BYTES_CEILING } else { BYTES_FLOOR }
 }
 
 /// The refusal of a file of `len` bytes, past [`max_bytes`]: its size, and the limit, saying
