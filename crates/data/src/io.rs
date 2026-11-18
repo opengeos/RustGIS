@@ -3896,11 +3896,8 @@ pub fn gpx_left_out(ds: &Dataset) -> usize {
 /// multipoints (a waypoint per point). One notice per kind; none for a layer GPX holds whole.
 pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<String> {
     let drawn = || ds.features.iter().filter(|f| f.geometry.is_some());
-    let fields: Vec<&str> = (ds.fields.iter().enumerate())
-        .filter(|(k, _)| Some(*k) != name_field)
-        .filter(|(k, _)| drawn().any(|f| f.attrs.get(*k).is_some_and(|v| !v.is_null())))
-        .map(|(_, f)| f.name.as_str())
-        .collect();
+    // Every other field, null everywhere or not: it isn't in the file, so it doesn't come back.
+    let fields: Vec<&str> = (ds.fields.iter().enumerate()).filter(|(k, _)| Some(*k) != name_field).map(|(_, f)| f.name.as_str()).collect();
     let (mut polygons, mut holes, mut multipoints) = (0, 0, 0);
     for g in drawn().filter_map(|f| f.geometry.as_ref()) {
         match g {

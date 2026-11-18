@@ -23,8 +23,8 @@ const GEOMETRY_ONLY: [&str; 4] = ["fgb", "shp", "kml", "gpx"];
 
 /// Changes a format makes without a notice, as (format, the start of a change from [`changes`],
 /// why). Each is what the format can hold or how its reader works, not a loss of a value's
-/// number or text, except trimming (Shapefile, KML, GPX), blanks read as null and (KML, GPX) a
-/// field of nulls left out, which are kept here until they are said (#1907). CSV keeps the spaces
+/// number or text, except trimming (Shapefile, KML, GPX) and blanks read as null, which are kept
+/// here until they are said (#1907). CSV keeps the spaces
 /// around a value (#2059).
 const LIMITS: &[(&str, &str, &str)] = &[
     // CSV holds text: reading types each column from its values (`text_type`) and reads an empty
@@ -39,7 +39,6 @@ const LIMITS: &[(&str, &str, &str)] = &[
     ("csv", "text became a number", "a column of numbers is a number column"),
     ("csv", "infinity or NaN became text", "inf and NaN aren't read as numbers"),
     ("csv", "not read back: nothing", "a layer without geometry or values is an empty file"),
-    ("gpx", "field of nulls missing", "GPX writes no attribute schema"),
     // GeoJSON types a property from its values.
     ("geojson", "field of nulls type changed", "a property that is null everywhere has no type"),
     ("geojson", "field type changed Date → Text", "a date is written as ISO 8601 text and stays text on read (#853)"),
