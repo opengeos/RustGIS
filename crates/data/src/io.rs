@@ -1728,14 +1728,19 @@ fn unmatched_coordinates_note(headers: &[String]) -> Option<String> {
     })
 }
 
-/// Compares complete pairs regardless of header order. Longitude/latitude wins when it has
-/// at least as many in-range, non-0,0 positions as the X/Y or planar pair has finite positions.
+/// Whether a position can be counted as evidence for inferring geographic coordinate columns.
+fn usable_degree_point(p: Coord) -> bool {
+    p.x.abs() <= 180.0 && p.y.abs() <= 90.0 && (p.x != 0.0 || p.y != 0.0)
+}
+
+/// Compares complete pairs by usable degree positions regardless of header order, preferring
+/// longitude/latitude on a tie. With no usable positions, retains finite X/Y for the import notices.
 /// Explicit columns and projected systems bypass this inference.
 fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(usize, usize)>> {
     let Some(xy) = found_non_geographic_xy(headers) else { return Ok(found_geographic_xy(headers)) };
     let Some(geographic) = found_geographic_xy(headers) else { return Ok(Some(xy)) };
-    let degrees = |p: Coord| p.x.abs() <= 180.0 && p.y.abs() <= 90.0;
-    let (mut positions, mut usable) = (0usize, 0usize);
+    let (mut xy_usable, mut geographic_usable) = (0usize, 0usize);
+    let mut xy_finite = false;
     for row in rows {
         crate::progress::check()?;
         let point = |(x, y): (usize, usize)| {
@@ -1744,10 +1749,13 @@ fn found_xy_in_rows(headers: &[String], rows: &[Vec<String>]) -> Result<Option<(
             let p = Coord::new(x, y);
             p.is_finite().then_some(p)
         };
-        positions += usize::from(point(xy).is_some());
-        usable += usize::from(point(geographic).is_some_and(|p| degrees(p) && (p.x != 0.0 || p.y != 0.0)));
+        let xy_point = point(xy);
+        xy_finite |= xy_point.is_some();
+        xy_usable += usize::from(xy_point.is_some_and(usable_degree_point));
+        geographic_usable += usize::from(point(geographic).is_some_and(usable_degree_point));
     }
-    Ok(Some(if usable >= positions { geographic } else { xy }))
+    let prefer_geographic = geographic_usable >= xy_usable && (geographic_usable > 0 || !xy_finite);
+    Ok(Some(if prefer_geographic { geographic } else { xy }))
 }
 
 /// A WKT column found: one named like geometry whose first value reads as WKT.
@@ -2445,8 +2453,7 @@ impl<W: std::io::Write> CsvWriter<W> {
         let point = geometry_type == GeometryType::Point;
         let mut head = Vec::new();
         if point {
-            // The coordinate columns come first, so reading takes them rather than a field
-            // named `lat` or `x`.
+            // The coordinate columns come first, before any attributes using recognised names.
             head.extend(csv_coordinate_names(fields));
         }
         head.extend(fields.iter().map(|f| f.name.clone()));
@@ -3770,17 +3777,25 @@ pub struct CsvLosses {
     /// Written with coordinate columns, as a point layer: a streamed export knows this from its
     /// chunks when the layer declares no type ([`CsvLosses::coordinates_note`]).
     pub points: bool,
+    /// Coordinate rows that can let a competing attribute pair win on reimport.
+    unusable_points: usize,
 }
 
 impl CsvLosses {
     /// The losses of `features` in a layer of type `gt`; a streamed export adds up its chunks'.
     pub fn of(features: &[crate::Feature], gt: GeometryType) -> Self {
         let mut out = Self { points: gt == GeometryType::Point, ..Self::default() };
-        for g in features.iter().filter_map(|f| f.geometry.as_ref()) {
+        for feature in features {
+            let geometry = feature.geometry.as_ref();
+            let point = if out.points { geometry.and_then(Geometry::label_point) } else { None };
+            if out.points && !point.is_some_and(usable_degree_point) {
+                out.unusable_points += 1;
+            }
+            let Some(g) = geometry else { continue };
             match (gt, g) {
                 (GeometryType::Point, Geometry::Point(_)) => {}
                 // No point to write: its coordinate cells are left empty.
-                (GeometryType::Point, g) if g.label_point().is_none() => out.unwritten += 1,
+                (GeometryType::Point, _) if point.is_none() => out.unwritten += 1,
                 (GeometryType::Point, Geometry::MultiPoint(v)) if v.len() <= 1 => {}
                 (GeometryType::Point, _) => out.as_one_point += 1,
                 // A layer of lines or polygons, or one that declares no type: no coordinates.
@@ -3807,24 +3822,33 @@ impl CsvLosses {
         notes
     }
 
-    /// What a CSV export with these losses says when reading the file back wouldn't take its
-    /// coordinate columns: its `fields` have every name reading takes for a longitude or a
-    /// latitude, and reading takes those fields instead. `None` otherwise.
+    /// Warns when adding the CSV back may use attributes for geometry. This can happen when the
+    /// coordinate names are all taken or when unusable coordinate rows let a competing pair win.
     pub fn coordinates_note(self, fields: &[Field], target: &str) -> Option<String> {
         if !self.points {
             return None;
         }
         let header: Vec<String> = csv_coordinate_names(fields).into_iter().chain(fields.iter().map(|f| f.name.clone())).collect();
-        let found = found_geographic_xy(&header).or_else(|| found_non_geographic_xy(&header));
-        if found == Some((0, 1)) {
-            return None;
-        }
+        let alternative = found_non_geographic_xy(&header);
+        let found = found_geographic_xy(&header).or(alternative);
         let name = |i: usize| dbf_notice_name(header.get(i).map_or("", String::as_str));
+        let target: String = target.chars().map(dbf_notice_char).collect();
+        if found == Some((0, 1)) {
+            return alternative.filter(|_| self.unusable_points > 0).map(|(x, y)| {
+                format!(
+                    "{target}: {} of the exported coordinate rows lack a usable longitude/latitude position; adding the file back may read columns '{}' and '{}' as coordinates. To use the exported geometry, pick '{}' and '{}'",
+                    self.unusable_points,
+                    name(x),
+                    name(y),
+                    name(0),
+                    name(1)
+                )
+            });
+        }
         let read = match found {
             Some((x, y)) => format!("reads columns '{}' and '{}' as the coordinates, which moves the points", name(x), name(y)),
             None => "reads no coordinates".to_string(),
         };
-        let target: String = target.chars().map(dbf_notice_char).collect();
         Some(format!(
             "{target}: the fields have every name read as a longitude or latitude, so the coordinates are in columns '{}' and '{}'; adding the file back {read} unless those columns are picked",
             name(0),
@@ -3839,6 +3863,7 @@ impl std::ops::AddAssign for CsvLosses {
         self.as_one_point += other.as_one_point;
         self.unwritten += other.unwritten;
         self.points |= other.points;
+        self.unusable_points += other.unusable_points;
     }
 }
 
@@ -5519,15 +5544,15 @@ mod tests {
         }
     }
 
-    /// A geographic alternative must cover at least as many rows as X/Y can place.
+    /// Both pairs compete by their coverage of usable degree positions.
     #[test]
     fn csv_coordinate_coverage() {
         for (rows, geographic) in [
-            ("1000,2000,3,4\n1001,2001,,\n", false),
-            ("1000,2000,3,4\n1001,2001,0,0\n", false),
-            ("1000,2000,3,4\n1001,2001,181,20\n", false),
-            ("1000,2000,3,4\n1001,2001,5,6\n", true),
-            ("1000,2000,3,4\n,,5,6\n", true),
+            ("10,20,3,4\n11,21,,\n", false),
+            ("10,20,3,4\n11,21,0,0\n", false),
+            ("10,20,3,4\n11,21,181,20\n", false),
+            ("10,20,3,4\n11,21,5,6\n", true),
+            ("10,20,3,4\n,,5,6\n", true),
         ] {
             let text = format!("X,Y,Longitude,Latitude\n{rows}");
             let c = csv_columns(&text, None, None).unwrap();
@@ -5538,7 +5563,7 @@ mod tests {
             assert_eq!(report.skipped, 0);
             assert_eq!(
                 ds.features[0].geometry,
-                Some(Geometry::Point(if geographic { Coord::new(3.0, 4.0) } else { Coord::new(1000.0, 2000.0) }))
+                Some(Geometry::Point(if geographic { Coord::new(3.0, 4.0) } else { Coord::new(10.0, 20.0) }))
             );
         }
     }
@@ -5555,6 +5580,19 @@ mod tests {
             assert_eq!(report.skipped, 0);
             assert!(report.messages.is_empty(), "{:?}", report.messages);
         }
+    }
+
+    /// Finite projected values cannot replace usable longitude/latitude without a projected CRS.
+    #[test]
+    fn csv_coordinate_coverage_ignores_out_of_range_planar_values() {
+        let text = "Longitude,Latitude,Easting,Northing\n-93.10,44.95,570000,160000\n,,570010,160010\n";
+        for crs in [None, Some(Crs::LonLat)] {
+            let columns = csv_columns(text, None, crs).unwrap();
+            assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longitude"), Some("Latitude")));
+        }
+        let (dataset, _) = read_csv(text, "coverage").unwrap();
+        assert_eq!(dataset.features[0].geometry, Some(Geometry::Point(Coord::new(-93.1, 44.95))));
+        assert_eq!(dataset.features[1].geometry, None);
     }
 
     /// Count suspect degree positions, retaining them; one zero axis or a nearby point is clean.
@@ -5606,14 +5644,17 @@ mod tests {
         ds.push(Some(square), vec![]);
         ds.push(None, vec![]);
         let losses = CsvLosses::of(&ds.features, ds.geometry_type);
-        assert_eq!(losses, CsvLosses { as_one_point: 0, unwritten: 1, points: false });
+        assert_eq!(losses, CsvLosses { unwritten: 1, ..CsvLosses::default() });
         assert!(losses.notes("t.csv")[0].contains("the geometry of 1 feature wasn't written"));
         assert!(!to_csv(&ds).unwrap().contains("longitude"));
         let points = [crate::Feature { id: 0, geometry: Some(Geometry::Point(Coord::new(1.0, 2.0))), attrs: vec![] }];
         assert_eq!(CsvLosses::of(&points, GeometryType::Point), CsvLosses { points: true, ..CsvLosses::default() });
         // A multipoint without a point in a point layer gets empty coordinate cells.
         let empty = [crate::Feature { id: 1, geometry: Some(Geometry::MultiPoint(vec![])), attrs: vec![] }];
-        assert_eq!(CsvLosses::of(&empty, GeometryType::Point), CsvLosses { as_one_point: 0, unwritten: 1, points: true });
+        assert_eq!(
+            CsvLosses::of(&empty, GeometryType::Point),
+            CsvLosses { as_one_point: 0, unwritten: 1, points: true, unusable_points: 1 }
+        );
     }
 
     /// GPX leaves out a feature without geometry and a multipoint without a point (no waypoint
@@ -5695,6 +5736,29 @@ mod tests {
         // A name left, or a layer that isn't of points: nothing to say.
         assert!(export_losses_notes(&layer(&LON_NAMES[1..]), "csv", None, "t.csv").is_empty());
         assert_eq!(CsvLosses::of(&[], GeometryType::Polyline).coordinates_note(&every.fields, "t.csv"), None);
+    }
+
+    /// Missing geometry can let exported X/Y attributes win on reimport. Report the ambiguity
+    /// before the file is reopened and show which columns restore the exported geometry.
+    #[test]
+    fn csv_export_warns_when_attributes_can_supply_geometry() {
+        let fields = vec![Field::new("X", FieldType::Integer), Field::new("Y", FieldType::Integer)];
+        let geometry = Some(Geometry::Point(Coord::new(20.0, 10.0)));
+        let mut ds = Dataset::new("t", GeometryType::Point, fields);
+        ds.push(geometry.clone(), vec![Value::Int(40), Value::Int(50)]);
+        assert!(export_losses_notes(&ds, "csv", None, "t.csv").is_empty());
+        ds.push(None, vec![Value::Int(41), Value::Int(51)]);
+        let notes = export_losses_notes(&ds, "csv", None, "t.csv");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("1 of the exported coordinate rows"), "{notes:?}");
+        assert!(notes[0].contains("may read columns 'X' and 'Y'"), "{notes:?}");
+        let text = to_csv(&ds).unwrap();
+        let (reopened, _) = read_csv(&text, "t").unwrap();
+        assert_eq!(reopened.features[0].geometry, Some(Geometry::Point(Coord::new(40.0, 50.0))));
+        let opts = CsvOptions { x: Some("longitude".into()), y: Some("latitude".into()), ..Default::default() };
+        let (reopened, _) = read_csv_with(&text, "t", &opts).unwrap();
+        assert_eq!(reopened.features[0].geometry, geometry);
+        assert_eq!(reopened.features[1].geometry, None);
     }
 
     #[test]
