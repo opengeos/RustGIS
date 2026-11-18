@@ -199,6 +199,10 @@ pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
 /// Script pane's Load….
 pub const SCRIPT_PICK: &str = "\u{1}script:";
 
+/// The largest script file the Script pane's Load… reads, as the assistant's command file; the
+/// browser's shell refuses a larger one before reading it.
+pub const SCRIPT_FILE_MAX_BYTES: usize = 1024 * 1024;
+
 /// Maximum portable shortcut document size: saved overrides plus room for version metadata.
 pub const SHORTCUT_FILE_MAX_BYTES: usize = keymap::MAX_PREF_BYTES + 100;
 
@@ -2041,7 +2045,7 @@ impl RustGisApp {
         }
         if let Some(name) = name.strip_prefix(SCRIPT_PICK) {
             // An answer with no name is a cancelled picker.
-            return if name.is_empty() { Ok(Value::Null) } else { analysispane::script_picked(self, bytes) };
+            return if name.is_empty() { Ok(Value::Null) } else { analysispane::script_picked(self, name, bytes) };
         }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);

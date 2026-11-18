@@ -494,6 +494,11 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
                 .push((rustgis_ui_egui::tl!("Shortcut file exceeds the size limit.").into(), true));
             continue;
         }
+        if mark == rustgis_ui_egui::SCRIPT_PICK && file.size() > rustgis_ui_egui::SCRIPT_FILE_MAX_BYTES as f64 {
+            let text = rustgis_ui_egui::i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]);
+            notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
+            continue;
+        }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
             read.push((name, bytes));
         } else if mark.starts_with(rustgis_ui_egui::DXF_PICK) {

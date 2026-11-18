@@ -1867,36 +1867,36 @@ fn load_script(app: &mut RustGisApp, ctx: &egui::Context) {
     let read = std::fs::File::open(&path).and_then(|file| {
         use std::io::Read;
         let mut bytes = Vec::new();
-        file.take(SCRIPT_FILE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map(|_| bytes)
+        file.take(crate::SCRIPT_FILE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map(|_| bytes)
     });
-    match read.map_err(|e| format!("{path}: {e}")).and_then(|bytes| script_text(app, &bytes)) {
+    let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+    match read.map_err(|e| format!("{path}: {e}")).and_then(|bytes| script_text(app, &name, &bytes)) {
         Ok(script) => open_script(app, ctx, script),
         Err(e) => app.session.notify(e, true),
     }
 }
 
 /// A script file the shell's picker read for Load…, kept for [`RustGisApp::logic`] to open once
-/// the inbox is read. A file that isn't UTF-8 text, or one landing while a run is under
-/// way, is refused and said, and the pane's script stays.
-pub(crate) fn script_picked(app: &mut RustGisApp, bytes: &[u8]) -> Result<Value, String> {
-    let script = script_text(app, bytes).inspect_err(|e| app.session.notify(e.clone(), true))?;
+/// the inbox is read. A file [`script_text`] refuses is said, and the pane's script stays.
+pub(crate) fn script_picked(app: &mut RustGisApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
+    let script = script_text(app, name, bytes).inspect_err(|e| app.session.notify(e.clone(), true))?;
     app.workflow.script_picked = Some(script);
     Ok(Value::Null)
 }
 
-/// The largest script file Load… reads, as the assistant's command file.
-const SCRIPT_FILE_MAX_BYTES: usize = 1024 * 1024;
-
-/// A script file's text for the Script pane: refused when it is over [`SCRIPT_FILE_MAX_BYTES`] or
-/// isn't UTF-8 text, or while a run is under way (its results would land in the replaced script).
-fn script_text(app: &RustGisApp, bytes: &[u8]) -> Result<String, String> {
+/// Script file `name`'s text for the Script pane, without the byte-order mark some editors
+/// start a UTF-8 file with (it would make the first line's command unknown): refused when it is
+/// over [`crate::SCRIPT_FILE_MAX_BYTES`] or isn't UTF-8 text, or while a run is under way (its
+/// results would land in the replaced script).
+fn script_text(app: &RustGisApp, name: &str, bytes: &[u8]) -> Result<String, String> {
     if script_running(app) {
         return Err(tl!("Wait for the run to finish").to_string());
     }
-    if bytes.len() > SCRIPT_FILE_MAX_BYTES {
-        return Err(tl!("The script file is larger than 1 MB").to_string());
+    if bytes.len() > crate::SCRIPT_FILE_MAX_BYTES {
+        return Err(crate::i18n::fmt("{file} is larger than 1 MB", &[("file", name)]));
     }
-    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| tl!("The file isn't UTF-8 text").to_string())
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| crate::i18n::fmt("{file} isn't UTF-8 text", &[("file", name)]))
 }
 
 /// The Script pane emptied: its script, results and count, so the next run is `Run #1`, and the
@@ -2592,7 +2592,7 @@ mod tests {
         load(&mut h, Some(&bad));
         assert_eq!(h.state().workflow.script, "kept", "a file that isn't UTF-8 leaves the script");
         assert!(h.state().workflow.script_last.is_some());
-        assert!(h.state().session.notices.iter().any(|n| n.text == "The file isn't UTF-8 text"), "{:?}", h.state().session.notices);
+        assert!(h.state().session.notices.iter().any(|n| n.text == "latin1.txt isn't UTF-8 text"), "{:?}", h.state().session.notices);
         load(&mut h, Some(&good));
         let w = &h.state().workflow;
         assert_eq!(w.script, "map.zoomFull\n");
@@ -2644,12 +2644,13 @@ mod tests {
         h.run();
         assert_eq!(h.state().workflow.script, "kept", "a cancelled picker changes nothing");
         assert!(h.state_mut().open_picked(&format!("{}bad.txt", crate::SCRIPT_PICK), b"\xff").is_err());
-        let big = vec![b'#'; SCRIPT_FILE_MAX_BYTES + 1];
+        let big = vec![b'#'; crate::SCRIPT_FILE_MAX_BYTES + 1];
         assert!(h.state_mut().open_picked(&format!("{}big.txt", crate::SCRIPT_PICK), &big).is_err());
-        assert!(h.state().session.notices.iter().any(|n| n.text == "The script file is larger than 1 MB"));
+        assert!(h.state().session.notices.iter().any(|n| n.text == "big.txt is larger than 1 MB"));
         h.run();
         assert_eq!(h.state().workflow.script, "kept");
-        h.state_mut().open_picked(&format!("{}zoom.txt", crate::SCRIPT_PICK), b"map.zoomFull").unwrap();
+        // A byte-order mark (Notepad's UTF-8) isn't kept: the first line's command stays known.
+        h.state_mut().open_picked(&format!("{}zoom.txt", crate::SCRIPT_PICK), b"\xEF\xBB\xBFmap.zoomFull").unwrap();
         h.run();
         assert_eq!(h.state().workflow.script, "map.zoomFull");
         assert_eq!(h.state().ui.right, Some(crate::RightPane::Script));
