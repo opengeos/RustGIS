@@ -652,7 +652,8 @@ mod tests {
 
         let _turn = crate::cache::turn();
         let url = "https://cog-window-budget.invalid/scene.tif";
-        let file = example_with(&Example { size: 1024, tile: 256, ..Example::default() });
+        // Signed samples repeat every 100 pixels, so adjacent 256-pixel tiles differ.
+        let file = example_with(&Example { size: 1024, tile: 256, int8: true, ..Example::default() });
         let total = file.len();
         let sent = Arc::new(AtomicUsize::new(0));
         let count = sent.clone();
@@ -676,7 +677,7 @@ mod tests {
         assert!(!result.pending && !result.failed);
         let raster = result.raster.expect("a raster window");
         assert_eq!((raster.width, raster.height), (2, 2));
-        assert_eq!(&raster.bands[0].data[..], &[31.0, 32.0, 32.0, 33.0]);
+        assert_eq!(&raster.bands[0].data[..], &[37.0, 38.0, 38.0, 39.0]);
         // A 64 KiB initial header read plus two uncompressed 256 × 256 byte tiles.
         let budget = 192 * 1024;
         let fetched = sent.load(Ordering::Relaxed);
