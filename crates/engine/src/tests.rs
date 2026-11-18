@@ -2859,6 +2859,9 @@ fn qgis_sources_import_as_their_layers() {
         // On a virtual layer on a memory layer: not a ring, not too deep.
         layer("on mem", "vector", "virtual", "?layer_ref=scratch:s&amp;query=SELECT%20*%20FROM%20s"),
         layer("on on mem", "vector", "virtual", "?layer_ref=on mem:o&amp;query=SELECT%20*%20FROM%20o"),
+        // A project layer of a GeoPackage named without a layer, and a virtual layer on it.
+        layer("whole gpkg", "vector", "ogr", "./sample.gpkg"),
+        layer("on whole gpkg", "vector", "virtual", "?layer_ref=whole gpkg:w&amp;query=SELECT%20*%20FROM%20w"),
         layer("ring a", "vector", "virtual", "?layer_ref=ring b:b&amp;query=SELECT%20*%20FROM%20b"),
         layer("deep 0", "vector", "virtual", "?layer_ref=deep 1:p&amp;query=SELECT%20*%20FROM%20p"),
         layer("deep 1", "vector", "virtual", "?layer_ref=deep 2:p&amp;query=SELECT%20*%20FROM%20p"),
@@ -2966,6 +2969,7 @@ fn qgis_sources_import_as_their_layers() {
     assert!(said("on orphan", "the layer with id `gone_1` it selects from isn't in the project"), "{notes}");
     assert!(said("ring a", "the virtual layers it selects from select from each other"), "{notes}");
     assert!(said("on on mem", "on a layer RustGIS doesn't read as a file's layer"), "{notes}");
+    assert!(said("on whole gpkg", "its source names no layer of sample.gpkg, a file that holds several"), "{notes}");
     // A chain deeper than RustGIS follows (each pass resolves one link, as they come after the
     // layers they select from): those near the file come in, the farthest are said.
     assert!(m.layer_by_name("deep 11").is_some(), "{notes}");

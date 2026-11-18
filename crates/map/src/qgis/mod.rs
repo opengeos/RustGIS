@@ -678,6 +678,16 @@ fn resolve_virtual_layers(layers: &mut [ProjectLayer], report: &mut Report) {
                 source::VirtualFrom::Missing(_) => None,
             };
             let Some(Source::File { path, layer, subset, ignored }) = base else { continue };
+            // A project layer on a file of several named without one: as a source naming none.
+            if layer.is_none() && source::holds_layers(path) {
+                let why = source::no_layer_named(path);
+                if let Some(Source::Virtual { from, filter, .. }) = layers.get_mut(i).map(|l| &mut l.source) {
+                    *from = Some(source::VirtualFrom::Missing(why));
+                    *filter = None;
+                }
+                changed = true;
+                continue;
+            }
             let (path, layer, ignored) = (path.clone(), layer.clone(), ignored.clone());
             let (subset, base_too_long) = match subset {
                 Some(q) if q.len() > max => (None, true),

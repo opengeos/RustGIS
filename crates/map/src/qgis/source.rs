@@ -368,10 +368,15 @@ fn memory(datasource: &str) -> Source {
 
 /// Whether the file at `path` is of a kind that holds several layers (a GeoPackage, a SpatiaLite
 /// or other SQLite database, a file geodatabase), by its name.
-fn holds_layers(path: &str) -> bool {
+pub(super) fn holds_layers(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let lower = lower.trim_end_matches(['/', '\\']);
     [".gpkg", ".sqlite", ".db", ".gdb"].iter().any(|e| lower.ends_with(e))
+}
+
+/// Why a virtual layer on the file at `path`, named without one of its layers, isn't read.
+pub(super) fn no_layer_named(path: &str) -> String {
+    format!("its source names no layer of {}, a file that holds several", cut_said(path.rsplit(['/', '\\']).next().unwrap_or(path), 100))
 }
 
 /// `text` to say in a note: its first `n` characters, and "…" when it goes on.
@@ -409,10 +414,7 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
                 } else {
                     match read(&provider, &source, dir) {
                         // A file of several layers named without one: RustGIS would add them all.
-                        Source::File { path, layer: None, .. } if holds_layers(&path) => VirtualFrom::Missing(format!(
-                            "its source names no layer of {}, a file that holds several",
-                            cut_said(path.rsplit(['/', '\\']).next().unwrap_or(&path), 100)
-                        )),
+                        Source::File { path, layer: None, .. } if holds_layers(&path) => VirtualFrom::Missing(no_layer_named(&path)),
                         source => VirtualFrom::Source(Box::new(source)),
                     }
                 };

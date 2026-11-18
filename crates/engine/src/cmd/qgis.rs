@@ -60,8 +60,9 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Imports a QGIS project as a new map. On the thread that runs it, as opening a project is: it
-/// adds layers to the session one after another, each through the command that adds its kind,
-/// and no part of it runs on its own yet. Its work is bounded by the project: at most
+/// adds layers to the session one after another, each through the command that adds its kind
+/// (a tile archive through that command's add itself, `tiles::add_with_metadata_wait`, with no
+/// wait for its metadata, as Add Data adds one), and no part of it runs on its own yet. Its work is bounded by the project: at most
 /// [`qgis::MAX_LAYERS`] layers, each read once by the command that adds it (a file's layers, and
 /// a virtual layer on one, each read their file), archives added without waiting for their
 /// metadata, annotation pictures within [`MAX_PICTURE_BYTES`]. A local archive's file is looked
