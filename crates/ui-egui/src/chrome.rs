@@ -113,8 +113,13 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                let separate_search =
+                    full.max.x - ui.cursor().min.x >= COMPACT_SEARCH_WIDTH + TOOLBAR_GAP + crate::widgets::SMALL_ICON_BUTTON_WIDTH;
                 header_branding(ui, app, full.max.x, &t);
-                quick_access(ui, app, full.max.x);
+                quick_access(ui, app, full.max.x, separate_search);
+                if !separate_search {
+                    return;
+                }
                 // Everything right of the Quick Access Toolbar is laid out by measuring, so on a
                 // narrow window the search box shrinks to an icon and the title shortens or hides
                 // instead of overlapping other controls.
@@ -211,8 +216,8 @@ fn header_branding(ui: &mut Ui, app: &mut RustGisApp, right: f32, tokens: &Token
     ui.add_space(gutter);
 }
 
-/// Fits the toolbar before compact Command Search. Overflow keeps the remaining controls reachable.
-fn quick_access(ui: &mut Ui, app: &mut RustGisApp, right: f32) {
+/// Fits as many toolbar items as the header has room for. At the narrowest width, search joins the overflow.
+fn quick_access(ui: &mut Ui, app: &mut RustGisApp, right: f32, separate_search: bool) {
     let pinned = app.ui.quick_access.clone();
     let mut items = vec![
         ("project.new", "new", "New project"),
@@ -226,10 +231,14 @@ fn quick_access(ui: &mut Ui, app: &mut RustGisApp, right: f32) {
         let label = crate::ribbon::QUICK.iter().find(|q| q.0 == id).map_or(id.as_str(), |q| q.1);
         (id.as_str(), crate::ribbon::quick_icon(id), label)
     }));
+    if !separate_search && !pinned.iter().any(|id| id == "ui.commandSearch") {
+        items.push(("ui.commandSearch", "search", "Command Search"));
+    }
     let spacing = ui.spacing().item_spacing.x;
     let width = crate::widgets::SMALL_ICON_BUTTON_WIDTH + spacing;
     // The spacing between toolbar buttons does not need another slot after the last button.
-    let slots = ((right - COMPACT_SEARCH_WIDTH - TOOLBAR_GAP - ui.cursor().min.x + spacing) / width).max(0.0) as usize;
+    let search_space = if separate_search { COMPACT_SEARCH_WIDTH + TOOLBAR_GAP } else { 0.0 };
+    let slots = ((right - search_space - ui.cursor().min.x + spacing) / width).max(0.0) as usize;
     let direct = if items.len() <= slots { items.len() } else { slots.saturating_sub(1) };
     let (visible, overflow) = items.split_at(direct);
     for &(id, icon, label) in visible {
@@ -1841,6 +1850,20 @@ mod tests {
             h.run();
             h.get_by_label("No project changes to undo or redo.");
         }
+    }
+
+    /// When the canvas fits just one button, its menu includes Search and Undo History.
+    #[test]
+    fn undo_history_and_search_share_the_last_toolbar_slot() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = history_toolbar(RustGisApp::with_sample(), 70.0);
+        h.run();
+        h.get_by_label("More Quick Access commands").click();
+        h.run();
+        h.get_by_label("Undo History");
+        h.get_by_label("Command Search").click_accesskit();
+        h.run();
+        assert!(h.state().ui.command_search.is_some());
     }
 
     /// Test fixture with a single pending step, as if a longer jump yielded.
