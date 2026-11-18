@@ -2126,7 +2126,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         return add_reads(s, p, &full, reads, Vec::new(), None);
     }
     if rustgis_data::io::is_multi_layer_name(path) {
-        // A city model or ZIP read ahead on the desktop: add the prepared layers without
+        // A file read ahead on the desktop ([`read_ahead_whole`]): add the prepared layers without
         // reading the file again on the UI thread.
         if let Some(read) = super::reads::take::<LayersRead>(s, &layers_key(path)) {
             if let Some(crs) = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()) {
@@ -2146,17 +2146,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         // RSS or Atom) is read here, on the UI thread there: within the size every computer reads,
         // as before #2408, so the window isn't held longer; said first, as it is the limit that
         // applies. The others ([`read_ahead_whole`]) take the larger limit.
-        let floor = rustgis_data::io::BYTES_FLOOR;
-        #[cfg(not(target_arch = "wasm32"))]
-        let ahead = read_ahead_whole(path);
-        #[cfg(target_arch = "wasm32")]
-        let ahead = false;
-        if !ahead && meta.len() > floor {
-            return Err(format!(
-                "{path}: a file of this kind is read whole as it is added, so at most {} MiB; it is {} MiB",
-                floor >> 20,
-                meta.len().div_ceil(1 << 20)
-            ));
+        if let Some(e) = past_read_as_added(path, meta.len()) {
+            return Err(e);
         }
         if meta.len() > rustgis_data::io::max_bytes() {
             return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
@@ -2207,9 +2198,29 @@ fn layers_key(path: &str) -> String {
     format!("layers:{path}")
 }
 
+/// The refusal of a file of several layers of `len` bytes that the desktop app reads as it is
+/// added, on the UI thread (not [`read_ahead_whole`]: a KML or KMZ, a LandXML, RSS or Atom),
+/// past the size every computer reads, as before #2408, so the window isn't held longer. Said
+/// before the larger limit, as it is the one that applies.
+fn past_read_as_added(path: &str, len: u64) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let ahead = read_ahead_whole(path);
+    #[cfg(target_arch = "wasm32")]
+    let ahead = false;
+    let floor = rustgis_data::io::BYTES_FLOOR;
+    (!ahead && len > floor).then(|| {
+        format!(
+            "{path}: a file of this kind is read whole as it is added, so at most {} MiB; it is {} MiB",
+            floor >> 20,
+            len.div_ceil(1 << 20)
+        )
+    })
+}
+
 /// Whether the desktop app reads a file of several layers whole ahead, off the UI thread
 /// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, a GML, GPX or TopoJSON file,
-/// an OpenStreetMap extract (`.pbf`, read by the built-in reader where GDAL isn't installed).
+/// an OpenStreetMap extract (`.pbf`; a large one goes to GDAL instead where it is installed, and
+/// isn't read ahead, [`large_osm`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_ahead_whole(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
@@ -2446,7 +2457,7 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     // A ZIP, a city model, a GML or a GPX file: its layers, read whole. A model named `.json` (not
     // `.city.json`) is a file of several layers only with options given, which Add Data reads as
     // it runs. A KML or KMZ (with its ground overlays) and a LandXML file are read as they are added.
-    if read_ahead_whole(&path) {
+    if read_ahead_whole(&path) && !large_osm(&path) {
         let (key, q) = (layers_key(&path), p.clone());
         return Some(ahead(NAME, key, move || read_layers_file(&q, &path)));
     }
@@ -2719,8 +2730,8 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8], local_file: b
     }
     if over_budget > 0 {
         notes.push(format!(
-            "{over_budget} ground overlays left out: their pictures don't fit beside the archive in the {} MiB read into memory on this computer",
-            rustgis_data::io::max_bytes() >> 20
+            "{over_budget} ground overlays left out: their pictures don't fit beside the archive in the {} MiB a KMZ is expanded within",
+            rustgis_data::io::BYTES_FLOOR >> 20
         ));
     }
     if !notes.is_empty() {
@@ -2866,6 +2877,10 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
         && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR);
     if rustgis_data::io::is_multi_layer_name(path) || model_json {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        // Listed within the size Add Data takes it at.
+        if let Some(e) = past_read_as_added(path, meta.len()) {
+            return Err(e);
+        }
         if meta.len() > rustgis_data::io::max_bytes() {
             return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }

@@ -110,10 +110,14 @@ pub type Overlays = (Vec<(GroundOverlay, Option<Vec<u8>>)>, usize, usize);
 
 /// The ground overlays a document lays out ([`Overlays`]).
 pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<Overlays> {
+    // As [`read`] inflates it: within the size every computer reads.
+    ground_overlays_within(file_name, bytes, usize::try_from(crate::io::BYTES_FLOOR).unwrap_or(usize::MAX))
+}
+
+/// [`ground_overlays`] with a KMZ expanded, and its pictures copied, within `budget` bytes.
+fn ground_overlays_within(file_name: &str, bytes: &[u8], budget: usize) -> Result<Overlays> {
     let is_kmz = std::path::Path::new(file_name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("kmz"))
         || bytes.starts_with(b"PK\x03\x04");
-    // As [`read`] inflates it: within the size every computer reads.
-    let budget = usize::try_from(crate::io::BYTES_FLOOR).unwrap_or(usize::MAX);
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let owned;
     let (doc_bytes, doc_dir): (&[u8], String) = if is_kmz {
@@ -655,10 +659,10 @@ mod tests {
         // Room for the archive, the document's copy and two and a half copies of the picture:
         // two are made.
         let max = (2 * doc.len() + 1000 + 2500) as u64;
-        let (out, undrawn, over_budget) = crate::io::with_max_bytes(max, || ground_overlays("a.kmz", &kmz)).unwrap();
+        let (out, undrawn, over_budget) = ground_overlays_within("a.kmz", &kmz, max as usize).unwrap();
         assert_eq!((out.len(), undrawn, over_budget), (2, 0, 3));
         assert!(out.iter().all(|(_, p)| p.as_deref().is_some_and(|p| p.len() == 1000)));
-        let (out, _, over_budget) = crate::io::with_max_bytes(1 << 20, || ground_overlays("a.kmz", &kmz)).unwrap();
+        let (out, _, over_budget) = ground_overlays("a.kmz", &kmz).unwrap();
         assert_eq!((out.len(), over_budget), (5, 0));
     }
 

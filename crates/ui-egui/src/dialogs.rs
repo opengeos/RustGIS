@@ -1966,7 +1966,7 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         ui.add(egui::TextEdit::singleline(&mut app.dialogs.e).hint_text("100000").desired_width(280.0)).labelled_by(input_label.id);
         ui.end_row();
     });
-    if app.dialogs.listed.as_deref().is_some_and(|path| path != app.dialogs.a) {
+    if app.dialogs.listed.as_deref().is_some_and(|path| path != app.dialogs.a.trim()) {
         app.dialogs.listed = None;
         app.dialogs.list.clear();
         app.dialogs.c.clear();
