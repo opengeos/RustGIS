@@ -195,6 +195,14 @@ pub const TOOL_FILE_PURPOSE: &str = "toolfile:";
 /// Marks a returned shortcut picker file; cancellation leaves no pending routing state.
 pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
 
+/// Starts the name of a script file the shell's `"script"` picker put in the inbox, for the
+/// Script pane's Load….
+pub const SCRIPT_PICK: &str = "\u{1}script:";
+
+/// The largest script file the Script pane's Load… reads, as the assistant's command file; the
+/// browser's shell refuses a larger one before reading it.
+pub const SCRIPT_FILE_MAX_BYTES: usize = 1024 * 1024;
+
 /// Maximum portable shortcut document size: saved overrides plus room for version metadata.
 pub const SHORTCUT_FILE_MAX_BYTES: usize = keymap::MAX_PREF_BYTES + 100;
 
@@ -813,6 +821,7 @@ pub struct UiState {
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
     pub quick_access: Vec<String>,
+    pub(crate) history_jump: Option<chrome::HistoryJump>,
     /// Whether a layout's PDF georeferences its map frames (Layout › Export › Georeference PDF).
     pub(crate) pdf_georeference: bool,
     /// The native title bar the header is drawn into; set by the desktop app on macOS.
@@ -1132,6 +1141,7 @@ impl Default for UiState {
             geolibre_zarr: Vec::new(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
+            history_jump: None,
             pdf_georeference: true,
             titlebar: None,
             pane_sets: Vec::new(),
@@ -1812,8 +1822,7 @@ impl RustGisApp {
         }
         let found = [CjkRegion::SimplifiedChinese, CjkRegion::Japanese, CjkRegion::Korean].into_iter().find_map(cjk_font);
         if let Some((bytes, index)) = found {
-            let mut face = egui::FontData::from_static(bytes);
-            face.index = *index;
+            let face = theme::installed_face(bytes, *index, true);
             self.extra_fonts.push(("cjk-fallback".into(), std::sync::Arc::new(face), None));
         }
     }
@@ -1826,8 +1835,7 @@ impl RustGisApp {
             return;
         }
         if let Some((bytes, index)) = rustgis_engine::render::fonts::symbol_font() {
-            let mut face = egui::FontData::from_static(bytes);
-            face.index = *index;
+            let face = theme::installed_face(bytes, *index, false);
             self.extra_fonts.push(("symbol-fallback".into(), std::sync::Arc::new(face), None));
         }
     }
@@ -1868,8 +1876,7 @@ impl RustGisApp {
         }
         self.fonts_requested.push(name.clone());
         if let Some((bytes, index)) = script_font(region) {
-            let mut face = egui::FontData::from_static(bytes);
-            face.index = *index;
+            let face = theme::installed_face(bytes, *index, matches!(region, rustgis_engine::render::fonts::ScriptFont::Cjk(_)));
             self.extra_fonts.push((name, std::sync::Arc::new(face), Some(region)));
             self.fonts_dirty = true;
         } else if let (Some(fetch), Some(url)) = (&self.services.fetch_font, script_font_url(region)) {
@@ -2034,11 +2041,16 @@ impl RustGisApp {
     /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) opens Add
     /// Delimited Text for it, or is read with a script's options; one the tool file picker marked
     /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`];
-    /// shortcut picks carry [`SHORTCUT_PICK`] and open the validated merge preview; DXF picks
+    /// shortcut picks carry [`SHORTCUT_PICK`] and open the validated merge preview; script picks
+    /// carry [`SCRIPT_PICK`] and open in the Script pane; DXF picks
     /// carry [`DXF_PICK`] and open Import DXF.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         if name.starts_with(SHORTCUT_PICK) {
             return shortcutfile::picked(self, bytes);
+        }
+        if let Some(name) = name.strip_prefix(SCRIPT_PICK) {
+            // An answer with no name is a cancelled picker.
+            return if name.is_empty() { Ok(Value::Null) } else { analysispane::script_picked(self, name, bytes) };
         }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);
@@ -2274,6 +2286,7 @@ impl RustGisApp {
             // Save As changed the document even when it began clean. Offering a download
             // cannot confirm that this renamed document reached a file.
             self.session.mark_unsaved();
+            self.ui.history_jump = None;
         }
         // On Android the file is written once the user has chosen its place, and the shell
         // says then whether it was.
@@ -4960,8 +4973,7 @@ impl RustGisApp {
                     dbf_notes.push(format!("{name}: {} rows couldn't be read and were left out", lost.rows));
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
-                // CSV holds a point a row, GPX a name for each feature and no areas.
-                dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name));
+                dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
                 drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {
                     self.session.notify(note, false);
@@ -6555,6 +6567,15 @@ impl RustGisApp {
         for (name, bytes) in arrived {
             let _ = self.open_picked(&name, &bytes);
         }
+        // A script file for the Script pane's Load…, opened with the context its undo needs; said,
+        // not dropped, if something in the inbox started a run meanwhile.
+        if let Some(script) = self.workflow.script_picked.take() {
+            if analysispane::script_running(self) {
+                self.session.notify(tl!("Wait for the run to finish").to_string(), true);
+            } else {
+                analysispane::open_script(self, ctx, script);
+            }
+        }
         // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
         // asynchronously and passes them through the inbox instead.)
         if !cfg!(target_arch = "wasm32") {
@@ -6656,6 +6677,7 @@ impl RustGisApp {
         self.themes_revision
     }
 
+    /// Draws the current workspace and processes toolbar actions once the interface fonts are ready.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let _diagnostics = self.session.diagnostics.enter();
         // See `logic`.
@@ -6746,6 +6768,8 @@ impl RustGisApp {
             self.sent_title = title;
         }
         pluginstart::frame_drawn(self, &ctx);
+        // Cancel, save prompts and any project changes from UI controls take effect first.
+        chrome::advance_history_jump(self, &ctx);
         // CJK text this frame drew with no face for it: the next frame's `logic` deals with it
         // (`ensure_data_cjk_font`), so there must be a next frame, though no input comes.
         if rustgis_engine::render::fonts::peek_missing_cjk().iter().any(|s| !self.cjk_scripts_handled.contains(s)) {
