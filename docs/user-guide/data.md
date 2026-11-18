@@ -108,8 +108,8 @@ RustGIS compares complete longitude/latitude and X/Y pairs regardless of column 
 X/Y includes planar aliases such as easting/northing. RustGIS counts in-range, non-0,0 positions
 for each pair, preferring longitude/latitude when the counts are equal and nonzero.
 That pair is used for the whole file. Automatic detection keeps X/Y and longitude/latitude
-separate. If it finds coordinate-like names but no complete pair or WKT column, the file opens
-as a table and the notice names the candidates so you can choose x and y.
+separate. If it finds candidate names for both axes but no matching pair or WKT column,
+the file opens as a table with a notice naming the candidates so you can choose x and y.
 The published aliases `Longitude Decimal Degrees`/`Latitude Decimal Degrees` and
 `Longitutde`, `Longtitude` and `Lattitude` are recognised too. The dialog checks the first 1,000 rows
 of delimited text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you

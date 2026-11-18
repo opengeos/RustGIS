@@ -145,12 +145,10 @@ struct Original {
     cpg: Option<(PathBuf, Vec<u8>)>,
 }
 
-/// Reads a Shapefile part at `p`, `None` when it is absent. Refuses oversized parts with advice for the whole dataset.
-fn read_part(p: &Path) -> Result<Option<Vec<u8>>> {
+/// Reads an original file at `p`, `None` when absent. The caller supplies format-specific size advice.
+fn read_part(p: &Path, size_error: fn(&str, u64) -> String) -> Result<Option<Vec<u8>>> {
     match std::fs::metadata(p) {
-        Ok(m) if m.len() > crate::io::MAX_BYTES => {
-            Err(DataError::Format(crate::io::shapefile_size_error(&p.to_string_lossy(), crate::io::MAX_BYTES)))
-        }
+        Ok(m) if m.len() > crate::io::MAX_BYTES => Err(DataError::Format(size_error(&p.to_string_lossy(), crate::io::MAX_BYTES))),
         Ok(_) => Ok(Some(std::fs::read(p)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
@@ -161,16 +159,17 @@ impl Original {
     /// Reads the parts of the Shapefile at `path`: its `.shp` and `.dbf` must be there; its
     /// `.shx`, `.prj` and `.cpg` (in whichever case it is spelled) may be.
     fn read(path: &Path) -> Result<Original> {
+        let read = |part: &Path| read_part(part, crate::io::shapefile_size_error);
         let missing = |ext: &str| refused(path, format!("its .{ext} isn't there"));
-        let shp = read_part(path)?.ok_or_else(|| missing("shp"))?;
+        let shp = read(path)?.ok_or_else(|| missing("shp"))?;
         let dbf_path = crate::io::dbf_sidecar(path);
-        let dbf = read_part(&dbf_path)?.ok_or_else(|| missing("dbf"))?;
-        let shx = read_part(&path.with_extension("shx"))?;
-        let prj = read_part(&path.with_extension("prj"))?;
+        let dbf = read(&dbf_path)?.ok_or_else(|| missing("dbf"))?;
+        let shx = read(&path.with_extension("shx"))?;
+        let prj = read(&path.with_extension("prj"))?;
         let mut cpg = None;
         for ext in crate::dbf::CPG_SPELLINGS {
             let p = path.with_extension(ext);
-            if let Some(bytes) = read_part(&p)? {
+            if let Some(bytes) = read(&p)? {
                 cpg = Some((p, bytes));
                 break;
             }

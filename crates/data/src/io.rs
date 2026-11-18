@@ -1729,19 +1729,22 @@ fn found_geographic_xy(headers: &[String]) -> Option<(usize, usize)> {
     find(LON_NAMES).or_else(|| find(LON_ALIASES)).zip(find(LAT_NAMES).or_else(|| find(LAT_ALIASES)))
 }
 
-/// Ordinary tables keep opening quietly. When there are coordinate-like names but no complete
-/// pair, name them so the user can supply the missing choice.
+/// Names candidate columns when both axes are present without a matching pair.
 fn unmatched_coordinates_note(headers: &[String]) -> Option<String> {
-    let candidates: Vec<_> = headers
-        .iter()
-        .map(|h| h.trim())
-        .filter(|h| {
-            let name = h.to_ascii_lowercase();
-            matches!(name.as_str(), "x" | "y")
-                || [LON_NAMES, LON_ALIASES, LAT_NAMES, LAT_ALIASES, X_NAMES, Y_NAMES].iter().any(|names| names.contains(&name.as_str()))
-        })
-        .collect();
-    (!candidates.is_empty()).then(|| {
+    let mut candidates = Vec::new();
+    let mut has_x = false;
+    let mut has_y = false;
+    for header in headers.iter().map(|h| h.trim()) {
+        let name = header.to_ascii_lowercase();
+        let x = name == "x" || [LON_NAMES, LON_ALIASES, X_NAMES].iter().any(|names| names.contains(&name.as_str()));
+        let y = name == "y" || [LAT_NAMES, LAT_ALIASES, Y_NAMES].iter().any(|names| names.contains(&name.as_str()));
+        if x || y {
+            candidates.push(header);
+            has_x |= x;
+            has_y |= y;
+        }
+    }
+    (has_x && has_y).then(|| {
         format!("Opened as a table. No matching coordinate pair among {}. Choose x and y to import points.", candidates.join(", "))
     })
 }
@@ -5517,6 +5520,16 @@ mod tests {
             assert!(report.messages.is_empty(), "{:?}", report.messages);
             let columns = csv_columns(text, None, None).unwrap();
             assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("Longtitude"), Some("Latitude")));
+        }
+    }
+
+    /// A plain table with only one candidate axis opens without a coordinate notice.
+    #[test]
+    fn csv_lone_coordinate_like_headers_do_not_warn() {
+        for text in ["id,name\n1,Main\n", "id,Y\n1,2\n", "id,Lat\n1,2\n", "id,X,Longitude\n1,2,3\n"] {
+            let (dataset, report) = read_csv(text, "table").unwrap();
+            assert_eq!(dataset.geometry_type, GeometryType::None);
+            assert!(report.messages.is_empty(), "{text}: {:?}", report.messages);
         }
     }
 
