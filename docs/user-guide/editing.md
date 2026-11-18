@@ -28,7 +28,9 @@ a project clears it. Undo does not reverse files already written by an export.
 In the desktop and browser toolbar, open **Undo History** next to Undo and Redo to see the
 current project state and the available steps. Select a row to go directly to the state after
 that change, or **Earliest available state** to undo every retained step. You can select a newer
-row to redo those changes. Making a new edit after going back discards the redo steps.
+row to redo those changes. On a narrow window, Undo History may be under **More Quick Access
+commands**. For longer jumps, **Cancel** in the status bar stops at the state reached so far.
+Making a new edit after going back discards the redo steps.
 
 ## Which parcel area to report
 

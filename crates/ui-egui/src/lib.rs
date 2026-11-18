@@ -813,6 +813,7 @@ pub struct UiState {
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
     pub quick_access: Vec<String>,
+    pub(crate) history_jump: Option<chrome::HistoryJump>,
     /// Whether a layout's PDF georeferences its map frames (Layout › Export › Georeference PDF).
     pub(crate) pdf_georeference: bool,
     /// The native title bar the header is drawn into; set by the desktop app on macOS.
@@ -1132,6 +1133,7 @@ impl Default for UiState {
             geolibre_zarr: Vec::new(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
+            history_jump: None,
             pdf_georeference: true,
             titlebar: None,
             pane_sets: Vec::new(),
@@ -6651,6 +6653,7 @@ impl RustGisApp {
         self.themes_revision
     }
 
+    /// Draws the current workspace and processes toolbar actions once the interface fonts are ready.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let _diagnostics = self.session.diagnostics.enter();
         // See `logic`.
@@ -6666,6 +6669,7 @@ impl RustGisApp {
         }
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
+        chrome::advance_history_jump(self, &ctx);
         // Before the shortcuts and the fields: the row picked in a text field's menu, as its keys.
         fieldmenu::play(self, &ctx);
         chrome::shortcuts(self, &ctx);

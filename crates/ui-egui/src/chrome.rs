@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mapview::Toast;
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{row_button, small, text_w, why_disabled};
+use crate::widgets::{row_button, selectable_menu_row, small, text_w, why_disabled};
 use crate::{RustGisApp, icons};
 
 /// The native title bar the header is drawn into (macOS: a transparent title bar over a
@@ -118,47 +118,11 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(tl!("RustGIS")).font(semibold(13.0)).color(t.text));
                 ui.add_space(10.0);
-                // Quick Access Toolbar.
-                small(ui, app, "new", "", "New project", "project.new", Value::Null, false);
-                small(ui, app, "open", "", "Open project", "ui.open", Value::Null, false);
-                small(ui, app, "save", "", "Save project", "ui.save", Value::Null, false);
-                small(
-                    ui,
-                    app,
-                    "undo",
-                    "",
-                    app.session
-                        .undo_label()
-                        .map(|l| crate::i18n::fmt("Undo {action}", &[("action", tl_raw!(l))]))
-                        .unwrap_or(tl!("Undo").into())
-                        .as_str(),
-                    "edit.undo",
-                    Value::Null,
-                    false,
-                );
-                small(
-                    ui,
-                    app,
-                    "redo",
-                    "",
-                    app.session
-                        .redo_label()
-                        .map(|l| crate::i18n::fmt("Redo {action}", &[("action", tl_raw!(l))]))
-                        .unwrap_or(tl!("Redo").into())
-                        .as_str(),
-                    "edit.redo",
-                    Value::Null,
-                    false,
-                );
-                undo_history(ui, app);
-                for id in app.ui.quick_access.clone() {
-                    let label = crate::ribbon::QUICK.iter().find(|q| q.0 == id).map_or(id.as_str(), |q| q.1).to_string();
-                    small(ui, app, crate::ribbon::quick_icon(&id), "", &label, &id, Value::Null, false);
-                }
+                quick_access(ui, app, full.max.x);
                 // Everything right of the Quick Access Toolbar is laid out by measuring, so on a
                 // narrow window the search box shrinks to an icon and the title shortens or hides
                 // instead of overlapping other controls.
-                let qat_end = ui.cursor().min.x + 8.0;
+                let qat_end = ui.cursor().min.x + TOOLBAR_GAP;
                 // Command search on the right: full width when there is room, a round icon button
                 // otherwise. It never reaches into the toolbar.
                 let label = tl!("Command Search");
@@ -174,7 +138,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 } else if room >= 150.0 + reserve {
                     (room - reserve).clamp(150.0, full_w)
                 } else {
-                    26.0
+                    COMPACT_SEARCH_WIDTH
                 };
                 let sr = Rect::from_min_max(pos2(right - sw, full.center().y - 12.0), pos2(right, full.center().y + 12.0));
                 let resp = ui.interact(sr, egui::Id::unique("command_search_box"), Sense::click());
@@ -224,65 +188,151 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
         });
 }
 
-/// Opens the project's retained undo and redo states from the Quick Access Toolbar.
-fn undo_history(ui: &mut Ui, app: &mut RustGisApp) {
-    let history = small(ui, app, "history", "", "Undo History", "ui.menu", Value::Null, false);
-    let target = egui::Popup::menu(&history)
-        .width(240.0)
-        .show(|ui| {
-            ui.strong(tl!("Undo History"));
-            if !app.session.can_undo() && !app.session.can_redo() {
-                ui.label(tl!("No project changes to undo or redo."));
-                return None;
-            }
+const HISTORY: &str = "ui.undoHistory";
+const COMPACT_SEARCH_WIDTH: f32 = 26.0;
+const TOOLBAR_GAP: f32 = 8.0;
+const HISTORY_MENU_WIDTH: f32 = 260.0;
 
-            let current = app.session.undo_depth();
-            // A step labels the state reached by applying it. The oldest state precedes all the
-            // retained steps, including when the stack has reached its limit.
-            let changes = app.session.undo_labels().chain(app.session.redo_labels());
-            let states: Vec<_> = std::iter::once(None).chain(changes.map(Some)).collect();
-            // If a background command moves the rows, a gesture begun on the old list no
-            // longer targets a row of the new one.
-            ui.push_id(app.session.state(), |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        let mut target = None;
-                        for (index, action) in states.into_iter().enumerate().rev() {
-                            let selected = index == current;
-                            let label = if selected {
-                                let action = action.map_or_else(|| tl_raw!("Earliest available state"), crate::i18n::t_raw);
-                                crate::i18n::fmt("Current: {action}", &[("action", action)])
-                            } else {
-                                action.map_or_else(|| tl!("Earliest available state"), crate::i18n::t).into()
-                            };
-                            let row = ui.add(egui::Button::selectable(selected, label).min_size(vec2(ui.available_width(), 0.0)));
-                            if selected && history.clicked() {
-                                row.scroll_to_me(Some(egui::Align::Center));
-                            }
-                            if row.clicked() && !selected {
-                                let command = if index < current { "edit.undo" } else { "edit.redo" };
-                                target = Some((command, index.abs_diff(current)));
-                            }
-                        }
-                        target
-                    })
-                    .inner
-            })
-            .inner
-        })
-        .and_then(|response| response.inner);
-
-    if let Some((command, steps)) = target {
-        for _ in 0..steps {
-            if app.run_by_user(command, Value::Null).is_err() {
-                break;
+/// Fits the toolbar before compact Command Search. Overflow keeps the remaining controls reachable.
+fn quick_access(ui: &mut Ui, app: &mut RustGisApp, right: f32) {
+    let pinned = app.ui.quick_access.clone();
+    let mut items = vec![
+        ("project.new", "new", "New project"),
+        ("ui.open", "open", "Open project"),
+        ("ui.save", "save", "Save project"),
+        ("edit.undo", "undo", "Undo"),
+        ("edit.redo", "redo", "Redo"),
+        (HISTORY, "history", "Undo History"),
+    ];
+    items.extend(pinned.iter().map(|id| {
+        let label = crate::ribbon::QUICK.iter().find(|q| q.0 == id).map_or(id.as_str(), |q| q.1);
+        (id.as_str(), crate::ribbon::quick_icon(id), label)
+    }));
+    let width = crate::widgets::SMALL_ICON_BUTTON_WIDTH + ui.spacing().item_spacing.x;
+    let slots = ((right - COMPACT_SEARCH_WIDTH - TOOLBAR_GAP - ui.cursor().min.x) / width).max(0.0) as usize;
+    let direct = if items.len() <= slots { items.len() } else { slots.saturating_sub(1) };
+    let (visible, overflow) = items.split_at(direct);
+    for &(id, icon, label) in visible {
+        if id == HISTORY {
+            let button = small(ui, app, icon, "", label, "ui.menu", Value::Null, false);
+            history_popup(&button).show(|ui| undo_history_rows(ui, app, button.clicked()));
+        } else {
+            let tooltip = match id {
+                "edit.undo" => app.session.undo_label().map(|action| crate::i18n::fmt("Undo {action}", &[("action", tl_raw!(action))])),
+                "edit.redo" => app.session.redo_label().map(|action| crate::i18n::fmt("Redo {action}", &[("action", tl_raw!(action))])),
+                _ => None,
+            };
+            small(ui, app, icon, "", tooltip.as_deref().unwrap_or(label), id, Value::Null, false);
+        }
+    }
+    if slots > 0 && !overflow.is_empty() {
+        let button = small(ui, app, "chevron_down", "", "More Quick Access commands", "ui.menu", Value::Null, false);
+        use egui::containers::menu::MenuConfig;
+        let close = egui::PopupCloseBehavior::CloseOnClickOutside;
+        let info = egui::UiStackInfo::new(egui::UiKind::Menu)
+            .with_tag_value(MenuConfig::MENU_CONFIG_TAG, MenuConfig::default().close_behavior(close));
+        egui::Popup::menu(&button).close_behavior(close).info(info).show(|ui| {
+            for &(id, icon, label) in overflow {
+                if id == HISTORY {
+                    crate::widgets::submenu_row(ui, icon, tl!(label), |ui| undo_history_rows(ui, app, false));
+                } else {
+                    crate::widgets::menu_item(ui, app, icon, label, id, Value::Null);
+                }
             }
+        });
+    }
+}
+
+/// Creates a popup where clicks on the scrollbar keep the history list open.
+fn history_popup(button: &egui::Response) -> egui::Popup<'_> {
+    egui::Popup::menu(button).width(HISTORY_MENU_WIDTH).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+}
+
+/// Shows all retained states. Activating a row queues the steps that lead to that state.
+fn undo_history_rows(ui: &mut Ui, app: &mut RustGisApp, opening: bool) {
+    ui.set_width(HISTORY_MENU_WIDTH);
+    ui.strong(tl!("Undo History"));
+    if !app.session.can_undo() && !app.session.can_redo() {
+        ui.label(tl!("No project changes to undo or redo."));
+        return;
+    }
+    let current = app.session.undo_depth();
+    let position = app.session.history_position();
+    // A step labels the state reached by applying it. The oldest state precedes all the
+    // retained steps, including when the stack has reached its limit.
+    let changes = app.session.undo_labels().chain(app.session.redo_labels());
+    let states: Vec<_> = std::iter::once(None).chain(changes.map(Some)).collect();
+    // Invalidate pointer gestures when commands change the history or its current position.
+    ui.push_id(position, |ui| {
+        egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
+            for (index, action) in states.into_iter().enumerate().rev() {
+                let (icon, command) = match index.cmp(&current) {
+                    std::cmp::Ordering::Less => ("undo", Some("edit.undo")),
+                    std::cmp::Ordering::Equal => ("history", None),
+                    std::cmp::Ordering::Greater => ("redo", Some("edit.redo")),
+                };
+                let selected = command.is_none();
+                let label = if selected {
+                    let action = action.map_or_else(|| tl_raw!("Earliest available state"), crate::i18n::t_raw);
+                    crate::i18n::fmt("Current: {action}", &[("action", action)])
+                } else {
+                    action.map_or_else(|| tl!("Earliest available state"), crate::i18n::t).into()
+                };
+                let row = selectable_menu_row(ui, icon, &label, selected);
+                if selected && opening {
+                    row.scroll_to_me(Some(egui::Align::Center));
+                }
+                if row.clicked()
+                    && let Some(command) = command
+                {
+                    let total = index.abs_diff(current);
+                    app.ui.history_jump = Some(HistoryJump { command, position, total, done: 0 });
+                    ui.ctx().request_repaint();
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
+/// The remaining steps and the project history they were selected from.
+pub(crate) struct HistoryJump {
+    command: &'static str,
+    position: (u64, u64),
+    total: usize,
+    done: usize,
+}
+
+/// Advances a jump within the frame budget. Each step uses the UI's normal undo/redo cleanup.
+/// A step already in progress finishes before yielding. Project changes invalidate the rest.
+pub(crate) fn advance_history_jump(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.ui.backstage || ctx.current_pass_index() != 0 {
+        return;
+    }
+    let Some(mut jump) = app.ui.history_jump.take() else { return };
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape)) {
+        return;
+    }
+    if app.session.history_position() != jump.position {
+        app.session.notify(tl!("The history jump stopped because the project changed."), false);
+        return;
+    }
+    let start = web_time::Instant::now();
+    while jump.done < jump.total {
+        if app.run_by_user(jump.command, Value::Null).is_err() {
+            return;
+        }
+        jump.done += 1;
+        if jump.done < jump.total && start.elapsed() >= std::time::Duration::from_millis(8) {
+            jump.position = app.session.history_position();
+            app.ui.history_jump = Some(jump);
+            ctx.request_repaint();
+            return;
         }
     }
 }
 
+/// Shows map readouts and progress controls for work the user can cancel.
 pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
@@ -402,6 +452,17 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     icons::paint(ui.painter(), r, "clear_sel", t.icon, t.accent);
                     if resp.on_hover_text(tl!("Clear selection")).clicked() {
                         let _ = app.run("select.clear", Value::Null);
+                    }
+                }
+                if let Some(jump) = &app.ui.history_jump {
+                    sep(ui, &t);
+                    let action = if jump.command == "edit.undo" { tl_raw!("Undo") } else { tl_raw!("Redo") };
+                    ui.label(crate::i18n::fmt(
+                        "{action} {done} of {total}",
+                        &[("action", action), ("done", &jump.done.to_string()), ("total", &jump.total.to_string())],
+                    ));
+                    if ui.small_button(tl!("Cancel")).on_hover_text(tl!("Stop at the state reached so far")).clicked() {
+                        app.ui.history_jump = None;
                     }
                 }
                 // An export writing its file: its progress and Cancel.
@@ -1649,6 +1710,21 @@ mod tests {
         }
     }
 
+    /// Runs the real toolbar and advances queued history steps on the following frames.
+    fn history_toolbar(app: RustGisApp, width: f32) -> egui_kittest::Harness<'static, RustGisApp> {
+        egui_kittest::Harness::builder()
+            .with_size(vec2(width, 700.0))
+            .with_context_setup(|ctx| crate::theme::install_fonts(ctx, &[], None))
+            .build_ui_state(
+                |ui, app| {
+                    advance_history_jump(app, ui.ctx());
+                    header(app, ui);
+                    status_bar(app, ui);
+                },
+                app,
+            )
+    }
+
     /// The toolbar can jump over several states in either direction, including to the saved state.
     #[test]
     fn undo_history_jumps_back_and_forward() {
@@ -1658,9 +1734,7 @@ mod tests {
         app.run("layer.rename", json!({"layer": "Cities", "name": "Places"})).unwrap();
         app.run("labels.style", json!({"layer": "Places", "size": 20})).unwrap();
         let latest = app.session.state();
-        let mut h = egui_kittest::Harness::builder()
-            .with_context_setup(|ctx| crate::theme::install_fonts(ctx, &[], None))
-            .build_ui_state(|ui, app| header(app, ui), app);
+        let mut h = history_toolbar(app, 800.0);
         h.run();
 
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Undo History").click();
@@ -1678,6 +1752,52 @@ mod tests {
         h.run();
         assert_eq!(h.state().session.state(), latest);
         assert!(!h.state().session.can_redo());
+    }
+
+    /// A new redo row can appear between press and release even at the same current state.
+    #[test]
+    fn undo_history_ignores_a_click_when_the_redo_branch_changes() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("labels.style", json!({"layer": "Cities", "size": 20})).unwrap();
+        let current = app.session.state();
+        let mut h = history_toolbar(app, 800.0);
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Undo History").click();
+        h.run();
+        let pos = h.get_by_label("Earliest available state").rect().center();
+        h.event(egui::Event::PointerMoved(pos));
+        let pointer =
+            |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(pointer(true));
+        h.run();
+        h.state_mut().run("layer.rename", json!({"layer": "Cities", "name": "Places"})).unwrap();
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        h.run();
+        assert!(h.state().session.can_redo());
+        h.event(pointer(false));
+        h.run();
+        assert_eq!(h.state().session.state(), current);
+        assert!(h.state().session.can_redo());
+    }
+
+    /// Narrow windows reserve room for search and keep the hidden history reachable.
+    #[test]
+    fn undo_history_is_reachable_in_quick_access_overflow() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.ui.quick_access.push("map.zoomFull".into());
+        let mut h = history_toolbar(app, 315.0);
+        h.run();
+        let overflow = h.get_by_label("More Quick Access commands");
+        let right_of_buttons = overflow.rect().max.x;
+        assert!(right_of_buttons < 315.0 - HEADER_PAD - COMPACT_SEARCH_WIDTH);
+        overflow.click();
+        h.run();
+        h.get_by_label_contains("Full Extent");
+        h.get_by_label("Undo History").click();
+        h.run();
+        h.get_by_label("No project changes to undo or redo.");
     }
 
     /// With a text field focused, Ctrl/⌘+Z undoes its typing, not the project; with none, the

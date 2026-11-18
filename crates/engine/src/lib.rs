@@ -2972,6 +2972,12 @@ impl Session {
         self.redo.iter().rev().map(|step| step.2)
     }
 
+    /// Identifies the current position and the history it belongs to. Editing and then undoing
+    /// the edit returns to the same state with a different redo stack.
+    pub fn history_position(&self) -> (u64, u64) {
+        (self.state, self.states)
+    }
+
     /// Makes the next command's undo step part of the last one, when that was made under the same
     /// `key`: a held arrow key nudging a layout element is one step to undo, not one per repeat
     /// (and doesn't push the work before it out of the history). Any other change in between,
