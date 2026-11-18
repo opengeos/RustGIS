@@ -3717,7 +3717,8 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
     }
 }
 
-/// The Settings tab: theme, scale, customization, language, start-up and autosave.
+/// The Settings tab: theme, scale, customization, language, start-up, datum grids, map tiles,
+/// performance and autosave.
 fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Theme", |ui| {
         theme_menu(app, ui);
@@ -3752,6 +3753,32 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         worldview_menu(app, ui);
     });
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
+    group(ui, "Datum Grids", |ui| {
+        let mut on = app.ui.download_grids;
+        // The browser keeps what it downloads for the session; a computer, in a folder.
+        let tip = if cfg!(target_arch = "wasm32") {
+            tl!(
+                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use for this session when this is off."
+            )
+        } else {
+            tl!(
+                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: to stop using them, delete the datum-grids folder in RustGIS's app data and start RustGIS again (grids installed for PROJ are still used)."
+            )
+        };
+        let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tip);
+        if resp.clicked() {
+            let _ = app.run("ui.datumGrids", json!({"on": on}));
+        }
+    });
+    group(ui, "Map Tiles", |ui| {
+        let mut on = app.ui.sharp_tiles;
+        let tip = tl!(
+            "On a high-resolution (HiDPI) display, fetch raster tiles and WMS pictures for the display's own pixels, up to twice the detail: text and lines in them come out sharp and smaller. Off, they are fetched for its logical pixels and stretched: softer, with larger text."
+        );
+        if ui.checkbox(&mut on, tl!("Sharp Tiles on HiDPI Displays")).on_hover_text(tip).clicked() {
+            let _ = app.run("ui.sharpTiles", json!({"on": on}));
+        }
+    });
     // The browser has no threads to set.
     if !cfg!(target_arch = "wasm32") {
         group(ui, "Performance", |ui| threads_menu(app, ui));
