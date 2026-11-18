@@ -149,6 +149,33 @@ fn picture(area: [f64; 4], res: f64, max_side: u32) -> Option<([f64; 4], u32, u3
     out.iter().all(|v| v.is_finite()).then_some((out, w as u32, h as u32))
 }
 
+/// A WMS GetMap address for a picture of `detail` pixels a logical one (as the picture asked
+/// for came out, past any size limit), with the
+/// resolution the servers that read one draw it at: `DPI` (GeoServer, QGIS Server),
+/// `MAP_RESOLUTION` (MapServer, QGIS Server) and `FORMAT_OPTIONS=dpi:` (GeoServer), so their
+/// symbols and text keep their size in the larger picture. Any other address, a picture at a
+/// logical pixel's detail, or one naming a resolution already, is left as it is.
+fn with_dpi(url: String, detail: f64) -> String {
+    if !(detail > 1.0 && detail.is_finite()) {
+        return url;
+    }
+    let (address, fragment) = url.split_once('#').map_or((url.as_str(), None), |(a, f)| (a, Some(f)));
+    let Some((_, query)) = address.split_once('?') else { return url };
+    let keys: Vec<(&str, &str)> = query.split('&').map(|part| part.split_once('=').unwrap_or((part, ""))).collect();
+    let has = |key: &str| keys.iter().any(|(k, _)| k.eq_ignore_ascii_case(key));
+    let is = |key: &str, value: &str| keys.iter().any(|(k, v)| k.eq_ignore_ascii_case(key) && v.eq_ignore_ascii_case(value));
+    if !is("REQUEST", "GetMap") || ["DPI", "MAP_RESOLUTION", "FORMAT_OPTIONS"].iter().any(|k| has(k)) {
+        return url;
+    }
+    let dpi = (96.0 * detail).round();
+    let mut out = format!("{address}&DPI={dpi}&MAP_RESOLUTION={dpi}&FORMAT_OPTIONS=dpi:{dpi}");
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
 /// How long a layer whose large picture failed is asked for smaller ones before a large one is
 /// tried again (the failure may have been passing: a timeout, a busy server).
 const SMALL_FOR: web_time::Duration = web_time::Duration::from_secs(300);
@@ -223,10 +250,13 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     if rustgis_tiles::template::zoom_for(merc, t.tile_size, rustgis_map::tiles::MAX_ZOOM) < t.min_zoom {
         return nothing;
     }
-    // Closer in than its finest zoom, its picture there is stretched (as its finest tiles are).
-    let finer = (zoom_res(t.max_zoom, t.tile_size) / merc).max(1.0);
     let cam = view.camera;
     let (w, h, k) = (view.width, view.height, view.pixels_per_point.max(0.01));
+    // A pixel of the picture for each of the display's own on a HiDPI one, when sharp tiles are
+    // on, so the picture isn't stretched (#2390).
+    let detail = f64::from(rustgis_tiles::template::detail(k as f32));
+    // Closer in than its finest zoom, its picture there is stretched (as its finest tiles are).
+    let finer = (zoom_res(t.max_zoom, t.tile_size) * detail / merc).max(1.0);
     let to_system = |m: Coord| -> Option<Coord> {
         match &req.transformer {
             None => Some(m),
@@ -257,7 +287,10 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let (Some(a), Some(b)) = (to_system(cam.to_map(w / 2.0, h / 2.0, w, h)), to_system(cam.to_map(w / 2.0 + 1.0, h / 2.0, w, h))) else {
         return nothing;
     };
-    let res = (b.x - a.x).hypot(b.y - a.y) * finer;
+    // The system's units a logical pixel, and a pixel of the picture asked for: coarser where it
+    // is stretched past its finest zoom.
+    let logical = (b.x - a.x).hypot(b.y - a.y);
+    let res = logical * finer / detail;
     if !(lo.0 < hi.0 && lo.1 < hi.1) {
         return nothing;
     }
@@ -298,6 +331,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             },
             None => (at, pw, ph),
         };
+        // The picture's own units a pixel: coarser than asked past the most a service draws.
         let r = (at[2] - at[0]) / f64::from(pw.max(1));
         // The layer's last picture holding the whole view at this detail, with room to move, is
         // drawn instead: a view turned (its box wider or narrower at each angle) or made smaller
@@ -317,7 +351,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             paint(pm, img, *last_at);
             return nothing;
         }
-        let url = Warp::map_address(&req.base, &req.system, at, pw, ph);
+        let url = with_dpi(Warp::map_address(&req.base, &req.system, at, pw, ph), logical / r);
         match cache::get(&url, Want::Image) {
             State::Ready(payload) => {
                 if let Payload::Image(img) = &*payload {
@@ -582,6 +616,36 @@ mod tests {
         assert_eq!((at, w, rows), ([0.0, h - 50.0, 100.0, h], 100, 50));
         // Wholly past it: nothing.
         assert_eq!(in_world([0.0, h + 10.0, 100.0, h + 20.0], 100, 10, world), Some(None));
+    }
+
+    /// A WMS picture of more pixels than the view's logical ones says the resolution it is for,
+    /// in the parameters servers read (#2390); any other is asked as it was.
+    #[test]
+    fn a_hidpi_wms_picture_says_its_resolution() {
+        let wms = "https://m.example.org/wms?SERVICE=WMS&REQUEST=GetMap&LAYERS=a&WIDTH=800&HEIGHT=600";
+        assert_eq!(with_dpi(wms.into(), 2.0), format!("{wms}&DPI=192&MAP_RESOLUTION=192&FORMAT_OPTIONS=dpi:192"));
+        assert_eq!(with_dpi(wms.into(), 1.5), format!("{wms}&DPI=144&MAP_RESOLUTION=144&FORMAT_OPTIONS=dpi:144"));
+        // At a logical pixel's detail, or stretched past its finest zoom: as it was.
+        for detail in [1.0, 0.4, f64::NAN, f64::INFINITY] {
+            assert_eq!(with_dpi(wms.into(), detail), wms, "{detail}");
+        }
+        // Lower case keys, and a fragment kept last.
+        let lower = "https://m.example.org/wms?service=wms&request=getmap&layers=a#rustgis-x";
+        assert_eq!(
+            with_dpi(lower.into(), 2.0),
+            "https://m.example.org/wms?service=wms&request=getmap&layers=a&DPI=192&MAP_RESOLUTION=192&FORMAT_OPTIONS=dpi:192#rustgis-x"
+        );
+        // A resolution of its own, a request that isn't GetMap, or no query: as it was.
+        for own in [
+            format!("{wms}&dpi=300"),
+            format!("{wms}&FORMAT_OPTIONS=antialias:none"),
+            format!("{wms}&map_resolution=72"),
+            "https://m.example.org/wms?SERVICE=WMS&REQUEST=GetCapabilities".into(),
+            "https://s.example.org/x/MapServer/export?bbox=1,2,3,4&size=800,600&f=image".into(),
+            "https://m.example.org/tile.png".into(),
+        ] {
+            assert_eq!(with_dpi(own.clone(), 2.0), own);
+        }
     }
 
     #[test]

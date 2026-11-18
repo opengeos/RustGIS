@@ -1072,6 +1072,12 @@ pub(crate) mod tests {
             ([px(5, 5), px(200, 100), px(394, 194)], std::mem::take(&mut *ASKED_ONE.lock().unwrap()))
         };
         let green = [20, 200, 20, 255];
+        // The resolution a picture says it is for (#2390): 96 a logical pixel's worth of its own
+        // pixels, which are up to a quarter of a level finer than asked for.
+        let dpi = |u: &str| -> Option<f64> {
+            let d: f64 = u.split("&DPI=").nth(1)?.split('&').next()?.parse().ok()?;
+            u.contains(&format!("&MAP_RESOLUTION={d}&FORMAT_OPTIONS=dpi:{d}")).then_some(d)
+        };
         // In Web Mercator.
         let mut m = Map::new("Map");
         m.graticule = false;
@@ -1079,21 +1085,50 @@ pub(crate) mod tests {
         m.tiles.push(TileLayer::new("WMS", TileKind::Raster, url));
         let (_, tiled) = at(&mut m, 30.0, 0.0);
         assert!(tiled.len() > 1 && tiled.iter().all(|u| u.contains("&WIDTH=256&HEIGHT=256&")), "{tiled:?}");
+        // Tiles for the display's own pixels (#2390): 30 m a point is 15 a pixel at 2 a point,
+        // zoom 13 (4.9 km tiles) rather than 12.
+        let bbox_width = |u: &str| -> Option<f64> {
+            let b: Vec<f64> = u.split("BBOX=").nth(1)?.split('&').next()?.split(',').filter_map(|v| v.parse().ok()).collect();
+            Some(b.get(2)? - b.first()?)
+        };
+        let z13 = 2.0 * rustgis_tiles::template::HALF_WORLD / 8192.0;
+        assert!(tiled.iter().all(|u| bbox_width(u).is_some_and(|w| (w - z13).abs() < 1.0)), "{tiled:?}");
         m.tiles[0].single_image = true;
         let (p, asked) = at(&mut m, 30.0, 0.0);
         assert_eq!(p, [green; 3], "the whole view drawn");
-        // One picture, past the view (200 × 100 logical pixels: 512 × 256 with the margin).
+        // One picture, past the view, for the display's own pixels (200 × 100 logical pixels at
+        // 2 a point: 768 × 512 with the margin), at their resolution (#2390).
         assert_eq!(asked.len(), 1, "{asked:?}");
-        assert!(asked[0].contains("&CRS=EPSG:3857&BBOX=") && asked[0].contains("&WIDTH=512&HEIGHT=256&"), "{}", asked[0]);
+        assert!(asked[0].contains("&CRS=EPSG:3857&BBOX=") && asked[0].contains("&WIDTH=768&HEIGHT=512&"), "{}", asked[0]);
+        assert!(dpi(&asked[0]).is_some_and(|d| (192.0..229.0).contains(&d)), "{}", asked[0]);
         // A small pan: the same picture, from the cache.
         let (p, asked) = at(&mut m, 30.0, 300.0);
         assert_eq!((p, asked.len()), ([green; 3], 0));
+        // A view whose picture would pass the most a service draws (1500 points at 2 a point:
+        // 5632 pixels with the margin) is asked coarser, and says the resolution it came out at,
+        // not the screen's.
+        {
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 1500.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let said: Vec<f64> = asked.iter().filter_map(|u| dpi(u)).collect();
+            assert!(said.len() == 1 && (135.0..162.0).contains(&said[0]), "{asked:?}");
+        }
         // Closer in than its finest zoom (10: 153 m a pixel), its picture there stretched, as its
         // finest tiles are: fewer pixels for the same view.
         m.tiles[0].max_zoom = 10;
         let (p, asked) = at(&mut m, 30.0, 0.0);
         assert_eq!((p, asked.len()), ([green; 3], 1));
         assert!(asked[0].contains("&WIDTH=256&HEIGHT=256&"), "{}", asked[0]);
+        assert!(!asked[0].contains("DPI"), "a stretched picture is asked at its own resolution: {}", asked[0]);
         // Zoomed out past its coarsest zoom: nothing asked, nothing drawn.
         m.tiles[0].max_zoom = 19;
         m.tiles[0].min_zoom = 15;
@@ -1115,7 +1150,7 @@ pub(crate) mod tests {
         }
         assert_eq!(p, [green; 3], "drawn in tiles");
         assert!(took < std::time::Duration::from_secs(10), "waited {took:?} for another's fetch");
-        assert!(asked.iter().any(|u| u.contains("&WIDTH=512&HEIGHT=256&")), "its picture asked first: {asked:?}");
+        assert!(asked.iter().any(|u| u.contains("&WIDTH=768&HEIGHT=512&")), "its picture asked first: {asked:?}");
         // In a system of its own, on a map in it.
         let lv95 = System { epsg: 2056, name: "EPSG:2056".into(), lat_first: false };
         let wms = Warp { epsg: 2056, grid: Grid::Map { lat_first: false }, area: Some([5.9, 45.8, 10.5, 47.8]), systems: vec![lv95] }.address(
@@ -1130,7 +1165,8 @@ pub(crate) mod tests {
         let (p, asked) = at(&mut m, 5.0, 0.0);
         assert_eq!(p, [green; 3]);
         assert_eq!(asked.len(), 1, "{asked:?}");
-        assert!(asked[0].contains("&CRS=EPSG:2056&BBOX=2") && asked[0].ends_with("&WIDTH=512&HEIGHT=256"), "{}", asked[0]);
+        assert!(asked[0].contains("&CRS=EPSG:2056&BBOX=2") && asked[0].contains("&WIDTH=768&HEIGHT=512&DPI="), "{}", asked[0]);
+        assert!(dpi(&asked[0]).is_some_and(|d| (192.0..229.0).contains(&d)), "{}", asked[0]);
     }
 
     /// Turning the map round asks a single picture layer for a picture or two, not one every few

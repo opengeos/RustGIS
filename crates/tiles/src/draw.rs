@@ -624,7 +624,8 @@ pub(crate) fn tiles_in(
     let (tiles, from, min_z, max_z, want, z) = match src {
         Source::Raster { tiles, from, tile_size, min_zoom, max_zoom, .. }
         | Source::RasterDem { tiles, from, tile_size, min_zoom, max_zoom, .. } => {
-            let z = template::zoom_for(frame.m_per_px * f64::from(frame.ppp), *tile_size, *max_zoom);
+            // By the display's own pixels on a HiDPI one, when sharp tiles are on (#2390).
+            let z = template::zoom_for(frame.m_per_px * f64::from(frame.ppp / template::detail(frame.ppp)), *tile_size, *max_zoom);
             (tiles, from, *min_zoom, *max_zoom, Want::Image, z)
         }
         Source::Vector { tiles, from, min_zoom, max_zoom, .. } => {
