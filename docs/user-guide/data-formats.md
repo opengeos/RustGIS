@@ -648,7 +648,9 @@ were rounded, and Export Raster, which writes the rounded values, says so again.
 | Raster tiles | `imagery.hostedImagery` | A zip of `tiles/z/x/y.png` tiles, `tiles.json` and a viewer page; at most 5,000 tiles and 256 MiB of tile data. |
 
 CSV writes signed decimals such as `-093.1445780` as stored, including leading zeros, when
-they fit double precision and have at most 15 significant digits. Text that starts like
+they fit double precision and have at most 15 significant digits. The file keeps the
+padding, but a spreadsheet opens these as numbers and shows them without it (`-93.144578`).
+Text that starts like
 a spreadsheet formula is prefixed with an apostrophe, including signed zero-padded
 integer codes such as `-007` and signed numbers that exceed those precision limits.
 The export reports the number of prefixed values and the affected fields.
