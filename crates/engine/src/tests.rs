@@ -1732,6 +1732,7 @@ fn a_character_of_a_font_is_a_marker_on_points_and_along_lines() {
 
 /// A GIF image as base64: read by the desktop's decoder (the engine's `gif` feature), not taken as
 /// a marker.
+#[cfg(not(target_arch = "wasm32"))]
 fn gif_base64() -> String {
     use base64::Engine;
     let mut gif = Vec::new();
@@ -1741,7 +1742,23 @@ fn gif_base64() -> String {
     base64::engine::general_purpose::STANDARD.encode(&gif)
 }
 
+/// A saved image marker that is a GIF (which the desktop's decoder reads and the web's doesn't)
+/// opens said and drawn as a circle on every platform, its image kept for saving.
 #[test]
+fn a_gif_picture_marker_fixture_opens_said_as_a_circle() {
+    let text = include_str!("../../../schema/fixtures/picture_markers_gif.rgis");
+    let mut s = Session::new(Project::default());
+    let mark = s.notice_mark();
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n.contains("Image markers in \"Schools\" aren't PNG or JPEG images")), "{said:?}");
+    let rustgis_map::Renderer::Single(symbol) = &s.project.styles[0].renderer else { panic!("a single symbol") };
+    let rustgis_map::Marker::Picture(picture) = symbol.marker else { panic!("an image marker") };
+    assert!(picture.base64().starts_with("R0lGOD") && !rustgis_render::picture_marker_draws(picture));
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() {
     use base64::Engine;
     use rustgis_map::{Marker, Picture};
@@ -1888,6 +1905,7 @@ fn an_image_is_a_marker_kept_in_the_project_file_that_an_older_reader_refuses() 
 /// point's (#2266), kept the first time and found where it's kept when given again; a call refused
 /// for its layer, its class or what it names with the image keeps none.
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn an_image_marks_a_line_a_point_and_a_dot_fill() {
     use base64::Engine;
     use rustgis_map::fills::FillPattern;
@@ -1951,6 +1969,7 @@ fn an_image_marks_a_line_a_point_and_a_dot_fill() {
         ("Countries", json!({"pattern": "dots", "image": junk}), "PNG or JPEG image as base64"),
         ("Countries", json!({"pattern": "dots", "image": gif_base64()}), "PNG or JPEG image as base64"),
         ("Countries", json!({"pattern": "dots", "marker": "star", "image": ""}), "image is empty"),
+        ("Countries", json!({"pattern": "hatch", "image": " "}), "image is empty"),
         ("Countries", json!({"pattern": "dots", "image": too_long}), "at most 2 MiB"),
         ("Countries", json!({"pattern": "dots", "marker": "image"}), "needs its image"),
         ("Countries", json!({"pattern": "dots", "marker": "star", "image": unkept}), "only one"),
