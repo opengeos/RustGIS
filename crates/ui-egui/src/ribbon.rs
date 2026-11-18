@@ -6526,16 +6526,39 @@ mod tests {
             h.query_all_by_label(row).last().unwrap_or_else(|| panic!("{row}")).hover();
             h.run();
         }
-        // A menu's rows fill its width, so a style's row is as wide as the submenu: the least a
-        // submenu is, its styles being shorter.
+        // A menu's rows fill its width, so a style's row is as wide as the submenu: at least the
+        // 100 pt agreed in #2398 (written here, not read from the constant), less rounding.
         let style = h.query_all_by_label("Panel").next().expect("the sheet's styles").rect();
-        let least = crate::widgets::SUBMENU_MIN_W;
-        assert!((least - 1.0..least + 1.0).contains(&style.width()), "a style's row is {} px wide", style.width());
+        assert!(style.width() >= 99.5, "a style's row is {} px wide", style.width());
         // A row opening a submenu is as tall as the plain rows beside it.
         let sheet = h.query_all_by_label("Letter (216 × 279 mm)").last().unwrap().rect();
         let figure = h.get_by_label("Journal figure, 1 column (90 mm)").rect();
         let (sheet, figure) = (sheet.height(), figure.height());
         assert!((sheet - figure).abs() < 0.5, "a sheet's row is {sheet} px tall, a figure's {figure}");
+    }
+
+    /// In a menu of `menu_item` rows (Report Section), the row opening a submenu is as tall as
+    /// the rows beside it (#2398).
+    #[test]
+    fn a_submenu_row_is_as_tall_as_the_menu_items_beside_it() {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                ui.horizontal(|ui| report_group(app, ui));
+            },
+            cities(),
+        );
+        h.run();
+        h.get_by_label("Report Section").click();
+        h.run();
+        let opener = h.get_by_label("Existing Template").rect().height();
+        let item = h.get_by_label("New Template (a layout page)").rect().height();
+        assert!((opener - item).abs() < 0.5, "Existing Template is {opener} px tall, New Template {item}");
     }
 
     #[test]
