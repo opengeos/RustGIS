@@ -29,6 +29,7 @@ mod connectionui;
 mod connectui;
 mod coordreadout;
 mod copernicusui;
+mod crspicker;
 mod cswui;
 mod cubesui;
 mod diagnosticlog;
@@ -793,6 +794,9 @@ pub struct UiState {
     pub start_projection_input: String,
     /// The coordinate system typed in View › Graticule's menu for the measured grid.
     pub graticule_crs_input: String,
+    /// The coordinate systems last chosen in a coordinate system box, the latest first
+    /// (`crspicker::RECENT_PREF`).
+    pub recent_crs: Vec<String>,
     /// Start-up preference: the extent the map opens on, `[minLon, minLat, maxLon, maxLat]`;
     /// `None` for the full extent.
     pub start_extent: Option<[f64; 4]>,
@@ -1060,6 +1064,7 @@ impl Default for UiState {
             start_projection: String::new(),
             start_projection_input: String::new(),
             graticule_crs_input: String::new(),
+            recent_crs: Vec::new(),
             start_extent: None,
             start_view: None,
             ribbon_minimized: false,
@@ -1673,6 +1678,13 @@ impl RustGisApp {
             self.ui.start_projection = p.code();
         }
         self.ui.start_extent = self.services.load_pref.as_ref().and_then(|load| load("start_extent")).and_then(|v| parse_extent(&v));
+        self.ui.recent_crs = self
+            .services
+            .load_pref
+            .as_ref()
+            .and_then(|load| load(crspicker::RECENT_PREF))
+            .map(|v| crspicker::from_pref(&v))
+            .unwrap_or_default();
         // How new single-band rasters are drawn (Save as Default in the raster Symbology pane).
         if let Some(d) = self.services.load_pref.as_ref().and_then(|load| load(RASTER_DEFAULTS_PREF))
             && let Ok(d) = serde_json::from_str::<rustgis_engine::map::RasterDefaults>(&d)
@@ -2444,6 +2456,24 @@ impl RustGisApp {
                 ),
                 false,
             );
+        }
+    }
+
+    /// Notes `code` as the latest coordinate system used, for the coordinate system boxes, and
+    /// keeps the list.
+    pub(crate) fn remember_crs(&mut self, code: &str) {
+        if crspicker::remember(&mut self.ui.recent_crs, code) {
+            self.save_pref(crspicker::RECENT_PREF, &self.ui.recent_crs.join("\n"));
+        }
+    }
+
+    /// [`Self::remember_crs`] for a code the catalog lists (`EPSG:2056`), not a preset or a
+    /// PROJ string, which the coordinate system boxes offer otherwise or can't name.
+    pub(crate) fn remember_crs_if_listed(&mut self, code: &str) {
+        let code = code.trim();
+        let code = if code.bytes().all(|b| b.is_ascii_digit()) { format!("EPSG:{code}") } else { code.to_string() };
+        if rustgis_engine::data::raster::crs_search::name_of(&code).is_some() {
+            self.remember_crs(&code.to_ascii_uppercase());
         }
     }
 
