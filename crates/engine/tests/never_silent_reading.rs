@@ -11,8 +11,8 @@
 //! fails here until the case is moved to [`Expect::Said`], so the list only shrinks. Exports have
 //! their own test, `never_silent_roundtrip.rs`.
 //!
-//! The table includes text, CityJSON, CityGML, KMZ and GeoPackage. More binary formats and
-//! loss kinds remain to add (ROADMAP.md); coverage of one loss is not certification of a reader.
+//! The table includes text, CityJSON, CityGML, KMZ, GeoPackage, FlatGeobuf, GeoParquet and FileGDB.
+//! More formats and loss kinds remain to add (ROADMAP.md); one loss does not certify a reader.
 use rustgis_engine::{Project, Session};
 use serde_json::json;
 
@@ -363,6 +363,27 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
         case("CityJSON: varying line heights", "a.city.json", cityjson(0), cityjson(5), Said("Z or M")),
         case("CityGML: varying line heights", "a.gml", citygml(0), citygml(5), Said("Z or M")),
         case("GeoPackage: a height", "a.gpkg", gpkg(fixture_dir, false), gpkg(fixture_dir, true), Said("Z or M")),
+        case(
+            "FlatGeobuf: a height",
+            "a.fgb",
+            include_bytes!("../testdata/reading-losses/xy.fgb"),
+            include_bytes!("../testdata/reading-losses/xyz.fgb"),
+            Said("Z or M"),
+        ),
+        case(
+            "GeoParquet: a height",
+            "a.parquet",
+            include_bytes!("../testdata/reading-losses/xy.parquet"),
+            include_bytes!("../testdata/reading-losses/xyz.parquet"),
+            Said("Z or M"),
+        ),
+        case(
+            "FileGDB: a height",
+            "a.gdb",
+            include_bytes!("../testdata/reading-losses/xy.gdb.zip"),
+            include_bytes!("../testdata/reading-losses/xyz.gdb.zip"),
+            Said("Z or M"),
+        ),
     ]);
     out
 }
@@ -430,6 +451,7 @@ type Reading = Result<(Vec<String>, bool), String>;
 /// Writes `file` with `content`, and `beside`, into `dir` (emptied first) and reads it. `Err` when
 /// the files can't be written: a failure of the test, never taken for a refusal. Each file of a
 /// case is read from the same `dir`, so notices naming its path are the same for both.
+/// A `.gdb` fixture is stored as a ZIP of its table files and extracted before opening the folder.
 fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, String)]) -> std::io::Result<Reading> {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir)?;
@@ -437,7 +459,21 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Stri
         std::fs::write(dir.join(name), text)?;
     }
     let path = dir.join(file);
-    std::fs::write(&path, content)?;
+    if file.ends_with(".gdb") {
+        // The archive is fixture storage only: RustGIS opens the extracted folder. Its ZIP
+        // importer deliberately refuses FileGDB folders, so do not test that refusal as a loss.
+        std::fs::create_dir_all(&path)?;
+        for (name, bytes) in rustgis_engine::data::zip::read(content).map_err(std::io::Error::other)? {
+            if std::path::Path::new(&name).components().count() != 1
+                || !matches!(std::path::Path::new(&name).components().next(), Some(std::path::Component::Normal(_)))
+            {
+                return Err(std::io::Error::other("a FileGDB fixture member isn't a plain file name"));
+            }
+            std::fs::write(path.join(name), bytes)?;
+        }
+    } else {
+        std::fs::write(&path, content)?;
+    }
     let mut s = Session::new(Project::default());
     // Layers and standalone tables (what a file without geometry adds).
     let held = |s: &Session| s.map().layers.len() + s.project.tables.len();
