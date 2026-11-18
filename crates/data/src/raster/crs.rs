@@ -2784,6 +2784,9 @@ mod tests {
             // system.
             assert!(crs.custom_def().unwrap().wkt_needed(), "ESRI:{code}");
         }
+        // One whose PROJ definition places points as its WKT does (World Robinson, on WGS 84)
+        // doesn't need it: older releases read it as this one does.
+        assert!(!esri_crs(54030).unwrap().custom_def().unwrap().wkt_needed());
         // Projected codes the bundled table lacked are the catalog's (World Miller Cylindrical),
         // and geographic ones aren't ESRI projected systems.
         assert!(esri_proj4(54003).is_some_and(|d| d.contains("+proj=mill")));
