@@ -39,6 +39,7 @@ const LIMITS: &[(&str, &str, &str)] = &[
     ("csv", "text became a number", "a column of numbers is a number column"),
     ("csv", "infinity or NaN became text", "inf and NaN aren't read as numbers"),
     ("csv", "not read back: nothing", "a layer without geometry or values is an empty file"),
+    ("gpx", "field of nulls missing", "GPX writes no attribute schema"),
     // GeoJSON types a property from its values.
     ("geojson", "field of nulls type changed", "a property that is null everywhere has no type"),
     ("geojson", "field type changed Date → Text", "a date is written as ISO 8601 text and stays text on read (#853)"),
@@ -55,14 +56,12 @@ const LIMITS: &[(&str, &str, &str)] = &[
 ];
 
 /// KML and GPX hold text, read with types from the values as for CSV (`type_text_columns`); the
-/// name field is written as the feature's name and read back as `name`, and a field that is
-/// null everywhere isn't in the file.
+/// name field is written as the feature's name and read back as `name`.
 const TEXT_FORMAT_LIMITS: &[&str] = &[
     "text trimmed",
     "blank text became null",
     "field type changed",
     "field of nulls type changed",
-    "field of nulls missing",
     "field renamed",
     "boolean became text",
     "date became text",
