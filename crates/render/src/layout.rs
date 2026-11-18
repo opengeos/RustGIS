@@ -1215,13 +1215,43 @@ fn frame_viewport(
     Ok((viewports, exact))
 }
 
-/// A ring whose longitudes run on across ±180°, cut there as the map cuts features (#209): each
-/// piece brought into -180°..180° and running to ±180° at the latitude where it crosses, the pieces
-/// broken apart by a `None`.
-fn split_at_antimeridian(ring: &[Option<Coord>]) -> Vec<Option<Coord>> {
+/// A ring (longitude, latitude), broken at each `None`, placed on a flat map for drawing: where its
+/// points go on the map's world, whose middle (its camera's centre) is at `mid`. `from_globe`: the
+/// ring is a frame on the globe's, its longitudes run on across ±180° rather than kept in a world.
+///
+/// A frame on the globe's ring the whole ring a turn east or west if that brings the middle of its
+/// longitudes nearer the map's middle, as they run on from its first point (#2348), which can be on
+/// the other side of ±180° from it: one shift for all keeps it in one piece on a map that doesn't
+/// wrap. A flat frame's ring is placed where it is. Then a ring that a map can't show in one piece
+/// is cut at the map's edge as the map cuts features (#209), each piece brought into the map's
+/// world and running to the edge (#2369): any ring on a world projection, which wraps at its edge
+/// (on Robinson centred on 150°E at -30°, with its datum's margin), and on Web Mercator, which
+/// doesn't, a globe frame's around a pole, which runs a whole turn, at ±180°.
+fn ring_on_flat(map: &Map, mid: Option<Coord>, ring: &[Option<Coord>], from_globe: bool) -> Vec<Option<Coord>> {
     use rustgis_data::Geometry;
-    let runs = ring.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect();
-    let Geometry::Line(pieces) = rustgis_map::antimeridian::cut(&Geometry::Line(runs), 0.0) else { return Vec::new() };
+    let (west, east) = ring.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(w, e), c| (w.min(c.x), e.max(c.x)));
+    let around_pole = from_globe && east - west >= 360.0 - 1e-6;
+    let shift = match (from_globe && !around_pole && west <= east, mid) {
+        (true, Some(mid)) => 360.0 * ((mid.x - (west + east) / 2.0) / 360.0).round(),
+        _ => 0.0,
+    };
+    let shifted = ring.iter().map(|c| c.map(|c| Coord::new(c.x + shift, c.y)));
+    let flat = map.flat();
+    let edge = match &flat {
+        rustgis_map::projection::Flat::Custom(p) => p.edge().copied(),
+        rustgis_map::projection::Flat::Mercator => None,
+    };
+    if edge.is_none() && !around_pole {
+        return shifted.collect();
+    }
+    let shifted: Vec<Option<Coord>> = shifted.collect();
+    let runs = shifted.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect();
+    let (lon0, margin) = edge.map_or((0.0, None), |e| (e.lon - 180.0, Some(e)));
+    let margin = |lat: f64| margin.map_or(0.0, |e| e.stray_at(lat));
+    // A line cut is a line: the `else` is never taken.
+    let Geometry::Line(pieces) = rustgis_map::antimeridian::cut_with_margin(&Geometry::Line(runs), lon0, &margin) else {
+        return shifted;
+    };
     pieces.into_iter().flat_map(|p| p.into_iter().map(Some).chain([None])).collect()
 }
 
@@ -1233,24 +1263,13 @@ fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Option<Coord>
     // On a globe, through the globe as the frame draws it, breaking behind its horizon (#2348):
     // through the flat camera the outline lands off the area once it is away from the centre.
     let globe = map.projection.is_globe().then(|| rustgis_map::globe::Globe::new(&view.camera, view.width, view.height));
-    // A frame on the globe's ring on a flat map, which doesn't wrap: the whole ring a turn east or
-    // west if that brings the middle of its longitudes nearer the frame's centre, as they run on
-    // from its first point (#2348), which can be on the other side of ±180° from it. One shift for
-    // all keeps it in one piece. A flat frame's ring is drawn where it is. A globe frame around a
-    // pole, whose ring runs a whole turn, is split at ±180° instead, each piece where it lies: one
-    // shift would leave a stretch of it off the world (#2369).
-    let (west, east) = ring.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(w, e), c| (w.min(c.x), e.max(c.x)));
-    let around_pole = from_globe && globe.is_none() && east - west >= 360.0 - 1e-6;
-    let split;
-    let ring = if around_pole {
-        split = split_at_antimeridian(ring);
-        &split[..]
-    } else {
-        ring
-    };
-    let shift = match (from_globe && globe.is_none() && !around_pole && west <= east, map.to_lonlat(view.camera.center)) {
-        (true, Some(mid)) => 360.0 * ((mid.x - (west + east) / 2.0) / 360.0).round(),
-        _ => 0.0,
+    let placed;
+    let ring = match globe {
+        Some(_) => ring,
+        None => {
+            placed = ring_on_flat(map, map.to_lonlat(view.camera.center), ring, from_globe);
+            &placed[..]
+        }
     };
     let mut pb = PathBuilder::new();
     let mut first = true;
@@ -1263,7 +1282,7 @@ fn outline_lonlat(pm: &mut Canvas, map: &Map, view: &View, ring: &[Option<Coord>
             Some(g) => g.forward(*c),
             // A tilted frame's outline breaks where it passes behind the eye, and any frame's where
             // its projection can't show the place (#2369).
-            None => map.to_map(Coord::new(c.x + shift, c.y)).and_then(|m| view.camera.try_to_screen(m, view.width, view.height)),
+            None => map.to_map(*c).and_then(|m| view.camera.try_to_screen(m, view.width, view.height)),
         };
         let Some((x, y)) = at else {
             first = true;
@@ -5765,6 +5784,33 @@ Elaboração: RustGIS",
         }
         let past: Vec<_> = red.iter().filter(|p| p.0.abs() > 34.2).collect();
         assert!(past.is_empty(), "{} red pixels past ±180°, as far as {:?}", past.len(), past.iter().map(|p| p.0).fold(0.0_f64, f64::max));
+    }
+
+    /// A ring placed on Robinson centred on 150°E, whose edge is at -30°, is cut there, each piece
+    /// on its side of the map, not joined across it (#2369): a flat frame's ring across the edge,
+    /// and a globe frame's around a pole, a whole turn of longitude.
+    #[test]
+    fn a_ring_is_cut_at_its_maps_own_edge() {
+        let mut robinson = Map::new("m");
+        robinson.set_projection(rustgis_map::Projection::Custom("robinson +lon_0=150".into()));
+        let mid = Some(Coord::new(150.0, 0.0));
+        let flat = [(-40.0, 10.0), (-20.0, 10.0), (-20.0, 20.0), (-40.0, 20.0), (-40.0, 10.0)].map(|(x, y)| Some(Coord::new(x, y)));
+        // From 20°E all the way round, 85°N, as a pole's ring runs, its longitudes continuous.
+        let pole: Vec<Option<Coord>> = (0..=36).map(|i| Some(Coord::new(20.0 + 10.0 * f64::from(i), 85.0))).collect();
+        for (name, ring, from_globe) in [("flat", &flat[..], false), ("pole", &pole[..], true)] {
+            let placed = ring_on_flat(&robinson, mid, ring, from_globe);
+            let points: Vec<Coord> = placed.iter().flatten().copied().collect();
+            assert!(!points.is_empty(), "{name}: nothing placed");
+            // Every point in the map's world, -30° to 330°, so it projects onto its own side.
+            let out: Vec<_> = points.iter().filter(|c| !(-30.0..=330.0).contains(&c.x)).collect();
+            assert!(out.is_empty(), "{name}: points outside the map's world: {out:?}");
+            // On both sides of the edge, the pieces broken apart.
+            assert!(points.iter().any(|c| c.x < -29.0) && points.iter().any(|c| c.x > 329.0), "{name}: not on both sides: {points:?}");
+            let jumps: Vec<_> = placed.windows(2).filter_map(|w| Some((w[0]?, w[1]?))).filter(|(a, b)| (a.x - b.x).abs() > 180.0).collect();
+            assert!(jumps.is_empty(), "{name}: joined across the edge: {jumps:?}");
+        }
+        // On Web Mercator, which doesn't wrap, a flat frame's ring is placed where it is.
+        assert_eq!(ring_on_flat(&Map::new("m"), Some(Coord::new(0.0, 0.0)), &flat, false), flat.to_vec());
     }
 
     /// A flat frame wider than the world, outlined on another flat frame, is drawn where it is
