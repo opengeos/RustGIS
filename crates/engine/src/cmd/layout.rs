@@ -1948,18 +1948,15 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             // small, as the whole globe's frame is (#2337): at the area's own latitude near a pole
             // the camera stops at its coarsest resolution, and the disc came out larger than its
             // circle, clipped. Further from the pole, the area is still on the disc and outlined.
-            // A locator too small for the globe to fit even on the equator (a figure's, under
-            // about 30 mm) keeps the area in the middle, as the disc is clipped wherever it is.
             let globe = globe_scale(&m, Coord::new(center.x, 0.0), side * 0.92);
-            let fits = |at: Coord| rustgis_map::layout::frame_camera(&m, at, globe, 0.0, 0.0).res < rustgis_map::camera::MAX_RES;
-            let at = if fits(Coord::new(center.x, 0.0)) { drawable_globe_center(&m, center, globe) } else { center };
+            let (at, whole) = globe_locator_center(&m, center, globe, side);
             if at != center {
                 warnings.push(format!(
-                    "the globe locator is centred at {:.1}° rather than the area's {:.1}° of latitude: nearer the pole, it can't draw the globe small enough to fit",
+                    "the globe locator is centred at {:.1}° rather than the map frame's {:.1}° of latitude: nearer the pole, it can't draw the globe small enough to fit",
                     at.y, center.y
                 ));
             }
-            if !fits(at) {
+            if !whole {
                 warnings.push("the globe locator is too small to show the whole globe: its circle clips it".into());
             }
             // Each polygon simplified to a tenth of a millimetre on the disc (its scale in metres),
@@ -5773,6 +5770,21 @@ fn drawable_globe_center(map: &Map, view: Coord, scale: f64) -> Coord {
         if fits(mid.copysign(view.y)) { fit = mid } else { over = mid }
     }
     Coord::new(view.x, fit.copysign(view.y))
+}
+
+/// Where a globe locator `side_mm` across at 1:`scale` centres the globe, and whether it shows it
+/// whole: as near `area` as the camera draws a globe that small ([`drawable_globe_center`]), the
+/// area still on the disc. A locator too small for the globe to fit even on the equator (under
+/// about 20 mm), or one whose nearest centre leaves the area behind the globe's rim, keeps the area
+/// in the middle, its circle clipping the globe (#2348).
+pub(crate) fn globe_locator_center(map: &Map, area: Coord, scale: f64, side_mm: f64) -> (Coord, bool) {
+    let cam = |at: Coord| rustgis_map::layout::frame_camera(map, at, scale, 0.0, 0.0);
+    if cam(Coord::new(area.x, 0.0)).res >= rustgis_map::camera::MAX_RES {
+        return (area, false);
+    }
+    let at = drawable_globe_center(map, area, scale);
+    let side = side_mm * rustgis_map::layout::PT_PER_MM;
+    if rustgis_map::globe::Globe::new(&cam(at), side, side).forward(area).is_some() { (at, true) } else { (area, false) }
 }
 
 /// Parses the publication's locator choice with its default: a globe on a sheet, none on a figure

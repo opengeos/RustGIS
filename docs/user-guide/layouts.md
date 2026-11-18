@@ -153,7 +153,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     globe is whole in its circle: near a pole, where it can't be drawn that small at the area's
     latitude, it is centred as near the area as fits, the area still outlined on it, and the
     warnings say so. A locator too small for the whole globe anywhere (a figure's, under about
-    30 mm) stays centred on the area, its circle clipping the globe, which the warnings also say.
+    20 mm), or one that would have to move so far that the area went behind the globe's rim,
+    stays centred on the area, its circle clipping the globe, which the warnings also say.
     It uses the map's basemap, not its web tiles, in a round frame, the globe
     nearly filling it and the area outlined in red; `"inset"` shows the surrounding region (about
     four times the area across) on the map itself, outlined the same way; `"none"` (a figure's
