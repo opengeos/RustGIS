@@ -178,6 +178,8 @@ pub(super) fn long_commands(boundaries: bool) {
         assert!(control.looked() > 0, "edit.previewShapeConversion never looks at Cancel");
         assert!(contents(&shapes.project) == before, "edit.previewShapeConversion changed the project after Cancel");
     }
+    // Original TIFF headers share the read queue and both cancellation sweeps.
+    exercise(&s, "raster.imageGrid", &json!({"layer": dem}), Kind::Read, &dir.0, boundaries);
     // A PDF's page is read on the same queue: the file, then its drawing, Cancel looked at between
     // (#2336).
     s.run("layout.new", &json!({"page": "a4", "template": "map"})).unwrap();

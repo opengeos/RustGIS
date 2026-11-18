@@ -880,6 +880,7 @@ pub(crate) const UI_COMMANDS: &[(&str, &str, &str)] = &[
     ("ui.mcpRelay", "MCP Relay", "Help › Help"),
     ("ui.pane.geoprocessing", "Tools Pane", "View › Windows"),
     ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
+    ("ui.pane.annotation", "Annotate", "Analyze › Annotate"),
     ("ui.pane.labeling", "Labeling Pane", "View › Windows"),
     ("ui.pane.layerProperties", "Layer Properties Pane", "View › Windows"),
     ("ui.pane.diagnosticLog", "Messages", "View › Windows"),
