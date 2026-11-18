@@ -1664,13 +1664,15 @@ fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, 
 }
 
 /// Keeps the images [`picture`] checked (`new`, in the order it met them) in the empty pictures it
-/// left in their places (`slots`, in the same order).
+/// left in their places (`slots`, in the same order): all of them, or none when the session can't
+/// keep them all.
 fn keep_pictures<'a>(slots: impl Iterator<Item = &'a mut Picture>, new: Vec<&str>) -> Result<(), String> {
-    for (slot, b64) in slots.filter(|p| p.is_default()).zip(new) {
-        *slot = Picture::new(b64);
-        if slot.is_default() {
-            return Err("no more images can be kept this session: restart RustGIS to use another".into());
-        }
+    if new.is_empty() {
+        return Ok(());
+    }
+    let kept = Picture::new_all(&new).ok_or("no more images can be kept this session: restart RustGIS to use another")?;
+    for (slot, p) in slots.filter(|p| p.is_default()).zip(kept) {
+        *slot = p;
     }
     Ok(())
 }

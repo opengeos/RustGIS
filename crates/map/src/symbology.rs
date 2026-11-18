@@ -125,6 +125,12 @@ pub struct Picture(&'static str);
 /// Where [`Picture::is_dropped`] points: an image a file gave that wasn't kept.
 static DROPPED: &str = "(dropped)";
 
+/// Whether `more` pictures taking `more_bytes` of base64 fit beside `count` kept ones taking
+/// `bytes` ([`MAX_PICTURES`], [`MAX_PICTURES_BYTES`]).
+fn fits((count, bytes): (usize, usize), (more, more_bytes): (usize, usize)) -> bool {
+    count + more <= MAX_PICTURES && bytes + more_bytes <= MAX_PICTURES_BYTES
+}
+
 /// The pictures kept this run, and the bytes of base64 they take.
 fn kept_pictures() -> std::sync::MutexGuard<'static, (std::collections::HashSet<&'static str>, usize)> {
     use std::collections::HashSet;
@@ -144,13 +150,37 @@ impl Picture {
         if let Some(p) = pictures.get(base64) {
             return Picture(p);
         }
-        if pictures.len() >= MAX_PICTURES || *bytes + base64.len() > MAX_PICTURES_BYTES {
+        if !fits((pictures.len(), *bytes), (1, base64.len())) {
             return Picture::default();
         }
         let p: &'static str = Box::leak(base64.to_owned().into_boxed_str());
         pictures.insert(p);
         *bytes += p.len();
         Picture(p)
+    }
+
+    /// [`Picture::new`] for several images at once, all or none: `None`, keeping nothing, when one
+    /// is empty or too long, or when together they don't fit beside those already kept. Each
+    /// image's picture, in the order given (the same image twice is the same picture).
+    pub fn new_all(images: &[&str]) -> Option<Vec<Picture>> {
+        let images: Vec<&str> = images.iter().map(|b64| b64.trim()).collect();
+        if images.iter().any(|b64| b64.is_empty() || b64.len() > MAX_PICTURE_BYTES) {
+            return None;
+        }
+        let mut kept = kept_pictures();
+        let (pictures, bytes) = &mut *kept;
+        let mut more: Vec<&str> = images.iter().copied().filter(|b64| !pictures.contains(*b64)).collect();
+        more.sort_unstable();
+        more.dedup();
+        if !fits((pictures.len(), *bytes), (more.len(), more.iter().map(|b64| b64.len()).sum())) {
+            return None;
+        }
+        for b64 in more {
+            let p: &'static str = Box::leak(b64.to_owned().into_boxed_str());
+            pictures.insert(p);
+            *bytes += p.len();
+        }
+        images.iter().map(|b64| pictures.get(*b64).copied().map(Picture)).collect()
     }
 
     /// The picture already kept for `base64`, keeping nothing new: a command given an image again
@@ -3631,6 +3661,21 @@ mod tests {
     /// A picture marker is written with its image, and read back as the same kept image; one a
     /// crafted file makes too long, or not text, is no image (drawn as a circle), and the rest
     /// still reads.
+    /// Several images are kept together or not at all: the store's limits are weighed for the
+    /// lot, images already kept and repeated ones counted once.
+    #[test]
+    fn pictures_are_kept_all_or_none() {
+        assert!(fits((MAX_PICTURES - 2, 0), (2, 10)) && !fits((MAX_PICTURES - 1, 0), (2, 10)));
+        assert!(fits((0, MAX_PICTURES_BYTES - 10), (1, 10)) && !fits((0, MAX_PICTURES_BYTES - 10), (2, 11)));
+        let old = Picture::new("YWxsLW9yLW5vbmUtb2xk");
+        let all = Picture::new_all(&["YWxsLW9yLW5vbmUtYQ==", " YWxsLW9yLW5vbmUtb2xk ", "YWxsLW9yLW5vbmUtYQ=="]).unwrap();
+        assert_eq!((all[1], all[0]), (old, all[2]));
+        assert_eq!(Picture::kept("YWxsLW9yLW5vbmUtYQ=="), Some(all[0]));
+        // One that can't be kept refuses the lot.
+        assert_eq!(Picture::new_all(&["YWxsLW9yLW5vbmUtYg==", " "]), None);
+        assert_eq!(Picture::kept("YWxsLW9yLW5vbmUtYg=="), None);
+    }
+
     #[test]
     fn picture_markers_keep_their_image_once_and_bound_what_a_file_gives() {
         let m = Marker::Picture(Picture::new(" iVBORw0KGgo= "));
