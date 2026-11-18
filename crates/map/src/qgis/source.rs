@@ -164,8 +164,10 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                     .collect();
                 let connection = kept.join(" ");
                 // What QGIS writes about the table (or the password) rather than the connection.
-                const TABLE_OR_SECRET: [&str; 9] =
-                    ["password", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity", "selectatid", "sql"];
+                // (Its filter, `sql=`, is named among those left out, below: the table added by
+                // hand doesn't carry it.)
+                const TABLE_OR_SECRET: [&str; 8] =
+                    ["password", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity", "selectatid"];
                 let mut long = 0;
                 let mut dropped: Vec<String> = conninfo(datasource)
                     .into_iter()
@@ -185,6 +187,11 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                         fits
                     })
                     .collect();
+                // Its filter, written last after the table's geometry column (`(geom) sql=…`),
+                // where the settings above don't see it.
+                if datasource.rsplit_once(" sql=").is_some_and(|(_, f)| !f.trim().is_empty()) && !dropped.iter().any(|k| k == "sql") {
+                    dropped.insert(0, "sql".to_string());
+                }
                 // The first 16 by name, the rest (and those too long to name) counted.
                 let more = dropped.len().saturating_sub(16) + long;
                 dropped.truncate(16);
