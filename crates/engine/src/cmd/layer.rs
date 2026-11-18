@@ -2199,9 +2199,9 @@ fn layers_key(path: &str) -> String {
 }
 
 /// The refusal of a file of several layers of `len` bytes that the desktop app reads as it is
-/// added, on the UI thread (not [`read_ahead_whole`]: a KML or KMZ, a LandXML, RSS or Atom),
-/// past the size every computer reads, as before #2408, so the window isn't held longer. Said
-/// before the larger limit, as it is the one that applies.
+/// added, on the UI thread (not [`read_ahead_whole`]: a KML or KMZ, a LandXML, RSS, Atom or
+/// GeoRSS), past the size every computer reads, as before #2408, so the window isn't held longer.
+/// Said before the larger limit, as it is the one that applies.
 fn past_read_as_added(path: &str, len: u64) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     let ahead = read_ahead_whole(path);
