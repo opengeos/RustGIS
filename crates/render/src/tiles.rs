@@ -931,8 +931,13 @@ pub(crate) mod tests {
                 done(Ok(color(20, 200, 20)));
             } else if url.starts_with("https://one.test/") {
                 ASKED_ONE.lock().unwrap().push(url.clone());
-                // Under `tiles-only/`, a service drawing no picture larger than a tile.
-                if url.starts_with("https://one.test/tiles-only/") && !url.contains("&WIDTH=256&HEIGHT=256") {
+                // Under `tiles-only/`, a service drawing no picture larger than a tile; under
+                // `no-dpi/`, one refusing a resolution it doesn't know.
+                if (url.starts_with("https://one.test/tiles-only/") && !url.contains("&WIDTH=256&HEIGHT=256"))
+                    || (url.starts_with("https://one.test/no-dpi/") && url.contains("DPI="))
+                    || (url.starts_with("https://one.test/max2048/")
+                        && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 2048))
+                {
                     done(Err("400 Bad Request".into()));
                 } else {
                     done(Ok(color(20, 200, 20)));
@@ -1002,12 +1007,13 @@ pub(crate) mod tests {
             let mut m = Map::new("Map");
             m.graticule = false;
             m.tiles.push(TileLayer::new(name, TileKind::Raster, url));
-            let at = |m: &mut Map, res: f64| {
-                let center = m.to_map(bern).unwrap();
+            let at_ppp = |m: &mut Map, res: f64, ppp: f64, dx: f64| {
+                let c = m.to_map(bern).unwrap();
+                let center = Coord::new(c.x + dx, c.y);
                 let view = View {
                     width: 200.0,
                     height: 100.0,
-                    pixels_per_point: 1.0,
+                    pixels_per_point: ppp,
                     camera: Camera { center, res, bearing: 0.0, pitch: 0.0 },
                     sky: false,
                 };
@@ -1017,6 +1023,7 @@ pub(crate) mod tests {
                 let p = pm.pixel(100, 50).unwrap();
                 ([p.red(), p.green(), p.blue(), p.alpha()], std::mem::take(&mut *ASKED.lock().unwrap()))
             };
+            let at = |m: &mut Map, res: f64| at_ppp(m, res, 1.0, 0.0);
             // On Web Mercator: in LV95, warped.
             let (p, asked) = at(&mut m, 8.0);
             assert_eq!(p, [20, 200, 20, 255], "{name} on Web Mercator");
@@ -1042,6 +1049,14 @@ pub(crate) mod tests {
             } else {
                 // The 5 m matrix's.
                 assert!(!asked.is_empty() && asked.iter().all(|u| u.starts_with("https://wmts.test/lv95/m2/")), "{asked:?}");
+                // At 10 m a point on a 2x display, the 5 m matrix's too (#2390); on a 3x one no
+                // finer (the 2.5 m matrix), as sharp tiles go to twice a point's detail at most.
+                // Each somewhere new, so its tiles are asked for.
+                for (ppp, dx) in [(2.0, 20_000.0), (3.0, 40_000.0)] {
+                    let (p, asked) = at_ppp(&mut m, 10.0, ppp, dx);
+                    assert_eq!(p, [20, 200, 20, 255]);
+                    assert!(!asked.is_empty() && asked.iter().all(|u| u.starts_with("https://wmts.test/lv95/m2/")), "{ppp}: {asked:?}");
+                }
             }
         }
     }
@@ -1076,7 +1091,8 @@ pub(crate) mod tests {
         // pixels, which are up to a quarter of a level finer than asked for.
         let dpi = |u: &str| -> Option<f64> {
             let d: f64 = u.split("&DPI=").nth(1)?.split('&').next()?.parse().ok()?;
-            u.contains(&format!("&MAP_RESOLUTION={d}&FORMAT_OPTIONS=dpi:{d}")).then_some(d)
+            let ogc: f64 = u.split("FORMAT_OPTIONS=dpi:").nth(1)?.split('&').next()?.parse().ok()?;
+            ((d * 25.4 / 0.28 / 96.0 - ogc).abs() <= 1.0).then_some(d)
         };
         // In Web Mercator.
         let mut m = Map::new("Map");
@@ -1121,6 +1137,66 @@ pub(crate) mod tests {
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             let said: Vec<f64> = asked.iter().filter_map(|u| dpi(u)).collect();
             assert!(said.len() == 1 && (135.0..162.0).contains(&said[0]), "{asked:?}");
+        }
+        // At one pixel a point the picture is asked for as before: its logical size, and no
+        // resolution, though its pixel is rounded a little finer than asked.
+        {
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 200.0,
+                height: 100.0,
+                pixels_per_point: 1.0,
+                camera: Camera { center, res: 31.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 1 && asked[0].contains("&WIDTH=512&HEIGHT=256&") && !asked[0].contains("DPI"), "{asked:?}");
+        }
+        // A service refusing a picture too large: asked again smaller, and not taken to refuse
+        // the resolution (the size was refused).
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/max2048/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 1500.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let width = |u: &String| u.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok());
+            assert!(asked.len() == 2 && width(&asked[0]) > Some(2048) && width(&asked[1]) <= Some(2048), "{asked:?}");
+            assert!(dpi(&asked[0]).is_some(), "{asked:?}");
+            // Its resolution wasn't what was refused: a view whose picture fits still says it.
+            let narrow = View { width: 200.0, ..view };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &narrow).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 1 && dpi(&asked[0]).is_some(), "{asked:?}");
+        }
+        // A service refusing the resolution: asked again without it, and drawn so.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/no-dpi/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let (p, asked) = at(&mut m, 30.0, 0.0);
+            assert_eq!(p, [green; 3], "{asked:?}");
+            assert!(asked.len() == 2 && asked[0].contains("DPI=") && !asked[1].contains("DPI="), "{asked:?}");
+            assert!(asked[1].contains("&WIDTH=768&HEIGHT=512&"), "at the same size: {asked:?}");
+            // And so for a while after: not asked with it again.
+            let (p, asked) = at(&mut m, 30.0, 5000.0);
+            assert!(p == [green; 3] && asked.iter().all(|u| !u.contains("DPI=")), "{asked:?}");
         }
         // Closer in than its finest zoom (10: 153 m a pixel), its picture there stretched, as its
         // finest tiles are: fewer pixels for the same view.

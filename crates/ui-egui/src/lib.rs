@@ -3639,7 +3639,9 @@ impl RustGisApp {
                 if let Some(save) = &self.services.save_pref {
                     save("sharp_tiles", if self.ui.sharp_tiles { "on" } else { "off" });
                 }
+                // The map and an open layout page are drawn again with tiles at the new detail.
                 self.map.invalidate();
+                self.layout.redraw();
                 return Ok(json!({"on": self.ui.sharp_tiles}));
             }
             "ui.recover" => return autosave::recover(self, p),

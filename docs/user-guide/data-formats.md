@@ -452,12 +452,13 @@ it's given `"singleImage": false` or a `"tileSize"`.
   place.
 - On a high-density (HiDPI) screen it is asked for in the screen's own pixels, up to twice the
   map's logical pixels, as tiles are (see [Sharp tiles on HiDPI displays](#sharp-tiles-on-hidpi-displays)).
-  A WMS picture then says the resolution it is for (`DPI`, `MAP_RESOLUTION` and
-  `FORMAT_OPTIONS=dpi:`, unless its address names one), so GeoServer, MapServer and QGIS Server
-  keep their symbols and text at their size; a service that reads none of them draws them
-  smaller. It is at most 4096 pixels a side (2048 for five minutes after a larger picture of the
-  layer fails), coarser for a view larger than that. A picture the service fails to draw leaves
-  the layer drawn in tiles there.
+  A WMS picture then says the resolution it is for, unless its address names one: `DPI` (QGIS
+  Server, from 96) and `FORMAT_OPTIONS=dpi:` (GeoServer, from the OGC standard pixel's 90.7), so
+  those servers keep their symbols and text at their size. A service that reads neither draws them
+  smaller; one that refuses the picture with them is asked again without them, for five
+  minutes. The picture is at most 4096 pixels a side (2048 for five minutes after a larger
+  picture of the layer fails), coarser for a view larger than that. A picture the service fails
+  to draw leaves the layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
   in than its finest zoom its picture there is stretched, as its tiles are.
 - It is drawn so on a flat map, north up or turned, in Web Mercator or in a projection with an
@@ -479,11 +480,16 @@ before keeps its tiles until you switch it.
 ### Sharp tiles on HiDPI displays
 
 On a high-density screen (a Retina or 4K display scaled 2x, a phone), raster tile layers (XYZ,
-WMTS, WMS in tiles, raster DEMs) and pictures of the view are fetched for the screen's own pixels,
-up to twice the detail of its logical pixels (#2390): a 2x screen takes the next zoom's tiles. Text
-and lines drawn into them come out sharp, and smaller, as in QGIS. A screen at more than 2x (most
-phones), and a map export or layout at a high resolution, still take tiles at twice the detail,
-not more: three times would ask for nine times the tiles, with their text too small to read.
+WMTS, WMS in tiles, raster archives, raster DEMs, and those in a system of their own) and pictures
+of the view are fetched for the screen's own pixels, up to twice the detail of its logical pixels
+(#2390): a 2x screen takes the next zoom's tiles (on a 5K or 6K screen, where those would be too
+many for the view, the finest zoom whose tiles fit). Text and lines drawn into them come out
+sharp, and smaller, as in QGIS. A screen at more than 2x (most phones), and a map export or layout
+at a high resolution, still take tiles at twice the detail, not more: three times would ask for
+nine times the tiles, with their text too small to read.
+
+Only a WMS layer drawn as one picture says the resolution it is for (above); in tiles it doesn't,
+and its symbols come out smaller.
 
 **Settings › Map Tiles › Sharp Tiles on HiDPI Displays** (on by default; `ui.sharpTiles`) turns it
 off: tiles and pictures are then fetched for the logical pixels and stretched, softer but with
