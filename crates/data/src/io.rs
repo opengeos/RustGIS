@@ -244,7 +244,9 @@ fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<V
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
 /// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
-/// track points. Other files give their one layer.
+/// track points. Other files give their one layer. A file read as it is added (KML and KMZ,
+/// LandXML, RSS, Atom, GeoRSS, XML that isn't a city model) stays within [`BYTES_FLOOR`], as
+/// before #2408; the others take [`max_bytes`].
 pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // KML and KMZ, LandXML, RSS, Atom, GeoRSS and other XML that isn't a city model are read as
@@ -4545,9 +4547,8 @@ mod tests {
         assert_eq!(e, file_size_error("a.geojson", max));
         // A KML stays within the floor with the limit raised; a GPX, read ahead, doesn't.
         let past_floor = vec![b' '; BYTES_FLOOR as usize + 1];
-        let raised =
-            || with_max_bytes(2 * BYTES_FLOOR, || (read_layers("a.kml", &past_floor).err(), read_layers("a.gpx", &past_floor).err()));
-        let (kml, gpx) = raised();
+        let (kml, gpx) =
+            with_max_bytes(2 * BYTES_FLOOR, || (read_layers("a.kml", &past_floor).err(), read_layers("a.gpx", &past_floor).err()));
         assert_eq!(kml.map(|e| e.to_string()), Some(file_size_error("a.kml", BYTES_FLOOR)));
         assert!(gpx.is_some_and(|e| file_size_error_args(&e.to_string()).is_none()), "a GPX is parsed, not refused by its size");
         let csv = b"x,y\n1,2\n";
@@ -4568,16 +4569,10 @@ mod tests {
         assert_eq!(e, file_size_error("a.csv", 4));
         // The encoding hint on compressed text that isn't UTF-8 only, not on one past the memory
         // budget.
-        let gzip = |text: &[u8]| {
-            use std::io::Write;
-            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-            encoder.write_all(text).unwrap();
-            encoder.finish().unwrap()
-        };
-        let latin1 = gzip(b"name,x,y\nZ\xfcrich,1,2\n");
+        let latin1 = gzip_csv(b"name,x,y\nZ\xfcrich,1,2\n");
         let e = read_gzip_text_budget(latin1.as_slice(), "a.csv.gz", &CsvOptions::default(), &mut (1 << 20)).unwrap_err().to_string();
         assert!(e.contains("if not UTF-8, decompress"), "{e}");
-        let utf8 = gzip(&b"1,2\n".repeat(10_000));
+        let utf8 = gzip_csv(&b"1,2\n".repeat(10_000));
         let e = read_gzip_text_budget(utf8.as_slice(), "a.csv.gz", &CsvOptions::default(), &mut 4096).unwrap_err().to_string();
         assert!(e.contains("memory budget") && !e.contains("UTF-8"), "{e}");
         // Within the size, but forty features each with a field of its own: a table of 1,600
