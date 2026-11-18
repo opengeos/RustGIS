@@ -1463,7 +1463,7 @@ struct RebuildFailures {
     named: Vec<String>,
     said: std::collections::BTreeSet<String>,
     /// Those past the named, counted once each (by a fingerprint of their key, the first
-    /// [`REBUILD_COUNTED`]; past those, each failure).
+    /// [`REBUILD_COUNTED`]; past those, each failure of a system not among them).
     more: usize,
     counted: std::collections::BTreeSet<u64>,
 }
@@ -1484,7 +1484,12 @@ impl RebuildFailures {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut h);
-            if self.counted.len() >= REBUILD_COUNTED || self.counted.insert(h.finish()) {
+            // Once each by fingerprint; past those kept, a new one still counts each time.
+            let h = h.finish();
+            if !self.counted.contains(&h) {
+                if self.counted.len() < REBUILD_COUNTED {
+                    self.counted.insert(h);
+                }
                 self.more += 1;
             }
         }
@@ -1987,6 +1992,16 @@ mod tests {
         f.add("EPSG 0");
         f.add(&format!("EPSG {}", REBUILD_KEPT + 1));
         assert_eq!((f.named.len(), f.more), (REBUILD_KEPT, 3));
+        // Past the fingerprints kept, one already counted still isn't counted again.
+        for i in 0..REBUILD_COUNTED {
+            f.add(&format!("WKT {i}"));
+        }
+        let more = f.more;
+        f.add("WKT 0");
+        f.add(&format!("EPSG {}", REBUILD_KEPT + 1));
+        assert_eq!(f.more, more);
+        f.add("WKT new");
+        assert_eq!(f.more, more + 1, "a new one past them counts");
         // One that is built again: nothing said.
         let fine = Live::new(Some("EPSG 4267".into()), u64::MAX, live.peek());
         assert!(matches!(fine.now(), Now::Again(_)));

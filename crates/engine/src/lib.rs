@@ -2653,14 +2653,17 @@ impl Session {
         }
         let (failed, shown) = rustgis_data::raster::crs::rebuild_failures_since(&mut self.rebuild_failures_seen);
         if failed > 0 {
-            let more = if failed > shown.len() { format!(" and {} more", failed - shown.len()) } else { String::new() };
             let (systems, they, them) =
                 if failed == 1 { ("coordinate system", "it goes", "it") } else { ("coordinate systems", "they go", "them") };
+            // Those named, and the rest counted; with none named (all past those kept by name),
+            // the count alone.
+            let named = match (shown.is_empty(), failed - shown.len()) {
+                (true, _) => String::new(),
+                (false, 0) => format!(": {}", shown.join(", ")),
+                (false, rest) => format!(": {} and {rest} more", shown.join(", ")),
+            };
             self.notify(
-                format!(
-                    "{failed} {systems} couldn't be built again with the datum grids that arrived, so {they} on without {them}: {}{more}",
-                    shown.join(", ")
-                ),
+                format!("{failed} {systems} couldn't be built again with the datum grids that arrived, so {they} on without {them}{named}"),
                 true,
             );
         }
