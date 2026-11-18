@@ -2772,10 +2772,9 @@ mod tests {
     /// ballpark that the projection's round trip once refused.
     #[test]
     fn esri_codes_place_points_as_proj_9_9_0() {
-        for (code, (lon, lat), (x, y), needed) in [
-            (102144u32, (-15.0, 28.34), (500_000.000, 3_134_617.542), true),
-            (31491, (3.925, 55.58), (1_558_329.555, 6_161_550.584), true),
-        ] {
+        for (code, (lon, lat), (x, y)) in
+            [(102144u32, (-15.0, 28.34), (500_000.000, 3_134_617.542)), (31491, (3.925, 55.58), (1_558_329.555, 6_161_550.584))]
+        {
             let crs = esri_crs(code).unwrap();
             assert_eq!(crs.label(), format!("ESRI:{code}"));
             let at = crs.transformer().unwrap().from_lonlat(Coord::new(lon, lat)).unwrap();
@@ -2783,7 +2782,7 @@ mod tests {
             // A project with it needs its WKT where the PROJ definition older releases read places
             // points elsewhere (Merchich, 246 m; DHDN past its Helmert's area), as for any other
             // system.
-            assert_eq!(crs.custom_def().unwrap().wkt_needed(), needed, "ESRI:{code}");
+            assert!(crs.custom_def().unwrap().wkt_needed(), "ESRI:{code}");
         }
         // Projected codes the bundled table lacked are the catalog's (World Miller Cylindrical),
         // and geographic ones aren't ESRI projected systems.
