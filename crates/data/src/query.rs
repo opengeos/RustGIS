@@ -1589,6 +1589,12 @@ fn whole(f: f64) -> Value {
     if f.is_finite() && f.abs() < 9e15 { Value::Int(f as i64) } else { real(f) }
 }
 
+/// Whether `v` is empty or `<null>` text, which a number read takes as missing
+/// ([`Value::asks_null`]); a null is told apart by whether it carries an error.
+fn blank_text(v: &Value) -> bool {
+    matches!(v, Value::Text(_)) && v.asks_null()
+}
+
 /// A float result, or why it is null: too large, or not a number.
 fn checked(f: f64) -> Result<Value, Fault> {
     if f.is_finite() {
@@ -1863,11 +1869,11 @@ impl<'a> Eval<'a> {
             // Empty or `<null>` text is missing to every operator but `+`, which joins it.
             Expr::Chain(first, rest) => {
                 let (first, mut missing) = self.operand(first);
-                missing |= rest.first().is_some_and(|(op, _)| *op != Arith::Add && first.asks_null());
+                missing |= rest.first().is_some_and(|(op, _)| *op != Arith::Add && blank_text(&first));
                 let mut acc = first.into_owned();
                 for (op, t) in rest {
                     let (v, m) = self.operand(t);
-                    missing |= m || (*op != Arith::Add && v.asks_null());
+                    missing |= m || (*op != Arith::Add && blank_text(&v));
                     acc = self.or_fail(arith(*op, &acc, &v));
                 }
                 if missing {
@@ -1936,7 +1942,14 @@ impl<'a> Eval<'a> {
             v
         };
         let arg = |i: usize| args.get(i).map(read).unwrap_or(Cow::Owned(Value::Null));
-        let n = |i: usize| self.num(&arg(i));
+        // A number argument; empty or `<null>` text there is missing, as a null is.
+        let number = |v: &Value| {
+            if blank_text(v) {
+                missing.set(true);
+            }
+            self.num(v)
+        };
+        let n = |i: usize| number(&arg(i));
         let txt = |i: usize| {
             let v = arg(i);
             (!v.is_null()).then(|| v.to_string())
@@ -1977,13 +1990,13 @@ impl<'a> Eval<'a> {
             }
             Func::Abs => match &*arg(0) {
                 Value::Int(i) => i.checked_abs().map(Value::Int).unwrap_or_else(|| self.fail(Fault::Overflow)),
-                v => self.num(v).map(|x| real(x.abs())).unwrap_or(Value::Null),
+                v => number(v).map(|x| real(x.abs())).unwrap_or(Value::Null),
             },
             Func::Round => {
                 let places = if args.len() > 1 { n(1).map(|p| p.clamp(-15.0, 15.0) as i32) } else { Some(0) };
                 match (arg(0).into_owned(), places) {
                     (Value::Int(i), Some(p)) if p >= 0 => Value::Int(i),
-                    (v, Some(p)) => match self.num(&v) {
+                    (v, Some(p)) => match number(&v) {
                         Some(x) => {
                             let m = 10f64.powi(p);
                             // So large it has no places to round: as it is.
@@ -2020,7 +2033,7 @@ impl<'a> Eval<'a> {
             Func::Clamp => {
                 // Each argument once: evaluated again, nested clamps would cost 2^depth.
                 let (lo, x, hi) = (arg(0), arg(1), arg(2));
-                match (self.num(&lo), self.num(&x), self.num(&hi)) {
+                match (number(&lo), number(&x), number(&hi)) {
                     (Some(l), Some(v), Some(h)) if l <= h => {
                         return if v < l {
                             lo
@@ -2051,7 +2064,7 @@ impl<'a> Eval<'a> {
             Func::ToString => txt(0).map(text).unwrap_or(Value::Null),
             Func::ToInt => match &*arg(0) {
                 Value::Int(i) => Value::Int(*i),
-                v => self.num(v).map(|x| whole(x.trunc())).unwrap_or(Value::Null),
+                v => number(v).map(|x| whole(x.trunc())).unwrap_or(Value::Null),
             },
             Func::ToReal => n(0).map(Value::Float).unwrap_or(Value::Null),
             Func::Length => txt(0).map(|s| Value::Int(s.chars().count() as i64)).unwrap_or(Value::Null),

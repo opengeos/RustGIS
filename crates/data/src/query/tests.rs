@@ -800,6 +800,11 @@ fn errors_say_why_they_are_null() {
         ("clamp(10, pop, 0)", Fault::ClampBounds),
         ("scale_exp(0, 0, 10, 1, 2, -1)", Fault::DivisionByZero),
         ("round(pop / 0) + 1", Fault::DivisionByZero),
+        // An error's null in either position of an operator still reports.
+        ("(1 / 0) * 2", Fault::DivisionByZero),
+        ("2 * (1 / 0)", Fault::DivisionByZero),
+        ("1 / 0 * 2", Fault::DivisionByZero),
+        ("sqrt(1 / 0)", Fault::DivisionByZero),
         ("nullif(pop / 0, 1)", Fault::DivisionByZero),
         ("'(' || (pop / 0) || ')'", Fault::DivisionByZero),
     ] {
@@ -831,6 +836,7 @@ fn errors_say_why_they_are_null() {
         ("'' * (1 / 0)", 0),
         ("(1 / 0) - '<null>'", 0),
         ("sqrt('<null>')", 0),
+        ("clamp('', 1 / 0, 5)", 0),
     ] {
         assert_eq!(why(text, row), (Value::Null, None), "{text}");
     }
