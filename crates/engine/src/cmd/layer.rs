@@ -2133,19 +2133,28 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
                 super::say_crs_note(s, crs);
             }
             let (full, reads) = read?;
-            return add_picked(s, p, &full, reads, !path.to_ascii_lowercase().ends_with(".zip"), Vec::new(), None);
+            // Whole for a city model only (its first layer says what the file does), not for a
+            // GML or GPX read ahead too.
+            #[cfg(not(target_arch = "wasm32"))]
+            let whole = is_city_model_path(path);
+            #[cfg(target_arch = "wasm32")]
+            let whole = !path.to_ascii_lowercase().ends_with(".zip");
+            return add_picked(s, p, &full, reads, whole, Vec::new(), None);
         }
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > rustgis_data::io::max_bytes() {
             return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
         }
-        // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a GPX, a
-        // GML, a LandXML) is read here, on the UI thread there: within the size every computer
-        // reads, as before #2408, so the window isn't held longer. Zips and city models are read
-        // ahead, so they take the larger limit.
-        let ahead_too = path.to_ascii_lowercase().ends_with(".zip") || is_city_model_path(path);
+        // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a LandXML)
+        // is read here, on the UI thread there: within the size every computer reads, as before
+        // #2408, so the window isn't held longer. Zips, city models, GML and GPX are read ahead
+        // ([`read_ahead_whole`]), so they take the larger limit.
         let floor = rustgis_data::io::BYTES_FLOOR;
-        if !ahead_too && meta.len() > floor {
+        #[cfg(not(target_arch = "wasm32"))]
+        let ahead = read_ahead_whole(path);
+        #[cfg(target_arch = "wasm32")]
+        let ahead = false;
+        if !ahead && meta.len() > floor {
             return Err(format!(
                 "{path}: a file of this kind is read whole as it is added, so at most {} MiB; it is {} MiB",
                 floor >> 20,
@@ -2196,6 +2205,17 @@ type LayersRead = Result<(String, Vec<rustgis_data::io::LayerRead>), String>;
 /// The key Add Data's read of the layers at `path` is taken by.
 fn layers_key(path: &str) -> String {
     format!("layers:{path}")
+}
+
+/// Whether the desktop app reads a file of several layers whole ahead, off the UI thread
+/// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, a GML or a GPX file.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_ahead_whole(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".zip")
+        || lower.ends_with(".gml")
+        || lower.ends_with(".gpx")
+        || (rustgis_data::io::is_multi_layer_name(path) && is_city_model_path(path))
 }
 
 /// Whether Add Data reads `path` as a city model's layers: a CityJSON model named `.city.json`, or
@@ -2424,9 +2444,10 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
         && !(lower.ends_with(".json") && (given("crs") || given("layer")))
         && std::fs::metadata(&path)
             .is_ok_and(|m| m.is_file() && (b(p, "stream") == Some(false) || m.len() <= rustgis_data::source::geojson::IN_PLACE_ABOVE));
-    // A ZIP or city model: its layers, read whole. A model named `.json` (not `.city.json`) is a
-    // file of several layers only with options given, which Add Data reads as it runs.
-    if lower.ends_with(".zip") || (rustgis_data::io::is_multi_layer_name(&path) && is_city_model_path(&path)) {
+    // A ZIP, a city model, a GML or a GPX file: its layers, read whole. A model named `.json` (not
+    // `.city.json`) is a file of several layers only with options given, which Add Data reads as
+    // it runs. A KML or KMZ (with its ground overlays) and a LandXML file are read as they are added.
+    if read_ahead_whole(&path) {
         let (key, q) = (layers_key(&path), p.clone());
         return Some(ahead(NAME, key, move || read_layers_file(&q, &path)));
     }
