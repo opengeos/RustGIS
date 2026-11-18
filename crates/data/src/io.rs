@@ -13,25 +13,26 @@ pub const MAX_BYTES: u64 = 256 << 20;
 const FILE_SIZE_LIMIT_START: &str = " is too large to open (limit ";
 const VECTOR_SIZE_LIMIT_END: &str =
     " MiB). Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.";
-const TABLE_SIZE_LIMIT_END: &str = " MiB). Split the data into smaller files and import each one separately.";
+const SPLIT_SIZE_LIMIT_END: &str = " MiB). Split the data into smaller files and import each one separately.";
 
 /// The whole-file refusal, using the reader's limit and recovery advice for the file type.
 pub fn file_size_error(name: &str, limit: u64) -> String {
     let dbf = Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dbf"));
-    let end =
-        if is_delimited_name(name) || crate::sheets::is_sheet_name(name) || dbf { TABLE_SIZE_LIMIT_END } else { VECTOR_SIZE_LIMIT_END };
+    let table = is_delimited_name(name) || crate::sheets::is_sheet_name(name) || dbf;
+    let raster = crate::raster::is_raster_name(name) || crate::raster::is_jpeg2000_name(name) || crate::mbtiles::is_mbtiles_name(name);
+    let end = if table || raster || crate::source::is_source_name(name) { SPLIT_SIZE_LIMIT_END } else { VECTOR_SIZE_LIMIT_END };
     format!("{name}{FILE_SIZE_LIMIT_START}{}{end}", limit >> 20)
 }
 
-/// Recovers the literal file name, limit and whether the refusal gives table advice.
+/// Recovers the literal file name, limit and whether the refusal advises splitting only.
 pub fn file_size_error_args(error: &str) -> Option<(&str, &str, bool)> {
-    let (body, table) = match error.strip_suffix(TABLE_SIZE_LIMIT_END) {
+    let (body, split_only) = match error.strip_suffix(SPLIT_SIZE_LIMIT_END) {
         Some(body) => (body, true),
         None => (error.strip_suffix(VECTOR_SIZE_LIMIT_END)?, false),
     };
     let (name, limit) = body.rsplit_once(FILE_SIZE_LIMIT_START)?;
     limit.parse::<u64>().ok()?;
-    Some((name, limit, table))
+    Some((name, limit, split_only))
 }
 
 /// File types the readers understand, for open dialogs.

@@ -1271,14 +1271,17 @@ fn like_name(p: &Value) -> Result<Option<&str>, String> {
 mod tests {
     use super::*;
 
-    /// Exercise the upload command handler with a reduced cap on both table and vector files.
+    /// Exercise upload refusals with a reduced cap across formats with different recovery advice.
     #[test]
     fn oversized_add_data_bytes_reports_limit_and_advice() {
         const LIMIT: usize = 1 << 20;
         let mut session = Session::new(crate::Project::default());
         let data = "YWJj".repeat(LIMIT / 3 + 1);
+        let split = "Split the data into smaller files and import each one separately.";
         for (name, advice) in [
-            ("permits.csv", "Split the data into smaller files and import each one separately."),
+            ("permits.csv", split),
+            ("imagery.tif", split),
+            ("permits.gpkg", split),
             (
                 "permits.geojson",
                 "Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.",

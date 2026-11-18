@@ -485,9 +485,9 @@ pub fn fmt_raw(template: &str, args: &[(&str, &str)]) -> String {
 
 /// Translates a whole-file size refusal, keeping the file name and limit as literal arguments.
 pub(crate) fn file_size_error(error: &str, format: impl FnOnce(&str, &[(&str, &str)]) -> String) -> Option<String> {
-    let (name, limit, table) = rustgis_engine::data::io::file_size_error_args(error)?;
+    let (name, limit, split_only) = rustgis_engine::data::io::file_size_error_args(error)?;
     let args = &[("name", name), ("limit", limit)];
-    Some(if table {
+    Some(if split_only {
         format("{name} is too large to open (limit {limit} MiB). Split the data into smaller files and import each one separately.", args)
     } else {
         format(
