@@ -102,7 +102,7 @@ place, is left out, and a notice names it. The parts are looked up beside the ad
 (S3's `X-Amz-*`) signs one file, so its Shapefile's parts can't be fetched with it: add that
 Shapefile zipped.
 Downloads are limited to 512 MiB on desktop and 256 MiB on the web; each reader has its own
-limit too. The whole-file vector readers, including CityGML, take up to the size read into memory: 256 MiB in the web app; on the desktop it follows the computer's memory, about 512 MiB for every 16 GiB, from 256 MiB up to 4 GiB (`fileBytes` in `gp.env`'s limits). A larger file is refused, saying its size and the limit. KML, KMZ and LandXML files, which are read as they are added, stay at 256 MiB. In the web app the server must allow
+limit too. The whole-file vector readers, including CityGML, take up to the size read into memory: 256 MiB in the web app; on the desktop it follows the computer's memory, about 512 MiB for every 16 GiB, from 256 MiB up to 4 GiB (`fileBytes` in `gp.env`'s limits). A larger file is refused, saying its size and the limit. KML, KMZ, LandXML, RSS and Atom files, which are read as they are added, stay at 256 MiB, and so does every file on a phone. In the web app the server must allow
 requests from web pages (CORS). On the desktop, with
 [GDAL](https://gdal.org) installed, a JPEG 2000 file (`.jp2`, `.j2k`: Sentinel-2's imagery on S3)
 is downloaded too, converted to a GeoTIFF that the project keeps, and added. Desktop byte uploads
