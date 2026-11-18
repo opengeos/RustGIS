@@ -10,9 +10,6 @@ pub mod ascii;
 pub mod cog;
 pub mod cogwrite;
 pub mod crs;
-pub(crate) mod epsg_axes;
-mod epsg_gap;
-mod esri;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;
 pub mod geotiff;
