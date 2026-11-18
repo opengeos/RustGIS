@@ -2632,16 +2632,11 @@ impl Session {
                 }
             }
         }
-        // A map's projection under the key its transformer is kept by: an ESRI code's catalog WKT
-        // (as `Projector::new` builds it), else its PROJ definition.
+        // A map's projection under the key its transformer is kept by (an ESRI code's catalog
+        // WKT, else its PROJ definition), as `systems_in_use` keys it too.
         used.extend(codes.into_iter().filter_map(|code| {
             let (def, label) = rustgis_map::projection::lookup(code).ok()?;
-            let esri = label
-                .strip_prefix("ESRI:")
-                .and_then(|n| n.parse::<u32>().ok())
-                .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def.as_str()))
-                .and_then(rustgis_data::raster::crs::esri_wkt);
-            Some((esri.map_or(def, |wkt| format!("WKT {wkt}")), label))
+            Some((rustgis_map::projection::transformer_key(&def, &label), label))
         }));
         used.extend(systems.into_iter().filter_map(definition_and_label));
         // By definition: two typed systems share a label ("Custom PROJ").
@@ -2757,9 +2752,10 @@ impl Session {
         };
         for map in &self.project.maps {
             if let rustgis_map::Projection::Custom(code) = &map.projection
-                && let (Ok((def, _)), Ok(crs)) = (rustgis_map::projection::lookup(code), rustgis_data::raster::Crs::parse(code))
+                && let (Ok((def, label)), Ok(crs)) = (rustgis_map::projection::lookup(code), rustgis_data::raster::Crs::parse(code))
             {
-                add(def, crs);
+                // Under the key its grid note is found by (`say_grid_notes`).
+                add(rustgis_map::projection::transformer_key(&def, &label), crs);
             }
             for layer in &map.layers {
                 let raster = layer.raster.as_ref().and_then(|r| r.data.as_ref()).map(|r| r.crs);

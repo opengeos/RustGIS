@@ -407,6 +407,22 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     Ok((def.to_string(), format!("EPSG:{n}")))
 }
 
+/// The key a map projection's transformer is kept under, for its grid notes: an ESRI code's
+/// catalog WKT (`WKT {text}`, as [`Projector::new`] builds it from that WKT), else its PROJ
+/// definition `def` (from [`lookup`], whose `label` names the code).
+pub fn transformer_key(def: &str, label: &str) -> String {
+    esri_wkt_of(def, label).map_or_else(|| def.to_string(), |wkt| format!("WKT {wkt}"))
+}
+
+/// The catalog WKT of an ESRI code whose definition is `def`.
+fn esri_wkt_of(def: &str, label: &str) -> Option<&'static str> {
+    label
+        .strip_prefix("ESRI:")
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def))
+        .and_then(rustgis_data::raster::crs::esri_wkt)
+}
+
 /// Where a projection is meant to be used. Points outside are not drawn: far from it most
 /// projections distort wildly, fold back or run off to infinity.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -443,7 +459,8 @@ impl Domain {
             "stere" | "sterea" | "somerc" | "krovak" | "mod_krovak" | "col_urban" | "cass" | "poly" | "omerc" | "labrd" => {
                 Domain::Cap { center: Coord::new(lon0, lat0), radius: 60.0 }
             }
-            // The hemisphere seen from above its centre (from a height, less of it, within the same cap).
+            // The hemisphere seen from above its centre; a perspective from a height sees less of it, which
+            // its transformer refuses.
             "ortho" | "nsper" | "tpers" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 90.0 },
             "laea" | "aeqd" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 120.0 },
             "aea" | "lcc" => {
@@ -582,15 +599,10 @@ impl Projector {
         // An ESRI code likewise, by the WKT terrio-crs's catalog gives it, as a layer in it is
         // (`esri_crs`). Built from the WKT directly, so a map takes no place in the table of
         // file-defined systems; a WKT that can't be built is refused, not drawn by the PROJ text.
-        let esri = label
-            .strip_prefix("ESRI:")
-            .and_then(|n| n.parse::<u32>().ok())
-            .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def.as_str()))
-            .and_then(rustgis_data::raster::crs::esri_wkt);
+        let esri = esri_wkt_of(&def, &label);
         // Noted as used, so a background export of a map drawn in it says its missing grid: under
-        // the key its transformer is kept by (an ESRI code's WKT, `transformer_of_wkt`).
-        let key = esri.map_or_else(|| def.clone(), |wkt| format!("WKT {wkt}"));
-        rustgis_data::raster::crs::note_used(&key, || label.to_string());
+        // the key its transformer is kept by ([`transformer_key`]).
+        rustgis_data::raster::crs::note_used(&transformer_key(&def, &label), || label.to_string());
         let t = match (epsg, esri) {
             // Without the code its error already starts with.
             (Some(c), _) => rustgis_data::raster::Crs::Epsg(c)
@@ -1088,6 +1100,17 @@ mod tests {
 
     /// ESRI codes (opengeos/RustGIS#213), against PROJ 9.9.0 (network off,
     /// `Transformer.from_crs("EPSG:4326", "ESRI:<code>", always_xy=True)`).
+    #[test]
+    fn grid_notes_are_keyed_as_the_transformer_is() {
+        // An ESRI map by its catalog WKT, as `Projector::new` builds it; an EPSG one by its
+        // definition, as data in it is.
+        let (def, label) = lookup("ESRI:102144").unwrap();
+        let wkt = rustgis_data::raster::crs::esri_wkt(102144).unwrap();
+        assert_eq!(transformer_key(&def, &label), format!("WKT {wkt}"));
+        let (def, label) = lookup("EPSG:2056").unwrap();
+        assert_eq!(transformer_key(&def, &label), def);
+    }
+
     #[test]
     fn esri_codes() {
         let check = |code: &str, (lon, lat): (f64, f64), (x, y): (f64, f64), tolerance: f64| {
