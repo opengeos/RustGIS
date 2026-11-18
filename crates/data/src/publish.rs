@@ -145,11 +145,11 @@ struct Original {
     cpg: Option<(PathBuf, Vec<u8>)>,
 }
 
-/// Reads the file at `p`, `None` when it isn't there; refuses one past what a reader takes.
+/// Reads a Shapefile part at `p`, `None` when it is absent. Refuses oversized parts with advice for the whole dataset.
 fn read_part(p: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::metadata(p) {
         Ok(m) if m.len() > crate::io::MAX_BYTES => {
-            Err(DataError::Format(crate::io::file_size_error(&p.to_string_lossy(), crate::io::MAX_BYTES)))
+            Err(DataError::Format(crate::io::shapefile_size_error(&p.to_string_lossy(), crate::io::MAX_BYTES)))
         }
         Ok(_) => Ok(Some(std::fs::read(p)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -912,6 +912,23 @@ mod tests {
         shapefile(&ds, &path, &sync).unwrap();
         // A second publisher that loaded the old baseline now sees the committed change.
         assert!(shapefile(&ds, &path, &sync).err().unwrap().to_string().contains("changed since the layer was read"));
+    }
+
+    /// The publisher's original-file read stops before loading an oversized attribute sidecar.
+    #[test]
+    fn oversized_shapefile_dbf_read_for_publish_gives_dataset_advice() {
+        use crate::io::{FileSizeAdvice, MAX_BYTES, file_size_error_args};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parcels.shp");
+        let dbf = path.with_extension("dbf");
+        written(&parcels(), &path);
+        std::fs::OpenOptions::new().write(true).open(&dbf).unwrap().set_len(MAX_BYTES + 1).unwrap();
+
+        let error = Original::read(&path).err().unwrap().to_string();
+        let limit = (MAX_BYTES >> 20).to_string();
+        assert_eq!(file_size_error_args(&error), Some((dbf.to_str().unwrap(), limit.as_str(), FileSizeAdvice::Shapefile)));
+        assert_eq!(std::fs::metadata(&dbf).unwrap().len(), MAX_BYTES + 1);
     }
 
     /// A duplicated descriptor must not keep a finished publisher's lock alive.

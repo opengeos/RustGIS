@@ -19,11 +19,20 @@ const SPLIT_SIZE_LIMIT_END: &str = " MiB). Split the data into smaller files and
 
 /// The whole-file refusal, using the reader's limit and recovery advice for the file type.
 pub fn file_size_error(name: &str, limit: u64) -> String {
-    let dbf = Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dbf"));
+    let ext = Path::new(name).extension();
+    if ext.is_some_and(|ext| ext.eq_ignore_ascii_case("shp") || ext.eq_ignore_ascii_case("shx")) {
+        return shapefile_size_error(name, limit);
+    }
+    let dbf = ext.is_some_and(|ext| ext.eq_ignore_ascii_case("dbf"));
     let table = is_delimited_name(name) || crate::sheets::is_sheet_name(name) || dbf;
     let raster = crate::raster::is_raster_name(name) || crate::raster::is_jpeg2000_name(name) || crate::mbtiles::is_mbtiles_name(name);
     let end = if table || raster || crate::source::is_source_name(name) { SPLIT_SIZE_LIMIT_END } else { VECTOR_SIZE_LIMIT_END };
     format!("{name}{FILE_SIZE_LIMIT_START}{}{end}", limit >> 20)
+}
+
+/// Names the refused part and gives recovery advice for the whole Shapefile.
+pub(crate) fn shapefile_size_error(name: &str, limit: u64) -> String {
+    format!("{name}{FILE_SIZE_LIMIT_START}{}{SHAPEFILE_SIZE_LIMIT_END}", limit >> 20)
 }
 
 /// Recovery instructions for a refused whole-file read.
@@ -2517,16 +2526,15 @@ pub(crate) fn dbf_sidecar(path: &Path) -> std::path::PathBuf {
 /// Reads a Shapefile with an optional source CRS replacing its `.prj`, before any geometry is
 /// converted. This changes only interpretation; the files on disk are never modified.
 pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(Dataset, ReadReport)> {
-    check_size(path)?;
+    check_size_with(path, shapefile_size_error)?;
     let dbf = dbf_sidecar(path);
     if !dbf.is_file() {
         return Err(DataError::Format(format!("Shapefile: {} is missing", dbf.display())));
     }
-    let sidecar_error = |name: &str, limit: u64| format!("{name}{FILE_SIZE_LIMIT_START}{}{SHAPEFILE_SIZE_LIMIT_END}", limit >> 20);
-    check_size_with(&dbf, sidecar_error)?;
+    check_size_with(&dbf, shapefile_size_error)?;
     let shx = path.with_extension("shx");
     if shx.is_file() {
-        check_size_with(&shx, sidecar_error)?;
+        check_size_with(&shx, shapefile_size_error)?;
     }
     let mut notes = Vec::new();
     let parts = ShapefileParts {
@@ -6517,15 +6525,15 @@ mod tests {
         assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
     }
 
-    /// An oversized Shapefile sidecar names the failing file and advises keeping the parts together.
+    /// An oversized Shapefile part names the failing file and advises keeping the parts together.
     #[test]
-    fn oversized_shapefile_sidecar_reports_whole_dataset_advice() {
+    fn oversized_shapefile_part_reports_whole_dataset_advice() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("roads.shp");
         std::fs::File::create(&path).unwrap();
         std::fs::File::create(path.with_extension("dbf")).unwrap();
         let limit = (MAX_BYTES >> 20).to_string();
-        for ext in ["dbf", "shx"] {
+        for ext in ["shp", "dbf", "shx"] {
             let sidecar = path.with_extension(ext);
             let file = std::fs::File::create(&sidecar).unwrap();
             file.set_len(MAX_BYTES + 1).unwrap();
