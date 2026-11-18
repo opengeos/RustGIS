@@ -4918,15 +4918,20 @@ impl RustGisApp {
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 rustgis_engine::cmd::share::gpkg_table(p, &ext)?;
                 // A streamed layer exports its whole source, not the features read for the view.
-                let (mut dataset, lost) = if l.is_streamed() { l.load_all_counted()? } else { (l.dataset.clone(), Default::default()) };
-                let filtered =
-                    rustgis_engine::data::export::filter_dataset(&mut dataset, l.definition_query.as_deref()).map_err(|e| e.to_string())?;
+                use std::borrow::Cow;
+                let (mut ds, lost) = if l.is_streamed() {
+                    let (dataset, lost) = l.load_all_counted()?;
+                    (Cow::Owned(dataset), lost)
+                } else {
+                    (Cow::Borrowed(&l.dataset), Default::default())
+                };
+                let query_report =
+                    rustgis_engine::data::export::filter_dataset(&mut ds, l.definition_query.as_deref()).map_err(|e| e.to_string())?;
                 let layer_name = l.name.clone();
                 // In the layer's own coordinate system, as share.exportLayer writes a file.
-                let ds = &dataset;
                 use rustgis_engine::data::io;
-                let crs = io::default_export_crs(ds, &ext);
-                let written = io::write_bytes_in(ds, &ext, crs).map_err(|e| e.to_string());
+                let crs = io::default_export_crs(&ds, &ext);
+                let written = io::write_bytes_in(&ds, &ext, crs).map_err(|e| e.to_string());
                 let (bytes, left_out) = match written {
                     Ok(w) => w,
                     Err(e) => {
@@ -4938,25 +4943,26 @@ impl RustGisApp {
                 let name = format!("{}.{ext}", l.name);
                 // The features written, read whole, give their own extent (not a raster's, or the
                 // one a streamed layer's source declares).
-                let mut notes = rustgis_engine::data::export_notes([(ds, ds.extent())], &name, crs);
-                rustgis_engine::cmd::share::coalesce_read_zm(&mut notes, &name, ds, &lost);
+                let mut notes = rustgis_engine::data::export_notes([(ds.as_ref(), ds.extent())], &name, crs);
+                rustgis_engine::cmd::share::coalesce_read_zm(&mut notes, &name, &ds, &lost);
                 let mut dbf_notes = Vec::new();
                 if ext == "zip" {
                     dbf_notes.extend(io::shapefile_names_note(&ds.fields, &name));
-                    dbf_notes.extend(io::shapefile_values_notes(ds, &name));
-                    dbf_notes.extend(io::shapefile_geometry_notes(ds, &name, crs));
+                    dbf_notes.extend(io::shapefile_values_notes(&ds, &name));
+                    dbf_notes.extend(io::shapefile_geometry_notes(&ds, &name, crs));
                 }
                 if matches!(ext.as_str(), "parquet" | "geoparquet") {
-                    dbf_notes.extend(rustgis_engine::data::source::parquet::values_note(ds, &name));
+                    dbf_notes.extend(rustgis_engine::data::source::parquet::values_note(&ds, &name));
                 }
                 dbf_notes.extend(io::dates_as_text_note(&ds.fields, &name));
-                dbf_notes.extend(rustgis_engine::cmd::share::gpkg_dates_note(ds, &ext, &name));
+                dbf_notes.extend(rustgis_engine::cmd::share::gpkg_dates_note(&ds, &ext, &name));
                 if lost.rows > 0 {
                     dbf_notes.push(format!("{name}: {} rows couldn't be read and were left out", lost.rows));
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
                 // CSV holds a point a row, GPX a name for each feature and no areas.
-                dbf_notes.extend(io::export_losses_notes(ds, &ext, io::name_field(ds), &name));
+                dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name));
+                drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {
                     self.session.notify(note, false);
                 }
@@ -4964,7 +4970,7 @@ impl RustGisApp {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
                 }
                 if self.download(&name, bytes) {
-                    rustgis_engine::cmd::share::notify_query_omissions(&mut self.session, &name, &layer_name, filtered);
+                    rustgis_engine::cmd::share::notify_export_query(&mut self.session, &name, &layer_name, &query_report);
                     for note in notes.into_iter().chain(dbf_notes).chain(construction_notes) {
                         self.session.notify(note, false);
                     }

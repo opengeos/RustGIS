@@ -199,7 +199,7 @@ fn a_streamed_export_writes_what_a_whole_export_writes() {
                 let expected = Exported {
                     written: whole.features.len() - left_out,
                     left_out,
-                    filtered: 0,
+                    query: Default::default(),
                     skipped: 0,
                     null_numbers: 0,
                     unfit,
@@ -235,7 +235,7 @@ fn streamed_export_counts_query_omissions_across_chunks() {
     let query = query::parse_fields("@row_number BETWEEN 5 AND 7", &layer).unwrap();
     let path = d.join("export.geojson");
     let (exported, _) = write_chunks_to(&src, &layer, &path, Crs::LonLat, &GpkgTable::default(), CHUNK_BYTES, Some(&query)).unwrap();
-    assert_eq!((exported.written, exported.filtered, exported.left_out), (3, ds.features.len() - 3, 0));
+    assert_eq!((exported.written, exported.query.filtered, exported.left_out), (3, ds.features.len() - 3, 0));
     let written = read_back(&path);
     let count_field = written.field_index("count").unwrap();
     let counts = (0..written.features.len()).map(|row| written.value(row, count_field).clone()).collect::<Vec<_>>();

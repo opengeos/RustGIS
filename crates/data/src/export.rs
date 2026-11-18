@@ -4,7 +4,7 @@
 //! SQLite's page cache). Desktop only: the writers write files, which the web app hands over as
 //! downloads instead.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use crate::io::{CsvWriter, GeoJsonWriter, GpkgTable, GpkgWritten, PROJECTED_FORMATS, check_projected, project_each, write_atomic_with};
 use crate::query::{self, Expr};
@@ -31,8 +31,8 @@ pub struct Exported {
     pub written: usize,
     /// Features the format couldn't hold (a FlatGeobuf holds only features with geometry).
     pub left_out: usize,
-    /// Features excluded by a definition query before writing.
-    pub filtered: usize,
+    /// What applying the definition query did before writing.
+    pub query: QueryReport,
     /// Rows of the source that couldn't be read, so aren't in the export.
     pub skipped: usize,
     /// Non-finite attributes written as null in GeoJSON or GeoPackage, counted over all chunks.
@@ -72,6 +72,23 @@ pub struct Exported {
     pub read_notes: Vec<String>,
 }
 
+/// The rows a definition query excluded, or why the stored query could not be applied.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueryReport {
+    pub filtered: usize,
+    pub parse_error: Option<String>,
+}
+
+/// Reads a stored query against the export schema. Blank queries are absent; unreadable queries
+/// leave all rows visible, as when drawing the layer, and carry the reason for the export notice.
+fn export_query(text: Option<&str>, ds: &Dataset) -> (Option<Expr>, QueryReport) {
+    let Some(text) = text.filter(|text| !text.trim().is_empty()) else { return (None, QueryReport::default()) };
+    match query::parse_fields(text, ds) {
+        Ok(expr) => (Some(expr), QueryReport::default()),
+        Err(error) => (None, QueryReport { filtered: 0, parse_error: Some(error) }),
+    }
+}
+
 /// Writes every feature of `src` to `path` in the format of its extension, in `crs` (see
 /// [`crate::io::write_path_in`], whose files these are), a chunk at a time. `layer` gives the
 /// layer's name, fields and geometry type; its features aren't read. The file is written
@@ -102,8 +119,10 @@ pub fn write_source_filtered(
     gpkg: &GpkgTable,
     definition_query: Option<&str>,
 ) -> Result<(Exported, Option<GpkgWritten>)> {
-    let query = definition_query.and_then(|text| query::parse_fields(text, layer).ok());
-    write_chunks_to(src, layer, path, crs, gpkg, CHUNK_BYTES, query.as_ref())
+    let (query, report) = export_query(definition_query, layer);
+    let (mut exported, table) = write_chunks_to(src, layer, path, crs, gpkg, CHUNK_BYTES, query.as_ref())?;
+    exported.query.parse_error = report.parse_error;
+    Ok((exported, table))
 }
 
 /// [`write_source_in`], `bytes` of features a chunk.
@@ -134,7 +153,7 @@ pub fn write_source_as_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path,
 
 /// Filters export rows in source order, preserving their positions for `@row_number`. A whole
 /// read or an in-memory layer counts its own progress; a chunk's source already counts the read.
-fn retain_matches(ds: &mut Dataset, expr: &Expr, offset: usize, count_progress: bool) -> Result<usize> {
+fn retain_matches(ds: &mut Cow<'_, Dataset>, expr: &Expr, offset: usize, count_progress: bool) -> Result<usize> {
     let len = ds.features.len();
     if count_progress {
         crate::progress::begin(len);
@@ -150,18 +169,19 @@ fn retain_matches(ds: &mut Dataset, expr: &Expr, offset: usize, count_progress: 
     }
     if filtered > 0 {
         let mut keep = keep.into_iter();
-        ds.features.retain(|_| keep.next().unwrap_or(false));
+        ds.to_mut().features.retain(|_| keep.next().unwrap_or(false));
     }
     Ok(filtered)
 }
 
-/// Applies a layer's definition query to a whole dataset, using the same missing or invalid
-/// query behavior as drawing the layer. Returns the number of rows excluded.
-pub fn filter_dataset(ds: &mut Dataset, definition_query: Option<&str>) -> Result<usize> {
-    match definition_query.and_then(|text| query::parse_fields(text, ds).ok()) {
-        Some(expr) => retain_matches(ds, &expr, 0, true),
-        None => Ok(0),
+/// Applies a layer's definition query to a whole dataset, copying borrowed data only when rows
+/// are excluded. An unreadable query keeps all rows and reports the parse error.
+pub fn filter_dataset(ds: &mut Cow<'_, Dataset>, definition_query: Option<&str>) -> Result<QueryReport> {
+    let (expr, mut report) = export_query(definition_query, ds);
+    if let Some(expr) = expr {
+        report.filtered = retain_matches(ds, &expr, 0, true)?;
     }
+    Ok(report)
 }
 
 /// Shared chunk writer for extension-based exports and explicit-format conversion.
@@ -206,6 +226,7 @@ fn write_chunks_as(
     let mut utc_dates = Vec::new();
     let mut fine_dates = Vec::new();
     let mut written_values = Vec::new();
+    let mut scratch = query.map(|expr| (expr, Cow::<Dataset>::Owned(layer.clone())));
     let mut feed = |add: &mut dyn FnMut(&[Feature]) -> Result<()>| -> Result<()> {
         // A GeoPackage export that starts again feeds the features again, and counts them again.
         total = 0;
@@ -219,11 +240,10 @@ fn write_chunks_as(
         // The source counts scanned rows; nested writers only check Cancel, so rows count once.
         crate::progress::begin(src.info().count.map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX)));
         let batch = src.visit_chunks(None, bytes, &mut |mut chunk| {
-            if let Some(expr) = query {
-                let mut input = layer.clone();
-                input.features = chunk.into();
-                filtered += retain_matches(&mut input, expr, total.saturating_add(filtered), false)?;
-                chunk = input.features.into_vec();
+            if let Some((expr, input)) = &mut scratch {
+                input.to_mut().features = chunk.into();
+                filtered += retain_matches(input, expr, total.saturating_add(filtered), false)?;
+                chunk = std::mem::take(&mut input.to_mut().features).into_vec();
             }
             // Counted from the longitude/latitude, before projecting. Every vertex is written:
             // the formats written in Web Mercator a chunk at a time (GeoPackage, FlatGeobuf)
@@ -300,7 +320,7 @@ fn write_chunks_as(
         Exported {
             written,
             left_out,
-            filtered,
+            query: QueryReport { filtered, parse_error: None },
             skipped,
             null_numbers,
             unfit,

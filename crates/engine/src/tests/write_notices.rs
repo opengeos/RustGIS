@@ -39,7 +39,7 @@ fn places() -> Session {
 }
 
 /// The command and its background worker apply the query before writing, even when the layer
-/// reads in place. A whole-data writer and a chunk writer both say precisely what was omitted.
+/// reads in place. Whole-data and chunk writers report omissions and unreadable saved queries.
 #[test]
 fn export_features_respects_the_definition_query() {
     use crate::cmd::exports::{export_land, export_start};
@@ -58,9 +58,15 @@ fn export_features_respects_the_definition_query() {
     assert!(s.map().layer_by_name("Streamed").unwrap().is_streamed());
 
     for (layer, ext, background) in [("Places", "gpkg", false), ("Streamed", "shp", false), ("Streamed", "gpkg", true)] {
-        for (query, expected) in [("long_attribute_name = 'kept'", 1), ("", 2)] {
-            s.run("layer.definitionQuery", &json!({"layer": layer, "where": query})).unwrap();
-            let path = dir.path().join(format!("{layer}-{expected}.{ext}"));
+        for (case, query, expected) in [("valid", "long_attribute_name = 'kept'", 1), ("absent", "", 2), ("unreadable", "missing = 1", 2)] {
+            if case == "unreadable" {
+                // A project can retain a query that refers to a field its source no longer has.
+                let id = s.map().layer_by_name(layer).unwrap().id;
+                s.map_mut().layer_mut(id).unwrap().definition_query = Some(query.into());
+            } else {
+                s.run("layer.definitionQuery", &json!({"layer": layer, "where": query})).unwrap();
+            }
+            let path = dir.path().join(format!("{layer}-{case}.{ext}"));
             let params = json!({"layer": layer, "path": path});
             let mark = s.notice_mark();
             let result = if background {
@@ -78,8 +84,11 @@ fn export_features_respects_the_definition_query() {
             assert_eq!(written.features.len(), expected);
             assert_eq!(written.value(0, 0), &Cell::Text("kept".into()));
             let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
-            if query.is_empty() {
+            if case == "absent" {
                 assert!(notices.is_empty(), "{layer}: {notices:?}");
+            } else if case == "unreadable" {
+                assert_eq!(notices.len(), 1);
+                assert!(notices[0].text.contains("could not be read") && notices[0].text.contains("missing"), "{notices:?}");
             } else {
                 assert_eq!(notices.len(), 1);
                 assert_eq!(
