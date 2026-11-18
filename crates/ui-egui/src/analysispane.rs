@@ -1870,7 +1870,8 @@ fn load_script(app: &mut RustGisApp, ctx: &egui::Context) {
         file.take(crate::SCRIPT_FILE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map(|_| bytes)
     });
     let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
-    match read.map_err(|e| format!("{path}: {e}")).and_then(|bytes| script_text(app, &name, &bytes)) {
+    let unread = |e: std::io::Error| crate::i18n::fmt("{path}: {error}", &[("path", &path), ("error", &e.to_string())]);
+    match read.map_err(unread).and_then(|bytes| script_text(app, &name, &bytes)) {
         Ok(script) => open_script(app, ctx, script),
         Err(e) => app.session.notify(e, true),
     }
