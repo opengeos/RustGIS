@@ -346,6 +346,9 @@ fn unsupported(codecs: &[Codec]) -> Option<String> {
 /// Size-preserving steps and CRC32C's four bytes give the exact limit before the first variable-size
 /// encoder. Other intermediate stages use the existing chunk-file limit, since encoded data can
 /// be larger than the final values. Limits apply to each decompressor, not just Zstandard.
+/// Zlib, gzip, LZ4 and Blosc's non-Zstandard decoding have no internal Cancel checks: a whole
+/// stage can finish before its caller observes cancellation. Zstandard checks between reads
+/// of at most 64 KiB.
 fn decode_chunk(codecs: &[Codec], bytes: &[u8], shape: &[u64], dtype: DType, fill: Option<f64>) -> Result<(Vec<u8>, bool)> {
     let n = shape.iter().try_fold(1u64, |a, &c| a.checked_mul(c)).ok_or_else(|| bad("a chunk too large"))?;
     let want = usize::try_from(n).ok().and_then(|n| n.checked_mul(dtype.size)).ok_or_else(|| bad("a chunk too large"))?;
