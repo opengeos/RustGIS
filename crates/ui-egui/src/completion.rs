@@ -203,6 +203,35 @@ impl<K: Clone + PartialEq> Tip<K> {
     }
 }
 
+/// Where Ctrl+Space asked a box for its list (the text's hash and the cursor): the list shows
+/// there with nothing typed, until the text or the cursor moves on.
+#[derive(Clone, Default)]
+pub(crate) struct Asked(Option<(u64, usize)>);
+
+impl Asked {
+    /// Before the box (its id `id`, its text `text`) sees the keys, with it focused: Ctrl+Space
+    /// asks for the list at its cursor. Whether it did (the list Escape closed may show again,
+    /// `List::reopen`).
+    pub fn keys(&mut self, ui: &Ui, id: Id, text: &str) -> bool {
+        if !ui.memory(|m| m.has_focus(id)) || !ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::Space)) {
+            return false;
+        }
+        let at = TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
+        self.0 = at.map(|at| (egui::util::hash(text), at));
+        true
+    }
+
+    /// Whether the list was asked for at cursor `at` of the text hashed `text`, and still is
+    /// there; once either moved on, forgotten.
+    pub fn here(&mut self, text: u64, at: Option<usize>) -> bool {
+        let here = at.is_some_and(|at| self.0 == Some((text, at)));
+        if !here {
+            self.0 = None;
+        }
+        here
+    }
+}
+
 /// The list's state between frames.
 #[derive(Clone)]
 pub(crate) struct List<O> {
