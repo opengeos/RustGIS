@@ -139,8 +139,9 @@ pub fn set_download(f: Download) {
     *download().write().unwrap_or_else(|e| e.into_inner()) = f;
 }
 
-/// Turns downloading datum grids on or off (the "Download datum grids" setting). Turning it on
-/// forgets this run's failures, so they are tried again.
+/// Turns downloading datum grids on or off (the "Download Datum Grids" setting). Turning it on
+/// from off forgets this run's failures, so they are tried again, and starts the limits over;
+/// on again while on changes nothing.
 pub fn set_enabled(on: bool) {
     // Only turning it on (from off) starts the limits over: on again while on changes nothing.
     let was = ENABLED.swap(on, Ordering::SeqCst);
@@ -167,6 +168,12 @@ pub fn turns() -> u64 {
 /// [`news_told`] when it started), and moves `seen` to the last.
 pub fn news_since(seen: &mut u64) -> Vec<News> {
     lock().news_since(seen)
+}
+
+/// Records news as a download would: for tests of the sessions' notices.
+#[doc(hidden)]
+pub fn tell(news: News) {
+    lock().tell(news);
 }
 
 /// The number of the last news: a session starting now says what comes after it.

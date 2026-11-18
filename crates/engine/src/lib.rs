@@ -1283,7 +1283,9 @@ impl Session {
             grid_downloads_said: Default::default(),
             grid_turns: 0,
             grid_news_seen: crate::grids::news_told(),
-            rebuild_failures_seen: rustgis_data::raster::crs::rebuild_failures_told(),
+            // From the run's start: the transformers are the process's, so one this session uses
+            // may have failed before it began.
+            rebuild_failures_seen: (0, 0),
             offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
