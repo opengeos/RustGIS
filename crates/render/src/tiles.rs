@@ -938,10 +938,15 @@ pub(crate) mod tests {
                 if (url.starts_with("https://one.test/tiles-only/") && !url.contains("&WIDTH=256&HEIGHT=256"))
                     || (url.starts_with("https://one.test/no-dpi/") && url.contains("DPI="))
                     || (url.starts_with("https://one.test/down/") && ONE_DOWN.load(std::sync::atomic::Ordering::Relaxed))
+                    || (url.starts_with("https://one.test/max1024/")
+                        && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 1024))
                     || (url.starts_with("https://one.test/max2048/")
                         && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 2048))
                 {
-                    done(Err("400 Bad Request".into()));
+                    done(Err("http status: 400".into()));
+                } else if url.starts_with("https://one.test/busy-dpi/") && url.contains("DPI=") {
+                    // A passing failure of the picture with its resolution.
+                    done(Err("http status: 503".into()));
                 } else {
                     done(Ok(color(20, 200, 20)));
                 }
@@ -1092,6 +1097,10 @@ pub(crate) mod tests {
         let green = [20, 200, 20, 255];
         // The resolution a picture says it is for (#2390): 96 a logical pixel's worth of its own
         // pixels, which are up to a quarter of a level finer than asked for.
+        // An address with the resolution it says taken out again.
+        let without_dpi = |u: &str| -> String {
+            u.split('&').filter(|p| !p.starts_with("DPI=") && !p.starts_with("FORMAT_OPTIONS=dpi:")).collect::<Vec<_>>().join("&")
+        };
         let dpi = |u: &str| -> Option<f64> {
             let d: f64 = u.split("&DPI=").nth(1)?.split('&').next()?.parse().ok()?;
             let ogc: f64 = u.split("FORMAT_OPTIONS=dpi:").nth(1)?.split('&').next()?.parse().ok()?;
@@ -1177,14 +1186,41 @@ pub(crate) mod tests {
             crate::render_png(&mut m, &view).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             let width = |u: &String| u.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok());
-            assert!(asked.len() == 2 && width(&asked[0]) > Some(2048) && width(&asked[1]) <= Some(2048), "{asked:?}");
-            assert!(dpi(&asked[0]).is_some(), "{asked:?}");
+            // With its resolution, without, then at most 2048 pixels a side.
+            assert_eq!(asked.len(), 3, "{asked:?}");
+            assert!(dpi(&asked[0]).is_some() && asked[1] == without_dpi(&asked[0]), "{asked:?}");
+            assert!(width(&asked[2]) <= Some(2048), "{asked:?}");
             // Its resolution wasn't what was refused: a view whose picture fits still says it.
             let narrow = View { width: 200.0, ..view };
             ASKED_ONE.lock().unwrap().clear();
             crate::render_png(&mut m, &narrow).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             assert!(asked.len() == 1 && dpi(&asked[0]).is_some(), "{asked:?}");
+        }
+        // A view whose HiDPI picture is over 2048 pixels but whose standard one isn't (700 points
+        // at 2 a point): asked at most 2048 pixels a side, still sharper than a standard screen's
+        // and saying its resolution, not at a standard screen's detail.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            // An address of its own: the layer before is kept to 2048 pixels for a while.
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/max2048/b/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 700.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let width = |u: &String| u.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok());
+            assert!(asked.len() == 3 && width(&asked[0]) > Some(2048), "{asked:?}");
+            assert!(width(&asked[2]).is_some_and(|w| w > 1280 && w <= 2048) && dpi(&asked[2]).is_some(), "{asked:?}");
         }
         // A service down for a while fails the picture with its resolution and without: once it
         // is back, the next picture says its resolution again (it wasn't what was refused).
@@ -1198,9 +1234,53 @@ pub(crate) mod tests {
             let (_, asked) = at(&mut m, 30.0, 0.0);
             ONE_DOWN.store(false, std::sync::atomic::Ordering::Relaxed);
             // Its picture with the resolution and without, then its tiles.
-            assert!(asked.len() > 2 && dpi(&asked[0]).is_some() && !asked[1].contains("DPI="), "{asked:?}");
+            assert!(asked.len() > 2 && dpi(&asked[0]).is_some() && asked[1] == without_dpi(&asked[0]), "{asked:?}");
             let (p, asked) = at(&mut m, 30.0, 50_000.0);
             assert!(p == [green; 3] && asked.len() == 1 && dpi(&asked[0]).is_some(), "{asked:?}");
+        }
+        // A service drawing no picture over 1024 pixels a side: the sharp picture fails with its
+        // resolution and without, and the picture at a standard screen's detail draws, as on main.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/max1024/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 400.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            let png = crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let p = pm.pixel(400, 100).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
+            assert!(p == green && asked.len() == 3, "{p:?} {asked:?}");
+            assert!(dpi(&asked[0]).is_some() && asked[1] == without_dpi(&asked[0]), "{asked:?}");
+            assert!(asked[2].contains("&WIDTH=768&") && !asked[2].contains("DPI="), "{asked:?}");
+            // And for a while: a panned view asks for the standard screen's picture at once.
+            let view = View { camera: Camera { center: Coord::new(center.x + 50_000.0, center.y), ..view.camera }, ..view };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 1 && asked[0].contains("&WIDTH=768&"), "{asked:?}");
+        }
+        // A passing failure (a 503) of the picture with its resolution, the one without drawing:
+        // the resolution wasn't refused, so the next picture says it again.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/busy-dpi/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let (p, asked) = at(&mut m, 30.0, 0.0);
+            assert!(p == [green; 3] && asked.len() == 2 && asked[1] == without_dpi(&asked[0]), "{asked:?}");
+            let (_, asked) = at(&mut m, 30.0, 50_000.0);
+            assert!(asked.first().is_some_and(|u| dpi(u).is_some()), "{asked:?}");
         }
         // A service refusing the resolution: asked again without it, and drawn so.
         {

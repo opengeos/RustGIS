@@ -169,12 +169,16 @@ fn with_dpi(url: String, detail: f64) -> String {
     let parts: Vec<(&str, Option<&str>)> =
         query.split('&').map(|part| part.split_once('=').map_or((part, None), |(k, v)| (k, Some(v)))).collect();
     // Keys compared decoded (`FORMAT%5FOPTIONS`), and written back as they came.
-    let key = |k: &str, want: &str| percent_decoded(k).eq_ignore_ascii_case(want);
-    let get_map = parts.iter().any(|(k, v)| key(k, "REQUEST") && v.is_some_and(|v| v.eq_ignore_ascii_case("GetMap")));
+    let key = |k: &str, want: &str| rustgis_data::address::percent_decode(k).eq_ignore_ascii_case(want);
+    let get_map = parts
+        .iter()
+        .any(|(k, v)| key(k, "REQUEST") && v.is_some_and(|v| rustgis_data::address::percent_decode(v).eq_ignore_ascii_case("GetMap")));
     // A resolution of its own: `DPI`, `MAP_RESOLUTION`, or a `dpi` among its format options.
     // Looked at decoded (`%64pi%3A300` is `dpi:300`); the address is kept as it is.
     let options_dpi = |v: &str| {
-        percent_decoded(v).split([';', ',']).any(|o| o.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("dpi")))
+        rustgis_data::address::percent_decode(v)
+            .split([';', ','])
+            .any(|o| o.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("dpi")))
     };
     let own =
         parts.iter().any(|(k, v)| key(k, "DPI") || key(k, "MAP_RESOLUTION") || (key(k, "FORMAT_OPTIONS") && v.is_some_and(options_dpi)));
@@ -199,6 +203,8 @@ fn with_dpi(url: String, detail: f64) -> String {
             }
             None => (*k).to_string(),
         })
+        // An empty part (a trailing `&`) left out, so none is added before the resolution.
+        .filter(|part| !part.is_empty())
         .collect();
     query.push(format!("DPI={dpi}"));
     if !options {
@@ -212,27 +218,6 @@ fn with_dpi(url: String, detail: f64) -> String {
     out
 }
 
-/// `text` with its percent escapes decoded (an invalid one kept as it is), for looking at only.
-fn percent_decoded(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while let Some(&b) = bytes.get(i) {
-        let hex = |at: usize| bytes.get(at).and_then(|c| (*c as char).to_digit(16));
-        match (b, hex(i + 1), hex(i + 2)) {
-            (b'%', Some(h), Some(l)) => {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-            }
-            _ => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// How long a layer whose large picture failed is asked for smaller ones before a large one is
 /// tried again (the failure may have been passing: a timeout, a busy server).
 const SMALL_FOR: web_time::Duration = web_time::Duration::from_secs(300);
@@ -241,13 +226,14 @@ const SMALL_FOR: web_time::Duration = web_time::Duration::from_secs(300);
 const PLAIN_FOR: web_time::Duration = SMALL_FOR;
 
 /// What is kept between frames, by the layer's address: its last picture drawn (the address,
-/// area and units a pixel), when a large picture of it last failed, and when a picture saying its
-/// resolution last failed.
+/// area and units a pixel), when a large picture of it last failed, when a picture saying its
+/// resolution was last refused, and when a HiDPI picture of it last gave way to a standard one.
 #[derive(Default)]
 struct Kept {
     last: HashMap<String, (String, [f64; 4], f64)>,
     small: HashMap<String, web_time::Instant>,
     plain: HashMap<String, web_time::Instant>,
+    standard: HashMap<String, web_time::Instant>,
 }
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -382,13 +368,28 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             crate::native_tiles::paint_blended(pm, img, at, at, opacity, blend, &place);
         }
     };
-    // Asked again smaller when the service refuses a large picture, and then without its
-    // resolution when it refuses one saying it.
+    // The units a pixel of a picture at a logical pixel's detail, as on a standard screen.
+    let logical_res = logical * (zoom_res(t.max_zoom, t.tile_size) / merc).max(1.0);
+    // What is tried when a picture fails, in turn, each once a frame:
+    // 1. the same picture without its resolution (a service may refuse a parameter it doesn't
+    //    know); kept for a while only when that one draws and the server refused the first
+    //    (a 4xx other than 408 or 429: not a server error, a timeout or a lost connection);
+    // 2. one at most 2048 pixels a side, with its resolution again, kept for a while (some
+    //    services draw no larger);
+    // 3. the picture at a logical pixel's detail, as on a standard screen (a service may draw
+    //    no picture as large as a HiDPI one), kept for a while once it draws.
+    // Past those, its tiles are drawn (and say what fails).
     let mut without = false;
-    for _ in 0..3 {
+    let was_standard = kept().standard.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
+    let mut standard = was_standard;
+    // The address (without its resolution) of the picture the server refused with it.
+    let mut refused: Option<String> = None;
+    for _ in 0..6 {
         let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
-        let plain = detail <= 1.0 || without || kept().plain.get(&key).is_some_and(|at| at.elapsed() < PLAIN_FOR);
-        let Some((at, pw, ph)) = picture(area, res, if small { SMALL_SIDE } else { MAX_SIDE }) else { return nothing };
+        let sharp = detail > 1.0 && !standard;
+        let plain = !sharp || without || kept().plain.get(&key).is_some_and(|at| at.elapsed() < PLAIN_FOR);
+        let ask = if sharp { res } else { logical_res };
+        let Some((at, pw, ph)) = picture(area, ask, if small { SMALL_SIDE } else { MAX_SIDE }) else { return nothing };
         let (at, pw, ph) = match world_of(req.system.epsg) {
             Some(world) => match in_world(at, pw, ph, world)? {
                 Some(p) => p,
@@ -414,6 +415,9 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             && let Payload::Image(img) = &*payload
         {
             paint(pm, img, *last_at);
+            if standard && !was_standard && detail > 1.0 {
+                remember_standard(&key);
+            }
             return nothing;
         }
         let address = Warp::map_address(&req.base, &req.system, at, pw, ph);
@@ -426,47 +430,77 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                     if k.last.len() >= MAX_KEPT {
                         k.last.clear();
                     }
-                    // Drawn without its resolution where the picture with it failed: most likely
-                    // the service refused the resolution, so the layer is asked without it for a
-                    // while. Where both fail (a service down, a timeout), nothing is kept.
-                    if without {
+                    // The same picture drew without its resolution where it was refused with
+                    // it: the layer is asked without it for a while.
+                    if refused.as_deref() == Some(address.as_str()) {
                         if k.plain.len() >= MAX_KEPT {
                             k.plain.clear();
                         }
                         k.plain.insert(key.clone(), web_time::Instant::now());
                     }
-                    k.last.insert(key, (url, at, r));
+                    k.last.insert(key.clone(), (url, at, r));
+                    drop(k);
+                    // A standard screen's picture drew where the HiDPI one failed this frame: so
+                    // for a while, then the HiDPI one is tried again.
+                    if standard && !was_standard && detail > 1.0 {
+                        remember_standard(&key);
+                    }
                 }
                 return nothing;
             }
             State::Pending => {
-                // The layer's last picture, where it still is in the cache, stands in.
-                if let Some((u, at, _)) = last
-                    && let Some(payload) = cache::peek(&u)
+                // The layer's last picture, where it still is in the cache, stands in; failing
+                // that, the same picture without its resolution, where it came from a try
+                // before (the failure with it may have been forgotten since).
+                let plain_here = (url != address).then(|| (address.clone(), at));
+                let stand_in = last.map(|(u, at, _)| (u, at)).into_iter().chain(plain_here).find_map(|(u, at)| match cache::peek(&u) {
+                    Some(payload) if matches!(&*payload, Payload::Image(_)) => Some((payload, at)),
+                    _ => None,
+                });
+                if let Some((payload, at)) = stand_in
                     && let Payload::Image(img) = &*payload
                 {
                     paint(pm, img, at);
                 }
                 return Some((true, None));
             }
-            // Asked again at most 2048 pixels a side for a while: some services draw no larger.
-            // Tried first, with its resolution still: a failure of a large picture says nothing
-            // of the resolution.
+            State::Failed(e) if url != address => {
+                without = true;
+                if refusal(&e) {
+                    refused = Some(address.clone());
+                }
+            }
             State::Failed(_) if !small && pw.max(ph) > SMALL_SIDE => {
                 let mut k = kept();
                 if k.small.len() >= MAX_KEPT {
                     k.small.clear();
                 }
                 k.small.insert(key.clone(), web_time::Instant::now());
+                // The smaller picture is asked with its resolution again: the size was refused.
+                (without, refused) = (false, None);
             }
-            // Asked again without its resolution: a service may refuse a parameter it doesn't
-            // know (kept for a while only once that picture draws).
-            State::Failed(_) if url != address => without = true,
-            // A picture the service doesn't draw: its tiles may draw (and say what fails).
+            State::Failed(_) if sharp => standard = true,
             State::Failed(_) => return None,
         }
     }
     None
+}
+
+/// Keeps the layer `key` to a standard screen's pictures for a while: its HiDPI one failed and
+/// the standard one drew.
+fn remember_standard(key: &str) {
+    let mut k = kept();
+    if k.standard.len() >= MAX_KEPT {
+        k.standard.clear();
+    }
+    k.standard.insert(key.to_string(), web_time::Instant::now());
+}
+
+/// Whether a fetch's failure is the server refusing what it was asked: a 4xx other than a
+/// timeout (408) or too many requests (429). A server error, a timeout or a lost connection says
+/// nothing of what was asked, and neither does an answer that isn't a picture (it may be any).
+fn refusal(error: &str) -> bool {
+    matches!(cache::http_status(error), Some(400..=499)) && !matches!(cache::http_status(error), Some(408 | 429))
 }
 
 /// Cells a side a picture in another system is warped in: each placed by its own corners, so
@@ -710,6 +744,11 @@ mod tests {
         for detail in [1.0, 0.4, f64::NAN, f64::INFINITY] {
             assert_eq!(with_dpi(wms.into(), detail), wms, "{detail}");
         }
+        // A trailing `&`: no empty part before the resolution.
+        assert_eq!(with_dpi(format!("{wms}&"), 2.0), format!("{wms}&DPI=192&FORMAT_OPTIONS=dpi:181"));
+        // An encoded request name.
+        let encoded = "https://m.example.org/wms?SERVICE=WMS&REQUEST=%47etMap&LAYERS=a";
+        assert_eq!(with_dpi(encoded.into(), 2.0), format!("{encoded}&DPI=192&FORMAT_OPTIONS=dpi:181"));
         // Lower case keys, and a fragment kept last.
         let lower = "https://m.example.org/wms?service=wms&request=getmap&layers=a#rustgis-x";
         assert_eq!(

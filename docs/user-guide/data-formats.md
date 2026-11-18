@@ -455,8 +455,12 @@ it's given `"singleImage": false` or a `"tileSize"`.
   A WMS picture then says the resolution it is for, unless its address names one: `DPI` (QGIS
   Server, from 96) and `FORMAT_OPTIONS=dpi:` (GeoServer, from the OGC standard pixel's 90.7), so
   those servers keep their symbols and text at their size. A service that reads neither draws them
-  smaller; one that refuses the picture with them is asked again without them, for five
-  minutes. The picture is at most 4096 pixels a side (2048 for five minutes after a larger
+  smaller. A picture that fails is asked again, in turn: without them; at most 2048 pixels a side,
+  with them; then at a standard screen's detail. A layer whose picture the server refuses with
+  them (a 4xx answer) and draws without them is asked without them for five minutes; a server
+  error, a timeout or a lost connection doesn't count. One that only draws at a standard screen's
+  detail is asked so for five minutes too.
+  The picture is at most 4096 pixels a side (2048 for five minutes after a larger
   picture of the layer fails), coarser for a view larger than that. A picture the service fails
   to draw leaves the layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
@@ -485,11 +489,11 @@ of the view are fetched for the screen's own pixels, up to twice the detail of i
 (#2390). On the Web Mercator tile pyramid a 2x screen takes the next zoom's tiles; on a 5K or 6K
 screen, where those would be too many for the view, it takes a zoom between that and the usual one
 whose tiles fit, if any does, else the usual one (or the layer's coarsest zoom, where it has none
-coarser). A layer in a system of its own (a WMTS matrix set) takes the coarsest of its service's
-matrices with that much detail, which may be more than twice. Text and lines drawn into them come
-out sharp, and smaller, as in QGIS. A screen at more than 2x (most phones), and a map export or
-layout at a high resolution, still take tiles at twice the detail, not more: three times would ask
-for nine times the tiles, with their text too small to read.
+coarser). A layer in a system of its own (a WMTS matrix set) takes a matrix of its service's
+near that detail, or a coarser one where the view would need too many of its tiles. Text and lines
+drawn into them come out sharp, and smaller, as in QGIS. A screen at more than 2x (most phones),
+and a map export or layout at a high resolution, still take tiles at twice the detail, not more:
+three times would ask for nine times the tiles, with their text too small to read.
 
 Only a WMS layer drawn as one picture says the resolution it is for (above); in tiles it doesn't,
 and its symbols come out smaller.
