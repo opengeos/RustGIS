@@ -1992,8 +1992,8 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     // a file of several layers (a KML, a zip) only within the size every computer reads, as
     // before #2408, as it is read whole to list it.
     let path = app.dialogs.a.trim().to_string();
-    // Only a file of several layers is read whole to list it; others (a Shapefile, a FlatGeobuf)
-    // are listed without reading their features.
+    // Only a file of several layers is refused past the floor: it is read whole to list it. Others
+    // are listed as before #2408 (a Shapefile or FlatGeobuf by name, a spreadsheet by its sheets).
     let too_large = || {
         rustgis_engine::data::io::is_multi_layer_name(&path)
             && std::fs::metadata(&path).is_ok_and(|m| m.len() > rustgis_engine::data::io::BYTES_FLOOR)

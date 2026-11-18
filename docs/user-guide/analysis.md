@@ -1561,7 +1561,7 @@ below the web app's fixed limits and never above a ceiling.
 | `bufferBytes`: memory for Buffer's output and Select Layer By Location's buffered selectors | 512 MiB (128 MiB in the web app) | the bytes themselves | 8 GiB |
 | `threadScratchBytes`: working memory a tool's threads take together, beyond one thread's | 256 MiB | a sixteenth of memory, on top of the quarter | 4 GiB |
 | `projectBytes`: the largest project file saved or opened (see [Projects](workspace.md#projects)) | 512 MiB | 5 bytes for each byte of the file (about 800 MiB for every 16 GB) | 4 GiB |
-| `fileBytes`: the largest file read into memory whole (CityGML, CityJSON, zips, DXF, GeoJSON not read in place, and the like; KML, KMZ, LandXML, RSS and Atom stay at 256 MiB, as does every file on a phone; see [Data formats](data-formats.md)) | 256 MiB | 8 bytes for each byte of the file (about 512 MiB for every 16 GiB) | 4 GiB |
+| `fileBytes`: the largest file read into memory whole (CityGML, CityJSON, zips, DXF, GeoJSON not read in place, and the like; KML, KMZ, LandXML, RSS, Atom and GeoRSS stay at 256 MiB, as does every file on a phone; see [Data formats](data-formats.md)) | 256 MiB | 8 bytes for each byte of the file (about 512 MiB for every 16 GiB) | 4 GiB |
 
 So a computer with 16 GB reads rasters of up to about 500 million samples. A run that passes on one
 computer can be refused on a smaller one; the error names the limit there. Project Raster (`raster.project`) puts a raster

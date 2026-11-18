@@ -53715,8 +53715,13 @@ fn files_read_on_the_calling_thread_stay_within_the_floor() {
         let e = rustgis_data::io::with_max_bytes(past * 2, || {
             s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap_err()
         });
-        // Main's refusal, which the app translates, at the floor: 256 MiB.
-        assert_eq!(e, rustgis_data::io::file_size_error(&path.display().to_string(), rustgis_data::io::BYTES_FLOOR), "{name}");
+        // At the floor, 256 MiB: a KML in the form the app translates; a GeoJSON document that
+        // isn't a FeatureCollection in its own, with the hint for a CityJSON model named .json.
+        if name.ends_with(".kml") {
+            assert_eq!(e, rustgis_data::io::file_size_error(&path.display().to_string(), rustgis_data::io::BYTES_FLOOR), "{name}");
+        } else {
+            assert!(e.contains("at most 256 MiB; it is 257 MiB") && e.contains(".city.json"), "{name}: {e}");
+        }
     }
     let _ = std::fs::remove_dir_all(dir);
 }
