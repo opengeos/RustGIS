@@ -164,10 +164,16 @@ impl Viewport {
 }
 
 /// The page's GeoPDF viewports, and why any that would place it can't be read.
-fn viewports(page: &Page<'_>) -> (Vec<Viewport>, Vec<String>) {
-    let (mut found, mut unread) = (Vec::new(), Vec::new());
+fn viewports(page: &Page<'_>) -> (Vec<Viewport>, Unread) {
+    let (mut found, mut unread) = (Vec::new(), Unread::default());
     let Some(vps) = page.raw().get::<Array>(b"VP".as_slice()) else { return (found, unread) };
-    for vp in vps.iter::<Dict>() {
+    // An entry that isn't a viewport's dictionary is counted, not passed over.
+    let dicts: Vec<Dict> = vps.iter::<Dict>().collect();
+    let strays = vps.raw_iter().count().saturating_sub(dicts.len());
+    if strays > 0 {
+        unread.add("an entry of its viewports isn't one".into(), strays);
+    }
+    for vp in dicts {
         let Some(measure) = vp.get::<Dict>(b"Measure".as_slice()) else { continue };
         // A measure in plain units (a drawing's scale) says nothing of the ground.
         if measure.get::<Name>(b"Subtype".as_slice()).is_none_or(|n| n.as_str() != "GEO") {
@@ -175,10 +181,25 @@ fn viewports(page: &Page<'_>) -> (Vec<Viewport>, Vec<String>) {
         }
         match viewport(&vp, &measure) {
             Ok(v) => found.push(v),
-            Err(why) => unread.push(why),
+            Err(why) => unread.add(why, 1),
         }
     }
     (found, unread)
+}
+
+/// A page's map frames that can't be used: how many, and why the first can't.
+#[derive(Default)]
+struct Unread {
+    count: usize,
+    first: Option<String>,
+}
+
+impl Unread {
+    /// Counts `n` more frames that can't be used for `why`.
+    fn add(&mut self, why: String, n: usize) {
+        self.count = self.count.saturating_add(n);
+        self.first.get_or_insert(why);
+    }
 }
 
 /// Pairs of numbers from an array, or why it isn't one: an entry that isn't a number, or an odd
@@ -243,8 +264,8 @@ fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
     let (mut found, unread) = viewports(page);
     let unplaced = "it opens without coordinates";
     if found.is_empty() {
-        if let Some(why) = unread.first() {
-            r.lost.push(format!("its map frame's coordinates can't be used ({why}): {unplaced}"));
+        if let Some(why) = &unread.first {
+            r.lost.push(format!("{} ({why}, the first): {unplaced}", unusable_frames(unread.count)));
         }
         return r;
     }
@@ -267,8 +288,8 @@ fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
                     let by = if failed.is_empty() { "the largest" } else { "the largest that can be used" };
                     placed.lost.push(format!("it has {others} more map frames with coordinates (insets, say): it is placed by {by}"));
                 }
-                let unusable = failed.len() + unread.len();
-                if let Some(why) = failed.first().or(unread.first()) {
+                let unusable = failed.len() + unread.count;
+                if let Some(why) = failed.first().or(unread.first.as_ref()) {
                     placed.lost.push(format!("{unusable} of its map frames have coordinates that can't be used ({why}, the first)"));
                 }
                 placed.lost.extend(v.note);
@@ -283,10 +304,19 @@ fn place_by_viewport(mut r: Raster, page: &Page<'_>, scale: f64) -> Raster {
             }
         };
     }
-    if let Some(why) = failed.first() {
-        r.lost.push(format!("its map frame's coordinates can't be used ({why}): {unplaced}"));
+    if let Some(why) = failed.first().or(unread.first.as_ref()) {
+        r.lost.push(format!("{} ({why}, the first): {unplaced}", unusable_frames(failed.len() + unread.count)));
     }
     r
+}
+
+/// That `n` of a page's map frames have coordinates that can't be used, said with the count.
+fn unusable_frames(n: usize) -> String {
+    if n == 1 {
+        "1 map frame has coordinates that can't be used".into()
+    } else {
+        format!("{n} map frames have coordinates that can't be used")
+    }
 }
 
 /// The world file placing a `w` × `h` drawing of the page by viewport `v` (`to_pixels` takes a
@@ -490,6 +520,10 @@ mod tests {
         let outline = geo(wgs84).replace("/LPTS [0 1 1 1 1 0 0 0]", "/Bounds [0 1 1 1 1 0 0 0]");
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &outline), None, true).unwrap();
         assert!(!r.georeferenced && r.lost[0].contains("(/LPTS)"), "{:?}", r.lost);
+        // Two frames, neither usable, and an entry that isn't a frame: all three counted.
+        let none = format!("/VP [{} {} 7]", vp("/Type /GEOGCS", "0 0 72 36"), vp("/Type /GEOGCS", "0 0 10 10"));
+        let r = read_bytes("geo", tiny_pdf("0 0 72 36", &none), None, true).unwrap();
+        assert!(!r.georeferenced && r.lost[0].starts_with("3 map frames have coordinates that can't be used ("), "{:?}", r.lost);
         // A rectangle with a fifth entry: not read as four corners, and said.
         let five = geo(wgs84).replace("/BBox [0 0 72 36]", "/BBox [0 0 72 36 /extra]");
         let r = read_bytes("geo", tiny_pdf("0 0 72 36", &five), None, true).unwrap();
