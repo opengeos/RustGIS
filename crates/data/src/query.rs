@@ -1411,6 +1411,10 @@ fn eq(a: &Value, b: &Value) -> bool {
     if let Some((x, y)) = a.temporal_keys(b) {
         return x == y;
     }
+    // Whole numbers compare exactly: through f64, neighbours above 2^53 would be equal.
+    if let (Value::Int(x), Value::Int(y)) = (a, b) {
+        return x == y;
+    }
     match (a.as_f64(), b.as_f64()) {
         (Some(x), Some(y)) if !matches!(a, Value::Text(_)) || !matches!(b, Value::Text(_)) => x == y,
         _ => a.to_string().eq_ignore_ascii_case(&b.to_string()),
@@ -1689,16 +1693,7 @@ impl<'a> Eval<'a> {
             Expr::Cmp { field, op, lit } => compare(ds.value(row, *field), *op, lit),
             Expr::Compare(op, l, r) => {
                 let (a, b) = (self.value(l), self.value(r));
-                // Page IDs must distinguish adjacent integers even beyond the precision of
-                // the expression language's general numeric equality.
-                if matches!(op, Op::Eq | Op::Ne)
-                    && (matches!(l.as_ref(), Expr::Var(Var::PageFeatureId)) || matches!(r.as_ref(), Expr::Var(Var::PageFeatureId)))
-                    && let (Value::Int(a), Value::Int(b)) = (&*a, &*b)
-                {
-                    Some((a == b) == (*op == Op::Eq))
-                } else {
-                    compare(&a, *op, &b)
-                }
+                compare(&a, *op, &b)
             }
             Expr::IsNullExpr { e, negate } => Some(self.value(e).is_null() != *negate),
             Expr::LikeExpr { e, pattern, negate } => {

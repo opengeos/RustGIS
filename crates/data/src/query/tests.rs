@@ -800,6 +800,9 @@ fn page_variables_are_typed_and_null_without_a_series() {
     let different = parse("@page_feature_id <> $id", &ds).unwrap();
     assert!(!matches(&different, &ds, 0, &env));
     assert!(matches(&different, &ds, 1, &env));
+    let listed = parse("$id IN (@page_feature_id)", &ds).unwrap();
+    assert!(matches(&listed, &ds, 0, &env));
+    assert!(!matches(&listed, &ds, 1, &env), "IN keeps adjacent large IDs apart too");
     assert!(!eval(&same, &ds, 0));
     assert!(!reads_series_page("'@page_feature_id' = !@page_number!"));
 }
