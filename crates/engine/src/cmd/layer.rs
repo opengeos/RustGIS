@@ -2020,7 +2020,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
                     && m.len() > floor
                 {
                     return Err(format!(
-                        "{path}: a GeoJSON document that isn't a FeatureCollection is read whole, so at most {} MiB; it is {} MiB",
+                        "{path}: a GeoJSON document that isn't a FeatureCollection is read whole, so at most {} MiB; it is {} MiB (a CityJSON model named .json: rename it .city.json)",
                         floor >> 20,
                         m.len().div_ceil(1 << 20)
                     ));
@@ -2138,6 +2138,19 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > rustgis_data::io::max_bytes() {
             return Err(format!("{path}: {}", rustgis_data::io::too_large(meta.len())));
+        }
+        // A file the desktop app doesn't read ahead (a KML or KMZ, with its overlays; a GPX, a
+        // GML, a LandXML) is read here, on the UI thread there: within the size every computer
+        // reads, as before #2408, so the window isn't held longer. Zips and city models are read
+        // ahead, so they take the larger limit.
+        let ahead_too = path.to_ascii_lowercase().ends_with(".zip") || is_city_model_path(path);
+        let floor = rustgis_data::io::BYTES_FLOOR;
+        if !ahead_too && meta.len() > floor {
+            return Err(format!(
+                "{path}: a file of this kind is read whole as it is added, so at most {} MiB; it is {} MiB",
+                floor >> 20,
+                meta.len().div_ceil(1 << 20)
+            ));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
@@ -2324,9 +2337,10 @@ fn read_shapefile_with(path: &str, name: &str, crs: rustgis_data::raster::Crs) -
 
 /// `read`, the read of the file at `path`, with the record of what it read: the files hashed
 /// just before ([`rustgis_data::sync::FileSync::around`]) and the digest of the rows read. Its
-/// work grows with the file, so the desktop app makes it off the UI thread ([`add_data_ahead`]),
-/// except for a large GeoJSON document that isn't a FeatureCollection, read whole on the calling
-/// thread and so kept within [`rustgis_data::io::BYTES_FLOOR`] (`add_data`).
+/// work grows with the file, so the desktop app makes it off the UI thread ([`add_data_ahead`]).
+/// A large GeoJSON document that isn't a FeatureCollection, without `"stream": false`, is read
+/// whole on the calling thread instead, and so kept within [`rustgis_data::io::BYTES_FLOOR`]
+/// (`add_data`), as are the files of several layers that aren't read ahead.
 /// When the files couldn't be hashed the layer has no record, and a note says it can't be
 /// compared with its file later.
 #[cfg(not(target_arch = "wasm32"))]

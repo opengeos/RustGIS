@@ -1975,17 +1975,18 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     // Listed here, on the frame: a GeoPackage's tables in place, without reading their features;
     // another file (a KML, a zip) only within the size every computer reads, as before #2408, as
     // it is read whole to list it.
-    let path = app.dialogs.a.trim();
-    let gpkg = path.to_ascii_lowercase().ends_with(".gpkg");
-    let too_large = !gpkg && std::fs::metadata(path).is_ok_and(|m| m.len() > rustgis_engine::data::io::BYTES_FLOOR);
-    if list && too_large {
+    let path = app.dialogs.a.trim().to_string();
+    let too_large = || {
+        !path.to_ascii_lowercase().ends_with(".gpkg")
+            && std::fs::metadata(&path).is_ok_and(|m| m.len() > rustgis_engine::data::io::BYTES_FLOOR)
+    };
+    if list && too_large() {
         app.dialogs.listed = None;
         app.dialogs.list.clear();
         app.dialogs.info = None;
-        app.dialogs.error =
-            Some(tl!("List Tables lists a file other than a GeoPackage up to 256 MiB; add a larger one with Add Data").to_string());
+        app.dialogs.error = Some(tl!("List Tables lists a file other than a GeoPackage up to 256 MiB; add it with Add Data").to_string());
     } else if list {
-        match app.run("info.fileLayers", json!({"path": app.dialogs.a})) {
+        match app.run("info.fileLayers", json!({"path": path})) {
             Ok(v) => {
                 app.dialogs.list = v["layers"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
                 app.dialogs.listed = Some(app.dialogs.a.clone());

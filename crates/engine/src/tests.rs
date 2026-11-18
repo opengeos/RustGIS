@@ -53584,6 +53584,34 @@ fn a_city_models_volumes_come_in_extruded() {
 /// Add Data and List Layers take a file read whole up to the same size, the one that follows the
 /// computer's memory (#2408), whether it holds one layer or several, and say its size and the
 /// limit when it is past it.
+/// Files read as they are added, on the UI thread in the desktop app (a GeoJSON document that
+/// isn't a FeatureCollection, a KML), stay within 256 MiB whatever the memory (#2408), saying so.
+/// The KML is a sparse file; the GeoJSON is padded with spaces, which it may end in.
+#[test]
+fn files_read_on_the_calling_thread_stay_within_the_floor() {
+    let dir = std::env::temp_dir().join(format!("rustgis-floor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let past = rustgis_data::io::BYTES_FLOOR + 1;
+    for (name, head) in [("feature.geojson", r#"{"type":"Feature","properties":{},"geometry":null}"#), ("places.kml", "<kml>")] {
+        let path = dir.join(name);
+        let f = std::fs::File::create(&path).unwrap();
+        use std::io::Write;
+        (&f).write_all(head.as_bytes()).unwrap();
+        if name.ends_with(".geojson") {
+            let pad = past - head.len() as u64;
+            std::io::copy(&mut std::io::Read::take(std::io::repeat(b' '), pad), &mut &f).unwrap();
+        } else {
+            f.set_len(past).unwrap();
+        }
+        let mut s = Session::new(Project::default());
+        let e = rustgis_data::io::with_max_bytes(past * 2, || {
+            s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap_err()
+        });
+        assert!(e.contains("at most 256 MiB; it is 257 MiB"), "{name}: {e}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn files_read_whole_take_the_size_read_into_memory() {
     let dir = std::env::temp_dir().join(format!("rustgis-file-limit-{}", std::process::id()));
