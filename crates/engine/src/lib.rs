@@ -2253,6 +2253,10 @@ impl Session {
         // Datum grids that have arrived move what the map draws in a system they shift: its
         // layers are projected again, and drawn.
         let news = crate::grids::news_since(&mut self.grid_news_seen);
+        let missed: u64 = news.iter().map(|n| if let crate::grids::News::Missed(m) = n { *m } else { 0 }).sum();
+        if missed > 0 {
+            self.notify_text(crate::grids::missed_text(missed), false);
+        }
         for (text, error) in crate::grids::news_texts(&news) {
             self.notify(text, error);
         }
@@ -2653,19 +2657,35 @@ impl Session {
         }
         let (failed, shown) = rustgis_data::raster::crs::rebuild_failures_since(&mut self.rebuild_failures_seen);
         if failed > 0 {
-            let (systems, they, them) =
-                if failed == 1 { ("coordinate system", "it goes", "it") } else { ("coordinate systems", "they go", "them") };
+            use notice_text::NoticeText;
             // Those named, and the rest counted; with none named (all past those kept by name),
-            // the count alone.
-            let named = match (shown.is_empty(), failed - shown.len()) {
-                (true, _) => String::new(),
-                (false, 0) => format!(": {}", shown.join(", ")),
-                (false, rest) => format!(": {} and {rest} more", shown.join(", ")),
+            // the count alone. The names are the systems' own text, never translated.
+            let key = match (failed == 1, shown.is_empty(), failed > shown.len()) {
+                (true, false, _) => {
+                    "{count} coordinate system couldn't be built again with the datum grids that arrived, so it goes on without it: {names}"
+                }
+                (true, true, _) => {
+                    "{count} coordinate system couldn't be built again with the datum grids that arrived, so it goes on without it"
+                }
+                (false, true, _) => {
+                    "{count} coordinate systems couldn't be built again with the datum grids that arrived, so they go on without them"
+                }
+                (false, false, false) => {
+                    "{count} coordinate systems couldn't be built again with the datum grids that arrived, so they go on without them: {names}"
+                }
+                (false, false, true) => {
+                    "{count} coordinate systems couldn't be built again with the datum grids that arrived, so they go on without them: {names} and {more} more"
+                }
             };
-            self.notify(
-                format!("{failed} {systems} couldn't be built again with the datum grids that arrived, so {they} on without {them}{named}"),
-                true,
+            let text = NoticeText::format(
+                key,
+                [
+                    ("count", failed.to_string().into()),
+                    ("names", shown.join(", ").into()),
+                    ("more", (failed - shown.len()).to_string().into()),
+                ],
             );
+            self.notify_text(text, true);
         }
         if rustgis_data::raster::crs::take_unnamed_grid_need() {
             self.notify(

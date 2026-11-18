@@ -312,6 +312,18 @@ impl State {
     }
 }
 
+/// What the session says of `missed` download news it asked for too late to hear: what it was
+/// isn't known (arrivals or failures), so it is said as information.
+pub(crate) fn missed_text(missed: u64) -> crate::notice_text::NoticeText {
+    use crate::notice_text::NoticeText;
+    let key = if missed == 1 {
+        "{count} notice about datum grid downloads came before it could be said, and is left out"
+    } else {
+        "{count} notices about datum grid downloads came before they could be said, and are left out"
+    };
+    NoticeText::format(key, [("count", missed.to_string().into())])
+}
+
 /// Why a grid isn't downloaded that trying again doesn't change.
 const FINAL: [&str; 3] = ["its name isn't a plain file name", "RustGIS has no folder", "RustGIS downloads PROJ's GeoTIFF grids only"];
 
@@ -587,10 +599,11 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
     let mut got = Vec::new();
     // By reason, in order: a reason given once for all its grids (the limit, for one).
     let mut why: Vec<(&str, Vec<&str>)> = Vec::new();
-    let (mut count, mut missed) = (0, 0);
+    // (Missed news is the session's to say: [`missed_text`].)
+    let mut count = 0;
     for n in news {
         match n {
-            News::Missed(n) => missed += n,
+            News::Missed(_) => {}
             News::Got { name, bytes } => got.push(format!("{name} ({})", size_text(*bytes))),
             News::Failed { name, error } => {
                 count += 1;
@@ -620,10 +633,6 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
             ),
             false,
         ));
-    }
-    if missed > 0 {
-        let notices = if missed == 1 { "notice" } else { "notices" };
-        out.push((format!("{missed} {notices} about datum grid downloads came before they could be said, and are left out"), true));
     }
     if let Some(first) = failed.first() {
         // Trying again helps a download that failed, not one RustGIS won't make (a name it
@@ -776,8 +785,9 @@ mod tests {
         let heard = log.news_since(&mut seen);
         assert_eq!((heard.first(), heard.len(), seen), (Some(&News::Missed(10)), NEWS_KEPT + 1, (NEWS_KEPT + 10) as u64));
         assert!(log.news_since(&mut seen).is_empty(), "each once");
-        let said = news_texts(&[News::Missed(10)]);
-        assert!(said[0].0.starts_with("10 notices about datum grid downloads came before they could be said") && said[0].1, "{said:?}");
+        assert!(news_texts(&[News::Missed(10)]).is_empty(), "the session's to say");
+        assert!(missed_text(10).english().starts_with("10 notices about datum grid downloads came before they could be said"));
+        assert!(missed_text(1).english().starts_with("1 notice about datum grid downloads came before it could be said, and is left out"));
         // A reason given once for its grids, a few named.
         let limit: Vec<News> = (0..5).map(|i| News::Failed { name: format!("g{i}.tif"), error: limit_text() }).collect();
         let said = news_texts(&limit);

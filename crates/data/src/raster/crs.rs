@@ -1530,7 +1530,8 @@ pub fn rebuild_failures_since(seen: &mut (usize, usize)) -> (usize, Vec<String>)
         .map(|k| match k.strip_prefix("EPSG ") {
             Some(code) => format!("EPSG:{code}"),
             None => {
-                let k = k.strip_prefix("WKT ").unwrap_or(k);
+                // On one line: a WKT read from a file may hold line breaks.
+                let k = k.strip_prefix("WKT ").unwrap_or(k).split_whitespace().collect::<Vec<_>>().join(" ");
                 let cut: String = k.chars().take(40).collect();
                 if k.chars().count() > 40 { format!("{cut}…") } else { cut }
             }
