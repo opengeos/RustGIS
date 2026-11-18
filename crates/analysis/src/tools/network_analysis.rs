@@ -399,13 +399,16 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
                     *s = false;
                 }
             }
-            let mut row: Vec<(usize, f64, f64)> = candidates
-                .into_iter()
-                .filter_map(|j| {
-                    let (cost, length) = graph.reach(search, o, &destinations.get(j)?.1);
-                    (cost.is_finite() && cost <= limit).then_some((j, cost, length))
-                })
-                .collect();
+            // Millions of destinations may be reached: Cancel is looked at between them.
+            let mut row: Vec<(usize, f64, f64)> = Vec::new();
+            for j in candidates {
+                crate::control::check()?;
+                let Some((_, d)) = destinations.get(j) else { continue };
+                let (cost, length) = graph.reach(search, o, d);
+                if cost.is_finite() && cost <= limit {
+                    row.push((j, cost, length));
+                }
+            }
             // Counted before the cheapest few are kept: those beyond them are reached.
             let unreached = destinations.len() - row.len();
             row.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
@@ -433,14 +436,11 @@ pub(super) fn od_cost_matrix_on(inp: &dyn Inputs, p: &Json, threads: Option<usiz
     // Summed wide: origins by destinations can pass a 32-bit count in the browser.
     let mut unreached = 0u64;
     // One origin may have millions of rows: Cancel is looked at between them too.
-    let mut pace = crate::control::Pace::default();
     for ((oid, _), (row, missed)) in origins.iter().zip(&found) {
         crate::control::check()?;
         unreached = unreached.saturating_add(u64::try_from(*missed).unwrap_or(u64::MAX));
         for (rank, &(j, cost, length)) in row.iter().enumerate() {
-            if pace.stop(1) {
-                return Err(crate::control::Cancelled.into());
-            }
+            crate::control::check()?;
             let did = destinations.get(j).map_or(Value::Null, |(d, _)| id(*d));
             out.push(None, vec![id(*oid), did, Value::Int(rank as i64 + 1), Value::Float(cost / unit_m), Value::Float(length / unit_m)]);
         }
