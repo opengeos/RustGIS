@@ -458,10 +458,11 @@ it's given `"singleImage": false` or a `"tileSize"`.
   their symbols and text at their size. A service that reads neither draws them smaller. A picture
   that fails is asked again, in turn: without them; at most 2048 pixels a side, with them; then at
   a standard screen's detail. A layer whose picture the server refuses with them (a 4xx answer
-  other than 408 or 429) and draws without them is asked without them for five minutes; a server
-  error, a timeout or a lost connection doesn't count. One whose HiDPI picture the server refuses
-  (the same 4xx) and whose standard one draws is asked at a standard screen's detail for five
-  minutes, while its HiDPI pictures would be as large. The picture is at most 4096 pixels a side
+  other than 408 or 429, or a document that isn't a picture, such as a WMS exception) and draws
+  without them is asked without them for five minutes; a server error, a timeout, a lost
+  connection or an empty answer doesn't count. One whose HiDPI picture the server refuses so and
+  whose standard one draws is asked at a standard screen's detail for five minutes, while its
+  HiDPI pictures would be at least as wide and as tall. The picture is at most 4096 pixels a side
   (2048 for five minutes after a larger picture of the layer fails), coarser for a view larger
   than that. A picture the service fails to draw leaves the layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer

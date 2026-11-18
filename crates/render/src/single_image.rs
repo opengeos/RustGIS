@@ -234,7 +234,7 @@ struct Kept {
     last: HashMap<String, (String, [f64; 4], f64)>,
     small: HashMap<String, web_time::Instant>,
     plain: HashMap<String, web_time::Instant>,
-    standard: HashMap<String, (web_time::Instant, u32)>,
+    standard: HashMap<String, (web_time::Instant, (u32, u32))>,
 }
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -385,16 +385,23 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     // Kept to a standard screen's pictures while its HiDPI ones are as large as one the server
     // refused: a smaller view's may draw.
     let was_standard = {
-        let side = |max| picture(area, res, max).map(|(_, w, h)| w.max(h));
+        // The HiDPI picture's size as it would be asked: kept to the world, as below.
+        let size = |max| {
+            let (at, w, h) = picture(area, res, max)?;
+            match world_of(req.system.epsg) {
+                Some(world) => in_world(at, w, h, world).flatten().map(|(_, w, h)| (w, h)),
+                None => Some((w, h)),
+            }
+        };
         let k = kept();
         let max = if k.small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR) { SMALL_SIDE } else { MAX_SIDE };
-        k.standard.get(&key).is_some_and(|(at, refused)| at.elapsed() < SMALL_FOR && side(max).is_some_and(|s| s >= *refused))
+        k.standard.get(&key).is_some_and(|(at, (rw, rh))| at.elapsed() < SMALL_FOR && size(max).is_some_and(|(w, h)| w >= *rw && h >= *rh))
     };
     let mut standard = was_standard;
-    // The side of the HiDPI picture the server refused (without its resolution), which keeps the
+    // The size of the HiDPI picture the server refused (without its resolution), which keeps the
     // layer to a standard screen's pictures for a while once one draws; `None` for a passing
     // failure (a 5xx, a timeout), which keeps nothing.
-    let mut refused_side: Option<u32> = None;
+    let mut refused_side: Option<(u32, u32)> = None;
     // The address (without its resolution) of the picture the server refused with it.
     let mut refused: Option<String> = None;
     for _ in 0..6 {
@@ -435,10 +442,15 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
         }
         let address = Warp::map_address(&req.base, &req.system, at, pw, ph);
         let url = if plain { address.clone() } else { with_dpi(address.clone(), logical / r) };
-        match cache::get(&url, Want::Image) {
-            // No picture (an empty answer) with its resolution: asked again without it, as a
-            // failure, though not one the layer is kept without it for.
-            State::Ready(payload) if url != address && !matches!(&*payload, Payload::Image(_)) => without = true,
+        // An empty answer to a HiDPI picture is taken as a failure, so the steps below are
+        // tried (a service may draw nothing that large), but not as a refusal: nothing is kept
+        // for it. To a standard screen's picture it is "nothing here", drawn as such. (An
+        // answer that doesn't decode, such as a WMS exception, fails in the cache already.)
+        let state = match cache::get(&url, Want::Image) {
+            State::Ready(payload) if sharp && !matches!(&*payload, Payload::Image(_)) => State::Failed(EMPTY.into()),
+            state => state,
+        };
+        match state {
             State::Ready(payload) => {
                 if let Payload::Image(img) = &*payload {
                     paint(pm, img, at);
@@ -486,7 +498,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                     refused = Some(address.clone());
                 }
             }
-            State::Failed(_) if !small && pw.max(ph) > SMALL_SIDE => {
+            State::Failed(e) if !small && pw.max(ph) > SMALL_SIDE && e != EMPTY => {
                 let mut k = kept();
                 if k.small.len() >= MAX_KEPT {
                     k.small.clear();
@@ -497,7 +509,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             }
             State::Failed(e) if sharp => {
                 standard = true;
-                refused_side = refusal(&e).then_some(pw.max(ph));
+                refused_side = refusal(&e).then_some((pw, ph));
             }
             State::Failed(_) => return None,
         }
@@ -506,8 +518,8 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
 }
 
 /// Keeps the layer `key` to a standard screen's pictures for a while, while its HiDPI ones are
-/// `side` pixels or more: the server refused one that large and the standard one drew.
-fn remember_standard(key: &str, side: u32) {
+/// at least `side` (width, height): the server refused one that large and the standard one drew.
+fn remember_standard(key: &str, side: (u32, u32)) {
     let mut k = kept();
     if k.standard.len() >= MAX_KEPT {
         k.standard.clear();
@@ -515,11 +527,16 @@ fn remember_standard(key: &str, side: u32) {
     k.standard.insert(key.to_string(), (web_time::Instant::now(), side));
 }
 
+/// What an empty answer to a HiDPI picture fails with (a failure, not a refusal).
+const EMPTY: &str = "an empty answer";
+
 /// Whether a fetch's failure is the server refusing what it was asked: a 4xx other than a
-/// timeout (408) or too many requests (429). A server error, a timeout or a lost connection says
-/// nothing of what was asked, and neither does an answer that isn't a picture (it may be any).
+/// timeout (408) or too many requests (429), or a document that isn't a picture (a WMS
+/// exception). A server error, a timeout, a lost connection or an empty answer says nothing of
+/// what was asked.
 fn refusal(error: &str) -> bool {
-    matches!(cache::http_status(error), Some(status) if (400..=499).contains(&status) && status != 408 && status != 429)
+    error.starts_with(cache::NOT_A_PICTURE)
+        || matches!(cache::http_status(error), Some(status) if (400..=499).contains(&status) && status != 408 && status != 429)
 }
 
 /// Cells a side a picture in another system is warped in: each placed by its own corners, so

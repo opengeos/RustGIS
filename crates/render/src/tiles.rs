@@ -949,6 +949,20 @@ pub(crate) mod tests {
                 {
                     // A passing failure of every picture over 1024 pixels.
                     done(Err("http status: 503".into()));
+                } else if url.starts_with("https://one.test/xml-dpi/") && url.contains("DPI=") {
+                    // A WMS exception, sent as a document, for a parameter it doesn't know.
+                    done(Ok(
+                        b"<?xml version=\"1.0\"?><ServiceExceptionReport><ServiceException>DPI</ServiceException></ServiceExceptionReport>"
+                            .to_vec(),
+                    ));
+                } else if url.starts_with("https://one.test/empty-big/")
+                    && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 1024)
+                {
+                    // An empty answer for every picture over 1024 pixels.
+                    done(Ok(Vec::new()));
+                } else if url.starts_with("https://one.test/empty-all/") {
+                    // Nothing here: an empty answer to every request.
+                    done(Ok(Vec::new()));
                 } else if url.starts_with("https://one.test/empty-dpi/") && url.contains("DPI=") {
                     // An empty answer to the picture with its resolution.
                     done(Ok(Vec::new()));
@@ -1283,6 +1297,18 @@ pub(crate) mod tests {
             crate::render_png(&mut m, &view).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             assert!(asked.len() == 1 && asked[0].contains("&WIDTH=768&") && dpi(&asked[0]).is_some(), "{asked:?}");
+            // A tall view's HiDPI picture (512 × 1536), narrower than the refused one (1536 × 512)
+            // though as long: asked sharp again.
+            let view = View {
+                width: 100.0,
+                height: 400.0,
+                camera: Camera { center: Coord::new(center.x + 150_000.0, center.y), ..view.camera },
+                ..view
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 1 && asked[0].contains("&WIDTH=512&HEIGHT=1536&") && dpi(&asked[0]).is_some(), "{asked:?}");
         }
         // A passing failure (a 503) of the HiDPI picture with its resolution and without: the
         // standard screen's picture draws for that frame, but nothing is kept, so the next view's
@@ -1302,14 +1328,74 @@ pub(crate) mod tests {
                 sky: false,
             };
             ASKED_ONE.lock().unwrap().clear();
-            crate::render_png(&mut m, &view).unwrap();
+            let png = crate::render_png(&mut m, &view).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
-            assert!(asked.len() == 3 && asked[2].contains("&WIDTH=768&"), "{asked:?}");
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let p = pm.pixel(400, 100).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
+            assert!(p == green && asked.len() == 3, "{p:?} {asked:?}");
+            assert!(asked[1] == without_dpi(&asked[0]) && asked[2].contains("&WIDTH=768&"), "{asked:?}");
             let view = View { camera: Camera { center: Coord::new(center.x + 50_000.0, center.y), ..view.camera }, ..view };
             ASKED_ONE.lock().unwrap().clear();
             crate::render_png(&mut m, &view).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             assert!(asked.first().is_some_and(|u| dpi(u).is_some() && u.contains("&WIDTH=1536&")), "{asked:?}");
+        }
+        // A WMS exception sent as a document for the resolution: a refusal, so the picture without
+        // it draws and the layer is asked without it for a while.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/xml-dpi/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let (p, asked) = at(&mut m, 30.0, 0.0);
+            assert!(p == [green; 3] && asked.len() == 2 && asked[1] == without_dpi(&asked[0]), "{asked:?}");
+            let (p, asked) = at(&mut m, 30.0, 50_000.0);
+            assert!(p == [green; 3] && asked.len() == 1 && !asked[0].contains("DPI="), "{asked:?}");
+        }
+        // Empty answers to the HiDPI picture with its resolution and without: the standard
+        // screen's picture draws.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/empty-big/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 400.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            let png = crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let p = pm.pixel(400, 100).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
+            assert!(p == green && asked.len() == 3 && asked[2].contains("&WIDTH=768&"), "{p:?} {asked:?}");
+        }
+        // An empty answer to a standard screen's picture is "nothing here", as before: one
+        // request, no tiles asked.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/empty-all/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 200.0,
+                height: 100.0,
+                pixels_per_point: 1.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert_eq!(asked.len(), 1, "{asked:?}");
         }
         // An empty answer to the picture with its resolution: asked again without it, and drawn.
         {

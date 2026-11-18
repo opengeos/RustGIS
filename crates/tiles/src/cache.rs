@@ -1485,7 +1485,7 @@ fn decode_with(
             b,
             Box::new(move |r| {
                 settle(match r {
-                    Ok(raw) => decode_image(&raw).map(Payload::Image),
+                    Ok(raw) => decode_image(&raw).map(Payload::Image).map_err(|e| format!("{NOT_A_PICTURE}: {e}")),
                     Err(b) => decode(&b, want),
                 })
             }),
@@ -2363,6 +2363,9 @@ fn payload_bytes(p: &Payload) -> usize {
     }
 }
 
+/// What an image fetch whose answer isn't a picture fails with first (then why).
+pub const NOT_A_PICTURE: &str = "not a picture";
+
 /// Decodes fetched bytes.
 pub fn decode(bytes: &[u8], want: Want) -> Result<Payload, String> {
     if bytes.is_empty() {
@@ -2372,7 +2375,9 @@ pub fn decode(bytes: &[u8], want: Want) -> Result<Payload, String> {
         return Err(format!("{} bytes is too large for a tile", bytes.len()));
     }
     match want {
-        Want::Image => decode_image(bytes).map(Payload::Image),
+        // Said as such, so a service's answer that isn't one (a WMS exception document) is told
+        // from a failed fetch.
+        Want::Image => decode_image(bytes).map(Payload::Image).map_err(|e| format!("{NOT_A_PICTURE}: {e}")),
         Want::Vector => mvt::decode(bytes).map(Payload::Vector),
         Want::Json => serde_json::from_slice(bytes).map(Payload::Json).map_err(|e| format!("not JSON: {e}")),
     }
@@ -4714,7 +4719,7 @@ mod tests {
         assert_eq!((back.width(), back.height()), (2, 2));
         assert!(matches!(decode(b"{\"a\": 1}", Want::Json), Ok(Payload::Json(_))));
         assert!(matches!(decode(b"", Want::Image), Ok(Payload::Empty)));
-        assert!(decode(b"not a picture", Want::Image).is_err());
+        assert!(decode(b"not a picture", Want::Image).is_err_and(|e| e.starts_with(NOT_A_PICTURE)));
         assert!(decode(b"{", Want::Json).is_err());
     }
 
