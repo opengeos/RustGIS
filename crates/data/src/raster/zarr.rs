@@ -343,22 +343,31 @@ fn unsupported(codecs: &[Codec]) -> Option<String> {
 
 /// Undoes `codecs` on a chunk of `shape` values of type `dtype`: its values' bytes (as many as
 /// the shape holds, never more) and their byte order. `fill` stands for a shard's missing chunks.
-/// Zstandard output consumed by another size-changing codec uses the existing chunk-file limit;
-/// only the final decoded stage can be held to the chunk's expected byte count.
+/// Size-preserving steps and CRC32C's four bytes give the exact limit before the first variable-size
+/// encoder. Other intermediate stages use the existing chunk-file limit, since encoded data can
+/// be larger than the final values. Limits apply to each decompressor, not just Zstandard.
 fn decode_chunk(codecs: &[Codec], bytes: &[u8], shape: &[u64], dtype: DType, fill: Option<f64>) -> Result<(Vec<u8>, bool)> {
     let n = shape.iter().try_fold(1u64, |a, &c| a.checked_mul(c)).ok_or_else(|| bad("a chunk too large"))?;
     let want = usize::try_from(n).ok().and_then(|n| n.checked_mul(dtype.size)).ok_or_else(|| bad("a chunk too large"))?;
+    // In encoding order, the fixed-size prefix gives the first variable codec's output size
+    // when decoded. Each checksum is part of that output until its own decoder removes it.
+    let first_variable = codecs.iter().position(|c| !matches!(c, Codec::Bytes { .. } | Codec::Shuffle(_) | Codec::Crc32c));
+    let known_limit = codecs.iter().take(first_variable.unwrap_or(codecs.len())).try_fold(want, |limit, c| {
+        if matches!(c, Codec::Crc32c) { limit.checked_add(4).ok_or_else(|| bad("a chunk's encoded stage is too large")) } else { Ok(limit) }
+    })?;
+    if known_limit as u64 > MAX_CHUNK_FILE {
+        return Err(bad("a chunk's encoded stage is too large"));
+    }
     let mut data = bytes.to_vec();
     let mut little = dtype.little;
-    // In encoding order, the first size-changing codec is the last such decoding stage.
-    let final_decoder = codecs.iter().position(|c| !matches!(c, Codec::Bytes { .. } | Codec::Shuffle(_)));
     for (i, c) in codecs.iter().enumerate().rev() {
+        let limit = if Some(i) == first_variable { known_limit } else { MAX_CHUNK_FILE as usize };
         data = match c {
-            Codec::Blosc => blosc(&data, want)?,
-            Codec::Zlib => inflate(&data, true, want)?,
-            Codec::Gzip => gunzip(&data, want)?,
-            Codec::Zstd => unzstd(&data, if Some(i) == final_decoder { want } else { MAX_CHUNK_FILE as usize })?,
-            Codec::Lz4 => numcodecs_lz4(&data, want)?,
+            Codec::Blosc => blosc(&data, limit)?,
+            Codec::Zlib => inflate(&data, true, limit)?,
+            Codec::Gzip => gunzip(&data, limit)?,
+            Codec::Zstd => unzstd(&data, limit)?,
+            Codec::Lz4 => numcodecs_lz4(&data, limit)?,
             Codec::Shuffle(e) => unshuffle(&data, *e),
             Codec::Crc32c => data.get(..data.len().saturating_sub(4)).unwrap_or_default().to_vec(),
             Codec::Bytes { little: l } => {
@@ -3700,6 +3709,46 @@ mod tests {
         assert_eq!(decoded.0, raw);
     }
 
+    /// The reverse pipeline has a Zstandard frame larger than its final values too; gzip must
+    /// return that complete frame instead of applying the final array size to it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_gzip_keeps_an_intermediate_zstd_frame() {
+        use std::io::Write;
+        let raw: Vec<u8> = (0..64u16).map(|i| ((i * 73 + 17) % 251) as u8).collect();
+        let frame = zstd::encode_all(raw.as_slice(), 1).unwrap();
+        assert!(frame.len() > raw.len());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&frame).unwrap();
+        let encoded = encoder.finish().unwrap();
+        let codecs = [Codec::Bytes { little: true }, Codec::Zstd, Codec::Gzip];
+        let decoded = decode_chunk(&codecs, &encoded, &[64], DType::parse_v3("uint8").unwrap(), None).unwrap();
+        assert_eq!(decoded.0, raw);
+    }
+
+    /// CRC32C has a fixed four-byte overhead: reject excess before stripping the checksum can
+    /// copy it or the final chunk-length handling can silently accept a prefix.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_zstd_before_crc32c_uses_the_known_length() {
+        let codecs = [Codec::Bytes { little: true }, Codec::Crc32c, Codec::Zstd];
+        // Little-endian CRC32C checksums of 64 and 128 zero bytes (Zarr's CRC32C codec).
+        for (n, checksum) in [(64, 0x03c8eb67u32), (128, 0x082764dbu32)] {
+            let mut encoded = vec![0u8; n];
+            encoded.extend(checksum.to_le_bytes());
+            let frame = zstd::encode_all(encoded.as_slice(), 1).unwrap();
+            let decoded = decode_chunk(&codecs, &frame, &[64], DType::parse_v3("uint8").unwrap(), None);
+            if n == 64 {
+                assert_eq!(decoded.unwrap().0, [0u8; 64]);
+            } else {
+                assert!(
+                    matches!(decoded, Err(DataError::Format(ref message)) if message.contains("a zstd chunk: decoded data is too large")),
+                    "{decoded:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn codecs_round_trip() {
         let raw: Vec<u8> = (0..4000u32).flat_map(|v| ((v * 7) as f32).to_le_bytes()).collect();
@@ -4015,9 +4064,11 @@ mod tests {
     fn bounded_zstd_shard_windows_keep_cancellation() {
         let files = window_store(true);
         let store = parse_store(&files[..1]).unwrap();
-        let p = plan(&store, &Selection { variable: "v".into(), ..Default::default() }).unwrap();
+        let selection = Selection { variable: "v".into(), window: Some(Window { x0: 0, y0: 0, x1: 2, y1: 2 }), ..Default::default() };
+        let p = plan(&store, &selection).unwrap();
         let mut got = read_plan(&files, &p);
         got.extend(read_spans(&files, &inner_parts(&store, &p, &got).unwrap()));
+        assert!(got.contains_key("v/c/0/0/0#0"));
         let _guard = crate::progress::install(Some(crate::progress::tests::Counted::cancelling_after(0)));
         let result = assemble(&store, &p, &got, "v", None);
         assert!(matches!(result, Err(DataError::Cancelled)), "{result:?}");
