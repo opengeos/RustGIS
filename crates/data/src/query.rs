@@ -1700,6 +1700,17 @@ impl<'a> Eval<'a> {
         v.unwrap_or_else(|f| self.fail(f))
     }
 
+    /// An operator's operand `e`: its value, and whether it is missing (null without an error of
+    /// its own). Its error, if any, joins the errors met so far.
+    fn operand(&self, e: &'a Expr) -> (Cow<'a, Value>, bool) {
+        let before = self.fault.take();
+        let v = self.value(e);
+        let own = self.fault.get();
+        self.fault.set(before.or(own));
+        let missing = v.is_null() && own.is_none();
+        (v, missing)
+    }
+
     /// `v` as a number argument: text or a date that isn't one is an error, a null just null.
     fn num(&self, v: &Value) -> Option<f64> {
         if let Some(fault) = Fault::of_non_number(v) {
@@ -1846,25 +1857,38 @@ impl<'a> Eval<'a> {
                     .map(|v| real(v / size))
                     .unwrap_or(Value::Null),
             }),
+            // An operand that is missing (null without an error) makes the result null whatever
+            // else failed, so an error is the result's only when no operand is missing:
+            // `1 / 0 + pop`, with `pop` null, is null because of `pop`.
             Expr::Chain(first, rest) => {
-                let mut acc = self.value(first).into_owned();
+                let (first, mut missing) = self.operand(first);
+                let mut acc = first.into_owned();
                 for (op, t) in rest {
-                    acc = self.or_fail(arith(*op, &acc, &self.value(t)));
+                    let (v, m) = self.operand(t);
+                    missing |= m;
+                    acc = self.or_fail(arith(*op, &acc, &v));
+                }
+                if missing {
+                    self.fault.set(None);
                 }
                 Cow::Owned(acc)
             }
             Expr::Concat(terms) => {
                 let mut s = String::new();
+                let mut null = false;
                 for t in terms {
-                    let v = self.value(t);
-                    if v.is_null() {
+                    let (v, missing) = self.operand(t);
+                    if missing {
+                        self.fault.set(None);
                         return Cow::Owned(Value::Null);
                     }
-                    if s.len() <= MAX_TEXT {
+                    // Null from an error: the rest are read only to see whether one is missing.
+                    null |= v.is_null();
+                    if !null && s.len() <= MAX_TEXT {
                         s.push_str(&v.to_string());
                     }
                 }
-                Cow::Owned(text(s))
+                Cow::Owned(if null { Value::Null } else { text(s) })
             }
             Expr::Case { subject, arms, otherwise } => {
                 // The subject only picks the arm.

@@ -426,17 +426,25 @@ pub(crate) struct WriteLosses {
     unread: usize,
     /// Each kind of error met, in the order met: how many rows, and the first [`LISTED_ROWS`].
     errors: Vec<(rustgis_data::query::Fault, usize, Vec<usize>)>,
-    /// The rows counted: an edit may write a row more than once, and it is counted once.
-    counted: std::collections::HashSet<usize>,
+    /// The rows counted, for an edit that may write a row more than once ([`once_per_row`]);
+    /// none where each row is written once (Calculate Field), so nothing grows with the rows.
+    ///
+    /// [`once_per_row`]: WriteLosses::once_per_row
+    counted: Option<std::collections::HashSet<usize>>,
 }
 
 impl WriteLosses {
+    /// A tally for an edit that may write the same row more than once, counting it once.
+    pub(crate) fn once_per_row() -> WriteLosses {
+        WriteLosses { counted: Some(Default::default()), ..Default::default() }
+    }
+
     /// Row `row`'s result and the error that made it null, if one did, as a `ty` field holds it,
     /// counting what that lost the first time `row` is written.
     pub(crate) fn write(&mut self, row: usize, (v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Value {
         let asked_null = v.asks_null();
         let (v, cut) = coerce_cut(v, ty);
-        if !self.counted.insert(row) {
+        if self.counted.as_mut().is_some_and(|c| !c.insert(row)) {
             return v;
         }
         self.cuts.add(cut);
@@ -1684,7 +1692,7 @@ mod tests {
         // Nor stores one it overflows to: it is null, too large.
         ds.push(None, vec![Value::Float(1e308)]);
         // A row an edit writes twice is counted once.
-        let mut losses = WriteLosses::default();
+        let mut losses = WriteLosses::once_per_row();
         for row in [4, 4] {
             losses.write(row, (Value::Null, Some(rustgis_data::query::Fault::DivisionByZero)), FieldType::Double);
         }

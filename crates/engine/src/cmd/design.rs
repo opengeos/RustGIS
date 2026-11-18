@@ -245,7 +245,8 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
         // rather than blocking every edit.
         let Ok(calc) = super::edit::Calculation::parse(&rule.expression, &metadata) else { continue };
         // Counted as Calculate Field counts them.
-        let mut losses = super::edit::WriteLosses::default();
+        // A change set may repeat a row: its losses are counted once.
+        let mut losses = super::edit::WriteLosses::once_per_row();
         for r in &rows {
             let v = losses.write(*r, calc.eval_or_fault(&l.dataset, *r), ty);
             if let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(fi)) {

@@ -820,6 +820,10 @@ fn errors_say_why_they_are_null() {
         ("if((1 / 0 IS NULL) AND NULL, 1)", 0),
         ("CASE 1 / 0 WHEN 1 THEN 2 ELSE NULL END", 0),
         ("nullif(NULL, 1 / 0)", 0),
+        // A missing operand makes an operator's result null whatever else failed.
+        ("1 / 0 + pop", 3),
+        ("pop * (1 / 0)", 3),
+        ("(1 / 0) || pop", 3),
         // Empty or `<null>` text is missing, not text that isn't a number.
         ("'' * 2", 0),
         ("sqrt('<null>')", 0),
