@@ -2276,6 +2276,7 @@ impl RustGisApp {
             // Save As changed the document even when it began clean. Offering a download
             // cannot confirm that this renamed document reached a file.
             self.session.mark_unsaved();
+            self.ui.history_jump = None;
         }
         // On Android the file is written once the user has chosen its place, and the shell
         // says then whether it was.
@@ -6669,7 +6670,6 @@ impl RustGisApp {
         }
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
-        chrome::advance_history_jump(self, &ctx);
         // Before the shortcuts and the fields: the row picked in a text field's menu, as its keys.
         fieldmenu::play(self, &ctx);
         chrome::shortcuts(self, &ctx);
@@ -6745,6 +6745,8 @@ impl RustGisApp {
             self.sent_title = title;
         }
         pluginstart::frame_drawn(self, &ctx);
+        // Cancel, save prompts and any project changes from UI controls take effect first.
+        chrome::advance_history_jump(self, &ctx);
         // CJK text this frame drew with no face for it: the next frame's `logic` deals with it
         // (`ensure_data_cjk_font`), so there must be a next frame, though no input comes.
         if rustgis_engine::render::fonts::peek_missing_cjk().iter().any(|s| !self.cjk_scripts_handled.contains(s)) {
