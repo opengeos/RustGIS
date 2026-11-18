@@ -5634,6 +5634,15 @@ impl RustGisApp {
                     Err(e) => self.landed_failed(landed.id, &landed.url, &landed.params, e),
                 }
             }
+            // One waiting whose project was closed meanwhile is given up, and said, rather than
+            // drawn for nothing while it holds the turn.
+            let (waiting, gone): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut self.ui.page_queue).into_iter().partition(|(l, ..)| self.session.download_under_way(l.id));
+            self.ui.page_queue = waiting;
+            for (landed, ..) in gone {
+                let why = tl!("given up before its page was drawn: its project was closed, or more than 64 downloads started after it");
+                self.landed_failed(landed.id, &landed.url, &landed.params, why.to_string());
+            }
             // Those waiting take the places freed, oldest first.
             while !self.ui.page_queue.is_empty() && self.ui.page_reads.len() + self.ui.window_reads.len() < MAX_WINDOW_READS {
                 let (landed, bytes, page) = self.ui.page_queue.remove(0);
