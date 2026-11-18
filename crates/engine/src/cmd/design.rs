@@ -340,8 +340,9 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
     e.deleted += counts.deleted;
     // Said once the edit is kept: a rejected one changed nothing.
     for (rule, field, losses, ty) in cuts {
-        for notice in losses.notices(&format!("Attribute rule {rule}"), &field, ty) {
-            s.notify(notice, false);
+        let by = crate::notice_text::NoticeText::format("Attribute rule {rule}", [("rule", rule.into())]);
+        for notice in losses.notices(by, &field, ty) {
+            s.notify_text(notice, false);
         }
     }
     Ok(())

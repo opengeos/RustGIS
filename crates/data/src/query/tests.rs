@@ -824,6 +824,8 @@ fn errors_say_why_they_are_null() {
         ("1 / 0 + pop", 3),
         ("pop * (1 / 0)", 3),
         ("(1 / 0) || pop", 3),
+        ("coalesce(1 / 0, pop)", 3),
+        ("clamp(pop, 1 / 0, 5)", 3),
         // Empty or `<null>` text is missing, not text that isn't a number.
         ("'' * 2", 0),
         ("sqrt('<null>')", 0),

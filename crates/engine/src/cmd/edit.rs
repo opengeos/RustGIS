@@ -6,6 +6,7 @@ use serde_json::{Value as Json, json};
 use std::borrow::Cow;
 
 use super::{need_layer_or_table, ps};
+use crate::notice_text::NoticeText;
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
@@ -483,20 +484,30 @@ impl WriteLosses {
 
     /// The notices for what writing `field`, of type `ty`, lost, each starting with `by` (the
     /// command or rule that wrote it). Rows are numbered from 1, as `@row_number` numbers them.
-    pub(crate) fn notices(&self, by: &str, field: &str, ty: FieldType) -> Vec<String> {
+    /// The error notices are templates a translated interface shows in its language.
+    pub(crate) fn notices(&self, by: NoticeText, field: &str, ty: FieldType) -> Vec<NoticeText> {
         let rows = |n: usize| if n == 1 { "1 row".to_string() } else { format!("{n} rows") };
-        let mut out = self.cuts.notices(by, field);
+        let english = by.english();
+        let mut out: Vec<NoticeText> = self.cuts.notices(&english, field).into_iter().map(NoticeText::from).collect();
         if self.unread > 0 {
-            out.push(format!("{by}: '{field}' is null in {}, whose result isn't a {} value", rows(self.unread), ty.label()));
+            out.push(format!("{english}: '{field}' is null in {}, whose result isn't a {} value", rows(self.unread), ty.label()).into());
         }
         for (fault, n, listed) in &self.errors {
             let numbers: Vec<String> = listed.iter().map(|r| r.saturating_add(1).to_string()).collect();
-            let (word, more) = (if listed.len() == 1 { "row" } else { "rows" }, if *n > listed.len() { "…" } else { "" });
-            out.push(format!(
-                "{by}: '{field}' is null in {} because of {} ({word} {}{more})",
-                rows(*n),
-                fault.describe(),
-                numbers.join(", ")
+            let key = match (*n, *n > listed.len()) {
+                (1, _) => "{by}: '{field}' is null in 1 row because of {cause} (row {rows})",
+                (_, false) => "{by}: '{field}' is null in {count} rows because of {cause} (rows {rows})",
+                (_, true) => "{by}: '{field}' is null in {count} rows because of {cause} (rows {rows}…)",
+            };
+            out.push(NoticeText::format(
+                key,
+                [
+                    ("by", by.clone()),
+                    ("field", field.to_string().into()),
+                    ("count", n.to_string().into()),
+                    ("cause", NoticeText::term(fault.describe())),
+                    ("rows", numbers.join(", ").into()),
+                ],
             ));
         }
         out
@@ -1493,8 +1504,8 @@ fn evaluate(calc: &Calculation, ds: &Dataset, rows: Vec<usize>, ty: FieldType) -
 /// Says what Calculate Field's results lost in `field` ([`evaluate`]), even when a calculation
 /// rule writes the field afterwards: the rule may read the cut value, and says what it cuts itself.
 fn calculation_notices(s: &mut Session, field: &str, ty: FieldType, losses: &WriteLosses) {
-    for notice in losses.notices("Calculate Field", field, ty) {
-        s.notify(notice, false);
+    for notice in losses.notices(NoticeText::term("Calculate Field"), field, ty) {
+        s.notify_text(notice, false);
     }
 }
 
@@ -1715,7 +1726,8 @@ mod tests {
         for row in [4, 4] {
             losses.write(row, (Value::Null, Some(rustgis_data::query::Fault::DivisionByZero)), FieldType::Double);
         }
-        assert_eq!(losses.notices("Rule", "n", FieldType::Double), ["Rule: 'n' is null in 1 row because of a division by zero (row 5)"]);
+        let said: Vec<String> = losses.notices(NoticeText::term("Rule"), "n", FieldType::Double).iter().map(NoticeText::english).collect();
+        assert_eq!(said, ["Rule: 'n' is null in 1 row because of a division by zero (row 5)"]);
         let calc = Calc::parse("'pop ' + Pop Est", &ds).unwrap();
         assert_eq!(calc.eval_or_fault(&ds, 0), (Value::Null, Some(rustgis_data::query::Fault::NotANumber)));
         let calc = Calc::parse("Pop Est * 10", &ds).unwrap();

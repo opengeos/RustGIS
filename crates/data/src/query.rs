@@ -1913,8 +1913,27 @@ impl<'a> Eval<'a> {
     }
 
     /// The value of the function `f` over `args` on this row.
+    /// As for an operator, a missing argument (null without an error of its own) is why a null
+    /// result is null, whatever else failed: `coalesce(1 / 0, pop)`, with `pop` null.
     fn call(&self, f: Func, args: &'a [Expr]) -> Cow<'a, Value> {
-        let arg = |i: usize| args.get(i).map(|a| self.value(a)).unwrap_or(Cow::Owned(Value::Null));
+        let missing = Cell::new(false);
+        let v = self.call_with(f, args, &missing);
+        if missing.get() && v.is_null() {
+            self.fault.set(None);
+        }
+        v
+    }
+
+    /// [`call`](Self::call), noting in `missing` an argument read that was missing.
+    fn call_with(&self, f: Func, args: &'a [Expr], missing: &Cell<bool>) -> Cow<'a, Value> {
+        let read = |a: &'a Expr| {
+            let (v, m) = self.operand(a);
+            if m {
+                missing.set(true);
+            }
+            v
+        };
+        let arg = |i: usize| args.get(i).map(read).unwrap_or(Cow::Owned(Value::Null));
         let n = |i: usize| self.num(&arg(i));
         let txt = |i: usize| {
             let v = arg(i);
@@ -1937,7 +1956,7 @@ impl<'a> Eval<'a> {
             }
             Func::Coalesce => {
                 for a in args {
-                    let v = self.value(a);
+                    let v = read(a);
                     if !v.is_null() {
                         return v;
                     }
@@ -1946,7 +1965,8 @@ impl<'a> Eval<'a> {
             }
             Func::NullIf => {
                 // `b` is only compared with.
-                let (a, b) = (arg(0), self.deciding(|| arg(1)));
+                let b = || args.get(1).map(|b| self.value(b)).unwrap_or(Cow::Owned(Value::Null));
+                let (a, b) = (arg(0), self.deciding(b));
                 if compare(&a, Op::Eq, &b) == Some(true) {
                     Value::Null
                 } else {
@@ -1983,7 +2003,7 @@ impl<'a> Eval<'a> {
             Func::Min | Func::Max => {
                 let mut best: Option<(f64, Cow<'a, Value>)> = None;
                 for a in args {
-                    let v = self.value(a);
+                    let v = read(a);
                     let Some(x) = v.as_f64() else { continue };
                     let better = match &best {
                         None => true,
