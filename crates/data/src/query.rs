@@ -1869,11 +1869,11 @@ impl<'a> Eval<'a> {
             // Empty or `<null>` text is missing to every operator but `+`, which joins it.
             Expr::Chain(first, rest) => {
                 let (first, mut missing) = self.operand(first);
-                missing |= rest.first().is_some_and(|(op, _)| *op != Arith::Add && blank_text(&first));
                 let mut acc = first.into_owned();
                 for (op, t) in rest {
                     let (v, m) = self.operand(t);
-                    missing |= m || (*op != Arith::Add && blank_text(&v));
+                    // The result so far counts too: `'' + '' - x` takes `-` on empty text.
+                    missing |= m || (*op != Arith::Add && (blank_text(&acc) || blank_text(&v)));
                     acc = self.or_fail(arith(*op, &acc, &v));
                 }
                 if missing {
@@ -1922,11 +1922,13 @@ impl<'a> Eval<'a> {
 
     /// The value of the function `f` over `args` on this row.
     /// As for an operator, a missing argument (null without an error of its own) is why a null
-    /// result is null, whatever else failed: `coalesce(1 / 0, pop)`, with `pop` null.
+    /// result is null, whatever else failed: `clamp(pop, 1 / 0, 5)`, with `pop` null. Not for
+    /// the functions that skip nulls (`coalesce`, `min`, `max`): there each null argument is a
+    /// cause, and fixing the error alone gives a value (`coalesce(1 / 0, pop)`).
     fn call(&self, f: Func, args: &'a [Expr]) -> Cow<'a, Value> {
         let missing = Cell::new(false);
         let v = self.call_with(f, args, &missing);
-        if missing.get() && v.is_null() {
+        if missing.get() && v.is_null() && !matches!(f, Func::Coalesce | Func::Min | Func::Max) {
             self.fault.set(None);
         }
         v
@@ -1993,8 +1995,12 @@ impl<'a> Eval<'a> {
                 v => number(v).map(|x| real(x.abs())).unwrap_or(Value::Null),
             },
             Func::Round => {
+                let x = arg(0).into_owned();
+                if blank_text(&x) {
+                    missing.set(true);
+                }
                 let places = if args.len() > 1 { n(1).map(|p| p.clamp(-15.0, 15.0) as i32) } else { Some(0) };
-                match (arg(0).into_owned(), places) {
+                match (x, places) {
                     (Value::Int(i), Some(p)) if p >= 0 => Value::Int(i),
                     (v, Some(p)) => match number(&v) {
                         Some(x) => {

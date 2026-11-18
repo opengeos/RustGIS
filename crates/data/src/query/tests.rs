@@ -805,10 +805,16 @@ fn errors_say_why_they_are_null() {
         ("2 * (1 / 0)", Fault::DivisionByZero),
         ("1 / 0 * 2", Fault::DivisionByZero),
         ("sqrt(1 / 0)", Fault::DivisionByZero),
+        ("round(1 / 0, 0)", Fault::DivisionByZero),
         ("nullif(pop / 0, 1)", Fault::DivisionByZero),
         ("'(' || (pop / 0) || ')'", Fault::DivisionByZero),
     ] {
         assert_eq!(why(text, 0), (Value::Null, Some(fault)), "{text}");
+    }
+    // A function that skips nulls has each null argument as a cause: fixing the error alone gives
+    // a value, so the error is said even beside a missing argument.
+    for text in ["coalesce(1 / 0, pop)", "max(1 / 0, pop)", "min(pop, sqrt(-1))"] {
+        assert!(why(text, 3).1.is_some(), "{text}");
     }
     // Null in, null out, without an error; what an expression asks for or guards against.
     for (text, row) in [
@@ -829,7 +835,6 @@ fn errors_say_why_they_are_null() {
         ("1 / 0 + pop", 3),
         ("pop * (1 / 0)", 3),
         ("(1 / 0) || pop", 3),
-        ("coalesce(1 / 0, pop)", 3),
         ("clamp(pop, 1 / 0, 5)", 3),
         // Empty or `<null>` text is missing, not text that isn't a number.
         ("'' * 2", 0),
@@ -837,6 +842,8 @@ fn errors_say_why_they_are_null() {
         ("(1 / 0) - '<null>'", 0),
         ("sqrt('<null>')", 0),
         ("clamp('', 1 / 0, 5)", 0),
+        ("'' + '' - (1 / 0)", 0),
+        ("round('', 1 / 0)", 0),
     ] {
         assert_eq!(why(text, row), (Value::Null, None), "{text}");
     }
