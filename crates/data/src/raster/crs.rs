@@ -1296,7 +1296,7 @@ impl Live {
                 // Said once: it goes on with the transformation it had, without the grid.
                 None => {
                     if let Some(key) = &self.key {
-                        REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner()).add(key);
+                        note_rebuild_failure(key);
                     }
                 }
             }
@@ -1497,6 +1497,14 @@ static REBUILD_FAILED: std::sync::Mutex<RebuildFailures> = std::sync::Mutex::new
     more: 0,
     counted: std::collections::BTreeSet::new(),
 });
+
+/// Records that the system kept under `key` ("EPSG 4267", "WKT …") couldn't be built again with
+/// grids that arrived: for the sessions to say ([`rebuild_failures_since`]). Public for tests of
+/// the sessions' notice; [`Live::now`] calls it.
+#[doc(hidden)]
+pub fn note_rebuild_failure(key: &str) {
+    REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner()).add(key);
+}
 
 /// Where a session has read the rebuild failures to ([`rebuild_failures_since`]): now's, for
 /// a session starting now.
@@ -1955,7 +1963,8 @@ mod tests {
     fn a_transformer_that_cant_be_built_again_goes_on_and_is_said() {
         let Some(Transformer { kind: Kind::Terrio(live), .. }) = epsg_transformer(4267) else { panic!("EPSG:4267") };
         // Kept under a key that no longer builds, and from another grid generation than now's.
-        let stale = Live::new(Some("WKT not a definition".into()), grid_generation().wrapping_add(1), live.peek());
+        // (Generations no test reaches, so another test's grids arriving meanwhile can't match them.)
+        let stale = Live::new(Some("WKT not a definition".into()), u64::MAX, live.peek());
         let mut seen = rebuild_failures_told();
         let mut other = seen;
         assert!(matches!(stale.now(), Now::First(_)), "goes on with the transformation it had");
@@ -1963,7 +1972,7 @@ mod tests {
         assert!(failed >= 1 && shown.iter().any(|s| s == "not a definition"), "{failed} {shown:?}");
         // Said once: not again in this generation, nor when more grids arrive.
         let _ = stale.now();
-        stale.generation.store(grid_generation().wrapping_add(2), std::sync::atomic::Ordering::SeqCst);
+        stale.generation.store(u64::MAX - 1, std::sync::atomic::Ordering::SeqCst);
         let _ = stale.now();
         assert!(!rebuild_failures_since(&mut seen).1.iter().any(|s| s == "not a definition"));
         // Another session hears it too, once.
@@ -1979,7 +1988,7 @@ mod tests {
         f.add(&format!("EPSG {}", REBUILD_KEPT + 1));
         assert_eq!((f.named.len(), f.more), (REBUILD_KEPT, 3));
         // One that is built again: nothing said.
-        let fine = Live::new(Some("EPSG 4267".into()), grid_generation().wrapping_add(1), live.peek());
+        let fine = Live::new(Some("EPSG 4267".into()), u64::MAX, live.peek());
         assert!(matches!(fine.now(), Now::Again(_)));
         assert!(!rebuild_failures_since(&mut seen).1.iter().any(|s| s == "EPSG:4267"));
     }
