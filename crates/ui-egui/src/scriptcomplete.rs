@@ -3,13 +3,13 @@
 //! a click accepts an item; Ctrl+Space opens it with nothing typed yet. What to offer at a cursor
 //! (`offer_at`) is worked out apart from the box and tested on its own: command ids (a line's
 //! first word), a command's parameter keys in its `{…}` and in its second-level objects
-//! (`key_at`), and the ids some values take: tools for a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
-//! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
-//! `"layer"`, the line's layer's fields for a `"field"` and the keys described as taking fields
-//! (in their arrays too, #846), maps, layouts, tables and label classes,
-//! and in a `gp.run` line's `"params"` what the tool's parameter takes by its kind (`tool_value`),
-//! as the tool's form offers it. Typing aids beside it: a command's parameters added on accept
-//! (`template`), and braces, brackets and quotes that close themselves (`brace`).
+//! (`key_at`), and the ids some values take: tools for a `gp.run` line's `"tool"`, commands for a
+//! `task.addStep` line's `"command"` (`value_at`), whose own keys then go in its `"params": {…}`,
+//! and what the project holds: layers for a `"layer"`, the line's layer's fields for a `"field"`
+//! and the keys described as taking fields (in their arrays too, #846), maps, layouts, tables and
+//! label classes, and in a `gp.run` line's `"params"` what the tool's parameter takes by its kind
+//! (`tool_value`), as the tool's form offers it. Typing aids beside it: a command's parameters
+//! added on accept (`template`), and braces, brackets and quotes that close themselves (`brace`).
 //! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};

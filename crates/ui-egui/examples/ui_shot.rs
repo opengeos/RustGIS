@@ -455,7 +455,7 @@ fn main() {
                 harness.step();
             }
         } else if let Some(k) = l.get("key").and_then(|v| v.as_str()) {
-            let mods = if l.get("ctrl").and_then(Value::as_bool) == Some(true) { egui::Modifiers::CTRL } else { egui::Modifiers::NONE };
+            let mods = if l.get("ctrl").and_then(Value::as_bool).unwrap_or(false) { egui::Modifiers::CTRL } else { egui::Modifiers::NONE };
             match egui::Key::from_name(k) {
                 Some(key) => harness.key_press_modifiers(mods, key),
                 None => eprintln!("no key named '{k}'"),
