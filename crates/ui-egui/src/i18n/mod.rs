@@ -485,11 +485,16 @@ pub fn fmt_raw(template: &str, args: &[(&str, &str)]) -> String {
 
 /// Translates a whole-file size refusal, keeping the file name and limit as literal arguments.
 pub(crate) fn file_size_error(error: &str, format: impl FnOnce(&str, &[(&str, &str)]) -> String) -> Option<String> {
-    let (name, limit) = rustgis_engine::data::io::file_size_error_args(error)?;
-    Some(format(
-        "{name} is too large to open (limit {limit} MiB). Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.",
-        &[("name", name), ("limit", limit)],
-    ))
+    let (name, limit, table) = rustgis_engine::data::io::file_size_error_args(error)?;
+    let args = &[("name", name), ("limit", limit)];
+    Some(if table {
+        format("{name} is too large to open (limit {limit} MiB). Split the data into smaller files and import each one separately.", args)
+    } else {
+        format(
+            "{name} is too large to open (limit {limit} MiB). Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.",
+            args,
+        )
+    })
 }
 
 /// Translates a template in its context, then fills placeholders before RTL display conversion.

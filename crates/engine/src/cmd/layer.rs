@@ -2218,7 +2218,7 @@ fn read_whole(p: &Value, path: &str) -> WholeRead {
     if let Some(read) = delimited {
         return Ok(read);
     }
-    let read = || rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"));
+    let read = || rustgis_data::io::read_path(Path::new(path)).map_err(|e| whole_read_error(path, e));
     // A file its edits can be written back to: the files as read, to compare with before then.
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::sync::is_syncable(path) {
@@ -3983,6 +3983,13 @@ fn read_delimited(
     read_delimited_bytes(p, name, &bytes()?).map(Some)
 }
 
+/// Adds file context to a reader error. A size refusal already names the file it could not read,
+/// which may be a sidecar of the requested file.
+fn whole_read_error(path: &str, error: rustgis_data::DataError) -> String {
+    let message = error.to_string();
+    if rustgis_data::io::file_size_error_args(&message).is_some() { message } else { format!("{path}: {message}") }
+}
+
 /// Reads local/uploaded delimited bytes with the same options and CRS notices on every path.
 pub(crate) fn read_delimited_bytes(
     p: &Value,
@@ -3990,7 +3997,7 @@ pub(crate) fn read_delimited_bytes(
     bytes: &[u8],
 ) -> Result<(rustgis_data::Dataset, rustgis_data::ReadReport), String> {
     let opts = csv_options(p)?.unwrap_or_default();
-    let (ds, mut report) = rustgis_data::io::read_delimited_bytes(name, bytes, &opts).map_err(|e| format!("{name}: {e}"))?;
+    let (ds, mut report) = rustgis_data::io::read_delimited_bytes(name, bytes, &opts).map_err(|e| whole_read_error(name, e))?;
     if let (Some(text), Some(crs)) = (ps(p, "crs"), opts.crs)
         && let Some(note) = rustgis_data::raster::wkt::typed_crs_note(text, crs)
     {

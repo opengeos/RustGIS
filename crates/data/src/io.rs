@@ -11,19 +11,27 @@ use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType,
 pub const MAX_BYTES: u64 = 256 << 20;
 
 const FILE_SIZE_LIMIT_START: &str = " is too large to open (limit ";
-const FILE_SIZE_LIMIT_END: &str =
+const VECTOR_SIZE_LIMIT_END: &str =
     " MiB). Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.";
+const TABLE_SIZE_LIMIT_END: &str = " MiB). Split the data into smaller files and import each one separately.";
 
-/// The whole-file refusal, using the limit of the reader that refused the input.
+/// The whole-file refusal, using the reader's limit and recovery advice for the file type.
 pub fn file_size_error(name: &str, limit: u64) -> String {
-    format!("{name}{FILE_SIZE_LIMIT_START}{}{FILE_SIZE_LIMIT_END}", limit >> 20)
+    let dbf = Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dbf"));
+    let end =
+        if is_delimited_name(name) || crate::sheets::is_sheet_name(name) || dbf { TABLE_SIZE_LIMIT_END } else { VECTOR_SIZE_LIMIT_END };
+    format!("{name}{FILE_SIZE_LIMIT_START}{}{end}", limit >> 20)
 }
 
-/// Recovers the literal file name and limit so the interface can translate the refusal.
-pub fn file_size_error_args(error: &str) -> Option<(&str, &str)> {
-    let (name, limit) = error.strip_suffix(FILE_SIZE_LIMIT_END)?.rsplit_once(FILE_SIZE_LIMIT_START)?;
+/// Recovers the literal file name, limit and whether the refusal gives table advice.
+pub fn file_size_error_args(error: &str) -> Option<(&str, &str, bool)> {
+    let (body, table) = match error.strip_suffix(TABLE_SIZE_LIMIT_END) {
+        Some(body) => (body, true),
+        None => (error.strip_suffix(VECTOR_SIZE_LIMIT_END)?, false),
+    };
+    let (name, limit) = body.rsplit_once(FILE_SIZE_LIMIT_START)?;
     limit.parse::<u64>().ok()?;
-    Some((name, limit))
+    Some((name, limit, table))
 }
 
 /// File types the readers understand, for open dialogs.
@@ -267,7 +275,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
+        return Err(DataError::Format(file_size_error(file_name, MAX_BYTES)));
     }
     let text = || std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")));
     let mut out = match ext.as_str() {
@@ -309,7 +317,7 @@ pub fn read_owned(file_name: &str, bytes: Vec<u8>) -> Result<(Dataset, ReadRepor
         return read_bytes(file_name, &bytes);
     }
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
+        return Err(DataError::Format(file_size_error(file_name, MAX_BYTES)));
     }
     let mut out = if crate::lidar::is_lidar_name(file_name) {
         let name = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
@@ -399,10 +407,11 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
     Ok(out)
 }
 
+/// Refuses an oversized file before any attempt to read it into memory.
 fn check_size(path: &Path) -> Result<()> {
     let len = std::fs::metadata(path)?.len();
     if len > MAX_BYTES {
-        return Err(DataError::Format(format!("file is too large ({len} bytes)")));
+        return Err(DataError::Format(file_size_error(&path.to_string_lossy(), MAX_BYTES)));
     }
     Ok(())
 }
@@ -2004,7 +2013,7 @@ pub fn read_delimited_bytes(file_name: &str, bytes: &[u8], opts: &CsvOptions) ->
 /// Reads an archive member without resetting the retained-table allowance.
 fn read_delimited_bytes_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(DataError::Format(format!("{file_name}: file exceeds the {MAX_BYTES}-byte limit")));
+        return Err(DataError::Format(file_size_error(file_name, MAX_BYTES)));
     }
     if is_gzip_text_name(file_name) {
         return read_gzip_text_budget(bytes, file_name, opts, budget);
@@ -2728,7 +2737,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
 /// Delimited members share one allowance, including gzip members whose text is nested in ZIP.
 fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut usize) -> Result<Vec<(Dataset, ReadReport)>> {
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
+        return Err(DataError::Format(file_size_error(file_name, MAX_BYTES)));
     }
     if let Some(c) = crs {
         c.transformer().map_err(DataError::Format)?;
@@ -6398,6 +6407,19 @@ mod tests {
         let clean = read_zip_budget("tables.zip", &zip, None, &mut (cost * 2)).unwrap();
         assert_eq!(clean.len(), 2);
         assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+    }
+
+    #[test]
+    fn oversized_standalone_dbf_reports_limit_and_table_advice() {
+        // A sparse file exercises the production cap without allocating or reading its contents.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("communities.DBF");
+        std::fs::File::create(&path).unwrap().set_len(MAX_BYTES + 1).unwrap();
+
+        let error = read_path(&path).unwrap_err().to_string();
+        let limit = (MAX_BYTES >> 20).to_string();
+        assert_eq!(file_size_error_args(&error), Some((path.to_str().unwrap(), limit.as_str(), true)));
+        assert!(error.contains("Split the data into smaller files"), "{error}");
     }
 
     /// Standalone tables share Shapefile typing and loss notices; .cpg wins over the header,
