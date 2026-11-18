@@ -1250,6 +1250,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else {
                 match (purpose, tool_exts) {
                     ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
+                    ("script", _) => rustgis_ui_egui::SCRIPT_PICK,
                     ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
                     ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
                     (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
@@ -1262,6 +1263,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 if exts.is_empty() { rfd::AsyncFileDialog::new() } else { rfd::AsyncFileDialog::new().add_filter(exts.join(", "), &exts) }
             } else if purpose == "shortcuts" {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Keyboard shortcuts"), &["json", "rgisshortcuts"])
+            } else if purpose == "script" {
+                rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Script"), &["txt"])
             } else if purpose == "shapefile" {
                 rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "zip"])
             } else if purpose == "project" {
