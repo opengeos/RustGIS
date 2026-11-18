@@ -289,6 +289,15 @@ impl PartialOrd for Value {
         }
         match (self.as_f64(), other.as_f64()) {
             (Some(a), Some(b)) if !matches!(self, Value::Text(_)) || !matches!(other, Value::Text(_)) => match (self, other) {
+                // Whole-number text against a whole number reads as the integer it spells.
+                (Value::Int(i), Value::Text(t)) => match t.trim().parse::<i64>() {
+                    Ok(j) => Some(i.cmp(&j)),
+                    Err(_) => int_cmp_f64(*i, b),
+                },
+                (Value::Text(t), Value::Int(i)) => match t.trim().parse::<i64>() {
+                    Ok(j) => Some(j.cmp(i)),
+                    Err(_) => int_cmp_f64(*i, a).map(Ordering::reverse),
+                },
                 (Value::Int(i), _) => int_cmp_f64(*i, b),
                 (_, Value::Int(i)) => int_cmp_f64(*i, a).map(Ordering::reverse),
                 _ => a.partial_cmp(&b),
@@ -588,6 +597,10 @@ mod tests {
         assert_eq!(Value::Int(2).partial_cmp(&Value::Float(2.5)), Some(Ordering::Less));
         assert_eq!(Value::Int(-2).partial_cmp(&Value::Float(-2.5)), Some(Ordering::Greater));
         assert_eq!(Value::Int(i64::MAX).partial_cmp(&Value::Float(9.3e18)), Some(Ordering::Less));
+        // The same integer written as text compares as that integer, both ways round.
+        let text = Value::Text(" 9007199254740993".into());
+        assert_eq!(b.partial_cmp(&text), Some(Ordering::Equal));
+        assert_eq!(text.partial_cmp(&a), Some(Ordering::Greater));
         let mut v = vec![b.clone(), f.clone(), a.clone(), Value::Float(1.5), Value::Int(1)];
         v.sort_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Equal));
         assert_eq!(v, [Value::Int(1), Value::Float(1.5), f, a, b]);

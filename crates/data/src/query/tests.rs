@@ -805,6 +805,8 @@ fn page_variables_are_typed_and_null_without_a_series() {
     assert!(!matches(&listed, &ds, 1, &env), "IN keeps adjacent large IDs apart too");
     let after = parse("$id > @page_feature_id", &ds).unwrap();
     assert_eq!((matches(&after, &ds, 0, &env), matches(&after, &ds, 1, &env)), (false, true), "ordering is exact too");
+    let written = parse("$id = '9007199254740993'", &ds).unwrap();
+    assert_eq!((eval(&written, &ds, 0), eval(&written, &ds, 1)), (false, true), "an id written as text is that id");
     assert!(!eval(&same, &ds, 0));
     assert!(!reads_series_page("'@page_feature_id' = !@page_number!"));
 }
