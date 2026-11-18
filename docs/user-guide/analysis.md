@@ -1575,7 +1575,7 @@ empties the pane: the script, its results, the count (the next run is Run #1 aga
 Details window. It asks nothing: the box keeps the focus, so Ctrl+Z (⌘+Z) brings the script back;
 after a click elsewhere, Ctrl+Z undoes in the project instead, so click into the box first. It is
 off with nothing to clear, and while a run is under way. **Load…**, off then too, reads a script
-from a file (a `.txt` file; on the desktop any other too) in place of the pane's, emptying its
+from a file (a `.txt` file in the browser; any file on the desktop and phone) in place of the pane's, emptying its
 results as Clear does, and Ctrl+Z (⌘+Z) brings the old script back; in the browser it uses the
 browser's file picker. A file that isn't UTF-8 text, or is over 1 MB, is refused with a notice
 naming it, and the script stays. Opening a

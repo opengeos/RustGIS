@@ -6541,9 +6541,14 @@ impl RustGisApp {
         for (name, bytes) in arrived {
             let _ = self.open_picked(&name, &bytes);
         }
-        // A script file for the Script pane's Load…, opened with the context its undo needs.
+        // A script file for the Script pane's Load…, opened with the context its undo needs; said,
+        // not dropped, if something in the inbox started a run meanwhile.
         if let Some(script) = self.workflow.script_picked.take() {
-            analysispane::open_script(self, ctx, script);
+            if analysispane::script_running(self) {
+                self.session.notify(tl!("Wait for the run to finish").to_string(), true);
+            } else {
+                analysispane::open_script(self, ctx, script);
+            }
         }
         // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
         // asynchronously and passes them through the inbox instead.)

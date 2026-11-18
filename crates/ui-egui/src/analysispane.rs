@@ -2594,18 +2594,18 @@ mod tests {
         assert_eq!(h.state().workflow.script, "kept", "a file that isn't UTF-8 leaves the script");
         assert!(h.state().workflow.script_last.is_some());
         assert!(h.state().session.notices.iter().any(|n| n.text == "latin1.txt isn't UTF-8 text"), "{:?}", h.state().session.notices);
+        let said = h.state().session.notices.len();
         load(&mut h, Some(&good));
         let w = &h.state().workflow;
         assert_eq!(w.script, "map.zoomFull\n");
         assert!(w.script_out.is_empty() && w.script_last.is_none(), "the results go, as with Clear");
-        let id = egui::Id::unique("script_text");
-        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, id).expect("the box's state");
-        let at = state.cursor.char_range().expect("a cursor");
-        assert_eq!(
-            state.undoer().undo(&(at, "map.zoomFull\n".to_string())).map(|(_, t)| t.as_str()),
-            Some("kept"),
-            "Ctrl+Z brings it back"
-        );
+        assert_eq!(h.state().session.notices.len(), said, "a clean file says nothing");
+        assert!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).is_focused(), "the box has the focus");
+        // The box's own undo brings the old script back, with nothing clicked first.
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert_eq!(h.state().workflow.script, "kept", "Ctrl+Z brings it back");
+        assert!(h.state().workflow.script_last.is_none(), "the results stay gone");
         // A run under way: off, as its results would land in the replaced script.
         h.state_mut().workflow.script_started.push_back((0, web_time::Instant::now(), 0));
         h.run();
@@ -2651,9 +2651,11 @@ mod tests {
         h.run();
         assert_eq!(h.state().workflow.script, "kept");
         // A byte-order mark (Notepad's UTF-8) isn't kept: the first line's command stays known.
+        let said = h.state().session.notices.len();
         h.state_mut().open_picked(&format!("{}zoom.txt", crate::SCRIPT_PICK), b"\xEF\xBB\xBFmap.zoomFull").unwrap();
         h.run();
         assert_eq!(h.state().workflow.script, "map.zoomFull");
+        assert_eq!(h.state().session.notices.len(), said, "a clean file says nothing");
         assert_eq!(h.state().ui.right, Some(crate::RightPane::Script));
         h.state_mut().workflow.script_started.push_back((0, web_time::Instant::now(), 0));
         assert!(h.state_mut().open_picked(&format!("{}other.txt", crate::SCRIPT_PICK), b"map.new").is_err());
