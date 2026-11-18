@@ -78,6 +78,7 @@ pub fn header_layout(titlebar: Option<TitlebarMetrics>) -> HeaderLayout {
     }
 }
 
+/// Draws the project controls and command search, giving the toolbar priority when the window narrows.
 pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let layout = header_layout(app.ui.titlebar);
@@ -149,6 +150,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     Value::Null,
                     false,
                 );
+                undo_history(ui, app);
                 for id in app.ui.quick_access.clone() {
                     let label = crate::ribbon::QUICK.iter().find(|q| q.0 == id).map_or(id.as_str(), |q| q.1).to_string();
                     small(ui, app, crate::ribbon::quick_icon(&id), "", &label, &id, Value::Null, false);
@@ -220,6 +222,65 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 }
             });
         });
+}
+
+/// Opens the project's retained undo and redo states from the Quick Access Toolbar.
+fn undo_history(ui: &mut Ui, app: &mut RustGisApp) {
+    let history = small(ui, app, "history", "", "Undo History", "ui.menu", Value::Null, false);
+    let target = egui::Popup::menu(&history)
+        .width(240.0)
+        .show(|ui| {
+            ui.strong(tl!("Undo History"));
+            if !app.session.can_undo() && !app.session.can_redo() {
+                ui.label(tl!("No project changes to undo or redo."));
+                return None;
+            }
+
+            let current = app.session.undo_depth();
+            // A step labels the state reached by applying it. The oldest state precedes all the
+            // retained steps, including when the stack has reached its limit.
+            let changes = app.session.undo_labels().chain(app.session.redo_labels());
+            let states: Vec<_> = std::iter::once(None).chain(changes.map(Some)).collect();
+            // If a background command moves the rows, a gesture begun on the old list no
+            // longer targets a row of the new one.
+            ui.push_id(app.session.state(), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        let mut target = None;
+                        for (index, action) in states.into_iter().enumerate().rev() {
+                            let selected = index == current;
+                            let label = if selected {
+                                let action = action.map_or_else(|| tl_raw!("Earliest available state"), crate::i18n::t_raw);
+                                crate::i18n::fmt("Current: {action}", &[("action", action)])
+                            } else {
+                                action.map_or_else(|| tl!("Earliest available state"), crate::i18n::t).into()
+                            };
+                            let row = ui.add(egui::Button::selectable(selected, label).min_size(vec2(ui.available_width(), 0.0)));
+                            if selected && history.clicked() {
+                                row.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if row.clicked() && !selected {
+                                let command = if index < current { "edit.undo" } else { "edit.redo" };
+                                target = Some((command, index.abs_diff(current)));
+                            }
+                        }
+                        target
+                    })
+                    .inner
+            })
+            .inner
+        })
+        .and_then(|response| response.inner);
+
+    if let Some((command, steps)) = target {
+        for _ in 0..steps {
+            if app.run_by_user(command, Value::Null).is_err() {
+                break;
+            }
+        }
+    }
 }
 
 pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
@@ -1586,6 +1647,37 @@ mod tests {
         ] {
             assert_eq!(parse_scale(text), None, "{text}");
         }
+    }
+
+    /// The toolbar can jump over several states in either direction, including to the saved state.
+    #[test]
+    fn undo_history_jumps_back_and_forward() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        let saved = app.session.state();
+        app.run("layer.rename", json!({"layer": "Cities", "name": "Places"})).unwrap();
+        app.run("labels.style", json!({"layer": "Places", "size": 20})).unwrap();
+        let latest = app.session.state();
+        let mut h = egui_kittest::Harness::builder()
+            .with_context_setup(|ctx| crate::theme::install_fonts(ctx, &[], None))
+            .build_ui_state(|ui, app| header(app, ui), app);
+        h.run();
+
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Undo History").click();
+        h.run();
+        h.get_by_label("Current: Text Symbol");
+        h.get_by_label("Earliest available state").click();
+        h.run();
+        assert_eq!(h.state().session.state(), saved);
+        assert!(!h.state().session.dirty());
+
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Undo History").click();
+        h.run();
+        h.get_by_label("Current: Earliest available state");
+        h.get_by_label("Text Symbol").click();
+        h.run();
+        assert_eq!(h.state().session.state(), latest);
+        assert!(!h.state().session.can_redo());
     }
 
     /// With a text field focused, Ctrl/⌘+Z undoes its typing, not the project; with none, the

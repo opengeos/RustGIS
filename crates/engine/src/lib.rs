@@ -2962,6 +2962,16 @@ impl Session {
         self.redo.last().map(|u| u.2)
     }
 
+    /// Labels of the retained changes leading to the current state, oldest first.
+    pub fn undo_labels(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.undo.iter().map(|step| step.2)
+    }
+
+    /// Labels of changes after the current state, in the order redo would restore them.
+    pub fn redo_labels(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.redo.iter().rev().map(|step| step.2)
+    }
+
     /// Makes the next command's undo step part of the last one, when that was made under the same
     /// `key`: a held arrow key nudging a layout element is one step to undo, not one per repeat
     /// (and doesn't push the work before it out of the history). Any other change in between,
