@@ -1,8 +1,8 @@
 //! Coordinate reference systems for rasters, by EPSG code or by definition.
 //!
-//! WGS 84 longitude/latitude and Web Mercator are handled directly; any other EPSG code is
-//! looked up in a built-in table of PROJ definitions ([`epsg_proj4`]) and transformed with a
-//! pure-Rust PROJ port, so the browser build works too. A file's own (user-defined) projection,
+//! WGS 84 longitude/latitude and Web Mercator are handled directly; any other EPSG or ESRI code is
+//! looked up in terrio-crs's catalog ([`epsg_proj4`], [`esri_proj4`]) and transformed by
+//! terrio-crs, a pure-Rust PROJ port, so the browser build works too. A file's own (user-defined) projection,
 //! such as the Albers of the NLCD land cover, is a [`Crs::Custom`]: its PROJ definition, kept in a
 //! table for the run.
 
@@ -217,6 +217,12 @@ pub fn esri_codes() -> impl Iterator<Item = u32> {
     codes.sort_unstable();
     codes.dedup();
     codes.into_iter()
+}
+
+/// The WKT terrio-crs's catalog gives the ESRI projected system `code`, which places its points as
+/// PROJ 9.9.0 does. `None` for a code the catalog doesn't compute.
+pub fn esri_wkt(code: u32) -> Option<&'static str> {
+    catalog_esri(code).map(|(_, wkt)| wkt)
 }
 
 /// One of Esri's projected coordinate systems by its code (`ESRI:102033`): transformed by the WKT
@@ -748,16 +754,6 @@ impl CustomCrs {
     /// system.
     pub fn wkt_needed(&self) -> bool {
         let Some(wkt) = self.wkt.as_deref() else { return false };
-        // An ESRI code's own ([`esri_crs`]): an older release reads its PROJ definition as it read
-        // the code before, and this one its WKT, as PROJ places it. The two can differ (Merchich
-        // UTM zone 28N, ESRI:102144, by 246 m), but a WKT wouldn't change where an older release
-        // puts the code.
-        if let Some(code) = self.label.strip_prefix("ESRI:").and_then(|c| c.parse::<u32>().ok())
-            && esri_proj4(code) == Some(self.proj4.as_str())
-            && catalog_esri(code).is_some_and(|(_, own)| own == wkt)
-        {
-            return false;
-        }
         static NEEDED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String), bool>>> =
             std::sync::OnceLock::new();
         let needed = NEEDED.get_or_init(Default::default);
@@ -2776,15 +2772,18 @@ mod tests {
     /// ballpark that the projection's round trip once refused.
     #[test]
     fn esri_codes_place_points_as_proj_9_9_0() {
-        for (code, (lon, lat), (x, y)) in
-            [(102144u32, (-15.0, 28.34), (500_000.000, 3_134_617.542)), (31491, (3.925, 55.58), (1_558_329.555, 6_161_550.584))]
-        {
+        for (code, (lon, lat), (x, y), needed) in [
+            (102144u32, (-15.0, 28.34), (500_000.000, 3_134_617.542), true),
+            (31491, (3.925, 55.58), (1_558_329.555, 6_161_550.584), true),
+        ] {
             let crs = esri_crs(code).unwrap();
             assert_eq!(crs.label(), format!("ESRI:{code}"));
             let at = crs.transformer().unwrap().from_lonlat(Coord::new(lon, lat)).unwrap();
             assert!((at.x - x).abs() < 0.01 && (at.y - y).abs() < 0.01, "ESRI:{code}: {at:?}");
-            // Older releases read its PROJ definition as before: no WKT is required.
-            assert!(!crs.custom_def().unwrap().wkt_needed(), "ESRI:{code}");
+            // A project with it needs its WKT where the PROJ definition older releases read places
+            // points elsewhere (Merchich, 246 m; DHDN past its Helmert's area), as for any other
+            // system.
+            assert_eq!(crs.custom_def().unwrap().wkt_needed(), needed, "ESRI:{code}");
         }
         // Projected codes the bundled table lacked are the catalog's (World Miller Cylindrical),
         // and geographic ones aren't ESRI projected systems.

@@ -444,7 +444,7 @@ impl Domain {
                 Domain::Cap { center: Coord::new(lon0, lat0), radius: 60.0 }
             }
             // The hemisphere seen from above its centre (from a height, less of it, within the same cap).
-            "ortho" | "nsper" | "tpers" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 89.0 },
+            "ortho" | "nsper" | "tpers" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 90.0 },
             "laea" | "aeqd" => Domain::Cap { center: Coord::new(lon0, lat0), radius: 120.0 },
             "aea" | "lcc" => {
                 let (a, b) = (param("lat_1").unwrap_or(lat0), param("lat_2").unwrap_or(lat0));
@@ -581,18 +581,20 @@ impl Projector {
             .strip_prefix("EPSG:")
             .and_then(|n| n.parse::<u16>().ok())
             .filter(|c| rustgis_data::raster::crs::epsg_proj4(*c) == Some(def.as_str()));
-        // An ESRI code likewise, by the WKT terrio-crs's catalog gives it.
+        // An ESRI code likewise, by the WKT terrio-crs's catalog gives it, as a layer in it is
+        // (`esri_crs`). Built from the WKT directly, so a map takes no place in the table of
+        // file-defined systems; a WKT that can't be built is refused, not drawn by the PROJ text.
         let esri = label
             .strip_prefix("ESRI:")
             .and_then(|n| n.parse::<u32>().ok())
             .filter(|n| rustgis_data::raster::crs::esri_proj4(*n) == Some(def.as_str()))
-            .and_then(rustgis_data::raster::crs::esri_crs);
+            .and_then(rustgis_data::raster::crs::esri_wkt);
         let t = match (epsg, esri) {
             // Without the code its error already starts with.
             (Some(c), _) => rustgis_data::raster::Crs::Epsg(c)
                 .transformer()
                 .map_err(|e| e.strip_prefix(&format!("{label}: ")).unwrap_or(&e).to_string()),
-            (None, Some(crs)) => crs.transformer().map_err(|e| e.strip_prefix(&format!("{label}: ")).unwrap_or(&e).to_string()),
+            (None, Some(wkt)) => rustgis_data::raster::crs::transformer_of_wkt(wkt),
             (None, None) => rustgis_data::raster::crs::transformer_of(&def),
         }
         .map_err(|e| refusal(code, proj, &e))?;

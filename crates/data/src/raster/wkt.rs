@@ -2597,7 +2597,7 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
 
     // Hyperbolic Cassini-Soldner (EPSG:3139, Vanua Levu Grid) has no WKT 1 name: GDAL writes it
     // as WKT 2 only, and as `Cassini_Soldner` it would be read as the ordinary one.
-    if def.split_whitespace().any(|t| t == "+hyperbolic") {
+    if terrio_crs::proj_boolean_parameters(def).is_ok_and(|p| p.iter().any(|(k, on)| k == "hyperbolic" && *on)) {
         return None;
     }
     // The projection and its parameters, in degrees and metres.
@@ -5350,6 +5350,18 @@ pub(crate) mod tests {
         assert!(wkt.starts_with("PROJCS[\"My_Grid\"") && !wkt.contains("AUTHORITY"), "{wkt}");
         let back = crs_from_wkt(&wkt).unwrap().transformer().unwrap().to_lonlat(Coord::new(500_000.0, 5_000_000.0)).unwrap();
         assert!((back.x - 3.0).abs() < 1e-6 && (back.y - 45.153_477).abs() < 1e-5, "{back:?}");
+    }
+
+    #[test]
+    fn hyperbolic_cassini_gets_no_wkt1() {
+        // The switch on, bare or written out, has no WKT 1 name; off, it is the ordinary Cassini.
+        for on in ["+hyperbolic", "+hyperbolic=true", "+hyperbolic=1"] {
+            assert_eq!(proj4_to_wkt(&format!("+proj=cass +lat_0=10 +lon_0=170 +ellps=WGS84 {on} +units=m"), "x"), None, "{on}");
+        }
+        for off in ["", "+hyperbolic=false"] {
+            let wkt = proj4_to_wkt(&format!("+proj=cass +lat_0=10 +lon_0=170 +ellps=WGS84 {off} +units=m"), "x");
+            assert!(wkt.is_some_and(|w| w.contains("Cassini_Soldner")), "{off}");
+        }
     }
 
     #[test]
