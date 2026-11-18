@@ -223,6 +223,10 @@ fn nearest_segment(segs: &[Segment], nodes: &[Coord], p: Coord, within: Option<f
         })
         .filter_map(|(i, (a, b, _, _))| {
             let (a, b) = (*nodes.get(*a)?, *nodes.get(*b)?);
+            // A segment runs the short way, as it is measured: an end stored across ±180° from the
+            // other is moved by a whole turn beside it. Unchanged within 180° of each other.
+            let gap = b.x - a.x;
+            let b = if gap.abs() > 180.0 { Coord::new(a.x + (gap + 180.0).rem_euclid(360.0) - 180.0, b.y) } else { b };
             // The whole turns between the point and the segment's middle: none within 180° of it,
             // so only a segment near the antimeridian (or stored past ±180°) sees the point moved
             // to its side, for the window test as for the projection.
@@ -236,7 +240,10 @@ fn nearest_segment(segs: &[Segment], nodes: &[Coord], p: Coord, within: Option<f
             let (dx, dy) = ((b.x - a.x) * k, b.y - a.y);
             let len2 = dx * dx + dy * dy;
             let t = if len2 > 0.0 { (((px - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-            let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
+            let x = a.x + t * (b.x - a.x);
+            // Written within −180° to 180°, as a line's vertices are; unchanged when it is.
+            let x = if (-180.0..=180.0).contains(&x) { x } else { (x + 180.0).rem_euclid(360.0) - 180.0 };
+            let q = Coord::new(x, a.y + t * (b.y - a.y));
             Some((i, t, q, haversine_m(q, p)))
         })
         .fold(None, |best: Option<(usize, f64, Coord, f64)>, (i, t, q, sphere)| {
@@ -1347,6 +1354,20 @@ mod tests {
         near.push(Some(Geometry::Point(c(0.0, 85.0))), vec![]);
         let (found, bounded) = within_counted(&near, &[0], c(0.01, 85.0), 10_000.0);
         assert!(found.len() == 1 && bounded == 0, "{found:?} {bounded}");
+    }
+
+    /// A segment across ±180° runs the short way: a point on it is placed there, and a point on
+    /// the far side of the world isn't placed on it at all.
+    #[test]
+    fn a_segment_across_the_antimeridian_is_measured_the_short_way() {
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(179.99, 0.0), Coord::new(-179.99, 0.0)]])), vec![]);
+        let graph = Graph(Arc::new(Network::build(&ds, &[0], None).unwrap()));
+        assert!(graph.place(Coord::new(0.0, 0.0), 1000.0).unwrap().is_none(), "nowhere near it");
+        let on = graph.place(Coord::new(179.995, 0.0), 10.0).unwrap();
+        assert!(on.is_some_and(|p| (p.at.x - 179.995).abs() < 1e-9), "{on:?}");
+        let across = graph.place(Coord::new(-179.995, 0.0001), 50.0).unwrap();
+        assert!(across.is_some_and(|p| (p.at.x + 179.995).abs() < 1e-9), "{across:?}");
     }
 
     /// A point is placed on a segment stored past ±180° (at 370°, the same meridian as 10°), as a
