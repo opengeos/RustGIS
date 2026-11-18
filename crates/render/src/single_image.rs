@@ -168,16 +168,16 @@ fn with_dpi(url: String, detail: f64) -> String {
     let Some((path, query)) = address.split_once('?') else { return url };
     let parts: Vec<(&str, Option<&str>)> =
         query.split('&').map(|part| part.split_once('=').map_or((part, None), |(k, v)| (k, Some(v)))).collect();
-    let key = |k: &str, want: &str| k.eq_ignore_ascii_case(want);
+    // Keys compared decoded (`FORMAT%5FOPTIONS`), and written back as they came.
+    let key = |k: &str, want: &str| percent_decoded(k).eq_ignore_ascii_case(want);
     let get_map = parts.iter().any(|(k, v)| key(k, "REQUEST") && v.is_some_and(|v| v.eq_ignore_ascii_case("GetMap")));
     // A resolution of its own: `DPI`, `MAP_RESOLUTION`, or a `dpi` among its format options.
-    let options_dpi = |v: &str| v.split([';', ',']).any(|o| o.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("dpi")));
-    let own = parts.iter().any(|(k, v)| {
-        key(k, "DPI")
-            || key(k, "MAP_RESOLUTION")
-            || (key(k, "FORMAT_OPTIONS")
-                && v.is_some_and(|v| options_dpi(&v.replace("%3A", ":").replace("%3a", ":").replace("%3B", ";").replace("%3b", ";"))))
-    });
+    // Looked at decoded (`%64pi%3A300` is `dpi:300`); the address is kept as it is.
+    let options_dpi = |v: &str| {
+        percent_decoded(v).split([';', ',']).any(|o| o.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case("dpi")))
+    };
+    let own =
+        parts.iter().any(|(k, v)| key(k, "DPI") || key(k, "MAP_RESOLUTION") || (key(k, "FORMAT_OPTIONS") && v.is_some_and(options_dpi)));
     if !get_map || own {
         return url;
     }
@@ -210,6 +210,27 @@ fn with_dpi(url: String, detail: f64) -> String {
         out.push_str(f);
     }
     out
+}
+
+/// `text` with its percent escapes decoded (an invalid one kept as it is), for looking at only.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let hex = |at: usize| bytes.get(at).and_then(|c| (*c as char).to_digit(16));
+        match (b, hex(i + 1), hex(i + 2)) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// How long a layer whose large picture failed is asked for smaller ones before a large one is
@@ -363,9 +384,10 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     };
     // Asked again smaller when the service refuses a large picture, and then without its
     // resolution when it refuses one saying it.
+    let mut without = false;
     for _ in 0..3 {
         let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
-        let plain = detail <= 1.0 || kept().plain.get(&key).is_some_and(|at| at.elapsed() < PLAIN_FOR);
+        let plain = detail <= 1.0 || without || kept().plain.get(&key).is_some_and(|at| at.elapsed() < PLAIN_FOR);
         let Some((at, pw, ph)) = picture(area, res, if small { SMALL_SIDE } else { MAX_SIDE }) else { return nothing };
         let (at, pw, ph) = match world_of(req.system.epsg) {
             Some(world) => match in_world(at, pw, ph, world)? {
@@ -404,6 +426,15 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                     if k.last.len() >= MAX_KEPT {
                         k.last.clear();
                     }
+                    // Drawn without its resolution where the picture with it failed: most likely
+                    // the service refused the resolution, so the layer is asked without it for a
+                    // while. Where both fail (a service down, a timeout), nothing is kept.
+                    if without {
+                        if k.plain.len() >= MAX_KEPT {
+                            k.plain.clear();
+                        }
+                        k.plain.insert(key.clone(), web_time::Instant::now());
+                    }
                     k.last.insert(key, (url, at, r));
                 }
                 return nothing;
@@ -428,15 +459,9 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                 }
                 k.small.insert(key.clone(), web_time::Instant::now());
             }
-            // Asked again without its resolution for a while: a service may refuse a parameter it
-            // doesn't know.
-            State::Failed(_) if url != address => {
-                let mut k = kept();
-                if k.plain.len() >= MAX_KEPT {
-                    k.plain.clear();
-                }
-                k.plain.insert(key.clone(), web_time::Instant::now());
-            }
+            // Asked again without its resolution: a service may refuse a parameter it doesn't
+            // know (kept for a while only once that picture draws).
+            State::Failed(_) if url != address => without = true,
             // A picture the service doesn't draw: its tiles may draw (and say what fails).
             State::Failed(_) => return None,
         }
@@ -691,6 +716,11 @@ mod tests {
             with_dpi(lower.into(), 2.0),
             "https://m.example.org/wms?service=wms&request=getmap&layers=a&DPI=192&FORMAT_OPTIONS=dpi:181#rustgis-x"
         );
+        // Format options of its own keep theirs, with the resolution added, its key as it came.
+        assert_eq!(
+            with_dpi(format!("{wms}&FORMAT%5FOPTIONS=antialias:none"), 2.0),
+            format!("{wms}&FORMAT%5FOPTIONS=antialias:none;dpi:181&DPI=192")
+        );
         // Format options of its own keep theirs, with the resolution added.
         assert_eq!(
             with_dpi(format!("{wms}&FORMAT_OPTIONS=antialias:none"), 2.0),
@@ -703,6 +733,8 @@ mod tests {
             format!("{wms}&dpi=300"),
             format!("{wms}&format_options=antialias:full;DPI:300"),
             format!("{wms}&FORMAT_OPTIONS=dpi%3A300"),
+            format!("{wms}&FORMAT_OPTIONS=%64pi%3A300"),
+            format!("{wms}&%44PI=300"),
             format!("{wms}&map_resolution=72"),
             "https://m.example.org/wms?SERVICE=WMS&REQUEST=GetCapabilities".into(),
             "https://s.example.org/x/MapServer/export?bbox=1,2,3,4&size=800,600&f=image".into(),

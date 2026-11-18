@@ -482,11 +482,14 @@ before keeps its tiles until you switch it.
 On a high-density screen (a Retina or 4K display scaled 2x, a phone), raster tile layers (XYZ,
 WMTS, WMS in tiles, raster archives, raster DEMs, and those in a system of their own) and pictures
 of the view are fetched for the screen's own pixels, up to twice the detail of its logical pixels
-(#2390): a 2x screen takes the next zoom's tiles (on a 5K or 6K screen, where those would be too
-many for the view, the finest zoom whose tiles fit). Text and lines drawn into them come out
-sharp, and smaller, as in QGIS. A screen at more than 2x (most phones), and a map export or layout
-at a high resolution, still take tiles at twice the detail, not more: three times would ask for
-nine times the tiles, with their text too small to read.
+(#2390). On the Web Mercator tile pyramid a 2x screen takes the next zoom's tiles; on a 5K or 6K
+screen, where those would be too many for the view, it takes a zoom between that and the usual one
+whose tiles fit, if any does, else the usual one (or the layer's coarsest zoom, where it has none
+coarser). A layer in a system of its own (a WMTS matrix set) takes the coarsest of its service's
+matrices with that much detail, which may be more than twice. Text and lines drawn into them come
+out sharp, and smaller, as in QGIS. A screen at more than 2x (most phones), and a map export or
+layout at a high resolution, still take tiles at twice the detail, not more: three times would ask
+for nine times the tiles, with their text too small to read.
 
 Only a WMS layer drawn as one picture says the resolution it is for (above); in tiles it doesn't,
 and its symbols come out smaller.
@@ -495,8 +498,8 @@ and its symbols come out smaller.
 off: tiles and pictures are then fetched for the logical pixels and stretched, softer but with
 their text at its usual size. Vector tiles are drawn for the screen's pixels either way. The
 command line and Python have no such setting: their exports and layouts above one pixel a point
-take sharp tiles. A tile layer exported as a GeoTIFF without a zoom takes the zoom the view shows
-at one pixel a point.
+take sharp tiles. A tile layer exported as a GeoTIFF without a zoom takes about the zoom the view
+shows at one pixel a point.
 
 ### Services in other coordinate systems
 

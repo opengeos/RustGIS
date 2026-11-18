@@ -869,6 +869,8 @@ pub(crate) mod tests {
 
     /// What `one.test` was asked for (a test of its own: tests run at once).
     static ASKED_ONE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    /// `one.test/down/` fails every request while this is set: a service down for a while.
+    static ONE_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     /// Held by the tests reading `ASKED_ONE`, one at a time.
     static ONE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -935,6 +937,7 @@ pub(crate) mod tests {
                 // `no-dpi/`, one refusing a resolution it doesn't know.
                 if (url.starts_with("https://one.test/tiles-only/") && !url.contains("&WIDTH=256&HEIGHT=256"))
                     || (url.starts_with("https://one.test/no-dpi/") && url.contains("DPI="))
+                    || (url.starts_with("https://one.test/down/") && ONE_DOWN.load(std::sync::atomic::Ordering::Relaxed))
                     || (url.starts_with("https://one.test/max2048/")
                         && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 2048))
                 {
@@ -1182,6 +1185,22 @@ pub(crate) mod tests {
             crate::render_png(&mut m, &narrow).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             assert!(asked.len() == 1 && dpi(&asked[0]).is_some(), "{asked:?}");
+        }
+        // A service down for a while fails the picture with its resolution and without: once it
+        // is back, the next picture says its resolution again (it wasn't what was refused).
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/down/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            ONE_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+            let (_, asked) = at(&mut m, 30.0, 0.0);
+            ONE_DOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+            // Its picture with the resolution and without, then its tiles.
+            assert!(asked.len() > 2 && dpi(&asked[0]).is_some() && !asked[1].contains("DPI="), "{asked:?}");
+            let (p, asked) = at(&mut m, 30.0, 50_000.0);
+            assert!(p == [green; 3] && asked.len() == 1 && dpi(&asked[0]).is_some(), "{asked:?}");
         }
         // A service refusing the resolution: asked again without it, and drawn so.
         {
