@@ -246,6 +246,10 @@ def check_regressions(runner):
             failures += not known
             status = "known disagreement" if known else "disagreement"
             print(f"{path.name}: {status} in {tool}: {kind}: {detail}", flush=True)
+        # As in reference.rs, a known case that agrees again fails until its mark is removed.
+        if fixture.get("known") and not any(kind == fixture["known"] for kind, _ in differences.values()):
+            failures += 1
+            print(f"{path.name}: the known disagreement is gone; remove the fixture's known mark", flush=True)
     return failures
 
 

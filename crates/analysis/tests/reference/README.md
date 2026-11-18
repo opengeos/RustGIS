@@ -28,8 +28,10 @@ minimized case, save the finding from the issue or run artifact as JSON and add
 The reducer keeps removing features, parts, holes and vertices until no single deletion
 preserves the same kind of difference for the tool on valid inputs. The nightly run keeps these
 findings as an artifact and uses the tool, difference kind and normalized reduced input to skip
-issues it has already reported. It groups Clip splits that differ only by a gap a few overlay
-grid steps wide between masks, with each reduced variant in the artifact.
+issues it has already reported; it only trusts markers in issues the workflow opened itself. It
+groups Clip splits that differ only by a gap a few overlay grid steps wide between masks, with each
+reduced variant in the artifact. That group is reported again once its issue is closed. An
+overlay run that fails without a finding opens its own issue, which closes when the check passes.
 
 The default run also checks the inputs in `overlay-regressions/`. The Union fixture checks
 that a polygon touching the zone boundary leaves the correct number of pieces. The Clip
