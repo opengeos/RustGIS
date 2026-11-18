@@ -823,6 +823,8 @@ pub struct Session {
     grid_turns: u64,
     /// The last datum grid download news this session said ([`crate::grids::news_since`]).
     grid_news_seen: u64,
+    /// The rebuild failures this session said ([`rustgis_data::raster::crs::rebuild_failures_since`]).
+    rebuild_failures_seen: (usize, usize),
     /// Whether this front end has the Download Datum Grids setting (the desktop and web apps), so
     /// a note about a missing grid can point to it; the command line and Python have none.
     pub offers_grid_downloads: bool,
@@ -1281,6 +1283,7 @@ impl Session {
             grid_downloads_said: Default::default(),
             grid_turns: 0,
             grid_news_seen: crate::grids::news_told(),
+            rebuild_failures_seen: rustgis_data::raster::crs::rebuild_failures_told(),
             offers_grid_downloads: false,
             cog_headers_seen: 0,
             terrain_blocks_checked: Default::default(),
@@ -2648,7 +2651,7 @@ impl Session {
             self.notify(format!("{}{tail}", grid_notes_text(labels.len(), &names_said(&labels))), false);
             self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
         }
-        let (failed, shown) = rustgis_data::raster::crs::take_rebuild_failures();
+        let (failed, shown) = rustgis_data::raster::crs::rebuild_failures_since(&mut self.rebuild_failures_seen);
         if failed > 0 {
             let more = if failed > shown.len() { format!(" and {} more", failed - shown.len()) } else { String::new() };
             let (systems, they, them) =

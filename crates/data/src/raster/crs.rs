@@ -1295,13 +1295,8 @@ impl Live {
                 }
                 // Said once: it goes on with the transformation it had, without the grid.
                 None => {
-                    let mut failed = REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner());
-                    let (to_say, said) = &mut *failed;
-                    if let Some(key) = &self.key
-                        && said.len() < 256
-                        && said.insert(key.clone())
-                    {
-                        to_say.push(key.clone());
+                    if let Some(key) = &self.key {
+                        REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner()).add(key);
                     }
                 }
             }
@@ -1462,15 +1457,48 @@ static UNNAMED_NEEDS_GRID: std::sync::atomic::AtomicBool = std::sync::atomic::At
 
 /// The systems (by the key they are kept under) whose transformer couldn't be built again when
 /// grids arrived: they go on with the transformation they had ([`Live::now`]), and are said once.
-/// (Those to say, and every one said or to be said this run: each is said once.)
-static REBUILD_FAILED: std::sync::Mutex<(Vec<String>, std::collections::BTreeSet<String>)> =
-    std::sync::Mutex::new((Vec::new(), std::collections::BTreeSet::new()));
+/// The systems whose transformer couldn't be built again when grids arrived, each once for the
+/// run, in order: every session reads them from its own place ([`rebuild_failures_since`]).
+/// The first [`REBUILD_KEPT`] by name, the rest counted.
+struct RebuildFailures {
+    named: Vec<String>,
+    said: std::collections::BTreeSet<String>,
+    /// Those past the named, counted: each failure of one, as its key isn't kept.
+    more: usize,
+}
 
-/// How many coordinate systems couldn't be built again with grids that arrived since this was
-/// last asked, and the first of them as said ("EPSG:4267", or a definition's start): for the
-/// session to say they go on without them.
-pub fn take_rebuild_failures() -> (usize, Vec<String>) {
-    let keys = std::mem::take(&mut REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner()).0);
+const REBUILD_KEPT: usize = 256;
+
+impl RebuildFailures {
+    fn add(&mut self, key: &str) {
+        if self.said.contains(key) {
+            return;
+        }
+        if self.named.len() < REBUILD_KEPT {
+            self.said.insert(key.to_string());
+            self.named.push(key.to_string());
+        } else {
+            self.more += 1;
+        }
+    }
+}
+
+static REBUILD_FAILED: std::sync::Mutex<RebuildFailures> =
+    std::sync::Mutex::new(RebuildFailures { named: Vec::new(), said: std::collections::BTreeSet::new(), more: 0 });
+
+/// Where a session has read the rebuild failures to ([`rebuild_failures_since`]): now's, for
+/// a session starting now.
+pub fn rebuild_failures_told() -> (usize, usize) {
+    let f = REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner());
+    (f.named.len(), f.more)
+}
+
+/// How many coordinate systems couldn't be built again with grids that arrived since `seen`
+/// (from [`rebuild_failures_told`]), and the first of them as said ("EPSG:4267", or a
+/// definition's start), and moves `seen` on: for the session to say they go on without them.
+pub fn rebuild_failures_since(seen: &mut (usize, usize)) -> (usize, Vec<String>) {
+    let f = REBUILD_FAILED.lock().unwrap_or_else(|e| e.into_inner());
+    let keys = f.named.get(seen.0..).unwrap_or_default();
     let shown = keys
         .iter()
         .take(3)
@@ -1483,7 +1511,9 @@ pub fn take_rebuild_failures() -> (usize, Vec<String>) {
             }
         })
         .collect();
-    (keys.len(), shown)
+    let count = keys.len() + f.more.saturating_sub(seen.1);
+    *seen = (f.named.len(), f.more);
+    (count, shown)
 }
 
 /// Whether a coordinate system RustGIS can't name, one of more than [`MAX_BUILT`] used this run,
@@ -1914,18 +1944,30 @@ mod tests {
         let Some(Transformer { kind: Kind::Terrio(live), .. }) = epsg_transformer(4267) else { panic!("EPSG:4267") };
         // Kept under a key that no longer builds, and from another grid generation than now's.
         let stale = Live::new(Some("WKT not a definition".into()), grid_generation().wrapping_add(1), live.peek());
+        let mut seen = rebuild_failures_told();
+        let mut other = seen;
         assert!(matches!(stale.now(), Now::First(_)), "goes on with the transformation it had");
-        let (failed, shown) = take_rebuild_failures();
+        let (failed, shown) = rebuild_failures_since(&mut seen);
         assert!(failed >= 1 && shown.iter().any(|s| s == "not a definition"), "{failed} {shown:?}");
         // Said once: not again in this generation, nor when more grids arrive.
         let _ = stale.now();
         stale.generation.store(grid_generation().wrapping_add(2), std::sync::atomic::Ordering::SeqCst);
         let _ = stale.now();
-        assert!(!take_rebuild_failures().1.iter().any(|s| s == "not a definition"));
+        assert!(!rebuild_failures_since(&mut seen).1.iter().any(|s| s == "not a definition"));
+        // Another session hears it too, once.
+        assert!(rebuild_failures_since(&mut other).1.iter().any(|s| s == "not a definition"));
+        assert!(!rebuild_failures_since(&mut other).1.iter().any(|s| s == "not a definition"));
+        // Past those kept by name, counted.
+        let mut f = RebuildFailures { named: Vec::new(), said: Default::default(), more: 0 };
+        for i in 0..REBUILD_KEPT + 3 {
+            f.add(&format!("EPSG {i}"));
+        }
+        f.add("EPSG 0");
+        assert_eq!((f.named.len(), f.more), (REBUILD_KEPT, 3));
         // One that is built again: nothing said.
         let fine = Live::new(Some("EPSG 4267".into()), grid_generation().wrapping_add(1), live.peek());
         assert!(matches!(fine.now(), Now::Again(_)));
-        assert!(!take_rebuild_failures().1.iter().any(|s| s == "EPSG:4267"));
+        assert!(!rebuild_failures_since(&mut seen).1.iter().any(|s| s == "EPSG:4267"));
     }
 
     /// Only PROJ's own grid server, a grid file itself and an open licence: a definition read
