@@ -6,6 +6,7 @@ use rustgis_data::Dataset;
 /// Which layer restrictions a consumer honors. Whole-layer tools deliberately use `All`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Policy {
+    /// Ignore selection, the definition query and `within`; consume the whole dataset.
     All,
     Query,
     SelectionAndQuery,

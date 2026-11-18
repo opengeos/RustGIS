@@ -1304,6 +1304,7 @@ fn narrow_to_queries(
         }
     }
     let mut seen = std::collections::HashSet::new();
+    let mut query_errors = Vec::new();
     for name in named {
         let Some(layer) = map.layer_by_name(name) else { continue };
         let key = layer.name.to_ascii_lowercase();
@@ -1313,7 +1314,7 @@ fn narrow_to_queries(
         let dataset = full.get(&key).unwrap_or(&layer.dataset);
         let resolved = layer.resolve_rows(dataset, rustgis_map::rows::Policy::SelectionAndQuery, rows.get(&key).map(Vec::as_slice))?;
         if let Some(error) = resolved.query_error {
-            messages.push(format!("{}: its definition query couldn't be read ({error}); reading without that query", layer.name));
+            query_errors.push(format!("{}: {error}", layer.name));
         }
         if let rustgis_map::rows::Rows::Subset(narrowed) = resolved.rows {
             if narrowed.is_empty() && !dataset.features.is_empty() {
@@ -1321,6 +1322,12 @@ fn narrow_to_queries(
             }
             rows.insert(key, narrowed);
         }
+    }
+    if !query_errors.is_empty() {
+        let count = query_errors.len();
+        let (layers, queries) = if count == 1 { ("layer", "that query") } else { ("layers", "those queries") };
+        messages
+            .push(format!("{count} {layers} with an unreadable definition query; reading without {queries}: {}", query_errors.join("; ")));
     }
     let name = spec.map_or("", |t| t.name);
     let mut told = std::collections::HashSet::new();

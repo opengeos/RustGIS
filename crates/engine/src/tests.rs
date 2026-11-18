@@ -53753,5 +53753,20 @@ fn row_resolver_buffer_and_both_clip_inputs() {
             let error = s.run("gp.run", &json!({"tool": tool, "params": params})).unwrap_err();
             assert!(error.contains(&format!("{empty_layer}: its definition query hides every feature the tool would read")), "{error}");
         }
+        // A single run reports this failure kind once, even when both inputs need fallback.
+        for layer in &mut s.map_mut().layers {
+            if layer.name == "policy points" {
+                layer.definition_query = Some("missing_point = 1".into());
+            } else if layer.name == "policy masks" {
+                layer.definition_query = Some("missing_mask = 1".into());
+            }
+        }
+        let mark = s.notice_mark();
+        assert_eq!(run(&mut s, "clip", json!({"input": "policy points", "clip": "policy masks"})).len(), 3);
+        let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        for detail in ["2", "policy points", "policy masks", "missing_point", "missing_mask"] {
+            assert!(notices[0].text.contains(detail), "{notices:?}");
+        }
     }
 }
