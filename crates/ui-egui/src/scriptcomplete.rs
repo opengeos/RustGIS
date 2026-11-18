@@ -590,10 +590,15 @@ fn params_expression_at<'a>(
     brace: usize,
     session: &'a rustgis_engine::Session,
 ) -> Option<(usize, Option<(&'a rustgis_engine::data::Dataset, Of)>)> {
-    let params = script.get(byte_at(script, h.brace + brace)?..)?.split('\n').next()?;
-    let (start, key, false) = scan(params.get(..byte_at(params, at.checked_sub(h.brace + brace)?)?)?).value? else {
+    let line = script.get(byte_at(script, h.brace + brace)?..)?.split('\n').next()?;
+    let (before, after) = line.split_at(byte_at(line, at.checked_sub(h.brace + brace)?)?);
+    let (start, key, false) = scan(before).value? else {
         return None;
     };
+    // The `"params"` object alone, up to its `}`: an object after it on the line (a later key's)
+    // isn't read as giving the layer.
+    let params = format!("{before}{}", object_rest(after, false));
+    let params = params.as_str();
     let data = match named_in(script, h)? {
         (Named::Tool, name) => {
             let tool = rustgis_engine::analysis::tool(&name)?;
@@ -731,7 +736,10 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                 let names = d
                     .fields
                     .iter()
-                    .filter(|f| (!numeric || f.ty.is_numeric()) && !given.iter().any(|(k, v, _)| k == key && *v == f.name))
+                    .filter(|f| {
+                        (!numeric || f.ty.is_numeric())
+                            && !given.iter().any(|(k, v, _)| k == key && text_of(v).as_deref() == Some(f.name.as_str()))
+                    })
                     .map(|f| f.name.as_str());
                 value_ids(start, at, &word, names, of)
             }
@@ -2525,6 +2533,11 @@ mod tests {
         let line = format!(r#"{s}", "layer": "Cities"}}, "command": "select.byAttributes"}}"#);
         assert!(has(at(&line, s.chars().count()), "pop_max"), "layer and command after");
         assert!(has(end(&format!(r#"{step}"where": "{typed}"#)), field), "a step's active layer");
+        // A later object on the line isn't read as the `"params"`' layer or input.
+        let s = r#"task.addStep {"command": "select.byAttributes", "params": {"layer": "Countries", "where": "pop_"#;
+        assert!(has(at(&format!(r#"{s}"}}, "x": {{"layer": "Cities"}}}}"#), s.chars().count()), "pop_est"), "a step's params alone");
+        let s = r#"gp.run {"tool": "selectByAttributes", "params": {"input": "Countries", "where": "pop_"#;
+        assert!(has(at(&format!(r#"{s}"}}, "x": {{"input": "Cities"}}}}"#), s.chars().count()), "pop_est"), "a tool's params alone");
         let plain = r#"task.addStep {"command": "layer.rename", "params": {"layer": "Countries", "name": "pop_"#;
         assert!(items(end(plain)).is_empty(), "a step's plain text");
         // Not here.
@@ -2765,6 +2778,11 @@ mod tests {
         assert_eq!(super::item_icon(&app.session, Some(&super::Of::TableFields(table)), "street"), Some("field"));
         assert!(offer(&app, r#"layer.geocode {"table": "Nowhere", "address": ""#).is_none(), "a table that isn't there");
         assert!(offer(&app, r#"layer.geocode {"table": 7, "address": ""#).is_none(), "a table given as a number: not the layer's");
+        // A name given in the array with escapes is the field it names: not offered again.
+        let fields = vec![Field::new("a\"b", FieldType::Text), Field::new("c", FieldType::Text)];
+        app.session.project.add_table(Dataset::new("Quoted", GeometryType::None, fields));
+        let o = offer(&app, r#"layer.geocode {"table": "Quoted", "address": ["a\"b", ""#).unwrap();
+        assert_eq!(o.items, ["c"], "an escaped name given");
     }
 
     /// A parameter's type says whether it takes fields, only numeric ones, in a list; a note in
