@@ -563,6 +563,8 @@ fn database_note(
     // Where a login would go, so a project can't hide it behind a connection's name.
     // (A saved connection's text has no quoted values: the first `host=` setting is its host.)
     let host = connection.split(' ').find_map(|p| p.strip_prefix("host=")).unwrap_or_default();
+    // How it is reached, when the project sets it (`sslmode=disable`): the login goes that way.
+    let tls = connection.split(' ').find_map(|p| p.strip_prefix("sslmode=")).map(|m| format!(", sslmode {m}")).unwrap_or_default();
     // Its settings the saved connection, or the connection text, leaves out, by name
     // (`sslrootcert`, `authcfg`, …).
     let left = |what: &str| {
@@ -574,7 +576,7 @@ fn database_note(
     };
     let text = match saved {
         Some(c) => format!(
-            "the {what} table {table}: log in to the saved connection '{c}' (to {host}; Data Sources › Connections), then add the table from it{}",
+            "the {what} table {table}: log in to the saved connection '{c}' (to {host}{tls}; Data Sources › Connections), then add the table from it{}",
             left("the saved connection")
         ),
         None => {

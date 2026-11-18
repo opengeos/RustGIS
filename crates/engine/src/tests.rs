@@ -2922,7 +2922,7 @@ fn qgis_sources_import_as_their_layers() {
     assert_eq!(sql.address, "mssql://me@sql.invalid/gis?instance=main");
     assert!(!format!("{:?}", s.connections.connections).contains("secret"));
     assert!(!notes.contains("secret") && !notes.contains("p4ss"), "{notes}");
-    assert!(notes.contains(&format!("log in to the saved connection '{}' (to db.invalid;", pg.name)), "{notes}");
+    assert!(notes.contains(&format!("log in to the saved connection '{}' (to db.invalid, sslmode disable;", pg.name)), "{notes}");
     for (table, c) in
         [("PostGIS table public.towns", &pg.name), ("PostGIS table public.roads", &pg.name), ("SQL Server table dbo.sites", &sql.name)]
     {

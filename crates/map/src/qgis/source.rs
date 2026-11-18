@@ -366,6 +366,14 @@ fn memory(datasource: &str) -> Source {
     Source::Memory { geometry, crs, fields, as_text: (as_text, texts), cut, unnamed, taken, zm, curved, unknown_geometry }
 }
 
+/// Whether the file at `path` is of a kind that holds several layers (a GeoPackage, a SpatiaLite
+/// or other SQLite database, a file geodatabase), by its name.
+fn holds_layers(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let lower = lower.trim_end_matches(['/', '\\']);
+    [".gpkg", ".sqlite", ".db", ".gdb"].iter().any(|e| lower.ends_with(e))
+}
+
 /// `text` to say in a note: its first `n` characters, and "…" when it goes on.
 fn cut_said(text: &str, n: usize) -> String {
     let mut out: String = text.chars().take(n).collect();
@@ -399,7 +407,14 @@ fn virtual_layer(datasource: &str, dir: &str) -> Source {
                 let from = if provider == "virtual" {
                     VirtualFrom::Missing("its source is another virtual layer, which RustGIS doesn't read as a file's layer".into())
                 } else {
-                    VirtualFrom::Source(Box::new(read(&provider, &source, dir)))
+                    match read(&provider, &source, dir) {
+                        // A file of several layers named without one: RustGIS would add them all.
+                        Source::File { path, layer: None, .. } if holds_layers(&path) => VirtualFrom::Missing(format!(
+                            "its source names no layer of {}, a file that holds several",
+                            cut_said(path.rsplit(['/', '\\']).next().unwrap_or(&path), 100)
+                        )),
+                        source => VirtualFrom::Source(Box::new(source)),
+                    }
                 };
                 // One with no name is `vtabN` to QGIS, N its place among the sources from 1.
                 let name = name.filter(|n| !n.is_empty()).unwrap_or_else(|| format!("vtab{}", named.len() + 1));
@@ -1018,7 +1033,7 @@ mod tests {
             "SELECT * FROM pts WHERE name = 'open",
         ] {
             let Source::Virtual { from, filter, .. } =
-                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg:pts&query={}", q.replace(' ', "%20")), dir)
+                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fpts.geojson:pts&query={}", q.replace(' ', "%20")), dir)
             else {
                 panic!()
             };
@@ -1027,7 +1042,7 @@ mod tests {
         // Fields named with their table are the layer's fields; values keep their text.
         let Source::Virtual { filter, .. } = read(
             "virtual",
-            "?layer=ogr:a.gpkg:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20pts.value%20%3E%2020%20AND%20%22PTS%22.%22kind%22%20=%20'pts.x'%20AND%20xpts.v%20=%201",
+            "?layer=ogr:a.geojson:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20pts.value%20%3E%2020%20AND%20%22PTS%22.%22kind%22%20=%20'pts.x'%20AND%20xpts.v%20=%201",
             dir,
         ) else {
             panic!()
@@ -1036,7 +1051,7 @@ mod tests {
         // A quote inside a quoted name doesn't end or open a value.
         let Source::Virtual { filter, .. } = read(
             "virtual",
-            "?layer=ogr:a.gpkg:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20%22it's%22%20=%201%20AND%20name%20=%20'pts.x'",
+            "?layer=ogr:a.geojson:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20%22it's%22%20=%201%20AND%20name%20=%20'pts.x'",
             dir,
         ) else {
             panic!()
@@ -1045,7 +1060,7 @@ mod tests {
         // Words of a query in quotes are values, not the query's.
         let Source::Virtual { filter, .. } = read(
             "virtual",
-            "?layer=ogr:..%2Fdata%2Fsample.gpkg:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20name%20=%20'order%20by;%20me'",
+            "?layer=ogr:..%2Fdata%2Fpts.geojson:pts&query=SELECT%20*%20FROM%20pts%20WHERE%20name%20=%20'order%20by;%20me'",
             dir,
         ) else {
             panic!()
@@ -1057,7 +1072,7 @@ mod tests {
             panic!()
         };
         assert_eq!((from, filter), (Some(VirtualFrom::Source(Box::new(gpkg.clone()))), None));
-        let many = format!("?{}&query=SELECT%20*%20FROM%20pts&layer=ogr:a.gpkg:pts", vec!["x=1"; 300].join("&"));
+        let many = format!("?{}&query=SELECT%20*%20FROM%20pts&layer=ogr:a.geojson:pts", vec!["x=1"; 300].join("&"));
         assert!(matches!(read("virtual", &many, dir), Source::Virtual { from: Some(_), .. }));
         // A virtual layer on a virtual layer isn't read as a file's layer.
         let nested = "?layer=virtual:%3Flayer%3Dogr%253Aa.gpkg%253At:v&query=SELECT%20*%20FROM%20v";
@@ -1082,17 +1097,24 @@ mod tests {
         // A source with no name is `vtab1` (QGIS's name for it), and nothing else.
         let unnamed = |table: &str| {
             let Source::Virtual { from, .. } =
-                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg&query=SELECT%20*%20FROM%20{table}"), dir)
+                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fpts.geojson&query=SELECT%20*%20FROM%20{table}"), dir)
             else {
                 panic!()
             };
             from
         };
         assert!(matches!(unnamed("vtab1"), Some(VirtualFrom::Source(_))));
+        // A GeoPackage named without a layer: said, not read as all its layers.
+        let Source::Virtual { from: Some(VirtualFrom::Missing(why)), .. } =
+            read("virtual", "?layer=ogr:..%2Fdata%2Fsample.gpkg:pts&query=SELECT%20*%20FROM%20pts", dir)
+        else {
+            panic!()
+        };
+        assert!(why.contains("its source names no layer of sample.gpkg"), "{why}");
         // The virtual layer's own filter (`subsetstring`) on top of its query's, or alone.
         let filtered = |q: &str| {
             let Source::Virtual { filter, .. } =
-                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fsample.gpkg:pts{q}&subsetstring=%22kind%22%20%3D%20'a'"), dir)
+                read("virtual", &format!("?layer=ogr:..%2Fdata%2Fpts.geojson:pts{q}&subsetstring=%22kind%22%20%3D%20'a'"), dir)
             else {
                 panic!()
             };
