@@ -27,6 +27,7 @@ Formats](data-formats.md).
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
 | Unreferenced TIFF and PNG scans; JPEG with `"as": "scan"` | Yes | GeoTIFF after georeferencing |
+| PDF pages: GeoPDFs placed by their coordinates, other pages as scans | Yes (desktop, command line and Python) | GeoTIFF after georeferencing |
 | Through GDAL: JPEG 2000, ERDAS Imagine, SRTM HGT, DTED, NetCDF, HDF, ENVI, SAGA… | Yes (desktop, when GDAL is installed) | No |
 | Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives | Yes | Yes (Imagery › Create Hosted Imagery) |
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
@@ -123,6 +124,15 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 ([Geoprocessing](analysis.md), and a table's right-click menu) makes points of a table already in
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
+
+**Use a polygon's published interior point.** To place TIGER interior points, run **XY Table
+To Point** with the polygon layer as **Input Table**. Set **X Field** to `INTPTLON` and **Y Field**
+to `INTPTLAT` (use `INTPTLON20` and `INTPTLAT20` when the fields have that suffix). The tool
+reads signed, zero-padded text directly, such as `-093.1445780` and `+44.9500000`.
+Set the tool's **Coordinate System** (`crs`) to the fields' system: NAD83, `EPSG:4269`, for
+TIGER/Line. Left empty, it places them as WGS 84. The new layer
+keeps the attributes and places points at the published coordinates. Check the tool's messages
+for any rows kept without a point.
 
 Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
 sheets that were not selected. The workbook shares a memory budget across its sheets and retained
@@ -358,6 +368,53 @@ database is trusted like the query, since its views run as part of it.
 
 **Home › Add › Add Data** opens a DuckDB database file (`.duckdb`, `.ddb`): every table with a geometry
 column becomes a layer (`"layer"` picks one).
+
+### Count GTFS departures per stop
+
+To count scheduled departures from 07:00 up to but excluding 09:00 on Tuesday, 8 December 2026,
+unzip the feed and run this in **Analyze › SQL** with DuckDB installed. Use the extracted files'
+full paths in `read_csv`. Reading the fields as text keeps IDs such as `006` distinct from `6`.
+
+```sql
+WITH exceptions AS (
+  SELECT service_id, exception_type
+  FROM read_csv('calendar_dates.txt', all_varchar = true)
+  WHERE date = '20261208'
+), active AS (
+  SELECT service_id
+  FROM read_csv('calendar.txt', all_varchar = true)
+  WHERE tuesday = '1' AND '20261208' BETWEEN start_date AND end_date
+    AND service_id NOT IN (SELECT service_id FROM exceptions WHERE exception_type = '2')
+  UNION
+  SELECT service_id FROM exceptions WHERE exception_type = '1'
+)
+SELECT s.stop_id, count(*) AS departures
+FROM read_csv('stop_times.txt', all_varchar = true) AS s
+JOIN read_csv('trips.txt', all_varchar = true) AS t USING (trip_id)
+JOIN active AS a ON a.service_id = t.service_id
+WHERE lpad(s.departure_time, 8, '0') >= '07:00:00'
+  AND lpad(s.departure_time, 8, '0') < '09:00:00'
+  AND s.stop_id IS NOT NULL
+  -- With frequencies.txt in the feed, also leave out its template trips:
+  -- AND t.trip_id NOT IN (SELECT trip_id FROM read_csv('frequencies.txt', all_varchar = true))
+GROUP BY s.stop_id
+ORDER BY s.stop_id
+```
+
+Match date exceptions to the weekly calendar by `service_id`. Type 2 removes service and
+type 1 adds it, even when the ID has no weekly row. Then match active services to trips by
+`service_id` and trips to stop times by `trip_id`. For another date, change both date literals
+and the weekday column. If the feed uses only `calendar_dates.txt`, keep just the additions
+in `active`. If it uses only `calendar.txt`, keep the weekly rule and omit the exception checks.
+
+The time filter pads one-digit hours and uses the feed's local service-day times, where
+`24:30:00` is after midnight on that service day. The result counts timed rows per `stop_id`,
+including repeat visits by a trip. Stops with no departures in the window have no row. The SQL
+pane previews the first 200 rows. This query uses the times in `stop_times.txt`. Frequency-based trips need a
+separate calculation using [`frequencies.txt`](https://gtfs.org/documentation/schedule/reference/#frequenciestxt),
+and their `trip_id`s left out of this query: their stop times are a template, which it would
+count as one departure. When the feed has that file, remove the `-- ` before the
+`AND t.trip_id NOT IN …` line.
 
 ### PostgreSQL and PostGIS
 
@@ -976,6 +1033,10 @@ of `id`. With `probe: true`, it returns the secret-free address to fetch (`fetch
 databases). For non-database kinds, pass that response text as `answer` with the same definition
 to parse it without a network request. Database kinds ignore `answer` and test through their
 driver. An anonymous S3 test needs at least one named bucket.
+
+**Test** does not send service requests to XYZ URL templates with tile coordinates
+(`{z}/{x}/{y}`, also `{zoom}` or `{-y}`). To add one to the map, use
+**Home › Add › Basemap › Add Tile Layer…** (`map.addTiles`) instead.
 
 `connection.browse` lists what a connection offers, a level at a time: database roots list the
 schemas returned by their provider; opening a schema lists its spatial tables. Services list their
@@ -1637,9 +1698,12 @@ coordinates, read whole, so it takes grids of up to 4,000,000 cells a side; a lo
 size. A box reaching past the grid is read within it, and says so; one over a longitude grid's
 edge (0°/360°, or ±180°) is refused: give a box on each side (one round the whole globe is the
 whole grid); `raster.zarrInfo` with
-`"bbox"` gives the cells a box covers (`window.cells`). A window is at least 2 × 2 cells (a box within one cell is widened to two, and says so), and
-doesn't follow the time slider yet. A window is kept in the project as a GeoTIFF, as a web
-store's slice is, also from a folder.
+`"bbox"` gives the cells a box covers (`window.cells`). A window is at least 2 × 2 cells (a box within one cell is widened to two, and says so). A window
+is kept in the project as a GeoTIFF, as a web store's slice is, also from a folder; with
+`"time": true` it follows the time slider instead, each step reading only the window, and the
+project keeps the window's cells with the store. A grid whose axes aren't named or measured as
+longitude, but whose store gives a geographic system, takes a box or a point written either way
+round the globe too, as it is drawn.
 
 **Follow the time slider** (desktop; `layer.addZarr` with `"time": true`) adds the variable as one
 layer whose step is the time slider's. The slider turns on over the variable's dates when it is
