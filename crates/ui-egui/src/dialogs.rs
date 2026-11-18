@@ -2002,8 +2002,10 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         app.dialogs.listed = None;
         app.dialogs.list.clear();
         app.dialogs.info = None;
-        app.dialogs.error =
-            Some(tl!("List Tables reads a file of several layers (a KML, a zip) whole, up to 256 MiB; add it with Add Data").to_string());
+        app.dialogs.error = Some(crate::i18n::fmt(
+            "List Tables reads a file of several layers (a KML, a zip) whole, up to {limit} MiB; add it with Add Data",
+            &[("limit", &(rustgis_engine::data::io::BYTES_FLOOR >> 20).to_string())],
+        ));
     } else if list {
         match app.run("info.fileLayers", json!({"path": path})) {
             Ok(v) => {
