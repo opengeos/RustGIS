@@ -168,8 +168,21 @@ fn retain_matches(ds: &mut Cow<'_, Dataset>, expr: &Expr, offset: usize, count_p
         filtered += usize::from(!matches);
     }
     if filtered > 0 {
-        let mut keep = keep.into_iter();
-        ds.to_mut().features.retain(|_| keep.next().unwrap_or(false));
+        match ds {
+            Cow::Borrowed(source) => {
+                let mut kept = Vec::new();
+                kept.try_reserve_exact(len - filtered).map_err(|_| DataError::Format("not enough memory to filter export rows".into()))?;
+                for feature in source.kept_features(&keep) {
+                    crate::progress::check()?;
+                    kept.push(feature.clone());
+                }
+                ds.to_mut().features = kept.into();
+            }
+            Cow::Owned(dataset) => {
+                let mut keep = keep.into_iter();
+                dataset.features.retain(|_| keep.next().unwrap_or(false));
+            }
+        }
     }
     Ok(filtered)
 }
