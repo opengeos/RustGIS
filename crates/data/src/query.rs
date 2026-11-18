@@ -1860,12 +1860,14 @@ impl<'a> Eval<'a> {
             // An operand that is missing (null without an error) makes the result null whatever
             // else failed, so an error is the result's only when no operand is missing:
             // `1 / 0 + pop`, with `pop` null, is null because of `pop`.
+            // Empty or `<null>` text is missing to every operator but `+`, which joins it.
             Expr::Chain(first, rest) => {
                 let (first, mut missing) = self.operand(first);
+                missing |= rest.first().is_some_and(|(op, _)| *op != Arith::Add && first.asks_null());
                 let mut acc = first.into_owned();
                 for (op, t) in rest {
                     let (v, m) = self.operand(t);
-                    missing |= m;
+                    missing |= m || (*op != Arith::Add && v.asks_null());
                     acc = self.or_fail(arith(*op, &acc, &v));
                 }
                 if missing {

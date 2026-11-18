@@ -828,6 +828,8 @@ fn errors_say_why_they_are_null() {
         ("clamp(pop, 1 / 0, 5)", 3),
         // Empty or `<null>` text is missing, not text that isn't a number.
         ("'' * 2", 0),
+        ("'' * (1 / 0)", 0),
+        ("(1 / 0) - '<null>'", 0),
         ("sqrt('<null>')", 0),
     ] {
         assert_eq!(why(text, row), (Value::Null, None), "{text}");

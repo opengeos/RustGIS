@@ -1642,7 +1642,8 @@ impl Calc {
                     (_, _, '+') if !va.is_null() && !vb.is_null() && !va.is_non_finite() && !vb.is_non_finite() => {
                         (Value::Text(format!("{va}{vb}")), None)
                     }
-                    _ if va.is_null() || vb.is_null() => (Value::Null, None),
+                    // Empty or `<null>` text is missing to `-`, `*`, `/` (`+` joins it, above).
+                    _ if va.is_null() || vb.is_null() || (op != '+' && (va.asks_null() || vb.asks_null())) => (Value::Null, None),
                     // `+` joins text; what it couldn't join is a stored NaN or infinity.
                     (_, _, '+') => (Value::Null, Some(Fault::NotANumber)),
                     _ => (Value::Null, Fault::of_non_number(&va).or(Fault::of_non_number(&vb))),
