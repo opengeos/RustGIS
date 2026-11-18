@@ -450,19 +450,20 @@ it's given `"singleImage": false` or a `"tileSize"`.
 - The picture reaches past the view, its middle on a grid, so small pans and zooms (most of a
   quarter of a level) ask for nothing new; while the next picture loads, the last one stays in
   place.
-- On a high-density (HiDPI) screen it is asked for in the screen's own pixels, up to twice the
-  map's logical pixels, as tiles are (see [Sharp tiles on HiDPI displays](#sharp-tiles-on-hidpi-displays)).
-  A WMS picture then says the resolution it is for, unless its address names one: `DPI` (QGIS
-  Server, from 96) and `FORMAT_OPTIONS=dpi:` (GeoServer, from the OGC standard pixel's 90.7), so
-  those servers keep their symbols and text at their size. A service that reads neither draws them
-  smaller. A picture that fails is asked again, in turn: without them; at most 2048 pixels a side,
-  with them; then at a standard screen's detail. A layer whose picture the server refuses with
-  them (a 4xx answer) and draws without them is asked without them for five minutes; a server
-  error, a timeout or a lost connection doesn't count. One that only draws at a standard screen's
-  detail is asked so for five minutes too.
-  The picture is at most 4096 pixels a side (2048 for five minutes after a larger
-  picture of the layer fails), coarser for a view larger than that. A picture the service fails
-  to draw leaves the layer drawn in tiles there.
+- On a high-density (HiDPI) screen it is asked for in the screen's own pixels, up to about twice
+  the map's logical pixels (its detail rounded a little finer, as for any picture), as tiles are
+  (see [Sharp tiles on HiDPI displays](#sharp-tiles-on-hidpi-displays)). A WMS picture then says
+  the resolution it is for, unless its address names one: `DPI` (QGIS Server, from 96) and
+  `FORMAT_OPTIONS=dpi:` (GeoServer, from the OGC standard pixel's 90.7), so those servers keep
+  their symbols and text at their size. A service that reads neither draws them smaller. A picture
+  that fails is asked again, in turn: without them; at most 2048 pixels a side, with them; then at
+  a standard screen's detail. A layer whose picture the server refuses with them (a 4xx answer
+  other than 408 or 429) and draws without them is asked without them for five minutes; a server
+  error, a timeout or a lost connection doesn't count. One whose HiDPI picture the server refuses
+  (the same 4xx) and whose standard one draws is asked at a standard screen's detail for five
+  minutes, while its HiDPI pictures would be as large. The picture is at most 4096 pixels a side
+  (2048 for five minutes after a larger picture of the layer fails), coarser for a view larger
+  than that. A picture the service fails to draw leaves the layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
   in than its finest zoom its picture there is stretched, as its tiles are.
 - It is drawn so on a flat map, north up or turned, in Web Mercator or in a projection with an
@@ -485,15 +486,16 @@ before keeps its tiles until you switch it.
 
 On a high-density screen (a Retina or 4K display scaled 2x, a phone), raster tile layers (XYZ,
 WMTS, WMS in tiles, raster archives, raster DEMs, and those in a system of their own) and pictures
-of the view are fetched for the screen's own pixels, up to twice the detail of its logical pixels
-(#2390). On the Web Mercator tile pyramid a 2x screen takes the next zoom's tiles; on a 5K or 6K
-screen, where those would be too many for the view, it takes a zoom between that and the usual one
-whose tiles fit, if any does, else the usual one (or the layer's coarsest zoom, where it has none
-coarser). A layer in a system of its own (a WMTS matrix set) takes a matrix of its service's
-near that detail, or a coarser one where the view would need too many of its tiles. Text and lines
-drawn into them come out sharp, and smaller, as in QGIS. A screen at more than 2x (most phones),
-and a map export or layout at a high resolution, still take tiles at twice the detail, not more:
-three times would ask for nine times the tiles, with their text too small to read.
+of the view are fetched for the screen's own pixels, up to about twice the detail of its logical
+pixels (#2390; a zoom or picture is rounded a little finer, as on a standard screen). On the Web
+Mercator tile pyramid a 2x screen takes the next zoom's tiles; on a 5K or 6K screen, where those
+would be too many for the view, it takes a zoom between that and the usual one whose tiles fit, if
+any does, else the usual one (or the layer's coarsest zoom, where it has none coarser). A layer in
+a system of its own (a WMTS matrix set) takes a matrix of its service's near that detail, or a
+coarser one where the view would need too many of its tiles. Text and lines drawn into them come
+out sharp, and smaller, as in QGIS. A screen at more than 2x (most phones), and a map export or
+layout at a high resolution, still take tiles at twice the detail, not more: three times would ask
+for nine times the tiles, with their text too small to read.
 
 Only a WMS layer drawn as one picture says the resolution it is for (above); in tiles it doesn't,
 and its symbols come out smaller.

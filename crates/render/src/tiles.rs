@@ -944,6 +944,14 @@ pub(crate) mod tests {
                         && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 2048))
                 {
                     done(Err("http status: 400".into()));
+                } else if url.starts_with("https://one.test/busy-big/")
+                    && url.split("&WIDTH=").nth(1).and_then(|w| w.split('&').next()?.parse::<u32>().ok()).is_some_and(|w| w > 1024)
+                {
+                    // A passing failure of every picture over 1024 pixels.
+                    done(Err("http status: 503".into()));
+                } else if url.starts_with("https://one.test/empty-dpi/") && url.contains("DPI=") {
+                    // An empty answer to the picture with its resolution.
+                    done(Ok(Vec::new()));
                 } else if url.starts_with("https://one.test/busy-dpi/") && url.contains("DPI=") {
                     // A passing failure of the picture with its resolution.
                     done(Err("http status: 503".into()));
@@ -1189,7 +1197,7 @@ pub(crate) mod tests {
             // With its resolution, without, then at most 2048 pixels a side.
             assert_eq!(asked.len(), 3, "{asked:?}");
             assert!(dpi(&asked[0]).is_some() && asked[1] == without_dpi(&asked[0]), "{asked:?}");
-            assert!(width(&asked[2]) <= Some(2048), "{asked:?}");
+            assert!(width(&asked[2]).is_some_and(|w| (1..=2048).contains(&w)), "{asked:?}");
             // Its resolution wasn't what was refused: a view whose picture fits still says it.
             let narrow = View { width: 200.0, ..view };
             ASKED_ONE.lock().unwrap().clear();
@@ -1268,6 +1276,50 @@ pub(crate) mod tests {
             crate::render_png(&mut m, &view).unwrap();
             let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
             assert!(asked.len() == 1 && asked[0].contains("&WIDTH=768&"), "{asked:?}");
+            // A narrower view's HiDPI picture (768 pixels) is smaller than the one refused: asked
+            // sharp again, with its resolution, and drawn.
+            let view = View { width: 200.0, camera: Camera { center: Coord::new(center.x + 100_000.0, center.y), ..view.camera }, ..view };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 1 && asked[0].contains("&WIDTH=768&") && dpi(&asked[0]).is_some(), "{asked:?}");
+        }
+        // A passing failure (a 503) of the HiDPI picture with its resolution and without: the
+        // standard screen's picture draws for that frame, but nothing is kept, so the next view's
+        // HiDPI picture is asked again.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/busy-big/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 400.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res: 30.0, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.len() == 3 && asked[2].contains("&WIDTH=768&"), "{asked:?}");
+            let view = View { camera: Camera { center: Coord::new(center.x + 50_000.0, center.y), ..view.camera }, ..view };
+            ASKED_ONE.lock().unwrap().clear();
+            crate::render_png(&mut m, &view).unwrap();
+            let asked = std::mem::take(&mut *ASKED_ONE.lock().unwrap());
+            assert!(asked.first().is_some_and(|u| dpi(u).is_some() && u.contains("&WIDTH=1536&")), "{asked:?}");
+        }
+        // An empty answer to the picture with its resolution: asked again without it, and drawn.
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/empty-dpi/"));
+            t.single_image = true;
+            m.tiles.push(t);
+            let (p, asked) = at(&mut m, 30.0, 0.0);
+            assert!(p == [green; 3] && asked.len() == 2 && asked[1] == without_dpi(&asked[0]), "{asked:?}");
         }
         // A passing failure (a 503) of the picture with its resolution, the one without drawing:
         // the resolution wasn't refused, so the next picture says it again.

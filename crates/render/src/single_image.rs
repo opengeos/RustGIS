@@ -227,13 +227,14 @@ const PLAIN_FOR: web_time::Duration = SMALL_FOR;
 
 /// What is kept between frames, by the layer's address: its last picture drawn (the address,
 /// area and units a pixel), when a large picture of it last failed, when a picture saying its
-/// resolution was last refused, and when a HiDPI picture of it last gave way to a standard one.
+/// resolution was last refused, and when (and how large) a HiDPI picture of it last refused by
+/// the server gave way to a standard one.
 #[derive(Default)]
 struct Kept {
     last: HashMap<String, (String, [f64; 4], f64)>,
     small: HashMap<String, web_time::Instant>,
     plain: HashMap<String, web_time::Instant>,
-    standard: HashMap<String, web_time::Instant>,
+    standard: HashMap<String, (web_time::Instant, u32)>,
 }
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -377,11 +378,23 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     // 2. one at most 2048 pixels a side, with its resolution again, kept for a while (some
     //    services draw no larger);
     // 3. the picture at a logical pixel's detail, as on a standard screen (a service may draw
-    //    no picture as large as a HiDPI one), kept for a while once it draws.
+    //    no picture as large as a HiDPI one); kept for a while, for HiDPI pictures as large,
+    //    when the server refused the HiDPI one and the standard one draws.
     // Past those, its tiles are drawn (and say what fails).
     let mut without = false;
-    let was_standard = kept().standard.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
+    // Kept to a standard screen's pictures while its HiDPI ones are as large as one the server
+    // refused: a smaller view's may draw.
+    let was_standard = {
+        let side = |max| picture(area, res, max).map(|(_, w, h)| w.max(h));
+        let k = kept();
+        let max = if k.small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR) { SMALL_SIDE } else { MAX_SIDE };
+        k.standard.get(&key).is_some_and(|(at, refused)| at.elapsed() < SMALL_FOR && side(max).is_some_and(|s| s >= *refused))
+    };
     let mut standard = was_standard;
+    // The side of the HiDPI picture the server refused (without its resolution), which keeps the
+    // layer to a standard screen's pictures for a while once one draws; `None` for a passing
+    // failure (a 5xx, a timeout), which keeps nothing.
+    let mut refused_side: Option<u32> = None;
     // The address (without its resolution) of the picture the server refused with it.
     let mut refused: Option<String> = None;
     for _ in 0..6 {
@@ -415,14 +428,17 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
             && let Payload::Image(img) = &*payload
         {
             paint(pm, img, *last_at);
-            if standard && !was_standard && detail > 1.0 {
-                remember_standard(&key);
+            if let Some(side) = refused_side.filter(|_| standard && !was_standard) {
+                remember_standard(&key, side);
             }
             return nothing;
         }
         let address = Warp::map_address(&req.base, &req.system, at, pw, ph);
         let url = if plain { address.clone() } else { with_dpi(address.clone(), logical / r) };
         match cache::get(&url, Want::Image) {
+            // No picture (an empty answer) with its resolution: asked again without it, as a
+            // failure, though not one the layer is kept without it for.
+            State::Ready(payload) if url != address && !matches!(&*payload, Payload::Image(_)) => without = true,
             State::Ready(payload) => {
                 if let Payload::Image(img) = &*payload {
                     paint(pm, img, at);
@@ -440,10 +456,10 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                     }
                     k.last.insert(key.clone(), (url, at, r));
                     drop(k);
-                    // A standard screen's picture drew where the HiDPI one failed this frame: so
-                    // for a while, then the HiDPI one is tried again.
-                    if standard && !was_standard && detail > 1.0 {
-                        remember_standard(&key);
+                    // A standard screen's picture drew where the server refused the HiDPI one this
+                    // frame: so for a while, then the HiDPI one is tried again.
+                    if let Some(side) = refused_side.filter(|_| standard && !was_standard) {
+                        remember_standard(&key, side);
                     }
                 }
                 return nothing;
@@ -479,28 +495,31 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                 // The smaller picture is asked with its resolution again: the size was refused.
                 (without, refused) = (false, None);
             }
-            State::Failed(_) if sharp => standard = true,
+            State::Failed(e) if sharp => {
+                standard = true;
+                refused_side = refusal(&e).then_some(pw.max(ph));
+            }
             State::Failed(_) => return None,
         }
     }
     None
 }
 
-/// Keeps the layer `key` to a standard screen's pictures for a while: its HiDPI one failed and
-/// the standard one drew.
-fn remember_standard(key: &str) {
+/// Keeps the layer `key` to a standard screen's pictures for a while, while its HiDPI ones are
+/// `side` pixels or more: the server refused one that large and the standard one drew.
+fn remember_standard(key: &str, side: u32) {
     let mut k = kept();
     if k.standard.len() >= MAX_KEPT {
         k.standard.clear();
     }
-    k.standard.insert(key.to_string(), web_time::Instant::now());
+    k.standard.insert(key.to_string(), (web_time::Instant::now(), side));
 }
 
 /// Whether a fetch's failure is the server refusing what it was asked: a 4xx other than a
 /// timeout (408) or too many requests (429). A server error, a timeout or a lost connection says
 /// nothing of what was asked, and neither does an answer that isn't a picture (it may be any).
 fn refusal(error: &str) -> bool {
-    matches!(cache::http_status(error), Some(400..=499)) && !matches!(cache::http_status(error), Some(408 | 429))
+    matches!(cache::http_status(error), Some(status) if (400..=499).contains(&status) && status != 408 && status != 429)
 }
 
 /// Cells a side a picture in another system is warped in: each placed by its own corners, so
