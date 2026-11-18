@@ -1416,6 +1416,10 @@ fn eq(a: &Value, b: &Value) -> bool {
         return x == y;
     }
     match (a.as_f64(), b.as_f64()) {
+        // A whole number against another number: equal exactly when the order says so.
+        (Some(_), Some(_)) if matches!(a, Value::Int(_)) || matches!(b, Value::Int(_)) => {
+            a.partial_cmp(b) == Some(std::cmp::Ordering::Equal)
+        }
         (Some(x), Some(y)) if !matches!(a, Value::Text(_)) || !matches!(b, Value::Text(_)) => x == y,
         _ => a.to_string().eq_ignore_ascii_case(&b.to_string()),
     }
