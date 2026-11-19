@@ -150,10 +150,17 @@ impl Features {
         Some(Arc::make_mut(&mut self.rows).remove(row))
     }
 
-    /// Keeps the rows `keep` says yes to, in order.
+    /// Keeps the rows `keep` says yes to, in order, asking it once per row. When it keeps them
+    /// all, nothing changes and the rows stay shared.
     pub fn retain_rows(&mut self, mut keep: impl FnMut(RowRef<'_>) -> bool) {
+        let kept: Vec<bool> = self.rows.iter().map(|row| keep(RowRef { row })).collect();
+        if kept.iter().all(|k| *k) {
+            return;
+        }
         self.max_id = None;
-        Arc::make_mut(&mut self.rows).retain(|row| keep(RowRef { row }));
+        // `Vec::retain` visits each row once, in order.
+        let mut kept = kept.into_iter();
+        Arc::make_mut(&mut self.rows).retain(|_| kept.next().unwrap_or(true));
     }
 
     /// Keeps the first `len` rows.
@@ -216,6 +223,7 @@ mod tests {
         copy.remove_column(5);
         copy.truncate_rows(3);
         assert_eq!(copy.remove_row(3), None);
+        copy.retain_rows(|_| true);
         assert!(copy.shares(&ds.features));
 
         assert_eq!(copy.set_value(0, 1, Value::Int(10)), Some(Value::Int(1)));

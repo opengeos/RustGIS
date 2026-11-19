@@ -9,7 +9,8 @@
 //! fields and the vector's methods deprecated, and every "use of deprecated" warning with their
 //! note outside `crates/data/` is one use. Other types with fields of the same names are never
 //! counted. Not counted: indexing (`features[i]`), iterating `&features` in a `for` loop and
-//! lending it as a `&[Feature]`, unless the row's fields are read.
+//! lending it as a `&[Feature]`, unless the row's fields are read; and code built only for another
+//! target (`cfg(target_arch = "wasm32")`, Android, iOS), since only this computer's build is checked.
 //!
 //! When the count falls, `--update` writes the new one; it never raises it. `--list` prints each
 //! use (`file:line:column`).
@@ -70,11 +71,13 @@ fn with_count(text: &str, count: usize) -> String {
     out
 }
 
-/// `RUSTFLAGS` without `-D warnings`, which would turn the counted warnings into errors and stop
-/// the packages after the first one with a use from being checked at all.
-fn flags_without_deny_warnings(flags: &str) -> String {
+/// The compiler flags for the check build: `flags` (the caller's) without `-D warnings`, which
+/// would turn the counted warnings into errors and stop the packages after the first one with a
+/// use from being checked at all, and with `deprecated` forced to warn, so that a lint cap
+/// (`--cap-lints`) can't hide the uses and let `--update` store too low a count.
+fn check_flags(flags: &[&str]) -> Vec<String> {
     let mut kept = Vec::new();
-    let mut words = flags.split_whitespace().peekable();
+    let mut words = flags.iter().copied().peekable();
     while let Some(w) = words.next() {
         if w == "-Dwarnings" || w == "--deny=warnings" {
             continue;
@@ -83,9 +86,20 @@ fn flags_without_deny_warnings(flags: &str) -> String {
             words.next();
             continue;
         }
-        kept.push(w);
+        kept.push(w.to_string());
     }
-    kept.join(" ")
+    kept.extend(["--force-warn".to_string(), "deprecated".to_string()]);
+    kept
+}
+
+/// The rendered errors in `cargo check --message-format=json` output.
+fn errors(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|m| m["reason"] == "compiler-message" && m["message"]["level"] == "error")
+        .filter_map(|m| m["message"]["rendered"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// Runs the check build and returns the uses it reports.
@@ -95,11 +109,22 @@ fn measure(root: &Path) -> Result<BTreeSet<Use>, String> {
     println!("$ cargo {}", args.join(" "));
     let mut cmd = Command::new(env!("CARGO"));
     cmd.args(args).current_dir(root).stderr(Stdio::inherit());
-    if let Ok(flags) = std::env::var("RUSTFLAGS") {
-        cmd.env("RUSTFLAGS", flags_without_deny_warnings(&flags));
+    // Cargo reads `CARGO_ENCODED_RUSTFLAGS` (words split by 0x1f) before `RUSTFLAGS`. Setting the
+    // flags replaces a config file's `rustflags`; those only matter for linking, which a check skips.
+    match std::env::var("CARGO_ENCODED_RUSTFLAGS").ok().filter(|f| !f.is_empty()) {
+        Some(flags) => {
+            let words: Vec<&str> = flags.split('\u{1f}').collect();
+            cmd.env("CARGO_ENCODED_RUSTFLAGS", check_flags(&words).join("\u{1f}"));
+        }
+        None => {
+            let flags = std::env::var("RUSTFLAGS").unwrap_or_default();
+            let words: Vec<&str> = flags.split_whitespace().collect();
+            cmd.env("RUSTFLAGS", check_flags(&words).join(" "));
+        }
     }
     let out = cmd.output().map_err(|e| e.to_string())?;
     if !out.status.success() {
+        errors(&String::from_utf8_lossy(&out.stdout)).iter().for_each(|e| eprint!("{e}"));
         return Err("rows: the check build failed, so nothing was counted (the errors are above)".into());
     }
     Ok(uses(&String::from_utf8_lossy(&out.stdout)))
@@ -203,10 +228,23 @@ mod tests {
     }
 
     #[test]
-    fn deny_warnings_is_taken_out_of_rustflags_and_nothing_else() {
-        assert_eq!(flags_without_deny_warnings("-D warnings -C debuginfo=1"), "-C debuginfo=1");
-        assert_eq!(flags_without_deny_warnings("-Dwarnings --deny=warnings --deny warnings -D unsafe_code"), "-D unsafe_code");
-        assert_eq!(flags_without_deny_warnings(""), "");
+    fn deny_warnings_is_taken_out_of_rustflags_and_deprecated_forced_to_warn() {
+        let f = |s: &str| check_flags(&s.split_whitespace().collect::<Vec<_>>()).join(" ");
+        assert_eq!(f("-D warnings -C debuginfo=1"), "-C debuginfo=1 --force-warn deprecated");
+        assert_eq!(f("-Dwarnings --deny=warnings --deny warnings -D unsafe_code"), "-D unsafe_code --force-warn deprecated");
+        assert_eq!(f("--cap-lints=allow"), "--cap-lints=allow --force-warn deprecated");
+        assert_eq!(f(""), "--force-warn deprecated");
+    }
+
+    #[test]
+    fn a_failed_check_shows_its_errors() {
+        let out = concat!(
+            r#"{"reason":"compiler-message","message":{"level":"error","rendered":"error[E0425]: x\n"}}"#,
+            "\n",
+            r#"{"reason":"compiler-message","message":{"level":"warning","rendered":"warning: y\n"}}"#,
+            "\nnot json\n"
+        );
+        assert_eq!(errors(out), vec!["error[E0425]: x\n".to_string()]);
     }
 
     #[test]
