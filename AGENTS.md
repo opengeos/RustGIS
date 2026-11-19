@@ -63,15 +63,16 @@ Work that splits into independent parts runs on several threads where practical:
 
 ## Size for real data
 Real data dwarfs the sample project: a parcel layer of half a million rows and a hundred fields
-loads at about 2.5 GB, national layers run to tens of millions of rows, and a 1 m elevation model
-of one city passes a billion cells. When a change stores, copies or compares layer data, give in
-the pull request what it holds as a multiple of the layer, as `cargo xtask memory` measures.
+loads at about 2.5 GB, national layers run to tens of millions of rows and more, and a 1 m
+elevation model of 1,000 km² is a billion cells. When a change stores, copies or compares layer
+data, give in the pull request what it holds as a multiple of the layer, as `cargo xtask memory`
+measures.
 - Memory follows what an operation changes or produces: an Undo step, a version, a sync base or a
-  cache holds only the changed rows or shares storage with the original. A second full copy of a
-  layer or raster is a bug (#2431).
-- Work that grows with its input goes in pieces (chunks, tiles, slices) or checks up front that it
-  fits (`memory::planned`) and otherwise refuses with a way out, such as filtering or clipping
-  first. Running out of memory partway counts as a crash.
+  cache holds only the changed rows or shares storage with the original. New work adds no second
+  full copy of a layer or raster; #2431 measured what one costs.
+- Work that grows with its input goes in pieces (chunks, tiles, slices), or sizes its limit with
+  `memory::planned` and refuses past it with a way out, such as filtering or clipping first.
+  Running out of memory partway counts as a crash.
 
 ## Architecture
 | Layer | Crate | Job |
