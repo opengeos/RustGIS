@@ -245,10 +245,11 @@ fn lookup_entry(code: &str) -> Option<&'static Entry> {
     match (parts.next(), parts.next(), parts.next()) {
         // `2056` is EPSG's; a number RustGIS doesn't read as EPSG's (as `102100`, Web Mercator, is)
         // and ESRI lists (`102033`) is ESRI's, as [`super::crs::Crs::parse`] reads it.
-        (Some(n), None, None) if n.bytes().all(|b| b.is_ascii_digit()) => found(format!("epsg:{n}")).or_else(|| {
-            let epsg = n.parse::<u32>().ok().and_then(super::crs::Crs::from_epsg);
-            if epsg.is_none() { found(format!("esri:{n}")) } else { None }
-        }),
+        (Some(n), None, None) if n.bytes().all(|b| b.is_ascii_digit()) => {
+            // `02056` is 2056.
+            let n = n.parse::<u32>().ok()?;
+            found(format!("epsg:{n}")).or_else(|| super::crs::bare_number_is_esri(n).then(|| found(format!("esri:{n}"))).flatten())
+        }
         // `EPSG:2056`, `epsg : 2056`, `EPSG 2056`.
         (Some(authority), Some(n), None) => found(format!("{authority}:{n}")),
         _ => None,
@@ -347,6 +348,7 @@ mod tests {
         assert_eq!(lookup("102033").map(|f| f.code.as_str()), Some("ESRI:102033"));
         // Web Mercator's old number stays EPSG's, as the parser reads it.
         assert_eq!(lookup("102100"), None);
+        assert_eq!(lookup("0102033").map(|f| f.code.as_str()), Some("ESRI:102033"));
         assert_eq!(lookup("EPSG:2056 x"), None);
     }
 }

@@ -2721,15 +2721,17 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
 }
 
 /// A typed coordinate system code: `ESRI:102033` or `Epsg: 3035` as it is (`lookup` reads the
-/// prefix in any case and spacing), a bare number as an EPSG code, or a Vietnamese province with
+/// prefix in any case and spacing), a bare number as `Crs::parse` reads it (EPSG's, or ESRI's for
+/// one EPSG lacks and ESRI has, such as `102033`), or a Vietnamese province with
 /// the `vn2000:` prefix (`vn2000:hanoi`); a bare name such as `hue` is not taken for one.
 pub(crate) fn typed_crs(text: &str) -> String {
     let text = text.trim();
     if text.starts_with(|c: char| c.is_ascii_digit()) {
-        // A number EPSG lacks and ESRI lists (`102033`) is ESRI's, as the boxes' lists find it.
-        let esri = text.bytes().all(|b| b.is_ascii_digit())
-            && rustgis_engine::data::raster::crs_search::lookup(text).is_some_and(|f| f.code.starts_with("ESRI:"));
-        if esri { format!("ESRI:{text}") } else { format!("EPSG:{text}") }
+        let number = text.bytes().all(|b| b.is_ascii_digit()).then(|| text.parse::<u32>().ok()).flatten();
+        match number {
+            Some(n) if rustgis_engine::data::raster::crs::bare_number_is_esri(n) => format!("ESRI:{n}"),
+            _ => format!("EPSG:{text}"),
+        }
     } else if let Some(lon) = rustgis_engine::map::projection::resolve_vn2000_alias(text) {
         format!("vn2000tm3 +lon_0={lon}")
     } else {
@@ -3161,6 +3163,16 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().session.map().projection.code(), "EPSG:3035");
         assert_eq!(h.state().dialogs.open, None);
+    }
+
+    /// A bare number in a box is read as `Crs::parse` reads it: EPSG's, or ESRI's for one EPSG lacks.
+    #[test]
+    fn a_bare_number_is_typed_as_the_parser_reads_it() {
+        use rustgis_engine::data::raster::Crs;
+        for (typed, code) in [("2056", "EPSG:2056"), ("102100", "EPSG:102100"), ("102033", "ESRI:102033")] {
+            assert_eq!(typed_crs(typed), code);
+            assert_eq!(Crs::parse(typed).map(|c| c.label()), Crs::parse(code).map(|c| c.label()), "{typed}");
+        }
     }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the
