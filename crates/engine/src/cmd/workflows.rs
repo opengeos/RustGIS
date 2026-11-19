@@ -1720,6 +1720,8 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"layer": nid, "lengthKm": r.length_m / 1000.0, "cost": r.cost, "segments": r.rows.len()}))
 }
 
+/// Searches query-visible resident rows independently of selection, replacing selection only
+/// when requested. Unreadable-query fallbacks are counted after a successful search.
 fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
     let at = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
     if !(at.x.is_finite() && at.y.abs() <= 90.0) {
@@ -1732,11 +1734,22 @@ fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
     let mut found: Vec<(u32, Vec<usize>)> = Vec::new();
     let mut bounded = Vec::new();
     let mut invalid = Vec::new();
+    let mut query_errors = Vec::new();
     for l in s.map().layers.iter().filter(|l| s.map().shows(l) && !l.is_raster() && !l.graphics) {
         if only.as_ref().is_some_and(|o| !o.contains(&l.name.to_ascii_lowercase())) {
             continue;
         }
-        let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
+        let resolved = l.resolve_rows(&l.dataset, rustgis_map::rows::Policy::Query, None)?;
+        if let Some(error) = resolved.query_error {
+            query_errors.push(crate::notice_text::NoticeText::format(
+                "{layer}: {error}",
+                [("layer", l.name.clone().into()), ("error", error.into())],
+            ));
+        }
+        let rows: Vec<usize> = match resolved.rows {
+            rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
+            rustgis_map::rows::Rows::Subset(rows) => rows,
+        };
         let report = network::within_report(&l.dataset, &rows, at, radius);
         let (near, n) = (report.rows, report.bounded);
         invalid.push((l.name.clone(), report.invalid_latitudes, report.missing_coordinates));
@@ -1765,6 +1778,18 @@ fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
         for (id, rows) in found {
             super::select::set(s, id, rows, super::select::Mode::Add);
         }
+    }
+    if !query_errors.is_empty() {
+        use crate::notice_text::NoticeText;
+        let key = if query_errors.len() == 1 {
+            "{count} layer with an unreadable definition query; reading without that query: {layers}"
+        } else {
+            "{count} layers with unreadable definition queries; reading without those queries: {layers}"
+        };
+        s.notify_text(
+            NoticeText::format(key, [("count", query_errors.len().to_string().into()), ("layers", NoticeText::list(query_errors))]),
+            false,
+        );
     }
     Ok(json!({"radiusKm": radius / 1000.0, "layers": out}))
 }
