@@ -1735,16 +1735,21 @@ fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
     let mut bounded = Vec::new();
     let mut invalid = Vec::new();
     let mut query_errors = Vec::new();
+    let mut query_error_count = 0;
     for l in s.map().layers.iter().filter(|l| s.map().shows(l) && !l.is_raster() && !l.graphics) {
         if only.as_ref().is_some_and(|o| !o.contains(&l.name.to_ascii_lowercase())) {
             continue;
         }
         let resolved = l.resolve_rows(&l.dataset, rustgis_map::rows::Policy::Query, None)?;
         if let Some(error) = resolved.query_error {
-            query_errors.push(crate::notice_text::NoticeText::format(
-                "{layer}: {error}",
-                [("layer", l.name.clone().into()), ("error", error.into())],
-            ));
+            query_error_count += 1;
+            // NoticeText::list nests entries; keep its depth independent of the layer count.
+            if query_errors.len() < 5 {
+                query_errors.push(crate::notice_text::NoticeText::format(
+                    "{layer}: {error}",
+                    [("layer", l.name.clone().into()), ("error", error.into())],
+                ));
+            }
         }
         let rows: Vec<usize> = match resolved.rows {
             rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
@@ -1779,17 +1784,19 @@ fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
             super::select::set(s, id, rows, super::select::Mode::Add);
         }
     }
-    if !query_errors.is_empty() {
+    if query_error_count > 0 {
         use crate::notice_text::NoticeText;
-        let key = if query_errors.len() == 1 {
+        let key = if query_error_count == 1 {
             "{count} layer with an unreadable definition query; reading without that query: {layers}"
         } else {
             "{count} layers with unreadable definition queries; reading without those queries: {layers}"
         };
-        s.notify_text(
-            NoticeText::format(key, [("count", query_errors.len().to_string().into()), ("layers", NoticeText::list(query_errors))]),
-            false,
-        );
+        let more = query_error_count - query_errors.len();
+        let mut layers = NoticeText::list(query_errors);
+        if more > 0 {
+            layers = NoticeText::format("{layers}; {count} more layers", [("layers", layers), ("count", more.to_string().into())]);
+        }
+        s.notify_text(NoticeText::format(key, [("count", query_error_count.to_string().into()), ("layers", layers)]), false);
     }
     Ok(json!({"radiusKm": radius / 1000.0, "layers": out}))
 }

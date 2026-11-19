@@ -932,6 +932,35 @@ fn neighborhood_reports_unreadable_queries_and_keeps_query_only_search() {
     }
 }
 
+/// The fallback count covers every searched layer, while the recursive diagnostic list stays
+/// bounded and says how many layer details it omitted.
+#[test]
+fn neighborhood_bounds_query_notice_details_and_keeps_total_count() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let mut s = Session::new(Project::default());
+    for i in 0..7 {
+        let mut ds = Dataset::new(format!("Road {i}"), GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let id = s.map_mut().add_dataset(ds);
+        s.map_mut().layer_mut(id).unwrap().definition_query = Some("missing = 1".into());
+    }
+    let names: Vec<_> = s.map().layers.iter().map(|layer| layer.name.clone()).collect();
+    let mark = s.notice_mark();
+    let result = s.run("analysis.neighborhood", &json!({"lon": 0, "lat": 0, "radius": 100})).unwrap();
+    assert_eq!(result["layers"].as_array().unwrap().len(), 7);
+    let notices = s.notices_since(mark);
+    assert_eq!(notices.len(), 1);
+    let text = &notices[0].text;
+    assert!(text.starts_with("7 layers with unreadable definition queries"), "{text}");
+    assert!(text.contains("2 more layers"), "{text}");
+    for name in names.iter().take(5) {
+        assert!(text.contains(name), "{text}");
+    }
+    for name in names.iter().skip(5) {
+        assert!(!text.contains(name), "{text}");
+    }
+}
+
 /// A tool reads what its layers show (#1995): the features a definition query keeps, with a
 /// selection cut to them, for the input and for an overlay layer. The Select tools leave out the
 /// features it hides, a layer it hides entirely is refused, and a tool that reads a layer whole
