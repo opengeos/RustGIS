@@ -27,7 +27,7 @@ fn the_memory_override_sets_the_limits_and_says_so() {
     assert_eq!(limits["undoBytes"], json!(2_u64 << 30));
     assert_eq!(limits["memorySource"], json!("override"));
     assert!(said.contains("memory limits follow RUSTGIS_MEMORY_BYTES (8.0 GiB)"), "{said}");
-    // 1 GiB: below every floor.
+    // 1 GiB: a quarter is the undo history's 256 MiB floor.
     assert_eq!(run(Some("1073741824")).0["undoBytes"], json!(256_u64 << 20));
     // Without it, or with a value that isn't a positive number of bytes, nothing changes or is said.
     let (plain, quiet) = run(None);

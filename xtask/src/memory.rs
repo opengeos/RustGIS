@@ -372,8 +372,8 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
         for (name, _) in limits.iter().filter(|(n, _)| !measured.iter().any(|(m, _)| m == n)) {
             println!("memory: dropped {name} from {LIMITS}: no scenario measures it");
         }
-        // The file now matches the scenarios; a value over its limit still fails.
-        over.retain(|o| !o.ends_with("not measured; remove it"));
+        // The file now matches the scenarios, new ones included; a value over its limit still fails.
+        over.retain(|o| !o.ends_with("not measured; remove it") && !o.ends_with("has no limit for it"));
     }
     for u in &under {
         println!("memory: {u}: if a change lowered it on purpose, run `cargo xtask memory --update` and commit {LIMITS}");
