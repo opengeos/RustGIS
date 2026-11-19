@@ -1656,7 +1656,8 @@ fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, 
     if let Some(kept) = Picture::kept(b64) {
         return if rustgis_render::picture_marker_draws(kept) { Ok(Some(kept)) } else { Err(WHAT.into()) };
     }
-    if !rustgis_render::picture_marker_readable(b64) {
+    // One met earlier in the call was checked then: an image decodes once per call.
+    if !new.contains(&b64) && !rustgis_render::picture_marker_readable(b64) {
         return Err(WHAT.into());
     }
     new.push(b64);

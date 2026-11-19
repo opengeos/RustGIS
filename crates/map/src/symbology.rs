@@ -131,12 +131,32 @@ fn fits((count, bytes): (usize, usize), (more, more_bytes): (usize, usize)) -> b
     count + more <= MAX_PICTURES && bytes + more_bytes <= MAX_PICTURES_BYTES
 }
 
-/// The pictures kept this run, and the bytes of base64 they take.
-fn kept_pictures() -> std::sync::MutexGuard<'static, (std::collections::HashSet<&'static str>, usize)> {
-    use std::collections::HashSet;
+/// Pictures kept, and the bytes of base64 they take.
+type Store = (std::collections::HashSet<&'static str>, usize);
+
+/// The pictures kept this run.
+fn kept_pictures() -> std::sync::MutexGuard<'static, Store> {
     use std::sync::{Mutex, OnceLock};
-    static KEPT: OnceLock<Mutex<(HashSet<&'static str>, usize)>> = OnceLock::new();
+    static KEPT: OnceLock<Mutex<Store>> = OnceLock::new();
     KEPT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Keeps trimmed, non-empty `images` in `store`, all or none ([`Picture::new_all`]): where each
+/// is kept, in the order given, or `None` with nothing kept when the new ones don't fit together.
+fn keep_all(store: &mut Store, images: &[&str]) -> Option<Vec<&'static str>> {
+    let (pictures, bytes) = store;
+    let mut more: Vec<&str> = images.iter().copied().filter(|b64| !pictures.contains(*b64)).collect();
+    more.sort_unstable();
+    more.dedup();
+    if !fits((pictures.len(), *bytes), (more.len(), more.iter().map(|b64| b64.len()).sum())) {
+        return None;
+    }
+    for b64 in more {
+        let p: &'static str = Box::leak(b64.to_owned().into_boxed_str());
+        pictures.insert(p);
+        *bytes += p.len();
+    }
+    images.iter().map(|b64| pictures.get(*b64).copied()).collect()
 }
 
 impl Picture {
@@ -167,20 +187,7 @@ impl Picture {
         if images.iter().any(|b64| b64.is_empty() || b64.len() > MAX_PICTURE_BYTES) {
             return None;
         }
-        let mut kept = kept_pictures();
-        let (pictures, bytes) = &mut *kept;
-        let mut more: Vec<&str> = images.iter().copied().filter(|b64| !pictures.contains(*b64)).collect();
-        more.sort_unstable();
-        more.dedup();
-        if !fits((pictures.len(), *bytes), (more.len(), more.iter().map(|b64| b64.len()).sum())) {
-            return None;
-        }
-        for b64 in more {
-            let p: &'static str = Box::leak(b64.to_owned().into_boxed_str());
-            pictures.insert(p);
-            *bytes += p.len();
-        }
-        images.iter().map(|b64| pictures.get(*b64).copied().map(Picture)).collect()
+        keep_all(&mut kept_pictures(), &images).map(|kept| kept.into_iter().map(Picture).collect())
     }
 
     /// The picture already kept for `base64`, keeping nothing new: a command given an image again
@@ -3658,9 +3665,6 @@ mod tests {
         assert_eq!(Picture::kept(" kept, for this test alone "), Some(p), "trimmed, as new trims");
     }
 
-    /// A picture marker is written with its image, and read back as the same kept image; one a
-    /// crafted file makes too long, or not text, is no image (drawn as a circle), and the rest
-    /// still reads.
     /// Several images are kept together or not at all: the store's limits are weighed for the
     /// lot, images already kept and repeated ones counted once.
     #[test]
@@ -3674,8 +3678,25 @@ mod tests {
         // One that can't be kept refuses the lot.
         assert_eq!(Picture::new_all(&["YWxsLW9yLW5vbmUtYg==", " "]), None);
         assert_eq!(Picture::kept("YWxsLW9yLW5vbmUtYg=="), None);
+        // A store one picture short of full (a store of its own, not the run's): two new images
+        // don't fit, and neither is kept; one does, beside one kept already.
+        let mut store: Store = Default::default();
+        for i in 1..MAX_PICTURES {
+            let p: &'static str = Box::leak(format!("p{i}").into_boxed_str());
+            store.0.insert(p);
+            store.1 += p.len();
+        }
+        let before = (store.0.len(), store.1);
+        assert_eq!(keep_all(&mut store, &["bmV3LW9uZQ==", "bmV3LXR3bw==", "p1"]), None);
+        assert_eq!((store.0.len(), store.1), before, "nothing kept");
+        let kept = keep_all(&mut store, &["bmV3LW9uZQ==", "p1", "bmV3LW9uZQ=="]).unwrap();
+        assert_eq!((kept[0], kept[1]), ("bmV3LW9uZQ==", "p1"));
+        assert!(std::ptr::eq(kept[0], kept[2]) && store.0.len() == MAX_PICTURES);
     }
 
+    /// A picture marker is written with its image, and read back as the same kept image; one a
+    /// crafted file makes too long, or not text, is no image (drawn as a circle), and the rest
+    /// still reads.
     #[test]
     fn picture_markers_keep_their_image_once_and_bound_what_a_file_gives() {
         let m = Marker::Picture(Picture::new(" iVBORw0KGgo= "));

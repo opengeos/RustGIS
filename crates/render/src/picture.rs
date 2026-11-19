@@ -228,5 +228,10 @@ mod tests {
             .unwrap();
         let png = base64::engine::general_purpose::STANDARD.encode(&bytes);
         assert_eq!(decode(&png).map(|p| (p.width(), p.height())), Some((4, 2)));
+        // A GIF, where the decoder reads one (the desktop's, with the engine's `gif` feature):
+        // drawn as a graphic, though not taken as a marker.
+        let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        assert_eq!(decode(gif).is_some(), image::ImageFormat::Gif.reading_enabled());
+        assert!(!readable(gif));
     }
 }
