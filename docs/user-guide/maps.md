@@ -764,9 +764,9 @@ World, Sphere and Africa Sinusoidal (`ESRI:54008`, `53008`, `102011`) can be the
 
 ### Finding a coordinate system
 
-Every box that takes a coordinate system (the Coordinate System dialog, Define Projection, the
-Shapefile, DXF and CSV imports, the measured grid, **Settings › Start-up › Projection** and the
-analysis environment) searches as you type. It finds a system by its code (`3035`,
+The coordinate system boxes of the Coordinate System dialog, Define Projection, the Shapefile, DXF
+and CSV imports, the measured grid, **Settings › Start-up › Projection** and the analysis
+environment search as you type. It finds a system by its code (`3035`,
 `EPSG:3035`, `esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection
 method (`albers`, `oblique mercator`) or by its area of use (`switzerland`), and lists the matches
 under the box: the systems you used last first (the ten last applied, kept between sessions), the

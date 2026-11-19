@@ -49,6 +49,18 @@ pub(crate) fn list_is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(open_id())).is_some_and(|open| open + 1 >= pass)
 }
 
+/// Where the pass a box's list was last shown is kept.
+fn shown_id() -> Id {
+    Id::unique("crs_box_shown")
+}
+
+/// Whether a coordinate system box's list was shown this pass or the last (not only its box
+/// focused).
+pub(crate) fn list_is_shown(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(shown_id())).is_some_and(|shown| shown + 1 >= pass)
+}
+
 /// One row of the list.
 #[derive(Clone)]
 struct Row {
@@ -89,8 +101,9 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
     // A code typed (`2056`, `EPSG:2056`): the recent systems whose code begins with it, or only
     // that system when the catalog lists it, so a recent EPSG:23035 never comes before 3035.
     let compact = text.to_ascii_lowercase().replace(' ', "");
-    let code_typed = !compact.is_empty() && (compact.bytes().all(|b| b.is_ascii_digit()) || compact.contains(':'));
-    let exact = if code_typed { crs_search::lookup(&compact).map(|f| f.code.to_ascii_lowercase()) } else { None };
+    // `EPSG 2056` too, as the catalog reads it.
+    let exact = crs_search::lookup(text).map(|f| f.code.to_ascii_lowercase());
+    let code_typed = exact.is_some() || (!compact.is_empty() && (compact.bytes().all(|b| b.is_ascii_digit()) || compact.contains(':')));
     let mut out: Vec<Row> = Vec::new();
     for code in recent {
         let Some(found) = crs_search::lookup(code) else { continue };
@@ -195,7 +208,8 @@ pub(crate) fn crs_box(
         edit.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(end))));
         edit.store(ui.ctx(), r.id);
     }
-    if r.changed() {
+    // A list opened anew, or its text changed, starts at its first row with nothing chosen.
+    if r.changed() || r.gained_focus() || !state.open {
         state.at = 0;
         state.moved = false;
     }
@@ -211,6 +225,9 @@ pub(crate) fn crs_box(
     let showing = state.open && (!rows.is_empty() || !text.trim().is_empty());
     if (state.open && showing) || r.has_focus() || r.lost_focus() {
         ui.data_mut(|d| d.insert_temp(open_id(), pass));
+    }
+    if showing {
+        ui.data_mut(|d| d.insert_temp(shown_id(), pass));
     }
     let mut taken = None;
     // Enter ends a single-line edit, so the box has just lost its focus when Enter takes a row.

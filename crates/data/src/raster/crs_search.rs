@@ -134,7 +134,7 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
         // A number begins the code, or `epsg:2` its key; a letter alone (`e`) begins no code.
         let in_code = (w.bytes().all(|b| b.is_ascii_digit()) && e.digits.starts_with(w.as_str()))
             || (w.contains(':') && e.key.starts_with(w.as_str()));
-        // `utm32n` and `lambert93` are words of the name typed without its spaces and marks.
+        // `lambert93`, `wgs84` are words of the name typed without the space or mark between.
         let glued = || w.len() > 3 && e.compact.contains(&w.chars().filter(|c| c.is_alphanumeric()).collect::<String>());
         let in_name = in_code || e.search.contains(w.as_str()) || w.eq_ignore_ascii_case(e.authority) || glued();
         if !in_name && !e.method.contains(w.as_str()) && !e.area.contains(w.as_str()) {

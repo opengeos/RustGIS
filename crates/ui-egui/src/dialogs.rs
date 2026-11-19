@@ -2572,7 +2572,9 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
                         .filter_map(|code| rustgis_engine::data::raster::crs_search::name_of(code).map(|n| (code.clone(), n.to_string())))
                         .filter(|(code, _)| crate::crspicker::map_usable(code))
                         .collect();
-                    if !recent.is_empty() {
+                    // Shown while anything is remembered, also systems only the other boxes list (one
+                    // in degrees), so they can be forgotten here too.
+                    if !app.ui.recent_crs.is_empty() {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!("Recently used")).size(11.0).color(t.text_dim));
                             // The way back: the list is the user's own, kept between sessions.
@@ -3098,6 +3100,13 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().dialogs.a, "EPSG:2056");
         assert_eq!(h.state().dialogs.text, "EPSG:2056");
+        // Emptied again: that ↓ chose nothing for the next time.
+        h.state_mut().dialogs.a.clear();
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.a, "", "no stale choice");
     }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the

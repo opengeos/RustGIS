@@ -2467,7 +2467,7 @@ impl RustGisApp {
 
     /// Notes `code` as the latest coordinate system used, for the coordinate system boxes, and
     /// keeps the list.
-    pub(crate) fn remember_crs(&mut self, code: &str) {
+    fn remember_crs(&mut self, code: &str) {
         if crspicker::remember(&mut self.ui.recent_crs, code) {
             self.save_pref(crspicker::RECENT_PREF, &self.ui.recent_crs.join("\n"));
         }
