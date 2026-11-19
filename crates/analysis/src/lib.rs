@@ -165,6 +165,8 @@ pub struct RasterInput<'a> {
 pub struct ToolResult {
     pub output: Output,
     pub messages: Vec<String>,
+    /// Losses identified by the producer. Text-only consumers also display their text.
+    pub losses: Vec<rustgis_data::loss::LossMessage>,
 }
 
 /// Access to the map's layers by name.
