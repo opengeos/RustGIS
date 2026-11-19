@@ -772,7 +772,7 @@ fn simulation_respects_selected_polygons_and_the_definition_query() {
         ] {
             let mut s = Session::new(Project::default());
             let mut ds = Dataset::new(
-                "Polygons",
+                "Polygons {error}",
                 GeometryType::Polygon,
                 vec![Field::new("number", FieldType::Integer), Field::new("count", FieldType::Integer)],
             );
@@ -802,7 +802,14 @@ fn simulation_respects_selected_polygons_and_the_definition_query() {
             let notices = s.notices_since(mark);
             assert_eq!(notices.len(), usize::from(query == "missing = 1"), "{notices:?}");
             if query == "missing = 1" {
-                assert!(notices[0].text.contains("Polygons") && notices[0].text.contains("missing"), "{notices:?}");
+                assert!(notices[0].text.contains("Polygons {error}") && notices[0].text.contains("missing"), "{notices:?}");
+                let translated = notices[0].translated(|key, args| {
+                    assert_eq!(key, "1 layer with an unreadable definition query; reading without that query: {layer}: {error}");
+                    assert_eq!(args.iter().find(|(key, _)| *key == "layer").map(|(_, value)| *value), Some("Polygons {error}"));
+                    assert!(args.iter().any(|(key, value)| *key == "error" && value.contains("missing")));
+                    key.to_string()
+                });
+                assert!(translated.is_some(), "the query fallback must retain a translatable template");
             }
         }
     }

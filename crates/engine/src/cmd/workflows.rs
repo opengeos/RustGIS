@@ -1761,9 +1761,12 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     }
     let name = out_name(p, format!("{}_simulated", l.name))?;
     let resolved = l.resolve_rows(&l.dataset, rustgis_map::rows::Policy::SelectionAndQuery, None)?;
-    let query_notice = resolved
-        .query_error
-        .map(|error| format!("1 layer with an unreadable definition query; reading without that query: {}: {error}", l.name));
+    let query_notice = resolved.query_error.map(|error| {
+        crate::notice_text::NoticeText::format(
+            "1 layer with an unreadable definition query; reading without that query: {layer}: {error}",
+            [("layer", l.name.clone().into()), ("error", error.into())],
+        )
+    });
     let rows: Vec<usize> = match resolved.rows {
         rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
         rustgis_map::rows::Rows::Subset(rows) => rows,
@@ -1798,7 +1801,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     }
     let n = ds.features.len();
     if let Some(notice) = query_notice {
-        s.notify(notice, false);
+        s.notify_text(notice, false);
     }
     let nid = super::layer::add_dataset(s, ds);
     Ok(json!({"layer": nid, "points": n}))
