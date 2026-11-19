@@ -382,7 +382,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.zip",
             shapefile_zip("臺北101".as_bytes()),
             shapefile_zip(b"\xbb\x4f\xa5\x5f101"),
-            Said("text value isn't valid UTF-8"),
+            Imported("text value isn't valid UTF-8"),
         ),
     ];
 

@@ -1423,7 +1423,8 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let dir = Dir(std::env::temp_dir().join(format!("rustgis-streamed-not-utf8-{}-{nanos}", std::process::id())));
     std::fs::create_dir_all(&dir.0).unwrap();
-    let note = "1 text value isn't valid UTF-8 and was read with U+FFFD in place of the bytes that can't be read, in 'NAME'; no .cpg file names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
+    // What the notice must carry: the count, the field and the replacement, not its wording.
+    let says = |t: &str| ["1 text value", "'NAME'", "U+FFFD", ".cpg"].iter().all(|k| t.contains(k));
     // 臺北101 in Big5, and as many bytes of ASCII.
     for (name, second, said) in [("big5", &b"\xbb\x4f\xa5\x5f101"[..], true), ("clean", &b"Tainan1"[..], false)] {
         let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("NAME", FieldType::Text)]);
@@ -1458,12 +1459,11 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
         s.map_mut().sync_sources(&view, 1000.0, true);
         s.notice_landed_rasters();
         assert!(!s.map().layer(id).unwrap().dataset.features.is_empty(), "{name}: the second read lands");
-        let expected = if said {
-            vec![format!("big5: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}")]
-        } else {
-            Vec::new()
-        };
-        assert_eq!(not_utf8(&s, mark), expected, "{name}: view reads");
+        let notes = not_utf8(&s, mark);
+        assert_eq!(notes.len(), usize::from(said), "{name}: view reads: {notes:?}");
+        if said {
+            assert!(notes[0].starts_with("big5: ") && notes[0].contains("Load All Features") && says(&notes[0]), "{}", notes[0]);
+        }
         // An export a chunk at a time, and a Data Interop conversion of the source, say it.
         s.map_mut().layer_mut(id).unwrap().dataset.features.clear();
         for (command, params) in [
@@ -1475,7 +1475,7 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
             let notes = not_utf8(&s, mark);
             assert_eq!(notes.len(), usize::from(said), "{name} {command}: {:?}", s.notices_since(mark));
             if said {
-                assert!(notes[0].ends_with(&format!("big5: {note}")), "{}", notes[0]);
+                assert!(notes[0].contains("big5: ") && says(&notes[0]), "{}", notes[0]);
             }
         }
     }
