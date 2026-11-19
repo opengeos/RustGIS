@@ -61,6 +61,18 @@ Work that splits into independent parts runs on several threads where practical:
   `available_parallelism` or a fixed number, and scratch memory within `memory::thread_scratch`;
 - a thread the OS refuses costs speed, not the run (`Builder::spawn_scoped`).
 
+## Size for real data
+Real data dwarfs the sample project: a parcel layer of half a million rows and a hundred fields
+loads at about 2.5 GB, national layers run to tens of millions of rows, and a 1 m elevation model
+of one city passes a billion cells. When a change stores, copies or compares layer data, give in
+the pull request what it holds as a multiple of the layer, as `cargo xtask memory` measures.
+- Memory follows what an operation changes or produces: an Undo step, a version, a sync base or a
+  cache holds only the changed rows or shares storage with the original. A second full copy of a
+  layer or raster is a bug (#2431).
+- Work that grows with its input goes in pieces (chunks, tiles, slices) or checks up front that it
+  fits (`memory::planned`) and otherwise refuses with a way out, such as filtering or clipping
+  first. Running out of memory partway counts as a crash.
+
 ## Architecture
 | Layer | Crate | Job |
 |---|---|---|
