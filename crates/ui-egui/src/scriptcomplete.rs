@@ -548,7 +548,7 @@ pub struct InExpression {
 /// index of the script), what it holds, escapes read, and where each of its chars starts in the
 /// script from there (`unescape`), the cursor in its chars, and the layer's or table's rows it's
 /// over, if any.
-struct ExpressionIn<'a> {
+struct ExpressionRead<'a> {
     start: usize,
     text: String,
     places: Vec<usize>,
@@ -556,7 +556,7 @@ struct ExpressionIn<'a> {
     data: Option<(&'a rustgis_engine::data::Dataset, Of)>,
 }
 
-impl ExpressionIn<'_> {
+impl ExpressionRead<'_> {
     /// What the expression's reading says goes at its cursor (`query::complete_at`), given to
     /// `then` with the fields it's over: none (the language's own words) without rows.
     fn read<T>(
@@ -595,7 +595,7 @@ fn call_at(script: &str, at: usize, h: &Hint, session: &rustgis_engine::Session)
 /// `task.addStep` line's command's key that does, in its `"params"`; anywhere in it. Over the
 /// fields of the line's (or the step's) layer or table (`line_data`), or of the tool's input;
 /// without one, the language's own words.
-fn expression_in<'a>(script: &str, at: usize, h: &Hint, session: &'a rustgis_engine::Session) -> Option<ExpressionIn<'a>> {
+fn expression_in<'a>(script: &str, at: usize, h: &Hint, session: &'a rustgis_engine::Session) -> Option<ExpressionRead<'a>> {
     let line = line_of(script, h)?;
     let before = scan(script.get(byte_at(script, h.brace)?..byte_at(script, at)?)?);
     let (start, data) = match before.value {
@@ -614,7 +614,7 @@ fn expression_in<'a>(script: &str, at: usize, h: &Hint, session: &'a rustgis_eng
     let (text, places) = unescape(&raw)?;
     // The cursor in the middle of an escape (`\|"`) is in no char of the text.
     let cursor = places.iter().position(|p| start + p == at)?;
-    Some(ExpressionIn { start, text, places, cursor, data })
+    Some(ExpressionRead { start, text, places, cursor, data })
 }
 
 /// Where the expression being typed at char `at` of `script` starts (a char index), in the
@@ -1298,41 +1298,27 @@ impl Offered for Offer {
 /// The help shown by the cursor while it's in a line's `{…}`.
 #[derive(Clone, Default)]
 struct HintState {
-    /// Where it floats, for what the cursor is in (`completion::Tip`).
-    tip: Tip<About>,
-    /// What it was worked out to show, where it starts (a char index) and what for, for which
-    /// cursor, script (its hash), language (the help is translated), plugins' revision (a
-    /// plugin's command comes and goes with its plugin) and project (the session's revision and
-    /// active layer: the fields an expression is read over): not again each frame the cursor
-    /// blinks.
-    worked: Option<Worked<(&'static str, u64, u64, Option<u32>), Option<(About, Shown)>>>,
+    /// Where the command's help floats, for the command whose braces the cursor is in
+    /// (`completion::Tip`).
+    tip: Tip<Hint>,
+    /// Where a function's signature floats instead, for the call the cursor is in (its `(`, a
+    /// char index of the script). Each has what Escape closed of its own: closing one doesn't
+    /// close the other, and going through a call doesn't bring back a command's help closed.
+    call: Tip<usize>,
+    /// What it was worked out to show, for which cursor, script (its hash), language (the help is
+    /// translated), plugins' revision (a plugin's command comes and goes with its plugin) and
+    /// project (the session's revision and active layer: the fields an expression is read over):
+    /// not again each frame the cursor blinks.
+    worked: Option<Worked<(&'static str, u64, u64, Option<u32>), Option<Shown>>>,
 }
 
-/// What the help by the cursor is about: the command whose braces it's in, or the call of a
-/// function it's in, in an expression there (its `(`, a char index of the script): Escape closes
-/// one, not the other.
-#[derive(Clone, Debug, PartialEq)]
-enum About {
-    Command(Hint),
-    Call(usize),
-}
-
-impl About {
-    /// Where what it's about starts (a char index), the help anchored there: the line's `{`, or
-    /// the call's `(`.
-    fn start(&self) -> usize {
-        match self {
-            About::Command(h) => h.brace,
-            About::Call(open) => *open,
-        }
-    }
-}
-
-/// What the help by the cursor shows: a command's or tool's help, or a function's signature.
+/// What the help by the cursor shows: the help of the command whose braces it's in (a command's
+/// or tool's), or the signature of the call of a function it's in, in an expression there, and
+/// where that call's `(` is (a char index of the script).
 #[derive(Clone)]
 enum Shown {
-    Help(Help),
-    Call(rustgis_engine::data::query::Call),
+    Help(Hint, Help),
+    Call(usize, rustgis_engine::data::query::Call),
 }
 
 fn load(ui: &Ui, box_id: Id) -> State {
@@ -1352,7 +1338,7 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
         tab: true,
         horizontal_arrows: true,
         vertical_arrows: true,
-        escape: state.list.is_open() || state.hint.tip.is_shown(),
+        escape: state.list.is_open() || state.hint.tip.is_shown() || state.hint.call.is_shown(),
     }
 }
 
@@ -1377,7 +1363,7 @@ pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
         return None;
     }
     // The help by the cursor (no list open): Escape closes it.
-    if !state.list.is_open() && state.hint.tip.keys(ui, box_id) {
+    if !state.list.is_open() && (state.hint.tip.keys(ui, box_id) || state.hint.call.keys(ui, box_id)) {
         store(ui, box_id, state);
         return None;
     }
@@ -1480,30 +1466,36 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
             let found = at.and_then(|at| {
                 let h = hint_at(script, at)?;
                 if let Some((call, open)) = call_at(script, at, &h, session) {
-                    return Some((About::Call(open), Shown::Call(call)));
+                    return Some(Shown::Call(open, call));
                 }
                 let help = help_at(session, script, at, &h)?;
-                Some((About::Command(h), Shown::Help(help)))
+                Some(Shown::Help(h, help))
             });
             state.hint.worked = Some(Worked { at, text, with, value: found.clone() });
             found
         }
     };
-    let rows = found.as_ref().map_or(0, |(_, shown)| match shown {
-        Shown::Help(help) => help.params.len() + 3,
-        Shown::Call(_) => crate::exprcomplete::TIP_ROWS,
+    let (help, call) = match found {
+        Some(Shown::Help(h, help)) => (Some((h, help)), None),
+        Some(Shown::Call(open, call)) => (None, Some((open, call))),
+        None => (None, None),
+    };
+    // In a call the command's help is hidden, not left: given no cursor, what Escape closed of it
+    // stays closed (`Tip::show`). Anchored at the line's `{`, the signature at the call's `(`.
+    let help_cursor = at.filter(|_| call.is_none());
+    let rows = help.as_ref().map_or(0, |(_, help)| help.params.len() + 3);
+    let about = help.as_ref().map(|(h, _)| (h.clone(), h.brace));
+    state.hint.tip.show(ui, box_id.with("complete_hint"), out, visible, help_cursor, about, rows, |ui, width| {
+        if let Some((_, help)) = &help {
+            draw_help(ui, help, width);
+        }
     });
-    // Anchored at the call's `(`, or the line's `{`.
-    let (about, shown): (Option<(About, usize)>, Option<Shown>) = found
-        .map(|(about, shown)| {
-            let start = about.start();
-            ((about, start), shown)
-        })
-        .unzip();
-    state.hint.tip.show(ui, box_id.with("complete_hint"), out, visible, at, about, rows, |ui, width| match &shown {
-        Some(Shown::Help(help)) => draw_help(ui, help, width),
-        Some(Shown::Call(call)) => crate::exprcomplete::draw_call(ui, call, width),
-        None => {}
+    let about = call.as_ref().map(|(open, _)| (*open, *open));
+    let rows = crate::exprcomplete::TIP_ROWS;
+    state.hint.call.show(ui, box_id.with("complete_call"), out, visible, at, about, rows, |ui, width| {
+        if let Some((_, call)) = &call {
+            crate::exprcomplete::draw_call(ui, call, width);
+        }
     });
     store(ui, box_id, state);
 }
@@ -2546,6 +2538,29 @@ mod tests {
         type_in(&mut h, " + round(abs(");
         assert!(shows(&h, "abs(x)"), "the innermost call's");
         assert!(!shows(&h, round));
+    }
+
+    /// A command's help closed with Escape stays closed through a call in its expression: the
+    /// signature shows in the call, and out of it the help doesn't come back, as the cursor never
+    /// left the braces.
+    #[test]
+    fn a_closed_commands_help_stays_closed_through_a_call() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        let help = super::help(&h.state().session, "select.byAttributes").unwrap();
+        let sig = format!("{}{}", help.id, help.keys);
+        type_in(&mut h, r#"select.byAttributes {"layer": "Countries", "where": "pop_est > "#);
+        h.get_by_label(&sig);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_label(&sig).is_none(), "closed");
+        type_in(&mut h, "round(");
+        assert!(h.query_by_role_and_label(Role::Label, "round(x[, places])").is_some(), "the signature in the call");
+        type_in(&mut h, "1)");
+        assert!(h.query_by_label(&sig).is_none(), "still closed out of the call");
+        type_in(&mut h, "\"}\nselect.byAttributes {");
+        h.get_by_label(&sig);
     }
 
     /// Ctrl+Space opens the list with nothing typed: a line's first word, an expression's; and
