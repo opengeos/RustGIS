@@ -150,10 +150,6 @@ pub fn unusable_epsg(code: u32) -> String {
     format!("the coordinate system EPSG:{code} isn't supported")
 }
 
-/// The PROJ definition of one of Esri's projected coordinate systems (`ESRI:102033`, South
-/// America Albers), as GDAL 3.13.3 writes it from terrio-crs's catalog of them (PROJ 9.9.0's ESRI
-/// authority), else of one the catalog lacks that RustGIS read before ([`UNCOMPUTED_ESRI`]).
-/// `None` for a code neither has.
 /// Whether a bare number (`102033`) is read as ESRI's code: it isn't one RustGIS reads as EPSG's
 /// (`2056`, and Web Mercator's `102100`), and ESRI has it. [`Crs::parse`], the coordinate system
 /// boxes and their lists all read a bare number by this.
@@ -161,6 +157,10 @@ pub fn bare_number_is_esri(code: u32) -> bool {
     Crs::from_epsg(code).is_none() && esri_proj4(code).is_some()
 }
 
+/// The PROJ definition of one of Esri's projected coordinate systems (`ESRI:102033`, South
+/// America Albers), as GDAL 3.13.3 writes it from terrio-crs's catalog of them (PROJ 9.9.0's ESRI
+/// authority), else of one the catalog lacks that RustGIS read before ([`UNCOMPUTED_ESRI`]).
+/// `None` for a code neither has.
 pub fn esri_proj4(code: u32) -> Option<&'static str> {
     catalog_esri(code).map(|(def, _)| def).or_else(|| UNCOMPUTED_ESRI.iter().find(|&&(c, _)| c == code).map(|&(_, def)| def))
 }

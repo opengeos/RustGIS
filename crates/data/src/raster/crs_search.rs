@@ -251,7 +251,11 @@ fn lookup_entry(code: &str) -> Option<&'static Entry> {
             found(format!("epsg:{n}")).or_else(|| super::crs::bare_number_is_esri(n).then(|| found(format!("esri:{n}"))).flatten())
         }
         // `EPSG:2056`, `epsg : 2056`, `EPSG 2056`.
-        (Some(authority), Some(n), None) => found(format!("{authority}:{n}")),
+        (Some(authority), Some(n), None) => {
+            // `EPSG:02056` is EPSG:2056 too.
+            let n = if n.bytes().all(|b| b.is_ascii_digit()) { n.parse::<u32>().ok()?.to_string() } else { n.to_string() };
+            found(format!("{authority}:{n}"))
+        }
         _ => None,
     }
 }
@@ -349,6 +353,7 @@ mod tests {
         // Web Mercator's old number stays EPSG's, as the parser reads it.
         assert_eq!(lookup("102100"), None);
         assert_eq!(lookup("0102033").map(|f| f.code.as_str()), Some("ESRI:102033"));
+        assert_eq!(lookup("EPSG:02056").map(|f| f.code.as_str()), Some("EPSG:2056"));
         assert_eq!(lookup("EPSG:2056 x"), None);
     }
 }
