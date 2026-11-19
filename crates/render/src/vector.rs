@@ -307,11 +307,16 @@ impl Drawing {
         if !transform.is_finite() || opacity.is_nan() || opacity <= 0.0 {
             return;
         }
-        if let std::collections::hash_map::Entry::Vacant(e) = self.shared.entry(Arc::as_ptr(pixels) as usize) {
-            self.cost += pixels.cost();
-            e.insert(Arc::clone(pixels));
+        // Refused as `push` refuses, before the pixels are kept: a drawing past its budget doesn't
+        // hold on to pixels it never places.
+        let key = Arc::as_ptr(pixels) as usize;
+        let added = if self.shared.contains_key(&key) { 300 } else { pixels.cost() + 300 };
+        if self.count >= MAX_ITEMS || self.cost.saturating_add(added) > max_cost() {
+            self.overflowed = true;
+            return;
         }
-        self.cost += 300;
+        self.shared.entry(key).or_insert_with(|| Arc::clone(pixels));
+        self.cost += added;
         let image = Image { pixels: Arc::clone(pixels), transform, opacity: opacity.min(1.0), smooth, shared: true };
         self.push(Item::Image(image));
     }
@@ -702,6 +707,13 @@ mod tests {
         let (_, _, items) = d.finish();
         let Item::Image(first) = &items[0] else { panic!("a picture") };
         assert!(first.shared && Arc::ptr_eq(&first.pixels, &px));
+        // Past the budget, a placement is refused before its pixels are kept.
+        TEST_MAX_COST.with(|l| l.set(Some(px.cost() + 299)));
+        let held = Arc::strong_count(&px);
+        let mut full = Drawing::new(10.0, 10.0);
+        full.shared_image(&px, Transform::identity(), 1.0, true);
+        TEST_MAX_COST.with(|l| l.set(None));
+        assert!(full.overflowed() && full.is_empty() && full.shared.is_empty() && Arc::strong_count(&px) == held);
     }
 
     #[test]

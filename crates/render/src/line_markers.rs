@@ -290,23 +290,24 @@ pub(crate) fn draw(pm: &mut Canvas, runs: &[Run], m: &LineMarkers, color: Rgba, 
     }
 }
 
-/// How far from a line (points) its stacked `strokes` reach, for culling: a stroke's offset and,
-/// past it, twice its width (`width`, the feature's, where it takes that), as far as a mitred
-/// corner can (tiny-skia's default limit, 4); or its marks' (a marker as far as its corners
-/// however it's turned, and its outline's width, as [`draw`] reaches).
+/// How far from a line (points) its stacked `strokes` reach, for culling. A stroke: four times its
+/// offset (the shifted line's mitred corners, `offset_polyline`, reach that far) and twice
+/// its width (`width`, the feature's, where it takes that), as far as tiny-skia's default mitre
+/// limit, 4, lets a corner reach. Its marks: its offset and a marker as far as its corners however
+/// it's turned (at least a point across, as [`draw`] draws it), and its outline's width.
 pub(crate) fn reach(strokes: &[LineStroke], width: f32) -> f32 {
     strokes
         .iter()
         .map(|s| {
             let w = s.width.unwrap_or(width).max(0.0);
-            let half = match s.markers {
+            let off = s.offset.abs();
+            match s.markers {
                 Some(m) => match m.mark {
-                    LineMark::Marker(shape) => m.size.max(0.0) * marker_reach(shape).max(crate::point_marks::turned_reach(shape)) + w,
-                    LineMark::Hash => m.size.max(0.0) / 2.0 + w,
+                    LineMark::Marker(shape) => off + m.size.max(1.0) * marker_reach(shape).max(crate::point_marks::turned_reach(shape)) + w,
+                    LineMark::Hash => off + m.size.max(0.0) / 2.0 + w,
                 },
-                None => 2.0 * w,
-            };
-            s.offset.abs() + half
+                None => 4.0 * off + 2.0 * w,
+            }
         })
         .fold(0.0, f32::max)
 }
@@ -331,6 +332,18 @@ mod tests {
 
     fn at(r: &Run, m: LineMarkers) -> Vec<(f64, f64)> {
         places(r, &m, 1.0, ALL, MAX_MARKS).into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// A shifted stroke reaches as far as its mitred corners (four times its offset) and twice its
+    /// width; a marker at least as far as a point-wide one, the smallest drawn.
+    #[test]
+    fn a_lines_reach_covers_mitred_offsets_and_tiny_markers() {
+        let shifted = LineStroke { offset: -8.0, width: Some(0.1), ..LineStroke::default() };
+        assert!((reach(&[shifted], 1.0) - (32.0 + 0.2)).abs() < 1e-4);
+        let tiny = LineMarkers { mark: LineMark::Marker(Marker::Circle), size: 0.2, ..LineMarkers::default() };
+        let marked = LineStroke { width: Some(0.0), markers: Some(tiny), ..LineStroke::default() };
+        assert!((reach(&[marked], 1.0) - 0.6).abs() < 1e-4, "a point across, to its 0.6");
+        assert_eq!(reach(&[], 1.0), 0.0);
     }
 
     #[test]
