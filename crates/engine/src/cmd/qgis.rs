@@ -559,7 +559,8 @@ fn add_layer(
                         report.approximated(name, format!("its map layer {id} alone, which the service doesn't list: the whole map"));
                         added
                     }
-                    Err(_) => return Err(e),
+                    // Both causes said: the layer isn't listed, and the whole map failed too.
+                    Err(whole) => return Err(format!("{e}; its whole map, tried instead: {whole}")),
                 },
                 (Err(e), _) => return Err(e),
             };

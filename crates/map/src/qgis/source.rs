@@ -306,11 +306,11 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             let mut options = WebOptions::of(&q, &READ);
             // The address's own query (a key, a token) isn't kept with the service's address: a
             // login's key is a login, anything else an option (named, never its value). A part with no
-            // name (`?abc`) may be a key itself: never named, taken as a login.
+            // name (`?abc`) or no value (`?abc=`) may be a key itself: never named, taken as a login.
             if let Some(query) = rest.as_deref().and_then(|r| r.split_once('?')).map(|(_, q)| q) {
                 for part in query.split('&').filter(|p| !p.is_empty()).take(200) {
                     match part.split_once('=') {
-                        Some((k, _)) if is_login(k) => options.login = true,
+                        Some((k, v)) if is_login(k) || v.is_empty() => options.login = true,
                         Some((k, _)) if !k.is_empty() => options.note(k),
                         _ => options.login = true,
                     }
@@ -946,6 +946,15 @@ mod tests {
             };
             assert!(options.login && options.ignored.is_empty(), "{option}: {options:?}");
         }
+    }
+
+    /// A vector tile service address's part with no value (`?abc=`) may be a key: taken as a
+    /// login, never named, as a part with no name is.
+    #[test]
+    fn an_address_part_with_no_value_is_a_login() {
+        let source = "serviceType=arcgis&type=xyz&url=https://example.com/arcgis/rest/services/v/VectorTileServer/tile/%7Bz%7D/%7By%7D/%7Bx%7D.pbf?S3CRET=";
+        let Source::ArcGis { options, .. } = read("arcgisvectortileservice", source, "/data") else { panic!("an ArcGIS source") };
+        assert!(options.login && options.ignored.is_empty(), "{options:?}");
     }
 
     #[test]
