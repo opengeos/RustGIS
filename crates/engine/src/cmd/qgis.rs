@@ -12,7 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("project.importQgis", "Import QGIS Project", "Project › Import", import_project).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files)).params(
+        C::new("project.importQgis", "Import QGIS Project", "Project › Import", import_project).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files).with(crate::policy::Effect::Network)).params(
             r#"{"path"?: "*.qgs|*.qgz", "text"?: "a .qgs file's text", "data"?: "a .qgs or .qgz file, base64", "dir"?: "the folder its relative paths start from (default: the file's)"} → the layers added and notes on what wasn't carried over"#,
         ),
         C::new("style.importQgis", "Import QGIS Style", "Style › Styles", import_style).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).when(need_layer).params(
@@ -94,8 +94,9 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     m.basemap = rustgis_map::Basemap::Blank;
     m.graticule = false;
     let degrees = project.crs.as_deref().and_then(Geographic::of);
-    // The map draws in the project's coordinate system (its saved view reads in it).
-    let mut projected = true;
+    // The map draws in the project's coordinate system (its saved view reads in it). Without one,
+    // the saved view's coordinates are in no known system, so it isn't read.
+    let mut projected = project.crs.is_some();
     if let Some(crs) = &project.crs {
         let code = match crs.as_str() {
             "EPSG:3857" | "EPSG:900913" => "mercator",
@@ -144,12 +145,13 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         let before: std::collections::HashSet<u32> = s.map().layers.iter().map(|l| l.id).collect();
         let tiles = s.map().tiles.len();
         // The tiles a web tile layer landed on the map as, when it is one.
-        let mut landed = None;
+        let mut landed_on = None;
         let result = if layer.kind == "annotation" {
             add_annotations(s, layer, crs, canvas.as_ref(), dir.is_some(), &mut pictures, &mut report)
                 .map(|(name, d)| Some((name, Some(d))))
         } else {
-            add_layer(s, layer, dir.is_some(), view, &mut landed, &mut connections, &mut report).map(|name| name.map(|name| (name, None)))
+            add_layer(s, layer, dir.is_some(), view, &mut landed_on, &mut connections, &mut report)
+                .map(|name| name.map(|name| (name, None)))
         };
         match result {
             Ok(Some((name, d))) => {
@@ -161,7 +163,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
                     // A web tile layer on the same tiles as one added before takes its place (the
                     // map keeps one tile layer of the same tiles): that one isn't on the map, nor
                     // among those added, said under its name.
-                    let key = landed;
+                    let key = landed_on;
                     if let Some(k) = &key {
                         for c in came_in.iter_mut().filter(|c| c.key.as_ref() == Some(k)) {
                             c.tile = false;
@@ -502,6 +504,12 @@ fn add_layer(
         }
         Source::Wms { url, layer: wms, wmts, options, .. } => {
             note_web_options(name, options, report);
+            if *wmts {
+                report.approximated(
+                    name,
+                    "its tile matrix set: RustGIS takes the service's Web Mercator one where the layer has one, else one in its own system, which may not be the one QGIS chose",
+                );
+            }
             let before = s.active_layer;
             let kind = if *wmts { "wmts" } else { "wms" };
             let added = s.run_part("service.add", &json!({"url": url, "type": kind, "layer": wms, "name": name}))?;
@@ -663,6 +671,8 @@ fn note_web_options(name: &str, options: &qgis::WebOptions, report: &mut Report)
     if !options.ignored.is_empty() {
         let more = if options.more > 0 { format!(" and {} more", options.more) } else { String::new() };
         report.approximated(name, format!("its source options {}{more} (not read)", options.ignored.join(", ")));
+    } else if options.more > 0 {
+        report.approximated(name, format!("{} of its source options (not read, not named)", options.more));
     }
     if options.login {
         report.approximated(

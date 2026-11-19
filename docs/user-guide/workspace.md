@@ -250,12 +250,16 @@ feature or map service) as features, a map service's map or one of its layers dr
 map, noted, when the service doesn't list that layer), an image service's image, or a vector tile
 service's tiles in the service's own style; a WCS coverage, read once over the view the project was
 saved with (all the way round a pole it holds), or whole when the project has no saved view RustGIS
-can use, noted either way (QGIS asks for each view). A collection its service gives as tiles comes
-in as tiles, its filter and style noted. Two layers on the same tiles (two map service layers drawn
+can use (or no coordinate system its view could be read in), noted either way (QGIS asks for each
+view). A WMTS layer is drawn from the service's Web Mercator tile matrix set where it has one, else
+from one in its own system, noted, as QGIS's choice of set isn't read. An OGC API collection its
+service answers with tiles comes in as tiles, its filter and style noted; one that offers only
+tiles, which a QGIS OGC API Features layer can't name, is left out, noted. Two layers on the same tiles (two map service layers drawn
 as its whole map, say) come in once, noted. A login the layer used (a user name and password, a
 token or key, or QGIS's saved authentication) isn't carried over and is noted: the service is asked
 with the login saved in RustGIS for it, if there is one. Other source settings RustGIS doesn't read
-(a WMS layer's own style, say) are noted by name (the first 32, the rest counted). A service that
+(a WMS layer's own style, say) are noted by name (the first 32, the rest counted); one with no
+value, which may be a key written on its own, is counted, never named. A service that
 doesn't answer, or doesn't list the layer, leaves that layer out, noted. In the web app, a web
 service's layer is left out, noted: add it with **Home › Add › Add Data › From Service**. On the
 desktop, the import waits for each service in turn. A memory

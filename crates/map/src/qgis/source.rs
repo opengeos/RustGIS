@@ -115,9 +115,18 @@ impl WebOptions {
     /// changes nothing it draws), and the login among them. Names are matched in any case.
     fn of(pairs: &[(String, String)], read: &[&str]) -> Self {
         let mut out = WebOptions::default();
-        for (k, _) in pairs {
+        for (k, v) in pairs {
             let k = k.trim();
             if k.is_empty() || read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
+                continue;
+            }
+            // A segment with no value (`…&abc&…`, or `abc=`) may be a key or a password written
+            // on its own: counted, never named. `styles` with none is the server's default style,
+            // which changes nothing.
+            if v.trim().is_empty() {
+                if !k.eq_ignore_ascii_case("styles") {
+                    out.more += 1;
+                }
                 continue;
             }
             if is_login(k) {
@@ -881,6 +890,32 @@ pub fn is_relative(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A segment with no value in a web source may be a key written on its own: it is counted, not
+    /// named, in the WMS, WCS and ArcGIS vector tile sources alike; `styles` with none is the default
+    /// style, not an option.
+    #[test]
+    fn a_bare_segment_is_counted_never_named() {
+        let dir = "/data";
+        let secret = "s3cr3tT0ken";
+        for (provider, source) in [
+            ("wms", format!("crs=EPSG:2056&format=image/png&layers=a&styles&{secret}&url=https://wms.example.com/")),
+            ("wcs", format!("identifier=dem&{secret}&url=https://wcs.example.com/")),
+            (
+                "arcgisvectortileservice",
+                format!("serviceType=arcgis&{secret}&type=xyz&url=https://example.com/arcgis/rest/services/v/VectorTileServer"),
+            ),
+        ] {
+            let got = read(provider, &source, dir);
+            let options = match &got {
+                Source::Wms { options, .. } | Source::Wcs { options, .. } | Source::ArcGis { options, .. } => options.clone(),
+                other => panic!("{provider}: {other:?}"),
+            };
+            assert!(options.ignored.iter().all(|o| !o.contains(secret)), "{provider}: {options:?}");
+            assert_eq!(options.more, 1, "{provider}: {options:?}");
+            assert!(!format!("{got:?}").contains(&format!("{secret}=")), "{provider}");
+        }
+    }
 
     #[test]
     fn sources_read_as_their_providers_write_them() {
