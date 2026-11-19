@@ -1550,7 +1550,13 @@ runs on one thread.
 
 `gp.env` also returns the memory limits on this computer (`limits`). On the desktop they follow the
 computer's memory, or a container's limit when it is lower: each plans for a quarter of it, never
-below the web app's fixed limits and never above a ceiling.
+below the web app's fixed limits and never above a ceiling. `limits.memorySource` says what they
+follow: `computer`, `container` (a container's limit, lower than the computer's memory),
+`override` or `unknown`. For tests, or to reproduce a smaller computer, set the environment
+variable `RUSTGIS_MEMORY_BYTES` to the memory in bytes (such as `8589934592` for 8 GiB) before
+starting RustGIS: it replaces the memory read from the computer and any container limit, and the
+command line says so on every run. It isn't a way to go faster: a value above the computer's
+memory raises every limit past what it has, and a large job can then run out of memory.
 
 | Limit | Floor (web app value in brackets) | Desktop: a quarter of memory at | Ceiling |
 |---|---|---|---|
@@ -1657,6 +1663,9 @@ form does: the layers of its kind (polygon, point, raster, vector; any layer, th
 the fields of the tool's input that it takes (numeric, holding coordinates), or its choices
 (`"units": "` offers `Kilometers`, `Meters`, …). Accepting one writes its name
 as the line's JSON needs it (`"Big \"lakes\""`).
+In a `task.addStep` line's `"params"`, a value offers what the step's command takes, as in a line
+of that command: its layers, maps, layouts, tables, label classes and fields, over the layer or
+table its `"params"` give (a `"layer"` outside them doesn't count), the active layer without one.
 In the string of a key that takes an expression (its type is `sql` or `expression` in the
 command's help: `"where"` in `select.byAttributes`, `"expression"` in `edit.calculateField`,
 `labels.by`'s keys…; in a `gp.run` line, a tool's expression, such as `selectByAttributes`'s

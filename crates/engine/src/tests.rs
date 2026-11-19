@@ -815,6 +815,56 @@ fn simulation_respects_selected_polygons_and_the_definition_query() {
     }
 }
 
+/// Routes use the query-visible network, even when only one segment is selected. A broken
+/// saved query keeps that network with one typed notice rather than silently bypassing it.
+#[test]
+fn route_reports_unreadable_query_and_keeps_query_only_network() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as Cell};
+
+    for (query, succeeds, warns) in [
+        ("", true, false),
+        ("number >= 1", true, false),
+        ("number = 1", false, false),
+        ("number > 2", false, false),
+        ("missing = 1", true, true),
+    ] {
+        let mut s = Session::new(Project::default());
+        let mut ds = Dataset::new("Roads {error}", GeometryType::Polyline, vec![Field::new("number", FieldType::Integer)]);
+        for row in 0..2 {
+            ds.push(
+                Some(Geometry::Line(vec![vec![Coord::new(row as f64, 0.0), Coord::new(row as f64 + 1.0, 0.0)]])),
+                vec![Cell::Int(row + 1)],
+            );
+        }
+        let id = s.map_mut().add_dataset(ds);
+        let layer = s.map_mut().layer_mut(id).unwrap();
+        layer.selection = vec![0];
+        layer.definition_query = Some(query.into());
+        let mark = s.notice_mark();
+        let result = s.run("analysis.route", &json!({"layer": id, "from": [0, 0], "to": [2, 0], "snapDistance": 1}));
+        assert_eq!(result.is_ok(), succeeds, "{query}: {result:?}");
+        if let Ok(result) = result {
+            assert_eq!(result["segments"], 2, "the selected segment alone cannot connect the endpoints");
+            let output = s.map().layer(result["layer"].as_u64().unwrap() as u32).unwrap();
+            assert_eq!(output.dataset.features.len(), 1);
+        }
+        let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("definition query")).collect();
+        assert_eq!(notices.len(), usize::from(warns), "{query}: {notices:?}");
+        if warns {
+            assert!(notices[0].text.contains("Roads {error}") && notices[0].text.contains("missing"));
+            assert!(
+                notices[0]
+                    .translated(|key, args| {
+                        assert_eq!(key, "1 layer with an unreadable definition query; reading without that query: {layer}: {error}");
+                        assert_eq!(args.iter().find(|(key, _)| *key == "layer").map(|(_, value)| *value), Some("Roads {error}"));
+                        key.to_string()
+                    })
+                    .is_some()
+            );
+        }
+    }
+}
+
 /// A tool reads what its layers show (#1995): the features a definition query keeps, with a
 /// selection cut to them, for the input and for an overlay layer. The Select tools leave out the
 /// features it hides, a layer it hides entirely is refused, and a tool that reads a layer whole
@@ -13809,15 +13859,25 @@ fn the_graticule_takes_a_type_and_a_measured_grids_system() {
     // From a file: a system the command would refuse is left out as the project opens, and said;
     // one it takes stays.
     let mut v: Value = serde_json::from_str(&text).unwrap();
-    for (crs, kept) in
-        [("EPSG:4326", false), ("EPSG:4978", false), ("not a system", false), ("x".repeat(5000).as_str(), false), ("EPSG:2056", true)]
-    {
+    for (crs, kept) in [
+        ("EPSG:4326", false),
+        ("EPSG:4978", false),
+        ("not a system", false),
+        ("x".repeat(5000).as_str(), false),
+        ("EPSG:2056", true),
+        // An ESRI code is a system now (the coordinate system boxes offer them).
+        ("ESRI:102033", true),
+    ] {
         v["maps"][0]["graticule_crs"] = json!(crs);
         let mut back = crate::Project::from_json(&v.to_string()).unwrap();
         assert_eq!(back.map().graticule_crs.as_deref(), kept.then_some(crs), "{}", &crs[..crs.len().min(20)]);
         let said = format!("{:?}", back.take_read_notices(&[crate::project::ReadPart::Maps]));
         assert_eq!(said.contains("the measured graticule's coordinate system"), !kept, "{said}");
     }
+    // The fixture: a measured graticule in an ESRI system opens with it, and nothing said.
+    let mut fixture = crate::Project::from_json(include_str!("../../../schema/fixtures/graticule_esri.rgis")).unwrap();
+    assert_eq!((fixture.map().graticule_type, fixture.map().graticule_crs.as_deref()), (GraticuleType::Measured, Some("ESRI:102033")));
+    assert!(fixture.take_read_notices(&[crate::project::ReadPart::Maps]).is_empty());
     // Several maps with one each: one notice, with how many and which.
     let mut many = v.clone();
     many["maps"][0]["graticule_crs"] = json!("EPSG:4326");
