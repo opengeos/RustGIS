@@ -1420,7 +1420,10 @@ fn go_to_view(s: &mut Session, project: &qgis::Project, degrees: Option<Geograph
 fn coverage_view(s: &Session, project: &qgis::Project, degrees: Option<Geographic>) -> Option<Extent> {
     let area = |v: &Extent| v.width() > 0.0 && v.height() > 0.0;
     if degrees.is_some() {
-        return saved_view(s, project, degrees).filter(area);
+        // A view in degrees past ±180° crosses the antimeridian: its longitudes on both sides of
+        // it are asked for (all of them), not only the part `saved_view` keeps for the map.
+        let across = project.extent.is_some_and(|[x0, _, x1, _]| x0 < -180.0 || x1 > 180.0);
+        return saved_view(s, project, degrees).map(|v| if across { Extent::new(-180.0, v.min_y, 180.0, v.max_y) } else { v }).filter(area);
     }
     let [x0, y0, x1, y1] = project.extent?;
     let m = s.map();

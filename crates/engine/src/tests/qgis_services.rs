@@ -285,4 +285,13 @@ fn a_wcs_coverage_reaches_the_pole_a_polar_view_holds() {
     let out = s.run("project.importQgis", &json!({"text": unplaced})).unwrap();
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
     assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
+    // A view in degrees across the antimeridian (170° to 190°): both sides of it, all the way round.
+    let across = format!(
+        r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs>
+        <mapcanvas name="theMapCanvas"><extent><xmin>170</xmin><ymin>40</ymin><xmax>190</xmax><ymax>50</ymax></extent></mapcanvas>
+        <projectlayers>{layer}</projectlayers></qgis>"#
+    );
+    let out = s.run("project.importQgis", &json!({"text": across})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once over the view"), "{out}");
+    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(40,50)"]);
 }
