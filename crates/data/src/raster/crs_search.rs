@@ -101,13 +101,25 @@ fn words_of(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
 }
 
-/// The places an area of use's name lists first: each `;`-separated part up to its first ` - `.
+/// The places an area of use's name lists first: each `;`-separated part up to its first ` - `,
+/// until a part goes on with ` - `, whose own `;` list names places within it (`United States
+/// (USA) - Indiana - counties of Adams; …; Switzerland; …` is the United States only).
 fn places(area: &str) -> Vec<String> {
-    area.split(';')
-        .filter_map(|part| part.split(" - ").next())
-        .map(|p| p.trim().trim_end_matches('.').trim().to_lowercase())
-        .filter(|p| !p.is_empty())
-        .collect()
+    let mut out = Vec::new();
+    for part in area.split(';') {
+        let (place, within) = match part.split_once(" - ") {
+            Some((place, _)) => (place, true),
+            None => (part, false),
+        };
+        let place = place.trim().trim_end_matches('.').trim().to_lowercase();
+        if !place.is_empty() {
+            out.push(place);
+        }
+        if within {
+            break;
+        }
+    }
+    out
 }
 
 /// How well `e` matches the query, lower first, and how many words were found only inside a word
@@ -270,6 +282,10 @@ mod tests {
         // Switzerland's own before Switzerland County, Indiana (EPSG:7285).
         let at = |code: &str| swiss.iter().position(|f| f.code == code);
         assert!(at("EPSG:2056") < at("EPSG:7285"), "{swiss:?}");
+        // Every system for Switzerland before those of Indiana's Switzerland County (EPSG:26773).
+        assert!(at("EPSG:21780") < at("EPSG:26773"), "{swiss:?}");
+        assert_eq!(places("Liechtenstein; Switzerland."), ["liechtenstein", "switzerland"]);
+        assert_eq!(places("United States (USA) - Indiana - counties of Adams; Switzerland; Union."), ["united states (usa)"]);
         // So does a projection's method, with the area: Swiss Oblique Mercator.
         let oblique = search("oblique mercator switzerland", true, 50);
         assert!(oblique.iter().any(|f| f.code == "EPSG:2056"), "{oblique:?}");
