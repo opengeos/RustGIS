@@ -6,6 +6,7 @@
 use crate::theme::Tokens;
 use egui::{Id, Key, Ui};
 use rustgis_engine::data::raster::crs_search::{self, Found, Kind};
+use std::sync::Arc;
 
 /// The most systems the list holds; more words narrow it.
 const LIMIT: usize = 60;
@@ -22,11 +23,31 @@ struct State {
     open: bool,
     /// The highlighted row.
     at: usize,
+    /// Whether ↑/↓ moved the highlight since the text last changed: Enter in a blank box takes a
+    /// row only then, a blank box being a choice of its own (no system, or the map's own).
+    moved: bool,
     /// The list last drawn, so a click outside both closes it.
     drawn: Option<egui::Rect>,
+    /// The rows last found, and what they were found for: the search runs when that changes,
+    /// not every frame.
+    found: Option<(String, Offer, Vec<String>, Arc<Vec<Row>>)>,
+}
+
+/// Where the pass a box's list was last open, or its box had the focus, is kept.
+fn open_id() -> Id {
+    Id::unique("crs_box_open")
+}
+
+/// Whether a coordinate system box had the focus, or its list was open, this pass or the last:
+/// Escape and the other unmodified keys are then the box's, not shortcuts (egui drops a box's
+/// focus on Escape before the shortcuts run).
+pub(crate) fn list_is_open(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(open_id())).is_some_and(|open| open + 1 >= pass)
 }
 
 /// One row of the list.
+#[derive(Clone)]
 struct Row {
     code: String,
     name: String,
@@ -61,21 +82,31 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
     let map = offer == Offer::Map;
     let text = text.trim();
     let words: Vec<String> = text.to_lowercase().split_whitespace().map(str::to_string).collect();
-    let matches = |hay: &str, digits: &str| words.iter().all(|w| hay.contains(w.as_str()) || digits.starts_with(w.as_str()));
+    let matches = |hay: &str| words.iter().all(|w| hay.contains(w.as_str()));
+    // A code typed (`2056`, `EPSG:2056`): the recent systems whose code begins with it, or only
+    // that system when the catalog lists it, so a recent EPSG:23035 never comes before 3035.
+    let compact = text.to_ascii_lowercase().replace(' ', "");
+    let code_typed = !compact.is_empty() && (compact.bytes().all(|b| b.is_ascii_digit()) || compact.contains(':'));
+    let exact = if code_typed { crs_search::lookup(&compact).map(|f| f.code.to_ascii_lowercase()) } else { None };
     let mut out: Vec<Row> = Vec::new();
     for code in recent {
-        let name = crs_search::name_of(code).unwrap_or_default().to_string();
+        let Some(found) = crs_search::lookup(code) else { continue };
         let usable = match offer {
             Offer::All => true,
-            Offer::Projected => crs_search::lookup(code).is_some_and(|f| f.kind == Kind::Projected),
-            Offer::Map => rustgis_engine::map::Projection::from_code(code).is_ok(),
+            Offer::Projected => found.kind == Kind::Projected,
+            Offer::Map => map_usable(code),
         };
         if !usable {
             continue;
         }
-        let hay = format!("{} {}", code.to_lowercase(), name.to_lowercase());
-        if matches(&hay, code.rsplit(':').next().unwrap_or_default()) {
-            out.push(Row { code: code.clone(), name, about: None, section: Section::Recent });
+        let lower = code.to_ascii_lowercase();
+        let hit = match (&exact, code_typed) {
+            (Some(exact), _) => &lower == exact,
+            (None, true) => lower.starts_with(&compact) || lower.rsplit(':').next().is_some_and(|d| d.starts_with(&compact)),
+            (None, false) => matches(&format!("{lower} {}", found.name.to_lowercase())),
+        };
+        if hit {
+            out.push(Row { code: code.clone(), name: found.name.clone(), about: None, section: Section::Recent });
         }
     }
     if map && !words.is_empty() {
@@ -84,16 +115,12 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
             .chain(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (*id, *label)));
         for (id, label) in own {
             let hay = format!("{} {} {}", id.to_lowercase(), label.to_lowercase(), crate::i18n::t(label).to_lowercase());
-            if matches(&hay, "") {
+            if matches(&hay) {
                 out.push(Row { code: id.to_string(), name: crate::i18n::t(label).to_string(), about: None, section: Section::Map });
             }
         }
     }
-    let projected = offer != Offer::All;
-    for Found { code, name, kind, area, method } in crs_search::search(text, projected, LIMIT) {
-        if projected && kind != Kind::Projected {
-            continue;
-        }
+    for Found { code, name, area, method, .. } in crs_search::search(text, offer != Offer::All, LIMIT) {
         if !out.iter().any(|r| r.code.eq_ignore_ascii_case(&code)) {
             let about = match (method, area) {
                 (Some(m), Some(a)) => Some(format!("{m}\n{a}")),
@@ -103,6 +130,24 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
         }
     }
     out
+}
+
+/// Whether a map can be drawn in `code`, asked once a run per code: [`Projection::from_code`]
+/// builds the projection.
+///
+/// [`Projection::from_code`]: rustgis_engine::map::Projection::from_code
+pub(crate) fn map_usable(code: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static KNOWN: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+    if let Some(known) = KNOWN.lock().ok().and_then(|k| k.as_ref().and_then(|k| k.get(code).copied())) {
+        return known;
+    }
+    let usable = rustgis_engine::map::Projection::from_code(code).is_ok();
+    if let Ok(mut known) = KNOWN.lock() {
+        known.get_or_insert_with(HashMap::new).insert(code.to_string(), usable);
+    }
+    usable
 }
 
 /// A coordinate system box `width` wide, editing `text`. `recent` are the recently used codes,
@@ -134,8 +179,22 @@ pub(crate) fn crs_box(
     }
     if r.changed() {
         state.at = 0;
+        state.moved = false;
     }
-    let rows = if state.open { rows(text, recent, offer) } else { Vec::new() };
+    let rows = if state.open {
+        let fresh = state.found.as_ref().is_none_or(|(t, o, r, _)| t != text || *o != offer || r.as_slice() != recent);
+        if fresh {
+            state.found = Some((text.clone(), offer, recent.to_vec(), Arc::new(rows(text, recent, offer))));
+        }
+        state.found.as_ref().map(|f| f.3.clone()).unwrap_or_default()
+    } else {
+        Arc::default()
+    };
+    let showing = state.open && (!rows.is_empty() || !text.trim().is_empty());
+    if (state.open && showing) || r.has_focus() || r.lost_focus() {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(open_id(), pass));
+    }
     let mut taken = None;
     // Enter ends a single-line edit, so the box has just lost its focus when Enter takes a row.
     if state.open && (r.has_focus() || r.lost_focus()) {
@@ -143,16 +202,27 @@ pub(crate) fn crs_box(
             .input(|i| (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown), i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
         if down && !rows.is_empty() {
             state.at = (state.at + 1).min(rows.len() - 1);
+            state.moved = true;
         }
         if up {
             state.at = state.at.saturating_sub(1);
+            state.moved = true;
         }
         // The list's keys are its own: Escape doesn't close the dialog, Enter doesn't submit it.
-        if escape {
-            state.open = false;
+        if escape && showing {
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape));
         }
-        if enter && let Some(row) = rows.get(state.at) {
+        if escape {
+            state.open = false;
+        }
+        // Enter in a blank box is that blank (no system, the map's own), unless a row was chosen
+        // with ↑/↓.
+        let chosen = !text.trim().is_empty() || state.moved;
+        if enter
+            && !escape
+            && chosen
+            && let Some(row) = rows.get(state.at)
+        {
             // A code typed in full is taken and Enter goes on to the dialog, which submits.
             if !row.code.eq_ignore_ascii_case(text.trim()) {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
@@ -246,13 +316,13 @@ fn list(ui: &mut Ui, rows: &[Row], at: &mut usize, t: &Tokens) -> Option<usize> 
                     heading = Some(section);
                 }
                 let mut job = egui::text::LayoutJob::default();
-                job.append(
-                    &row.code,
-                    0.0,
-                    egui::TextFormat { font_id: egui::FontId::monospace(11.5), color: t.text_dim, ..Default::default() },
-                );
-                if row.section == Section::Map {
-                    job = egui::text::LayoutJob::default();
+                // A map's own projection is named only; it has no code.
+                if row.section != Section::Map {
+                    job.append(
+                        &row.code,
+                        0.0,
+                        egui::TextFormat { font_id: egui::FontId::monospace(11.5), color: t.text_dim, ..Default::default() },
+                    );
                 }
                 if !row.name.is_empty() {
                     job.append(
@@ -295,12 +365,18 @@ pub(crate) fn remember(recent: &mut Vec<String>, code: &str) -> bool {
     true
 }
 
-/// The recently used codes saved as [`RECENT_PREF`].
+/// The recently used codes saved as [`RECENT_PREF`], as the catalog spells them; a line it doesn't
+/// list (edited by hand, a code a later catalog dropped) is left out.
 pub(crate) fn from_pref(value: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in value.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        if !out.iter().any(|c: &String| c.eq_ignore_ascii_case(line)) && out.len() < RECENT_MAX {
-            out.push(line.to_string());
+    let mut out: Vec<String> = Vec::new();
+    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 32) {
+        if out.len() == RECENT_MAX {
+            break;
+        }
+        if let Some(found) = crs_search::lookup(line)
+            && !out.contains(&found.code)
+        {
+            out.push(found.code.clone());
         }
     }
     out
@@ -330,12 +406,20 @@ mod tests {
         assert_eq!((robinson[0].code.as_str(), robinson[0].section), ("robinson", Section::Map));
         assert!(robinson.iter().any(|r| r.code == "ESRI:54030"));
         assert!(!rows("robinson", &[], Offer::All).iter().any(|r| r.section == Section::Map), "data is never in a preset");
+        // A code typed is that system first, not a recent one holding its digits.
+        let recent = vec!["EPSG:23035".to_string(), "EPSG:3031".to_string()];
+        assert_eq!(rows("3035", &recent, Offer::All)[0].code, "EPSG:3035");
+        assert_eq!(rows("EPSG:3035", &recent, Offer::All)[0].code, "EPSG:3035");
+        // A code begun: the recent ones it begins first, and only those.
+        let begun = rows("303", &recent, Offer::All);
+        assert_eq!((begun[0].code.as_str(), begun[0].section), ("EPSG:3031", Section::Recent));
+        assert!(!begun.iter().any(|r| r.code == "EPSG:23035" && r.section == Section::Recent));
     }
 
     #[test]
     fn the_recent_list_keeps_the_latest_first_without_repeats() {
-        let mut recent = from_pref("EPSG:2056\n\nepsg:2056\nEPSG:3857\n");
-        assert_eq!(recent, ["EPSG:2056", "EPSG:3857"]);
+        let mut recent = from_pref("EPSG:2056\n\nepsg:2056\nEPSG:3857\nrobinson\n+proj=merc\nEPSG:99999999\n");
+        assert_eq!(recent, ["EPSG:2056", "EPSG:3857"], "the catalog's spelling, its codes only");
         assert!(remember(&mut recent, "EPSG:3857"));
         assert_eq!(recent, ["EPSG:3857", "EPSG:2056"]);
         assert!(!remember(&mut recent, "  "));

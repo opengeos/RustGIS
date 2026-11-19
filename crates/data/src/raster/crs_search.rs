@@ -1,6 +1,7 @@
 //! Finding a coordinate system by name or code in terrio-crs's catalog, for the coordinate system
 //! pickers: `swiss lv95`, `2056`, `EPSG:2056` and `epsg lv95` all find EPSG:2056.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// What a coordinate system found by [`search`] is.
@@ -71,8 +72,8 @@ fn entries() -> &'static [Entry] {
                     digits: e.code.to_string(),
                     key: code.to_ascii_lowercase(),
                     search: e.name.to_lowercase(),
-                    tokens: words_of(&e.name.to_lowercase()),
                     phrase: format!(" {} ", words_of(&e.name.to_lowercase()).join(" ")),
+                    tokens: words_of(&e.name.to_lowercase()),
                     area: e.area_name.as_deref().unwrap_or_default().to_lowercase(),
                     places: places(e.area_name.as_deref().unwrap_or_default()),
                     method: e.projection_method.as_deref().unwrap_or_default().to_lowercase(),
@@ -82,6 +83,12 @@ fn entries() -> &'static [Entry] {
         }
         out
     })
+}
+
+/// Where each entry is in [`entries`], by its `epsg:2056` key.
+fn index() -> &'static HashMap<String, usize> {
+    static INDEX: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    INDEX.get_or_init(|| entries().iter().enumerate().map(|(i, e)| (e.key.clone(), i)).collect())
 }
 
 /// The words of `text`, without the marks between them: `ch1903`, `lv95` for `ch1903+ / lv95`.
@@ -152,10 +159,13 @@ fn current_datum(e: &Entry) -> bool {
 /// a row, WGS 84 and ETRS89, EPSG before ESRI, shorter names, and by code. At most `limit`, and only projected ones when
 /// `projected_only` (a map is drawn in one). Nothing for blank text.
 pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
-    let lower = text.trim().to_lowercase();
-    // `EPSG: 2056` is one code.
-    let whole = lower.replace(": ", ":");
-    let words: Vec<String> = whole.split_whitespace().map(str::to_string).collect();
+    // `EPSG: 2056` and `epsg : 2056` are one code.
+    let mut whole = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    for spaced in [" :", ": "] {
+        whole = whole.replace(spaced, ":");
+    }
+    // A word without a letter or digit (`/`, `+`) says nothing of a system.
+    let words: Vec<String> = whole.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).map(str::to_string).collect();
     if words.is_empty() {
         return Vec::new();
     }
@@ -169,7 +179,7 @@ pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
     // before `… (N-E)`); codes typed stay in code order.
     // The words typed in a row in the name (`lambert 93` in `… / Lambert-93`) before apart.
     let typed = format!(" {} ", words_of(&whole).join(" "));
-    hits.sort_by_key(|((r, inside), e)| {
+    hits.sort_by_cached_key(|((r, inside), e)| {
         (
             *r,
             *inside,
@@ -187,7 +197,7 @@ pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
 pub fn lookup(code: &str) -> Option<&'static Found> {
     let lower = code.trim().to_ascii_lowercase().replace(' ', "");
     let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
-    entries().iter().find(|e| e.key == key).map(|e| &e.found)
+    index().get(&key).map(|&i| &entries()[i].found)
 }
 
 /// The catalog's name of `code` (`EPSG:2056`, `esri:102033`, `2056`), if it lists it.
@@ -239,6 +249,11 @@ mod tests {
         // EPSG:9311 or ISN93.
         assert_eq!(search("lambert 93", true, 5)[0].code, "EPSG:2154");
         assert_eq!(search("utm 32", true, 5)[0].code, "EPSG:25832");
+        // Spaces around the colon, and marks alone, change nothing.
+        assert_eq!(search("epsg : 2056", false, 5)[0].code, "EPSG:2056");
+        assert_eq!(search("EPSG:  2056", false, 5)[0].code, "EPSG:2056");
+        assert!(search("/ +", false, 5).is_empty());
+        assert_eq!(search("+ lv95", false, 5)[0].code, "EPSG:2056");
     }
 
     #[test]

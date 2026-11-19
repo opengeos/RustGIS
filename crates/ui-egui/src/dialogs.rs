@@ -959,9 +959,8 @@ fn add_dxf(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let mut p = json!({"blocks": app.dialogs.flag});
         if !app.dialogs.text.trim().is_empty() {
             p["crs"] = json!(app.dialogs.text.trim());
-            let crs = app.dialogs.text.trim().to_string();
-            app.remember_crs_if_listed(&crs);
         }
+        let crs = app.dialogs.text.trim().to_string();
         let file = app.dialogs.dxf.take().ok_or("choose a file first")?;
         let r = match &file.source {
             DxfSource::Path(path) => {
@@ -970,9 +969,11 @@ fn add_dxf(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             }
             DxfSource::Bytes(bytes) => app.import_dxf_bytes(&file.name, bytes, p),
         };
-        // Kept for another try.
+        // Kept for another try; a system is remembered once its import has started.
         if r.is_err() {
             app.dialogs.dxf = Some(file);
+        } else {
+            app.remember_crs_if_listed(&crs);
         }
         r.map(|_| ())
     })
@@ -1172,9 +1173,12 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             }
             CsvSource::Bytes(bytes) => app.open_bytes_with(&file.name, bytes, Some(p)),
         };
-        // Kept for another try.
+        // Kept for another try; a system is remembered once its import has started.
         if r.is_err() {
             app.dialogs.csv = Some(file);
+        } else {
+            let crs = app.dialogs.text.trim().to_string();
+            app.remember_crs_if_listed(&crs);
         }
         r.map(|_| ())
     })
@@ -2566,10 +2570,20 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
                     let recent: Vec<(String, String)> = recent
                         .iter()
                         .filter_map(|code| rustgis_engine::data::raster::crs_search::name_of(code).map(|n| (code.clone(), n.to_string())))
-                        .filter(|(code, _)| rustgis_engine::map::Projection::from_code(code).is_ok())
+                        .filter(|(code, _)| crate::crspicker::map_usable(code))
                         .collect();
                     if !recent.is_empty() {
-                        ui.label(egui::RichText::new(tl!("Recently used")).size(11.0).color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(tl!("Recently used")).size(11.0).color(t.text_dim));
+                            // The way back: the list is the user's own, kept between sessions.
+                            if ui
+                                .small_button(tl!("Clear"))
+                                .on_hover_text(tl!("Forget the recently used coordinate systems, in every coordinate system box"))
+                                .clicked()
+                            {
+                                app.clear_recent_crs();
+                            }
+                        });
                         for (code, name) in &recent {
                             let selected = app.dialogs.text.eq_ignore_ascii_case(code);
                             if ui.selectable_label(selected, format!("{name} ({code})")).clicked() {
@@ -3037,6 +3051,53 @@ mod tests {
         assert!(h.query_by_role_and_label(Role::Button, &first).is_none(), "Escape closed it");
         assert_eq!(h.state().dialogs.open, Some("selectByAttributes"), "not the dialog");
         assert_eq!(h.state().session.tool, rustgis_engine::Tool::ZoomIn, "nor switched the tool");
+    }
+
+    /// In the app, Escape in a coordinate system box closes its list, not the dialog, and the
+    /// Escape shortcut (the Explore tool) doesn't take it; Enter in the blank box takes no recent
+    /// system, while ↓ then Enter does.
+    #[test]
+    fn a_coordinate_system_box_keeps_its_keys_in_the_app() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.ui.recent_crs = vec!["EPSG:2056".into()];
+        app.run("tool.set", json!({"tool": "zoomIn"})).unwrap();
+        app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        // Under the box, and in the dialog's own list.
+        let shown = |h: &egui_kittest::Harness<'_, RustGisApp>| h.query_all_by_label_contains("CH1903+ / LV95").count();
+        assert_eq!(shown(&h), 2, "the recent list opened");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(shown(&h), 1, "Escape closed it");
+        assert_eq!(h.state().dialogs.open, Some("coordinateSystem"), "not the dialog");
+        assert_eq!(h.state().session.tool, rustgis_engine::Tool::ZoomIn, "nor switched the tool");
+        // Blank and Enter: no system taken.
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.a, "", "a blank box stays blank");
+        // ↓ chooses the recent one, Enter takes it.
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.a, "EPSG:2056");
+        assert_eq!(h.state().dialogs.text, "EPSG:2056");
     }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the

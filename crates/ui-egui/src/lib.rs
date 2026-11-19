@@ -2467,13 +2467,19 @@ impl RustGisApp {
         }
     }
 
+    /// Forgets the recently used coordinate systems.
+    pub(crate) fn clear_recent_crs(&mut self) {
+        self.ui.recent_crs.clear();
+        self.save_pref(crspicker::RECENT_PREF, "");
+    }
+
     /// [`Self::remember_crs`] for a code the catalog lists (`EPSG:2056`), not a preset or a
     /// PROJ string, which the coordinate system boxes offer otherwise or can't name.
     pub(crate) fn remember_crs_if_listed(&mut self, code: &str) {
-        let code = code.trim();
-        let code = if code.bytes().all(|b| b.is_ascii_digit()) { format!("EPSG:{code}") } else { code.to_string() };
-        if rustgis_engine::data::raster::crs_search::name_of(&code).is_some() {
-            self.remember_crs(&code.to_ascii_uppercase());
+        // As the catalog spells it, so `epsg: 2056` and `EPSG:2056` are one system.
+        if let Some(found) = rustgis_engine::data::raster::crs_search::lookup(code) {
+            let code = found.code.clone();
+            self.remember_crs(&code);
         }
     }
 

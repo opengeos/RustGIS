@@ -829,6 +829,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     let pass = ctx.cumulative_pass_nr();
     let typing = ctx.egui_wants_keyboard_input()
         || crate::completion::menu_is_open(ctx)
+        || crate::crspicker::list_is_open(ctx)
         || crate::searchbox::had_focus(&app.ui.search, pass)
         || crate::table::had_focus(&app.table, pass);
     // A text field focused, not any widget (a button reached with Tab): it has an undo of its own.

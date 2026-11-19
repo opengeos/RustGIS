@@ -700,9 +700,14 @@ map's own projections by name where the box sets the map (`robinson`), then the 
 systems. Among equal matches, names whose words begin with the words typed come first
 (`lambert 93` finds Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a
 plain system before its axis-order variants. ↑/↓ move through the list, Enter or a click takes a
-system, and Escape closes the list. A box for the map, the measured grid or the analysis
-environment lists projected systems only. Text the list doesn't hold, such as WKT or a PROJ
-string, is used as typed.
+system, and Escape closes the list. In a dialog, taking a system fills the box and a second Enter
+confirms the dialog (a code typed in full, such as `EPSG:2263`, confirms with the first); in the
+graticule and start-up menus it applies the system at once; in the analysis environment,
+**Set Coordinate System** applies it. Enter in an empty box leaves it empty (no system, or the
+map's own for the measured grid) unless ↓ chose a row. A box for the map, the measured grid or the
+analysis environment lists projected systems only. Text the list doesn't hold, such as WKT or a
+PROJ string, is used as typed. A system is remembered once it is applied or its import starts;
+**Clear** beside **Recently used** in the Coordinate System dialog forgets them all.
 
 Projections and datum transformations are computed by
 [terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.9.0 computes them. On the desktop, the
