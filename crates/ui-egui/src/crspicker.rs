@@ -124,7 +124,12 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
             }
         }
     }
-    for Found { code, name, area, method, .. } in crs_search::search(text, offer != Offer::All, LIMIT) {
+    // A map's box leaves out what a map can't be drawn in, so it asks for more.
+    let limit = if map { LIMIT * 2 } else { LIMIT };
+    for Found { code, name, area, method, .. } in crs_search::search(text, offer != Offer::All, limit) {
+        if out.len() >= LIMIT + recent.len() {
+            break;
+        }
         // A projected system a map can't be drawn in (a method RustGIS can't compute) isn't offered.
         if map && !map_usable(&code) {
             continue;

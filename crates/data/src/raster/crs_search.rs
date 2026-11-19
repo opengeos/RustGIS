@@ -1,5 +1,5 @@
 //! Finding a coordinate system by name or code in terrio-crs's catalog, for the coordinate system
-//! pickers: `swiss lv95`, `2056`, `EPSG:2056` and `epsg lv95` all find EPSG:2056.
+//! pickers: `lv95`, `switzerland`, `2056`, `EPSG:2056` and `epsg lv95` all find EPSG:2056.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -38,6 +38,8 @@ struct Entry {
     key: String,
     /// The name in lower case.
     search: String,
+    /// Its letters and digits alone: `wgs84utmzone32n`, for words typed without the spaces.
+    compact: String,
     /// The name's words in lower case: `ch1903`, `lv95` for `CH1903+ / LV95`.
     tokens: Vec<String>,
     /// Those words with a space between and around each: ` ch1903 lv95 `.
@@ -74,6 +76,7 @@ fn entries() -> &'static [Entry] {
                     digits: e.code.to_string(),
                     key: code.to_ascii_lowercase(),
                     phrase: format!(" {} ", tokens.join(" ")),
+                    compact: tokens.concat(),
                     tokens,
                     search: lower,
                     area: e.area_name.as_deref().unwrap_or_default().to_lowercase(),
@@ -119,7 +122,9 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
         // A number begins the code, or `epsg:2` its key; a letter alone (`e`) begins no code.
         let in_code = (w.bytes().all(|b| b.is_ascii_digit()) && e.digits.starts_with(w.as_str()))
             || (w.contains(':') && e.key.starts_with(w.as_str()));
-        let in_name = in_code || e.search.contains(w.as_str()) || w.eq_ignore_ascii_case(e.authority);
+        // `utm32n` and `lambert93` are words of the name typed without its spaces and marks.
+        let glued = || w.len() > 3 && e.compact.contains(&w.chars().filter(|c| c.is_alphanumeric()).collect::<String>());
+        let in_name = in_code || e.search.contains(w.as_str()) || w.eq_ignore_ascii_case(e.authority) || glued();
         if !in_name && !e.method.contains(w.as_str()) && !e.area.contains(w.as_str()) {
             return None;
         }
@@ -209,9 +214,16 @@ pub fn lookup(code: &str) -> Option<&'static Found> {
 }
 
 fn lookup_entry(code: &str) -> Option<&'static Entry> {
-    let lower: String = code.to_ascii_lowercase().split_whitespace().collect();
-    let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
-    index().get(&key).map(|&i| &entries()[i])
+    let lower = code.to_ascii_lowercase();
+    let mut parts = lower.split(|c: char| c == ':' || c.is_whitespace()).filter(|p| !p.is_empty());
+    let found = |key: String| index().get(&key).map(|&i| &entries()[i]);
+    match (parts.next(), parts.next(), parts.next()) {
+        // `2056` is EPSG's; a number only ESRI lists (`102033`) is ESRI's.
+        (Some(n), None, None) if n.bytes().all(|b| b.is_ascii_digit()) => found(format!("epsg:{n}")).or_else(|| found(format!("esri:{n}"))),
+        // `EPSG:2056`, `epsg : 2056`, `EPSG 2056`.
+        (Some(authority), Some(n), None) => found(format!("{authority}:{n}")),
+        _ => None,
+    }
 }
 
 /// Whether the system `code` matches `text` as [`search`] matches it: by its code, the words of
@@ -274,6 +286,9 @@ mod tests {
         assert_eq!(search("epsg : 2056", false, 5)[0].code, "EPSG:2056");
         assert_eq!(search("EPSG:  2056", false, 5)[0].code, "EPSG:2056");
         assert!(search("/ +", false, 5).is_empty());
+        // Words typed without their spaces.
+        assert_eq!(search("lambert93", true, 5)[0].code, "EPSG:2154");
+        assert_eq!(search("wgs84 utm 32n", true, 5)[0].code, "EPSG:32632");
         // A letter alone begins no code.
         assert!(search("e", false, 60).iter().all(|f| f.name.to_lowercase().contains('e')
             || f.area.as_deref().unwrap_or_default().to_lowercase().contains('e')
@@ -290,5 +305,10 @@ mod tests {
         assert_eq!(name_of("epsg:4326"), Some("WGS 84"));
         assert_eq!(name_of("vn2000tm3"), None);
         assert_eq!(lookup("4326").map(|f| f.kind), Some(Kind::Geographic));
+        for spelt in ["EPSG 2056", "epsg : 2056", " EPSG:2056 "] {
+            assert_eq!(lookup(spelt).map(|f| f.code.as_str()), Some("EPSG:2056"), "{spelt}");
+        }
+        assert_eq!(lookup("102033").map(|f| f.code.as_str()), Some("ESRI:102033"));
+        assert_eq!(lookup("EPSG:2056 x"), None);
     }
 }
