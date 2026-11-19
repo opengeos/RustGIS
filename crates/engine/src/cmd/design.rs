@@ -173,18 +173,16 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
     };
     let new_rows: Vec<usize> =
         if new_defaults { changes.iter().filter(|c| c.before.is_none()).filter_map(|c| c.row).collect() } else { Vec::new() };
-    let zs: Vec<(usize, Option<f64>)> = new_rows
-        .iter()
-        .map(|r| {
-            // Sampled at its place in longitude/latitude, from the layer's own coordinates.
-            let z = s.map().layer(id).and_then(|l| {
-                let g = l.dataset.features.get(*r)?.geometry.as_ref()?;
-                let lonlat = l.dataset.geometry_to_lonlat(g).ok()?;
-                z_of(s, &lonlat)
-            });
-            (*r, z)
-        })
-        .collect();
+    // Sampled at each place in longitude/latitude, from the layer's own coordinates; a place that
+    // can't be converted refuses the edit rather than leave the feature without its `z`.
+    let mut zs: Vec<(usize, Option<f64>)> = Vec::with_capacity(new_rows.len());
+    for r in &new_rows {
+        let lonlat = match s.map().layer(id).and_then(|l| Some((l, l.dataset.features.get(*r)?.geometry.as_ref()?))) {
+            Some((l, g)) => Some(l.dataset.geometry_to_lonlat(g)?),
+            None => None,
+        };
+        zs.push((*r, lonlat.and_then(|g| z_of(s, &g))));
+    }
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // New features: subtype defaults fill empty fields; elevation goes in `z`.
     if let Some(st) = l.design.subtypes.clone()
