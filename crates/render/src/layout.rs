@@ -5366,17 +5366,24 @@ mod tests {
     }
 
     /// A wrapped text past the 200 lines a text draws is reported cut, even when its 201st line is
-    /// blank and the text goes on after it (#2346).
+    /// blank and the text goes on after it (#2346); one followed only by blank lines loses nothing
+    /// and isn't.
     #[test]
     fn a_wrapped_text_past_its_last_drawn_line_is_reported_cut() {
         let info = PageInfo::default();
-        let mut l = Layout::new("L", 100.0, 1500.0);
-        let mut kind = ElementKind::text(format!("{}\n\nZ", vec!["a"; 200].join("\n")), 12.0, Rgba::rgb(0, 0, 0), false);
-        if let ElementKind::Text { wrap, .. } = &mut kind {
-            *wrap = true;
-        }
-        let id = l.add("Note", (10.0, 10.0, 40.0, 1400.0), kind);
+        let page = |tail: &str| {
+            let mut l = Layout::new("L", 100.0, 1500.0);
+            let mut kind = ElementKind::text(format!("{}{tail}", vec!["a"; 200].join("\n")), 12.0, Rgba::rgb(0, 0, 0), false);
+            if let ElementKind::Text { wrap, .. } = &mut kind {
+                *wrap = true;
+            }
+            let id = l.add("Note", (10.0, 10.0, 40.0, 1400.0), kind);
+            (l, id)
+        };
+        let (l, id) = page("\n\nZ");
         assert_eq!(clipped_text(&l, &[], 96.0, &info), vec![(id, "Note".into())]);
+        let (l, _) = page("\n\n\n");
+        assert!(clipped_text(&l, &[], 96.0, &info).is_empty(), "only blank lines past it");
     }
 
     /// The same lines at every resolution: they are measured at one (#2346), so the layout view,
