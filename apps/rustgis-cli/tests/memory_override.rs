@@ -30,10 +30,17 @@ fn the_memory_override_sets_the_limits_and_says_so() {
     // 1 GiB: a quarter is the undo history's 256 MiB floor.
     assert_eq!(run(Some("1073741824")).0["undoBytes"], json!(256_u64 << 20));
     // Without it, or with a value that isn't a positive number of bytes, nothing changes or is said.
-    let (plain, quiet) = run(None);
+    let (mut plain, quiet) = run(None);
     assert_ne!(plain["memorySource"], json!("override"));
     assert!(!quiet.contains("RUSTGIS_MEMORY_BYTES"), "{quiet}");
-    assert_eq!(run(Some("8 GiB")).0, plain);
+    // What the computer has free is read live (#2431), so it can differ between the two runs, and
+    // the limits it bounds too: they are compared only where much is free.
+    let mut junk = run(Some("8 GiB")).0;
+    let (a, b) = (plain["freeBytes"].take(), junk["freeBytes"].take());
+    let roomy = |free: &Value| free.as_u64().is_none_or(|f| f > plain["memory"].as_u64().unwrap_or(0) / 2);
+    if roomy(&a) && roomy(&b) {
+        assert_eq!(junk, plain);
+    }
 }
 
 /// What the process holds reaches `gp.env` (#2431): with the sample project open it is more than
@@ -51,6 +58,8 @@ fn gp_env_says_what_is_held() {
     let limits = serde_json::from_slice::<Value>(&out.stdout).unwrap()["limits"].clone();
     let held = limits["heldBytes"].as_u64().unwrap();
     assert!(held > 0 && held < 8 << 30, "{held}");
+    // With the override, what else runs on the computer doesn't change the limits.
+    assert_eq!(limits["freeBytes"], Value::Null);
     // 16 GiB plans for 4 GiB: 512 MiB of file.
     assert_eq!(limits["fileBytes"], json!(512_u64 << 20));
 }

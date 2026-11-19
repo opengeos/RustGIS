@@ -2009,7 +2009,13 @@ impl Session {
                 copy,
                 stamp: self.history_stamp(),
             })),
-            Err((held, usable)) => Err(format!(
+            Err(undo_memory::NoRoom { free: Some(free), .. }) => Err(format!(
+                "{label}: not enough memory to edit {name}: the edit copies its rows (about {}), and the computer has only about {} free now, with about {} kept for drawing and the window, as other programs (and memory RustGIS freed but keeps for reuse) use the rest. Close other programs, or remove layers or tables you no longer need, then try again.",
+                undo_memory::size_said(copy),
+                undo_memory::size_said(free),
+                undo_memory::size_said(self.undo_memory.memory.map_or(0, rustgis_data::memory::margin)),
+            )),
+            Err(undo_memory::NoRoom { held, usable, free: None }) => Err(format!(
                 "{label}: not enough memory to edit {name}: the edit copies its rows (about {}), and the open layers and tables already hold about {} of the {} RustGIS plans to use on this computer. Remove layers or tables you no longer need, then try again.",
                 undo_memory::size_said(copy),
                 undo_memory::size_said(held),

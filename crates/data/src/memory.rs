@@ -112,19 +112,60 @@ pub fn scaled(memory: Option<u64>, floor: usize, ceiling: usize, bytes: u64) -> 
 }
 
 /// A limit of units costing `bytes` each that plans for what is left (#2431 fix 3): as many as
-/// [`share`] holds with what the process holds now ([`held`]) taken off, within `floor` and
-/// `ceiling`; `floor` when the memory isn't known. So a limit asked for again later can be lower,
-/// never below its floor.
+/// [`share`] holds with what the process holds now ([`held`]) and what the computer has free now
+/// ([`available`]), within `floor` and `ceiling`; `floor` when the memory isn't known. So a limit
+/// asked for again later can be lower, never below its floor.
 pub fn planned(floor: usize, ceiling: usize, bytes: u64) -> usize {
-    within(share(physical(), held()), floor, ceiling, bytes)
+    within(share(physical(), held(), available()), floor, ceiling, bytes)
 }
 
 /// The memory a job plans for on a computer with `memory` bytes (`None`: not known) while `held`
-/// bytes are held: [`SHARE`] of it, or what is left of [`usable`] after what is held when that
-/// is less. Up to half the memory held, it is the share.
-pub fn share(memory: Option<u64>, held: u64) -> Option<u64> {
+/// bytes are held and `free` bytes are free (`None`: not known): the smallest of [`SHARE`] of it,
+/// what is left of [`usable`] after what is held, and what is free less [`margin`]. With half the
+/// memory or less held and enough free, it is the share.
+pub fn share(memory: Option<u64>, held: u64, free: Option<u64>) -> Option<u64> {
     let memory = memory?;
-    Some((memory / SHARE).min(usable(Some(memory)).unwrap_or(0).saturating_sub(held)))
+    let left = usable(Some(memory)).unwrap_or(0).saturating_sub(held);
+    let free = free.map_or(u64::MAX, |free| free.saturating_sub(margin(memory)));
+    Some((memory / SHARE).min(left).min(free))
+}
+
+/// What is kept free beside a job or an edit's copy on a computer with `memory` bytes, for what
+/// RustGIS's estimates don't count (drawing, the window, the allocator's slack): a twentieth of
+/// the memory, from 256 MiB up to 2 GiB, as drawing doesn't grow with the memory.
+pub fn margin(memory: u64) -> u64 {
+    (memory / 20).clamp(256 << 20, 2 << 30)
+}
+
+/// The memory the computer has free now, read each time (#2431): what the system can give without
+/// swapping, the cache it can drop counted as free, with RustGIS's own use already taken off.
+/// It reads files or asks the system, so it is read once a job or an edit, never in a loop.
+///
+/// `None`:
+/// - in the browser, in a fuzzing build, or when it can't be read;
+/// - when [`OVERRIDE`] is set, so a test or a reproduction gives the same limits whatever else
+///   runs;
+/// - in a container whose limit the limits follow: its usage counts the file cache the kernel only
+///   drops near the limit, so it would read as nearly full after any large read; the limit itself
+///   bounds RustGIS there.
+///
+/// Memory RustGIS freed that its allocator keeps for reuse still counts as used here. On macOS
+/// the system counts pages programs are using as available too, so this rarely bounds anything
+/// there.
+pub fn available() -> Option<u64> {
+    #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
+    {
+        if source() != "computer" {
+            return None;
+        }
+        let mut s = sysinfo::System::new().ok()?;
+        s.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
+        Some(s.available_memory()).filter(|m| *m > 0)
+    }
+    #[cfg(any(fuzzing, target_arch = "wasm32"))]
+    {
+        None
+    }
 }
 
 /// As many units of `bytes` as `share` holds, within `floor` and `ceiling`.
@@ -199,16 +240,29 @@ mod tests {
 
     #[test]
     fn a_job_plans_for_what_is_left_of_the_memory_once_half_is_held() {
-        assert_eq!(share(Some(16 * GIB), 0), Some(4 * GIB), "nothing held: the share");
-        assert_eq!(share(Some(16 * GIB), 8 * GIB), Some(4 * GIB), "half held: still the share");
-        assert_eq!(share(Some(16 * GIB), 10 * GIB), Some(2 * GIB), "what is left of three quarters");
-        assert_eq!(share(Some(16 * GIB), 20 * GIB), Some(0), "more held than planned for: nothing");
-        assert_eq!(share(None, 10 * GIB), None, "memory not known");
+        assert_eq!(share(Some(16 * GIB), 0, None), Some(4 * GIB), "nothing held: the share");
+        assert_eq!(share(Some(16 * GIB), 8 * GIB, None), Some(4 * GIB), "half held: still the share");
+        assert_eq!(share(Some(16 * GIB), 10 * GIB, None), Some(2 * GIB), "what is left of three quarters");
+        assert_eq!(share(Some(16 * GIB), 20 * GIB, None), Some(0), "more held than planned for: nothing");
+        assert_eq!(share(None, 10 * GIB, Some(GIB)), None, "memory not known");
         // The limits keep their floors and ceilings.
-        assert_eq!(within(share(Some(16 * GIB), 10 * GIB), 100, 1 << 40, 8), 256 << 20);
-        assert_eq!(within(share(Some(16 * GIB), 12 * GIB), 100, 1 << 40, 8), 100, "never below the floor");
-        assert_eq!(within(share(None, 12 * GIB), 100, 1 << 40, 8), 100);
-        assert_eq!(within(share(Some(1024 * GIB), 0), 100, 1_000, 8), 1_000);
+        assert_eq!(within(share(Some(16 * GIB), 10 * GIB, None), 100, 1 << 40, 8), 256 << 20);
+        assert_eq!(within(share(Some(16 * GIB), 12 * GIB, None), 100, 1 << 40, 8), 100, "never below the floor");
+        assert_eq!(within(share(None, 12 * GIB, None), 100, 1 << 40, 8), 100);
+        assert_eq!(within(share(Some(1024 * GIB), 0, None), 100, 1_000, 8), 1_000);
+    }
+
+    #[test]
+    fn a_job_plans_for_no_more_than_the_computer_has_free() {
+        // 8 GiB with little held, but other programs use most of it: what is free, less the margin
+        // (a twentieth of 8 GiB, above 256 MiB).
+        assert_eq!(share(Some(8 * GIB), GIB, Some(GIB)), Some(GIB - 8 * GIB / 20));
+        assert_eq!(margin(GIB), 256 << 20, "at least 256 MiB");
+        assert_eq!(share(Some(8 * GIB), GIB, Some(6 * GIB)), Some(2 * GIB), "plenty free: the share");
+        assert_eq!(share(Some(8 * GIB), GIB, Some(100 << 20)), Some(0), "less free than the margin: nothing");
+        assert_eq!(margin(16 * GIB), 16 * GIB / 20, "a twentieth");
+        assert_eq!(margin(1024 * GIB), 2 * GIB, "at most 2 GiB");
+        assert_eq!(within(share(Some(8 * GIB), 0, Some(0)), 100, 1 << 40, 8), 100, "never below the floor");
     }
 
     #[test]
