@@ -3249,7 +3249,7 @@ const WRAP_PX_PER_MM: f64 = 300.0 / 25.4;
 
 /// A wrapped text (#2346) as the lines it is drawn in, joined by line breaks: each of its own
 /// lines broken at spaces to fit `width` mm at `size` points, a word wider than that broken
-/// across lines ([`crate::report::wrap_with`]). A line is measured as [`text_block`] places it:
+/// across lines ([`crate::report::wrap_lines`]). A line is measured as [`text_block`] places it:
 /// a left-aligned one from the box's edge to its ink's right, an aligned one by its ink.
 pub(crate) fn wrapped(s: &str, width: f64, size: f64, style: TextStyle) -> String {
     let ppp = (WRAP_PX_PER_MM / PT_PER_MM) as f32;
@@ -3259,7 +3259,8 @@ pub(crate) fn wrapped(s: &str, width: f64, size: f64, style: TextStyle) -> Strin
         let (lo, hi) = text::styled_extent(t, px, style.face, spacing);
         f64::from(if style.align == TextAlign::Left { hi } else { hi - lo })
     };
-    crate::report::wrap_with(s, width * WRAP_PX_PER_MM, measure).join("\n")
+    // Lines past the 200 a text draws aren't broken: one more tells the cut-off check it goes on.
+    crate::report::wrap_lines(s, width * WRAP_PX_PER_MM, measure, 200).join("\n")
 }
 
 /// The distance between two lines of text at `size` points, in mm, as [`text_block`] sets them.

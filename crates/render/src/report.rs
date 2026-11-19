@@ -80,22 +80,28 @@ pub fn wrap(s: &str, w: f64, pt: f32) -> Vec<String> {
 }
 
 /// [`wrap`] with the width of a piece of text (in mm) measured by `width`: bold text, or text whose
-/// tokens are filled in only when it is drawn. Past the first 2000 lines, and the first 5000 words
-/// of a line, the text is kept as it is, unbroken, rather than lost: a layout text drawn through it
-/// shows the rest past its box, where the cut-off notice finds it (#2346).
+/// tokens are filled in only when it is drawn. At most 2000 lines and one more ([`wrap_lines`]).
 pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
+    wrap_lines(s, w, width, 2000)
+}
+
+/// [`wrap_with`] that stops once it has `max` lines and one more, which tells a caller the text
+/// goes on: its work is bounded by the lines it returns, however long the text, and every word in
+/// them is broken to the width (a layout text draws 200 and says it is cut past them, #2346).
+pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> Vec<String> {
     let mut out = Vec::new();
-    let mut paras = s.lines();
-    for para in paras.by_ref().take(2000) {
+    'text: for para in s.lines() {
         let mut line = String::new();
-        let mut words = para.split_whitespace();
-        for word in words.by_ref().take(5000) {
+        for word in para.split_whitespace() {
+            if out.len() > max {
+                break 'text;
+            }
             // A word wider than the line (a long URL…) is broken across lines: the most of its
             // characters that fit, found by doubling then halving from its start, so a piece
             // costs a few measures of about its own length, not of the rest of the word (a long
             // word in a box narrower than a few letters stays cheap, #2346).
             let mut word = word;
-            while word.chars().nth(1).is_some() {
+            while word.chars().nth(1).is_some() && out.len() <= max {
                 let prefix = |k: usize| word.char_indices().nth(k).map_or(word, |(i, _)| &word[..i]);
                 let (mut fits, mut probe) = (1, 2);
                 let mut over = loop {
@@ -135,12 +141,11 @@ pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
             }
         }
         out.push(line);
-        let rest = words.collect::<Vec<_>>().join(" ");
-        if !rest.is_empty() {
-            out.push(rest);
+        if out.len() > max {
+            break;
         }
     }
-    out.extend(paras.map(str::to_string));
+    out.truncate(max.saturating_add(1));
     out
 }
 
@@ -546,15 +551,21 @@ mod tests {
         assert!(count.get() < 20 * lines.len(), "{} measures for {} lines", count.get(), lines.len());
     }
 
-    /// Text past the lines and words it breaks is kept, unbroken, not dropped (#2346).
+    /// Every word of a long paragraph is broken to the width, however many (#2346); the lines stop
+    /// one past the limit, which tells the caller the text goes on, whatever ends them.
     #[test]
-    fn text_past_the_caps_is_kept() {
+    fn a_long_text_wraps_every_word_and_stops_one_line_past_its_limit() {
+        let fit = |t: &str| width_mm(t, 7.0, false);
         let words = vec!["word"; 6000].join(" ");
-        let lines = wrap_with(&words, 40.0, |t| width_mm(t, 7.0, false));
+        let lines = wrap_with(&words, 40.0, fit);
         assert_eq!(lines.join(" "), words, "every word kept");
+        assert!(lines.iter().all(|l| fit(l) <= 40.0), "and broken to fit");
+        let few = wrap_lines(&words, 40.0, fit, 10);
+        assert_eq!(few, lines[..11], "one line past the limit");
         let many = vec!["line"; 2100].join("\n");
-        let lines = wrap_with(&many, 40.0, |t| width_mm(t, 7.0, false));
-        assert_eq!(lines.join("\n"), many, "every line kept");
+        assert_eq!(wrap_with(&many, 40.0, fit).len(), 2001, "past it, lines");
+        let long = "x".repeat(5000);
+        assert_eq!(wrap_lines(&long, 0.5, fit, 10).len(), 11, "or pieces of one word");
     }
 
     /// A long word costs measures of about its own length, not of the rest of the word for each
@@ -564,10 +575,15 @@ mod tests {
         let word = "x".repeat(5000);
         for w in [0.5, 4.0, 40.0] {
             let measured = std::cell::Cell::new(0usize);
-            let lines = wrap_with(&word, w, |t| {
-                measured.set(measured.get() + t.chars().count());
-                width_mm(t, 7.0, false)
-            });
+            let lines = wrap_lines(
+                &word,
+                w,
+                |t| {
+                    measured.set(measured.get() + t.chars().count());
+                    width_mm(t, 7.0, false)
+                },
+                usize::MAX,
+            );
             assert_eq!(lines.concat(), word, "nothing lost at {w} mm");
             assert!(lines.iter().all(|l| l.chars().count() == 1 || width_mm(l, 7.0, false) <= w), "every piece fits at {w} mm");
             assert!(measured.get() < 20 * word.len(), "{} letters measured at {w} mm", measured.get());
