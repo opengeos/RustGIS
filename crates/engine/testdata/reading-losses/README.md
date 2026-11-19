@@ -107,9 +107,17 @@ remove the unused theme, document properties and sheet metadata. ZIP timestamps 
 1980-01-01. The generated XLSB short string/RK cell records were re-encoded as
 full `BrtCellSt`/`BrtCellRk` records with explicit column indexes, following the
 published [MS-XLSB Cell layout](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/1e3e0c46-6175-4123-b02b-903643a5cc07).
-The writer's undocumented short forms are not read by the current XLSB parser;
-these fixtures use the published full records and do not test short-form fidelity.
+These fixtures use the published full records and do not test short-form fidelity.
+As an independent check of the rewritten contents, SheetJS CE 0.18.5's `readFile`
+and `sheet_to_json` read all six committed XLS/XLSB workbooks back to the documented
+headers, WKT and numeric ID. This check uses a parser independent of RustGIS.
 No macros, formulas or external links are included.
+
+The original, unmodified SheetJS 0.18.5 clean XLSB is a known reader gap: native
+`sheets::read` retains `POINT(1 2)` but returns no attribute fields or values,
+including the source `id=7`, with zero skipped rows and no messages. Its short
+cell records are not covered by the full-record fixture pairs; this observed
+silent attribute loss is tracked below and in the roadmap.
 
 | Files (both `.xls` and `.xlsb`) | WKT | Current loss classification |
 | --- | --- | --- |
@@ -152,7 +160,8 @@ but not covered here, not necessarily a known bug. CRS assumptions remain separa
 | GeoPackage / FlatGeobuf / GeoParquet / FileGDB (distinct readers) | Z in each | M, members/parts/curves where supported, attributes |
 | LAS/LAZ | None in this paired corpus | Sampling, dimensions/attributes; geometry members/holes inapplicable |
 | XLSX | WKT Z/members, error-valued attribute | M, other geometry, dates/formulas/names/encoding |
-| ODS / XLS / XLSB (distinct workbook parsers) | WKT Z/members in each | M, other geometry, dates/errors/names/encoding |
+| ODS / XLS (distinct workbook parsers) | WKT Z/members in each | M, other geometry, dates/errors/names/encoding |
+| XLSB | WKT Z/members with full cell records | Known silent loss: original SheetJS 0.18.5 short-cell clean workbook keeps the point but loses all attribute fields/values without a notice; M, other geometry, dates/errors/names/encoding remain gaps |
 | XLSM | Shared XLSX OOXML implementation only | No distinct fixture; macros and macro fidelity untested |
 | Generic ZIP | Delegates to inner readers; KMZ covered above | Other wrapper parity |
 

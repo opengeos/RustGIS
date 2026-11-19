@@ -73,7 +73,9 @@ A result is right, or RustGIS says what it lost or assumed
   nodes or ways the file doesn't hold, and inner rings outside every outer one; and the text
   readers' losses listed as `Silent` in `crates/engine/tests/never_silent_reading.rs`, among them
   each vertex's Z in DXF and unreadable coordinates, holes and parts in KML, GeoRSS, MapInfo and
-  DXF, plus geometry-collection members in XLSX/ODS/XLS/XLSB and error-valued attribute cells in XLSX. A fix makes
+  DXF, plus geometry-collection members in XLSX/ODS/XLS/XLSB, error-valued attribute cells in XLSX,
+  and attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
+  workbook retains its point but no attributes, without a notice). A fix makes
   its case `Said` _(open)_.
 - Lossy sample files in `never_silent_reading.rs` for the readers it doesn't cover yet:
   remaining distinct loss families and parser paths (see the finite
