@@ -686,30 +686,7 @@ System** dialog, which also takes a projected EPSG code (such as `3035`, `32633`
 code whose projection method RustGIS can't compute is refused with the reason, rather than drawn
 in another projection. The codes are those of the EPSG registry v13.102 and PROJ 9.9.0's ESRI
 codes, so a system added to EPSG recently (such as `11476`, SIRGAS-Chile 2025 / UTM zone 19S) is
-there too.
-
-### Finding a coordinate system
-
-Every box that takes a coordinate system (the Coordinate System dialog, Define Projection, the
-Shapefile, DXF and CSV imports, the measured grid, **Settings › Start-up › Projection** and the
-analysis environment) searches as you type. It finds a system by its code (`3035`,
-`EPSG:3035`, `esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection
-method (`albers`, `oblique mercator`) or by its area of use (`switzerland`), and lists the matches
-under the box: the systems you used last first (the ten last applied, kept between sessions), the
-map's own projections by name where the box sets the map (`robinson`), then the EPSG and ESRI
-systems. Among equal matches, names whose words begin with the words typed come first
-(`lambert 93` finds Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a
-plain system before its axis-order variants. ↑/↓ move through the list, Enter or a click takes a
-system, and Escape closes the list. In a dialog, taking a system fills the box and a second Enter
-confirms the dialog (a code typed in full, such as `EPSG:2263`, confirms with the first); in the
-graticule and start-up menus it applies the system at once; in the analysis environment,
-**Set Coordinate System** applies it. Enter in an empty box leaves it empty (no system, or the
-map's own for the measured grid) unless ↓ chose a row. A box for the map, the measured grid or the
-analysis environment lists projected systems only. Text the list doesn't hold, such as WKT or a
-PROJ string, is used as typed. A system is remembered once it is applied or its import starts;
-**Clear** beside **Recently used** in the Coordinate System dialog forgets them all.
-
-Projections and datum transformations are computed by
+there too. Projections and datum transformations are computed by
 [terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.9.0 computes them. On the desktop, the
 command line, Python and the phone apps, datum shift grids are read from RustGIS's own grid folder
 (`datum-grids` in its app data), then from those PROJ and terrio use on the computer
@@ -784,6 +761,28 @@ Earth, Natural Earth, Winkel Tripel and Eckert IV are computed by RustGIS itself
 so EPSG:8857 (Equal Earth) works too. So is the sinusoidal projection, on a sphere or an
 ellipsoid: MODIS rasters, whose GeoTIFFs give it as their own projection, open and draw, and
 World, Sphere and Africa Sinusoidal (`ESRI:54008`, `53008`, `102011`) can be the map's.
+
+### Finding a coordinate system
+
+Every box that takes a coordinate system (the Coordinate System dialog, Define Projection, the
+Shapefile, DXF and CSV imports, the measured grid, **Settings › Start-up › Projection** and the
+analysis environment) searches as you type. It finds a system by its code (`3035`,
+`EPSG:3035`, `esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection
+method (`albers`, `oblique mercator`) or by its area of use (`switzerland`), and lists the matches
+under the box: the systems you used last first (the ten last applied, kept between sessions), the
+map's own projections by name where the box sets the map (`robinson`), then the EPSG and ESRI
+systems. Among equal matches, names whose words begin with the words typed come first
+(`lambert 93` finds Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a
+plain system before its axis-order variants. ↑/↓ move through the list, Enter or a click takes a
+system, and Escape closes the list. In a dialog, taking a system fills the box and a second Enter
+confirms the dialog (a code typed in full, such as `2263` or `EPSG:2263`, confirms with the
+first); in the
+graticule and start-up menus it applies the system at once; in the analysis environment,
+**Set Coordinate System** applies it. Enter in an empty box leaves it empty (no system, or the
+map's own for the measured grid) unless ↓ chose a row. A box for the map, the measured grid or the
+analysis environment lists projected systems only. Text the list doesn't hold, such as WKT or a
+PROJ string, is used as typed. A system is remembered once it is applied or its import starts;
+**Clear** beside **Recently used** in the Coordinate System dialog forgets them all.
 
 ## Globe
 

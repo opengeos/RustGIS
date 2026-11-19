@@ -2079,7 +2079,13 @@ impl RustGisApp {
                 self.session.notify(error.clone(), true);
                 return Err(error);
             };
-            return self.open_bytes_with(name, bytes, Some(options));
+            let crs = options.get("crs").and_then(Value::as_str).unwrap_or_default().to_string();
+            let r = self.open_bytes_with(name, bytes, Some(options));
+            // Remembered once a file was picked and its import started, not when the picker opened.
+            if r.is_ok() {
+                self.remember_crs_if_listed(&crs);
+            }
+            return r;
         }
         if let Some(picked) = name.strip_prefix(DXF_PICK) {
             let (id, name) = picked.split_once(':').ok_or(tl!("Invalid DXF picker request"))?;
@@ -4217,6 +4223,8 @@ impl RustGisApp {
                     }
                     open("shapefile");
                 } else if let Some(path) = dialogs::pick_open(&["shp", "zip"], tl!("Shapefile")) {
+                    let text = text.to_string();
+                    self.remember_crs_if_listed(&text);
                     // Read on a thread of its own, as Add Data's other files are.
                     #[cfg(not(target_arch = "wasm32"))]
                     return readjob::run(self, "layer.addData", json!({"path": path, "crs": text}));

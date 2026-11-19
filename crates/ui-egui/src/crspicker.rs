@@ -28,6 +28,9 @@ struct State {
     moved: bool,
     /// The list last drawn, so a click outside both closes it.
     drawn: Option<egui::Rect>,
+    /// The pass the box was last drawn in: one not drawn the pass before (its menu or dialog
+    /// closed) opens with its list closed.
+    pass: u64,
     /// The rows last found, and what they were found for: the search runs when that changes,
     /// not every frame.
     found: Option<(String, Offer, Vec<String>, Arc<Vec<Row>>)>,
@@ -122,6 +125,10 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
         }
     }
     for Found { code, name, area, method, .. } in crs_search::search(text, offer != Offer::All, LIMIT) {
+        // A projected system a map can't be drawn in (a method RustGIS can't compute) isn't offered.
+        if map && !map_usable(&code) {
+            continue;
+        }
         if !out.iter().any(|r| r.code.eq_ignore_ascii_case(&code)) {
             let about = match (method, area) {
                 (Some(m), Some(a)) => Some(format!("{m}\n{a}")),
@@ -166,6 +173,11 @@ pub(crate) fn crs_box(
 ) -> (egui::Response, bool) {
     let id = Id::unique(("crs_box", salt));
     let mut state: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let pass = ui.ctx().cumulative_pass_nr();
+    if state.pass + 1 < pass {
+        state.open = false;
+    }
+    state.pass = pass;
     let r = ui.add(egui::TextEdit::singleline(text).id(id.with("edit")).hint_text(hint).desired_width(width));
     if r.gained_focus() || r.clicked() || r.changed() {
         state.open = true;
@@ -193,7 +205,6 @@ pub(crate) fn crs_box(
     };
     let showing = state.open && (!rows.is_empty() || !text.trim().is_empty());
     if (state.open && showing) || r.has_focus() || r.lost_focus() {
-        let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(open_id(), pass));
     }
     let mut taken = None;
@@ -224,8 +235,10 @@ pub(crate) fn crs_box(
             && chosen
             && let Some(row) = rows.get(state.at)
         {
-            // A code typed in full is taken and Enter goes on to the dialog, which submits.
-            if !row.code.eq_ignore_ascii_case(text.trim()) {
+            // A code typed in full (`2263`, `EPSG:2263`) is taken and Enter goes on to the dialog,
+            // which submits.
+            let typed_in_full = crs_search::lookup(text).is_some_and(|f| f.code == row.code);
+            if !typed_in_full {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
             }
             taken = Some(row.code.clone());
@@ -371,7 +384,7 @@ pub(crate) fn remember(recent: &mut Vec<String>, code: &str) -> bool {
 /// catalog isn't read here, at start-up.
 pub(crate) fn from_pref(value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 64) {
+    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 256) {
         if out.len() == RECENT_MAX {
             break;
         }

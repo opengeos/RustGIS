@@ -209,7 +209,7 @@ pub fn lookup(code: &str) -> Option<&'static Found> {
 }
 
 fn lookup_entry(code: &str) -> Option<&'static Entry> {
-    let lower = code.trim().to_ascii_lowercase().replace(' ', "");
+    let lower: String = code.to_ascii_lowercase().split_whitespace().collect();
     let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
     index().get(&key).map(|&i| &entries()[i])
 }

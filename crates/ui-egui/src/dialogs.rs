@@ -455,8 +455,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 ui.label(tl!("In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP."));
                 close = buttons(app, ui, "Choose File…", |app| {
                     let crs = app.dialogs.text.trim().to_string();
+                    // Remembered once a file is picked (`ui.importShapefile`).
                     app.run("ui.importShapefile", json!({"crs": crs}))?;
-                    app.remember_crs_if_listed(&crs);
                     Ok(())
                 });
             }
