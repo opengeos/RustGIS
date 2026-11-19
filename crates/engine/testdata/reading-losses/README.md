@@ -93,7 +93,7 @@ not certify ODS completeness or cover malformed archives, formulas, dates or err
 
 ## XLS and XLSB
 
-Six made-up workbooks written offline with SheetJS Community Edition `xlsx` 0.18.5:
+Seven made-up workbooks written offline with SheetJS Community Edition `xlsx` 0.18.5:
 `utils.aoa_to_sheet([['wkt','id','note'],[wkt,7]])`, appended as `Places`, then
 `writeFile` with `bookType: 'biff8'` (XLS) or `'xlsb'` and compression enabled.
 The writer is independent of RustGIS and is not needed by tests. No writer code or
@@ -104,28 +104,31 @@ XLS files retain the writer's small compound container. XLSB archives were minim
 offline with Python's standard-library `zipfile`: retain workbook, worksheet and style
 binary parts, replace package relationships/content types with only those parts, and
 remove the unused theme, document properties and sheet metadata. ZIP timestamps are
-1980-01-01. The generated XLSB short string/RK cell records were re-encoded as
+1980-01-01. Except in `book-short.xlsb`, the generated XLSB short string/RK cell
+records were re-encoded as
 full `BrtCellSt`/`BrtCellRk` records with explicit column indexes, following the
 published [MS-XLSB Cell layout](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/1e3e0c46-6175-4123-b02b-903643a5cc07).
-These fixtures use the published full records and do not test short-form fidelity.
-As an independent check of the rewritten contents, SheetJS CE 0.18.5's `readFile`
-and `sheet_to_json` read all six committed XLS/XLSB workbooks back to the documented
+`book-short.xlsb` preserves the original worksheet records and tests the short-cell loss.
+As a check independent of the handwritten full-cell rewrite, SheetJS CE 0.18.5's `readFile`
+and `sheet_to_json` read all seven committed XLS/XLSB workbooks back to the documented
 headers, WKT and numeric ID. This check uses a parser independent of RustGIS.
 No macros, formulas or external links are included.
 
-The original, unmodified SheetJS 0.18.5 clean XLSB is a known reader gap: native
+The original SheetJS 0.18.5 short-cell worksheet, retained in `book-short.xlsb`,
+pins a known reader gap: native
 `sheets::read` retains `POINT(1 2)` but returns no attribute fields or values,
 including the source `id=7`, with zero skipped rows and no messages. Its short
-cell records are not covered by the full-record fixture pairs; this observed
-silent attribute loss is tracked below and in the roadmap.
+cell records are paired with the full-record `book-clean.xlsb`; both native and
+command imports must retain exactly the point with no attribute fields/values or notices.
 
-| Files (both `.xls` and `.xlsb`) | WKT | Current loss classification |
+| Files (`.xls` and `.xlsb` unless stated) | WKT | Current loss classification |
 | --- | --- | --- |
 | `book-clean` | `POINT(1 2)` | None; no native or command notice |
 | `book-z` | `POINT Z(1 2 3)` | Imports with a Z/M-loss notice |
 | `book-collection` | `GEOMETRYCOLLECTION(POINT(1 2),POINT(3 4))` | Silent: only the first member remains |
+| `book-short.xlsb` (paired with `book-clean.xlsb`) | `POINT(1 2)` | Silent: all attribute fields and values are lost |
 
-Both members of each pair must retain exactly one point at (1, 2), integer `id=7`,
+The height/member pairs must retain exactly one point at (1, 2), integer `id=7`,
 text `note=Null` and both field names/types, through `sheets::read` and `layer.addData`.
 Native checks require zero skipped rows, the expected height flag and exactly one
 Z/M message for the height variant (none otherwise). Valid lossy fixtures must import.
@@ -161,7 +164,7 @@ but not covered here, not necessarily a known bug. CRS assumptions remain separa
 | LAS/LAZ | None in this paired corpus | Sampling, dimensions/attributes; geometry members/holes inapplicable |
 | XLSX | WKT Z/members, error-valued attribute | M, other geometry, dates/formulas/names/encoding |
 | ODS / XLS (distinct workbook parsers) | WKT Z/members in each | M, other geometry, dates/errors/names/encoding |
-| XLSB | WKT Z/members with full cell records | Known silent loss: original SheetJS 0.18.5 short-cell clean workbook keeps the point but loses all attribute fields/values without a notice; M, other geometry, dates/errors/names/encoding remain gaps |
+| XLSB | WKT Z/members with full cell records; short-cell attribute loss | Pinned silent short-cell loss; M, other geometry, dates/errors/names/encoding remain gaps |
 | XLSM | Shared XLSX OOXML implementation only | No distinct fixture; macros and macro fidelity untested |
 | Generic ZIP | Delegates to inner readers; KMZ covered above | Other wrapper parity |
 

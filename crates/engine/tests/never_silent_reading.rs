@@ -419,6 +419,13 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             Imported("Z or M"),
         ),
         case(
+            "XLSB: short cell records lose attribute fields and values",
+            "a.xlsb",
+            include_bytes!("../testdata/reading-losses/book-clean.xlsb"),
+            include_bytes!("../testdata/reading-losses/book-short.xlsb"),
+            Silent("the point remains but all attribute fields and values are lost"),
+        ),
+        case(
             "XLSB: a WKT geometry collection's later members",
             "a.xlsb",
             include_bytes!("../testdata/reading-losses/book-clean.xlsb"),
@@ -609,18 +616,20 @@ fn check_shapefile_xy(ds: &rustgis_engine::data::Dataset, shape_type: Option<u8>
     Ok(())
 }
 
-/// All workbook variants retain the same point, row ID and two attribute columns. The
-/// error-cell fixture differs from an empty note only in source content, not retained data.
-fn check_workbook(ds: &rustgis_engine::data::Dataset) -> std::io::Result<()> {
+/// Workbooks retain the point and two attributes except the pinned XLSB short-cell loss,
+/// which retains the point but drops every attribute field and value.
+fn check_workbook(ds: &rustgis_engine::data::Dataset, short_cells: bool) -> std::io::Result<()> {
     use rustgis_engine::data::{Field, FieldType, Geometry, Value};
     use rustgis_engine::geom::Coord;
-    if ds.fields != vec![Field::new("id", FieldType::Integer), Field::new("note", FieldType::Text)]
+    let fields = if short_cells { vec![] } else { vec![Field::new("id", FieldType::Integer), Field::new("note", FieldType::Text)] };
+    let attrs = if short_cells { vec![] } else { vec![Value::Int(7), Value::Null] };
+    if ds.fields != fields
         || ds.features.len() != 1
         || ds.features[0].geometry != Some(Geometry::Point(Coord::new(1.0, 2.0)))
-        || ds.features[0].attrs != vec![Value::Int(7), Value::Null]
+        || ds.features[0].attrs != attrs
     {
         return Err(std::io::Error::other(format!(
-            "spreadsheet fixture didn't retain exactly its point, ID and null note: fields={:?}, features={:?}",
+            "spreadsheet fixture has unexpected retained data: fields={:?}, features={:?}",
             ds.fields, ds.features
         )));
     }
@@ -643,6 +652,7 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
         std::fs::write(dir.join(name), bytes)?;
     }
     let path = dir.join(file);
+    let short_cells = content == include_bytes!("../testdata/reading-losses/book-short.xlsb");
     if file.ends_with(".gdb") {
         // The archive is fixture storage only: RustGIS opens the extracted folder. Its ZIP
         // importer deliberately refuses FileGDB folders, so do not test that refusal as a loss.
@@ -680,7 +690,7 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
     if rustgis_engine::data::sheets::is_sheet_name(file) {
         let (native, report) = rustgis_engine::data::sheets::read(content, "a", None, &Default::default())
             .map_err(|e| std::io::Error::other(format!("native spreadsheet fixture: {e}")))?;
-        check_workbook(&native)?;
+        check_workbook(&native, short_cells)?;
         let height = content == include_bytes!("../testdata/reading-losses/book-z.xlsx")
             || content == include_bytes!("../testdata/reading-losses/book-z.ods")
             || content == include_bytes!("../testdata/reading-losses/book-z.xls")
@@ -710,7 +720,7 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
         if s.map().layers.len() != 1 || !s.project.tables.is_empty() {
             return Err(std::io::Error::other("spreadsheet fixture didn't add exactly one layer"));
         }
-        check_workbook(&s.map().layers[0].dataset)?;
+        check_workbook(&s.map().layers[0].dataset, short_cells)?;
         if (content == include_bytes!("../testdata/reading-losses/book-clean.xlsx")
             || content == include_bytes!("../testdata/reading-losses/book-clean.ods")
             || content == include_bytes!("../testdata/reading-losses/book-clean.xls")
