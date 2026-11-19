@@ -35818,6 +35818,8 @@ mod ogc_server;
 
 mod ogc_dataset;
 
+mod qgis_services;
+
 #[path = "../../../tests/support/esripbf.rs"]
 mod esripbf_answers;
 
