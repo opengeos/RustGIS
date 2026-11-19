@@ -142,21 +142,6 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
     if !s.map().editing.settings.enabled {
         return Err("editing is turned off (Edit › Edit)".into());
     }
-    // Construction belongs to an object, not a reusable numeric id. Each removed or inserted
-    // feature that passes here (cut/paste, split pieces, edits) forgets its construction. Some
-    // row changes don't (GeoPackage and offline-area syncs, archive restore): there a feature
-    // keeps its construction only while its geometry still equals it (see `box_spec`). Undo
-    // keeps its own cache snapshot.
-    for change in &changes {
-        let feature = match (change.before(), change.row) {
-            (Some(before), None) => Some(before.id),
-            (None, Some(row)) => s.map().layer(id).and_then(|l| l.dataset.features.get(row)).map(|f| f.id),
-            _ => None,
-        };
-        if let Some(feature) = feature {
-            crate::construction::forget_feature(s, id, feature);
-        }
-    }
     let elevation = s.map().editing.settings.elevation.clone();
     // Elevation from a surface: sampled before the layer is borrowed mutably.
     let z_of = |s: &Session, g: &Geometry| -> Option<f64> {
@@ -175,15 +160,32 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
         if new_defaults { changes.iter().filter(|c| c.before.is_none()).filter_map(|c| c.row).collect() } else { Vec::new() };
     // Sampled from a surface at each place in longitude/latitude, from the layer's own coordinates:
     // a place that can't be converted refuses the edit rather than leave the feature without its
-    // `z`. Without a surface, the place isn't read.
+    // `z`. Without a surface, the place isn't converted. Done before anything below changes the
+    // session, so a refusal leaves it as it was.
     let mut zs: Vec<(usize, Option<f64>)> = Vec::with_capacity(new_rows.len());
     for r in &new_rows {
-        let place = match (&elevation, s.map().layer(id).and_then(|l| Some((l, l.dataset.features.get(*r)?.geometry.as_ref()?)))) {
-            (Elevation::Surface(_), Some((l, g))) => Some(l.dataset.geometry_to_lonlat(g)?),
-            (_, Some((_, g))) => Some(std::borrow::Cow::Borrowed(g)),
-            (_, None) => None,
+        let stored = s.map().layer(id).and_then(|l| Some((l, l.dataset.features.get(*r)?.geometry.as_ref()?)));
+        let z = match (stored, &elevation) {
+            (None, _) => None,
+            (Some((l, g)), Elevation::Surface(_)) => z_of(s, l.dataset.geometry_to_lonlat(g)?.as_ref()),
+            (Some((_, g)), _) => z_of(s, g),
         };
-        zs.push((*r, place.and_then(|g| z_of(s, &g))));
+        zs.push((*r, z));
+    }
+    // Construction belongs to an object, not a reusable numeric id. Each removed or inserted
+    // feature that passes here (cut/paste, split pieces, edits) forgets its construction. Some
+    // row changes don't (GeoPackage and offline-area syncs, archive restore): there a feature
+    // keeps its construction only while its geometry still equals it (see `box_spec`). Undo
+    // keeps its own cache snapshot.
+    for change in &changes {
+        let feature = match (change.before(), change.row) {
+            (Some(before), None) => Some(before.id),
+            (None, Some(row)) => s.map().layer(id).and_then(|l| l.dataset.features.get(row)).map(|f| f.id),
+            _ => None,
+        };
+        if let Some(feature) = feature {
+            crate::construction::forget_feature(s, id, feature);
+        }
     }
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // New features: subtype defaults fill empty fields; elevation goes in `z`.

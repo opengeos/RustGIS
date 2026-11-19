@@ -923,7 +923,7 @@ impl Dataset {
 fn edit_into_own(to: &raster::Reprojection, g: &Geometry) -> Option<Geometry> {
     let mut clamped = false;
     if to.target() == raster::Crs::WebMercator {
-        g.for_each_coord(|c| clamped |= c.y.is_finite() && c.y.abs() > rustgis_geom::MAX_LAT);
+        g.for_each_coord(|c| clamped |= c.is_finite() && c.y.abs() > rustgis_geom::MAX_LAT);
     }
     if clamped { None } else { convert_keeping_missing(to, g) }
 }
@@ -967,6 +967,7 @@ mod tests {
         assert!(edit_into_own(&merc, &Geometry::Point(Coord::new(10.0, 89.0))).is_none());
         assert!(edit_into_own(&merc, &Geometry::Point(Coord::new(10.0, 80.0))).is_some());
         assert!(edit_into_own(&merc, &Geometry::Point(Coord::new(10.0, f64::NAN))).is_some());
+        assert!(edit_into_own(&merc, &Geometry::Point(Coord::new(f64::NAN, 89.0))).is_some());
     }
 
     #[test]
