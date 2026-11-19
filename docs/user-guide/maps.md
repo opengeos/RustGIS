@@ -686,7 +686,25 @@ System** dialog, which also takes a projected EPSG code (such as `3035`, `32633`
 code whose projection method RustGIS can't compute is refused with the reason, rather than drawn
 in another projection. The codes are those of the EPSG registry v13.102 and PROJ 9.9.0's ESRI
 codes, so a system added to EPSG recently (such as `11476`, SIRGAS-Chile 2025 / UTM zone 19S) is
-there too. Projections and datum transformations are computed by
+there too.
+
+### Finding a coordinate system
+
+Every box that takes a coordinate system (the Coordinate System dialog, Define Projection, the
+Shapefile, DXF and CSV imports, the measured grid, **Settings › Start-up › Projection** and the
+analysis environment) searches as you type. It finds a system by its code (`3035`,
+`EPSG:3035`, `esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection
+method (`albers`, `oblique mercator`) or by its area of use (`switzerland`), and lists the matches
+under the box: the systems you used last first (the ten last applied, kept between sessions), the
+map's own projections by name where the box sets the map (`robinson`), then the EPSG and ESRI
+systems. Among equal matches, names whose words begin with the words typed come first
+(`lambert 93` finds Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a
+plain system before its axis-order variants. ↑/↓ move through the list, Enter or a click takes a
+system, and Escape closes the list. A box for the map, the measured grid or the analysis
+environment lists projected systems only. Text the list doesn't hold, such as WKT or a PROJ
+string, is used as typed.
+
+Projections and datum transformations are computed by
 [terrio-crs](https://github.com/opengeos/terrio), as PROJ 9.9.0 computes them. On the desktop, the
 command line, Python and the phone apps, datum shift grids are read from RustGIS's own grid folder
 (`datum-grids` in its app data), then from those PROJ and terrio use on the computer
@@ -804,7 +822,8 @@ picking one shows it:
 - **Latitude and Longitude** (the default): parallels and meridians, more of them as you zoom in.
 - **Measured Grid**: eastings and northings in a projected coordinate system, at a round interval
   that suits the scale (about eight lines across the view), as a layout's measured grid draws them.
-  The system is the one typed under **Measured grid's coordinate system** (an EPSG code such as
+  The system is the one chosen under **Measured grid's coordinate system** (found by name or
+  code, see [Finding a coordinate system](#finding-a-coordinate-system); an EPSG code such as
   `2056`, WKT or a PROJ string; `"crs"` in the command); left empty, it is the map's own when the
   map is projected, else the WGS 84 UTM zone at the centre of the view. A system that can't be read
   or is geographic is refused, with a message naming it.
