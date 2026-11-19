@@ -4,7 +4,10 @@ use rustgis_data::{Coord, Feature, Features, Geometry, Value};
 use std::{
     collections::{HashMap, HashSet},
     mem::size_of,
-    sync::Weak,
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 type Key = Weak<Vec<Feature>>;
@@ -24,6 +27,8 @@ pub(crate) struct Budget {
     pub(crate) memory: Option<u64>,
     // Dropping steps to make room for an edit is said once a project, as `said` is.
     room_said: bool,
+    // The copies of background edits not landed yet ([`Budget::reserve`]).
+    in_flight: Arc<AtomicU64>,
     // Keeping the weak key prevents address reuse while its estimate is cached, without keeping
     // the rows themselves alive. Copy-on-write gives changed rows a different key.
     estimates: HashMap<usize, (Key, usize)>,
@@ -37,6 +42,7 @@ impl Default for Budget {
             said: false,
             memory: rustgis_data::memory::physical(),
             room_said: false,
+            in_flight: Arc::default(),
             estimates: HashMap::new(),
         }
     }
@@ -99,38 +105,52 @@ impl Budget {
     }
 
     /// Makes room for an edit that copies `copy` bytes of rows (#2431 fix 3): when what the session
-    /// holds and the copy pass the memory it plans to use ([`rustgis_data::memory::usable`]),
-    /// history goes until they fit: Redo first, farthest first, as the edit clears it anyway, then
-    /// Undo, oldest first. The history is left as it is, and `Err` gives what is held and the memory
-    /// planned for, when the copy wouldn't fit even with the history gone.
+    /// holds, the copies of edits still running in the background and this copy pass the memory
+    /// it plans to use ([`rustgis_data::memory::usable`]), history is set aside until they fit:
+    /// Redo first, farthest first, as the edit clears it anyway, then Undo, oldest first. What is
+    /// set aside is freed just before the edit copies, or given back if it never does
+    /// ([`Session::put_back`](crate::Session)). `Err` gives what is held and the memory planned
+    /// for, with the history left as it is, when the copy wouldn't fit even with the history gone.
     pub(crate) fn make_room(
         &mut self,
         live: &Project,
         undo: &mut Vec<Step>,
         redo: &mut Vec<Step>,
         copy: u64,
-    ) -> Result<Option<usize>, (u64, u64)> {
+    ) -> Result<Option<Aside>, (u64, u64)> {
         let Some(usable) = rustgis_data::memory::usable(self.memory) else { return Ok(None) };
-        let fits = |held: u64| held.saturating_add(copy) <= usable;
+        let running = self.in_flight.load(Ordering::Relaxed);
+        let fits = |held: u64| held.saturating_add(running).saturating_add(copy) <= usable;
         if fits(self.held(live, undo, redo)) {
             return Ok(None);
         }
         let open = self.held(live, &[], &[]);
         if !fits(open) {
-            return Err((open, usable));
+            return Err((open.saturating_add(running), usable));
         }
-        let mut dropped = 0;
+        let mut aside = Aside::default();
         while !fits(self.held(live, undo, redo)) {
             if !redo.is_empty() {
-                redo.remove(0);
+                aside.redo.push(redo.remove(0));
             } else if undo.is_empty() {
                 break;
             } else {
-                undo.remove(0);
+                aside.undo.push(undo.remove(0));
             }
-            dropped += 1;
         }
-        Ok((dropped > 0 && !std::mem::replace(&mut self.room_said, true)).then_some(dropped))
+        Ok(Some(aside).filter(|aside| aside.len() > 0))
+    }
+
+    /// Whether dropping steps to make room is to be said: once a project.
+    pub(crate) fn say_room(&mut self) -> bool {
+        !std::mem::replace(&mut self.room_said, true)
+    }
+
+    /// Counts `bytes` as held until the reservation is dropped: the copy an edit running in the
+    /// background makes, until it lands (and the project holds it) or is abandoned.
+    pub(crate) fn reserve(&self, bytes: u64) -> Reservation {
+        self.in_flight.fetch_add(bytes, Ordering::Relaxed);
+        Reservation { in_flight: Arc::clone(&self.in_flight), bytes }
     }
 
     /// The estimated size of `features`' rows: what the first write to them copies while a
@@ -153,6 +173,42 @@ impl Budget {
             });
             sum.saturating_add(*bytes)
         })
+    }
+}
+
+/// Undo and Redo steps set aside to make room for an edit ([`Budget::make_room`]), oldest first.
+#[derive(Default)]
+pub(crate) struct Aside {
+    pub(crate) undo: Vec<Step>,
+    pub(crate) redo: Vec<Step>,
+}
+
+impl Aside {
+    pub(crate) fn len(&self) -> usize {
+        self.undo.len() + self.redo.len()
+    }
+}
+
+/// Steps set aside, shared with the hook that frees them just before the edit copies rows, on
+/// whichever thread it runs.
+pub(crate) type AsideSlot = Arc<Mutex<Option<Aside>>>;
+
+/// The hook [`rustgis_data::before_rows_copy`] calls: frees the steps in `slot`.
+pub(crate) fn free_on_copy(slot: &AsideSlot) -> Box<dyn FnOnce()> {
+    let slot = Arc::clone(slot);
+    Box::new(move || drop(slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()))
+}
+
+/// A background edit's copy, counted as held while it runs ([`Budget::reserve`]).
+pub struct Reservation {
+    in_flight: Arc<AtomicU64>,
+    bytes: u64,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        // Only what `reserve` added is taken away, so this never goes below zero.
+        self.in_flight.fetch_sub(self.bytes, Ordering::Relaxed);
     }
 }
 
@@ -445,17 +501,156 @@ mod tests {
         assert_eq!(session.undo_depth(), 3, "every Undo step is kept");
     }
 
+    /// A session with a table of one long text, added and edited twice: three Undo steps, two of
+    /// them holding their own rows.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn table_session() -> Session {
+        let mut session = Session::new(crate::Project::default());
+        let text = format!("n,t\n1,{}\n", "a".repeat(4096));
+        session.run("layer.addDataText", &json!({"fileName": "calc.csv", "text": text})).unwrap();
+        session.undo_memory.limit = 1 << 30;
+        session.undo_memory.memory = None;
+        for t in ["b", "c"] {
+            session.run("edit.setValue", &json!({"table": "calc", "row": 0, "field": "t", "value": t.repeat(4096)})).unwrap();
+        }
+        session
+    }
+
+    /// Memory planned so the open rows, the copies in flight and one copy of the table fit with a
+    /// little over, without the history.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn room_for_one_table_copy(session: &mut Session) -> u64 {
+        let rows = session.project.tables[0].dataset.features.clone();
+        let copy = session.undo_memory.rows_bytes(&rows);
+        drop(rows);
+        let open =
+            session.undo_memory.held(&session.project, &[], &[]) + session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed);
+        ((open + copy + 64) * 4).div_ceil(3) + 4
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn a_table_edit_run_in_the_background_is_checked_before_its_work() {
-        let mut session = Session::new(crate::Project::default());
-        session.run("layer.addDataText", &json!({"fileName": "calc.csv", "text": "n\n1\n2\n"})).unwrap();
-        session.undo_memory.memory = Some(4);
+    fn a_table_edit_run_in_the_background_is_checked_when_it_starts() {
+        use crate::cmd::reads::read_ahead;
+        let mut session = table_session();
         let p = json!({"table": "calc", "row": 0, "field": "n", "value": 3});
-        let err = crate::cmd::reads::read_ahead(&mut session, "edit.setValue", &p).err().unwrap();
+        session.undo_memory.memory = Some(4);
+        let ahead = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap();
+        let err = ahead.refresh_table_input(&mut session).err().unwrap();
         assert!(err.contains("not enough memory to edit calc"), "{err}");
+        assert_eq!(session.undo_depth(), 3, "a refused edit keeps the history");
+
+        // Room for one copy: the history is set aside when the edit starts.
+        session.undo_memory.memory = Some(room_for_one_table_copy(&mut session));
+        let first = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        assert_eq!(session.undo_depth(), 0);
+        // A second edit starting while the first one's copy is in flight sees that copy.
+        let second = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap();
+        let err = second.refresh_table_input(&mut session).err().unwrap();
+        assert!(err.contains("not enough memory to edit calc"), "{err}");
+
+        // Cancelled before it ran: its history comes back at the next check, as nothing else changed.
+        drop(first);
         session.undo_memory.memory = Some(1 << 40);
-        assert!(crate::cmd::reads::read_ahead(&mut session, "edit.setValue", &p).is_ok());
+        let ahead = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        assert_eq!(session.undo_depth(), 3, "the history set aside comes back");
+        assert_eq!(
+            session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed),
+            session.undo_memory.rows_bytes(&session.project.tables[0].dataset.features.clone())
+        );
+        drop(ahead);
+        assert_eq!(session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed), 0, "the reservation ends with the edit");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_background_table_edit_frees_the_history_when_it_copies_and_says_so() {
+        use crate::cmd::reads::read_ahead;
+        let mut session = table_session();
+        let p = json!({"table": "calc", "row": 0, "field": "t", "value": "d"});
+        session.undo_memory.memory = Some(room_for_one_table_copy(&mut session));
+        let mark = session.notice_mark();
+        let ahead = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        let read = ahead.run(&rustgis_analysis::control::Control::stoppable()).ok().unwrap();
+        session.finish_read(read).unwrap();
+        assert_eq!(session.project.tables[0].dataset.features[0].attrs[1], Value::Text("d".into()));
+        let notices = session.notices_since(mark);
+        assert!(notices.iter().any(|n| n.text.contains("(3 before editing calc)")), "{notices:?}");
+        assert_eq!(session.undo_depth(), 1, "the edit's own step");
+        assert_eq!(session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_second_background_edit_needing_history_waits_for_the_first() {
+        use crate::cmd::reads::read_ahead;
+        let mut session = table_session();
+        let p = json!({"table": "calc", "row": 0, "field": "n", "value": 3});
+        // Room for what is held and 64 bytes: the first edit's copy needs the oldest Undo step
+        // with rows of its own set aside, the second's the next one too.
+        let held = session.undo_memory.held(&session.project, &session.undo, &session.redo);
+        session.undo_memory.memory = Some(((held + 64) * 4).div_ceil(3) + 4);
+        let first = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        assert_eq!(session.undo_depth(), 1, "the table's addition and its first edit are aside");
+        let in_flight = session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed);
+        let err = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).err().unwrap();
+        assert!(err.contains("while another edit is running"), "{err}");
+        assert_eq!(session.undo_depth(), 1, "what the second set aside is back");
+        assert_eq!(session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed), in_flight);
+        drop(first);
+        session.reclaim_rooms();
+        assert_eq!(session.undo_depth(), 3);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_cancelled_background_edit_gives_its_history_back_or_says_it_went() {
+        use crate::cmd::reads::read_ahead;
+        let p = json!({"table": "calc", "row": 0, "field": "n", "value": 3});
+
+        // Cancelled before copying, nothing else done: Undo has its steps again at once.
+        let mut session = table_session();
+        session.undo_memory.memory = Some(room_for_one_table_copy(&mut session));
+        let ahead = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        assert_eq!(session.undo_depth(), 0);
+        drop(ahead);
+        let mark = session.notice_mark();
+        session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(session.undo_depth(), 2, "three came back, one was undone");
+        assert!(session.notices_since(mark).is_empty());
+
+        // The project changed meanwhile: the steps can't go back in place, and that is said.
+        let mut session = table_session();
+        session.undo_memory.memory = Some(room_for_one_table_copy(&mut session));
+        let ahead = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
+        session.undo_memory.memory = None;
+        session.run("layer.addDataText", &json!({"fileName": "other.csv", "text": "a\n1\n"})).unwrap();
+        drop(ahead);
+        let mark = session.notice_mark();
+        session.run("layer.addDataText", &json!({"fileName": "third.csv", "text": "a\n1\n"})).unwrap();
+        let notices = session.notices_since(mark);
+        assert!(notices.iter().any(|n| n.text.contains("(3 before editing calc)")), "{notices:?}");
+        assert_eq!(session.undo_depth(), 2, "only the two later steps");
+    }
+
+    #[test]
+    fn a_failed_edit_keeps_the_history_set_aside_for_it() {
+        let mut session = session(4096);
+        session.undo_memory.limit = 1 << 30;
+        session.undo_memory.memory = None;
+        for text in ["b", "c"] {
+            edit(&mut session, &text.repeat(4096));
+        }
+        session.undo_memory.memory = Some(room_for_one_copy(&mut session, 64));
+        let mark = session.notice_mark();
+        // An unknown field fails before anything is written.
+        assert!(session.run("edit.setValue", &json!({"layer": "rows", "row": 0, "field": "nope", "value": "x"})).is_err());
+        assert_eq!(session.undo_depth(), 2, "nothing was copied, so nothing was dropped");
+        assert!(!session.notices_since(mark).iter().any(|n| n.text.contains("make room")));
+        // The same edit with a real field copies, and drops them.
+        edit(&mut session, "d");
+        assert_eq!(session.undo_depth(), 1);
+        assert!(session.notices_since(mark).iter().any(|n| n.text.contains("(2 before editing rows)")));
     }
 
     #[test]
@@ -463,7 +658,11 @@ mod tests {
         let mut session = session(4096);
         session.undo_memory.memory = Some(4);
         let id = Some(session.map().layer_by_name("rows").unwrap().id);
-        assert!(session.room_for_edit("edit.pasteSpecial", true, "Paste Special", id, None).is_none());
-        assert!(session.room_for_edit("edit.paste", true, "Paste", id, None).is_some());
+        assert!(matches!(session.room_for_edit("edit.pasteSpecial", true, "Paste Special", id, None), Ok(None)));
+        assert!(session.room_for_edit("edit.paste", true, "Paste", id, None).is_err());
+        // Editing settings copy no rows.
+        for command in ["edit.elevation", "edit.groundToGrid"] {
+            assert!(matches!(session.room_for_edit(command, true, "Settings", id, None), Ok(None)), "{command}");
+        }
     }
 }

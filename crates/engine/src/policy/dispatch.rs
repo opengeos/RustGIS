@@ -189,7 +189,7 @@ impl Session {
             params.insert("layer".into(), json!(id));
         }
         let mut op = self.authorize(command, &Value::Object(params))?;
-        self.check_read_command(&op, true)?;
+        self.check_read_command(&op)?;
         let copy_command = matches!(command, "model.run" | "script.run") && self.policy_user();
         if copy_command {
             // A model's or script's native copy may read through several tools. Bind the original
@@ -211,7 +211,10 @@ impl Session {
     }
     /// Lands only the original read invocation; no result can be claimed by another command.
     pub(crate) fn finish_read(&mut self, read: crate::cmd::reads::Read) -> CmdResult {
-        let crate::cmd::reads::Read { op, owner, source, ready, inputs } = read;
+        let crate::cmd::reads::Read { op, owner, source, ready, inputs, room, reservation } = read;
+        // History set aside for the edit's copy goes back if the edit fails or never copied, while
+        // nothing else has changed the history since (#2431).
+        let in_place = room.as_ref().is_some_and(|room| room.stamp == self.history_stamp());
         let (command, params) = match op.op() {
             CommandOp::Registered { spec, params } => (spec.id, params.clone()),
             _ => return Err("not a registered read command".into()),
@@ -231,9 +234,13 @@ impl Session {
                         if !owner.native_tool_owner() && *op.node != s.command_node(command, &params)? {
                             return Err("the read command changed since it was authorized".into());
                         }
-                        s.check_read_command(&op, false)?;
+                        s.check_read_command(&op)?;
                         s.read_ahead = ready;
-                        let result = s.invoke(op, Txn::Own);
+                        // An edit without a worker copies here, when it lands.
+                        let result = match room.as_ref().filter(|room| room.count > 0) {
+                            Some(room) => rustgis_data::before_rows_copy(room.free_on_copy(), || s.invoke(op, Txn::Own)).0,
+                            None => s.invoke(op, Txn::Own),
+                        };
                         if result.is_ok()
                             && let Some(source) = crate::sources::added_by(command, &params)
                         {
@@ -245,15 +252,19 @@ impl Session {
             })
         }));
         self.read_ahead = None;
+        if let Some(room) = &room {
+            let failed = !matches!(&result, Ok(Ok(_)));
+            self.put_back(room, failed, in_place);
+            self.forget_room(room);
+        }
+        drop(reservation);
         match result {
             Ok(result) => result,
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }
     /// Preserves ordinary command conditions for the admitted read's layer or table selector.
-    /// `before_work`: the read is about to start, and an edit's copy is checked against memory
-    /// then (#2431), before its worker makes it; landing doesn't check again.
-    fn check_read_command(&mut self, op: &Authorized<CommandOp>, before_work: bool) -> Result<(), String> {
+    fn check_read_command(&mut self, op: &Authorized<CommandOp>) -> Result<(), String> {
         let CommandOp::Registered { spec, params } = op.op() else { return Err("not a registered read command".into()) };
         let named = self.layer_id(params).ok();
         let active = self.active_layer;
@@ -266,9 +277,6 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         if let Some(why) = self.streamed_edit(spec.id, spec.mutates, spec.label, if table.is_some() { None } else { named.or(active) }) {
-            return Err(why);
-        }
-        if before_work && let Some(why) = self.room_for_edit(spec.id, spec.mutates, spec.label, named.or(active), table) {
             return Err(why);
         }
         Ok(())
