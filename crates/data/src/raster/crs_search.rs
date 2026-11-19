@@ -175,8 +175,19 @@ fn query(text: &str) -> (String, Vec<String>) {
     for spaced in [" :", ": "] {
         whole = whole.replace(spaced, ":");
     }
+    // `EPSG 2056` is `EPSG:2056` too.
+    let mut joined: Vec<String> = Vec::new();
+    for w in whole.split_whitespace() {
+        match joined.last_mut() {
+            Some(last) if (last == "epsg" || last == "esri") && w.bytes().all(|b| b.is_ascii_digit()) => {
+                *last = format!("{last}:{w}");
+            }
+            _ => joined.push(w.to_string()),
+        }
+    }
+    let whole = joined.join(" ");
     // A word without a letter or digit (`/`, `+`) says nothing of a system.
-    let words = whole.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).map(str::to_string).collect();
+    let words = joined.into_iter().filter(|w| w.chars().any(char::is_alphanumeric)).collect();
     (whole, words)
 }
 
@@ -283,7 +294,8 @@ mod tests {
         let at = |code: &str| swiss.iter().position(|f| f.code == code);
         assert!(at("EPSG:2056") < at("EPSG:7285"), "{swiss:?}");
         // Every system for Switzerland before those of Indiana's Switzerland County (EPSG:26773).
-        assert!(at("EPSG:21780") < at("EPSG:26773"), "{swiss:?}");
+        let (bern, indiana) = (at("EPSG:21780"), at("EPSG:26773"));
+        assert!(bern.is_some() && indiana.is_some() && bern < indiana, "{swiss:?}");
         assert_eq!(places("Liechtenstein; Switzerland."), ["liechtenstein", "switzerland"]);
         assert_eq!(places("United States (USA) - Indiana - counties of Adams; Switzerland; Union."), ["united states (usa)"]);
         // So does a projection's method, with the area: Swiss Oblique Mercator.
@@ -301,6 +313,8 @@ mod tests {
         // Spaces around the colon, and marks alone, change nothing.
         assert_eq!(search("epsg : 2056", false, 5)[0].code, "EPSG:2056");
         assert_eq!(search("EPSG:  2056", false, 5)[0].code, "EPSG:2056");
+        assert_eq!(search("EPSG 3263", false, 5)[0].code, "EPSG:3263");
+        assert_eq!(search("esri 102033", false, 5)[0].code, "ESRI:102033");
         assert!(search("/ +", false, 5).is_empty());
         // Words typed without their spaces.
         assert_eq!(search("lambert93", true, 5)[0].code, "EPSG:2154");

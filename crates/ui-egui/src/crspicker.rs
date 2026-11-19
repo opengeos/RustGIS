@@ -106,6 +106,9 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
     let code_typed = exact.is_some() || (!compact.is_empty() && (compact.bytes().all(|b| b.is_ascii_digit()) || compact.contains(':')));
     let mut out: Vec<Row> = Vec::new();
     for code in recent {
+        if out.len() == RECENT_MAX {
+            break;
+        }
         let Some(found) = crs_search::lookup(code) else { continue };
         let usable = match offer {
             Offer::All => true,
@@ -271,7 +274,8 @@ pub(crate) fn crs_box(
     // would move what is under it before the click ends (a menu closes on a click elsewhere anyway).
     let inline = egui::containers::menu::is_in_menu(ui);
     // Enter ends a single-line edit, which loses focus: that is the take, not a close.
-    if state.open && !inline && r.lost_focus() && taken.is_none() && !ui.input(|i| i.key_pressed(Key::Enter)) {
+    // Enter that took no row (a blank box) closes it too.
+    if state.open && !inline && r.lost_focus() && taken.is_none() {
         // A click on the list loses the box's focus first: the list closes on a click elsewhere.
         let on_list = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| state.drawn.is_some_and(|d| d.contains(p)));
         if !on_list {
@@ -395,21 +399,20 @@ pub(crate) fn remember(recent: &mut Vec<String>, code: &str) -> bool {
     if code.is_empty() {
         return false;
     }
+    // As long as the list was: [`RECENT_MAX`], or a longer one a newer RustGIS saved.
+    let keep = recent.len().max(RECENT_MAX);
     recent.retain(|c| !c.eq_ignore_ascii_case(code));
     recent.insert(0, code.to_string());
-    recent.truncate(RECENT_MAX);
+    recent.truncate(keep);
     true
 }
 
-/// The recently used codes saved as [`RECENT_PREF`]. A code this catalog doesn't list (from a
-/// newer RustGIS's) is kept, to be saved again as it was, and only left out of the lists; the
-/// catalog isn't read here, at start-up.
+/// The recently used codes saved as [`RECENT_PREF`], every line kept: a code this catalog doesn't
+/// list, and lines past [`RECENT_MAX`] (a newer RustGIS's), are saved again as they were and only
+/// left out of the lists. The catalog isn't read here, at start-up.
 pub(crate) fn from_pref(value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 256) {
-        if out.len() == RECENT_MAX {
-            break;
-        }
+    for line in value.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if !out.iter().any(|c| c.eq_ignore_ascii_case(line)) {
             out.push(line.to_string());
         }
@@ -470,5 +473,12 @@ mod tests {
         }
         assert_eq!(recent.len(), RECENT_MAX);
         assert_eq!(recent[0], "EPSG:32619");
+        // A longer list (a newer RustGIS's) is kept whole and stays as long; ten are listed.
+        let saved: Vec<String> = (0..12).map(|n| format!("EPSG:{}", 32601 + n)).collect();
+        let mut longer = from_pref(&saved.join("\n"));
+        assert_eq!(longer, saved);
+        remember(&mut longer, "EPSG:2056");
+        assert_eq!((longer.len(), longer[0].as_str()), (12, "EPSG:2056"));
+        assert_eq!(rows("", &longer, Offer::All).len(), RECENT_MAX);
     }
 }

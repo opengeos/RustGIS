@@ -538,6 +538,13 @@ impl Crs {
             return vn2000_epsg(t).and_then(|c| Crs::from_epsg(c.into())).ok_or_else(|| format!("unknown coordinate system '{t}'"));
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
+        // `ESRI:102033`, as the coordinate system boxes offer it and a `.prj` names it.
+        if let Some(rest) = up.strip_prefix("ESRI")
+            && let Some(n) = rest.trim_start().strip_prefix(':').map(str::trim)
+        {
+            let c = n.parse::<u32>().map_err(|_| format!("'{t}': an ESRI code is a number, such as ESRI:102033"))?;
+            return esri_crs(c).ok_or_else(|| format!("unknown coordinate system ESRI:{c}"));
+        }
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
         match code.parse::<u32>() {
             Ok(c) if known => Crs::from_epsg(c).ok_or_else(|| format!("unknown coordinate system EPSG:{c}")),
@@ -2198,6 +2205,17 @@ impl Transformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An ESRI code reads as the system the picker offers for it (`ESRI:102033`, as a `.prj` and
+    /// the coordinate system boxes name it); one the catalog lacks is refused with its name.
+    #[test]
+    fn an_esri_code_is_read() {
+        for text in ["ESRI:102033", "esri:102033", " ESRI : 102033 "] {
+            assert_eq!(Crs::parse(text).map(|c| c.label()), Ok("ESRI:102033".to_string()), "{text}");
+        }
+        assert!(Crs::parse("ESRI:1").is_err_and(|e| e.contains("ESRI:1")));
+        assert!(Crs::parse("ESRI:x").is_err());
+    }
 
     /// A kept transformer that can't be built again when grids arrive goes on as it was, said
     /// once however many grids arrive; one that is built again isn't said.

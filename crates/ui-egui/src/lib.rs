@@ -2079,13 +2079,12 @@ impl RustGisApp {
                 self.session.notify(error.clone(), true);
                 return Err(error);
             };
-            let crs = options.get("crs").and_then(Value::as_str).unwrap_or_default().to_string();
-            let r = self.open_bytes_with(name, bytes, Some(options));
-            // Remembered once a file was picked and its import started, not when the picker opened.
-            if r.is_ok() {
+            // Remembered once a file is picked, as on the desktop, not when the picker opened.
+            if let Some(crs) = options.get("crs").and_then(Value::as_str) {
+                let crs = crs.to_string();
                 self.remember_crs_if_listed(&crs);
             }
-            return r;
+            return self.open_bytes_with(name, bytes, Some(options));
         }
         if let Some(picked) = name.strip_prefix(DXF_PICK) {
             let (id, name) = picked.split_once(':').ok_or(tl!("Invalid DXF picker request"))?;

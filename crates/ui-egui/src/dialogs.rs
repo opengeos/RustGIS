@@ -2537,6 +2537,8 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     choices.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
     // Two panes of a fixed height, so the dialog doesn't stretch to the window.
     let pane_h = 340.0;
+    // Enter on a code typed in full: the picker leaves it to the dialog, which applies it.
+    let mut enter_applies = false;
     ui.allocate_ui_with_layout(vec2(ui.available_width(), pane_h), egui::Layout::left_to_right(egui::Align::Min), |ui| {
         ui.set_height(pane_h);
         ui.vertical(|ui| {
@@ -2555,10 +2557,15 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             );
             let r = r.labelled_by(input_label.id);
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Search by name or code")));
+            enter_applies = taken && ui.input(|i| i.key_pressed(egui::Key::Enter));
             // Words being typed to search are no system yet: the selection stays until they are one.
+            // A code or a definition (`3035`, `EPSG:3035`, `albers +lat_1=…`) is what was asked for,
+            // its error shown and Apply off when it can't be drawn.
             if (r.changed() || taken) && !app.dialogs.a.trim().is_empty() {
                 let typed = typed_crs(&app.dialogs.a);
-                if taken || rustgis_engine::map::Projection::from_code(&typed).is_ok() {
+                let a = app.dialogs.a.trim();
+                let explicit = a.contains(['+', ':', '=']) || a.bytes().all(|b| b.is_ascii_digit());
+                if taken || explicit || rustgis_engine::map::Projection::from_code(&typed).is_ok() {
                     app.dialogs.text = typed;
                 }
             }
@@ -2621,7 +2628,8 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     let same = check.as_ref().is_ok_and(|p| p.code() == current);
     let mut close = false;
     ui.horizontal(|ui| {
-        if ui.add_enabled(check.is_ok() && !same, egui::Button::new(tl!("Apply"))).clicked() {
+        let apply = ui.add_enabled(check.is_ok() && !same, egui::Button::new(tl!("Apply"))).clicked();
+        if apply || (enter_applies && check.is_ok() && !same) {
             match app.run("map.projection", json!({"type": chosen})) {
                 Ok(_) => {
                     app.remember_crs_if_listed(&chosen);
@@ -3107,6 +3115,41 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run_steps(2);
         assert_eq!(h.state().dialogs.a, "", "no stale choice");
+    }
+
+    /// In the Coordinate System dialog, Enter on a code typed in full applies it; a definition that
+    /// can't be drawn is shown as such, not replaced by the system chosen before.
+    #[test]
+    fn the_map_dialog_applies_a_full_code_on_enter() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        // A definition the map can't be drawn in: shown, not the system chosen before.
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").type_text("albers +lat_1=-30 +lat_2=30");
+        h.run_steps(2);
+        assert!(h.state().dialogs.text.starts_with("albers +lat_1=-30"), "{}", h.state().dialogs.text);
+        // A code in full, then Enter: applied, the dialog closed.
+        h.state_mut().dialogs.a.clear();
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::TextInput, "Search by name or code").type_text("3035");
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().session.map().projection.code(), "EPSG:3035");
+        assert_eq!(h.state().dialogs.open, None);
     }
 
     /// A scale's commas go only where they group thousands: a decimal comma is left for the
