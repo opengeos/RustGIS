@@ -903,6 +903,8 @@ impl Dataset {
         }
         let mut out = self.clone();
         for f in &mut out.features {
+            // A whole layer, on a tool's thread: Cancel is looked at between features.
+            progress::check().map_err(|e| e.to_string())?;
             if let Some(g) = &mut f.geometry {
                 *g = convert_keeping_missing(&to, g, &HeldPlaces::default()).ok_or_else(|| {
                     format!(
@@ -940,11 +942,16 @@ impl Dataset {
         if self.edits_in_lonlat() {
             return Ok(results);
         }
+        // Only the stored places a result reads as are held: memory follows the results, not
+        // the layer.
         let mut held = HeldPlaces::default();
+        held.want_only(&results.features.iter().filter_map(|f| f.geometry.as_ref()).collect::<Vec<_>>());
         for g in self.features.iter().filter_map(|f| f.geometry.as_ref()) {
+            progress::check().map_err(|e| e.to_string())?;
             self.hold_places(g, None, &mut held);
         }
         for f in &mut results.features {
+            progress::check().map_err(|e| e.to_string())?;
             if let Some(g) = f.geometry.take() {
                 f.geometry = Some(self.edit_from_lonlat(g, &held).map_err(|e| format!("{}: feature {}: {e}", self.name, f.id))?);
             }
