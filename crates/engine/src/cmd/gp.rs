@@ -1253,7 +1253,6 @@ fn map_inputs<'a>(s: &'a Session, spec: Option<&rustgis_analysis::ToolSpec>, par
 /// thread.
 fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
     let (full, mut messages) = streamed_inputs(&snap.map, spec, params)?;
-    #[cfg(not(target_arch = "wasm32"))]
     let mut full = full;
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(spec) = spec.filter(|t| rustgis_analysis::TOOLS.iter().any(|builtin| std::ptr::eq(builtin, *t))) {
@@ -1267,8 +1266,6 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
             }
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    let mut full = full;
     lonlat_inputs(&snap.map, spec, params, &mut full)?;
     let mut rows = env_inputs(&snap.map, &full, &snap.env, params)?;
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;

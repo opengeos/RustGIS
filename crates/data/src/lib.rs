@@ -901,21 +901,29 @@ impl Dataset {
         if to.is_identity() {
             return Ok(Cow::Borrowed(self));
         }
-        let mut out = self.clone();
-        for f in &mut out.features {
-            // A whole layer, on a tool's thread: Cancel is looked at between features.
+        // The converted rows are built as they are read, one copy of the layer's features (with
+        // its attributes) beside the layer itself; the rest of it is shared. Cancel is looked at
+        // between features: a whole layer, on a tool's thread.
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(self.features.len())
+            .map_err(|_| format!("{}: not enough memory to convert it to longitude/latitude", self.name))?;
+        for f in self.features.iter() {
             progress::check().map_err(|e| e.to_string())?;
-            if let Some(g) = &mut f.geometry {
-                *g = convert_keeping_missing(&to, g, &HeldPlaces::default()).ok_or_else(|| {
+            let geometry = match &f.geometry {
+                Some(g) => Some(convert_keeping_missing(&to, g, &HeldPlaces::default()).ok_or_else(|| {
                     format!(
                         "{}: feature {} has a place in {} that can't be given in longitude/latitude",
                         self.name,
                         f.id,
                         to.source().label()
                     )
-                })?;
-            }
+                })?),
+                None => None,
+            };
+            rows.push(Feature { id: f.id, geometry, attrs: f.attrs.clone() });
         }
+        let mut out = self.clone();
+        out.features = rows.into();
         Ok(Cow::Owned(out))
     }
 

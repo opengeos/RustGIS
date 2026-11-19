@@ -2364,8 +2364,9 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
         // A cancelled run stops between rules too (a gaps rule's union doesn't look), as an error,
         // so no result short of its rules is ever taken.
         rustgis_data::progress::check().map_err(|_| "the topology check was cancelled".to_string())?;
+        // Named already: the dataset that can't be converted (the layer, or its covering layer).
         if let Some(e) = &i.unreadable {
-            return Err(format!("{}: {e}", i.layer));
+            return Err(e.clone());
         }
         rustgis_analysis::validate_latitudes(&i.data, i.rows.iter().copied())?;
         found.push(match (&i.rule, &i.by) {
