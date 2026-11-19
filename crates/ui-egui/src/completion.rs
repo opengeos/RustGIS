@@ -157,6 +157,17 @@ impl<K: Clone + PartialEq> Tip<K> {
         true
     }
 
+    /// Instead of `show`, with a cursor in `here` (what the help would be about there) but other
+    /// help shown over it (a function's signature over its command's): not shown, and what Escape
+    /// closed stays closed only while the cursor is still in it.
+    pub fn hide(&mut self, here: Option<&K>) {
+        if here != self.dismissed.as_ref() {
+            self.dismissed = None;
+        }
+        self.shown = None;
+        self.size = None;
+    }
+
     /// After the box (`out`): the help `found` for the cursor at char `at` (None: no cursor, or
     /// none to show it by, such as a list open over it), as what it's about and the char where
     /// that starts, drawn by `draw`

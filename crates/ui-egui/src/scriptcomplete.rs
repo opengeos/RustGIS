@@ -1313,12 +1313,12 @@ struct HintState {
 }
 
 /// What the help by the cursor shows: the help of the command whose braces it's in (a command's
-/// or tool's), or the signature of the call of a function it's in, in an expression there, and
-/// where that call's `(` is (a char index of the script).
+/// or tool's), or the signature of the call of a function it's in, in an expression there, with
+/// the command whose braces it's in and where that call's `(` is (a char index of the script).
 #[derive(Clone)]
 enum Shown {
     Help(Hint, Help),
-    Call(usize, rustgis_engine::data::query::Call),
+    Call(Hint, usize, rustgis_engine::data::query::Call),
 }
 
 fn load(ui: &Ui, box_id: Id) -> State {
@@ -1466,7 +1466,7 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
             let found = at.and_then(|at| {
                 let h = hint_at(script, at)?;
                 if let Some((call, open)) = call_at(script, at, &h, session) {
-                    return Some(Shown::Call(open, call));
+                    return Some(Shown::Call(h, open, call));
                 }
                 let help = help_at(session, script, at, &h)?;
                 Some(Shown::Help(h, help))
@@ -1477,19 +1477,24 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
     };
     let (help, call) = match found {
         Some(Shown::Help(h, help)) => (Some((h, help)), None),
-        Some(Shown::Call(open, call)) => (None, Some((open, call))),
+        Some(Shown::Call(h, open, call)) => {
+            // In a call its command's help is hidden, not left: what Escape closed of it stays
+            // closed while the cursor is still in that command's braces (`Tip::hide`).
+            state.hint.tip.hide(Some(&h));
+            (None, Some((open, call)))
+        }
         None => (None, None),
     };
-    // In a call the command's help is hidden, not left: given no cursor, what Escape closed of it
-    // stays closed (`Tip::show`). Anchored at the line's `{`, the signature at the call's `(`.
-    let help_cursor = at.filter(|_| call.is_none());
-    let rows = help.as_ref().map_or(0, |(_, help)| help.params.len() + 3);
-    let about = help.as_ref().map(|(h, _)| (h.clone(), h.brace));
-    state.hint.tip.show(ui, box_id.with("complete_hint"), out, visible, help_cursor, about, rows, |ui, width| {
-        if let Some((_, help)) = &help {
-            draw_help(ui, help, width);
-        }
-    });
+    // Anchored at the line's `{`, the signature at the call's `(`.
+    if call.is_none() {
+        let rows = help.as_ref().map_or(0, |(_, help)| help.params.len() + 3);
+        let about = help.as_ref().map(|(h, _)| (h.clone(), h.brace));
+        state.hint.tip.show(ui, box_id.with("complete_hint"), out, visible, at, about, rows, |ui, width| {
+            if let Some((_, help)) = &help {
+                draw_help(ui, help, width);
+            }
+        });
+    }
     let about = call.as_ref().map(|(open, _)| (*open, *open));
     let rows = crate::exprcomplete::TIP_ROWS;
     state.hint.call.show(ui, box_id.with("complete_call"), out, visible, at, about, rows, |ui, width| {
@@ -2542,7 +2547,7 @@ mod tests {
 
     /// A command's help closed with Escape stays closed through a call in its expression: the
     /// signature shows in the call, and out of it the help doesn't come back, as the cursor never
-    /// left the braces.
+    /// left the braces. A call in another command's braces is leaving them.
     #[test]
     fn a_closed_commands_help_stays_closed_through_a_call() {
         use egui::accesskit::Role;
@@ -2561,6 +2566,26 @@ mod tests {
         assert!(h.query_by_label(&sig).is_none(), "still closed out of the call");
         type_in(&mut h, "\"}\nselect.byAttributes {");
         h.get_by_label(&sig);
+        // Closed in one command, then straight into a call in another, and back: shown again, as
+        // the cursor left its braces.
+        let mut h = pane();
+        let help = super::help(&h.state().session, "labels.style").unwrap();
+        let styled = format!("{}{}", help.id, help.keys);
+        type_in(&mut h, r#"labels.style {"size": 1, "#);
+        h.get_by_label(&styled);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_label(&styled).is_none(), "closed");
+        type_in(&mut h, "\nselect.byAttributes {\"layer\": \"Countries\", \"where\": \"round(");
+        assert!(h.query_by_role_and_label(Role::Label, "round(x[, places])").is_some(), "another command's call");
+        // Straight back into the first command's braces (a click there).
+        let id = egui::Id::unique("script_text");
+        let mut state = egui::widgets::text_edit::TextEditState::load(&h.ctx, id).unwrap_or_default();
+        let back = egui::text::CCursorRange::one(egui::text::CCursor::new("labels.style {".chars().count()));
+        state.cursor.set_char_range(Some(back));
+        state.store(&h.ctx, id);
+        h.run();
+        h.get_by_label(&styled);
     }
 
     /// Ctrl+Space opens the list with nothing typed: a line's first word, an expression's; and
