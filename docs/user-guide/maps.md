@@ -766,23 +766,25 @@ World, Sphere and Africa Sinusoidal (`ESRI:54008`, `53008`, `102011`) can be the
 
 The coordinate system boxes of the Coordinate System dialog, Define Projection, the Shapefile, DXF
 and CSV imports, the measured grid, **Settings › Start-up › Projection** and the analysis
-environment search as you type. It finds a system by its code (`3035`,
-`EPSG:3035`, `esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection
-method (`albers`, `oblique mercator`) or by its area of use (`switzerland`), and lists the matches
-under the box: the systems you used last first (the ten last applied, kept between sessions), the
-map's own projections by name where the box sets the map (`robinson`), then the EPSG and ESRI
-systems. Among equal matches, names whose words begin with the words typed come first
-(`lambert 93` finds Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a
-plain system before its axis-order variants. ↑/↓ move through the list, Enter or a click takes a
-system, and Escape closes the list. In a dialog, taking a system fills the box and a second Enter
-confirms the dialog (a code typed in full, such as `2263` or `EPSG:2263`, confirms with the
-first); in the
-graticule and start-up menus it applies the system at once; in the analysis environment,
-**Set Coordinate System** applies it. Enter in an empty box leaves it empty (no system, or the
-map's own for the measured grid) unless ↓ chose a row. A box for the map, the measured grid or the
-analysis environment lists projected systems only. Text the list doesn't hold, such as WKT or a
-PROJ string, is used as typed. A system is remembered once it is applied or its import starts;
-**Clear** beside **Recently used** in the Coordinate System dialog forgets them all.
+environment search as you type. A box finds a system by its code (`3035`, `EPSG:3035`,
+`esri:102033`), by words of its name (`lv95`, `utm 32n wgs`), by its projection method (`albers`,
+`oblique mercator`) or by its area of use (`switzerland`), and lists the matches under the box: the
+systems you used last first (the ten last applied, kept between sessions), the map's own
+projections by name where the box sets the map (`robinson`), then the EPSG and ESRI systems. Among
+equal matches, names whose words begin with the words typed come first (`lambert 93` finds
+Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a plain system before
+its axis-order variants.
+
+↑/↓ move through the list, Enter or a click takes a system, and Escape closes the list. In a
+dialog, taking a system fills the box and a second Enter confirms the dialog (a code typed in full,
+such as `2263` or `EPSG:2263`, confirms with the first); in the graticule and start-up menus it
+applies the system at once; in the analysis environment, **Set Coordinate System** applies it.
+
+Enter in an empty box leaves it empty (no system, or the map's own for the measured grid) unless ↑
+or ↓ chose a row. A box for the map, the measured grid or the analysis environment lists projected
+systems only. Text the list doesn't hold, such as WKT or a PROJ string, is used as typed. A system
+is remembered once it is applied or its import starts; **Clear** beside **Recently used** in the
+Coordinate System dialog forgets them all.
 
 ## Globe
 
