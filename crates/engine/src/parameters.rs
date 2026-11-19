@@ -122,11 +122,11 @@ mod tests {
         const LOSS: &str = "{n} resource(s) were omitted at https://h.invalid/x?token=RGSYNTH_2";
         let result = session.guarded("Loss rollback", true, |s| {
             s.guarded("Nested loss", true, |s| {
-                s.notify_loss(LOSS, 1);
+                s.notify_counted(Some(rustgis_data::loss::LossCode::DroppedLegend), LOSS, 1);
                 Ok(Value::Null)
             })?;
             assert!(s.notices_since(mark).is_empty(), "the outer guard has not finished");
-            s.notify_loss(LOSS, 2);
+            s.notify_counted(Some(rustgis_data::loss::LossCode::DroppedLegend), LOSS, 2);
             s.project.name = "temporary".into();
             s.notify("Deleted 3 features", false);
             panic!("synthetic loss rollback");
@@ -135,7 +135,9 @@ mod tests {
         assert_eq!(session.project.name, name);
         let notices = session.notices_since(mark);
         assert_eq!(notices.iter().filter(|n| !n.error).count(), 1);
-        assert!(notices.iter().any(|n| !n.error && n.text.starts_with("3 resource(s)")));
+        assert!(notices.iter().any(|n| n.loss() == Some(rustgis_data::loss::LossCode::DroppedLegend)
+            && n.severity == rustgis_data::diagnostics::Severity::Warning
+            && n.text.starts_with("3 resource(s)")));
         assert!(notices.iter().all(|n| !n.text.contains("RGSYNTH_") && n.text != "Deleted 3 features"));
         let diagnostic_losses = session.diagnostics.records().into_iter().filter(|r| r.message.starts_with("3 resource(s)")).count();
         assert_eq!(diagnostic_losses, 1);
