@@ -975,7 +975,6 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.horizontal_wrapped(|ui| {
                 let name = ui.label(tl!("Projected system"));
                 let recent = app.ui.recent_crs.clone();
-                let tokens = crate::theme::Tokens::get(ui.ctx());
                 // A row taken fills the box; Set Coordinate System applies it, since another
                 // system starts without the cell size set for this one.
                 let (edit, _) = crate::crspicker::crs_box(
@@ -986,9 +985,10 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     crate::crspicker::Offer::Projected,
                     130.0,
                     "EPSG:32616",
-                    &tokens,
+                    t,
                 );
-                let _ = edit.labelled_by(name.id);
+                // Named by the label beside it, for a screen reader.
+                edit.labelled_by(name.id);
                 // An empty box sets nothing; clearing the system is its own button, so a click never
                 // clears it and its cell size by accident. Cleared, a run takes the layer's system.
                 let typed = app.workflow.env_crs.trim().to_string();

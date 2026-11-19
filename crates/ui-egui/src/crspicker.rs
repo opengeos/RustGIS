@@ -103,7 +103,8 @@ fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
         let hit = match (&exact, code_typed) {
             (Some(exact), _) => &lower == exact,
             (None, true) => lower.starts_with(&compact) || lower.rsplit(':').next().is_some_and(|d| d.starts_with(&compact)),
-            (None, false) => matches(&format!("{lower} {}", found.name.to_lowercase())),
+            // As the catalog's own are found: by name, method or area of use.
+            (None, false) => words.is_empty() || crs_search::matches(code, text),
         };
         if hit {
             out.push(Row { code: code.clone(), name: found.name.clone(), about: None, section: Section::Recent });
@@ -182,7 +183,7 @@ pub(crate) fn crs_box(
         state.moved = false;
     }
     let rows = if state.open {
-        let fresh = state.found.as_ref().is_none_or(|(t, o, r, _)| t != text || *o != offer || r.as_slice() != recent);
+        let fresh = state.found.as_ref().is_none_or(|(was, o, r, _)| was != text || *o != offer || r.as_slice() != recent);
         if fresh {
             state.found = Some((text.clone(), offer, recent.to_vec(), Arc::new(rows(text, recent, offer))));
         }
@@ -365,18 +366,17 @@ pub(crate) fn remember(recent: &mut Vec<String>, code: &str) -> bool {
     true
 }
 
-/// The recently used codes saved as [`RECENT_PREF`], as the catalog spells them; a line it doesn't
-/// list (edited by hand, a code a later catalog dropped) is left out.
+/// The recently used codes saved as [`RECENT_PREF`]. A code this catalog doesn't list (from a
+/// newer RustGIS's) is kept, to be saved again as it was, and only left out of the lists; the
+/// catalog isn't read here, at start-up.
 pub(crate) fn from_pref(value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 32) {
+    for line in value.lines().map(str::trim).filter(|l| !l.is_empty() && l.len() <= 64) {
         if out.len() == RECENT_MAX {
             break;
         }
-        if let Some(found) = crs_search::lookup(line)
-            && !out.contains(&found.code)
-        {
-            out.push(found.code.clone());
+        if !out.iter().any(|c| c.eq_ignore_ascii_case(line)) {
+            out.push(line.to_string());
         }
     }
     out
@@ -418,8 +418,15 @@ mod tests {
 
     #[test]
     fn the_recent_list_keeps_the_latest_first_without_repeats() {
-        let mut recent = from_pref("EPSG:2056\n\nepsg:2056\nEPSG:3857\nrobinson\n+proj=merc\nEPSG:99999999\n");
-        assert_eq!(recent, ["EPSG:2056", "EPSG:3857"], "the catalog's spelling, its codes only");
+        let mut recent = from_pref("EPSG:2056\n\nepsg:2056\nEPSG:3857\n");
+        assert_eq!(recent, ["EPSG:2056", "EPSG:3857"]);
+        // A code this catalog doesn't list is kept, and only left out of the lists.
+        let newer = from_pref("EPSG:99999999\nEPSG:2056");
+        assert_eq!(newer, ["EPSG:99999999", "EPSG:2056"]);
+        assert_eq!(rows("", &newer, Offer::All).iter().map(|r| r.code.as_str()).collect::<Vec<_>>(), ["EPSG:2056"]);
+        // A recent system found by its area of use is listed as recent.
+        let swiss = rows("switzerland", &["EPSG:2056".to_string()], Offer::Map);
+        assert_eq!((swiss[0].code.as_str(), swiss[0].section), ("EPSG:2056", Section::Recent));
         assert!(remember(&mut recent, "EPSG:3857"));
         assert_eq!(recent, ["EPSG:3857", "EPSG:2056"]);
         assert!(!remember(&mut recent, "  "));

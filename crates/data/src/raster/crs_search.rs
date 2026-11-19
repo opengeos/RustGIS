@@ -66,14 +66,16 @@ fn entries() -> &'static [Entry] {
             for e in terrio_crs::list_crs(&query) {
                 let kind = if e.kind == terrio_crs::CrsKind::Projected { Kind::Projected } else { Kind::Geographic };
                 let code = format!("{}:{}", e.authority, e.code);
+                let lower = e.name.to_lowercase();
+                let tokens = words_of(&lower);
                 out.push(Entry {
                     authority: e.authority,
                     number: e.code,
                     digits: e.code.to_string(),
                     key: code.to_ascii_lowercase(),
-                    search: e.name.to_lowercase(),
-                    phrase: format!(" {} ", words_of(&e.name.to_lowercase()).join(" ")),
-                    tokens: words_of(&e.name.to_lowercase()),
+                    phrase: format!(" {} ", tokens.join(" ")),
+                    tokens,
+                    search: lower,
                     area: e.area_name.as_deref().unwrap_or_default().to_lowercase(),
                     places: places(e.area_name.as_deref().unwrap_or_default()),
                     method: e.projection_method.as_deref().unwrap_or_default().to_lowercase(),
@@ -114,7 +116,9 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
     let mut beside_name = false;
     let mut inside = 0;
     for w in words {
-        let in_code = e.digits.starts_with(w.as_str()) || e.key.starts_with(w.as_str());
+        // A number begins the code, or `epsg:2` its key; a letter alone (`e`) begins no code.
+        let in_code = (w.bytes().all(|b| b.is_ascii_digit()) && e.digits.starts_with(w.as_str()))
+            || (w.contains(':') && e.key.starts_with(w.as_str()));
         let in_name = in_code || e.search.contains(w.as_str()) || w.eq_ignore_ascii_case(e.authority);
         if !in_name && !e.method.contains(w.as_str()) && !e.area.contains(w.as_str()) {
             return None;
@@ -147,6 +151,18 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
     Some((r, inside))
 }
 
+/// The text searched for, in lower case, and its words.
+fn query(text: &str) -> (String, Vec<String>) {
+    // `EPSG: 2056` and `epsg : 2056` are one code.
+    let mut whole = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    for spaced in [" :", ": "] {
+        whole = whole.replace(spaced, ":");
+    }
+    // A word without a letter or digit (`/`, `+`) says nothing of a system.
+    let words = whole.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).map(str::to_string).collect();
+    (whole, words)
+}
+
 /// Whether `e` is on WGS 84 or ETRS89, the datums most data comes in today.
 fn current_datum(e: &Entry) -> bool {
     ["wgs 84", "etrs89"].iter().any(|d| e.search.strip_prefix(d).is_some_and(|rest| rest.is_empty() || rest.starts_with(" /")))
@@ -159,13 +175,7 @@ fn current_datum(e: &Entry) -> bool {
 /// a row, WGS 84 and ETRS89, EPSG before ESRI, shorter names, and by code. At most `limit`, and only projected ones when
 /// `projected_only` (a map is drawn in one). Nothing for blank text.
 pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
-    // `EPSG: 2056` and `epsg : 2056` are one code.
-    let mut whole = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-    for spaced in [" :", ": "] {
-        whole = whole.replace(spaced, ":");
-    }
-    // A word without a letter or digit (`/`, `+`) says nothing of a system.
-    let words: Vec<String> = whole.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).map(str::to_string).collect();
+    let (whole, words) = query(text);
     if words.is_empty() {
         return Vec::new();
     }
@@ -195,9 +205,20 @@ pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
 
 /// The catalog's entry for `code` (`EPSG:2056`, `esri:102033`, `2056`), if it lists it.
 pub fn lookup(code: &str) -> Option<&'static Found> {
+    lookup_entry(code).map(|e| &e.found)
+}
+
+fn lookup_entry(code: &str) -> Option<&'static Entry> {
     let lower = code.trim().to_ascii_lowercase().replace(' ', "");
     let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
-    index().get(&key).map(|&i| &entries()[i].found)
+    index().get(&key).map(|&i| &entries()[i])
+}
+
+/// Whether the system `code` matches `text` as [`search`] matches it: by its code, the words of
+/// its name, its projection's method or its area of use.
+pub fn matches(code: &str, text: &str) -> bool {
+    let (whole, words) = query(text);
+    !words.is_empty() && lookup_entry(code).is_some_and(|e| rank(e, &words, &whole).is_some())
 }
 
 /// The catalog's name of `code` (`EPSG:2056`, `esri:102033`, `2056`), if it lists it.
@@ -253,6 +274,12 @@ mod tests {
         assert_eq!(search("epsg : 2056", false, 5)[0].code, "EPSG:2056");
         assert_eq!(search("EPSG:  2056", false, 5)[0].code, "EPSG:2056");
         assert!(search("/ +", false, 5).is_empty());
+        // A letter alone begins no code.
+        assert!(search("e", false, 60).iter().all(|f| f.name.to_lowercase().contains('e')
+            || f.area.as_deref().unwrap_or_default().to_lowercase().contains('e')
+            || f.method.as_deref().unwrap_or_default().to_lowercase().contains('e')));
+        assert!(matches("EPSG:2056", "switzerland") && matches("EPSG:2056", "oblique mercator"));
+        assert!(!matches("EPSG:2056", "france") && !matches("EPSG:2056", " "));
         assert_eq!(search("+ lv95", false, 5)[0].code, "EPSG:2056");
     }
 

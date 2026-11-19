@@ -4048,7 +4048,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
         items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
         // While a search is typed its list offers the matching ones of these, and the menu stays
         // within the window.
-        if app.ui.start_projection_input.trim().is_empty() {
+        if app.ui.start_projection_input.trim().is_empty() || !crate::crspicker::list_is_open(ui.ctx()) {
             for (id, label) in items {
                 if ui.add(egui::Button::selectable(is_projection(&current, &id), tl!(label.as_str()))).clicked() {
                     let _ = app.run("ui.startup", json!({"projection": id}));
@@ -4068,7 +4068,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
                 &recent,
                 crate::crspicker::Offer::Map,
                 150.0,
-                "3010, lv95",
+                tl!("3010, lv95"),
                 &t,
             );
             let edit = edit.labelled_by(name.id);
