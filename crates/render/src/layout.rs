@@ -5380,7 +5380,7 @@ mod tests {
             let id = l.add("Note", (10.0, 10.0, 40.0, 1400.0), kind);
             (l, id)
         };
-        let (l, id) = page("\n\nZ");
+        let (l, id) = page("\n\u{a0}\nZ");
         assert_eq!(clipped_text(&l, &[], 96.0, &info), vec![(id, "Note".into())]);
         let (l, _) = page("\n\n\n");
         assert!(clipped_text(&l, &[], 96.0, &info).is_empty(), "only blank lines past it");

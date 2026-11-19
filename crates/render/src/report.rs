@@ -87,11 +87,17 @@ pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
 }
 
 /// [`wrap_with`] that stops once it has `max` lines and one more with text, which tells a caller
-/// the text goes on (a layout text draws 200 and says it is cut past them, #2346): blank lines
-/// from `max` on are left out, so the one past it always has ink. Its work is bounded by the
-/// lines it returns, and every word in them is broken to the width.
+/// the text goes on (a layout text draws 200 and says it is cut past them, #2346): lines with
+/// nothing but spaces (no-break ones too) from `max` on are left out, so the one past it always
+/// has ink. Its work is bounded by the lines it returns, and every word in them is broken to the
+/// width.
 pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> Vec<String> {
     let past = |out: &[String]| out.len() > max;
+    let keep = |out: &mut Vec<String>, line: String| {
+        if out.len() < max || line.chars().any(|c| !c.is_whitespace()) {
+            out.push(line);
+        }
+    };
     let mut out = Vec::new();
     'text: for para in s.lines() {
         let mut line = String::new();
@@ -129,23 +135,21 @@ pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> V
                     }
                 }
                 if !line.is_empty() {
-                    out.push(std::mem::take(&mut line));
+                    keep(&mut out, std::mem::take(&mut line));
                 }
                 let piece = prefix(fits);
-                out.push(piece.to_string());
+                keep(&mut out, piece.to_string());
                 word = &word[piece.len()..];
             }
             let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
             if !line.is_empty() && width(&next) > w {
-                out.push(std::mem::take(&mut line));
+                keep(&mut out, std::mem::take(&mut line));
                 line = word.to_string();
             } else {
                 line = next;
             }
         }
-        if !line.is_empty() || out.len() < max {
-            out.push(line);
-        }
+        keep(&mut out, line);
         if past(&out) {
             break;
         }
@@ -592,7 +596,9 @@ mod tests {
         assert_eq!(lines[200], "Z");
         let lines = wrap_lines(&format!("{}\n\n\n\nZ", vec!["a"; 199].join("\n")), 40.0, fit, 200);
         assert_eq!((lines.len(), lines[199].as_str(), lines[200].as_str()), (201, "", "Z"), "blank lines before the limit stay");
-        for tail in ["\n", "\n\n\n"] {
+        let lines = wrap_lines(&format!("{}\n\u{a0}\n\u{202f}\u{a0}\nZ", vec!["a"; 200].join("\n")), 40.0, fit, 200);
+        assert_eq!(lines.last().map(String::as_str), Some("Z"), "a line of no-break spaces is blank too");
+        for tail in ["\n", "\n\n\n", "\n\u{a0}"] {
             let blank = format!("{}{tail}", vec!["a"; 200].join("\n"));
             assert_eq!(wrap_lines(&blank, 40.0, fit, 200).len(), 200, "nothing with text past it: {tail:?}");
         }
