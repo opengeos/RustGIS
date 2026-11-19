@@ -1103,8 +1103,8 @@ fn modify(s: &mut Session, mut change: impl FnMut((u32, usize), &Geometry) -> Re
             let lonlat = l.dataset.geometry_to_lonlat(own)?;
             let Some(g) = change((id, r), &lonlat)? else { continue };
             super::edit::validate(&g)?;
-            // A change of the whole shape (a move, a rotation) snaps to nothing: only the feature's
-            // own places are looked for.
+            // A change of the whole shape (a move, a rotation) has no place of its own to snap:
+            // only the feature's own places are held, with no search of other features.
             let mut held = rustgis_data::HeldPlaces::default();
             l.dataset.hold_places(own, None, &mut held);
             let g = l.dataset.edit_from_lonlat(g, &held)?;
@@ -1170,45 +1170,55 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
 }
 
 /// The places an edit of layer `id`, given in longitude/latitude (`edited`), keeps as stored when
-/// written back ([`rustgis_data::Dataset::edit_from_lonlat`]): those of the feature it changes
-/// (`original`, in the layer's own coordinates), and a stored place of a feature in a layer of the
+/// written back ([`rustgis_data::Dataset::edit_from_lonlat`]): those of the features it changes
+/// (`originals`, in the layer's own coordinates), and a stored place of a feature in a layer of the
 /// same system that one of its other places reads exactly as (a vertex snapped to, a feature
-/// pasted where it was copied from). Empty while the layer is in longitude/latitude, as every
-/// layer is today: its edits are written as they are.
-pub(crate) fn held_places(s: &Session, id: u32, original: Option<&Geometry>, edited: &[&Geometry]) -> rustgis_data::HeldPlaces {
+/// pasted where it was copied from). Each other place is converted on its own to find what is
+/// stored near it, so no stored place is missed however large the edit. That takes one pass over
+/// the feature boxes of the layers in its system, once a command, as a selection by box does.
+/// Empty while the layer is in longitude/latitude, as every layer is today: its edits are written
+/// as they are.
+pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited: &[&Geometry]) -> rustgis_data::HeldPlaces {
     let mut held = rustgis_data::HeldPlaces::default();
     let Some(l) = s.map().layer(id).filter(|l| !l.dataset.edits_in_lonlat()) else { return held };
-    if let Some(g) = original {
+    for g in originals {
         l.dataset.hold_places(g, None, &mut held);
     }
-    // The places not held yet, and the box they are in.
-    let (mut left, mut within) = (0usize, rustgis_geom::Extent::EMPTY);
+    let system = l.dataset.coord_crs();
+    let Ok(to_own) = rustgis_data::raster::Crs::LonLat.to(system) else { return held };
+    // The places not held yet, each in the layer's coordinates, and the box they are in there,
+    // padded by what a round trip moves a place: a stored place reading as one lies within it.
+    let mut within = rustgis_geom::Extent::EMPTY;
     for g in edited {
         g.for_each_coord(|c| {
-            if c.is_finite() && held.get(c).is_none() {
-                left += 1;
-                within = within.union(&rustgis_geom::Extent { min_x: c.x, min_y: c.y, max_x: c.x, max_y: c.y });
+            if c.is_finite()
+                && held.get(c).is_none()
+                && let Some(own) = to_own.point(c)
+            {
+                let r = round_trip_reach(own);
+                within = within.union(&rustgis_geom::Extent { min_x: own.x - r, min_y: own.y - r, max_x: own.x + r, max_y: own.y + r });
             }
         });
     }
-    if left == 0 {
+    if within.is_empty() {
         return held;
     }
-    let system = l.dataset.coord_crs();
     for m in s.map().layers.iter().filter(|m| !m.is_raster() && m.dataset.coord_crs() == system) {
-        // Padded by a millionth of its size in its units: a place converted to the layer's system
-        // may land a hair beside the one it reads as.
-        let own = m.dataset.extent_from_lonlat(&within);
-        let own = own.padded(0.0, 1e-6 * own.min_x.abs().max(own.max_x.abs()).max(own.min_y.abs()).max(own.max_y.abs()).max(1.0));
         for f in &m.dataset.features {
             if let Some(g) = &f.geometry
-                && g.extent().intersects(&own)
+                && g.extent().intersects(&within)
             {
-                m.dataset.hold_places(g, Some(&own), &mut held);
+                m.dataset.hold_places(g, Some(&within), &mut held);
             }
         }
     }
     held
+}
+
+/// How far a round trip through longitude/latitude may move place `c`, in its own units, with
+/// room to spare: a millionth of its size.
+fn round_trip_reach(c: Coord) -> f64 {
+    1e-6 * c.x.abs().max(c.y.abs()).max(1.0)
 }
 
 /// Replaces a feature's shape with one of the layer's kind, as one edit: `g` in longitude/latitude,
@@ -1217,7 +1227,7 @@ pub(crate) fn replace_geometry(s: &mut Session, id: u32, row: usize, g: Geometry
     super::edit::validate(&g)?;
     // What the edit left of the feature, or snapped to, stays as stored.
     let original = s.map().layer(id).and_then(|l| l.dataset.features.get(row)?.geometry.as_ref());
-    let held = held_places(s, id, original, &[&g]);
+    let held = held_places(s, id, &original.into_iter().collect::<Vec<_>>(), &[&g]);
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let g = l.dataset.edit_from_lonlat(g, &held)?;
     if l.geometry_type() != GeometryType::None && l.geometry_type() != g.kind() {
@@ -2188,16 +2198,25 @@ fn stored_place(s: &Session, id: u32, row: usize, at: Coord) -> Option<Coord> {
     // are read and projected: a snap asks on every pointer move.
     let to_lonlat = l.dataset.lonlat_conversion().ok()?;
     let shown = rustgis_data::raster::Crs::LonLat.to(l.dataset.coord_crs()).ok()?.point(s.map().to_lonlat(at)?)?;
-    let reach = 1e-6 * shown.x.abs().max(shown.y.abs()).max(1.0);
+    let reach = round_trip_reach(shown);
+    // In longitude/latitude, a longitude past ±180° (a shape drawn across the antimeridian) is the
+    // same place one turn round, where the map shows it.
+    let geographic = to_lonlat.is_identity();
+    let turn = |dx: f64| if geographic { (dx + 180.0).rem_euclid(360.0) - 180.0 } else { dx };
     let near = (s.map().camera.res * 1e-3).powi(2);
     let mut best: Option<(f64, Coord)> = None;
     own.for_each_coord(|c| {
-        if (c.x - shown.x).abs() <= reach
+        if turn(c.x - shown.x).abs() <= reach
             && (c.y - shown.y).abs() <= reach
             && let Some(read) = to_lonlat.point(c)
-            && let Some(m) = s.map().to_map(read)
         {
-            let d2 = (m.x - at.x).powi(2) + (m.y - at.y).powi(2);
+            // As read, or one turn round, whichever the map shows at the hit.
+            let wrapped = Coord::new((read.x + 180.0).rem_euclid(360.0) - 180.0, read.y);
+            let d2 = [read, wrapped]
+                .into_iter()
+                .filter_map(|r| s.map().to_map(r))
+                .map(|m| (m.x - at.x).powi(2) + (m.y - at.y).powi(2))
+                .fold(f64::INFINITY, f64::min);
             if d2 <= near && best.is_none_or(|b| d2 < b.0) {
                 best = Some((d2, read));
             }

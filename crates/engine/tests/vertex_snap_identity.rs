@@ -228,3 +228,26 @@ fn a_snapped_vertex_is_the_stored_place_exactly() {
         assert_eq!(parts[1][0], parts[0][1], "{projection:?}");
     }
 }
+
+/// A stored vertex past 180° (a shape drawn across the antimeridian) is snapped to as stored,
+/// where the map shows it: past the edge on Web Mercator, one turn round on a world projection.
+#[test]
+fn a_vertex_past_the_antimeridian_is_snapped_to_as_stored() {
+    let places =
+        (0..12).map(|i| Coord::new(180.0 + 7.123456789012345 * f64::from(i % 5 + 1) / 3.0, -60.0 + 11.987654321098765 * f64::from(i)));
+    for (past, projection) in places.flat_map(|p| [(p, None), (p, Some("robinson"))]) {
+        let (mut s, _) = fixture(Geometry::Line(vec![vec![Coord::new(170.0, 10.0), past]]));
+        if let Some(code) = projection {
+            s.map_mut().projection = Projection::from_code(code).unwrap();
+        }
+        s.map_mut().camera.res = 1e-3;
+        s.map_mut().editing.snapping = Snapping { enabled: true, tolerance_px: 50.0, vertex: true, edge: true, end: true };
+        let hits: Vec<_> =
+            [past.x, past.x - 360.0].into_iter().filter_map(|x| snap_except(&mut s, Coord::new(x + 1e-8, past.y), None)).collect();
+        assert!(!hits.is_empty(), "{projection:?} {past:?}");
+        for (at, kind) in hits {
+            assert_eq!(kind, "end");
+            assert_eq!((at.x.to_bits(), at.y.to_bits()), (past.x.to_bits(), past.y.to_bits()), "{projection:?}: {at:?}");
+        }
+    }
+}

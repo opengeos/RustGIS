@@ -134,7 +134,7 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     // Pasted where they were copied from, in a layer of the same system, their places stay as
     // stored there.
-    let held = super::design::held_places(s, id, None, &src.features.iter().filter_map(|f| f.geometry.as_ref()).collect::<Vec<_>>());
+    let held = super::design::held_places(s, id, &[], &src.features.iter().filter_map(|f| f.geometry.as_ref()).collect::<Vec<_>>());
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if l.is_raster() {
         return Err("features can't be pasted into a raster layer".into());
