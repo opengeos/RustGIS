@@ -546,7 +546,17 @@ fn add_layer(
             added_one(s, before)?;
         }
         Source::ArcGis { url, layer: wanted, features, style, options } => {
-            note_web_options(name, options, report);
+            // Layers of a map service it doesn't draw alone (several, or by name): its whole map,
+            // said as a change to what is drawn, not as a setting left unread.
+            let mut options = options.clone();
+            if wanted == "map"
+                && let Some(i) = options.ignored.iter().position(|o| o == "layer=…")
+            {
+                options.ignored.remove(i);
+                report
+                    .approximated(name, "the layers QGIS draws of its map service (several, or by name): the whole map, every layer drawn");
+            }
+            note_web_options(name, &options, report);
             let before = s.active_layer;
             let add = |s: &mut Session, wanted: &str| {
                 s.run_part("service.add", &json!({"url": url, "type": "arcgis", "layer": wanted, "name": name}))

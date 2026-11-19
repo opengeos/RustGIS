@@ -50,7 +50,8 @@ fn a_qgis_projects_web_service_layers_come_in_from_their_services() {
             <layer-tree-layer id="Roads" checked="Qt::Unchecked"/><layer-tree-layer id="Parcels" checked="Qt::Checked"/>
             <layer-tree-layer id="Topo" checked="Qt::Checked"/><layer-tree-layer id="Topo 2" checked="Qt::Checked"/>
             <layer-tree-layer id="Missing" checked="Qt::Checked"/><layer-tree-layer id="Gone" checked="Qt::Checked"/>
-        </layer-tree-group><projectlayers>{}{}{}{}{}{}</projectlayers></qgis>"#,
+            <layer-tree-layer id="Topo 3" checked="Qt::Checked"/>
+        </layer-tree-group><projectlayers>{}{}{}{}{}{}{}</projectlayers></qgis>"#,
         layer(
             "Roads",
             "vector",
@@ -74,6 +75,7 @@ fn a_qgis_projects_web_service_layers_come_in_from_their_services() {
         layer("Topo 2", "raster", "arcgismapserver", &format!("layer='6' url='{base}/arcgis/rest/services/T/MapServer'")),
         layer("Missing", "vector", "WFS", &format!("typename='nope' url='{base}/wfs'")),
         layer("Gone", "raster", "arcgismapserver", &format!("layer='1' url='{base}/arcgis/rest/services/Gone/MapServer'")),
+        layer("Topo 3", "raster", "arcgismapserver", &format!("layer='5,6' url='{base}/arcgis/rest/services/T/MapServer'")),
     );
     let mut s = Session::new(Project::default());
     let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
@@ -103,6 +105,12 @@ fn a_qgis_projects_web_service_layers_come_in_from_their_services() {
     // A map service that doesn't answer is left out: no fall back to its whole map.
     assert!(notes.contains(r#""kind":"skipped","layer":"Gone","text":"the layer: "#), "{notes}");
     assert!(!notes.contains("its map layer 1 alone"), "{notes}");
+    // Two layers of it: its whole map, said as what is drawn, not as an unread setting.
+    assert!(
+        notes.contains(r#""layer":"Topo 3","text":"the layers QGIS draws of its map service (several, or by name): the whole map"#),
+        "{notes}"
+    );
+    assert!(!notes.contains("layer=…"), "{notes}");
 }
 
 /// An OGC API Features collection comes in as features; a WMTS layer (QGIS's WMS source naming a
