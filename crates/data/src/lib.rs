@@ -43,6 +43,7 @@ pub mod provenance;
 pub mod publish;
 pub mod query;
 pub mod raster;
+mod row_access;
 pub mod rows;
 pub mod s3_address;
 pub mod secrets;
@@ -61,6 +62,7 @@ pub mod zip;
 
 pub use date::{Date, DateTime};
 pub use geometry::{Geometry, GeometryType, Measure, VertexId, ambiguous_area_message, pole_loop_count, pole_loop_message};
+pub use row_access::RowRef;
 pub use rustgis_geom::{Coord, Extent};
 pub use value::{Field, FieldType, Value};
 
@@ -200,8 +202,11 @@ mod secret_redaction_tests {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Feature {
+    #[cfg_attr(feature = "count-row-uses", deprecated(note = "read rows through `Features::row`/`rows` (`RowRef`); see cargo xtask rows"))]
     pub id: u64,
+    #[cfg_attr(feature = "count-row-uses", deprecated(note = "read rows through `Features::row`/`rows` (`RowRef`); see cargo xtask rows"))]
     pub geometry: Option<Geometry>,
+    #[cfg_attr(feature = "count-row-uses", deprecated(note = "read rows through `Features::row`/`rows` (`RowRef`); see cargo xtask rows"))]
     pub attrs: Vec<Value>,
 }
 
@@ -230,6 +235,7 @@ impl Features {
     }
 
     /// The rows, taking them out of the share (copying them only when another copy holds them).
+    #[cfg_attr(feature = "count-row-uses", deprecated(note = "use `Features::to_rows` or the row accessors; see cargo xtask rows"))]
     pub fn into_vec(self) -> Vec<Feature> {
         std::sync::Arc::unwrap_or_clone(self.rows)
     }
@@ -385,7 +391,7 @@ impl Dataset {
         if self.windowed {
             return 0;
         }
-        self.features.iter().flat_map(|f| &f.attrs).filter(|v| v.is_non_finite()).count()
+        self.features.rows().flat_map(RowRef::values).filter(|v| v.is_non_finite()).count()
     }
 
     /// How many of its features have a coordinate that isn't a number (NaN, infinity), which a
@@ -395,7 +401,7 @@ impl Dataset {
         if self.windowed {
             return 0;
         }
-        self.features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| !g.is_finite())).count()
+        self.features.rows().filter(|r| r.geometry().is_some_and(|g| !g.is_finite())).count()
     }
 }
 
@@ -708,11 +714,11 @@ impl Dataset {
 
     /// Value of `field` for feature `row` (Null when out of range).
     pub fn value(&self, row: usize, field: usize) -> &Value {
-        self.features.get(row).and_then(|f| f.attrs.get(field)).unwrap_or(&Value::Null)
+        self.features.value(row, field)
     }
 
     pub fn extent(&self) -> Extent {
-        self.features.iter().filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
+        self.features.rows().filter_map(RowRef::geometry).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
     }
 
     /// Pushes a feature with the next id, padding/truncating attributes to the schema.
@@ -735,9 +741,7 @@ impl Dataset {
             return i;
         }
         self.fields.push(Field::new(name, ty));
-        for f in &mut self.features {
-            f.attrs.push(Value::Null);
-        }
+        self.features.add_column(Value::Null);
         self.fields.len() - 1
     }
 
