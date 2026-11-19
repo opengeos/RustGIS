@@ -276,4 +276,13 @@ fn a_wcs_coverage_reaches_the_pole_a_polar_view_holds() {
     let out = s.run("project.importQgis", &json!({"text": whole})).unwrap();
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
     assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
+    // A saved view with no coordinate system it is in: no view either, not one read as Web
+    // Mercator's.
+    let unplaced = format!(
+        r#"<qgis version="4.2.3"><mapcanvas name="theMapCanvas"><extent><xmin>-1000000</xmin><ymin>-1000000</ymin><xmax>1000000</xmax><ymax>1000000</ymax></extent></mapcanvas>
+        <projectlayers>{layer}</projectlayers></qgis>"#
+    );
+    let out = s.run("project.importQgis", &json!({"text": unplaced})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
+    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
 }

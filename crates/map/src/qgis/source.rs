@@ -102,6 +102,16 @@ pub struct WebOptions {
 }
 
 impl WebOptions {
+    /// With `rest` parts past those read (the first [`MAX_PARTS`]), if any: counted, never named,
+    /// and taken as a login (one of them may be a key).
+    fn with_rest(mut self, rest: usize) -> Self {
+        if rest > 0 {
+            self.more += rest;
+            self.login = true;
+        }
+        self
+    }
+
     /// Notes the option `key` (`name=…`), or counts it once 32 are named.
     fn note(&mut self, key: &str) {
         if self.ignored.len() < 32 {
@@ -225,7 +235,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                         // identify settings.
                         const READ: [&str; 9] =
                             ["url", "layers", "crs", "format", "tileMatrixSet", "contextualWMSLegend", "dpiMode", "featureCount", "type"];
-                        let mut options = WebOptions::of(&q, &READ);
+                        let mut options = WebOptions::of(&q, &READ).with_rest(rest_of(datasource));
                         // A style of its own (not the server's default) isn't asked for.
                         if let Some(i) = options.ignored.iter().position(|o| o == "styles=…")
                             && get("styles").is_none_or(|v| v.eq_ignore_ascii_case("default"))
@@ -257,7 +267,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
         "memory" => memory(datasource),
         "virtual" => virtual_layer(datasource, dir),
         p if p.eq_ignore_ascii_case("wfs") || p.eq_ignore_ascii_case("oapif") => {
-            let kv = conninfo(datasource);
+            let (kv, left) = conninfo_rest(datasource);
             let get = |k: &str| kv.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.clone()).filter(|v| !v.is_empty());
             // What RustGIS reads (the address, the type, the filter), and what it does its own way:
             // the version it asks, the system it asks in, pages, and a layer read whole rather
@@ -282,9 +292,13 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 None => Some(Err(q)),
             });
             match (get("url"), get("typename")) {
-                (Some(url), Some(layer)) => {
-                    Source::Wfs { url, layer, ogc_api: provider.eq_ignore_ascii_case("oapif"), filter, options: WebOptions::of(&kv, &READ) }
-                }
+                (Some(url), Some(layer)) => Source::Wfs {
+                    url,
+                    layer,
+                    ogc_api: provider.eq_ignore_ascii_case("oapif"),
+                    filter,
+                    options: WebOptions::of(&kv, &READ).with_rest(usize::from(left)),
+                },
                 _ => Source::Other { provider: provider.into() },
             }
         }
@@ -309,12 +323,13 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 })
                 .unzip();
             const READ: [&str; 4] = ["url", "type", "serviceType", "styleUrl"];
-            let mut options = WebOptions::of(&q, &READ);
+            let mut options = WebOptions::of(&q, &READ).with_rest(rest_of(datasource));
             // The address's own query (a key, a token) isn't kept with the service's address: a
             // login's key is a login, anything else an option (named, never its value). A part with no
             // name (`?abc`) or no value (`?abc=`) may be a key itself: never named, taken as a login.
             if let Some(query) = rest.as_deref().and_then(|r| r.split_once('?')).map(|(_, q)| q) {
-                for part in query.split('&').filter(|p| !p.is_empty()).take(200) {
+                options = options.with_rest(query.split('&').filter(|p| !p.is_empty()).skip(MAX_PARTS).count());
+                for part in query.split('&').filter(|p| !p.is_empty()).take(MAX_PARTS) {
                     match part.split_once('=') {
                         Some((k, v)) if is_login(k) || v.is_empty() => options.login = true,
                         Some((k, _)) if !k.is_empty() => options.note(k),
@@ -334,7 +349,9 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             // grid); the cache setting changes nothing drawn.
             const READ: [&str; 5] = ["url", "identifier", "crs", "format", "cache"];
             match (get("url"), get("identifier")) {
-                (Some(url), Some(coverage)) => Source::Wcs { url, coverage, options: WebOptions::of(&q, &READ) },
+                (Some(url), Some(coverage)) => {
+                    Source::Wcs { url, coverage, options: WebOptions::of(&q, &READ).with_rest(rest_of(datasource)) }
+                }
                 _ => Source::Other { provider: provider.into() },
             }
         }
@@ -407,7 +424,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
 /// `…/MapServer/3`; `arcgismapserver`: `url='…/MapServer'`, with `layer='3'` for one of its
 /// layers; `arcgisimageserver`: `url='…/ImageServer'`), as [`Source::ArcGis`].
 fn arcgis(provider: &str, datasource: &str) -> Source {
-    let kv = conninfo(datasource);
+    let (kv, left) = conninfo_rest(datasource);
     let get = |k: &str| kv.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
     let other = || Source::Other { provider: provider.into() };
     let Some(url) = get("url") else { return other() };
@@ -415,7 +432,7 @@ fn arcgis(provider: &str, datasource: &str) -> Source {
     let lower = url.to_ascii_lowercase();
     // The system it is asked in and the image format are RustGIS's own.
     const READ: [&str; 4] = ["url", "layer", "crs", "format"];
-    let options = WebOptions::of(&kv, &READ);
+    let options = WebOptions::of(&kv, &READ).with_rest(usize::from(left));
     let layer =
         |url: String, layer: String, features: bool| Source::ArcGis { url, layer, features, style: false, options: options.clone() };
     match provider {
@@ -815,17 +832,32 @@ fn csv(datasource: &str, dir: &str) -> Source {
     }
 }
 
-/// `key=value` pairs joined by `&`, each value percent-decoded (QGIS's web sources).
+/// The most `&`-joined parts of a web source, or of an address's query, read; the rest are
+/// counted ([`WebOptions::with_rest`]).
+const MAX_PARTS: usize = 200;
+
+/// The non-empty parts of a web source past the first [`MAX_PARTS`], which [`query`] doesn't read.
+fn rest_of(s: &str) -> usize {
+    s.split('&').skip(MAX_PARTS).filter(|p| !p.is_empty()).count()
+}
+
+/// `key=value` pairs joined by `&`, each value percent-decoded (QGIS's web sources), the first
+/// [`MAX_PARTS`].
 fn query(s: &str) -> Vec<(String, String)> {
     s.split('&')
-        .take(200)
+        .take(MAX_PARTS)
         .filter_map(|kv| kv.split_once('=').or(Some((kv, ""))))
         .map(|(k, v)| (k.to_string(), rustgis_data::address::percent_decode(v)))
         .collect()
 }
 
-/// `key=value` and `key='value'` pairs joined by spaces (QGIS's connection texts).
+/// `key=value` and `key='value'` pairs joined by spaces (QGIS's connection texts), the first 100.
 fn conninfo(s: &str) -> Vec<(String, String)> {
+    conninfo_rest(s).0
+}
+
+/// [`conninfo`], and whether text is left past the 100 pairs it reads.
+fn conninfo_rest(s: &str) -> (Vec<(String, String)>, bool) {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() && out.len() < 100 {
@@ -854,7 +886,8 @@ fn conninfo(s: &str) -> Vec<(String, String)> {
         out.push((k, v));
         rest = next.trim_start();
     }
-    out
+    let left = out.len() >= 100 && !rest.is_empty();
+    (out, left)
 }
 
 /// A connection text's `table="schema"."table" (geom)`, as `schema.table` (or `table`).
@@ -969,6 +1002,19 @@ mod tests {
         let source = "serviceType=arcgis&type=xyz&url=https://example.com/VectorTileServer/rest/services/Base/VectorTileServer/tile/%7Bz%7D/%7By%7D/%7Bx%7D.pbf";
         let Source::ArcGis { url, .. } = read("arcgisvectortileservice", source, "/data") else { panic!("an ArcGIS source") };
         assert_eq!(url, "https://example.com/VectorTileServer/rest/services/Base/VectorTileServer");
+    }
+
+    /// The parts of a web source past the 200 read are counted and taken as a login (one of them
+    /// may be a key), not dropped unsaid.
+    #[test]
+    fn parts_past_those_read_are_counted_as_a_login() {
+        let many: String = (0..205).map(|i| format!("&opt{i}=v")).collect();
+        let Source::Wcs { options, .. } = read("wcs", &format!("identifier=dem&url=https://wcs.example.com/{many}"), "/data") else {
+            panic!("a WCS source")
+        };
+        assert!(options.login, "{options:?}");
+        // Every option is either named or counted: the 198 read and the 7 past them.
+        assert_eq!(options.ignored.len() + options.more, 205, "{options:?}");
     }
 
     #[test]
