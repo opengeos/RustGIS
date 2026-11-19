@@ -505,6 +505,12 @@ fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f3
         GeometryType::Point => {
             let rad = size / 2.0;
             let c = r.center();
+            // An image, without the symbol's colours, as on the map; one that doesn't draw is the
+            // circle below, as there.
+            if let Some(image) = crate::markerimages::image(p.ctx(), s.marker) {
+                image.paint(p, c, size);
+                return;
+            }
             match s.marker {
                 Marker::Square => {
                     p.rect_filled(Rect::from_center_size(c, vec2(rad * 1.8, rad * 1.8)), 0.0, c32(s.fill));
@@ -534,9 +540,6 @@ fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f3
                     let col = if s.fill.a() == 0 && s.stroke_width > 0.0 { s.stroke } else { s.fill };
                     glyph(p, c, g, glyph_px, c32(col));
                 }
-                // An image, without the symbol's colours, as on the map; one that doesn't draw is
-                // the circle below, as there.
-                Marker::Picture(pic) if crate::markerimages::paint(p, c, size, pic) => {}
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
                     p.circle_stroke(c, rad, Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)));
@@ -5787,7 +5790,13 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
         xs.push((x.0 + x.1) / 2.0);
     }
     let half = (m.size * k).max(1.0) / 2.0;
+    // An image, looked up once for all its places.
+    let image = if let LineMark::Marker(mark) = m.mark { crate::markerimages::image(ui.ctx(), mark) } else { None };
     for at in xs {
+        if let Some(image) = &image {
+            image.paint(ui.painter(), pos2(at, y), 2.0 * half);
+            continue;
+        }
         match m.mark {
             LineMark::Hash => {
                 let (sin, cos) = m.angle.to_radians().sin_cos();
@@ -5798,7 +5807,6 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
                 ui.painter().rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
             }
             LineMark::Marker(Marker::Char(g)) => glyph(ui.painter(), pos2(at, y), g, (2.0 * half).max(6.0), c),
-            LineMark::Marker(Marker::Picture(pic)) if crate::markerimages::paint(ui.painter(), pos2(at, y), 2.0 * half, pic) => {}
             LineMark::Marker(_) => {
                 ui.painter().circle_filled(pos2(at, y), half, c);
             }
@@ -7581,7 +7589,8 @@ mod tests {
     use super::*;
 
     /// A point layer given an image by `layer.marker` shows it in its patch (the Layers row and the
-    /// symbol editor's swatch), not a circle (#2266).
+    /// symbol editor's swatch), and a stroke's image marker shows on the stroke editor's line, not
+    /// circles (#2266).
     #[test]
     fn a_picture_marker_shows_in_its_patch() {
         let png =
@@ -7597,6 +7606,14 @@ mod tests {
         let image = |c: &egui::epaint::ClippedShape| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default());
         assert_eq!(out.shapes.len(), 1);
         assert!(out.shapes.iter().all(image));
+        // On the stroke editor's line: once at its middle, once more at each end.
+        let one = LineMarkers { mark: LineMark::Marker(s.marker), size: 12.0, at: Placements::MIDDLE, ..LineMarkers::default() };
+        let ends = LineMarkers { at: Placements::VERTICES, ..one };
+        for (m, n) in [(one, 1), (ends, 2)] {
+            let line = |ui: &mut Ui| marker_preview(ui, &m, (0.0, 80.0), 7.0, 1.0, egui::Color32::RED, 1.0);
+            let shapes = ctx.run_ui(egui::RawInput::default(), line).shapes;
+            assert_eq!((shapes.len(), shapes.iter().all(image)), (n, true), "{:?}", m.at);
+        }
         // (Its texture's upload isn't handed to a renderer here.)
         out.textures_delta.clear();
     }

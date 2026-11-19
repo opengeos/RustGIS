@@ -162,9 +162,10 @@ fn with_marker<R>(p: Picture, f: impl FnOnce(&Pixmap, f32) -> R) -> Option<R> {
 }
 
 /// Picture marker `p`'s image at most `side` pixels per side, and its height for its width; `None`
-/// where it's drawn as a circle (no image, not a PNG or JPEG, or one that doesn't decode).
+/// where it's drawn as a circle (no image, whose base64 is empty, not a PNG or JPEG, or one that
+/// doesn't decode).
 pub(crate) fn marker_image(p: Picture, side: u32) -> Option<(Pixmap, f32)> {
-    (!p.is_default() && png_or_jpeg(p.base64())).then(|| decode_sized(p.base64(), side)).flatten()
+    png_or_jpeg(p.base64()).then(|| decode_sized(p.base64(), side)).flatten()
 }
 
 /// Picture marker `p`'s height for its width; `None` if its image doesn't decode (it's drawn as a

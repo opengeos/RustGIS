@@ -495,10 +495,7 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
             }
             FillPattern::Dots { marker, size, spacing, displacement, .. } => {
                 // An image, looked up once for all its dots.
-                let image = match marker {
-                    Marker::Picture(pic) => crate::markerimages::image(ui.ctx(), pic),
-                    _ => None,
-                };
+                let image = crate::markerimages::image(ui.ctx(), marker);
                 // (No finer than 4 points in the swatch: it is a picture, not every dot.)
                 let [dx, dy] = spacing.map(|s| s.max(4.0));
                 // (Shifts widened with the spacing, so a half shift stays a half.)
@@ -587,6 +584,40 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    /// A fill of image markers shows its image on the preview's grid, not circles (#2266).
+    #[test]
+    fn a_fill_of_image_markers_shows_its_image() {
+        use base64::Engine;
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(6, 3, image::Rgba([10, 120, 230, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let pic = rustgis_engine::map::Picture::new(&base64::engine::general_purpose::STANDARD.encode(&png));
+        let dots = |marker| FillLayer {
+            color: None,
+            pattern: FillPattern::Dots {
+                marker,
+                size: 6.0,
+                outline: None,
+                outline_width: 0.0,
+                spacing: [10.0, 10.0],
+                displacement: [0.0, 0.0],
+                offset: [0.0, 0.0],
+            },
+        };
+        let base = Symbol { stroke_width: 0.0, ..Symbol::default_for(rustgis_engine::data::GeometryType::Polygon, 0) };
+        let ctx = egui::Context::default();
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 20.0));
+        let textured =
+            |c: &egui::epaint::ClippedShape| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default());
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| preview(ui, r, &[dots(Marker::Picture(pic))], &base));
+        assert!(!out.shapes.is_empty() && out.shapes.iter().all(textured));
+        out.textures_delta.clear();
+        // A shape is still circles.
+        let shapes = ctx.run_ui(egui::RawInput::default(), |ui| preview(ui, r, &[dots(Marker::Circle)], &base)).shapes;
+        assert!(shapes.iter().all(|c| matches!(c.shape, egui::Shape::Circle(_))));
+    }
 
     /// Fills are added (the first the symbol's colour, the next hatch lines over it), drawn as
     /// markers or removed, each a `layer.fillLayers`.
