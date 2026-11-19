@@ -133,6 +133,12 @@ impl WebOptions {
                 out.login |= !v.trim().is_empty();
                 continue;
             }
+            // A name with a space in it holds a word written on its own before the pair (`… abc
+            // key=…` in a connection text), which may be a key: taken as a login, never named.
+            if k.contains(char::is_whitespace) {
+                out.login = true;
+                continue;
+            }
             if read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
                 continue;
             }
@@ -875,15 +881,7 @@ fn conninfo_rest(s: &str) -> (Vec<(String, String)>, usize) {
             unread += 1;
             break;
         };
-        // A word written on its own before a pair (`… abc key=…`) isn't part of its name: it may be
-        // a key, so it is counted, never named.
-        let k = match k.trim().rsplit_once(char::is_whitespace) {
-            Some((bare, key)) => {
-                unread += usize::from(!bare.trim().is_empty());
-                key.to_string()
-            }
-            None => k.trim().to_string(),
-        };
+        let k = k.trim().to_string();
         let (v, next) = if let Some(quoted) = after.strip_prefix('\'') {
             // A quote or backslash escaped with a backslash is part of the value (libpq's rule).
             let mut value = String::new();
@@ -1062,7 +1060,7 @@ mod tests {
         };
         assert!(options.login && options.ignored.is_empty(), "{options:?}");
         // A word on its own before a pair isn't named with it.
-        let Source::Wfs { options, .. } = read("WFS", "url='https://wfs.example.com/' S3CRET typename='roads' extra='v'", "/data") else {
+        let Source::Wfs { options, .. } = read("WFS", "url='https://wfs.example.com/' typename='roads' S3CRET extra='v'", "/data") else {
             panic!("a WFS source")
         };
         assert!(options.login && options.ignored.iter().all(|o| !o.contains("S3CRET")), "{options:?}");
@@ -1170,6 +1168,13 @@ mod tests {
         let pg = read("postgres", r#"dbname='gis' password='x table=leak' table="dbo"."towns" (geom)"#, dir);
         assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "dbo.towns".into(), dropped: Vec::new() });
         let pg = read("postgres", r"dbname='gis' password='x\' table=leak' table=t", dir);
+        // An unquoted filter's words aren't settings: `AND port=6543` is part of `sql=`, so the
+        // connection doesn't take 6543 as its port.
+        let Source::Postgres { connection, .. } = read("postgres", "dbname='gis' host=db table=t (geom) sql=active=1 AND port=6543", dir)
+        else {
+            panic!("a PostGIS source")
+        };
+        assert_eq!(connection, "dbname=gis host=db");
         assert_eq!(pg, Source::Postgres { connection: "dbname=gis".into(), table: "t".into(), dropped: Vec::new() });
         // Settings a saved connection doesn't keep, by name.
         let Source::Postgres { dropped, .. } = read(
