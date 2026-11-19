@@ -159,6 +159,9 @@ fn page_mm(v: f64) -> f64 {
 pub(crate) struct Doc {
     out: Vec<u8>,
     offsets: Vec<Option<usize>>,
+    /// Shared pictures' image objects, by their pixels' address and whether smoothed (see
+    /// [`crate::vector::Image::shared`]): written once, placed wherever drawn.
+    pub(crate) images: std::collections::HashMap<(usize, bool), usize>,
 }
 
 impl Doc {
@@ -171,7 +174,7 @@ impl Doc {
     fn of_version(version: &str) -> Doc {
         let mut out = format!("%PDF-{version}\n").into_bytes();
         out.extend_from_slice(b"%\xE2\xE3\xCF\xD3\n");
-        Doc { out, offsets: Vec::new() }
+        Doc { out, offsets: Vec::new(), images: std::collections::HashMap::new() }
     }
 
     /// A new object's number.

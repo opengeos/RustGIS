@@ -4,7 +4,7 @@
 //! shows; only the marks near the image are drawn.
 
 use crate::Canvas;
-use rustgis_map::{LineMark, LineMarkers, Marker, Picture, Placements, Rgba};
+use rustgis_map::{LineMark, LineMarkers, LineStroke, Marker, Picture, Placements, Rgba};
 use tiny_skia::{FillRule, LineCap, Path, PathBuilder, Stroke, Transform};
 
 use crate::{marker_path, marker_reach, paint};
@@ -288,6 +288,27 @@ pub(crate) fn draw(pm: &mut Canvas, runs: &[Run], m: &LineMarkers, color: Rgba, 
             break;
         }
     }
+}
+
+/// How far from a line (points) its stacked `strokes` reach, for culling: a stroke's offset and,
+/// past it, twice its width (`width`, the feature's, where it takes that), as far as a mitred
+/// corner can (tiny-skia's default limit, 4); or its marks' (a marker as far as its corners
+/// however it's turned, and its outline's width, as [`draw`] reaches).
+pub(crate) fn reach(strokes: &[LineStroke], width: f32) -> f32 {
+    strokes
+        .iter()
+        .map(|s| {
+            let w = s.width.unwrap_or(width).max(0.0);
+            let half = match s.markers {
+                Some(m) => match m.mark {
+                    LineMark::Marker(shape) => m.size.max(0.0) * marker_reach(shape).max(crate::point_marks::turned_reach(shape)) + w,
+                    LineMark::Hash => m.size.max(0.0) / 2.0 + w,
+                },
+                None => 2.0 * w,
+            };
+            s.offset.abs() + half
+        })
+        .fold(0.0, f32::max)
 }
 
 /// The image marks `m` draw, if they are images that decode (one that doesn't is drawn as a circle).
