@@ -80,12 +80,16 @@ pub fn wrap(s: &str, w: f64, pt: f32) -> Vec<String> {
 }
 
 /// [`wrap`] with the width of a piece of text (in mm) measured by `width`: bold text, or text whose
-/// tokens are filled in only when it is drawn.
+/// tokens are filled in only when it is drawn. Past the first 2000 lines, and the first 5000 words
+/// of a line, the text is kept as it is, unbroken, rather than lost: a layout text drawn through it
+/// shows the rest past its box, where the cut-off notice finds it (#2346).
 pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
     let mut out = Vec::new();
-    for para in s.lines().take(2000) {
+    let mut paras = s.lines();
+    for para in paras.by_ref().take(2000) {
         let mut line = String::new();
-        for word in para.split_whitespace().take(5000) {
+        let mut words = para.split_whitespace();
+        for word in words.by_ref().take(5000) {
             // A word wider than the line (a long URL…) is broken across lines: the most of its
             // characters that fit, found by doubling then halving from its start, so a piece
             // costs a few measures of about its own length, not of the rest of the word (a long
@@ -131,7 +135,12 @@ pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
             }
         }
         out.push(line);
+        let rest = words.collect::<Vec<_>>().join(" ");
+        if !rest.is_empty() {
+            out.push(rest);
+        }
     }
+    out.extend(paras.map(str::to_string));
     out
 }
 
@@ -535,6 +544,17 @@ mod tests {
         assert!(lines.iter().all(|l| width_mm(l, 7.0, false) <= 40.0), "every piece fits");
         assert_eq!(lines.concat(), word, "nothing lost");
         assert!(count.get() < 20 * lines.len(), "{} measures for {} lines", count.get(), lines.len());
+    }
+
+    /// Text past the lines and words it breaks is kept, unbroken, not dropped (#2346).
+    #[test]
+    fn text_past_the_caps_is_kept() {
+        let words = vec!["word"; 6000].join(" ");
+        let lines = wrap_with(&words, 40.0, |t| width_mm(t, 7.0, false));
+        assert_eq!(lines.join(" "), words, "every word kept");
+        let many = vec!["line"; 2100].join("\n");
+        let lines = wrap_with(&many, 40.0, |t| width_mm(t, 7.0, false));
+        assert_eq!(lines.join("\n"), many, "every line kept");
     }
 
     /// A long word costs measures of about its own length, not of the rest of the word for each
