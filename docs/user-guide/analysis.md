@@ -1569,6 +1569,16 @@ exceeds `undoBytes`, RustGIS drops the oldest Undo steps first, then the farthes
 It keeps the newest Undo step even if that step alone exceeds the limit. The first time this
 happens in a project, a message says so. Edits can still create a temporary full copy of a layer.
 
+Before an edit of a layer's or table's features or fields, RustGIS checks that this copy fits
+beside what it already holds: the open layers, tables and rasters, and what only Undo and Redo
+keep, all within three quarters of the computer's memory. When it doesn't fit, Redo steps are
+dropped first (the edit clears them anyway), then the oldest Undo steps, and a message says so the
+first time in a project. An edit that wouldn't fit even with no Undo history is refused before
+anything changes, and the message gives the size of the copy and what is held. Edits made by a
+script, model, task or plugin aren't checked, and the web app doesn't
+check, as it can't read the memory. Sizes are estimated, counting each text and part as the block
+of memory it takes, so they come out above the bytes themselves.
+
 So a computer with 16 GB reads rasters of up to about 500 million samples. A run that passes on one
 computer can be refused on a smaller one; the error names the limit there. Project Raster (`raster.project`) puts a raster
 on a grid of any coordinate system, cell size and extent, and Polygons to Raster

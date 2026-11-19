@@ -189,7 +189,7 @@ impl Session {
             params.insert("layer".into(), json!(id));
         }
         let mut op = self.authorize(command, &Value::Object(params))?;
-        self.check_read_command(&op)?;
+        self.check_read_command(&op, true)?;
         let copy_command = matches!(command, "model.run" | "script.run") && self.policy_user();
         if copy_command {
             // A model's or script's native copy may read through several tools. Bind the original
@@ -231,7 +231,7 @@ impl Session {
                         if !owner.native_tool_owner() && *op.node != s.command_node(command, &params)? {
                             return Err("the read command changed since it was authorized".into());
                         }
-                        s.check_read_command(&op)?;
+                        s.check_read_command(&op, false)?;
                         s.read_ahead = ready;
                         let result = s.invoke(op, Txn::Own);
                         if result.is_ok()
@@ -251,7 +251,9 @@ impl Session {
         }
     }
     /// Preserves ordinary command conditions for the admitted read's layer or table selector.
-    fn check_read_command(&mut self, op: &Authorized<CommandOp>) -> Result<(), String> {
+    /// `before_work`: the read is about to start, and an edit's copy is checked against memory
+    /// then (#2431), before its worker makes it; landing doesn't check again.
+    fn check_read_command(&mut self, op: &Authorized<CommandOp>, before_work: bool) -> Result<(), String> {
         let CommandOp::Registered { spec, params } = op.op() else { return Err("not a registered read command".into()) };
         let named = self.layer_id(params).ok();
         let active = self.active_layer;
@@ -264,6 +266,9 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         if let Some(why) = self.streamed_edit(spec.id, spec.mutates, spec.label, if table.is_some() { None } else { named.or(active) }) {
+            return Err(why);
+        }
+        if before_work && let Some(why) = self.room_for_edit(spec.id, spec.mutates, spec.label, named.or(active), table) {
             return Err(why);
         }
         Ok(())

@@ -1818,6 +1818,11 @@ impl Session {
             return Err(e);
         }
         let op = self.authorize(id, params)?;
+        // After authorizing: an edit refused there (an Assistant call not approved) costs no history.
+        if let Some(e) = self.room_for_edit(id, mutates, label, named.or(active), table) {
+            self.notify(e.clone(), true);
+            return Err(e);
+        }
         self.merge = merge;
         let res = self.invoke(op, policy::Txn::Own);
         if id == "layer.addDownload"
@@ -1914,6 +1919,48 @@ impl Session {
         }
         let l = layer.and_then(|l| self.map().layer(l)).filter(|l| l.is_streamed())?;
         Some(streamed_refusal(label, &l.name))
+    }
+
+    /// Makes room in memory for an edit of a layer's or table's features or fields (#2431 fix 3):
+    /// its first write copies the rows the Undo snapshot shares, so the copy has to fit beside what
+    /// the session holds. Older history is dropped first, said once a project; an edit that
+    /// wouldn't fit even without history is refused before anything changes. A command run by
+    /// another (a script's, a task's step) isn't checked: its history belongs to the command
+    /// running it, which may still roll back. A table edit the desktop runs in the background is
+    /// checked before its work starts (`capture_read`). An edit of several layers is
+    /// measured by the one it names, and memory outside the project (results, caches, the
+    /// clipboard) is left to the quarter [`rustgis_data::memory::usable`] keeps free.
+    pub(crate) fn room_for_edit(&mut self, id: &str, mutates: bool, label: &str, layer: Option<u32>, table: Option<u32>) -> Option<String> {
+        // Paste Special makes a layer of its own: it copies none of the active one's rows.
+        if !(mutates && edits_features(id)) || id == "edit.pasteSpecial" || self.depth > 0 {
+            return None;
+        }
+        let (name, features) = match table {
+            Some(t) => self.project.table(t).map(|t| (t.dataset.name.clone(), t.dataset.features.clone()))?,
+            None => layer
+                .and_then(|l| self.map().layer(l))
+                .filter(|l| !l.is_streamed())
+                .map(|l| (l.name.clone(), l.dataset.features.clone()))?,
+        };
+        let copy = self.undo_memory.rows_bytes(&features);
+        drop(features);
+        match self.undo_memory.make_room(&self.project, &mut self.undo, &mut self.redo, copy) {
+            Ok(None) => None,
+            Ok(Some(dropped)) => {
+                let template = "Memory is nearly full: older Undo steps are dropped to make room for edits ({count} before editing {layer}). An edit that still doesn't fit is refused.";
+                self.notify_text(
+                    notice_text::NoticeText::format(template, [("count", dropped.to_string().into()), ("layer", name.into())]),
+                    false,
+                );
+                None
+            }
+            Err((held, usable)) => Some(format!(
+                "{label}: not enough memory to edit {name}: the edit copies its rows (about {}), and the open layers and tables already hold about {} of the {} RustGIS plans to use on this computer. Remove layers or tables you no longer need, then try again.",
+                undo_memory::size_said(copy),
+                undo_memory::size_said(held),
+                undo_memory::size_said(usable),
+            )),
+        }
     }
 
     /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo
