@@ -875,7 +875,15 @@ fn conninfo_rest(s: &str) -> (Vec<(String, String)>, usize) {
             unread += 1;
             break;
         };
-        let k = k.trim().to_string();
+        // A word written on its own before a pair (`… abc key=…`) isn't part of its name: it may be
+        // a key, so it is counted, never named.
+        let k = match k.trim().rsplit_once(char::is_whitespace) {
+            Some((bare, key)) => {
+                unread += usize::from(!bare.trim().is_empty());
+                key.to_string()
+            }
+            None => k.trim().to_string(),
+        };
         let (v, next) = if let Some(quoted) = after.strip_prefix('\'') {
             // A quote or backslash escaped with a backslash is part of the value (libpq's rule).
             let mut value = String::new();
@@ -1053,6 +1061,11 @@ mod tests {
             panic!("a WCS source")
         };
         assert!(options.login && options.ignored.is_empty(), "{options:?}");
+        // A word on its own before a pair isn't named with it.
+        let Source::Wfs { options, .. } = read("WFS", "url='https://wfs.example.com/' S3CRET typename='roads' extra='v'", "/data") else {
+            panic!("a WFS source")
+        };
+        assert!(options.login && options.ignored.iter().all(|o| !o.contains("S3CRET")), "{options:?}");
     }
 
     #[test]

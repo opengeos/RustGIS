@@ -1459,6 +1459,8 @@ fn coverage_view(s: &Session, project: &qgis::Project, degrees: Option<Geographi
     if holds(-90.0) {
         view = Extent::new(-180.0, -90.0, 180.0, view.max_y);
     }
+    // A place on the antimeridian or a pole, brought back a rounding step past it, is on it.
+    let view = Extent::new(view.min_x.max(-180.0), view.min_y.max(-90.0), view.max_x.min(180.0), view.max_y.min(90.0));
     Some(view).filter(area)
 }
 
