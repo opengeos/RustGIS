@@ -276,38 +276,44 @@ fn a_wcs_coverage_reaches_the_pole_a_polar_view_holds() {
         <mapcanvas name="theMapCanvas"><extent><xmin>-1000000</xmin><ymin>19000000</ymin><xmax>1000000</xmax><ymax>20100000</ymax></extent></mapcanvas>
         <projectlayers>{layer}</projectlayers></qgis>"#
     );
-    s.run("project.importQgis", &json!({"text": mercator})).unwrap();
-    let narrow = subsets(&server.requests());
+    // Each import's own coverage request: one it skips fails here rather than finding the last's.
+    let import = |s: &mut Session, text: &str| {
+        let before = server.requests().len();
+        let out = s.run("project.importQgis", &json!({"text": text})).unwrap();
+        let asked = server.requests();
+        (out, subsets(asked.get(before..).unwrap_or_default()))
+    };
+    let (_, narrow) = import(&mut s, &mercator);
     assert!(narrow.first().is_some_and(|lon| lon.starts_with("Long(-8.98") && lon.contains(",8.98")), "{narrow:?}");
     // No saved view: the whole coverage, said.
     let whole = format!(r#"<qgis version="4.2.3"><projectlayers>{layer}</projectlayers></qgis>"#);
-    let out = s.run("project.importQgis", &json!({"text": whole})).unwrap();
+    let (out, asked) = import(&mut s, &whole);
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
-    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
+    assert_eq!(asked, ["Long(-180,180)", "Lat(-90,90)"]);
     // A saved view with no coordinate system it is in: no view either, not one read as Web
     // Mercator's.
     let unplaced = format!(
         r#"<qgis version="4.2.3"><mapcanvas name="theMapCanvas"><extent><xmin>-1000000</xmin><ymin>-1000000</ymin><xmax>1000000</xmax><ymax>1000000</ymax></extent></mapcanvas>
         <projectlayers>{layer}</projectlayers></qgis>"#
     );
-    let out = s.run("project.importQgis", &json!({"text": unplaced})).unwrap();
+    let (out, asked) = import(&mut s, &unplaced);
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
-    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
+    assert_eq!(asked, ["Long(-180,180)", "Lat(-90,90)"]);
     // A view in degrees across the antimeridian (170° to 190°): both sides of it, all the way round.
     let across = format!(
         r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs>
         <mapcanvas name="theMapCanvas"><extent><xmin>170</xmin><ymin>40</ymin><xmax>190</xmax><ymax>50</ymax></extent></mapcanvas>
         <projectlayers>{layer}</projectlayers></qgis>"#
     );
-    let out = s.run("project.importQgis", &json!({"text": across})).unwrap();
+    let (out, asked) = import(&mut s, &across);
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once over the view"), "{out}");
-    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(40,50)"]);
+    assert_eq!(asked, ["Long(-180,180)", "Lat(40,50)"]);
     // A Web Mercator view across the antimeridian, given unwrapped (170° to 190° east): both sides.
     let unwrapped = format!(
         r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs>
         <mapcanvas name="theMapCanvas"><extent><xmin>18924313</xmin><ymin>4865942</ymin><xmax>21150708</xmax><ymax>6446276</ymax></extent></mapcanvas>
         <projectlayers>{layer}</projectlayers></qgis>"#
     );
-    s.run("project.importQgis", &json!({"text": unwrapped})).unwrap();
-    assert_eq!(subsets(&server.requests()).first().map(String::as_str), Some("Long(-180,180)"));
+    let (_, asked) = import(&mut s, &unwrapped);
+    assert_eq!(asked.first().map(String::as_str), Some("Long(-180,180)"), "{asked:?}");
 }
