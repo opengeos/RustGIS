@@ -130,13 +130,14 @@ impl Budget {
     /// holds, the copies of edits still running in the background and this copy pass the memory
     /// it plans to use ([`rustgis_data::memory::usable`]), or the copy passes what the computer has
     /// free now less [`rustgis_data::memory::margin`] (other programs use the rest), history is set
-    /// aside until they fit. What is set aside counts as free for the copy: its memory goes back
-    /// to RustGIS's allocator, which the copy then reuses, not to the system. Copies of other
-    /// edits still running count against what is free only once they have allocated it. Set aside:
-    /// Redo first, farthest first, as the edit clears it anyway, then Undo, oldest first. What is
-    /// set aside is freed just before the edit copies, or given back if it never does
-    /// ([`Session::put_back`](crate::Session)), and counted as held until then. `Err` gives what is held and the memory planned
-    /// for, with the history left as it is, when the copy wouldn't fit even with the history gone.
+    /// aside until they fit. What is set aside counts as free for the copy, before the margin is
+    /// taken off: its memory goes back to RustGIS's allocator, which the copy then reuses, not to
+    /// the system. Copies of other edits still running count against what is free only once they
+    /// have allocated it. Redo is set aside first, farthest first, as the edit clears it anyway,
+    /// then Undo, oldest first. What is set aside is freed just before the edit copies, or given
+    /// back if it never does ([`Session::put_back`](crate::Session)), and counted as held until
+    /// then. `Err` gives what is held and the memory planned for, with the history left as it is,
+    /// when the copy wouldn't fit even with the history gone.
     pub(crate) fn make_room(
         &mut self,
         live: &Project,
@@ -148,10 +149,14 @@ impl Budget {
         let Some(usable) = rustgis_data::memory::usable(Some(memory)) else { return Ok(None) };
         let running = self.in_flight.load(Ordering::Relaxed);
         let free = (self.free)();
-        let room = free.map(|free| free.saturating_sub(rustgis_data::memory::margin(memory)));
+        let margin = rustgis_data::memory::margin(memory);
         let before = self.held(live, undo, redo);
         let planned = |held: u64| held.saturating_add(running).saturating_add(copy) <= usable;
-        let fits = |held: u64| planned(held) && room.is_none_or(|room| copy <= room.saturating_add(before.saturating_sub(held)));
+        // What is set aside is added to what is free before the margin is taken off, so it
+        // doesn't make up for less free than the margin.
+        let fits = |held: u64| {
+            planned(held) && free.is_none_or(|free| copy <= free.saturating_add(before.saturating_sub(held)).saturating_sub(margin))
+        };
         if fits(before) {
             return Ok(None);
         }
@@ -825,6 +830,19 @@ mod tests {
         let err = session.run("edit.setValue", &json!({"layer": "rows", "row": 0, "field": "text", "value": "e"})).unwrap_err();
         assert!(err.contains("the computer has only about") && err.contains("as other programs"), "{err}");
         assert_eq!(value(&session), &Value::Text("d".into()), "nothing changed");
+        // Less free than the margin: steps set aside make room only beyond it, so an edit that
+        // fits in them alone is refused, with the history left as it is.
+        for text in ["f", "g"] {
+            session.undo_memory.memory = None;
+            edit(&mut session, &text.repeat(4096));
+        }
+        session.undo_memory.memory = Some(1 << 40);
+        session.undo_memory.free = || Some(rustgis_data::memory::margin(1 << 40) - (1 << 20));
+        let depth = session.undo_depth();
+        let err = session.run("edit.setValue", &json!({"layer": "rows", "row": 0, "field": "text", "value": "h"})).unwrap_err();
+        assert!(err.contains("the computer has only about"), "{err}");
+        assert_eq!(session.undo_depth(), depth, "the history is left as it is");
+        assert_eq!(value(&session), &Value::Text("g".repeat(4096)), "nothing changed");
     }
 
     /// Undo and Redo copy no rows and aren't checked (they are registered as `.view()`, so they

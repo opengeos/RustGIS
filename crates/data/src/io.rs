@@ -67,7 +67,9 @@ pub fn too_large(len: u64) -> String {
     too_large_said(len, max_bytes())
 }
 
-/// [`too_large`] against the limit `max` taken when the read started.
+/// [`too_large`] against the limit `max` taken when the read started. What is held and free is
+/// read again here: it may have moved since `max` was taken, so the figures said are the ones now,
+/// beside the limit the read was held to.
 fn too_large_said(len: u64, max: u64) -> String {
     let memory = crate::memory::physical().filter(|_| bytes_ceiling() > BYTES_FLOOR);
     // A test's own limit isn't lowered by what is held or free.
@@ -2974,7 +2976,9 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
         }
     }
     // The zip must open again: within the read size and the zip reader's inflated total.
-    let limit = crate::zip::MAX_TOTAL.min(usize::try_from(max_bytes()).unwrap_or(usize::MAX));
+    // Read once for the whole run: it reads what the computer has free (#2431).
+    let max = max_bytes();
+    let limit = crate::zip::MAX_TOTAL.min(usize::try_from(max).unwrap_or(usize::MAX));
     let (mut out, mut problems) = (Vec::new(), Vec::new());
     for (file, parts) in files.into_iter().zip(zips) {
         out.extend(file);
@@ -2986,8 +2990,8 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
         let total = parts.iter().fold(0usize, |sum, (_, b)| sum.saturating_add(b.len()));
         // Said by the limit it passed: the size read into memory (which follows the computer's
         // memory), or the most a zip expands to.
-        if total as u64 > max_bytes() {
-            problems.push(format!("{shp}: its data files together: {}", too_large(total as u64)));
+        if total as u64 > max {
+            problems.push(format!("{shp}: its data files together: {}", too_large_said(total as u64, max)));
             continue;
         }
         if total > limit {
@@ -2999,8 +3003,8 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
             continue;
         }
         match crate::zip::write(&parts) {
-            Ok(zip) if zip.len() as u64 <= max_bytes() => out.push((zip_name, zip)),
-            Ok(zip) => problems.push(format!("{shp}: zipped together: {}", too_large(zip.len() as u64))),
+            Ok(zip) if zip.len() as u64 <= max => out.push((zip_name, zip)),
+            Ok(zip) => problems.push(format!("{shp}: zipped together: {}", too_large_said(zip.len() as u64, max))),
             Err(e) => problems.push(format!("{shp}: its data files couldn't be zipped together: {e}")),
         }
     }
