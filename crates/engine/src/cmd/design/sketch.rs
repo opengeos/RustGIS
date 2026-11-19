@@ -60,7 +60,9 @@ pub(super) fn cut_polygon(s: &mut Session, p: &Value) -> CmdResult {
                 for g in &pieces {
                     super::super::edit::validate(g)?;
                 }
-                let pieces = pieces.into_iter().map(|g| l.dataset.geometry_from_lonlat(g)).collect::<Result<Vec<_>, _>>()?;
+                // The polygon's places, and the line's where it was snapped to one, stay as stored.
+                let held = super::held_places(s, id, f.geometry.as_ref(), &pieces.iter().collect::<Vec<_>>());
+                let pieces = pieces.into_iter().map(|g| l.dataset.edit_from_lonlat(g, &held)).collect::<Result<Vec<_>, _>>()?;
                 cuts.push((r, f.clone(), pieces));
             }
             None => missed += 1,
@@ -101,15 +103,19 @@ pub(super) fn cut_polygon(s: &mut Session, p: &Value) -> CmdResult {
 pub(super) fn reshape(s: &mut Session, p: &Value) -> CmdResult {
     let line = line(p)?;
     let id = selection_layer(s)?;
-    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
     let [r] = l.selection.as_slice() else { return Err("select one feature to reshape".into()) };
     let r = *r;
     let f = l.dataset.features.get(r).cloned().ok_or("no such row")?;
-    // Reshaped in longitude/latitude, from the layer's own coordinates, and written back in them.
-    let lonlat = l.dataset.geometry_to_lonlat(f.geometry.as_ref().ok_or("the feature has no shape")?)?;
+    // Reshaped in longitude/latitude, from the layer's own coordinates, and written back in them,
+    // what the line left (or snapped to) as stored.
+    let own = f.geometry.as_ref().ok_or("the feature has no shape")?;
+    let lonlat = l.dataset.geometry_to_lonlat(own)?;
     let done = sketch_edit::reshape(&lonlat, &line)?;
     super::super::edit::validate(&done.geometry)?;
-    let reshaped = l.dataset.geometry_from_lonlat(done.geometry)?;
+    let held = super::held_places(s, id, Some(own), &[&done.geometry]);
+    let reshaped = l.dataset.edit_from_lonlat(done.geometry, &held)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if let Some(feat) = l.dataset.features.get_mut(r) {
         feat.geometry = Some(reshaped);
     }
