@@ -5,8 +5,10 @@
 //! [`Transformer::from_lonlat`], with the checks each makes (a latitude past a pole, a place a
 //! projection folds or can't bring back is refused). From or to longitude/latitude it is that one
 //! step alone, so a conversion of longitude/latitude geometry gives exactly what the target's
-//! transformer gives. Between two systems on the same datum other than WGS 84 the datum shifts
-//! there and back are the same transformation and cancel, within its round trip.
+//! transformer gives. Between two systems on the same datum other than WGS 84 the shift there and
+//! back cancels only where both legs pick the same transformation; where the transformation chosen
+//! depends on the place (a grid's edge, an area of use), a direct operation would differ, which
+//! matters once layers keep their own coordinates (#2032 C2).
 
 use super::crs::{Crs, Transformer};
 use crate::Geometry;
@@ -26,9 +28,9 @@ pub struct Reprojection {
 impl Crs {
     /// The conversion of coordinates in this system to `other`'s. Between the same system it does
     /// nothing ([`Reprojection::is_identity`]). Fails as either system's [`Crs::transformer`]
-    /// does. Not kept: each system's transformer is kept for the run already, and asking for it
-    /// is what notes the system for the missing-grid notice and waits for its grids
-    /// ([`Crs::transformer`]), which every conversion must do as a call of its own did.
+    /// does. Each call asks both systems for their transformers again ([`Crs::transformer`], which
+    /// keeps them for the run), so every conversion notes its systems for the missing-grid notice
+    /// and waits for their grids, as asking for a transformer itself does.
     pub fn to(self, other: Crs) -> Result<Reprojection, String> {
         let same = self == other;
         let of = |crs: Crs| -> Result<Option<Transformer>, String> {
@@ -91,8 +93,9 @@ impl Reprojection {
 
     /// The box in the target system around `e`, from 17 by 17 places along its edges and inside
     /// it, as the map's `Flat::extent` boxes are found: a box a projection curves is
-    /// followed between them, not exactly (a bulge between two samples may pass it). Empty when
-    /// none of them converts. Between the same system, `e` as it is.
+    /// followed between them, not exactly (a bulge between two samples may pass it). Places that
+    /// don't convert are left out, so a box partly outside what the target holds gives the box of
+    /// the part that converts; empty when none does. Between the same system, `e` as it is.
     pub fn extent(&self, e: &Extent) -> Extent {
         if self.is_identity() || e.is_empty() {
             return *e;
@@ -125,6 +128,17 @@ mod tests {
         let back = lv95.to(Crs::LonLat).unwrap().point(m).unwrap();
         assert_eq!(Some(back), t.to_lonlat(m));
         assert!((back.x - bern.x).abs() < 1e-7 && (back.y - bern.y).abs() < 1e-7, "{back:?}");
+    }
+
+    /// Every dataset is held in longitude/latitude, whatever system it was read in, so the map's
+    /// conversion of its geometry is the identity and can't fail (the map draws none of a layer
+    /// whose conversion fails: [`crate::Dataset::coord_crs`]).
+    #[test]
+    fn every_dataset_is_held_in_lonlat() {
+        let mut ds = crate::Dataset::new("lv95", crate::GeometryType::Point, vec![]);
+        ds.crs = Some(Crs::Epsg(2056));
+        assert_eq!(ds.coord_crs(), Crs::LonLat);
+        assert!(ds.coord_crs().to(Crs::LonLat).unwrap().is_identity());
     }
 
     /// Each system judges what it is given, as its transformer does: Web Mercator writes a latitude
@@ -188,7 +202,7 @@ mod tests {
     }
 
     /// A box follows its curved edges: in LV95 the middle of Switzerland's longitude/latitude
-    /// box's south edge lies about 900 m south of either southern corner, and is inside.
+    /// box's south edge lies more than 500 m south of either southern corner, and is inside.
     #[test]
     fn a_box_holds_its_converted_edges() {
         let to = Crs::LonLat.to(Crs::Epsg(2056)).unwrap();
@@ -198,6 +212,11 @@ mod tests {
         for c in [Coord::new(5.9, 45.8), Coord::new(10.5, 47.8), Coord::new(8.2, 45.8)] {
             assert!(out.contains(t.from_lonlat(c).unwrap()), "{c:?} {out:?}");
         }
+        // The curve itself: the south edge's middle lies well south of both southern corners, so
+        // a box from the corners alone would miss it.
+        let south = |lon: f64| t.from_lonlat(Coord::new(lon, 45.8)).unwrap().y;
+        assert!(south(8.2) < south(5.9).min(south(10.5)) - 500.0, "{} {} {}", south(8.2), south(5.9), south(10.5));
+        assert!(out.min_y <= south(8.2));
         assert!(Crs::LonLat.to(Crs::Epsg(2056)).unwrap().extent(&Extent::EMPTY).is_empty());
     }
 }

@@ -151,10 +151,11 @@ impl Extent {
     }
     /// `n + 1` by `n + 1` places evenly over the box, its edges and corners included, column by
     /// column from the west: what a box taken into another system is found from, so a box the
-    /// conversion curves is followed. At least its four corners (`n` of 0 is taken as 1); no
+    /// conversion curves is followed. `n` is taken between 1 (the four corners) and 1024; no
     /// places for an empty box.
     pub fn samples(&self, n: usize) -> impl Iterator<Item = Coord> + '_ {
-        let n = n.max(1);
+        // A grid of at least the corners, and no larger than 1025 by 1025.
+        let n = n.clamp(1, 1024);
         let steps = if self.is_empty() { 0 } else { n + 1 };
         (0..steps).flat_map(move |i| {
             (0..steps)
@@ -1013,6 +1014,7 @@ mod tests {
         assert!(s.iter().all(|c| e.contains(*c)));
         assert_eq!(Extent::EMPTY.samples(16).count(), 0);
         assert_eq!(e.samples(0).count(), 4);
+        assert_eq!(e.samples(usize::MAX).count(), 1025 * 1025);
     }
 
     #[test]

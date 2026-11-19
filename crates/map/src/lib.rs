@@ -1309,7 +1309,8 @@ impl Layer {
         fits
     }
 
-    /// Whether the projected geometry cache is filled for a projection.
+    /// Whether the projected geometry cache is filled for a projection, from the layer's current
+    /// rows and its coordinate system ([`Dataset::coord_crs`]).
     pub fn is_cached(&self, key: &str) -> bool {
         self.projected_for == key
             && self.projected_rev == self.geometry_rev
