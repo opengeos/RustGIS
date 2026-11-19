@@ -1752,6 +1752,8 @@ fn neighborhood(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"radiusKm": radius / 1000.0, "layers": out}))
 }
 
+/// Generate points in resident polygons kept by the selection and definition query. An
+/// unreadable saved query leaves those polygons unfiltered and is reported once.
 fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
@@ -1759,11 +1761,16 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         return Err("points are simulated inside polygons".into());
     }
     let name = out_name(p, format!("{}_simulated", l.name))?;
-    // The selected polygons, or every visible one.
-    let rows: Vec<usize> = if l.selection.is_empty() {
-        l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect()
-    } else {
-        l.selection.clone()
+    let resolved = l.resolve_rows(&l.dataset, rustgis_map::rows::Policy::SelectionAndQuery, None)?;
+    let query_notice = resolved.query_error.map(|error| {
+        crate::notice_text::NoticeText::format(
+            "1 layer with an unreadable definition query; reading without that query: {layer}: {error}",
+            [("layer", l.name.clone().into()), ("error", error.into())],
+        )
+    });
+    let rows: Vec<usize> = match resolved.rows {
+        rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
+        rustgis_map::rows::Rows::Subset(rows) => rows,
     };
     let seed = f(p, "seed").map_or(42, |v| v.max(0.0) as u64);
     let pts: Vec<(usize, Coord)> = match ps(p, "field") {
@@ -1794,6 +1801,9 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         ds.push(Some(Geometry::Point(*c)), vec![Attr::Int(*r as i64)]);
     }
     let n = ds.features.len();
+    if let Some(notice) = query_notice {
+        s.notify_text(notice, false);
+    }
     let nid = super::layer::add_dataset(s, ds);
     Ok(json!({"layer": nid, "points": n}))
 }
@@ -1885,22 +1895,31 @@ fn similar(s: &mut Session, p: &Value) -> CmdResult {
 /// needs a file path so its full source can be read off the desktop frame, rather than returning
 /// only its loaded view. File conversions use the shared export lifecycle.
 fn convert(s: &mut Session, p: &Value) -> CmdResult {
+    use std::borrow::Cow;
+
     if ps(p, "path").is_some() {
         return super::exports::write_here(s, p, "data.convert");
     }
     let id = s.layer_id(p)?;
-    if s.map().layer(id).is_some_and(|l| l.is_streamed()) {
+    let layer = s.map().layer(id).ok_or("no such layer")?;
+    if layer.is_streamed() {
         return Err("a streamed layer needs a path to convert its whole source; text conversion would contain only the loaded view".into());
     }
-    let construction_notes = s.constructions.export_notes(s.map().instance_id(), s.map().layer(id).ok_or("no such layer")?)?;
-    let ds = feature_ds(s, p)?;
-    let (text, notes) = converted(ds, p)?;
+    let construction_notes = s.constructions.export_notes(s.map().instance_id(), layer)?;
+    let mut ds = Cow::Borrowed(feature_ds(s, p)?);
+    let report = rustgis_data::export::filter_dataset(&mut ds, layer.definition_query.as_deref()).map_err(|e| e.to_string())?;
+    let (text, notes) = converted(&ds, p)?;
     let null_numbers = rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, conversion_format(p)?);
     let target = ds.name.clone();
+    let query_note = super::share::query_export_note(&target, &layer.name, &report);
+    drop(ds);
     for note in notes.into_iter().chain(construction_notes) {
         s.notify(note, false);
     }
     super::share::notify_null_numbers(s, &target, null_numbers);
+    if let Some(note) = query_note {
+        s.notify_text(note, false);
+    }
     Ok(json!({"text": text}))
 }
 
@@ -1908,6 +1927,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
 /// GeoJSON and CSV use the chunk writer; KML, GPX and WKT read whole within the existing memory
 /// limits, then check Cancel between features (one geometry's serialization is indivisible).
 pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Work, String> {
+    use std::borrow::Cow;
+
     feature_ds(s, p)?;
     let id = s.layer_id(p)?;
     let layer = s.map().layer(id).ok_or("no such layer")?.clone();
@@ -1919,13 +1940,15 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
         let construction_notes = constructions.export_notes(map, &layer)?;
         let format = conversion_format(&params)?;
         let chunks = if layer.is_streamed() && matches!(format, "geojson" | "csv") { layer.chunk_export()? } else { None };
-        let (mut notes, null_numbers) = if let Some((source, ds)) = chunks {
-            let result = rustgis_data::export::write_source_as_in(
+        let query = layer.definition_query.as_deref();
+        let (mut notes, null_numbers, query_report) = if let Some((source, ds)) = chunks {
+            let result = rustgis_data::export::write_source_as_filtered(
                 source.as_ref(),
                 &ds,
                 std::path::Path::new(&path),
                 rustgis_data::raster::Crs::LonLat,
                 format,
+                query,
             )
             .map_err(|e| e.to_string())?;
             let mut notes = rustgis_data::export_notes([(&ds, layer.extent())], &path, rustgis_data::raster::Crs::LonLat);
@@ -1948,32 +1971,35 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                     .map(|n| format!("{path}: {}: {n}, so they're empty in the export", ds.name)),
             );
             notes.extend(result.read_notes.iter().map(|n| format!("{path}: {}: {n} when read for the export", ds.name)));
-            (notes, result.null_numbers)
+            (notes, result.null_numbers, result.query)
         } else {
-            let (whole, unreadable) = if layer.is_streamed() {
-                layer.load_all_counted().map(|(ds, n)| (Some(ds), n))?
+            let (mut ds, unreadable) = if layer.is_streamed() {
+                let (ds, unreadable) = layer.load_all_counted()?;
+                (Cow::Owned(ds), unreadable)
             } else {
-                (None, rustgis_map::Unreadable::default())
+                (Cow::Borrowed(&layer.dataset), rustgis_map::Unreadable::default())
             };
-            let ds = whole.as_ref().unwrap_or(&layer.dataset);
+            let report = rustgis_data::export::filter_dataset(&mut ds, query).map_err(|e| e.to_string())?;
             rustgis_data::progress::begin(ds.features.len());
-            let (text, mut notes) = converted(ds, &params)?;
-            super::share::coalesce_read_zm(&mut notes, &path, ds, &unreadable);
+            let (text, mut notes) = converted(&ds, &params)?;
+            super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
             rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             if unreadable.rows > 0 {
                 notes.push(format!("{path}: {} rows couldn't be read and were left out", unreadable.rows));
             }
             notes.extend(super::share::read_notes(&path, &ds.name, &unreadable));
-            (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format))
+            (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format), report)
         };
         let bytes = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len();
         notes.extend(construction_notes);
         notes.push(format!("Exported {path}"));
         let target = path.clone();
-        let refused_notes = super::share::null_numbers_note(&target, null_numbers).map(|n| n.english()).into_iter().collect();
-        let then = (null_numbers > 0).then(|| {
+        let query_note = super::share::query_export_note(&target, &layer.name, &query_report);
+        let refused_notes = super::share::null_numbers_note(&target, null_numbers).iter().chain(&query_note).map(|n| n.english()).collect();
+        let then = (null_numbers > 0 || query_note.is_some()).then(|| {
             Box::new(move |s: &mut Session, _: &mut Value| {
                 super::share::notify_null_numbers(s, &target, null_numbers);
+                super::share::notify_written_query(s, query_note);
                 Ok(())
             }) as super::exports::Then
         });
