@@ -298,7 +298,13 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 .as_deref()
                 .and_then(|u| {
                     let lower = u.to_ascii_lowercase();
-                    let end = lower.find("/vectortileserver")? + "/vectortileserver".len();
+                    // The service itself: the last `/VectorTileServer` that ends a folder (a folder
+                    // of the same name above it is part of its address).
+                    let end = lower
+                        .match_indices("/vectortileserver")
+                        .map(|(i, m)| i + m.len())
+                        .filter(|&e| matches!(lower.as_bytes().get(e), None | Some(b'/' | b'?')))
+                        .last()?;
                     Some((u.get(..end)?.to_string(), u.get(end..)?.to_string()))
                 })
                 .unzip();
@@ -955,6 +961,14 @@ mod tests {
         let source = "serviceType=arcgis&type=xyz&url=https://example.com/arcgis/rest/services/v/VectorTileServer/tile/%7Bz%7D/%7By%7D/%7Bx%7D.pbf?S3CRET=";
         let Source::ArcGis { options, .. } = read("arcgisvectortileservice", source, "/data") else { panic!("an ArcGIS source") };
         assert!(options.login && options.ignored.is_empty(), "{options:?}");
+    }
+
+    /// A vector tile service under a folder of the same name keeps that folder in its address.
+    #[test]
+    fn a_vector_tile_service_is_its_last_folder_of_that_name() {
+        let source = "serviceType=arcgis&type=xyz&url=https://example.com/VectorTileServer/rest/services/Base/VectorTileServer/tile/%7Bz%7D/%7By%7D/%7Bx%7D.pbf";
+        let Source::ArcGis { url, .. } = read("arcgisvectortileservice", source, "/data") else { panic!("an ArcGIS source") };
+        assert_eq!(url, "https://example.com/VectorTileServer/rest/services/Base/VectorTileServer");
     }
 
     #[test]
