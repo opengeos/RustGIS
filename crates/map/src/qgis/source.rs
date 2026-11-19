@@ -127,7 +127,13 @@ impl WebOptions {
         let mut out = WebOptions::default();
         for (k, v) in pairs {
             let k = k.trim();
-            if k.is_empty() || read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
+            // A value with no name (`=abc`) may be a key: taken as a login, as an address's part
+            // with no name is.
+            if k.is_empty() {
+                out.login |= !v.trim().is_empty();
+                continue;
+            }
+            if read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
                 continue;
             }
             // A segment with no value (`…&abc&…`, or `abc=`) may be a key or a password written
@@ -297,7 +303,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                     layer,
                     ogc_api: provider.eq_ignore_ascii_case("oapif"),
                     filter,
-                    options: WebOptions::of(&kv, &READ).with_rest(usize::from(left)),
+                    options: WebOptions::of(&kv, &READ).with_rest(left),
                 },
                 _ => Source::Other { provider: provider.into() },
             }
@@ -434,7 +440,7 @@ fn arcgis(provider: &str, datasource: &str) -> Source {
     let lower = url.to_ascii_lowercase();
     // The system it is asked in and the image format are RustGIS's own.
     const READ: [&str; 4] = ["url", "layer", "crs", "format"];
-    let options = WebOptions::of(&kv, &READ).with_rest(usize::from(left));
+    let options = WebOptions::of(&kv, &READ).with_rest(left);
     let layer =
         |url: String, layer: String, features: bool| Source::ArcGis { url, layer, features, style: false, options: options.clone() };
     match provider {
@@ -858,12 +864,17 @@ fn conninfo(s: &str) -> Vec<(String, String)> {
     conninfo_rest(s).0
 }
 
-/// [`conninfo`], and whether text is left past the 100 pairs it reads.
-fn conninfo_rest(s: &str) -> (Vec<(String, String)>, bool) {
+/// [`conninfo`], and how many pairs it doesn't keep: those past the 100 it reads, and one for text
+/// it can't read as a pair (which stops it).
+fn conninfo_rest(s: &str) -> (Vec<(String, String)>, usize) {
     let mut out = Vec::new();
+    let mut unread = 0usize;
     let mut rest = s.trim();
-    while !rest.is_empty() && out.len() < 100 {
-        let Some((k, after)) = rest.split_once('=') else { break };
+    while !rest.is_empty() {
+        let Some((k, after)) = rest.split_once('=') else {
+            unread += 1;
+            break;
+        };
         let k = k.trim().to_string();
         let (v, next) = if let Some(quoted) = after.strip_prefix('\'') {
             // A quote or backslash escaped with a backslash is part of the value (libpq's rule).
@@ -885,11 +896,14 @@ fn conninfo_rest(s: &str) -> (Vec<(String, String)>, bool) {
             let end = after.find(' ').unwrap_or(after.len());
             (after.get(..end).unwrap_or_default().to_string(), after.get(end..).unwrap_or_default())
         };
-        out.push((k, v));
+        if out.len() < 100 {
+            out.push((k, v));
+        } else {
+            unread += 1;
+        }
         rest = next.trim_start();
     }
-    let left = out.len() >= 100 && !rest.is_empty();
-    (out, left)
+    (out, unread)
 }
 
 /// A connection text's `table="schema"."table" (geom)`, as `schema.table` (or `table`).
@@ -1023,6 +1037,22 @@ mod tests {
         assert!(options.login, "{options:?}");
         // Every option is either named or counted: the 198 read and the 7 past them.
         assert_eq!(options.ignored.len() + options.more, 205, "{options:?}");
+    }
+
+    /// A connection text's pairs past the 100 read are each counted, and a value with no name is
+    /// a login.
+    #[test]
+    fn connection_pairs_past_those_read_are_each_counted() {
+        let many: String = (0..150).map(|i| format!(" opt{i}='v'")).collect();
+        let Source::Wfs { options, .. } = read("WFS", &format!("url='https://wfs.example.com/' typename='roads'{many}"), "/data") else {
+            panic!("a WFS source")
+        };
+        assert_eq!(options.ignored.len() + options.more, 150, "{options:?}");
+        assert!(options.login, "{options:?}");
+        let Source::Wcs { options, .. } = read("wcs", "identifier=dem&=s3cret&url=https://wcs.example.com/", "/data") else {
+            panic!("a WCS source")
+        };
+        assert!(options.login && options.ignored.is_empty(), "{options:?}");
     }
 
     #[test]

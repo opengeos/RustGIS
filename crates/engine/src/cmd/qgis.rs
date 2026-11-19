@@ -1429,7 +1429,10 @@ fn coverage_view(s: &Session, project: &qgis::Project, degrees: Option<Geographi
     for i in 0..=STEPS {
         let t = f64::from(i) / f64::from(STEPS);
         let (x, y) = (x0 + t * (x1 - x0), y0 + t * (y1 - y0));
-        for c in [(x, y0), (x, y1), (x0, y), (x1, y)].into_iter().filter_map(|(x, y)| m.to_lonlat(Coord::new(x, y))) {
+        for (x, y) in [(x, y0), (x, y1), (x0, y), (x1, y)] {
+            // A place of the view's edge the map can't give in degrees (past its projection's
+            // edge): the box would fall short of the view, so the coverage is read whole.
+            let c = m.to_lonlat(Coord::new(x, y))?;
             view = Some(view.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y)));
         }
     }
