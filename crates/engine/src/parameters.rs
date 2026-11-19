@@ -145,4 +145,31 @@ mod tests {
         session.guarded("Next command", false, |_| Ok(Value::Null)).unwrap();
         assert!(session.notices_since(mark).is_empty());
     }
+
+    #[test]
+    fn counted_notice_overflow_warns_without_assigning_a_cause() {
+        use rustgis_data::{diagnostics::Severity, loss::LossCode};
+        let mut session = crate::Session::new(crate::Project::default());
+        session
+            .guarded("Count omissions", false, |s| {
+                // Seed the bounded channel to exercise overflow without adding more producers.
+                s.notify_counted(None, "{n} advisory", 1);
+                let first = &s.loss_notices[0];
+                let (template, count, text) = (first.template, first.count, first.text.clone());
+                s.loss_notices.resize_with(crate::MAX_LOSS_NOTICE_KINDS, || crate::LossNotice {
+                    code: None,
+                    template,
+                    count,
+                    text: text.clone(),
+                    source: None,
+                });
+                s.notify_counted(Some(LossCode::DroppedLegend), "{n} omitted legends", 2);
+                Ok(Value::Null)
+            })
+            .unwrap();
+        let overflow = session.notices.last().unwrap();
+        assert_eq!(overflow.text, "2 further counted notice occurrence(s) could not be described");
+        assert_eq!(overflow.severity, Severity::Warning);
+        assert_eq!(overflow.loss(), None);
+    }
 }

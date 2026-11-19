@@ -141,8 +141,9 @@ const MAX_SERVICE_DOCUMENTS: usize = 32;
 /// well as its document count. The 32-document count is shared by all discovery kinds;
 /// this byte budget applies only to the linked dataset documents.
 pub(crate) const MAX_DATASET_BYTES: usize = if cfg!(test) { 64 << 10 } else { 64 << 20 };
-/// A notice for legend pictures a service listed that its layer cannot keep (an address too long).
-const LEGENDS_LEFT_OUT_NOTICE: &str = "{n} legend picture(s) the service listed were left out: their addresses are too long";
+/// A notice for legend pictures the layer cannot keep because of their addresses.
+const LEGENDS_LEFT_OUT_NOTICE: &str =
+    "{n} legend picture(s) the service listed were left out: their addresses are too long or do not use HTTP or HTTPS";
 
 /// Most bytes of document addresses a listing repeats: each listed layer's `source_url` is its
 /// document's address, which nothing bounds (a landing page links to any collections address).
@@ -1296,8 +1297,7 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
                     }
                 }
             }
-            // (Those the layer wouldn't keep, an address too long, are left out, not refused,
-            // and counted in a notice.)
+            // Count pictures left out because their addresses fail the layer's checks.
             let legends = rustgis_map::tiles::checked_legends(layer.legends.iter().cloned());
             let offered = layer.legends.len().min(rustgis_data::ogc::MAX_LEGENDS);
             s.notify_counted(

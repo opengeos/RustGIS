@@ -44,7 +44,7 @@ impl LossCode {
     pub const fn spec(self) -> LossSpec {
         use LossKind::{Changed, Dropped};
         let (id, kind, action) = match self {
-            Self::DroppedLegend => ("dropped.legend", Dropped, "Use a service with a shorter legend address."),
+            Self::DroppedLegend => ("dropped.legend", Dropped, "Use a service with short HTTP or HTTPS addresses for its legend pictures."),
             Self::DroppedTime => ("dropped.time", Dropped, "Write to a date-time field to keep the time of day."),
             Self::DroppedValue => ("dropped.value", Dropped, "Correct the value or use a destination field that can hold it."),
             Self::DroppedCalculationResult => {

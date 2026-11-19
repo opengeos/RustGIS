@@ -3123,7 +3123,8 @@ impl Session {
         }
         let overflow = std::mem::take(&mut self.loss_notice_overflow);
         if overflow > 0 {
-            self.notify(format!("{overflow} further loss(es) could not be described"), false);
+            // The overflow count may combine several causes and unclassified advisories.
+            self.warn(format!("{overflow} further counted notice occurrence(s) could not be described"));
         }
     }
 
