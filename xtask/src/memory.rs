@@ -147,21 +147,41 @@ fn write_tables(dir: &Path) -> Result<(), String> {
     std::fs::write(dir.join("join.csv"), join).map_err(|e| format!("join.csv: {e}"))
 }
 
+/// `rustgis-cli run`'s options for every measured run: no installed plugins, the built-in
+/// worldview (another one is downloaded first), and a fixed thread count.
+const RUN: [&str; 6] = ["run", "--no-plugins", "--worldview", "default", "--threads", THREADS];
+
+/// RustGIS's own directory and worldview overrides, which would bring the person's plugins,
+/// settings or downloads into the run.
+const UNSET: [&str; 6] =
+    ["RUSTGIS_PLUGINS_DIR", "RUSTGIS_APP_DATA_DIR", "RUSTGIS_CONFIG_DIR", "RUSTGIS_CACHE_DIR", "RUSTGIS_WORLDVIEW", "RUSTGIS_LANGUAGE"];
+
 /// Gives `cmd` a clean home in `dir` and [`MEMORY`], so neither the person's settings (threads,
 /// plugins) nor the machine's memory change the result.
 fn isolate(cmd: &mut Command, dir: &Path) -> Result<(), String> {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
     cmd.env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config")).env("XDG_DATA_HOME", home.join(".local/share"));
+    for var in UNSET {
+        cmd.env_remove(var);
+    }
     cmd.env("RUSTGIS_MEMORY_BYTES", MEMORY.to_string());
     Ok(())
+}
+
+/// Prints the notices a successful run gave (fields cut, rows skipped, a CRS assumed), so a
+/// change in what the generated tables load as shows in the log beside the ratios.
+fn echo_notices(label: &str, stderr: &[u8]) {
+    for line in String::from_utf8_lossy(stderr).lines().filter(|l| !l.trim().is_empty()) {
+        println!("  {label}: {line}");
+    }
 }
 
 /// Runs one scenario and returns its peak resident memory in KiB.
 fn peak_kib(cli: &Path, dir: &Path, s: &Scenario) -> Result<u64, String> {
     let report = dir.join(format!("{}.peak", s.name));
     let mut cmd = Command::new("/usr/bin/time");
-    cmd.args(["-f", "%M", "-o"]).arg(&report).arg(cli).args(["run", "--threads", THREADS]);
+    cmd.args(["-f", "%M", "-o"]).arg(&report).arg(cli).args(RUN);
     isolate(&mut cmd, dir)?;
     cmd.arg("--cmd").arg(format!(r#"layer.addData={{"path":{},"name":"rows"}}"#, quoted(&dir.join("rows.fgb"))));
     for c in &s.cmds {
@@ -182,6 +202,7 @@ fn peak_kib(cli: &Path, dir: &Path, s: &Scenario) -> Result<u64, String> {
         let tail: Vec<&str> = err.lines().rev().take(20).collect();
         return Err(format!("scenario {} failed ({}):\n{}", s.name, out.status, tail.into_iter().rev().collect::<Vec<_>>().join("\n")));
     }
+    echo_notices(s.name, &out.stderr);
     text.lines()
         .rev()
         .find_map(|l| l.trim().parse::<u64>().ok())
@@ -259,20 +280,25 @@ fn updated(text: &str, measured: &[(String, f64)], limits: &[(String, f64)]) -> 
     out
 }
 
-/// Builds the release `rustgis-cli` when no `--cli` is given, and returns its path under the
-/// target directory (`CARGO_TARGET_DIR` when set).
+/// Builds the release `rustgis-cli` when no `--cli` is given, and returns the executable Cargo
+/// reports for it, wherever the target directory is configured.
 fn build_cli(root: &Path) -> Result<PathBuf, String> {
     println!("$ cargo build --release --locked -p rustgis-cli");
-    let st = Command::new(env!("CARGO"))
-        .args(["build", "--release", "--locked", "-p", "rustgis-cli"])
+    let out = Command::new(env!("CARGO"))
+        .args(["build", "--release", "--locked", "-p", "rustgis-cli", "--message-format=json-render-diagnostics"])
         .current_dir(root)
-        .status()
+        .stderr(Stdio::inherit())
+        .output()
         .map_err(|e| e.to_string())?;
-    if !st.success() {
+    if !out.status.success() {
         return Err("cargo build --release -p rustgis-cli failed".into());
     }
-    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
-    Ok(target.join("release").join("rustgis-cli"))
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "rustgis-cli")
+        .find_map(|m| m["executable"].as_str().map(PathBuf::from))
+        .ok_or_else(|| "cargo built rustgis-cli but reported no executable for it".into())
 }
 
 /// `cargo xtask memory`: writes the data, runs every scenario once under GNU time with the memory
@@ -348,7 +374,8 @@ fn measure(cli: &Path, dir: &Path) -> Result<Vec<(Scenario, u64)>, String> {
     let mut convert = Command::new(cli);
     isolate(&mut convert, dir)?;
     let out = convert
-        .args(["run", "--cmd"])
+        .args(RUN)
+        .arg("--cmd")
         .arg(format!(r#"layer.addData={{"path":{},"name":"rows"}}"#, quoted(&dir.join("rows.csv"))))
         .arg("--cmd")
         .arg(format!(r#"share.exportLayer={{"layer":"rows","path":{}}}"#, quoted(&dir.join("rows.fgb"))))
@@ -359,6 +386,7 @@ fn measure(cli: &Path, dir: &Path) -> Result<Vec<(Scenario, u64)>, String> {
     if !out.status.success() {
         return Err(format!("writing rows.fgb failed ({}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
     }
+    echo_notices("rows.fgb", &out.stderr);
     let mut out = Vec::new();
     for s in scenarios(dir) {
         let kib = peak_kib(cli, dir, &s)?;
