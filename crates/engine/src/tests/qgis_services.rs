@@ -198,3 +198,79 @@ fn ogc_api_wmts_and_wcs_layers_come_in_from_their_services() {
     // A layer whose source says nothing RustGIS doesn't read comes in with no note.
     assert!(!notes.contains(r#""layer":"Places""#), "{notes}");
 }
+
+/// A WCS coverage in a polar project is asked for up to the pole the saved view holds, all the way
+/// round (the view's corners alone miss it); with no saved view, whole, and said either way.
+#[test]
+fn a_wcs_coverage_reaches_the_pole_a_polar_view_holds() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let r = Raster::new(
+        "ice",
+        8,
+        4,
+        vec![vec![1.0; 32]],
+        GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 45.0, pixel_height: -45.0 },
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let server = Server::new(vec![
+        Route::new("/wcs?SERVICE=WCS&REQUEST=GetCapabilities", ""),
+        Route::new(
+            "/wcs?SERVICE=WCS&VERSION=2.0.1&REQUEST=DescribeCoverage&COVERAGEID=ice",
+            r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/4326" axisLabels="Lat Long">
+            <lowerCorner>-90 -180</lowerCorner><upperCorner>90 180</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#,
+        ),
+        Route::bytes("/wcs", rustgis_data::raster::geotiff::write(&r, 0).unwrap()),
+    ]);
+    let base = &server.base;
+    server.set(
+        "/wcs?SERVICE=WCS&REQUEST=GetCapabilities",
+        &format!(
+            r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+            <ows:OperationsMetadata><ows:Operation name="GetCoverage"><ows:DCP><ows:HTTP><ows:Get xlink:href="{base}/wcs?" xmlns:xlink="http://www.w3.org/1999/xlink"/></ows:HTTP></ows:DCP></ows:Operation></ows:OperationsMetadata>
+            <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>ice</wcs:CoverageId><ows:Title>Ice</ows:Title>
+            <ows:WGS84BoundingBox><ows:LowerCorner>-180 -90</ows:LowerCorner><ows:UpperCorner>180 90</ows:UpperCorner></ows:WGS84BoundingBox>
+            </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#
+        ),
+    );
+    let layer = format!(
+        r#"<maplayer type="raster"><id>Ice</id><datasource>identifier=ice&amp;url={base}/wcs</datasource><layername>Ice</layername><provider>wcs</provider></maplayer>"#
+    );
+    // Polar stereographic north, the view ±1000 km round the pole.
+    let polar = format!(
+        r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:3413</authid></spatialrefsys></projectCrs>
+        <mapcanvas name="theMapCanvas"><extent><xmin>-1000000</xmin><ymin>-1000000</ymin><xmax>1000000</xmax><ymax>1000000</ymax></extent></mapcanvas>
+        <projectlayers>{layer}</projectlayers></qgis>"#
+    );
+    let mut s = Session::new(Project::default());
+    let out = s.run("project.importQgis", &json!({"text": polar})).unwrap();
+    let asked = server.requests();
+    let subsets = |asked: &[ogc_server::Request]| -> Vec<String> {
+        let get = asked
+            .iter()
+            .rev()
+            .find(|r| r.path == "/wcs" && r.query.iter().any(|(k, v)| k == "REQUEST" && v == "GetCoverage"))
+            .unwrap_or_else(|| panic!("{asked:?}"));
+        get.query.iter().filter(|(k, _)| k == "SUBSET").map(|(_, v)| v.clone()).collect()
+    };
+    let polar_subsets = subsets(&asked);
+    assert_eq!(polar_subsets.first().map(String::as_str), Some("Long(-180,180)"), "{out}");
+    assert!(polar_subsets.get(1).is_some_and(|lat| lat.ends_with(",90)")), "{polar_subsets:?}");
+    // Web Mercator draws a pole as its top edge, not a point: a view reaching it isn't widened.
+    let mercator = format!(
+        r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs>
+        <mapcanvas name="theMapCanvas"><extent><xmin>-1000000</xmin><ymin>19000000</ymin><xmax>1000000</xmax><ymax>20100000</ymax></extent></mapcanvas>
+        <projectlayers>{layer}</projectlayers></qgis>"#
+    );
+    s.run("project.importQgis", &json!({"text": mercator})).unwrap();
+    let narrow = subsets(&server.requests());
+    assert!(narrow.first().is_some_and(|lon| lon.starts_with("Long(-8.98") && lon.contains(",8.98")), "{narrow:?}");
+    // No saved view: the whole coverage, said.
+    let whole = format!(r#"<qgis version="4.2.3"><projectlayers>{layer}</projectlayers></qgis>"#);
+    let out = s.run("project.importQgis", &json!({"text": whole})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("its coverage, read once and whole"), "{out}");
+    assert_eq!(subsets(&server.requests()), ["Long(-180,180)", "Lat(-90,90)"]);
+}

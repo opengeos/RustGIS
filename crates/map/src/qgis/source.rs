@@ -96,28 +96,45 @@ pub enum Source {
 pub struct WebOptions {
     /// At most 32 options, as `name=…`.
     pub ignored: Vec<String>,
+    /// How many more there are, past those 32 (counted, not named).
+    pub more: usize,
     pub login: bool,
 }
 
 impl WebOptions {
+    /// Notes the option `key` (`name=…`), or counts it once 32 are named.
+    fn note(&mut self, key: &str) {
+        if self.ignored.len() < 32 {
+            self.ignored.push(noted_option(&format!("{key}=")));
+        } else {
+            self.more += 1;
+        }
+    }
+
     /// The options of `pairs` other than those named in `read` (what RustGIS reads, or what
     /// changes nothing it draws), and the login among them. Names are matched in any case.
     fn of(pairs: &[(String, String)], read: &[&str]) -> Self {
-        const LOGIN: [&str; 6] = ["user", "username", "password", "authcfg", "authkey", "token"];
         let mut out = WebOptions::default();
         for (k, _) in pairs {
             let k = k.trim();
             if k.is_empty() || read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
                 continue;
             }
-            if LOGIN.iter().any(|l| l.eq_ignore_ascii_case(k)) {
+            if is_login(k) {
                 out.login = true;
-            } else if out.ignored.len() < 32 {
-                out.ignored.push(noted_option(&format!("{k}=")));
+            } else {
+                out.note(k);
             }
         }
         out
     }
+}
+
+/// Whether a source option or address key is a login's: a user name, a password, a token or key,
+/// or QGIS's saved authentication.
+fn is_login(key: &str) -> bool {
+    const LOGIN: [&str; 6] = ["user", "username", "password", "authcfg", "authkey", "token"];
+    LOGIN.iter().any(|l| l.eq_ignore_ascii_case(key.trim()))
 }
 
 /// The layer a virtual layer selects from: a source it names (`layer=provider:source:name`), or
@@ -261,13 +278,14 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             const READ: [&str; 4] = ["url", "type", "serviceType", "styleUrl"];
             let mut options = WebOptions::of(&q, &READ);
             // The address's own query (a key, a token) isn't kept with the service's address: a
-            // token is a login, anything else an option (named, never its value).
+            // login's key is a login, anything else an option (named, never its value). A part with no
+            // name (`?abc`) may be a key itself: never named, taken as a login.
             if let Some(query) = rest.as_deref().and_then(|r| r.split_once('?')).map(|(_, q)| q) {
-                for (k, _) in self::query(query) {
-                    if k.eq_ignore_ascii_case("token") {
-                        options.login = true;
-                    } else if !k.is_empty() && options.ignored.len() < 32 {
-                        options.ignored.push(noted_option(&format!("{k}=")));
+                for part in query.split('&').filter(|p| !p.is_empty()).take(200) {
+                    match part.split_once('=') {
+                        Some((k, _)) if is_login(k) => options.login = true,
+                        Some((k, _)) if !k.is_empty() => options.note(k),
+                        _ => options.login = true,
                     }
                 }
             }
@@ -1122,7 +1140,7 @@ mod tests {
         // A login is said, never its values; other options by name.
         let login = "user='me' password='secret' authcfg=x maxNumFeatures='10' typename='t' url='https://e.org/wfs'";
         let Source::Wfs { options, .. } = read("WFS", login, dir) else { panic!() };
-        assert_eq!(options, WebOptions { ignored: vec!["maxNumFeatures=…".into()], login: true });
+        assert_eq!(options, WebOptions { ignored: vec!["maxNumFeatures=…".into()], more: 0, login: true });
         assert!(!format!("{options:?}").contains("secret"));
         // OGC API Features, under its provider's name in any case.
         for provider in ["OAPIF", "oapif"] {
@@ -1191,7 +1209,7 @@ mod tests {
                 layer: "style".into(),
                 features: false,
                 style: true,
-                options: WebOptions { ignored: Vec::new(), login: true }
+                options: WebOptions { ignored: Vec::new(), more: 0, login: true }
             }
         );
         // A token in the service's address is a login (never kept or said); another key, by name.
@@ -1199,7 +1217,15 @@ mod tests {
             "serviceType=arcgis&type=xyz&url=https%3A%2F%2Fe.org%2Frest%2Fservices%2FB%2FVectorTileServer%3Ftoken%3Dsecret%26f%3Djson";
         let Source::ArcGis { url, options, .. } = read("arcgisvectortileservice", tokened, dir) else { panic!() };
         assert_eq!(url, "https://e.org/rest/services/B/VectorTileServer");
-        assert_eq!(options, WebOptions { ignored: vec!["f=…".into()], login: true });
+        assert_eq!(options, WebOptions { ignored: vec!["f=…".into()], more: 0, login: true });
+        // A part with no name may be a key: never said, taken as a login.
+        let bare = "type=xyz&url=https%3A%2F%2Fe.org%2Frest%2Fservices%2FB%2FVectorTileServer%3FSECRETVALUE";
+        let Source::ArcGis { options, .. } = read("arcgisvectortileservice", bare, dir) else { panic!() };
+        assert_eq!(options, WebOptions { ignored: Vec::new(), more: 0, login: true });
+        // Past 32 options, the rest are counted.
+        let many: String = (0..40).map(|i| format!("o{i}='x' ")).collect();
+        let Source::Wfs { options, .. } = read("WFS", &format!("{many}typename='t' url='https://e.org/wfs'"), dir) else { panic!() };
+        assert_eq!((options.ignored.len(), options.more), (32, 8));
         // WCS.
         assert_eq!(
             read("wcs", "cache=PreferNetwork&crs=EPSG:2056&format=GTiff&identifier=dem&url=https://example.invalid/wcs", dir),
@@ -1221,12 +1247,12 @@ mod tests {
         );
         // A WMS layer's login and a style of its own are said; the server's default style isn't.
         let Source::Wms { options, .. } = read("wms", "authcfg=x&layers=a&styles=night&url=https://e.org/wms", dir) else { panic!() };
-        assert_eq!(options, WebOptions { ignored: vec!["styles=…".into()], login: true });
+        assert_eq!(options, WebOptions { ignored: vec!["styles=…".into()], more: 0, login: true });
         let Source::Wms { options, .. } = read("wms", "layers=a&styles=&url=https://e.org/wms", dir) else { panic!() };
         assert_eq!(options, WebOptions::default());
         // A token given as an option is a login too.
         let Source::Wcs { options, .. } = read("wcs", "identifier=dem&token=t1&url=https://e.org/wcs", dir) else { panic!() };
-        assert_eq!(options, WebOptions { ignored: Vec::new(), login: true });
+        assert_eq!(options, WebOptions { ignored: Vec::new(), more: 0, login: true });
         // Without the address or the layer: none RustGIS adds.
         for (provider, source) in
             [("WFS", "typename='t'"), ("wcs", "url=https://e.org/wcs"), ("arcgisvectortileservice", "url=https://e.org/x")]

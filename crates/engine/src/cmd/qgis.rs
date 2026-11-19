@@ -59,18 +59,21 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
     crate::project::read_file(std::path::Path::new(path), MAX_FILE)
 }
 
-/// Imports a QGIS project as a new map. On the thread that runs it, as opening a project is: it
-/// adds layers to the session one after another, each through the command that adds its kind
-/// (a tile archive through that command's add itself, `tiles::add_with_metadata_wait`, with no
-/// wait for its metadata, as Add Data adds one), and no part of it runs on its own yet. Its work is bounded by the project: at most
+/// Imports a QGIS project as a new map. On the thread that runs it, as opening a project is,
+/// because it changes the session as it goes and RustGIS has no background path yet for a command
+/// that runs other commands on the session (the import as a whole off the window, with progress
+/// and Cancel, would be that path): it adds layers one after another, each through the command
+/// that adds its kind, and later layers, groups and relations read those added before. (A tile
+/// archive goes through that command's add itself, `tiles::add_with_metadata_wait`, with no
+/// wait for its metadata, as Add Data adds one.) Its work is bounded by the project: at most
 /// [`qgis::MAX_LAYERS`] layers, each read once by the command that adds it (a file's layers, and
 /// a virtual layer on one, each read their file), archives added without waiting for their
 /// metadata, annotation pictures within [`MAX_PICTURE_BYTES`]. A local archive's file is looked
 /// for on this thread (`is_file`), which a slow network share can hold up, and a web service's
 /// layer (WMS, WMTS, WFS, OGC API, ArcGIS, WCS) asks its service on this thread, through
 /// `service.add`: its capabilities, then a WFS, OGC API or ArcGIS layer's features (each page
-/// within the read limits) or a WCS coverage over the project's saved view. Running the whole
-/// import off the window, with progress and Cancel, is for the import as a whole.
+/// within the read limits) or a WCS coverage over the project's saved view. No step looks at
+/// Cancel.
 fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     // The folder relative paths start from: `dir` (a blank one is none, so they don't start
@@ -135,7 +138,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let mut came_in: Vec<CameIn> = Vec::new();
     // The view the project was saved with, in degrees: the area a WCS coverage is asked for (none
     // when the map couldn't take the project's coordinate system, which the view is in).
-    let view = if projected { saved_view(s, &project, degrees) } else { None };
+    let view = if projected { coverage_view(s, &project, degrees) } else { None };
     let tree_layers = project.layers.iter().enumerate().rev().map(|(i, l)| (Some(i), l));
     for (index, layer) in tree_layers.chain(project.main_annotations.iter().map(|l| (None, l))) {
         let before: std::collections::HashSet<u32> = s.map().layers.iter().map(|l| l.id).collect();
@@ -523,7 +526,9 @@ fn add_layer(
             let kind = if *ogc_api { "ogcapi" } else { "wfs" };
             let before = s.active_layer;
             let added = s.run_part("service.add", &json!({"url": url, "type": kind, "layer": typename, "name": name}))?;
-            // An OGC API collection may come as tiles: a web layer's settings, as a WMS layer's.
+            // A QGIS OGC API layer is a collection's features, which its bare name names (a
+            // collection without them isn't listed by it, and is noted). Should a service still
+            // answer it with tiles: a web layer's settings, its filter and style noted.
             if added.get("index").is_some() {
                 tiles_not_features(name, layer, service_filter, report);
                 *tile = landed(s, &added);
@@ -577,6 +582,11 @@ fn add_layer(
                 report.approximated(
                     name,
                     "its coverage, read once over the view the project was saved with: outside it, the layer has no data",
+                );
+            } else {
+                report.approximated(
+                    name,
+                    "its coverage, read once and whole (the project has no saved view RustGIS can use), at the resolution that fits it",
                 );
             }
         }
@@ -651,12 +661,13 @@ fn tiles_not_features(name: &str, layer: &qgis::ProjectLayer, service_filter: Op
 /// name, and its login, which isn't carried over (never its values).
 fn note_web_options(name: &str, options: &qgis::WebOptions, report: &mut Report) {
     if !options.ignored.is_empty() {
-        report.approximated(name, format!("its source options {} (not read)", options.ignored.join(", ")));
+        let more = if options.more > 0 { format!(" and {} more", options.more) } else { String::new() };
+        report.approximated(name, format!("its source options {}{more} (not read)", options.ignored.join(", ")));
     }
     if options.login {
         report.approximated(
             name,
-            "its login (a user name and password, or QGIS's saved authentication): not carried over; the service is asked with the login saved in RustGIS for it, if there is one, else without one (add a web-service connection with the login to use one)",
+            "its login (a user name and password, a token or key, or QGIS's saved authentication): not carried over; the service is asked with the login saved in RustGIS for it, if there is one, else without one (add a web-service connection with the login to use one)",
         );
     }
 }
@@ -1388,6 +1399,53 @@ fn go_to_view(s: &mut Session, project: &qgis::Project, degrees: Option<Geograph
     if project.rotation != 0.0 {
         s.map_mut().camera.set_bearing(-project.rotation);
     }
+}
+
+/// The area a WCS coverage is asked for over: the project's saved view in degrees. A view in
+/// degrees is [`saved_view`]'s. A projected one is read along its edges (where a polar view's
+/// farthest latitude can be, not only at its corners), all the way round where it crosses the
+/// antimeridian or holds a pole (one that projects to a point inside it; a pole drawn as a line,
+/// as Web Mercator's, is no point). `None` (the whole coverage) when it has no area.
+fn coverage_view(s: &Session, project: &qgis::Project, degrees: Option<Geographic>) -> Option<Extent> {
+    let area = |v: &Extent| v.width() > 0.0 && v.height() > 0.0;
+    if degrees.is_some() {
+        return saved_view(s, project, degrees).filter(area);
+    }
+    let [x0, y0, x1, y1] = project.extent?;
+    let m = s.map();
+    const STEPS: u32 = 16;
+    let mut view: Option<Extent> = None;
+    for i in 0..=STEPS {
+        let t = f64::from(i) / f64::from(STEPS);
+        let (x, y) = (x0 + t * (x1 - x0), y0 + t * (y1 - y0));
+        for c in [(x, y0), (x, y1), (x0, y), (x1, y)].into_iter().filter_map(|(x, y)| m.to_lonlat(Coord::new(x, y))) {
+            view = Some(view.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y)));
+        }
+    }
+    let mut view = view?;
+    // Edges more than half way round: across the antimeridian (the box between them would be the
+    // other side of the world).
+    if view.width() > 180.0 {
+        view = Extent::new(-180.0, view.min_y, 180.0, view.max_y);
+    }
+    let inside = |p: Coord| p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+    let holds = |lat: f64| {
+        let at = |lon: f64| m.to_map(Coord::new(lon, lat));
+        match (at(0.0), at(90.0), at(180.0)) {
+            (Some(a), Some(b), Some(c)) => {
+                let near = |p: Coord, q: Coord| (p.x - q.x).abs() + (p.y - q.y).abs() <= 1e-6 * (1.0 + a.x.abs() + a.y.abs());
+                near(a, b) && near(a, c) && inside(a)
+            }
+            _ => false,
+        }
+    };
+    if holds(90.0) {
+        view = Extent::new(-180.0, view.min_y, 180.0, 90.0);
+    }
+    if holds(-90.0) {
+        view = Extent::new(-180.0, -90.0, 180.0, view.max_y);
+    }
+    Some(view).filter(area)
 }
 
 /// The view `project` was saved with, in degrees (on the map's projection, as the import set it).

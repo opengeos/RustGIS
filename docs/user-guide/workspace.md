@@ -243,23 +243,22 @@ GeoTIFF and the other formats RustGIS reads, a SpatiaLite table, a GPX file's wa
 or tracks), a CSV of points or WKT geometry, XYZ tiles (raster or vector, from their address),
 an MBTiles file on this computer (raster or vector), a PMTiles archive (raster or vector, a file
 or a web address) or a web service, unchecked layers and groups hidden. A web service's layer
-comes in as **Add Web Data** adds it, from the service: a WMS or WMTS layer; a WFS feature type
-or an OGC API collection, as features in the QGIS layer's style (a filter of the form
-`SELECT * FROM t WHERE …` becomes its definition query; another query is noted); an ArcGIS
-feature layer (of a feature or map service) as features, a map service's map or one of its
-layers drawn alone (the whole map, noted, when the service doesn't draw that layer alone), an
-image service's image, or a vector tile service's tiles in the service's own style; a WCS
-coverage, read once over the view the project was saved with (noted: QGIS asks for each view),
-or whole when that view isn't known (none saved, or in a coordinate system the map couldn't
-take). A collection its service gives as tiles comes in as tiles, its filter and style noted.
-Two layers on the same tiles (two map service layers drawn as its whole map, say) come in once,
-noted. A login the layer used (a user name and password, a token, or QGIS's saved
-authentication) isn't carried over and is noted: the service is asked with the login saved in
-RustGIS for it, if there is one. Other source settings RustGIS doesn't read (a WMS layer's own
-style, say) are noted by name. A service that doesn't answer, or doesn't list the layer, leaves
-that layer out, noted. In the web app, a web service's layer is left out, noted: add it with
-**Home › Add › Add Data › From Service**. On the desktop, the import waits for each service in
-turn. A memory
+comes in as **Add Web Data** adds it, from the service: a WMS or WMTS layer; a WFS feature type or
+an OGC API collection, as features in the QGIS layer's style (a filter of the form `SELECT * FROM t
+WHERE …` becomes its definition query; another query is noted); an ArcGIS feature layer (of a
+feature or map service) as features, a map service's map or one of its layers drawn alone (the whole
+map, noted, when the service doesn't list that layer), an image service's image, or a vector tile
+service's tiles in the service's own style; a WCS coverage, read once over the view the project was
+saved with (all the way round a pole it holds), or whole when the project has no saved view RustGIS
+can use, noted either way (QGIS asks for each view). A collection its service gives as tiles comes
+in as tiles, its filter and style noted. Two layers on the same tiles (two map service layers drawn
+as its whole map, say) come in once, noted. A login the layer used (a user name and password, a
+token or key, or QGIS's saved authentication) isn't carried over and is noted: the service is asked
+with the login saved in RustGIS for it, if there is one. Other source settings RustGIS doesn't read
+(a WMS layer's own style, say) are noted by name (the first 32, the rest counted). A service that
+doesn't answer, or doesn't list the layer, leaves that layer out, noted. In the web app, a web
+service's layer is left out, noted: add it with **Home › Add › Add Data › From Service**. On the
+desktop, the import waits for each service in turn. A memory
 layer comes in empty with its fields, as QGIS opens it (QGIS doesn't save its features). A
 virtual layer that selects every column of one file's layer (`SELECT * FROM t`, with or without
 a `WHERE` clause, its fields named with or without the table, or no query) comes in as that
