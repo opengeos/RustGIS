@@ -259,7 +259,7 @@ as its whole map, say) come in once, noted. A login the layer used (a user name 
 token or key, or QGIS's saved authentication) isn't carried over and is noted: the service is asked
 with the login saved in RustGIS for it, if there is one. Other source settings RustGIS doesn't read
 (a WMS layer's own style, say) are noted by name (the first 32, the rest counted); one with no
-value, which may be a key written on its own, is counted, never named. A service that
+value, which may be a key written on its own, is taken as a login, never named. A service that
 doesn't answer, or doesn't list the layer, leaves that layer out, noted. In the web app, a web
 service's layer is left out, noted: add it with **Home › Add › Add Data › From Service**. On the
 desktop, the import waits for each service in turn. A memory

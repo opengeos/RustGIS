@@ -121,11 +121,11 @@ impl WebOptions {
                 continue;
             }
             // A segment with no value (`…&abc&…`, or `abc=`) may be a key or a password written
-            // on its own: counted, never named. `styles` with none is the server's default style,
-            // which changes nothing.
+            // on its own: taken as a login, as an address's bare part is, never named. `styles`
+            // with none is the server's default style, which changes nothing.
             if v.trim().is_empty() {
                 if !k.eq_ignore_ascii_case("styles") {
-                    out.more += 1;
+                    out.login = true;
                 }
                 continue;
             }
@@ -142,8 +142,26 @@ impl WebOptions {
 /// Whether a source option or address key is a login's: a user name, a password, a token or key,
 /// or QGIS's saved authentication.
 fn is_login(key: &str) -> bool {
-    const LOGIN: [&str; 6] = ["user", "username", "password", "authcfg", "authkey", "token"];
-    LOGIN.iter().any(|l| l.eq_ignore_ascii_case(key.trim()))
+    const LOGIN: [&str; 15] = [
+        "user",
+        "username",
+        "password",
+        "pass",
+        "secret",
+        "authcfg",
+        "authkey",
+        "token",
+        "access_token",
+        "apikey",
+        "api_key",
+        "api-key",
+        "key",
+        "client_secret",
+        "signature",
+    ];
+    let key = key.trim();
+    // A header QGIS sends with each request (`http-header:Authorization=…`) is a login too.
+    LOGIN.iter().any(|l| l.eq_ignore_ascii_case(key)) || key.get(..12).is_some_and(|p| p.eq_ignore_ascii_case("http-header:"))
 }
 
 /// The layer a virtual layer selects from: a source it names (`layer=provider:source:name`), or
@@ -891,9 +909,10 @@ pub fn is_relative(path: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// A segment with no value in a web source may be a key written on its own: it is counted, not
-    /// named, in the WMS, WCS and ArcGIS vector tile sources alike; `styles` with none is the default
-    /// style, not an option.
+    /// A segment with no value in a web source may be a key written on its own: it is taken as a
+    /// login, never named, in the WMS, WCS and ArcGIS vector tile sources alike; `styles` with none
+    /// is the default style, not an option. A credential under another name than `password` or
+    /// `token` (an API key, a header) is a login too.
     #[test]
     fn a_bare_segment_is_counted_never_named() {
         let dir = "/data";
@@ -912,8 +931,20 @@ mod tests {
                 other => panic!("{provider}: {other:?}"),
             };
             assert!(options.ignored.iter().all(|o| !o.contains(secret)), "{provider}: {options:?}");
-            assert_eq!(options.more, 1, "{provider}: {options:?}");
+            assert!(options.login && options.more == 0, "{provider}: {options:?}");
             assert!(!format!("{got:?}").contains(&format!("{secret}=")), "{provider}");
+        }
+    }
+
+    /// Credentials under other names than `password` or `token` are logins: not named, noted as
+    /// a login.
+    #[test]
+    fn keys_and_headers_are_logins() {
+        for option in ["apikey=abc", "access_token=abc", "http-header:Authorization=Bearer%20abc", "client_secret=abc"] {
+            let Source::Wcs { options, .. } = read("wcs", &format!("identifier=dem&{option}&url=https://wcs.example.com/"), "/data") else {
+                panic!("{option}: a WCS source")
+            };
+            assert!(options.login && options.ignored.is_empty(), "{option}: {options:?}");
         }
     }
 

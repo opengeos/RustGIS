@@ -194,6 +194,9 @@ fn ogc_api_wmts_and_wcs_layers_come_in_from_their_services() {
     // The WMTS layer was asked as one (its answer here isn't one: noted).
     assert!(asked.iter().any(|r| r.path == "/wmts" && r.query.iter().any(|(k, v)| k == "SERVICE" && v == "WMTS")), "{asked:?}");
     assert!(notes.contains(r#""layer":"Tiles","text":"the layer: "#), "{notes}");
+    // Its tile matrix set is RustGIS's choice, not QGIS's: said for the WMTS layer, and for no other.
+    assert!(notes.contains(r#""layer":"Tiles","text":"its tile matrix set: RustGIS takes the service's Web Mercator one"#), "{notes}");
+    assert_eq!(notes.matches("its tile matrix set").count(), 1, "{notes}");
     assert!(notes.contains(r#""layer":"Soil","text":"its coverage, read once over the view the project was saved with"#), "{notes}");
     // A layer whose source says nothing RustGIS doesn't read comes in with no note.
     assert!(!notes.contains(r#""layer":"Places""#), "{notes}");
