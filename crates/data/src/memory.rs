@@ -14,6 +14,9 @@ pub const SHARE: u64 = 4;
 /// `None` in the browser, or when it can't be read. Also `None` in a fuzzing build (cargo-fuzz sets
 /// `cfg(fuzzing)`), so the limits sit at their floors: a quarter of the runner's memory is more than
 /// the fuzzer's 2 GB memory cap, which a header claiming a vast image would reach by design (#1952).
+///
+/// On the desktop, [`OVERRIDE`] set to a positive whole number of bytes replaces the memory read,
+/// to reproduce a smaller (or larger) computer and for tests; any other value is ignored.
 pub fn physical() -> Option<u64> {
     #[cfg(fuzzing)]
     {
@@ -30,8 +33,22 @@ pub fn physical() -> Option<u64> {
     }
 }
 
+/// The environment variable that replaces the memory [`physical`] reads.
+pub const OVERRIDE: &str = "RUSTGIS_MEMORY_BYTES";
+
+/// The memory [`OVERRIDE`]'s value gives: a positive whole number of bytes, else `None`.
+#[cfg(any(test, all(not(fuzzing), not(target_arch = "wasm32"))))]
+fn overridden(value: Option<&str>) -> Option<u64> {
+    value?.trim().parse::<u64>().ok().filter(|m| *m > 0)
+}
+
+/// The memory to plan for: the override when it is set, else physical memory, or a container's
+/// limit when that is lower.
 #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
 fn read() -> Option<u64> {
+    if let Some(m) = overridden(std::env::var(OVERRIDE).ok().as_deref()) {
+        return Some(m);
+    }
     let mut s = sysinfo::System::new().ok()?;
     s.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
     let total = Some(s.total_memory()).filter(|m| *m > 0)?;
@@ -83,6 +100,15 @@ mod tests {
         assert_eq!(scaled(None, 100, 1_000, 8), 100, "unknown memory: the floor");
         assert_eq!(scaled(Some(u64::MAX), 100, usize::MAX, 0) as u64, u64::MAX / SHARE, "no overflow or division by zero");
         assert_eq!(scaled(Some(16 * GIB), 100, 50, 8), 100, "a ceiling below the floor is the floor");
+    }
+
+    #[test]
+    fn the_override_is_a_positive_number_of_bytes() {
+        assert_eq!(overridden(Some("8589934592")), Some(8 * GIB));
+        assert_eq!(overridden(Some(" 1024 ")), Some(1024));
+        for junk in [None, Some(""), Some("0"), Some("-1"), Some("8 GiB"), Some("1e9"), Some("99999999999999999999")] {
+            assert_eq!(overridden(junk), None, "{junk:?}");
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -1550,7 +1550,9 @@ runs on one thread.
 
 `gp.env` also returns the memory limits on this computer (`limits`). On the desktop they follow the
 computer's memory, or a container's limit when it is lower: each plans for a quarter of it, never
-below the web app's fixed limits and never above a ceiling.
+below the web app's fixed limits and never above a ceiling. To try the limits of a smaller computer,
+set the environment variable `RUSTGIS_MEMORY_BYTES` to the memory in bytes (such as `8589934592`
+for 8 GiB) before starting RustGIS; it replaces the memory read from the computer.
 
 | Limit | Floor (web app value in brackets) | Desktop: a quarter of memory at | Ceiling |
 |---|---|---|---|
