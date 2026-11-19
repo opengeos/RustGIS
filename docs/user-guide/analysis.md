@@ -1575,7 +1575,8 @@ and the copies of edits still running in the background, all within three quarte
 computer's memory. When it doesn't fit, Redo steps are set aside first (the edit clears them
 anyway), then the oldest Undo steps. They are freed only once the edit starts copying; an edit
 that fails before that, or is cancelled before it starts copying, gives them back, unless the
-project was changed while it ran in the background. A message says when steps are freed, the
+project was changed while it ran in the background. One that fails after it started copying has
+used them, as a finished edit would have. A message says when steps are freed, the
 first time in a project. An edit that wouldn't fit even with no Undo
 history is refused before anything changes, and the message gives the size of the copy and what is
 held. An edit the desktop runs in the background is checked when it starts; one that needs Undo

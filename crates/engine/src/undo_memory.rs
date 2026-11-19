@@ -706,6 +706,32 @@ mod tests {
     }
 
     #[test]
+    fn shape_edits_that_change_nothing_keep_the_history_set_aside_for_them() {
+        let mut session = session(4096);
+        session.undo_memory.limit = 1 << 30;
+        session.undo_memory.memory = None;
+        // A selection with no shape, so Move changes nothing.
+        let id = session.map().layer_by_name("rows").unwrap().id;
+        let layer = session.map_mut().layer_mut(id).unwrap();
+        layer.dataset.features[0].geometry = None;
+        layer.selection = vec![0];
+        session.active_layer = Some(id);
+        for text in ["b", "c"] {
+            edit(&mut session, &text.repeat(4096));
+        }
+        session.undo_memory.memory = Some(room_for_one_copy(&mut session, 64));
+        let mark = session.notice_mark();
+        let point = json!({"type": "Point", "coordinates": [1.0, 1.0]});
+        let err = session.run("edit.setGeometry", &json!({"layer": "rows", "row": 5, "geometry": point})).unwrap_err();
+        assert!(err.contains("no such row"), "{err}");
+        assert_eq!(session.undo_depth(), 2, "Set Geometry of a row past the end keeps the history");
+        let err = session.run("edit.move", &json!({"dx": 1.0, "dy": 1.0})).unwrap_err();
+        assert!(err.contains("nothing selected"), "{err}");
+        assert_eq!(session.undo_depth(), 2, "Move that changes nothing keeps the history");
+        assert!(!session.notices_since(mark).iter().any(|n| n.text.contains("make room")));
+    }
+
+    #[test]
     fn paste_special_is_not_measured_by_the_active_layer() {
         let mut session = session(4096);
         session.undo_memory.memory = Some(4);
