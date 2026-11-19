@@ -21606,15 +21606,31 @@ fn tool_result_reports_classified_attribute_loss() {
                 attrs: if extra { vec![FieldValue::Int(7)] } else { Vec::new() },
             }]
             .into();
+            if batch {
+                let mut second = ds.clone();
+                second.name = "More sites".into();
+                second.features.push(Feature {
+                    id: 2,
+                    geometry: Some(Geometry::Point(rustgis_geom::Coord::new(2.0, 3.0))),
+                    attrs: if extra { vec![FieldValue::Int(8)] } else { Vec::new() },
+                });
+                s.map_mut().add_dataset(second);
+            }
             s.map_mut().add_dataset(ds);
             let mark = s.notice_mark();
             if batch {
-                s.run("gp.batch", &json!({"tool": "repairGeometry", "inputs": ["Sites"], "params": {}})).unwrap();
+                let result =
+                    s.run("gp.batch", &json!({"tool": "repairGeometry", "inputs": ["Sites", "More sites"], "params": {}})).unwrap();
+                assert_eq!(result["succeeded"], 2);
             } else {
                 s.run("gp.run", &json!({"tool": "repairGeometry", "params": {"input": "Sites"}})).unwrap();
             }
             let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.loss() == Some(LossCode::DroppedExtraAttributes)).collect();
             assert_eq!(notices.len(), usize::from(extra), "batch {batch}");
+            if batch && extra {
+                let text = &notices[0].text;
+                assert!(text.contains("2 loss report(s)") && text.contains("1 feature had") && text.contains("2 features had"), "{text}");
+            }
             assert!(notices.iter().all(|n| n.severity == Severity::Warning && n.text.contains("extra values")));
             assert_eq!(s.project.gp_history.iter().any(|r| r.messages.iter().any(|m| m.contains("extra values"))), extra);
         }

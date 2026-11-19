@@ -2300,14 +2300,11 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
     // Every distinct message is named (a loss reported by the fourth kind must not be hidden),
     // up to a bound a hostile run can't flood; all of them are in the result's `messages`.
     const NAMED: usize = 50;
-    let classified = distinct_tool_messages.iter().filter_map(|(text, code, count)| Some((text, (*code)?, count)));
-    let listed = classified.clone().take(NAMED);
-    for (text, code, count) in listed {
-        s.notify_loss(code, batch_message(text, *count).into());
-    }
-    let unlisted = classified.count().saturating_sub(NAMED);
-    if unlisted > 0 {
-        s.warn(format!("gp.batch: {unlisted} more loss messages are listed in the result"));
+    let mut losses = BatchLosses::default();
+    for (text, code, count) in &distinct_tool_messages {
+        if let Some(code) = code {
+            losses.add(*code, text, *count);
+        }
     }
     if items_reporting_messages > 0 {
         let plain = || distinct_tool_messages.iter().filter(|(_, code, _)| code.is_none());
@@ -2350,12 +2347,13 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
             let label = if count == 1 { "input" } else { "inputs" };
             let text = format!("gp.batch: {count} {label} ({inputs_list}): {msg}");
             if let Some(code) = code {
-                s.notify_loss(code, text.into());
+                losses.add(code, &text, count);
             } else {
                 s.notify(text, false);
             }
         }
     }
+    losses.say(s);
 
     if !failed.is_empty() {
         let sample = failed.iter().take(3).filter_map(|v| v.get("input").and_then(Value::as_str)).collect::<Vec<_>>().join(", ");
@@ -2595,6 +2593,39 @@ pub(crate) fn execute(
     continuation.check()?;
     fit_to_windows(s, &mut res, &ids);
     apply_with(s, run_of(t0), kept(), res, millis, opts)
+}
+
+/// Counts classified reports across a batch and keeps a bounded sample for each code.
+#[derive(Default)]
+struct BatchLosses(std::collections::BTreeMap<&'static str, BatchLoss>);
+
+struct BatchLoss {
+    code: LossCode,
+    reports: usize,
+    examples: Vec<String>,
+    omitted: usize,
+}
+
+impl BatchLosses {
+    /// Counts every report, even when its text is beyond the sample.
+    fn add(&mut self, code: LossCode, text: &str, count: usize) {
+        let entry = self.0.entry(code.spec().id).or_insert_with(|| BatchLoss { code, reports: 0, examples: Vec::new(), omitted: 0 });
+        entry.reports = entry.reports.saturating_add(count);
+        if entry.examples.len() < 3 {
+            entry.examples.push(batch_message(text, count));
+        } else {
+            entry.omitted += 1;
+        }
+    }
+
+    /// Publishes one warning per code. Full messages are in the batch result.
+    fn say(self, s: &mut Session) {
+        for loss in self.0.into_values() {
+            let sample = loss.examples.join("; ");
+            let more = if loss.omitted == 0 { String::new() } else { format!(" and {} more, in the result", loss.omitted) };
+            s.notify_loss(loss.code, format!("gp.batch: {} loss report(s) ({sample}{more})", loss.reports).into());
+        }
+    }
 }
 
 /// The text of a distinct batch notice, with its repetition count when it appeared more than once.
