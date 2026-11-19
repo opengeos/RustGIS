@@ -22,6 +22,7 @@ pub mod pam;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 pub mod planetary;
+pub mod reproject;
 pub mod wkt;
 pub mod world;
 pub mod zarr;
@@ -30,6 +31,7 @@ use std::path::Path;
 
 pub use crs::{Crs, Transformer};
 pub use image_grid::ImageGrid;
+pub use reproject::Reprojection;
 use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 
