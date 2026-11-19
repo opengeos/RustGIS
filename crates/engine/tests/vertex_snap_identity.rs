@@ -251,3 +251,14 @@ fn a_vertex_past_the_antimeridian_is_snapped_to_as_stored() {
         }
     }
 }
+
+/// Of two stored places a turn apart, the one the map draws at the hit is snapped to: on Web
+/// Mercator, (0°, 0°) is drawn there and 360° a world away.
+#[test]
+fn a_place_one_turn_away_is_another_vertex() {
+    let (mut s, _) = fixture(Geometry::MultiPoint(vec![Coord::new(360.0, 0.0), Coord::new(0.0, 0.0)]));
+    s.map_mut().camera.res = 1e-3;
+    s.map_mut().editing.snapping = Snapping { enabled: true, tolerance_px: 50.0, vertex: true, edge: true, end: true };
+    let (at, kind) = snap_except(&mut s, Coord::new(1e-8, 1e-8), None).expect("snaps");
+    assert_eq!((at, kind), (Coord::new(0.0, 0.0), "vertex"));
+}

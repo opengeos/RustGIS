@@ -954,7 +954,11 @@ impl Dataset {
 /// Places a dataset already holds, in its own coordinates, by the exact longitude/latitude each
 /// reads as: what an edit written back keeps as stored ([`Dataset::edit_from_lonlat`]).
 #[derive(Clone, Debug, Default)]
-pub struct HeldPlaces(std::collections::HashMap<(u64, u64), Coord>);
+pub struct HeldPlaces {
+    places: std::collections::HashMap<(u64, u64), Coord>,
+    /// When set, the only readings held from now on ([`HeldPlaces::want_only`]).
+    wanted: Option<std::collections::HashSet<(u64, u64)>>,
+}
 
 impl HeldPlaces {
     fn key(c: Coord) -> (u64, u64) {
@@ -969,22 +973,39 @@ impl HeldPlaces {
                 && within.is_none_or(|e| e.contains(c))
                 && let Some(read) = to.point(c)
             {
-                self.0.entry(Self::key(read)).or_insert(c);
+                let key = Self::key(read);
+                if self.wanted.as_ref().is_none_or(|w| w.contains(&key)) {
+                    self.places.entry(key).or_insert(c);
+                }
             }
         });
     }
 
+    /// From now on, holds only places that one of `edited`'s (in longitude/latitude) reads as and
+    /// that isn't held yet: a search of many stored places keeps only those an edit asks for.
+    pub fn want_only(&mut self, edited: &[&Geometry]) {
+        let mut wanted = std::collections::HashSet::new();
+        for g in edited {
+            g.for_each_coord(|c| {
+                if c.is_finite() && self.get(c).is_none() {
+                    wanted.insert(Self::key(c));
+                }
+            });
+        }
+        self.wanted = Some(wanted);
+    }
+
     /// The held place that reads exactly as `c` in longitude/latitude.
     pub fn get(&self, c: Coord) -> Option<Coord> {
-        self.0.get(&Self::key(c)).copied()
+        self.places.get(&Self::key(c)).copied()
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.places.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.places.is_empty()
     }
 }
 
@@ -1060,6 +1081,12 @@ mod tests {
         held.add(&to_lonlat, &feature, None);
         held.add(&to_lonlat, &neighbour, None);
         assert_eq!(held.len(), 5);
+        // Wanting only one reading, a search holds no other.
+        let mut only = HeldPlaces::default();
+        only.want_only(&[&Geometry::Point(to_lonlat.point(other).unwrap())]);
+        only.add(&to_lonlat, &feature, None);
+        only.add(&to_lonlat, &neighbour, None);
+        assert_eq!(only.len(), 1);
         // As the edit reads them: the feature's places in longitude/latitude.
         let read: Vec<Coord> = stored.iter().map(|c| to_lonlat.point(*c).unwrap()).collect();
         let snapped = to_lonlat.point(other).unwrap();

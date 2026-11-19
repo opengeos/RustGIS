@@ -1174,8 +1174,10 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
 /// (`originals`, in the layer's own coordinates), and a stored place of a feature in a layer of the
 /// same system that one of its other places reads exactly as (a vertex snapped to, a feature
 /// pasted where it was copied from). Each other place is converted on its own to find what is
-/// stored near it, so no stored place is missed however large the edit. That takes one pass over
-/// the feature boxes of the layers in its system, once a command, as a selection by box does.
+/// stored near it, so no stored place is missed however large the edit, and only stored places
+/// one of them reads as are held. The search reads the box of every feature of the layers in its
+/// system, each from its vertices, once a command (an added feature, a paste): work that grows
+/// with those layers, which C2 is to take to a spatial index.
 /// Empty while the layer is in longitude/latitude, as every layer is today: its edits are written
 /// as they are.
 pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited: &[&Geometry]) -> rustgis_data::HeldPlaces {
@@ -1184,6 +1186,8 @@ pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited:
     for g in originals {
         l.dataset.hold_places(g, None, &mut held);
     }
+    // Only what an edited place still lacks is held from here on.
+    held.want_only(edited);
     let system = l.dataset.coord_crs();
     let Ok(to_own) = rustgis_data::raster::Crs::LonLat.to(system) else { return held };
     // The places not held yet, each in the layer's coordinates, and the box they are in there,
@@ -2199,26 +2203,25 @@ fn stored_place(s: &Session, id: u32, row: usize, at: Coord) -> Option<Coord> {
     let to_lonlat = l.dataset.lonlat_conversion().ok()?;
     let shown = rustgis_data::raster::Crs::LonLat.to(l.dataset.coord_crs()).ok()?.point(s.map().to_lonlat(at)?)?;
     let reach = round_trip_reach(shown);
-    // In longitude/latitude, a longitude past ±180° (a shape drawn across the antimeridian) is the
-    // same place one turn round, where the map shows it.
+    // A world projection draws a longitude past ±180° (a shape drawn across the antimeridian) one
+    // turn round; Web Mercator draws it past its edge. A place matched as read wins over one
+    // matched only one turn round: (0°, 0°) shown at the hit is that vertex, not one stored at 360°.
     let geographic = to_lonlat.is_identity();
     let turn = |dx: f64| if geographic { (dx + 180.0).rem_euclid(360.0) - 180.0 } else { dx };
     let near = (s.map().camera.res * 1e-3).powi(2);
-    let mut best: Option<(f64, Coord)> = None;
+    let off = |r: Coord| s.map().to_map(r).map(|m| (m.x - at.x).powi(2) + (m.y - at.y).powi(2)).filter(|d2| *d2 <= near);
+    let mut best: Option<((u8, f64), Coord)> = None;
     own.for_each_coord(|c| {
         if turn(c.x - shown.x).abs() <= reach
             && (c.y - shown.y).abs() <= reach
             && let Some(read) = to_lonlat.point(c)
         {
-            // As read, or one turn round, whichever the map shows at the hit.
             let wrapped = Coord::new((read.x + 180.0).rem_euclid(360.0) - 180.0, read.y);
-            let d2 = [read, wrapped]
-                .into_iter()
-                .filter_map(|r| s.map().to_map(r))
-                .map(|m| (m.x - at.x).powi(2) + (m.y - at.y).powi(2))
-                .fold(f64::INFINITY, f64::min);
-            if d2 <= near && best.is_none_or(|b| d2 < b.0) {
-                best = Some((d2, read));
+            let rank = off(read).map(|d2| (0, d2)).or_else(|| off(wrapped).map(|d2| (1, d2)));
+            if let Some(rank) = rank
+                && best.is_none_or(|b| rank < b.0)
+            {
+                best = Some((rank, read));
             }
         }
     });
