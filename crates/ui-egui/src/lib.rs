@@ -66,6 +66,7 @@ mod localagents;
 mod mapgpu;
 mod mapmenu;
 mod mapview;
+mod markerimages;
 mod measure_units;
 mod modelbuilder;
 mod navui;

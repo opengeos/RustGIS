@@ -534,6 +534,9 @@ fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, size: f3
                     let col = if s.fill.a() == 0 && s.stroke_width > 0.0 { s.stroke } else { s.fill };
                     glyph(p, c, g, glyph_px, c32(col));
                 }
+                // An image, without the symbol's colours, as on the map; one that doesn't draw is
+                // the circle below, as there.
+                Marker::Picture(pic) if crate::markerimages::paint(p, c, size, pic) => {}
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
                     p.circle_stroke(c, rad, Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)));
@@ -5761,8 +5764,9 @@ pub(crate) fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
 }
 
 /// A stroke's markers along the editor's preview line, from `x.0` to `x.1` at `y`, scaled by `k`:
-/// markers as dots (squares as squares), hash marks as ticks, `w` wide. A sketch, not the map's
-/// drawing: other shapes and outlines aren't shown, and inner placements are marked at the middle.
+/// markers as dots (squares as squares, images as themselves, unturned), hash marks as ticks, `w`
+/// wide. A sketch, not the map's drawing: other shapes and outlines aren't shown, and inner
+/// placements are marked at the middle.
 fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: egui::Color32, w: f32) {
     let mut xs = Vec::new();
     if m.at.has(Placements::INTERVAL) {
@@ -5794,6 +5798,7 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
                 ui.painter().rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
             }
             LineMark::Marker(Marker::Char(g)) => glyph(ui.painter(), pos2(at, y), g, (2.0 * half).max(6.0), c),
+            LineMark::Marker(Marker::Picture(pic)) if crate::markerimages::paint(ui.painter(), pos2(at, y), 2.0 * half, pic) => {}
             LineMark::Marker(_) => {
                 ui.painter().circle_filled(pos2(at, y), half, c);
             }
@@ -7574,6 +7579,27 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A point layer given an image by `layer.marker` shows it in its patch (the Layers row and the
+    /// symbol editor's swatch), not a circle (#2266).
+    #[test]
+    fn a_picture_marker_shows_in_its_patch() {
+        let png =
+            "iVBORw0KGgoAAAANSUhEUgAAABgAAAAMCAYAAAB4MH11AAAAIElEQVR4nGO4ICPznxQsE3OBJMwwasGoBaMWjFpAGAMALk9r//PjorkAAAAASUVORK5CYII=";
+        let mut app = RustGisApp::with_sample();
+        app.run("layer.marker", json!({"layer": "Cities", "image": png, "size": 14})).unwrap();
+        let l = app.session.map().layer_by_name("Cities").unwrap();
+        let (s, g) = (l.renderer.base_symbol(), l.geometry_type());
+        let ctx = egui::Context::default();
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(18.0, 14.0));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| patch(ui.painter(), r, &s, g));
+        // The image alone: one mesh on its own texture (not the font atlas's), and no circle.
+        let image = |c: &egui::epaint::ClippedShape| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default());
+        assert_eq!(out.shapes.len(), 1);
+        assert!(out.shapes.iter().all(image));
+        // (Its texture's upload isn't handed to a renderer here.)
+        out.textures_delta.clear();
+    }
 
     /// The stroke and fill editors send an image back with every change, so it is kept; one that
     /// can't be drawn (a file's, not kept or not an image) becomes the circle it showed as, which

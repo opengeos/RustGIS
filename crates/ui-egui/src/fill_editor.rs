@@ -467,8 +467,8 @@ pub(crate) fn fills_editor(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tok
 }
 
 /// The stacked `fills` on `r`, bottom first: a colour fills it, hatch lines cross it at their
-/// angle and spacing, markers sit on their grid (as circles), a gradient or shapeburst shades it
-/// (in cells), each in its colour or `base`'s.
+/// angle and spacing, markers sit on their grid (as circles, images as themselves), a gradient or
+/// shapeburst shades it (in cells), each in its colour or `base`'s.
 fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
     let p = ui.painter().with_clip_rect(r);
     let one = [FillLayer::default()];
@@ -493,7 +493,12 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
                     k += step;
                 }
             }
-            FillPattern::Dots { size, spacing, displacement, .. } => {
+            FillPattern::Dots { marker, size, spacing, displacement, .. } => {
+                // An image, looked up once for all its dots.
+                let image = match marker {
+                    Marker::Picture(pic) => crate::markerimages::image(ui.ctx(), pic),
+                    _ => None,
+                };
                 // (No finer than 4 points in the swatch: it is a picture, not every dot.)
                 let [dx, dy] = spacing.map(|s| s.max(4.0));
                 // (Shifts widened with the spacing, so a half shift stays a half.)
@@ -505,7 +510,12 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
                     for col in -1..=cols {
                         let x = r.min.x + (col as f32 + 0.5) * dx + if row.rem_euclid(2) == 1 { shift[0] } else { 0.0 };
                         let y = r.min.y + (row as f32 + 0.5) * dy + if col.rem_euclid(2) == 1 { shift[1] } else { 0.0 };
-                        p.circle_filled(pos2(x, y), (size / 2.0).max(0.5), c);
+                        match &image {
+                            Some(image) => image.paint(&p, pos2(x, y), size.max(1.0)),
+                            None => {
+                                p.circle_filled(pos2(x, y), (size / 2.0).max(0.5), c);
+                            }
+                        }
                     }
                 }
             }

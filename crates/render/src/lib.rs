@@ -603,6 +603,16 @@ pub fn picture_marker_draws(p: rustgis_map::Picture) -> bool {
     picture::marker_aspect(p).is_some()
 }
 
+/// Picture marker `p`'s image for a preview, at most `side` pixels per side: its premultiplied
+/// RGBA pixels, their width and height, and the image's height for its width (from before it was
+/// scaled down). `None` where the map draws a circle. Decoded on every call: the caller keeps it.
+pub fn picture_marker_thumbnail(p: rustgis_map::Picture, side: u32) -> Option<(Vec<u8>, [u32; 2], f32)> {
+    picture::marker_image(p, side).map(|(img, aspect)| {
+        let size = [img.width(), img.height()];
+        (img.take(), size, aspect)
+    })
+}
+
 /// The colour unplaced labels are drawn in.
 pub const UNPLACED: Rgba = Rgba::rgb(0xD0, 0x1C, 0x1C);
 
