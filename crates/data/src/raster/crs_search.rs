@@ -170,6 +170,8 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
 
 /// The text searched for, in lower case, and its words.
 fn query(text: &str) -> (String, Vec<String>) {
+    // No name is longer: a pasted text past it is searched by its start, so a frame stays short.
+    let text = text.get(..text.char_indices().nth(200).map_or(text.len(), |(i, _)| i)).unwrap_or(text);
     // `EPSG: 2056` and `epsg : 2056` are one code.
     let mut whole = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     for spaced in [" :", ": "] {

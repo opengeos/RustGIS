@@ -542,12 +542,18 @@ impl Crs {
         if let Some(rest) = up.strip_prefix("ESRI")
             && let Some(n) = rest.trim_start().strip_prefix(':').map(str::trim)
         {
-            let c = n.parse::<u32>().map_err(|_| format!("'{t}': an ESRI code is a number, such as ESRI:102033"))?;
+            let c = Some(n)
+                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|n| n.parse::<u32>().ok())
+                .ok_or_else(|| format!("'{t}': an ESRI code is a number, such as ESRI:102033"))?;
             return esri_crs(c).ok_or_else(|| format!("unknown coordinate system ESRI:{c}"));
         }
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
         match code.parse::<u32>() {
-            Ok(c) if known => Crs::from_epsg(c).ok_or_else(|| format!("unknown coordinate system EPSG:{c}")),
+            // A bare number EPSG lacks and ESRI lists (`102033`) is ESRI's, as the boxes find it.
+            Ok(c) if known => Crs::from_epsg(c)
+                .or_else(|| t.bytes().all(|b| b.is_ascii_digit()).then(|| esri_crs(c)).flatten())
+                .ok_or_else(|| format!("unknown coordinate system EPSG:{c}")),
             _ => Err(format!("'{t}': give a coordinate system as EPSG:<code>, WKT, or +proj string")),
         }
     }
@@ -2214,7 +2220,11 @@ mod tests {
             assert_eq!(Crs::parse(text).map(|c| c.label()), Ok("ESRI:102033".to_string()), "{text}");
         }
         assert!(Crs::parse("ESRI:1").is_err_and(|e| e.contains("ESRI:1")));
-        assert!(Crs::parse("ESRI:x").is_err());
+        assert!(Crs::parse("ESRI:x").is_err() && Crs::parse("ESRI:+102033").is_err());
+        // A bare number: EPSG's, else ESRI's.
+        assert_eq!(Crs::parse("102033").map(|c| c.label()), Ok("ESRI:102033".to_string()));
+        assert_eq!(Crs::parse("2056").map(|c| c.epsg()), Ok(2056));
+        assert!(Crs::parse("EPSG:102033").is_err(), "an EPSG code stays EPSG's");
     }
 
     /// A kept transformer that can't be built again when grids arrive goes on as it was, said
