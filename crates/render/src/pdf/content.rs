@@ -344,10 +344,10 @@ impl Writer<'_> {
         let id = if image.shared {
             let key = (std::sync::Arc::as_ptr(px) as usize, image.smooth);
             let id = match self.doc.images.get(&key) {
-                Some(&id) => id,
+                Some((_, id)) => *id,
                 None => {
                     let id = self.image_object(px, image.smooth);
-                    self.doc.images.insert(key, id);
+                    self.doc.images.insert(key, (std::sync::Arc::clone(px), id));
                     id
                 }
             };

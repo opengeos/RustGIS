@@ -160,8 +160,9 @@ pub(crate) struct Doc {
     out: Vec<u8>,
     offsets: Vec<Option<usize>>,
     /// Shared pictures' image objects, by their pixels' address and whether smoothed (see
-    /// [`crate::vector::Image::shared`]): written once, placed wherever drawn.
-    pub(crate) images: std::collections::HashMap<(usize, bool), usize>,
+    /// [`crate::vector::Image::shared`]): written once, placed wherever drawn. The pixels are
+    /// held, so their address isn't reused by others while it is a key.
+    pub(crate) images: std::collections::HashMap<(usize, bool), (std::sync::Arc<crate::vector::Pixels>, usize)>,
 }
 
 impl Doc {

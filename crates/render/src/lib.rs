@@ -4878,7 +4878,8 @@ fn render_frame(
                     let mut stroke_paths = stroke_paths::Paths::default();
                     // Symbol levels: lines with stacked strokes wait, and go down a level at a time
                     // after the rest (each batch of a streamed layer on its own).
-                    let levels = layer.stroke_levels && layer.has_strokes();
+                    let has_strokes = layer.has_strokes();
+                    let levels = layer.stroke_levels && has_strokes;
                     // Polygons with stacked fills (patterns) draw them in place of their single fill.
                     let has_fills = layer.has_fills();
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
@@ -4904,7 +4905,7 @@ fn render_frame(
                                 return false;
                             }
                             // (A line layer with no stacked strokes isn't styled for it.)
-                            if matches!(g, Geometry::Line(_)) && !layer.has_strokes() {
+                            if matches!(g, Geometry::Line(_)) && !has_strokes {
                                 return false;
                             }
                             let (sym, strokes) = styler.style(row);
