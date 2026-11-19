@@ -29,19 +29,26 @@ const MEMORY_PER_BYTE: u64 = 8;
 
 /// Largest file read into memory on this computer (#2408): on the desktop as much as a quarter of
 /// its memory holds at [`MEMORY_PER_BYTE`] a byte, from [`BYTES_FLOOR`] up to [`BYTES_CEILING`],
-/// as the other memory limits follow it (#1291 step 2); [`BYTES_FLOOR`] in the browser.
+/// as the other memory limits follow it (#1291 step 2); [`BYTES_FLOOR`] in the browser. Less once
+/// RustGIS holds more than half the memory ([`crate::memory::share`], #2431), never below the floor.
 pub fn max_bytes() -> u64 {
     if let Some(max) = TEST_MAX.with(std::cell::Cell::get) {
         return max;
     }
-    max_bytes_for(crate::memory::physical())
+    max_bytes_within(crate::memory::share(crate::memory::physical(), crate::memory::held()))
 }
 
-/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known). The formula is
-/// [`crate::memory::scaled`]'s, worked out here in `u64`, as that one counts in `usize`, which
-/// doesn't hold 4 GiB on a 32-bit build.
+/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known) with nothing held. The
+/// formula is [`crate::memory::scaled`]'s, worked out here in `u64`, as that one counts in `usize`,
+/// which doesn't hold 4 GiB on a 32-bit build.
 fn max_bytes_for(memory: Option<u64>) -> u64 {
-    memory.map_or(BYTES_FLOOR, |m| (m / crate::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, bytes_ceiling()))
+    max_bytes_within(memory.map(|m| m / crate::memory::SHARE))
+}
+
+/// [`max_bytes`] when a job plans for `share` bytes ([`crate::memory::share`]; `None`: not known):
+/// less once RustGIS holds more than half the memory (#2431), never below [`BYTES_FLOOR`].
+fn max_bytes_within(share: Option<u64>) -> u64 {
+    share.map_or(BYTES_FLOOR, |share| (share / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, bytes_ceiling()))
 }
 
 /// The most [`max_bytes`] grows to in this build: [`BYTES_CEILING`] on a 64-bit desktop build. A
@@ -61,13 +68,33 @@ pub fn too_large(len: u64) -> String {
 
 /// [`too_large`] against the limit `max` taken when the read started.
 fn too_large_said(len: u64, max: u64) -> String {
-    let follows = crate::memory::physical().is_some() && bytes_ceiling() > BYTES_FLOOR;
-    let limit = if follows {
-        format!("{} on this computer, a limit that follows its memory", size_said(max, false))
-    } else {
-        size_said(max, false)
+    let memory = crate::memory::physical().filter(|_| bytes_ceiling() > BYTES_FLOOR);
+    // A test's own limit isn't lowered by what is held.
+    let held = if TEST_MAX.with(std::cell::Cell::get).is_some() { 0 } else { crate::memory::held() };
+    too_large_held(len, max, memory, held)
+}
+
+/// [`too_large_said`] on a computer with `memory` bytes (`None`: the limit doesn't follow it)
+/// while RustGIS holds `held`: what is held is said when it lowered the limit (#2431), with the
+/// limit when nothing is held and what to do.
+fn too_large_held(len: u64, max: u64, memory: Option<u64>, held: u64) -> String {
+    let file = size_said(len, true);
+    let Some(memory) = memory else {
+        return format!("file is too large ({file}; the most read into memory is {})", size_said(max, false));
     };
-    format!("file is too large ({}; the most read into memory is {limit})", size_said(len, true))
+    let full = max_bytes_for(Some(memory));
+    if held == 0 || max >= full {
+        return format!(
+            "file is too large ({file}; the most read into memory is {} on this computer, a limit that follows its memory)",
+            size_said(max, false)
+        );
+    }
+    format!(
+        "file is too large ({file}; the most read into memory is {} on this computer while RustGIS holds {} of its memory, {} with nothing held): remove layers or tables you no longer need, and save and reopen the project to let go of what Undo keeps of them, then try again",
+        size_said(max, false),
+        size_said(held, true),
+        size_said(full, false)
+    )
 }
 
 /// A size in MiB, rounded `up` (a file's, so it never looks within the limit) or down (the
@@ -2310,9 +2337,10 @@ fn read_gzip_text_budget(
 
 /// Estimated memory for retained CSV rows and the dataset built alongside them: a quarter
 /// of physical memory, between 256 MiB (also the browser limit) and 4 GiB.
+/// Less once RustGIS holds more than half the memory, never below the floor ([`crate::memory::planned`], #2431).
 fn csv_memory_budget() -> usize {
     let ceiling = usize::try_from(4u64 << 30).unwrap_or(usize::MAX);
-    crate::memory::scaled(crate::memory::physical(), 256 << 20, ceiling, 1)
+    crate::memory::planned(256 << 20, ceiling, 1)
 }
 
 /// Collects records for type inference, charging text and row/cell objects before copying.
@@ -4768,6 +4796,29 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// A file refused because RustGIS holds much of the memory says so, with the limit when nothing
+    /// is held and what to do; refused at the full limit, or where the limit doesn't follow the
+    /// memory, it says what it said before (#2431).
+    #[test]
+    fn a_file_refused_while_memory_is_held_says_so() {
+        const GIB: u64 = 1 << 30;
+        if bytes_ceiling() == BYTES_FLOOR {
+            return; // A phone or a 32-bit build: the limit doesn't follow the memory.
+        }
+        let lowered = too_large_held(2 * GIB, GIB, Some(64 * GIB), 40 * GIB);
+        assert_eq!(
+            lowered,
+            "file is too large (2048 MiB; the most read into memory is 1024 MiB on this computer while RustGIS holds 40960 MiB of its memory, 2048 MiB with nothing held): remove layers or tables you no longer need, and save and reopen the project to let go of what Undo keeps of them, then try again"
+        );
+        let full = too_large_held(3 * GIB, 2 * GIB, Some(64 * GIB), GIB);
+        assert_eq!(
+            full,
+            "file is too large (3072 MiB; the most read into memory is 2048 MiB on this computer, a limit that follows its memory)"
+        );
+        assert_eq!(too_large_held(3 * GIB, 2 * GIB, Some(64 * GIB), 0), full);
+        assert_eq!(too_large_held(GIB, 256 << 20, None, 40 * GIB), "file is too large (1024 MiB; the most read into memory is 256 MiB)");
+    }
+
     /// The size read into memory follows the computer's memory between its floor and ceiling,
     /// and stays at the floor where the memory isn't known (the browser) (#2408).
     #[test]
@@ -4784,6 +4835,12 @@ mod tests {
             // A phone or a 32-bit build: the floor, whatever the memory.
             assert_eq!(max_bytes_for(Some(16 * GIB)), BYTES_FLOOR);
             assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_FLOOR);
+        }
+        // Holding more than half the memory lowers it, never below the floor (#2431).
+        if bytes_ceiling() > BYTES_FLOOR {
+            assert_eq!(max_bytes_within(crate::memory::share(Some(16 * GIB), 8 * GIB)), 512 << 20, "half held: unchanged");
+            assert_eq!(max_bytes_within(crate::memory::share(Some(64 * GIB), 40 * GIB)), GIB);
+            assert_eq!(max_bytes_within(crate::memory::share(Some(16 * GIB), 12 * GIB)), BYTES_FLOOR);
         }
         // The test limit is the calling thread's, and comes back after it, nested too.
         let real = max_bytes();

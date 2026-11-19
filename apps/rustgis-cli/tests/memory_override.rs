@@ -35,3 +35,22 @@ fn the_memory_override_sets_the_limits_and_says_so() {
     assert!(!quiet.contains("RUSTGIS_MEMORY_BYTES"), "{quiet}");
     assert_eq!(run(Some("8 GiB")).0, plain);
 }
+
+/// What the process holds reaches `gp.env` (#2431): with the sample project open it is more than
+/// nothing, and on a computer that size it is far below half the memory, so the limits are the
+/// ones with nothing held.
+#[test]
+fn gp_env_says_what_is_held() {
+    let out = Command::new(env!("CARGO_BIN_EXE_rustgis-cli"))
+        .args(["run", "--no-plugins", "--worldview", "default", "--sample", "--cmd", "gp.env"])
+        .env("RUSTGIS_MEMORY_BYTES", "17179869184")
+        .env_remove("RUSTGIS_WORLDVIEW")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let limits = serde_json::from_slice::<Value>(&out.stdout).unwrap()["limits"].clone();
+    let held = limits["heldBytes"].as_u64().unwrap();
+    assert!(held > 0 && held < 8 << 30, "{held}");
+    // 16 GiB plans for 4 GiB: 512 MiB of file.
+    assert_eq!(limits["fileBytes"], json!(512_u64 << 20));
+}

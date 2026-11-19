@@ -29,6 +29,8 @@ pub(crate) struct Budget {
     room_said: bool,
     // The copies of background edits not landed yet ([`Budget::reserve`]).
     in_flight: Arc<AtomicU64>,
+    // This session's part of what the process holds ([`Budget::publish`]).
+    holding: rustgis_data::memory::Holding,
     // Keeping the weak key prevents address reuse while its estimate is cached, without keeping
     // the rows themselves alive. Copy-on-write gives changed rows a different key.
     estimates: HashMap<usize, (Key, usize)>,
@@ -43,6 +45,7 @@ impl Default for Budget {
             memory: rustgis_data::memory::physical(),
             room_said: false,
             in_flight: Arc::default(),
+            holding: rustgis_data::memory::Holding::default(),
             estimates: HashMap::new(),
         }
     }
@@ -104,6 +107,20 @@ impl Budget {
         (bytes as u64).saturating_add(raster_bytes(projects))
     }
 
+    /// Says what the session holds ([`Self::held`]) to the process-wide figure the memory limits
+    /// plan with ([`rustgis_data::memory::planned`], #2431 fix 3), after each command. Copies still
+    /// being made count through their [`Reservation`]s. Nothing is measured where the memory isn't
+    /// known (the browser), as no limit follows it there.
+    pub(crate) fn publish(&mut self, live: &Project, undo: &[Step], redo: &[Step]) {
+        if self.memory.is_some() {
+            let held = self.held(live, undo, redo);
+            self.holding.set(held);
+            // Estimates of rows nothing holds any more go, as `trim` does, which runs only when the
+            // history moves: a command that replaces rows without a step would otherwise leave them.
+            self.estimates.retain(|_, (key, _)| key.strong_count() > 0);
+        }
+    }
+
     /// Makes room for an edit that copies `copy` bytes of rows (#2431 fix 3): when what the session
     /// holds, the copies of edits still running in the background and this copy pass the memory
     /// it plans to use ([`rustgis_data::memory::usable`]), history is set aside until they fit:
@@ -153,7 +170,7 @@ impl Budget {
     /// background makes, until it lands (and the project holds it) or is abandoned.
     pub(crate) fn reserve(&self, bytes: u64) -> Reservation {
         self.in_flight.fetch_add(bytes, Ordering::Relaxed);
-        Reservation { in_flight: Arc::clone(&self.in_flight), bytes }
+        Reservation { in_flight: Arc::clone(&self.in_flight), bytes, _held: rustgis_data::memory::Holding::of(bytes) }
     }
 
     /// The estimated size of `features`' rows: what the first write to them copies while a
@@ -209,6 +226,8 @@ pub(crate) fn free_on_copy(slot: &AsideSlot) -> Box<dyn FnOnce()> {
 pub struct Reservation {
     in_flight: Arc<AtomicU64>,
     bytes: u64,
+    // Counted in what the process holds too, for the limits (#2431), until dropped.
+    _held: rustgis_data::memory::Holding,
 }
 
 impl Drop for Reservation {
@@ -729,6 +748,27 @@ mod tests {
         assert!(err.contains("nothing selected"), "{err}");
         assert_eq!(session.undo_depth(), 2, "Move that changes nothing keeps the history");
         assert!(!session.notices_since(mark).iter().any(|n| n.text.contains("make room")));
+    }
+
+    /// After each command a session says what it holds to the process-wide figure the memory
+    /// limits plan with, and takes it back when dropped; a background copy counts until it is
+    /// dropped; where the memory isn't known nothing is measured (#2431).
+    #[test]
+    fn a_session_says_what_it_holds_for_the_limits() {
+        let mut session = session(4096);
+        session.undo_memory.memory = Some(1 << 40);
+        edit(&mut session, "b");
+        let held = session.undo_memory.held(&session.project, &session.undo, &session.redo);
+        assert!(held > 4096, "{held}");
+        assert_eq!(session.undo_memory.holding.bytes(), held);
+        let copy = session.undo_memory.reserve(1 << 20);
+        assert_eq!(copy._held.bytes(), 1 << 20, "a copy being made is counted");
+        drop(copy);
+        // Unknown memory: what was said stays as it was, and nothing is measured.
+        let mut unknown = self::session(4096);
+        unknown.undo_memory.memory = None;
+        edit(&mut unknown, "c");
+        assert_eq!(unknown.undo_memory.holding.bytes(), 0);
     }
 
     #[test]

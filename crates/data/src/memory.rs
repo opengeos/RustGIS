@@ -3,8 +3,11 @@
 //! On the desktop a memory limit plans for a share of the physical memory ([`SHARE`]): never below
 //! the fixed value it had before (its floor, still the browser's limit), never above a ceiling. A
 //! container's memory limit counts, when it is lower. The memory is read once, at the first limit
-//! asked for, so a session keeps the same limits; [`scaled`] takes it as an argument, so tests pass
-//! fixed amounts.
+//! asked for; [`scaled`] takes it as an argument, so tests pass fixed amounts. Most limits plan for
+//! what is left once the process holds more than half the memory ([`planned`], #2431 fix 3), so
+//! they can be lower later in a session, never below their floors.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A limit plans for a quarter of the physical memory: room for the layers already held, the
 /// drawing, and a second job running at the same time.
@@ -105,9 +108,76 @@ pub fn usable(memory: Option<u64>) -> Option<u64> {
 /// A limit of units costing `bytes` each: as many as [`SHARE`] of `memory` holds, within `floor`
 /// and `ceiling`; `floor` when the memory isn't known.
 pub fn scaled(memory: Option<u64>, floor: usize, ceiling: usize, bytes: u64) -> usize {
-    let Some(memory) = memory else { return floor };
-    let n = memory / SHARE / bytes.max(1);
-    usize::try_from(n).unwrap_or(usize::MAX).clamp(floor, ceiling.max(floor))
+    within(memory.map(|m| m / SHARE), floor, ceiling, bytes)
+}
+
+/// A limit of units costing `bytes` each that plans for what is left (#2431 fix 3): as many as
+/// [`share`] holds with what the process holds now ([`held`]) taken off, within `floor` and
+/// `ceiling`; `floor` when the memory isn't known. So a limit asked for again later can be lower,
+/// never below its floor.
+pub fn planned(floor: usize, ceiling: usize, bytes: u64) -> usize {
+    within(share(physical(), held()), floor, ceiling, bytes)
+}
+
+/// The memory a job plans for on a computer with `memory` bytes (`None`: not known) while `held`
+/// bytes are held: [`SHARE`] of it, or what is left of [`usable`] after what is held when that
+/// is less. Up to half the memory held, it is the share.
+pub fn share(memory: Option<u64>, held: u64) -> Option<u64> {
+    let memory = memory?;
+    Some((memory / SHARE).min(usable(Some(memory)).unwrap_or(0).saturating_sub(held)))
+}
+
+/// As many units of `bytes` as `share` holds, within `floor` and `ceiling`.
+fn within(share: Option<u64>, floor: usize, ceiling: usize, bytes: u64) -> usize {
+    let Some(share) = share else { return floor };
+    usize::try_from(share / bytes.max(1)).unwrap_or(usize::MAX).clamp(floor, ceiling.max(floor))
+}
+
+/// What the process holds (#2431 fix 3): the sum of every [`Holding`]'s bytes, set by each
+/// session for its layers, tables, rasters and Undo history, and for copies still being made.
+static HELD: AtomicU64 = AtomicU64::new(0);
+
+/// The memory the process holds now: what every live [`Holding`] says.
+pub fn held() -> u64 {
+    HELD.load(Ordering::Relaxed)
+}
+
+/// One holder's part of [`held`]: what it sets is counted until it sets another amount or is
+/// dropped.
+#[derive(Debug, Default)]
+pub struct Holding {
+    bytes: u64,
+}
+
+impl Holding {
+    /// A part of [`held`] counting `bytes` until dropped.
+    pub fn of(bytes: u64) -> Self {
+        let mut holding = Self::default();
+        holding.set(bytes);
+        holding
+    }
+
+    /// Counts `bytes` in place of what this holding counted before.
+    pub fn set(&mut self, bytes: u64) {
+        let was = std::mem::replace(&mut self.bytes, bytes);
+        if bytes >= was {
+            HELD.fetch_add(bytes - was, Ordering::Relaxed);
+        } else {
+            HELD.fetch_sub(was - bytes, Ordering::Relaxed);
+        }
+    }
+
+    /// What this holding counts.
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        // Only what `set` added is taken away, so the sum never goes below zero.
+        HELD.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +195,37 @@ mod tests {
         assert_eq!(scaled(None, 100, 1_000, 8), 100, "unknown memory: the floor");
         assert_eq!(scaled(Some(u64::MAX), 100, usize::MAX, 0) as u64, u64::MAX / SHARE, "no overflow or division by zero");
         assert_eq!(scaled(Some(16 * GIB), 100, 50, 8), 100, "a ceiling below the floor is the floor");
+    }
+
+    #[test]
+    fn a_job_plans_for_what_is_left_of_the_memory_once_half_is_held() {
+        assert_eq!(share(Some(16 * GIB), 0), Some(4 * GIB), "nothing held: the share");
+        assert_eq!(share(Some(16 * GIB), 8 * GIB), Some(4 * GIB), "half held: still the share");
+        assert_eq!(share(Some(16 * GIB), 10 * GIB), Some(2 * GIB), "what is left of three quarters");
+        assert_eq!(share(Some(16 * GIB), 20 * GIB), Some(0), "more held than planned for: nothing");
+        assert_eq!(share(None, 10 * GIB), None, "memory not known");
+        // The limits keep their floors and ceilings.
+        assert_eq!(within(share(Some(16 * GIB), 10 * GIB), 100, 1 << 40, 8), 256 << 20);
+        assert_eq!(within(share(Some(16 * GIB), 12 * GIB), 100, 1 << 40, 8), 100, "never below the floor");
+        assert_eq!(within(share(None, 12 * GIB), 100, 1 << 40, 8), 100);
+        assert_eq!(within(share(Some(1024 * GIB), 0), 100, 1_000, 8), 1_000);
+    }
+
+    #[test]
+    fn holdings_add_up_and_take_their_part_back() {
+        // Only sessions (in the engine) hold, so nothing else here changes the sum; small amounts,
+        // so the limits other tests read at the same time don't move.
+        let base = held();
+        let first = Holding::of(3);
+        let mut second = Holding::of(5);
+        assert_eq!(held(), base + 8);
+        second.set(1);
+        assert_eq!(held(), base + 4);
+        drop(first);
+        assert_eq!(held(), base + 1);
+        assert_eq!(second.bytes(), 1);
+        drop(second);
+        assert_eq!(held(), base);
     }
 
     #[test]

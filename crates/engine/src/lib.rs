@@ -1747,6 +1747,8 @@ impl Session {
             if res.is_ok() && !history_deferred && self.history_position() != history_before {
                 self.trim_undo_memory();
             }
+            // What the session holds now, for the limits that plan for what is left (#2431).
+            self.undo_memory.publish(&self.project, &self.undo, &self.redo);
             // And the coordinate systems that needed a missing datum grid, after every command.
             self.say_grid_notes();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they

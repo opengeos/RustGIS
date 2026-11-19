@@ -1558,6 +1558,18 @@ starting RustGIS: it replaces the memory read from the computer and any containe
 command line says so on every run. It isn't a way to go faster: a value above the computer's
 memory raises every limit past what it has, and a large job can then run out of memory.
 
+Once RustGIS holds more than half the memory, the limits below other than `threadScratchBytes`,
+`undoBytes` and `projectBytes` plan for less: for what is
+left of three quarters of the memory after what it holds, never below their floors. On a 16 GB
+computer holding 10 GiB, they plan for 2 GiB instead of 4 GiB. What is held counts the open layers,
+tables and rasters, what only Undo and Redo keep and the copies of edits running in the background,
+in every project open in the process, as of the last command; `limits.heldBytes` gives it. A file
+refused for its size then says what is held, and the limit with nothing held. Removing layers or
+tables you no longer need raises the limits once Undo no longer keeps them: saving and reopening the
+project lets go of the Undo history. Reading a file again, or opening another project while a large
+one is open, plans against the lowered limits too, so a file that opened earlier in the session can
+be refused later; never below the floors.
+
 | Limit | Floor (web app value in brackets) | Desktop: a quarter of memory at | Ceiling |
 |---|---|---|---|
 | `rasterSamples`: samples a raster read holds (cells times bands) | 120 million (32 million in the web app) | 8 bytes a sample | 1 billion |
