@@ -117,12 +117,12 @@ in other languages and scripts: Chinese (`經度`/`緯度`, `座標經度`/`座�
 Arabic, Persian, Hebrew, Russian, Ukrainian, Greek, German (`Längengrad`/`Breitengrad`), Dutch,
 Spanish (`longitud`/`latitud`), Italian, the Nordic languages, Polish, Czech, Hungarian, Turkish
 and others, in any case. A note in brackets after a name (`經度(X)`, `Longitude (WGS84)`,
-`lat [deg]`) is set aside; a name as written comes before one with a note. A word that is also an
-object's length or width (German `Länge` and `Breite`) isn't taken as a coordinate; Spanish
-`longitud`, which is also a length, is taken only beside `latitud`. English names come first when
-a file has both, and export writes English names. Names are matched as their characters are
-written, so a name saved with its accents as separate marks (Vietnamese on some Macs) isn't
-recognised: choose its columns. The dialog checks the first 1,000 rows
+`lat [deg]`) is set aside; a name as written comes before one with a note, in English and in
+other languages. A word that is also an object's length or width (German `Länge` and `Breite`)
+isn't taken as a coordinate, nor named in the notice; Spanish `longitud`, which is also a length,
+is taken only as written and beside `latitud`. English names come first when a file has both,
+and export writes English names. A name whose accents a file saved as separate marks (as some
+Macs save Vietnamese) reads as one typed with them. The dialog checks the first 1,000 rows
 of delimited text, or every row of a spreadsheet, to pick defaults. It recomputes unchanged defaults when you
 leave the coordinate-system box or press Enter; columns you picked stay picked. With a projected
 coordinate system, defaults prefer X/Y or easting/northing columns when the file also has

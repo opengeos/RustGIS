@@ -1969,11 +1969,11 @@ fn found_planar_xy(headers: &[String]) -> Option<(usize, usize)> {
     find(X_NAMES, "x").zip(find(Y_NAMES, "y"))
 }
 
-/// A header as longitude and latitude names are looked up: trimmed and lower-cased (in any
-/// script), with a note in brackets at its end set aside (`經度(X)`, `Longitude (WGS84)`,
-/// `緯度（度）`, `lat [deg]`).
+/// A header as longitude and latitude names are looked up ([`folded`]), with a note in brackets
+/// at its end set aside (`經度(X)`, `Longitude (WGS84)`, `緯度（度）`, `lat [deg]`).
 fn geographic_key(header: &str) -> String {
-    let mut name = header.trim();
+    let folded = folded(header);
+    let mut name = folded.as_str();
     for (open, close) in [('(', ')'), ('（', '）'), ('[', ']')] {
         if let Some(rest) = name.strip_suffix(close)
             && let Some(at) = rest.rfind(open)
@@ -1984,47 +1984,70 @@ fn geographic_key(header: &str) -> String {
             break;
         }
     }
-    name.to_lowercase()
+    name.to_string()
+}
+
+/// A header as it is compared with longitude and latitude names: trimmed, in Unicode's composed
+/// form (a name whose accents a file saved as separate marks, as some Macs save Vietnamese, reads
+/// as one typed with them), lower-cased in any script.
+fn folded(header: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    header.trim().nfc().collect::<String>().to_lowercase()
+}
+
+/// Whether a header is, as written, a longitude word that also means length ([`AMBIGUOUS_LON`]).
+fn ambiguous_lon(header: &str) -> bool {
+    let name = folded(header);
+    AMBIGUOUS_LON.iter().any(|(word, _)| *word == name)
 }
 
 /// How well a header names longitude (`lat`: latitude), best first: an English name as written
 /// (0), a published misspelling as written (1), either with a note in brackets set aside (2, 3),
-/// then a name in another language (4, its words joined by `_` too). `None`: not a name of it.
-/// So `Longitude` wins over `Longitude (DMS)` wherever they stand.
+/// a name in another language as written (4), then one with a note set aside (5); its words may
+/// be joined by `_`. `None`: not a name of it. So `Longitude` wins over `Longitude (DMS)`, and
+/// `經度` over `經度(DMS)`, wherever they stand.
 fn geographic_tier(header: &str, lat: bool) -> Option<usize> {
-    let exact = header.trim().to_lowercase();
+    let exact = folded(header);
     let key = geographic_key(header);
     let (names, aliases, world) = if lat { (LAT_NAMES, LAT_ALIASES, LAT_WORLD) } else { (LON_NAMES, LON_ALIASES, LON_WORLD) };
     let in_world = |k: &str| world.contains(&k) || world.contains(&k.replace('_', " ").as_str());
+    // A word that also means length counts only as written ([`AMBIGUOUS_LON`]).
+    let ambiguous = AMBIGUOUS_LON.iter().any(|(w, _)| *w == key);
     let hits = [
         names.contains(&exact.as_str()),
         aliases.contains(&exact.as_str()),
         names.contains(&key.as_str()),
         aliases.contains(&key.as_str()),
+        in_world(&exact),
+        !ambiguous && in_world(&key),
     ];
-    hits.iter().position(|hit| *hit).or_else(|| {
-        // A word that also means length counts only as written ([`AMBIGUOUS_LON`]).
-        let ambiguous = AMBIGUOUS_LON.iter().any(|(w, _)| *w == key);
-        (in_world(&exact) || (!ambiguous && in_world(&key))).then_some(4)
-    })
+    hits.iter().position(|hit| *hit)
 }
+
+/// The number of [`geographic_tier`]s.
+const GEOGRAPHIC_TIERS: usize = 6;
 
 /// A complete longitude/latitude pair: for each, the first column of the best tier of names
 /// that has one ([`geographic_tier`]). A longitude that also means length ([`AMBIGUOUS_LON`])
-/// pairs only with its own language's latitude.
+/// is taken only when there is no other, beside its own language's latitude (with or without a
+/// note), whatever other latitude the file has.
 fn found_geographic_xy(headers: &[String]) -> Option<(usize, usize)> {
-    let name = |i: usize| headers.get(i).map(|h| h.trim().to_lowercase()).unwrap_or_default();
-    let best = |lat: bool, keep: &dyn Fn(usize) -> bool| {
+    let best = |lat: bool, keep: &dyn Fn(&str) -> bool| {
         let tiers: Vec<Option<usize>> = headers.iter().map(|h| geographic_tier(h, lat)).collect();
-        (0..5).find_map(|tier| (0..tiers.len()).find(|&i| tiers.get(i) == Some(&Some(tier)) && keep(i)))
+        (0..GEOGRAPHIC_TIERS)
+            .find_map(|tier| (0..tiers.len()).find(|&i| tiers.get(i) == Some(&Some(tier)) && headers.get(i).is_some_and(|h| keep(h))))
     };
-    let lat = best(true, &|_| true)?;
-    let lat_name = name(lat);
-    let lon = best(false, &|i| {
-        let lon_name = name(i);
-        AMBIGUOUS_LON.iter().all(|(word, partner)| *word != lon_name || *partner == lat_name)
-    })?;
-    Some((lon, lat))
+    let lat = best(true, &|_| true);
+    if let (Some(lon), Some(lat)) = (best(false, &|h| !ambiguous_lon(h)), lat) {
+        return Some((lon, lat));
+    }
+    AMBIGUOUS_LON.iter().find_map(|(word, partner)| {
+        let lon = headers.iter().position(|h| folded(h) == *word)?;
+        // Its latitude as written first, then one with a note.
+        let lat =
+            headers.iter().position(|h| folded(h) == *partner).or_else(|| headers.iter().position(|h| geographic_key(h) == *partner))?;
+        Some((lon, lat))
+    })
 }
 
 /// Names candidate columns when both axes are present without a matching pair.
@@ -2034,7 +2057,8 @@ fn unmatched_coordinates_note(headers: &[String]) -> Option<String> {
     let mut has_y = false;
     for header in headers.iter().map(|h| h.trim()) {
         let name = header.to_ascii_lowercase();
-        let x = name == "x" || X_NAMES.contains(&name.as_str()) || geographic_tier(header, false).is_some();
+        // (A word that also means length isn't named on its own.)
+        let x = name == "x" || X_NAMES.contains(&name.as_str()) || (geographic_tier(header, false).is_some() && !ambiguous_lon(header));
         let y = name == "y" || Y_NAMES.contains(&name.as_str()) || geographic_tier(header, true).is_some();
         if x || y {
             candidates.push(header);
@@ -6057,11 +6081,33 @@ mod tests {
         let text = "經度,緯度,longitude,latitude\n1,2,120.21,22.99\n";
         let (ds, _) = read_csv(text, "both").unwrap();
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(120.21, 22.99))));
-        // Spanish `longitud` (also length) only beside `latitud`, and only as written.
+        // Spanish `longitud` (also length) only beside `latitud`, and only as written; on its
+        // own it isn't named in a notice either.
         for text in ["Tramo,Lat,Longitud\nA,22.99,3\n", "Tramo,Latitud,Longitud (km)\nA,22.99,3\n"] {
-            let (ds, _) = read_csv(text, "tramos").unwrap();
+            let (ds, report) = read_csv(text, "tramos").unwrap();
             assert_eq!(ds.geometry_type, GeometryType::None, "{text}");
+            assert!(report.messages.is_empty(), "{text}: {:?}", report.messages);
         }
+        // Beside `latitud` (with a note, or with another latitude before it), it pairs with it.
+        for text in [
+            "Longitud,Latitud (WGS84)\n121.5,25\n",
+            "Lat,Longitud,Latitud\n1,121.5,25\n",
+            "Longitud,Latitud (DMS),Latitud\n121.5,\"25°N\",25\n",
+        ] {
+            let (ds, report) = read_csv(text, "pares").unwrap();
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(121.5, 25.0))), "{text}");
+            assert!(report.messages.is_empty(), "{text}: {:?}", report.messages);
+        }
+        // Another language's name as written wins over one with a note, as English names do.
+        let text = "經度(DMS),緯度(DMS),經度,緯度\n\"E121°30'\",\"N25°\",121.5,25.0\n";
+        let columns = csv_columns(text, None, None).unwrap();
+        assert_eq!((columns.x.as_deref(), columns.y.as_deref()), (Some("經度"), Some("緯度")));
+        // A name saved with its accents as separate marks (NFD) reads as one typed with them.
+        use unicode_normalization::UnicodeNormalization;
+        let (x, y): (String, String) = ("Kinh độ".nfd().collect(), "Vĩ độ".nfd().collect());
+        assert_ne!(x, "Kinh độ");
+        let (ds, _) = read_csv(&format!("{x},{y}\n105.8,21.0\n"), "hanoi").unwrap();
+        assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(105.8, 21.0))));
         // A name as written wins over one with a note set aside, wherever it stands: decimal
         // degrees, not the DMS text before them.
         let text = "Longitude (DMS),Latitude (DMS),Longitude,Latitude\n\"121°30'E\",\"25°N\",121.5,25.0\n";
