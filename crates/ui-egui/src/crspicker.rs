@@ -35,6 +35,17 @@ struct Row {
     section: Section,
 }
 
+/// What a box offers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Offer {
+    /// Every system: a layer's data may be in degrees.
+    All,
+    /// Projected systems only (a measured graticule, an analysis's cells).
+    Projected,
+    /// What a map can be drawn in: projected systems and the map's own projections.
+    Map,
+}
+
 /// The parts of the list, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Section {
@@ -45,16 +56,21 @@ enum Section {
 }
 
 /// The rows for `text`: the recently used systems that match it (all of them for no text), for a
-/// map its own projections whose names match, then the catalog's. `map` keeps the projected
-/// systems only, a map being drawn in one.
-fn rows(text: &str, recent: &[String], map: bool) -> Vec<Row> {
+/// map its own projections whose names match, then the catalog's, as `offer` allows.
+fn rows(text: &str, recent: &[String], offer: Offer) -> Vec<Row> {
+    let map = offer == Offer::Map;
     let text = text.trim();
     let words: Vec<String> = text.to_lowercase().split_whitespace().map(str::to_string).collect();
     let matches = |hay: &str, digits: &str| words.iter().all(|w| hay.contains(w.as_str()) || digits.starts_with(w.as_str()));
     let mut out: Vec<Row> = Vec::new();
     for code in recent {
         let name = crs_search::name_of(code).unwrap_or_default().to_string();
-        if map && rustgis_engine::map::Projection::from_code(code).is_err() {
+        let usable = match offer {
+            Offer::All => true,
+            Offer::Projected => crs_search::lookup(code).is_some_and(|f| f.kind == Kind::Projected),
+            Offer::Map => rustgis_engine::map::Projection::from_code(code).is_ok(),
+        };
+        if !usable {
             continue;
         }
         let hay = format!("{} {}", code.to_lowercase(), name.to_lowercase());
@@ -73,8 +89,9 @@ fn rows(text: &str, recent: &[String], map: bool) -> Vec<Row> {
             }
         }
     }
-    for Found { code, name, kind, area, method } in crs_search::search(text, map, LIMIT) {
-        if map && kind != Kind::Projected {
+    let projected = offer != Offer::All;
+    for Found { code, name, kind, area, method } in crs_search::search(text, projected, LIMIT) {
+        if projected && kind != Kind::Projected {
             continue;
         }
         if !out.iter().any(|r| r.code.eq_ignore_ascii_case(&code)) {
@@ -96,7 +113,7 @@ pub(crate) fn crs_box(
     salt: &str,
     text: &mut String,
     recent: &[String],
-    map: bool,
+    offer: Offer,
     width: f32,
     hint: &str,
     t: &Tokens,
@@ -118,7 +135,7 @@ pub(crate) fn crs_box(
     if r.changed() {
         state.at = 0;
     }
-    let rows = if state.open { rows(text, recent, map) } else { Vec::new() };
+    let rows = if state.open { rows(text, recent, offer) } else { Vec::new() };
     let mut taken = None;
     // Enter ends a single-line edit, so the box has just lost its focus when Enter takes a row.
     if state.open && (r.has_focus() || r.lost_focus()) {
@@ -136,12 +153,19 @@ pub(crate) fn crs_box(
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape));
         }
         if enter && let Some(row) = rows.get(state.at) {
+            // A code typed in full is taken and Enter goes on to the dialog, which submits.
+            if !row.code.eq_ignore_ascii_case(text.trim()) {
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            }
             taken = Some(row.code.clone());
-            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
         }
     }
+    // In a menu the list is drawn in it, under the box: a menu closes on a press in any other
+    // layer, a popup's too. It stays open there until taken or Escape, since closing on a press
+    // would move what is under it before the click ends (a menu closes on a click elsewhere anyway).
+    let inline = egui::containers::menu::is_in_menu(ui);
     // Enter ends a single-line edit, which loses focus: that is the take, not a close.
-    if state.open && r.lost_focus() && taken.is_none() && !ui.input(|i| i.key_pressed(Key::Enter)) {
+    if state.open && !inline && r.lost_focus() && taken.is_none() && !ui.input(|i| i.key_pressed(Key::Enter)) {
         // A click on the list loses the box's focus first: the list closes on a click elsewhere.
         let on_list = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| state.drawn.is_some_and(|d| d.contains(p)));
         if !on_list {
@@ -149,6 +173,7 @@ pub(crate) fn crs_box(
         }
     }
     if state.open
+        && !inline
         && ui.input(|i| i.pointer.any_pressed())
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
         && !r.rect.contains(p)
@@ -157,7 +182,17 @@ pub(crate) fn crs_box(
         state.open = false;
     }
     state.at = state.at.min(rows.len().saturating_sub(1));
-    if state.open && (!rows.is_empty() || !text.trim().is_empty()) {
+    let showing = state.open && (!rows.is_empty() || !text.trim().is_empty());
+    if showing && inline {
+        let shown = egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(width.max(300.0));
+            list(ui, &rows, &mut state.at, t)
+        });
+        state.drawn = Some(shown.response.rect);
+        if let Some(i) = shown.inner {
+            taken = rows.get(i).map(|row| row.code.clone());
+        }
+    } else if showing {
         let shown = egui::Popup::from_response(&r)
             .id(id.with("list"))
             .open(true)
@@ -278,21 +313,23 @@ mod tests {
     #[test]
     fn recently_used_systems_come_first_and_only_once() {
         let recent = vec!["EPSG:2056".to_string(), "EPSG:4326".to_string()];
-        let found = rows("lv95", &recent, false);
+        let found = rows("lv95", &recent, Offer::All);
         assert_eq!(found[0].code, "EPSG:2056");
         assert_eq!(found[0].section, Section::Recent);
         assert_eq!(found.iter().filter(|r| r.code == "EPSG:2056").count(), 1);
         // No text: the recent ones alone.
-        let all = rows("", &recent, false);
+        let all = rows("", &recent, Offer::All);
         assert_eq!(all.iter().map(|r| r.code.as_str()).collect::<Vec<_>>(), ["EPSG:2056", "EPSG:4326"]);
         assert_eq!(all[1].name, "WGS 84");
         // A map can't be drawn in degrees.
-        assert!(!rows("", &recent, true).iter().any(|r| r.code == "EPSG:4326"));
+        assert!(!rows("", &recent, Offer::Map).iter().any(|r| r.code == "EPSG:4326"));
+        assert_eq!(rows("", &recent, Offer::Projected).iter().map(|r| r.code.as_str()).collect::<Vec<_>>(), ["EPSG:2056"]);
+        assert!(!rows("robinson", &[], Offer::Projected).iter().any(|r| r.section == Section::Map), "a preset isn't a system");
         // A map's own projections are found by name, before the catalog's systems.
-        let robinson = rows("robinson", &[], true);
+        let robinson = rows("robinson", &[], Offer::Map);
         assert_eq!((robinson[0].code.as_str(), robinson[0].section), ("robinson", Section::Map));
         assert!(robinson.iter().any(|r| r.code == "ESRI:54030"));
-        assert!(!rows("robinson", &[], false).iter().any(|r| r.section == Section::Map), "data is never in a preset");
+        assert!(!rows("robinson", &[], Offer::All).iter().any(|r| r.section == Section::Map), "data is never in a preset");
     }
 
     #[test]

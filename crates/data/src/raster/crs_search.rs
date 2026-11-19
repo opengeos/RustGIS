@@ -37,6 +37,10 @@ struct Entry {
     key: String,
     /// The name in lower case.
     search: String,
+    /// The name's words in lower case: `ch1903`, `lv95` for `CH1903+ / LV95`.
+    tokens: Vec<String>,
+    /// Those words with a space between and around each: ` ch1903 lv95 `.
+    phrase: String,
     /// The area of use's name in lower case.
     area: String,
     /// The places the area of use names first, in lower case: `liechtenstein`, `switzerland` for
@@ -67,6 +71,8 @@ fn entries() -> &'static [Entry] {
                     digits: e.code.to_string(),
                     key: code.to_ascii_lowercase(),
                     search: e.name.to_lowercase(),
+                    tokens: words_of(&e.name.to_lowercase()),
+                    phrase: format!(" {} ", words_of(&e.name.to_lowercase()).join(" ")),
                     area: e.area_name.as_deref().unwrap_or_default().to_lowercase(),
                     places: places(e.area_name.as_deref().unwrap_or_default()),
                     method: e.projection_method.as_deref().unwrap_or_default().to_lowercase(),
@@ -78,6 +84,11 @@ fn entries() -> &'static [Entry] {
     })
 }
 
+/// The words of `text`, without the marks between them: `ch1903`, `lv95` for `ch1903+ / lv95`.
+fn words_of(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
 /// The places an area of use's name lists first: each `;`-separated part up to its first ` - `.
 fn places(area: &str) -> Vec<String> {
     area.split(';')
@@ -87,24 +98,34 @@ fn places(area: &str) -> Vec<String> {
         .collect()
 }
 
-/// How well `e` matches the query, lower first; `None` when it doesn't. Every word must be in the
-/// name, the projection's method or the area of use's name, begin the code or `authority:code`, or
-/// be the authority.
-fn rank(e: &Entry, words: &[String], whole: &str) -> Option<u8> {
+/// How well `e` matches the query, lower first, and how many words were found only inside a word
+/// of the name (`93` in `ISN93`, not beginning `Lambert-93`'s); `None` when it doesn't match. Every
+/// word must be in the name, the projection's method or the area of use's name, begin the code or
+/// `authority:code`, or be the authority.
+fn rank(e: &Entry, words: &[String], whole: &str) -> Option<(u8, usize)> {
     let mut code_word = false;
     let mut beside_name = false;
+    let mut inside = 0;
     for w in words {
         let in_code = e.digits.starts_with(w.as_str()) || e.key.starts_with(w.as_str());
         let in_name = in_code || e.search.contains(w.as_str()) || w.eq_ignore_ascii_case(e.authority);
         if !in_name && !e.method.contains(w.as_str()) && !e.area.contains(w.as_str()) {
             return None;
         }
+        // A word's own words (`ch1903+` is `ch1903`) each begin one of the name's.
+        let starts_a_word =
+            w.split(|c: char| !c.is_alphanumeric()).filter(|p| !p.is_empty()).all(|p| e.tokens.iter().any(|t| t.starts_with(p)));
+        // Among words, a number beginning only the code (`32` of 32601 in `utm 32`) is inside too.
+        if in_name && !starts_a_word && (words.len() > 1 || !in_code) {
+            inside += 1;
+        }
         code_word |= in_code;
         beside_name |= !in_name;
     }
-    Some(if whole == e.digits || whole == e.key {
+    let r = if whole == e.digits || whole == e.key {
         0
-    } else if code_word {
+    } else if code_word && words.len() == 1 {
+        // A code begun (`205`); a number among words (`lambert 93`) is a word of the name.
         1
     } else if e.places.iter().any(|p| p == whole) {
         // A country typed: the systems for that country before those naming it otherwise.
@@ -115,13 +136,20 @@ fn rank(e: &Entry, words: &[String], whole: &str) -> Option<u8> {
         3
     } else {
         4
-    })
+    };
+    Some((r, inside))
+}
+
+/// Whether `e` is on WGS 84 or ETRS89, the datums most data comes in today.
+fn current_datum(e: &Entry) -> bool {
+    ["wgs 84", "etrs89"].iter().any(|d| e.search.strip_prefix(d).is_some_and(|rest| rest.is_empty() || rest.starts_with(" /")))
 }
 
 /// The coordinate systems matching `text` (words of the name, the projection's method or the area
 /// of use, a code or `EPSG:code`, in any case), best first: the code typed, codes beginning with it,
-/// names beginning with the text, other names, then systems matched by their method or area of use; EPSG before ESRI,
-/// and by code. At most `limit`, and only projected ones when
+/// names beginning with the text, other names, then systems matched by their method or area of use;
+/// within each, names with every word beginning one of theirs first, then those with the words in
+/// a row, WGS 84 and ETRS89, EPSG before ESRI, shorter names, and by code. At most `limit`, and only projected ones when
 /// `projected_only` (a map is drawn in one). Nothing for blank text.
 pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
     let lower = text.trim().to_lowercase();
@@ -131,20 +159,40 @@ pub fn search(text: &str, projected_only: bool, limit: usize) -> Vec<Found> {
     if words.is_empty() {
         return Vec::new();
     }
-    let mut hits: Vec<(u8, &Entry)> = entries()
+    let mut hits: Vec<((u8, usize), &Entry)> = entries()
         .iter()
         .filter(|e| !projected_only || e.found.kind == Kind::Projected)
         .filter_map(|e| rank(e, &words, &whole).map(|r| (r, e)))
         .collect();
-    hits.sort_by_key(|(r, e)| (*r, e.authority != "EPSG", e.number));
+    // Among equal name matches, the systems on today's global datums first (`utm 32n wgs` is WGS
+    // 84's zone before WGS 72's), and the plain system before its variants (`ETRS89 / UTM zone 32N`
+    // before `… (N-E)`); codes typed stay in code order.
+    // The words typed in a row in the name (`lambert 93` in `… / Lambert-93`) before apart.
+    let typed = format!(" {} ", words_of(&whole).join(" "));
+    hits.sort_by_key(|((r, inside), e)| {
+        (
+            *r,
+            *inside,
+            !e.phrase.contains(&typed),
+            !current_datum(e),
+            e.authority != "EPSG",
+            if *r >= 2 { e.search.len() } else { 0 },
+            e.number,
+        )
+    });
     hits.into_iter().take(limit).map(|(_, e)| e.found.clone()).collect()
+}
+
+/// The catalog's entry for `code` (`EPSG:2056`, `esri:102033`, `2056`), if it lists it.
+pub fn lookup(code: &str) -> Option<&'static Found> {
+    let lower = code.trim().to_ascii_lowercase().replace(' ', "");
+    let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
+    entries().iter().find(|e| e.key == key).map(|e| &e.found)
 }
 
 /// The catalog's name of `code` (`EPSG:2056`, `esri:102033`, `2056`), if it lists it.
 pub fn name_of(code: &str) -> Option<&'static str> {
-    let lower = code.trim().to_ascii_lowercase().replace(' ', "");
-    let key = if lower.bytes().all(|b| b.is_ascii_digit()) { format!("epsg:{lower}") } else { lower };
-    entries().iter().find(|e| e.key == key).map(|e| e.found.name.as_str())
+    lookup(code).map(|f| f.name.as_str())
 }
 
 #[cfg(test)]
@@ -184,6 +232,13 @@ mod tests {
         assert!(oblique.iter().any(|f| f.code == "EPSG:2056"), "{oblique:?}");
         assert!(search("lambert azimuthal", true, 500).iter().any(|f| f.code == "EPSG:3035"));
         assert_eq!(search("utm", false, 7).len(), 7, "the limit holds");
+        // WGS 84's zone before WGS 72's (32232), ETRS89's before ED50's (23032).
+        assert_eq!(search("utm 32n wgs", true, 5)[0].code, "EPSG:32632");
+        assert_eq!(search("utm 32n", true, 5)[0].code, "EPSG:25832");
+        // A number among words is a word of the name, best where it begins one: Lambert-93, not
+        // EPSG:9311 or ISN93.
+        assert_eq!(search("lambert 93", true, 5)[0].code, "EPSG:2154");
+        assert_eq!(search("utm 32", true, 5)[0].code, "EPSG:25832");
     }
 
     #[test]
@@ -192,5 +247,6 @@ mod tests {
         assert_eq!(name_of("2056"), Some("CH1903+ / LV95"));
         assert_eq!(name_of("epsg:4326"), Some("WGS 84"));
         assert_eq!(name_of("vn2000tm3"), None);
+        assert_eq!(lookup("4326").map(|f| f.kind), Some(Kind::Geographic));
     }
 }

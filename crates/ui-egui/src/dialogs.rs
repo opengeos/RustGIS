@@ -449,7 +449,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let input_label = ui.label(tl!("Source coordinate system"));
                 let recent = app.ui.recent_crs.clone();
                 let width = ui.available_width();
-                let (response, _) = crate::crspicker::crs_box(ui, "addShapefile", &mut app.dialogs.text, &recent, false, width, "EPSG:2263", &t);
+                let (response, _) = crate::crspicker::crs_box(ui, "addShapefile", &mut app.dialogs.text, &recent, crate::crspicker::Offer::All, width, "EPSG:2263", &t);
                 let response = response.labelled_by(input_label.id);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(tl!("In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP."));
@@ -466,7 +466,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let input_label = ui.label(tl!("Source coordinate system"));
                 let recent = app.ui.recent_crs.clone();
                 let width = ui.available_width();
-                let (label, _) = crate::crspicker::crs_box(ui, "defineProjection", &mut app.dialogs.text, &recent, false, width, "EPSG:2263", &t);
+                let (label, _) = crate::crspicker::crs_box(ui, "defineProjection", &mut app.dialogs.text, &recent, crate::crspicker::Offer::All, width, "EPSG:2263", &t);
                 let label = label.labelled_by(input_label.id);
                 label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(egui::RichText::new(tl!("Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.")).weak());
@@ -939,8 +939,16 @@ fn add_dxf(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     egui::Grid::new("dxf").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let input_label = ui.label(tl!("Coordinate system"));
         let recent = app.ui.recent_crs.clone();
-        let (response, _) =
-            crate::crspicker::crs_box(ui, "dxf", &mut app.dialogs.text, &recent, false, 260.0, "EPSG:3857", &Tokens::get(ui.ctx()));
+        let (response, _) = crate::crspicker::crs_box(
+            ui,
+            "dxf",
+            &mut app.dialogs.text,
+            &recent,
+            crate::crspicker::Offer::All,
+            260.0,
+            "EPSG:3857",
+            &Tokens::get(ui.ctx()),
+        );
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Coordinate system")));
         response.labelled_by(input_label.id);
         ui.end_row();
@@ -1091,8 +1099,16 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         }
         let input_label = ui.label(tl!("Coordinate system"));
         let recent = app.ui.recent_crs.clone();
-        let (response, taken) =
-            crate::crspicker::crs_box(ui, "csv", &mut app.dialogs.text, &recent, false, 240.0, "EPSG:4326", &Tokens::get(ui.ctx()));
+        let (response, taken) = crate::crspicker::crs_box(
+            ui,
+            "csv",
+            &mut app.dialogs.text,
+            &recent,
+            crate::crspicker::Offer::All,
+            240.0,
+            "EPSG:4326",
+            &Tokens::get(ui.ctx()),
+        );
         let response = response.labelled_by(input_label.id);
         app.dialogs.csv_crs_dirty |= response.changed() || taken;
         if (response.lost_focus() || taken) && app.dialogs.csv_crs_dirty {
@@ -2523,8 +2539,16 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             ui.set_width(270.0);
             let input_label = ui.label(tl!("Search by name or code"));
             let recent = app.ui.recent_crs.clone();
-            let (r, taken) =
-                crate::crspicker::crs_box(ui, "map", &mut app.dialogs.a, &recent, true, 262.0, tl!("e.g. 3035, lv95, vn2000tm3"), t);
+            let (r, taken) = crate::crspicker::crs_box(
+                ui,
+                "map",
+                &mut app.dialogs.a,
+                &recent,
+                crate::crspicker::Offer::Map,
+                262.0,
+                tl!("e.g. 3035, lv95, vn2000tm3"),
+                t,
+            );
             let r = r.labelled_by(input_label.id);
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Search by name or code")));
             // Words being typed to search are no system yet: the selection stays until they are one.
