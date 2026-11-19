@@ -621,9 +621,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
   preset or a supported projected EPSG or ESRI code, such as `3010` or `ESRI:102033`, found by
   name or code as in [Finding a coordinate system](maps.md#finding-a-coordinate-system)), and the
   **Extent** it opens on (the full extent, or **Use Current View** to keep the view you are looking
-  at). A project opened at
-  start keeps its own projection and view; the Projection and Extent settings apply to the sample
-  and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample
+  at). A project opened at start keeps its own projection and view; the Projection and Extent
+  settings apply to the sample and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample
   and says why. After a crash it starts with the sample too, in case the project is what crashed, and offers
   back the [recovery copy](#autosave-and-recovery) autosave kept of unsaved work, if any;
   starting `rustgis --sample` also skips the start-up project. The choices are remembered on this

@@ -776,9 +776,10 @@ Lambert-93 before ISN93 / Lambert 1993), then WGS 84 and ETRS89 systems, and a p
 its axis-order variants.
 
 ↑/↓ move through the list, Enter or a click takes a system, and Escape closes the list. In a
-dialog, taking a system fills the box and a second Enter confirms the dialog (a code typed in full,
-such as `2263` or `EPSG:2263`, confirms with the first); in the graticule and start-up menus it
-applies the system at once; in the analysis environment, **Set Coordinate System** applies it.
+dialog, taking a system fills the box, and Apply or OK confirms the dialog; Enter on a code typed in
+full, such as `2263` or `EPSG:2263`, takes it and confirms the dialog at once. In the graticule and
+start-up menus a system taken applies at once; in the analysis environment, **Set Coordinate
+System** applies it.
 
 Enter in an empty box leaves it empty (no system, or the map's own for the measured grid) unless ↑
 or ↓ chose a row. A box for the map, the measured grid or the analysis environment lists projected

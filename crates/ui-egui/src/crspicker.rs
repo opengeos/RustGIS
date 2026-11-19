@@ -407,7 +407,8 @@ pub(crate) fn remember(recent: &mut Vec<String>, code: &str) -> bool {
     true
 }
 
-/// The recently used codes saved as [`RECENT_PREF`], every line kept: a code this catalog doesn't
+/// The recently used codes saved as [`RECENT_PREF`], every distinct line kept (a line repeated in
+/// another case is one system): a code this catalog doesn't
 /// list, and lines past [`RECENT_MAX`] (a newer RustGIS's), are saved again as they were and only
 /// left out of the lists. The catalog isn't read here, at start-up.
 pub(crate) fn from_pref(value: &str) -> Vec<String> {

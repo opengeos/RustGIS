@@ -2561,6 +2561,13 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             // Words being typed to search are no system yet: the selection stays until they are one.
             // A code or a definition (`3035`, `EPSG:3035`, `albers +lat_1=…`) is what was asked for,
             // its error shown and Apply off when it can't be drawn.
+            // Emptied: the map's own system again, not a code typed before and left.
+            if r.changed() && app.dialogs.a.trim().is_empty() && app.dialogs.text != current {
+                let invalid = rustgis_engine::map::Projection::from_code(&app.dialogs.text).is_err();
+                if invalid {
+                    app.dialogs.text = current.clone();
+                }
+            }
             if (r.changed() || taken) && !app.dialogs.a.trim().is_empty() {
                 let typed = typed_crs(&app.dialogs.a);
                 let a = app.dialogs.a.trim();
@@ -2578,6 +2585,7 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
                         .iter()
                         .filter_map(|code| rustgis_engine::data::raster::crs_search::name_of(code).map(|n| (code.clone(), n.to_string())))
                         .filter(|(code, _)| crate::crspicker::map_usable(code))
+                        .take(crate::crspicker::RECENT_MAX)
                         .collect();
                     // Shown while anything is remembered, also systems only the other boxes list (one
                     // in degrees), so they can be forgotten here too.
@@ -2718,7 +2726,10 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
 pub(crate) fn typed_crs(text: &str) -> String {
     let text = text.trim();
     if text.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("EPSG:{text}")
+        // A number EPSG lacks and ESRI lists (`102033`) is ESRI's, as the boxes' lists find it.
+        let esri = text.bytes().all(|b| b.is_ascii_digit())
+            && rustgis_engine::data::raster::crs_search::lookup(text).is_some_and(|f| f.code.starts_with("ESRI:"));
+        if esri { format!("ESRI:{text}") } else { format!("EPSG:{text}") }
     } else if let Some(lon) = rustgis_engine::map::projection::resolve_vn2000_alias(text) {
         format!("vn2000tm3 +lon_0={lon}")
     } else {
