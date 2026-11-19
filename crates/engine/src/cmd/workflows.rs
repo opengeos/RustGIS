@@ -36,7 +36,9 @@ pub fn commands() -> Vec<C> {
         C::new("model.validate", "Validate Model", "Analyze › Geoprocessing", |s, p| {
             let (_, g, _) = model_graph(s, p)?;
             note_passed_graph(s, p);
-            let problems = crate::model::validate(s, &g);
+            let mut problems = crate::model::validate(s, &g);
+            // A key a step's tool doesn't read: listed, so a typo is caught before the run.
+            problems.extend(crate::model::unknown_params(&g));
             Ok(json!({"ok": problems.is_empty(), "problems": problems}))
         }).roles(&[crate::ParamRole { key: "graph", role: crate::Role::ModelGraph }]).effects(crate::policy::Effects::NONE)
         .view()
@@ -1054,6 +1056,9 @@ fn run_steps(s: &mut Session, model: Model) -> CmdResult {
         let mut params = st.params.clone();
         wire(&mut params, &outputs, i, 0)?;
         let before = s.project.gp_history.len();
+        if let Some(spec) = super::gp::resolve_tool(&st.tool) {
+            super::gp::warn_unknown_params(s, spec, &params);
+        }
         let r = super::gp::run_tool(s, &st.tool, &params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.tool))?;
         // A step that made no layer leaves nothing for a later %n to use.
         let out =

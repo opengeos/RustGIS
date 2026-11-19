@@ -1525,7 +1525,47 @@ impl Inputs for MapInputs<'_> {
 fn run(s: &mut Session, p: &Value) -> CmdResult {
     let tool = ps(p, "tool").ok_or("tool is required")?.to_string();
     let params = p.get("params").cloned().unwrap_or(json!({}));
+    if let Some(spec) = resolve_tool(&tool) {
+        warn_unknown_params(s, spec, &params);
+    }
     run_tool(s, &tool, &params)
+}
+
+/// The keys of `params` the tool doesn't read, sorted: a misspelled one ("unit" for "units")
+/// would leave the tool on its default (#2307).
+pub(crate) fn unknown_params<'a>(spec: &rustgis_analysis::ToolSpec, params: &'a Value) -> Vec<&'a str> {
+    let mut unknown: Vec<&str> = params
+        .as_object()
+        .into_iter()
+        .flat_map(|map| map.keys().map(String::as_str))
+        .filter(|key| !rustgis_analysis::is_accepted_param(spec, key))
+        .collect();
+    unknown.sort_unstable();
+    unknown
+}
+
+/// Says which keys of `params` the tool ignores, and what it reads, as [`Session::run`] does for
+/// a command's own keys; nothing when it reads them all. The tool still runs.
+pub(crate) fn warn_unknown_params(s: &mut Session, spec: &rustgis_analysis::ToolSpec, params: &Value) {
+    if let Some(text) = unknown_params_notice(spec, params) {
+        s.warn(text);
+    }
+}
+
+/// The notice of [`warn_unknown_params`]. Bounded: the keys come from the caller (the first
+/// few, each clipped).
+pub(crate) fn unknown_params_notice(spec: &rustgis_analysis::ToolSpec, params: &Value) -> Option<String> {
+    let unknown = unknown_params(spec, params);
+    if unknown.is_empty() {
+        return None;
+    }
+    let mut said: Vec<String> = unknown.iter().take(5).map(|k| format!("'{}'", k.chars().take(40).collect::<String>())).collect();
+    if unknown.len() > 5 {
+        said.push(format!("{} more", unknown.len() - 5));
+    }
+    let reads: Vec<&str> = spec.params.iter().map(|p| p.name).collect();
+    let reads = if reads.is_empty() { "no parameters".to_string() } else { reads.join(", ") };
+    Some(format!("{} ignores {} (it reads {reads})", spec.name, said.join(", ")))
 }
 
 /// Whether `inputs` is the wildcard `"*"` (either as a string or a single-element array `["*"]`).
@@ -5517,6 +5557,65 @@ mod batch_tests {
             !recent_clean.iter().any(|n| n.text.contains("unrecognised")),
             "clean call must not emit unrecognised option notice: {recent_clean:?}"
         );
+    }
+
+    /// A misspelled tool parameter is said, by gp.run and by both kinds of model, and the tool
+    /// still runs; correct parameters say nothing (#2307).
+    #[test]
+    fn gp_run_and_models_say_which_tool_parameters_are_ignored() {
+        let said = |s: &Session, mark: u64| {
+            s.notices_since(mark).iter().filter(|n| n.text.contains("Buffer ignores")).map(|n| n.text.clone()).collect::<Vec<_>>()
+        };
+
+        let mut s = test_session();
+        let mark = s.notices.len() as u64;
+        s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100, "unit": "Miles"}})).unwrap();
+        let notices = said(&s, mark);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("'unit'") && notices[0].contains("units"), "{notices:?}");
+
+        let mark = s.notices.len() as u64;
+        s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100, "units": "Miles"}})).unwrap();
+        assert!(said(&s, mark).is_empty());
+
+        // Many keys: the first few, then a count.
+        let mut params = json!({"input": "Cities", "distance": 1});
+        for i in 0..8 {
+            params[format!("k{i}")] = json!(1);
+        }
+        let mark = s.notices.len() as u64;
+        s.run("gp.run", &json!({"tool": "buffer", "params": params})).unwrap();
+        let notices = said(&s, mark);
+        assert!(notices.len() == 1 && notices[0].contains("3 more") && !notices[0].contains("'k7'"), "{notices:?}");
+
+        // A model of steps, validated then run.
+        let mark = s.notices.len() as u64;
+        s.run(
+            "model.new",
+            &json!({"name": "Typo", "steps": [{"tool": "buffer", "params": {"input": "Cities", "distance": 100, "unit": "Miles"}}]}),
+        )
+        .unwrap();
+        let v = s.run("model.validate", &json!({"name": "Typo"})).unwrap();
+        assert_eq!(v["ok"], false, "{v}");
+        assert!(v["problems"].as_array().unwrap().iter().any(|p| p["code"] == "unknown-param"), "{v}");
+        s.run("model.run", &json!({"name": "Typo"})).unwrap();
+        assert_eq!(said(&s, mark).len(), 1, "{:?}", said(&s, mark));
+
+        // The same model spelled right: valid, and quiet.
+        let mark = s.notices.len() as u64;
+        s.run(
+            "model.new",
+            &json!({"name": "Right", "steps": [{"tool": "buffer", "params": {"input": "Cities", "distance": 100, "units": "Miles"}}]}),
+        )
+        .unwrap();
+        let v = s.run("model.validate", &json!({"name": "Right"})).unwrap();
+        assert_eq!(v["ok"], true, "{v}");
+        s.run("model.run", &json!({"name": "Right"})).unwrap();
+        assert!(said(&s, mark).is_empty());
+
+        // Junk params never panic: not an object, or a non-string key's value.
+        assert!(unknown_params_notice(rustgis_analysis::tool("buffer").unwrap(), &json!([1, 2])).is_none());
+        assert!(unknown_params_notice(rustgis_analysis::tool("buffer").unwrap(), &json!(null)).is_none());
     }
 
     #[test]

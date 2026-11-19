@@ -493,7 +493,12 @@ pub fn is_accepted_param(spec: &ToolSpec, key: &str) -> bool {
     if spec.params.iter().any(|p| p.name == key) {
         return true;
     }
-    if spec.id == "joinField" { JOIN_FIELD_ALIASES.contains(&key) } else { false }
+    match spec.id {
+        "joinField" => JOIN_FIELD_ALIASES.contains(&key),
+        // Zonal Statistics reads its raster as `layer` when `raster` isn't given.
+        "zonalStats" => key == "layer",
+        _ => false,
+    }
 }
 
 /// The names a tool reads one of its parameters under, `key` among them, or none when it has no
