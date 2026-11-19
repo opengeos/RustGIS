@@ -1566,7 +1566,7 @@ below the web app's fixed limits and never above a ceiling.
 Undo history keeps up to 40 steps. When the estimated memory for saved copies of features
 exceeds `undoBytes`, RustGIS drops the oldest Undo steps first, then the farthest Redo steps.
 It keeps the newest Undo step even if that step alone exceeds the limit. The first time this
-happens in a session, a message says so. Edits can still create a temporary full copy of a layer.
+happens in a project, a message says so. Edits can still create a temporary full copy of a layer.
 
 So a computer with 16 GB reads rasters of up to about 500 million samples. A run that passes on one
 computer can be refused on a smaller one; the error names the limit there. Project Raster (`raster.project`) puts a raster

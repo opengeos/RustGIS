@@ -16,8 +16,8 @@ pub(crate) struct Budget {
     pub(crate) limit: usize,
     // Command dispatch also runs post-command maintenance, which can record a second step.
     pub(crate) deferred: bool,
-    // Dropping steps is said once a session: past the budget every further edit drops one, and
-    // a message each time would only repeat the first.
+    // Dropping steps is said once a project: past the budget every further edit drops one, and
+    // a message each time would only repeat the first. Another project says it again.
     said: bool,
     // Keeping the weak key prevents address reuse while its estimate is cached, without keeping
     // the rows themselves alive. Copy-on-write gives changed rows a different key.
@@ -33,6 +33,7 @@ impl Default for Budget {
 impl Budget {
     pub(crate) fn clear(&mut self) {
         self.estimates.clear();
+        self.said = false;
     }
 
     /// Keep a contiguous history around the current state. Count a shared allocation only at its
@@ -66,7 +67,7 @@ impl Budget {
         if undo_drop + redo_drop == 0 || std::mem::replace(&mut self.said, true) {
             return None;
         }
-        let template = "Undo history is limited by memory: older steps are dropped as you edit, so Undo and Redo stay within {limit}.";
+        let template = "Undo history is limited by memory: older steps are dropped as you edit, keeping Undo and Redo to about {limit}. The newest step is always kept.";
         let limit = if self.limit >= 1 << 30 {
             format!("{:.1} GiB", self.limit as f64 / (1_u64 << 30) as f64)
         } else if self.limit >= 1 << 20 {
@@ -166,7 +167,7 @@ mod tests {
         session.run("edit.undo", &json!({})).unwrap();
         assert_eq!(value(&session), &Value::Text(b.clone()));
         session.run("edit.redo", &json!({})).unwrap();
-        assert_eq!(value(&session), &Value::Text(c));
+        assert_eq!(value(&session), &Value::Text(c.clone()));
         assert!(session.notices_since(mark).is_empty());
 
         // Past the budget each edit drops a step again, without saying it again.
@@ -174,6 +175,13 @@ mod tests {
         edit(&mut session, &b);
         assert_eq!(session.undo_depth(), 1);
         assert!(session.notices_since(mark).is_empty());
+
+        // Another project's first drop is said again.
+        session.clear_history();
+        edit(&mut session, &c);
+        let mark = session.notice_mark();
+        edit(&mut session, &b);
+        assert_eq!(session.notices_since(mark).len(), 1);
     }
 
     #[test]
