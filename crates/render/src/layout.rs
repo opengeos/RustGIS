@@ -3259,7 +3259,8 @@ pub(crate) fn wrapped(s: &str, width: f64, size: f64, style: TextStyle) -> Strin
         let (lo, hi) = text::styled_extent(t, px, style.face, spacing);
         f64::from(if style.align == TextAlign::Left { hi } else { hi - lo })
     };
-    // Lines past the 200 a text draws aren't broken: one more tells the cut-off check it goes on.
+    // Lines past the 200 a text draws aren't broken: one more, with text, tells the cut-off check
+    // it goes on.
     crate::report::wrap_lines(s, width * WRAP_PX_PER_MM, measure, 200).join("\n")
 }
 
@@ -5361,6 +5362,20 @@ mod tests {
         assert!(clipped_text(&l, &[], 96.0, &info).is_empty());
         let id = l.elements[0].id;
         l.element_mut(id).unwrap().h = 4.0;
+        assert_eq!(clipped_text(&l, &[], 96.0, &info), vec![(id, "Note".into())]);
+    }
+
+    /// A wrapped text past the 200 lines a text draws is reported cut, even when its 201st line is
+    /// blank and the text goes on after it (#2346).
+    #[test]
+    fn a_wrapped_text_past_its_last_drawn_line_is_reported_cut() {
+        let info = PageInfo::default();
+        let mut l = Layout::new("L", 100.0, 1500.0);
+        let mut kind = ElementKind::text(format!("{}\n\nZ", vec!["a"; 200].join("\n")), 12.0, Rgba::rgb(0, 0, 0), false);
+        if let ElementKind::Text { wrap, .. } = &mut kind {
+            *wrap = true;
+        }
+        let id = l.add("Note", (10.0, 10.0, 40.0, 1400.0), kind);
         assert_eq!(clipped_text(&l, &[], 96.0, &info), vec![(id, "Note".into())]);
     }
 

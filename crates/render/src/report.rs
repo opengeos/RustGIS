@@ -80,20 +80,23 @@ pub fn wrap(s: &str, w: f64, pt: f32) -> Vec<String> {
 }
 
 /// [`wrap`] with the width of a piece of text (in mm) measured by `width`: bold text, or text whose
-/// tokens are filled in only when it is drawn. At most 2000 lines and one more ([`wrap_lines`]).
+/// tokens are filled in only when it is drawn. Every line of the text: its work grows with the
+/// text's length, each word measured on a line no wider than `w`.
 pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
-    wrap_lines(s, w, width, 2000)
+    wrap_lines(s, w, width, usize::MAX)
 }
 
-/// [`wrap_with`] that stops once it has `max` lines and one more, which tells a caller the text
-/// goes on: its work is bounded by the lines it returns, however long the text, and every word in
-/// them is broken to the width (a layout text draws 200 and says it is cut past them, #2346).
+/// [`wrap_with`] that stops once it has `max` lines and one more with text, which tells a caller
+/// the text goes on (a layout text draws 200 and says it is cut past them, #2346): blank lines
+/// from `max` on are left out, so the one past it always has ink. Its work is bounded by the
+/// lines it returns, and every word in them is broken to the width.
 pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> Vec<String> {
+    let past = |out: &[String]| out.len() > max;
     let mut out = Vec::new();
     'text: for para in s.lines() {
         let mut line = String::new();
-        for word in para.split_whitespace() {
-            if out.len() > max {
+        for word in words(para) {
+            if past(&out) {
                 break 'text;
             }
             // A word wider than the line (a long URL…) is broken across lines: the most of its
@@ -101,7 +104,7 @@ pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> V
             // costs a few measures of about its own length, not of the rest of the word (a long
             // word in a box narrower than a few letters stays cheap, #2346).
             let mut word = word;
-            while word.chars().nth(1).is_some() && out.len() <= max {
+            while word.chars().nth(1).is_some() && !past(&out) {
                 let prefix = |k: usize| word.char_indices().nth(k).map_or(word, |(i, _)| &word[..i]);
                 let (mut fits, mut probe) = (1, 2);
                 let mut over = loop {
@@ -140,13 +143,21 @@ pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> V
                 line = next;
             }
         }
-        out.push(line);
-        if out.len() > max {
+        if !line.is_empty() || out.len() < max {
+            out.push(line);
+        }
+        if past(&out) {
             break;
         }
     }
     out.truncate(max.saturating_add(1));
     out
+}
+
+/// The words of a line, split at its spaces: a no-break space (U+00A0, U+2007, U+202F) keeps the
+/// words on either side together, as one, so `10 km` or `Fig. 1` written with one stays on a line.
+fn words(line: &str) -> impl Iterator<Item = &str> {
+    line.split(|c: char| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}')).filter(|w| !w.is_empty())
 }
 
 /// The size a picture is drawn at, in millimetres, within the content width and height.
@@ -562,10 +573,40 @@ mod tests {
         assert!(lines.iter().all(|l| fit(l) <= 40.0), "and broken to fit");
         let few = wrap_lines(&words, 40.0, fit, 10);
         assert_eq!(few, lines[..11], "one line past the limit");
-        let many = vec!["line"; 2100].join("\n");
-        assert_eq!(wrap_with(&many, 40.0, fit).len(), 2001, "past it, lines");
+        let many = vec!["line"; 3000].join("\n");
+        assert_eq!(wrap_with(&many, 40.0, fit).len(), 3000, "with no limit, every line");
+        assert_eq!(wrap_lines(&many, 40.0, fit, 2000).len(), 2001, "past a limit, one line more");
         let long = "x".repeat(5000);
         assert_eq!(wrap_lines(&long, 0.5, fit, 10).len(), 11, "or pieces of one word");
+    }
+
+    /// Past its limit the line that tells the text goes on has text: blank lines before it are
+    /// left out, so a caller sees ink there (#2346); blank lines alone past it are dropped.
+    #[test]
+    fn the_line_past_the_limit_has_text() {
+        let fit = |t: &str| width_mm(t, 7.0, false);
+        let text = format!("{}\n\nZ", vec!["a"; 200].join("\n"));
+        let lines = wrap_lines(&text, 40.0, fit, 200);
+        assert_eq!(lines.len(), 201);
+        assert_eq!(lines[199], "a");
+        assert_eq!(lines[200], "Z");
+        let lines = wrap_lines(&format!("{}\n\n\n\nZ", vec!["a"; 199].join("\n")), 40.0, fit, 200);
+        assert_eq!((lines.len(), lines[199].as_str(), lines[200].as_str()), (201, "", "Z"), "blank lines before the limit stay");
+        for tail in ["\n", "\n\n\n"] {
+            let blank = format!("{}{tail}", vec!["a"; 200].join("\n"));
+            assert_eq!(wrap_lines(&blank, 40.0, fit, 200).len(), 200, "nothing with text past it: {tail:?}");
+        }
+    }
+
+    /// A no-break space keeps its words on one line and is kept (#2346); an ordinary space there
+    /// breaks the line.
+    #[test]
+    fn a_no_break_space_keeps_its_words_together() {
+        let fit = |t: &str| width_mm(t, 7.0, false);
+        let w = fit("population 10");
+        assert_eq!(wrap_with("population 10 km", w, fit), ["population 10", "km"]);
+        assert_eq!(wrap_with("population 10\u{a0}km", w, fit), ["population", "10\u{a0}km"]);
+        assert_eq!(wrap_with("Fig.\u{202f}1 shows", fit("Fig.\u{202f}1 shows"), fit), ["Fig.\u{202f}1 shows"]);
     }
 
     /// A long word costs measures of about its own length, not of the rest of the word for each
