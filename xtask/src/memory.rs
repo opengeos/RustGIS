@@ -41,6 +41,21 @@ const THREADS: &str = "4";
 fn margin(ratio: f64) -> f64 {
     0.10 + ratio * 0.05
 }
+
+/// The one absolute limit: loading's peak in MiB. Every ratio divides by it, so a loader that
+/// held twice as much would lower them all and pass; the generated table is the same every run,
+/// so its load peak is too (168 MiB here, 172 on a GitHub runner's dev build).
+const LOAD: &str = "load_mib";
+
+/// Headroom over a measured value: 15% for the load peak in MiB, else [`margin`].
+fn headroom(name: &str, value: f64) -> f64 {
+    if name == LOAD { value * 0.15 } else { margin(value) }
+}
+
+/// How a value reads in messages: MiB for the load peak, else a multiple of it.
+fn unit(name: &str) -> &'static str {
+    if name == LOAD { " MiB" } else { "× the baseline" }
+}
 /// The file of limits, from the workspace root.
 pub(crate) const LIMITS: &str = "xtask/memory-limits.txt";
 
@@ -234,8 +249,8 @@ pub(crate) fn parse_limits(text: &str) -> Result<Vec<(String, f64)>, String> {
 pub(crate) fn ratios(peaks: &[(&str, u64)]) -> Result<Vec<(String, f64)>, String> {
     let get = |n: &str| peaks.iter().find(|(p, _)| *p == n).map(|(_, kib)| *kib as f64);
     let base = get("load").filter(|b| *b > 0.0).ok_or("no baseline peak")?;
-    let mut out: Vec<(String, f64)> =
-        peaks.iter().filter(|(n, _)| *n != "load").map(|(n, kib)| (n.to_string(), *kib as f64 / base)).collect();
+    let mut out: Vec<(String, f64)> = vec![(LOAD.to_string(), base / 1024.0)];
+    out.extend(peaks.iter().filter(|(n, _)| *n != "load").map(|(n, kib)| (n.to_string(), *kib as f64 / base)));
     if let (Some(full), Some(more)) = (get("edits_24"), get("edits_32")) {
         out.push(("edits_growth".into(), (more - full).max(0.0) / base));
     }
@@ -248,14 +263,15 @@ pub(crate) fn compare(measured: &[(String, f64)], limits: &[(String, f64)]) -> (
     let (mut over, mut under) = (Vec::new(), Vec::new());
     for (name, ratio) in measured {
         match limits.iter().find(|(n, _)| n == name) {
-            None => over.push(format!("{name}: {ratio:.2}× the baseline, but {LIMITS} has no limit for it")),
+            None => over.push(format!("{name}: {ratio:.2}{}, but {LIMITS} has no limit for it", unit(name))),
             Some((_, limit)) if *ratio > *limit => over.push(format!(
-                "{name}: {ratio:.2}× the baseline, over its limit of {limit:.2}× by {:.2} (+{:.0}%)",
+                "{name}: {ratio:.2}{u}, over its limit of {limit:.2}{u} by {:.2} (+{:.0}%)",
                 ratio - limit,
-                (ratio / limit - 1.0) * 100.0
+                (ratio / limit - 1.0) * 100.0,
+                u = unit(name)
             )),
-            Some((_, limit)) if *ratio + 2.0 * margin(*ratio) < *limit => {
-                under.push(format!("{name}: {ratio:.2}× the baseline, well under its limit of {limit:.2}×"))
+            Some((_, limit)) if *ratio + 2.0 * headroom(name, *ratio) < *limit => {
+                under.push(format!("{name}: {ratio:.2}{u}, well under its limit of {limit:.2}{u}", u = unit(name)))
             }
             Some(_) => {}
         }
@@ -268,12 +284,13 @@ pub(crate) fn compare(measured: &[(String, f64)], limits: &[(String, f64)]) -> (
     (over, under)
 }
 
-/// The limits file `--update` writes: each measured ratio plus its margin, rounded up to 0.05,
-/// never above the current limit.
+/// The limits file `--update` writes: each measured value plus its headroom, rounded up (to 0.05,
+/// or 5 MiB for the load peak), never above the current limit.
 fn updated(text: &str, measured: &[(String, f64)], limits: &[(String, f64)]) -> String {
     let mut out: String = text.lines().take_while(|l| l.starts_with('#') || l.trim().is_empty()).map(|l| format!("{l}\n")).collect();
     for (name, ratio) in measured {
-        let new = ((ratio + margin(*ratio)) * 20.0).ceil() / 20.0;
+        let step = if name == LOAD { 0.2 } else { 20.0 };
+        let new = ((ratio + headroom(name, *ratio)) * step).ceil() / step;
         let limit = limits.iter().find(|(n, _)| n == name).map_or(new, |(_, l)| l.min(new));
         let _ = writeln!(out, "{name} = {limit:.2}");
     }
@@ -337,7 +354,8 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     println!("{:<14} {:>9} {:>8} {:>8}  what", "scenario", "peak MiB", "ratio", "limit");
     for (s, kib) in &peaks {
         let ratio = measured.iter().find(|(n, _)| n == s.name).map(|(_, r)| *r);
-        let limit = limits.iter().find(|(n, _)| n == s.name).map(|(_, l)| *l);
+        let key = if s.name == "load" { LOAD } else { s.name };
+        let limit = limits.iter().find(|(n, _)| n == key).map(|(_, l)| *l);
         let fmt = |v: Option<f64>| v.map_or("-".to_string(), |v| format!("{v:.2}"));
         println!("{:<14} {:>9.0} {:>8} {:>8}  {}", s.name, *kib as f64 / 1024.0, fmt(ratio), fmt(limit), s.what);
     }
@@ -346,13 +364,17 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
         println!("{:<14} {:>9} {:>8.2} {:>8}  the peak's growth from 24 to 32 edits", "edits_growth", "", g, limit);
     }
 
+    let (mut over, under) = compare(&measured, &limits);
     if update {
         let text = updated(&limits_text, &measured, &limits);
         std::fs::write(&limits_path, text).map_err(|e| format!("{LIMITS}: {e}"))?;
         println!("memory: wrote {LIMITS}; a limit only comes down, so check the diff");
-        return Ok(());
+        for (name, _) in limits.iter().filter(|(n, _)| !measured.iter().any(|(m, _)| m == n)) {
+            println!("memory: dropped {name} from {LIMITS}: no scenario measures it");
+        }
+        // The file now matches the scenarios; a value over its limit still fails.
+        over.retain(|o| !o.ends_with("not measured; remove it"));
     }
-    let (over, under) = compare(&measured, &limits);
     for u in &under {
         println!("memory: {u}: if a change lowered it on purpose, run `cargo xtask memory --update` and commit {LIMITS}");
     }
@@ -403,7 +425,8 @@ mod tests {
     fn the_committed_limits_cover_every_scenario() {
         let text = include_str!("../memory-limits.txt");
         let limits = parse_limits(text).unwrap();
-        let mut names: Vec<String> = scenarios(Path::new("/x")).iter().filter(|s| s.name != "load").map(|s| s.name.to_string()).collect();
+        let mut names: Vec<String> = vec![LOAD.to_string()];
+        names.extend(scenarios(Path::new("/x")).iter().filter(|s| s.name != "load").map(|s| s.name.to_string()));
         names.push("edits_growth".into());
         let limited: Vec<String> = limits.iter().map(|(n, _)| n.clone()).collect();
         assert_eq!(names, limited);
@@ -415,15 +438,26 @@ mod tests {
         let measured = ratios(&peaks).unwrap();
         assert_eq!(
             measured,
-            vec![("edits_2".into(), 1.5), ("edits_24".into(), 1.5), ("edits_32".into(), 3.0), ("edits_growth".into(), 1.5)]
+            vec![
+                (LOAD.into(), 100.0 / 1024.0),
+                ("edits_2".into(), 1.5),
+                ("edits_24".into(), 1.5),
+                ("edits_32".into(), 3.0),
+                ("edits_growth".into(), 1.5)
+            ]
         );
-        let limits = parse_limits("# c\nedits_2 = 2.0\nedits_24 = 1.6\nedits_32 = 2.5 # grows\nedits_growth = 1.6\n").unwrap();
+        let limits =
+            parse_limits("# c\nload_mib = 0.12\nedits_2 = 2.0\nedits_24 = 1.6\nedits_32 = 2.5 # grows\nedits_growth = 1.6\n").unwrap();
         let (over, under) = compare(&measured, &limits);
         assert_eq!(over.len(), 1, "{over:?}");
         assert!(over[0].starts_with("edits_32: 3.00× the baseline, over its limit of 2.50×"), "{over:?}");
         assert_eq!(under.len(), 1, "{under:?}");
         assert!(under[0].starts_with("edits_2"), "{under:?}");
         assert!(parse_limits("edits_2 = -1").is_err() && parse_limits("edits_2").is_err());
+
+        // A loader holding twice as much lowers every ratio, but its own limit catches it.
+        let (over, _) = compare(&[(LOAD.into(), 344.0)], &[(LOAD.into(), 200.0)]);
+        assert!(over[0].starts_with("load_mib: 344.00 MiB, over its limit of 200.00 MiB"), "{over:?}");
     }
 
     #[test]
@@ -432,6 +466,8 @@ mod tests {
         let limits = parse_limits(text).unwrap();
         let measured = vec![("edits_2".to_string(), 1.5), ("edits_8".to_string(), 3.0)];
         assert_eq!(updated(text, &measured, &limits), "# head\n\nedits_2 = 1.70\nedits_8 = 2.50\n");
+        // The load peak gets 15% and rounds up to 5 MiB.
+        assert_eq!(updated("", &[(LOAD.into(), 172.0)], &[]), "load_mib = 200.00\n");
     }
 
     #[test]
