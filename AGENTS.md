@@ -70,9 +70,9 @@ measures.
 - Memory follows what an operation changes or produces: an Undo step, a version, a sync base or a
   cache holds only the changed rows or shares storage with the original. New work adds no second
   full copy of a layer or raster; #2431 measured what one costs.
-- Work that grows with its input goes in pieces (chunks, tiles, slices), or sizes its limit with
-  `memory::planned` and refuses past it with a way out, such as filtering or clipping first.
-  Running out of memory partway counts as a crash.
+- Work that grows with its input goes in pieces (chunks, tiles, slices) that it doesn't keep, or
+  sizes its limit with `memory::planned` and refuses past it with a way out, such as filtering or
+  clipping first. Running out of memory partway counts as a crash.
 
 ## Architecture
 | Layer | Crate | Job |
