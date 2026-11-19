@@ -2225,6 +2225,8 @@ mod tests {
         assert_eq!(Crs::parse("102033").map(|c| c.label()), Ok("ESRI:102033".to_string()));
         assert_eq!(Crs::parse("2056").map(|c| c.epsg()), Ok(2056));
         assert!(Crs::parse("EPSG:102033").is_err(), "an EPSG code stays EPSG's");
+        // Web Mercator's old number is read as before.
+        assert_eq!(Crs::parse("102100"), Ok(Crs::WebMercator));
     }
 
     /// A kept transformer that can't be built again when grids arrive goes on as it was, said
