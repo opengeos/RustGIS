@@ -9,7 +9,8 @@
 //! fields and the vector's methods deprecated, and every "use of deprecated" warning with their
 //! note outside `crates/data/` is one use. Other types with fields of the same names are never
 //! counted. Not counted: indexing (`features[i]`), iterating `&features` in a `for` loop and
-//! lending it as a `&[Feature]`, unless the row's fields are read; and code built only for another
+//! lending it as a `&[Feature]`, unless the row's fields are read; a vector or slice method with no
+//! deprecated copy in `row_access.rs` (the common ones all have one); and code built only for another
 //! target (`cfg(target_arch = "wasm32")`, Android, iOS), since only this computer's build is checked.
 //!
 //! When the count falls, `--update` writes the new one; it never raises it. `--list` prints each

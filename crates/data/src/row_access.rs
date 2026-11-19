@@ -87,7 +87,7 @@ impl Features {
     /// nothing changes, when the row or the field doesn't exist.
     pub fn set_value(&mut self, row: usize, field: usize, value: Value) -> Option<Value> {
         self.rows.get(row)?.attrs.get(field)?;
-        let cell = Arc::make_mut(&mut self.rows).get_mut(row)?.attrs.get_mut(field)?;
+        let cell = self.rows_mut().get_mut(row)?.attrs.get_mut(field)?;
         Some(std::mem::replace(cell, value))
     }
 
@@ -95,14 +95,14 @@ impl Features {
     /// there is no row `row`.
     pub fn set_geometry(&mut self, row: usize, geometry: Option<Geometry>) -> Option<Option<Geometry>> {
         self.rows.get(row)?;
-        let old = &mut Arc::make_mut(&mut self.rows).get_mut(row)?.geometry;
+        let old = &mut self.rows_mut().get_mut(row)?.geometry;
         Some(std::mem::replace(old, geometry))
     }
 
     /// Adds a column after the last, holding `value` in every row (Add Field): one new column
     /// when values are kept by column, not a change to every row.
     pub fn add_column(&mut self, value: Value) {
-        for f in Arc::make_mut(&mut self.rows) {
+        for f in self.rows_mut() {
             // Exactly one more slot: a doubled capacity in every row would cost more than the column.
             f.attrs.reserve_exact(1);
             f.attrs.push(value.clone());
@@ -114,7 +114,7 @@ impl Features {
         if self.rows.iter().all(|f| f.attrs.len() <= field) {
             return;
         }
-        for f in Arc::make_mut(&mut self.rows) {
+        for f in self.rows_mut() {
             if field < f.attrs.len() {
                 f.attrs.remove(field);
             }
@@ -128,7 +128,7 @@ impl Features {
         if values.len() != self.rows.len() || self.rows.iter().any(|f| f.attrs.len() <= field) {
             return Err(values);
         }
-        let rows = Arc::make_mut(&mut self.rows);
+        let rows = self.rows_mut();
         let old = rows.iter_mut().zip(values).filter_map(|(f, v)| f.attrs.get_mut(field).map(|c| std::mem::replace(c, v))).collect();
         Ok(old)
     }
@@ -136,8 +136,16 @@ impl Features {
     /// Appends `feature` as the last row, keeping its id.
     pub fn push_row(&mut self, feature: Feature) {
         let id = feature.id;
-        Arc::make_mut(&mut self.rows).push(feature);
+        self.rows_mut().push(feature);
         self.max_id = self.max_id.map(|m| m.max(id));
+    }
+
+    /// The rows for a change, copied first when another owner (an Undo snapshot) shares them.
+    /// Every change goes through it, so the hook [`crate::before_rows_copy`] sets runs before a
+    /// copy, as it does through `DerefMut`.
+    fn rows_mut(&mut self) -> &mut Vec<Feature> {
+        self.before_copy();
+        Arc::make_mut(&mut self.rows)
     }
 
     /// Removes row `row`, moving the rows after it up one, and returns it; `None`, and nothing
@@ -147,7 +155,7 @@ impl Features {
             return None;
         }
         self.max_id = None;
-        Some(Arc::make_mut(&mut self.rows).remove(row))
+        Some(self.rows_mut().remove(row))
     }
 
     /// Keeps the rows `keep` says yes to, in order, asking it once per row. When it keeps them
@@ -160,14 +168,14 @@ impl Features {
         self.max_id = None;
         // `Vec::retain` visits each row once, in order.
         let mut kept = kept.into_iter();
-        Arc::make_mut(&mut self.rows).retain(|_| kept.next().unwrap_or(true));
+        self.rows_mut().retain(|_| kept.next().unwrap_or(true));
     }
 
     /// Keeps the first `len` rows.
     pub fn truncate_rows(&mut self, len: usize) {
         if len < self.rows.len() {
             self.max_id = None;
-            Arc::make_mut(&mut self.rows).truncate(len);
+            self.rows_mut().truncate(len);
         }
     }
 
@@ -180,7 +188,7 @@ impl Features {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    use crate::{Dataset, Feature, Features, Field, FieldType, Geometry, GeometryType, Value};
 
     fn layer() -> Dataset {
         let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
@@ -231,6 +239,23 @@ mod tests {
         assert_eq!((ds.features.value(0, 1), copy.value(0, 1)), (&Value::Int(1), &Value::Int(10)));
         assert_eq!(copy.set_geometry(1, ds.features.geometry(0).cloned()), Some(None));
         assert_eq!(copy.geometry(1), ds.features.geometry(0));
+    }
+
+    #[test]
+    fn a_change_that_copies_shared_rows_calls_the_copy_hook_first() {
+        let ds = layer();
+        let mut copy = ds.features.clone();
+        let fired = |copy: &mut Features, change: &dyn Fn(&mut Features)| crate::before_rows_copy(Box::new(|| {}), || change(copy)).1;
+        assert!(!fired(&mut copy, &|f| {
+            f.set_value(9, 0, Value::Null);
+        }));
+        assert!(fired(&mut copy, &|f| f.add_column(Value::Null)));
+        // The rows are its own now: nothing more to copy.
+        assert!(!fired(&mut copy, &|f| {
+            f.set_value(0, 0, Value::Null);
+        }));
+        let mut other = ds.features.clone();
+        assert!(fired(&mut other, &|f| f.truncate_rows(1)));
     }
 
     #[test]
@@ -399,6 +424,121 @@ mod counted {
         #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
         pub fn shrink_to_fit(&mut self) {
             self.deref_mut().shrink_to_fit()
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn insert(&mut self, i: usize, f: Feature) {
+            self.deref_mut().insert(i, f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn drain<R: std::ops::RangeBounds<usize>>(&mut self, r: R) -> std::vec::Drain<'_, Feature> {
+            self.deref_mut().drain(r)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn append(&mut self, other: &mut Vec<Feature>) {
+            self.deref_mut().append(other)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn split_off(&mut self, at: usize) -> Vec<Feature> {
+            self.deref_mut().split_off(at)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn swap(&mut self, a: usize, b: usize) {
+            self.deref_mut().swap(a, b)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn swap_remove(&mut self, i: usize) -> Feature {
+            self.deref_mut().swap_remove(i)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn resize(&mut self, n: usize, f: Feature) {
+            self.deref_mut().resize(n, f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn resize_with<F: FnMut() -> Feature>(&mut self, n: usize, f: F) {
+            self.deref_mut().resize_with(n, f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn retain_mut<F: FnMut(&mut Feature) -> bool>(&mut self, f: F) {
+            self.deref_mut().retain_mut(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn dedup_by_key<K: PartialEq, F: FnMut(&mut Feature) -> K>(&mut self, f: F) {
+            self.deref_mut().dedup_by_key(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn sort_by<F: FnMut(&Feature, &Feature) -> std::cmp::Ordering>(&mut self, f: F) {
+            self.deref_mut().sort_by(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn sort_unstable_by<F: FnMut(&Feature, &Feature) -> std::cmp::Ordering>(&mut self, f: F) {
+            self.deref_mut().sort_unstable_by(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn sort_unstable_by_key<K: Ord, F: FnMut(&Feature) -> K>(&mut self, f: F) {
+            self.deref_mut().sort_unstable_by_key(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn binary_search_by<F: FnMut(&Feature) -> std::cmp::Ordering>(&self, f: F) -> Result<usize, usize> {
+            self.deref().binary_search_by(f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn binary_search_by_key<B: Ord, F: FnMut(&Feature) -> B>(&self, b: &B, f: F) -> Result<usize, usize> {
+            self.deref().binary_search_by_key(b, f)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn last_mut(&mut self) -> Option<&mut Feature> {
+            self.deref_mut().last_mut()
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn split_at(&self, mid: usize) -> (&[Feature], &[Feature]) {
+            self.deref().split_at(mid)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn split_at_mut(&mut self, mid: usize) -> (&mut [Feature], &mut [Feature]) {
+            self.deref_mut().split_at_mut(mid)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn as_mut_slice(&mut self) -> &mut [Feature] {
+            self.deref_mut().as_mut_slice()
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn chunks_mut(&mut self, n: usize) -> std::slice::ChunksMut<'_, Feature> {
+            self.deref_mut().chunks_mut(n)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn chunks_exact(&self, n: usize) -> std::slice::ChunksExact<'_, Feature> {
+            self.deref().chunks_exact(n)
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn split_first(&self) -> Option<(&Feature, &[Feature])> {
+            self.deref().split_first()
+        }
+
+        #[deprecated(note = "use the row accessors (`Features::row`, `rows`, `set_value`, ...); see cargo xtask rows")]
+        pub fn split_last(&self) -> Option<(&Feature, &[Feature])> {
+            self.deref().split_last()
         }
     }
 }
