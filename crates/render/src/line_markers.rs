@@ -294,7 +294,8 @@ pub(crate) fn draw(pm: &mut Canvas, runs: &[Run], m: &LineMarkers, color: Rgba, 
 /// offset (the shifted line's mitred corners, `offset_polyline`, reach that far) and twice
 /// its width (`width`, the feature's, where it takes that), as far as tiny-skia's default mitre
 /// limit, 4, lets a corner reach. Its marks: its offset and a marker as far as its corners however
-/// it's turned (at least a point across, as [`draw`] draws it), and its outline's width.
+/// it's turned (at least a point across, as [`draw`] draws it), and twice its outline's width (its
+/// mitred points, at the same limit).
 pub(crate) fn reach(strokes: &[LineStroke], width: f32) -> f32 {
     strokes
         .iter()
@@ -303,7 +304,9 @@ pub(crate) fn reach(strokes: &[LineStroke], width: f32) -> f32 {
             let off = s.offset.abs();
             match s.markers {
                 Some(m) => match m.mark {
-                    LineMark::Marker(shape) => off + m.size.max(1.0) * marker_reach(shape).max(crate::point_marks::turned_reach(shape)) + w,
+                    LineMark::Marker(shape) => {
+                        off + m.size.max(1.0) * marker_reach(shape).max(crate::point_marks::turned_reach(shape)) + 2.0 * w
+                    }
                     LineMark::Hash => off + m.size.max(0.0) / 2.0 + w,
                 },
                 None => 4.0 * off + 2.0 * w,
@@ -335,7 +338,8 @@ mod tests {
     }
 
     /// A shifted stroke reaches as far as its mitred corners (four times its offset) and twice its
-    /// width; a marker at least as far as a point-wide one, the smallest drawn.
+    /// width; a marker at least as far as a point-wide one, the smallest drawn, and its outline's
+    /// mitred points.
     #[test]
     fn a_lines_reach_covers_mitred_offsets_and_tiny_markers() {
         let shifted = LineStroke { offset: -8.0, width: Some(0.1), ..LineStroke::default() };
@@ -343,6 +347,10 @@ mod tests {
         let tiny = LineMarkers { mark: LineMark::Marker(Marker::Circle), size: 0.2, ..LineMarkers::default() };
         let marked = LineStroke { width: Some(0.0), markers: Some(tiny), ..LineStroke::default() };
         assert!((reach(&[marked], 1.0) - 0.6).abs() < 1e-4, "a point across, to its 0.6");
+        // A thick outline's mitred points reach twice its width past the shape.
+        let star = LineMarkers { mark: LineMark::Marker(Marker::Star), size: 10.0, ..LineMarkers::default() };
+        let outlined = LineStroke { width: Some(20.0), markers: Some(star), ..LineStroke::default() };
+        assert!((reach(&[outlined], 1.0) - (6.0 + 40.0)).abs() < 1e-4);
         assert_eq!(reach(&[], 1.0), 0.0);
     }
 
