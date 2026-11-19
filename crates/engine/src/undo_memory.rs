@@ -109,7 +109,7 @@ impl Budget {
     /// it plans to use ([`rustgis_data::memory::usable`]), history is set aside until they fit:
     /// Redo first, farthest first, as the edit clears it anyway, then Undo, oldest first. What is
     /// set aside is freed just before the edit copies, or given back if it never does
-    /// ([`Session::put_back`](crate::Session)). `Err` gives what is held and the memory planned
+    /// ([`Session::put_back`](crate::Session)), and counted as held until then. `Err` gives what is held and the memory planned
     /// for, with the history left as it is, when the copy wouldn't fit even with the history gone.
     pub(crate) fn make_room(
         &mut self,
@@ -121,7 +121,8 @@ impl Budget {
         let Some(usable) = rustgis_data::memory::usable(self.memory) else { return Ok(None) };
         let running = self.in_flight.load(Ordering::Relaxed);
         let fits = |held: u64| held.saturating_add(running).saturating_add(copy) <= usable;
-        if fits(self.held(live, undo, redo)) {
+        let before = self.held(live, undo, redo);
+        if fits(before) {
             return Ok(None);
         }
         let open = self.held(live, &[], &[]);
@@ -138,6 +139,8 @@ impl Budget {
                 aside.undo.push(undo.remove(0));
             }
         }
+        let after = self.held(live, undo, redo);
+        aside.held = Some(self.reserve(before.saturating_sub(after)));
         Ok(Some(aside).filter(|aside| aside.len() > 0))
     }
 
@@ -181,6 +184,9 @@ impl Budget {
 pub(crate) struct Aside {
     pub(crate) undo: Vec<Step>,
     pub(crate) redo: Vec<Step>,
+    /// The steps' own memory, still held until they are freed or put back: counted by the checks
+    /// of other edits meanwhile.
+    held: Option<Reservation>,
 }
 
 impl Aside {
@@ -585,21 +591,50 @@ mod tests {
     fn a_second_background_edit_needing_history_waits_for_the_first() {
         use crate::cmd::reads::read_ahead;
         let mut session = table_session();
-        let p = json!({"table": "calc", "row": 0, "field": "n", "value": 3});
-        // Room for what is held and 64 bytes: the first edit's copy needs the oldest Undo step
-        // with rows of its own set aside, the second's the next one too.
-        let held = session.undo_memory.held(&session.project, &session.undo, &session.redo);
-        session.undo_memory.memory = Some(((held + 64) * 4).div_ceil(3) + 4);
+        // A small table to edit: its copy is far smaller than a step of `calc`'s rows.
+        session.run("layer.addDataText", &json!({"fileName": "tiny.csv", "text": "n\n1\n"})).unwrap();
+        let p = json!({"table": "tiny", "row": 0, "field": "n", "value": 3});
+        let tiny = session.project.tables.iter().find(|t| t.dataset.name == "tiny").unwrap().dataset.features.clone();
+        let small = session.undo_memory.rows_bytes(&tiny);
+        drop(tiny);
+        let rows = session.undo_memory.rows_bytes(&session.project.tables[0].dataset.features.clone());
+        let open = session.undo_memory.held(&session.project, &[], &[]);
+        // Room for the open rows, one step of `calc`'s rows (a step takes a little more than the
+        // rows) and two small copies: the first edit sets aside the oldest step with rows; the
+        // second, with the first's copy and steps still counted, would need the next one.
+        session.undo_memory.memory = Some(((open + rows + 2 * small + 1024) * 4).div_ceil(3) + 4);
         let first = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).ok().unwrap();
-        assert_eq!(session.undo_depth(), 1, "the table's addition and its first edit are aside");
-        let in_flight = session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed);
+        let (depth, in_flight) = (session.undo_depth(), session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(depth, 2, "calc's addition and first edit are aside");
+        assert!(in_flight > small, "the steps aside are counted with the copy: {in_flight}");
         let err = read_ahead(&mut session, "edit.setValue", &p).ok().unwrap().refresh_table_input(&mut session).err().unwrap();
         assert!(err.contains("while another edit is running"), "{err}");
-        assert_eq!(session.undo_depth(), 1, "what the second set aside is back");
+        assert_eq!(session.undo_depth(), depth, "what the second set aside is back");
         assert_eq!(session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed), in_flight);
         drop(first);
         session.reclaim_rooms();
-        assert_eq!(session.undo_depth(), 3);
+        assert_eq!(session.undo_depth(), 4);
+        assert_eq!(session.undo_memory.in_flight.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_layer_edit_waiting_in_the_background_is_refused_once_its_layer_changed() {
+        use crate::cmd::reads::read_ahead;
+        let mut session = Session::new(crate::Project::default());
+        let text = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"day": "01/02/2024"},
+            "geometry": {"type": "Point", "coordinates": [10.01, 45.01]}}]})
+        .to_string();
+        session.run("layer.addDataText", &json!({"fileName": "dated.geojson", "text": text})).unwrap();
+        session.run("edit.enable", &json!({"on": true})).unwrap();
+        let p = json!({"layer": "dated", "field": "day", "type": "date", "format": "%m/%d/%Y"});
+        let ahead = read_ahead(&mut session, "edit.convertField", &p).ok().unwrap();
+        session.run("edit.setValue", &json!({"layer": "dated", "row": 0, "field": "day", "value": "02/03/2024"})).unwrap();
+        let err = ahead.refresh_table_input(&mut session).err().unwrap();
+        assert!(err.contains("the layer changed while the edit was waiting"), "{err}");
+        // Unchanged, it starts.
+        let ahead = read_ahead(&mut session, "edit.convertField", &p).ok().unwrap();
+        assert!(ahead.refresh_table_input(&mut session).is_ok());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -631,6 +666,23 @@ mod tests {
         let notices = session.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("(3 before editing calc)")), "{notices:?}");
         assert_eq!(session.undo_depth(), 2, "only the two later steps");
+    }
+
+    #[test]
+    fn an_edit_of_a_row_past_the_end_keeps_the_history_set_aside_for_it() {
+        let mut session = session(4096);
+        session.undo_memory.limit = 1 << 30;
+        session.undo_memory.memory = None;
+        for text in ["b", "c"] {
+            edit(&mut session, &text.repeat(4096));
+        }
+        session.run("edit.undo", &json!({})).unwrap();
+        session.undo_memory.memory = Some(room_for_one_copy(&mut session, 64));
+        let mark = session.notice_mark();
+        let err = session.run("edit.setValue", &json!({"layer": "rows", "row": 5, "field": "text", "value": "x"})).unwrap_err();
+        assert!(err.contains("no such row"), "{err}");
+        assert_eq!((session.undo_depth(), session.can_redo()), (1, true), "Undo and Redo are kept");
+        assert!(!session.notices_since(mark).iter().any(|n| n.text.contains("make room")));
     }
 
     #[test]

@@ -66,6 +66,8 @@ pub struct ReadAhead {
     /// Set when the edit starts ([`Self::refresh_table_input`]), carried to its landing.
     room: Option<crate::RoomMade>,
     reservation: Option<crate::undo_memory::Reservation>,
+    /// The rows a layer edit's worker copies, as they were when it was prepared.
+    rows: Option<std::sync::Weak<Vec<rustgis_data::Feature>>>,
 }
 
 impl ReadAhead {
@@ -132,6 +134,12 @@ impl ReadAhead {
             };
             if dataset.fields != preview.fields || !dataset.features.shares(&preview.features) {
                 return Err("the data changed after its date preview: choose the format again".into());
+            }
+        }
+        if let Some(rows) = &self.rows {
+            let now = s.layer_id(params).ok().and_then(|id| s.map().layer(id)).map(|l| l.dataset.features.allocation_key());
+            if !now.is_some_and(|now| now.ptr_eq(rows)) {
+                return Err("the layer changed while the edit was waiting: run the edit again".into());
             }
         }
         let Some((opened, table, instance)) = self.table else { return Ok(self) };
@@ -284,7 +292,12 @@ pub(crate) fn prepare(s: &mut Session, op: Authorized<CommandOp>, owner: Continu
     let table = super::edit::table_edit_in_background(spec.id)
         .and_then(|_| s.named_table(spec, params))
         .and_then(|id| s.project.table(id).map(|t| (s.opened, id, t.instance_id())));
-    Ok(ReadAhead { name, op, owner, source, work, table, preview: None, capture_inputs: s.log.on(), room: None, reservation: None })
+    // A layer edit's worker copies the rows taken here: they must still be the layer's when it
+    // starts, so the memory checked then is what it copies (#2431).
+    let rows = (work.is_some() && table.is_none() && spec.mutates && crate::edits_features(spec.id))
+        .then(|| s.layer_id(params).ok().and_then(|id| s.map().layer(id)).map(|l| l.dataset.features.allocation_key()))
+        .flatten();
+    Ok(ReadAhead { name, op, owner, source, work, table, preview: None, capture_inputs: s.log.on(), room: None, reservation: None, rows })
 }
 
 /// Consumes a completed read under its initiating owner, with ordinary command history and undo.
