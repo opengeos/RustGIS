@@ -312,12 +312,14 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
                 .as_deref()
                 .and_then(|u| {
                     let lower = u.to_ascii_lowercase();
-                    // The service itself: the last `/VectorTileServer` that ends a folder (a folder
-                    // of the same name above it is part of its address).
-                    let end = lower
+                    // The service itself: the last `/VectorTileServer` that ends a folder of the
+                    // path (a folder of the same name above it is part of its address; the query,
+                    // which may hold a key, is never searched).
+                    let path = lower.split_once('?').map_or(lower.as_str(), |(p, _)| p);
+                    let end = path
                         .match_indices("/vectortileserver")
                         .map(|(i, m)| i + m.len())
-                        .filter(|&e| matches!(lower.as_bytes().get(e), None | Some(b'/' | b'?')))
+                        .filter(|&e| matches!(path.as_bytes().get(e), None | Some(b'/')))
                         .last()?;
                     Some((u.get(..end)?.to_string(), u.get(end..)?.to_string()))
                 })
@@ -1002,6 +1004,12 @@ mod tests {
         let source = "serviceType=arcgis&type=xyz&url=https://example.com/VectorTileServer/rest/services/Base/VectorTileServer/tile/%7Bz%7D/%7By%7D/%7Bx%7D.pbf";
         let Source::ArcGis { url, .. } = read("arcgisvectortileservice", source, "/data") else { panic!("an ArcGIS source") };
         assert_eq!(url, "https://example.com/VectorTileServer/rest/services/Base/VectorTileServer");
+        // One named in the query (a key's value, say) is never the service: the address keeps none
+        // of the query.
+        let keyed = "serviceType=arcgis&type=xyz&url=https://example.com/rest/services/Base/VectorTileServer?token=abc/VectorTileServer/x";
+        let Source::ArcGis { url, options, .. } = read("arcgisvectortileservice", keyed, "/data") else { panic!("an ArcGIS source") };
+        assert_eq!(url, "https://example.com/rest/services/Base/VectorTileServer");
+        assert!(options.login, "{options:?}");
     }
 
     /// The parts of a web source past the 200 read are counted and taken as a login (one of them
