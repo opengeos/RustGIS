@@ -865,6 +865,102 @@ fn route_reports_unreadable_query_and_keeps_query_only_network() {
     }
 }
 
+/// Neighborhood searches ignore old selections, replace them only on request, and report
+/// broken saved queries once across affected layers, including layers with no nearby rows.
+#[test]
+fn neighborhood_reports_unreadable_queries_and_keeps_query_only_search() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as Cell};
+
+    for (query, expected) in [("", vec![0, 1]), ("number = 2", vec![1]), ("number > 3", vec![]), ("missing = 1", vec![0, 1])] {
+        let mut s = Session::new(Project::default());
+        let mut ids = Vec::new();
+        for (name, latitude, visible) in [("Near {error}", 0.0, true), ("Far {layer}", 10.0, true), ("Hidden", 0.0, false)] {
+            let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("number", FieldType::Integer)]);
+            for row in 0..3 {
+                ds.push(Some(Geometry::Point(Coord::new(row as f64 * 0.01, latitude))), vec![Cell::Int(row + 1)]);
+            }
+            let id = s.map_mut().add_dataset(ds);
+            let layer = s.map_mut().layer_mut(id).unwrap();
+            layer.selection = vec![2];
+            layer.definition_query = Some(query.into());
+            layer.visible = visible;
+            ids.push(id);
+        }
+        // Exercise a saved broken query, rather than the query-setting command's validation.
+        let saved = serde_json::to_string(&s.project).unwrap();
+        let mut s = Session::new(Project::from_json(&saved).unwrap());
+        for select in [false, true] {
+            let mark = s.notice_mark();
+            let result = s.run("analysis.neighborhood", &json!({"lon": 0, "lat": 0, "radius": 1500, "select": select})).unwrap();
+            assert_eq!(result["layers"].as_array().unwrap().len(), usize::from(!expected.is_empty()), "{query}: {result}");
+            if !expected.is_empty() {
+                assert_eq!(result["layers"][0]["count"], expected.len());
+                assert_eq!(result["layers"][0]["sums"]["number"].as_f64(), Some(expected.iter().map(|r| r + 1).sum::<usize>() as f64));
+            }
+            assert_eq!(s.map().layer(ids[0]).unwrap().selection, if select { expected.clone() } else { vec![2] });
+            for id in &ids[1..] {
+                assert_eq!(s.map().layer(*id).unwrap().selection, if select { vec![] } else { vec![2] });
+            }
+            let notices = s.notices_since(mark);
+            assert_eq!(notices.len(), usize::from(query == "missing = 1"), "{notices:?}");
+            if query == "missing = 1" {
+                assert!(
+                    notices[0].text.contains("Near {error}")
+                        && notices[0].text.contains("Far {layer}")
+                        && !notices[0].text.contains("Hidden")
+                );
+                assert!(
+                    notices[0]
+                        .translated(|key, args| {
+                            assert!(
+                                !key.contains("missing") && !key.contains("Near") && !key.contains("Far"),
+                                "literal data became a template: {key}"
+                            );
+                            if key.contains("unreadable definition") {
+                                assert_eq!(args.iter().find(|(key, _)| *key == "count").map(|(_, value)| *value), Some("2"));
+                            }
+                            if key == "{layer}: {error}" {
+                                assert!(args.iter().any(|(key, value)| *key == "layer" && ["Near {error}", "Far {layer}"].contains(value)));
+                                assert!(args.iter().any(|(key, value)| *key == "error" && value.contains("missing")));
+                            }
+                            key.to_string()
+                        })
+                        .is_some()
+                );
+            }
+        }
+    }
+}
+
+/// The fallback count covers every searched layer, while the recursive diagnostic list stays
+/// bounded and says how many layer details it omitted.
+#[test]
+fn neighborhood_bounds_query_notice_details_and_keeps_total_count() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let mut s = Session::new(Project::default());
+    for i in 0..7 {
+        let mut ds = Dataset::new(format!("Road {i}"), GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let id = s.map_mut().add_dataset(ds);
+        s.map_mut().layer_mut(id).unwrap().definition_query = Some("missing = 1".into());
+    }
+    let names: Vec<_> = s.map().layers.iter().map(|layer| layer.name.clone()).collect();
+    let mark = s.notice_mark();
+    let result = s.run("analysis.neighborhood", &json!({"lon": 0, "lat": 0, "radius": 100})).unwrap();
+    assert_eq!(result["layers"].as_array().unwrap().len(), 7);
+    let notices = s.notices_since(mark);
+    assert_eq!(notices.len(), 1);
+    let text = &notices[0].text;
+    assert!(text.starts_with("7 layers with unreadable definition queries"), "{text}");
+    assert!(text.contains("2 more layers"), "{text}");
+    for name in names.iter().take(5) {
+        assert!(text.contains(name), "{text}");
+    }
+    for name in names.iter().skip(5) {
+        assert!(!text.contains(name), "{text}");
+    }
+}
+
 /// A tool reads what its layers show (#1995): the features a definition query keeps, with a
 /// selection cut to them, for the input and for an overlay layer. The Select tools leave out the
 /// features it hides, a layer it hides entirely is refused, and a tool that reads a layer whole
@@ -39008,6 +39104,47 @@ fn text_elements_take_a_rotation() {
     assert_eq!(turn(&s, plain), 90.0);
 }
 
+/// Text elements wrap to their box with `wrap` (#2346): off by default and not written then, on
+/// when added or updated, kept through a save; a value that isn't true or false is refused and
+/// changes nothing, as is `wrap` for an element that isn't a text; null leaves it as it is.
+#[test]
+fn text_elements_take_wrap() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = Session::new(sample::world_project());
+    s.run("layout.new", &json!({"name": "Notes"})).unwrap();
+    let wraps = |s: &Session, id: u32| match s.project.layouts[0].element(id).map(|e| &e.kind) {
+        Some(ElementKind::Text { wrap, .. }) => *wrap,
+        _ => panic!("a text element"),
+    };
+    let add = |s: &mut Session, p: Value| s.run("layout.addElement", &p).unwrap()["element"].as_u64().unwrap() as u32;
+    let plain = add(&mut s, json!({"kind": "text", "text": "Fonte: IBGE"}));
+    assert!(!wraps(&s, plain));
+    assert!(!serde_json::to_string(&s.project.layouts[0]).unwrap().contains("wrap"), "an unwrapped text writes nothing");
+    let note = add(&mut s, json!({"kind": "text", "text": "A long note", "wrap": true}));
+    assert!(wraps(&s, note));
+    let dynamic = add(&mut s, json!({"kind": "dynamicText", "wrap": "yes"}));
+    assert!(wraps(&s, dynamic));
+    s.run("layout.update", &json!({"element": plain, "wrap": true})).unwrap();
+    assert!(wraps(&s, plain));
+    s.run("layout.update", &json!({"element": dynamic, "wrap": false})).unwrap();
+    assert!(!wraps(&s, dynamic));
+    let back: rustgis_map::layout::Layout = serde_json::from_str(&serde_json::to_string(&s.project.layouts[0]).unwrap()).unwrap();
+    assert!(matches!(back.element(note).map(|e| &e.kind), Some(ElementKind::Text { wrap: true, .. })));
+    // Neither true nor false: refused, said, and nothing changes.
+    let err = s.run("layout.update", &json!({"element": plain, "wrap": "sometimes", "text": "Changed"})).unwrap_err();
+    assert!(err.contains("wrap"), "{err}");
+    assert!(wraps(&s, plain));
+    assert!(matches!(&s.project.layouts[0].element(plain).unwrap().kind, ElementKind::Text { text, .. } if text == "Fonte: IBGE"));
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "wrap": [true]})).unwrap_err().contains("wrap"));
+    // Only a text wraps.
+    let rect = add(&mut s, json!({"kind": "rectangle", "x": 10, "y": 10, "w": 20, "h": 20}));
+    assert!(s.run("layout.update", &json!({"element": rect, "wrap": true})).unwrap_err().contains("wrap"));
+    assert!(s.run("layout.addElement", &json!({"kind": "legend", "wrap": false})).unwrap_err().contains("wrap"));
+    // null leaves it as it is.
+    s.run("layout.update", &json!({"element": plain, "wrap": null})).unwrap();
+    assert!(wraps(&s, plain));
+}
+
 /// Text elements take a font family (#517): sans by default and not written then, serif when
 /// added or later, kept through a save, sans again on request; a bad value is an error that
 /// changes nothing. Where no serif is installed the text is drawn in the sans, and the command
@@ -51020,6 +51157,7 @@ fn the_footer_lines_up_with_a_legend_at_the_right() {
         font: FontFamily::Sans,
         font_name: None,
         rotation: 0.0,
+        wrap: false,
     };
     let card = || ElementKind::Rectangle {
         fill: rustgis_map::Rgba::new(0, 0, 0, 0),
