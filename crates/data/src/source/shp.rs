@@ -187,12 +187,9 @@ impl ShpSource {
         {
             notes.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
         }
-        let fields = table
-            .columns
-            .iter()
-            .zip(read_names(&dbf, table.columns.len(), &encoding.decoder())?)
-            .map(|(c, n)| Field::new(n, c.out))
-            .collect();
+        let (names, not_utf8) = read_names(&dbf, table.columns.len(), &encoding.decoder(), encoding.is_utf8())?;
+        notes.extend(crate::dbf::not_utf8_names_note(not_utf8));
+        let fields = table.columns.iter().zip(names).map(|(c, n)| Field::new(n, c.out)).collect();
         let mut info = SourceInfo {
             name: name.to_string(),
             format: "Shapefile",
@@ -239,7 +236,8 @@ impl FeatureSource for ShpSource {
         let mut buf = Vec::new();
         let mut row = vec![0u8; self.table.row_len];
         let mut features = Vec::new();
-        let (mut skipped, mut unread_dates, mut null_text) = (0, Vec::new(), Vec::new());
+        let (mut skipped, mut unread_dates, mut null_text, mut not_utf8) = (0, Vec::new(), Vec::new(), Vec::new());
+        let utf8 = self.encoding.is_utf8();
         // An extent the file's system couldn't bound (#1925) has no boxes for the index to sample
         // by: every record is visited, tested, and the matches sampled as they come.
         let late = req.extent.is_some() && bounds.is_none();
@@ -298,7 +296,7 @@ impl FeatureSource for ShpSource {
                 if late && !sample.wants() {
                     return Ok(());
                 }
-                self.table.values(&row, &encoding, &mut unread_dates, &mut null_text)
+                self.table.values(&row, &encoding, &mut unread_dates, &mut null_text, utf8.then_some(&mut not_utf8))
             } else {
                 if late && !sample.wants() {
                     return Ok(());
@@ -320,7 +318,7 @@ impl FeatureSource for ShpSource {
         } else {
             self.index.visit(bounds, limit, &mut each)?
         };
-        Ok(Batch { features, matched, complete, skipped, unread_dates, rounded_dates: Vec::new(), null_text, notes: Vec::new() })
+        Ok(Batch { features, matched, complete, skipped, unread_dates, rounded_dates: Vec::new(), null_text, notes: Vec::new(), not_utf8 })
     }
     fn streams_chunks(&self) -> bool {
         true
@@ -340,7 +338,8 @@ impl FeatureSource for ShpSource {
         let mut dbf = Cursor::open(&self.dbf)?;
         let mut buf = Vec::new();
         let mut row = vec![0u8; self.table.row_len];
-        let (mut skipped, mut unread_dates, mut null_text) = (0, Vec::new(), Vec::new());
+        let (mut skipped, mut unread_dates, mut null_text, mut not_utf8) = (0, Vec::new(), Vec::new(), Vec::new());
+        let utf8 = self.encoding.is_utf8();
         // The same directory, ordering, extent rules and read-only scan fallback as sampled
         // reads, with no interaction row cap. The index visits records without materializing
         // their directory or the complete feature collection in memory.
@@ -392,7 +391,7 @@ impl FeatureSource for ShpSource {
                 if row.first() == Some(&b'*') {
                     return Ok(());
                 }
-                self.table.values(&row, &encoding, &mut unread_dates, &mut null_text)
+                self.table.values(&row, &encoding, &mut unread_dates, &mut null_text, utf8.then_some(&mut not_utf8))
             } else {
                 vec![Value::Null; self.table.columns.len()]
             };
@@ -408,6 +407,7 @@ impl FeatureSource for ShpSource {
             rounded_dates: Vec::new(),
             null_text,
             notes: Vec::new(),
+            not_utf8,
         })
     }
 }
@@ -634,14 +634,16 @@ fn read_table(path: &Path) -> Result<Table> {
 
 impl Table {
     /// A row's values (after its deletion flag), counting in `unread_dates` the dates that
-    /// aren't ones ([`Batch::unread_dates`]) and in `null_text` the text `<Null>` read as null
-    /// ([`Batch::null_text`]).
+    /// aren't ones ([`Batch::unread_dates`]), in `null_text` the text `<Null>` read as null
+    /// ([`Batch::null_text`]) and in `not_utf8`, given when the table is read as UTF-8, the text
+    /// that isn't UTF-8 ([`Batch::not_utf8`]).
     fn values(
         &self,
         row: &[u8],
         encoding: &dyn shapefile::dbase::Encoding,
         unread_dates: &mut Vec<usize>,
         null_text: &mut Vec<usize>,
+        mut not_utf8: Option<&mut Vec<usize>>,
     ) -> Vec<Value> {
         let mut out = Vec::with_capacity(self.columns.len());
         for (k, c) in self.columns.iter().enumerate() {
@@ -663,6 +665,13 @@ impl Table {
                     super::null_text_at(null_text, k);
                     Value::Null
                 } else {
+                    // Counted on the bytes: U+FFFD in the text read can also be what the file holds.
+                    if let Some(counts) = &mut not_utf8
+                        && matches!(v, Value::Text(_))
+                        && std::str::from_utf8(padded(b)).is_err()
+                    {
+                        super::not_utf8_at(counts, k);
+                    }
                     v
                 }
             });
@@ -671,20 +680,24 @@ impl Table {
     }
 }
 
-/// The `.dbf`'s column names, in order (read again: the layout above keeps only offsets).
-fn read_names(path: &Path, n: usize, encoding: &dyn shapefile::dbase::Encoding) -> Result<Vec<String>> {
+/// The `.dbf`'s column names, in order (read again: the layout above keeps only offsets), and,
+/// when they are read as UTF-8 (`utf8`), how many of them aren't UTF-8
+/// ([`crate::dbf::not_utf8_names_note`]).
+fn read_names(path: &Path, n: usize, encoding: &dyn shapefile::dbase::Encoding, utf8: bool) -> Result<(Vec<String>, usize)> {
     let mut f = BufReader::new(crate::provenance::open(path)?);
     f.seek(SeekFrom::Start(32))?;
     let mut out = Vec::with_capacity(n);
+    let mut not_utf8 = 0;
     let mut d = [0u8; 32];
     for _ in 0..n {
         f.read_exact(&mut d)?;
         let name = d.get(..11).unwrap_or(&[]);
         let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
         let name = name.get(..end).unwrap_or(&[]);
+        not_utf8 += usize::from(utf8 && std::str::from_utf8(name).is_err());
         out.push(encoding.decode(name).unwrap_or_else(|_| String::from_utf8_lossy(name)).trim().to_string());
     }
-    Ok(out)
+    Ok((out, not_utf8))
 }
 
 /// A text field's bytes up to the first NUL, without the padding after them: spaces before the

@@ -79,8 +79,9 @@ A result is right, or RustGIS says what it lost or assumed
   remaining spreadsheet formats (ODS, XLS, XLSB and XLSM). It covers GeoJSON, TopoJSON, CSV,
   KML, KMZ, GPX, GML, GeoRSS,
   DXF, LandXML and MapInfo, with height-loss cases for CityJSON, CityGML, GeoPackage,
-  FlatGeobuf, GeoParquet and FileGDB, Z/M-loss cases for Shapefile, and ring-loss cases for
-  OSM PBF, and WKT height/member and error-cell losses for XLSX; other loss kinds remain.
+  FlatGeobuf, GeoParquet and FileGDB, Z/M-loss and non-UTF-8 text cases for Shapefile, and
+  ring-loss cases for OSM PBF, and WKT height/member and error-cell losses for XLSX; other loss
+  kinds remain.
   Exports are checked by `never_silent_roundtrip.rs` _(open)_.
 - A `--strict` option for `rustgis-cli run` that exits non-zero when a loss is reported, for
   scheduled jobs. Notices carry a severity but not a kind today (`Notice` in
