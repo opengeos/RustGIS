@@ -8150,6 +8150,45 @@ Elaboração: RustGIS",
         assert!(x < -3.0, "{x}");
     }
 
+    /// 64-bit FNV-1a over the pixmaps' bytes.
+    fn fnv(pms: &[Pixmap]) -> u64 {
+        pms.iter().flat_map(|p| p.data().iter()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    /// A plain scale bar on a white `w` x 60 pixmap, in the default colours.
+    fn draw_default(style: ScaleBarStyle, units: ScaleUnits, divisions: usize, ground: f64, w: u32, ppp: f64, comma: bool) -> Pixmap {
+        let mut pm = Pixmap::new(w, 60).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let r = Rect::from_xywh(0.0, 0.0, w as f32, 60.0).unwrap();
+        let colors = (Rgba::rgb(0x22, 0x22, 0x22), Rgba::rgb(0xFF, 0xFF, 0xFF));
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, (units, divisions, style), colors, ppp, comma));
+        pm
+    }
+
+    /// How [`scale_bars_without_details_draw_as_before`]'s bars drew before scale bars had details.
+    const PINNED: u64 = 0xc3cb_47e7_d78d_abb4;
+
+    /// A bar with none of the details draws exactly as main drew it: every style, unit, division
+    /// count, ground resolution, density and decimal mark.
+    #[test]
+    fn scale_bars_without_details_draw_as_before() {
+        let mut drawn = Vec::new();
+        for style in ScaleBarStyle::ALL {
+            for units in [ScaleUnits::Auto, ScaleUnits::Miles, ScaleUnits::Feet, ScaleUnits::Meters] {
+                for divisions in [1, 4, 10] {
+                    for ground in [0.37, 100.0, 7.84] {
+                        for (w, ppp) in [(93u32, 1.0), (300, 1.0), (300, 300.0 / 72.0)] {
+                            for comma in [false, true] {
+                                drawn.push(draw_default(style, units, divisions, ground, w, ppp, comma));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(fnv(&drawn), PINNED, "{:#x}", fnv(&drawn));
+    }
+
     #[test]
     fn scale_bars_count_in_their_units_and_divisions() {
         let draw_in = |bar, colors| {
