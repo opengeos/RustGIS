@@ -131,6 +131,7 @@ impl LayerLook {
             projected_rev: _,
             projected_for: _,
             projected_crs: _,
+            lonlat: _,
             view_memory: _,
             geometry_kinds: _,
             geometry_rev,
