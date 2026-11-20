@@ -102,6 +102,21 @@ pub struct WebOptions {
 }
 
 impl WebOptions {
+    /// With the query of a service's address (`…?a=1&token=…`), which isn't kept with the address:
+    /// a login's key, or a part with no name or no value (which may be a key itself), is a login;
+    /// anything else an option, named, never its value.
+    fn with_address_query(mut self, query: &str) -> Self {
+        self = self.with_rest(query.split('&').filter(|p| !p.is_empty()).skip(MAX_PARTS).count());
+        for part in query.split('&').filter(|p| !p.is_empty()).take(MAX_PARTS) {
+            match part.split_once('=') {
+                Some((k, v)) if is_login(k) || v.is_empty() => self.login = true,
+                Some((k, _)) if !k.is_empty() => self.note(k),
+                _ => self.login = true,
+            }
+        }
+        self
+    }
+
     /// With `rest` parts past those read (the first [`MAX_PARTS`]), if any: counted, never named,
     /// and taken as a login (one of them may be a key).
     fn with_rest(mut self, rest: usize) -> Self {
@@ -342,14 +357,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             // login's key is a login, anything else an option (named, never its value). A part with no
             // name (`?abc`) or no value (`?abc=`) may be a key itself: never named, taken as a login.
             if let Some(query) = rest.as_deref().and_then(|r| r.split_once('?')).map(|(_, q)| q) {
-                options = options.with_rest(query.split('&').filter(|p| !p.is_empty()).skip(MAX_PARTS).count());
-                for part in query.split('&').filter(|p| !p.is_empty()).take(MAX_PARTS) {
-                    match part.split_once('=') {
-                        Some((k, v)) if is_login(k) || v.is_empty() => options.login = true,
-                        Some((k, _)) if !k.is_empty() => options.note(k),
-                        _ => options.login = true,
-                    }
-                }
+                options = options.with_address_query(query);
             }
             match root {
                 Some(url) => Source::ArcGis { url, layer: "style".into(), features: false, style: get("styleUrl").is_some(), options },
@@ -441,12 +449,14 @@ fn arcgis(provider: &str, datasource: &str) -> Source {
     let (kv, left) = conninfo_rest(datasource);
     let get = |k: &str| kv.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
     let other = || Source::Other { provider: provider.into() };
-    let Some(url) = get("url") else { return other() };
-    let url = url.trim_end_matches('/').to_string();
+    let Some(address) = get("url") else { return other() };
+    // The address's own query (a token, say) isn't kept with it, and is noted ([`WebOptions::with_address_query`]).
+    let (path, query) = address.split_once('?').unwrap_or((&address, ""));
+    let url = path.trim_end_matches('/').to_string();
     let lower = url.to_ascii_lowercase();
     // The system it is asked in and the image format are RustGIS's own.
     const READ: [&str; 4] = ["url", "layer", "crs", "format"];
-    let options = WebOptions::of(&kv, &READ).with_rest(left);
+    let options = WebOptions::of(&kv, &READ).with_rest(left).with_address_query(query);
     let layer =
         |url: String, layer: String, features: bool| Source::ArcGis { url, layer, features, style: false, options: options.clone() };
     match provider {
@@ -1007,6 +1017,25 @@ mod tests {
             };
             assert!(options.login && options.ignored.is_empty(), "{option}: {options:?}");
         }
+    }
+
+    /// An ArcGIS service address with a query (a token) is read: the layer from its path, the
+    /// token a login, never kept with the address.
+    #[test]
+    fn an_arcgis_address_with_a_query_is_read() {
+        let Source::ArcGis { url, layer, features, options, .. } =
+            read("arcgisfeatureserver", "url='https://example.com/arcgis/rest/services/P/FeatureServer/0?token=s3cret&f=json'", "/data")
+        else {
+            panic!("an ArcGIS source")
+        };
+        assert_eq!((url.as_str(), layer.as_str(), features), ("https://example.com/arcgis/rest/services/P/FeatureServer", "0", true));
+        assert!(options.login && options.ignored == ["f=…"], "{options:?}");
+        let Source::ArcGis { url, .. } =
+            read("arcgismapserver", "url='https://example.com/arcgis/rest/services/T/MapServer?token=s3cret'", "/data")
+        else {
+            panic!("an ArcGIS source")
+        };
+        assert_eq!(url, "https://example.com/arcgis/rest/services/T/MapServer");
     }
 
     /// A vector tile service address's part with no value (`?abc=`) may be a key: taken as a
