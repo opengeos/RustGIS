@@ -660,7 +660,7 @@ fn draw_page(
                 let bearing = frame(*f).map_or(0.0, |fr| fr.2.bearing);
                 north_arrow(&mut pm, r, *style, *fill, *outline, ppp, bearing)
             }
-            ElementKind::ScaleBar { frame: f, units, divisions, style, color, fill } => {
+            ElementKind::ScaleBar { frame: f, units, divisions, style, color, fill, .. } => {
                 if let Some(&(_, mi, cam, _, _)) = frame(*f)
                     && let Some(map) = maps.get(mi)
                 {
@@ -8281,14 +8281,10 @@ Elaboração: RustGIS",
             },
         );
         let (crimson, navy) = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
-        let bar = ElementKind::ScaleBar {
-            frame,
-            units: ScaleUnits::Auto,
-            divisions: 4,
-            style: ScaleBarStyle::Alternating,
-            color: crimson,
-            fill: navy,
-        };
+        let mut bar = ElementKind::scale_bar(frame);
+        if let ElementKind::ScaleBar { color, fill, .. } = &mut bar {
+            (*color, *fill) = (crimson, navy);
+        }
         l.add("Scale Bar", (5.0, 5.0, 90.0, 20.0), bar);
         let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
         // Above the frame (30 mm of the page's 60): the bar's divisions in its colour and fill, and

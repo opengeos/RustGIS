@@ -4911,7 +4911,7 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
                 outline: color(p, "outline", *outline)?,
             }))
         }
-        ElementKind::ScaleBar { frame, units, divisions, style, color: c, fill } => {
+        ElementKind::ScaleBar { units, divisions, style, color: c, fill, .. } => {
             if ["style", "units", "divisions", "color", "fill"].iter().all(|k| p.get(k).is_none()) {
                 return Ok(None);
             }
@@ -4932,7 +4932,12 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
                 None => *divisions,
             };
             let (color, fill) = (color(p, "color", *c)?, color(p, "fill", *fill)?);
-            Ok(Some(ElementKind::ScaleBar { frame: *frame, units, divisions, style, color, fill }))
+            // The details (subdivisions, labels, fit) stay as they were.
+            let mut next = kind.clone();
+            if let ElementKind::ScaleBar { units: u, divisions: d, style: st, color: co, fill: fi, .. } = &mut next {
+                (*u, *d, *st, *co, *fi) = (units, divisions, style, color, fill);
+            }
+            Ok(Some(next))
         }
         ElementKind::Rectangle { fill, outline, width, dash, .. } | ElementKind::Ellipse { fill, outline, width, dash } => {
             if ["fill", "outline", "color", "width", "radius", "dash"].iter().all(|k| p.get(k).is_none()) {

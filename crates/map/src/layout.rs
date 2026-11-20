@@ -831,6 +831,144 @@ fn divisions() -> usize {
     4
 }
 
+/// The most subdivisions each division of a scale bar is split into.
+pub const MAX_SCALE_SUBDIVISIONS: usize = 10;
+
+/// The most divisions a scale bar draws to the left of its zero.
+pub const MAX_SCALE_BEFORE_ZERO: usize = 2;
+
+/// The most decimal places a scale bar's numbers show.
+pub const MAX_SCALE_DECIMALS: usize = 3;
+
+/// The sizes a scale bar's labels have, in points.
+pub const SCALE_LABEL_SIZE: std::ops::RangeInclusive<f64> = 4.0..=24.0;
+
+/// The size a scale bar's labels have unless set, in points.
+pub const DEFAULT_SCALE_LABEL_SIZE: f64 = 8.0;
+
+/// The most characters a scale bar's unit label has.
+pub const MAX_UNIT_LABEL_CHARS: usize = 100;
+
+fn scale_label_size() -> f64 {
+    DEFAULT_SCALE_LABEL_SIZE
+}
+
+fn is_scale_label_size(v: &f64) -> bool {
+    *v == DEFAULT_SCALE_LABEL_SIZE
+}
+
+/// Where a scale bar's numbers sit against the bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScaleLabelPosition {
+    /// Over the bar.
+    #[default]
+    Above,
+    /// Under the bar.
+    Below,
+}
+
+impl ScaleLabelPosition {
+    pub const ALL: [ScaleLabelPosition; 2] = [ScaleLabelPosition::Above, ScaleLabelPosition::Below];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            ScaleLabelPosition::Above => "above",
+            ScaleLabelPosition::Below => "below",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ScaleLabelPosition::Above => "Above the bar",
+            ScaleLabelPosition::Below => "Below the bar",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<ScaleLabelPosition> {
+        ScaleLabelPosition::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// Where a scale bar's unit label sits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnitLabelPosition {
+    /// After the last number, on the same line.
+    #[default]
+    AfterLabels,
+    /// Beside the end of the bar.
+    AfterBar,
+    /// Over the bar.
+    Above,
+    /// Under the bar.
+    Below,
+}
+
+impl UnitLabelPosition {
+    pub const ALL: [UnitLabelPosition; 4] =
+        [UnitLabelPosition::AfterLabels, UnitLabelPosition::AfterBar, UnitLabelPosition::Above, UnitLabelPosition::Below];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            UnitLabelPosition::AfterLabels => "afterLabels",
+            UnitLabelPosition::AfterBar => "afterBar",
+            UnitLabelPosition::Above => "above",
+            UnitLabelPosition::Below => "below",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UnitLabelPosition::AfterLabels => "After the labels",
+            UnitLabelPosition::AfterBar => "After the bar",
+            UnitLabelPosition::Above => "Above the bar",
+            UnitLabelPosition::Below => "Below the bar",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<UnitLabelPosition> {
+        UnitLabelPosition::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// What a scale bar gives way on when its length does not fit its box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScaleBarFit {
+    /// Keep the number of divisions and the bar's width; the value of a division changes.
+    #[default]
+    AdjustDivisionValue,
+    /// Keep the value of a division and the bar's width; the number of divisions changes.
+    AdjustDivisions,
+    /// Keep the value and the number of divisions; the bar's width changes.
+    AdjustWidth,
+}
+
+impl ScaleBarFit {
+    pub const ALL: [ScaleBarFit; 3] = [ScaleBarFit::AdjustDivisionValue, ScaleBarFit::AdjustDivisions, ScaleBarFit::AdjustWidth];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            ScaleBarFit::AdjustDivisionValue => "adjustDivisionValue",
+            ScaleBarFit::AdjustDivisions => "adjustDivisions",
+            ScaleBarFit::AdjustWidth => "adjustWidth",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ScaleBarFit::AdjustDivisionValue => "Adjust division value",
+            ScaleBarFit::AdjustDivisions => "Adjust number of divisions",
+            ScaleBarFit::AdjustWidth => "Adjust width",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<ScaleBarFit> {
+        ScaleBarFit::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
 /// The most columns a legend lays its rows in.
 pub const MAX_LEGEND_COLUMNS: usize = 3;
 
@@ -975,6 +1113,31 @@ pub enum ElementKind {
         /// The alternating bar's light divisions.
         #[serde(default = "white")]
         fill: Rgba,
+        /// Parts each division is split into, 0 (none) to [`MAX_SCALE_SUBDIVISIONS`].
+        #[serde(default, skip_serializing_if = "is_default")]
+        subdivisions: usize,
+        /// Divisions drawn left of zero, 0 to [`MAX_SCALE_BEFORE_ZERO`].
+        #[serde(default, skip_serializing_if = "is_default")]
+        divisions_before_zero: usize,
+        /// Where the numbers sit against the bar.
+        #[serde(default, skip_serializing_if = "is_default")]
+        label_position: ScaleLabelPosition,
+        /// Text printed in place of the units' abbreviation. `None` prints the abbreviation and
+        /// `Some("")` prints nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit_label: Option<String>,
+        /// Where the unit label sits.
+        #[serde(default, skip_serializing_if = "is_default")]
+        unit_label_position: UnitLabelPosition,
+        /// Decimal places in the numbers, 0 to [`MAX_SCALE_DECIMALS`].
+        #[serde(default, skip_serializing_if = "is_default")]
+        decimals: usize,
+        /// The numbers' size in points, within [`SCALE_LABEL_SIZE`].
+        #[serde(default = "scale_label_size", skip_serializing_if = "is_scale_label_size")]
+        label_size: f64,
+        /// What gives way when the bar's length does not fit its box.
+        #[serde(default, skip_serializing_if = "is_default")]
+        fit: ScaleBarFit,
     },
     Legend {
         frame: u32,
@@ -1395,7 +1558,51 @@ impl ElementKind {
             style: ScaleBarStyle::default(),
             color: ink(),
             fill: white(),
+            subdivisions: 0,
+            divisions_before_zero: 0,
+            label_position: ScaleLabelPosition::default(),
+            unit_label: None,
+            unit_label_position: UnitLabelPosition::default(),
+            decimals: 0,
+            label_size: DEFAULT_SCALE_LABEL_SIZE,
+            fit: ScaleBarFit::default(),
         }
+    }
+
+    /// Whether this is a scale bar with any of the details set: subdivisions, divisions before
+    /// zero, a label or unit label placement, a unit label, decimals, a label size or a fit.
+    pub fn scale_bar_uses_details(&self) -> bool {
+        let ElementKind::ScaleBar {
+            frame,
+            subdivisions,
+            divisions_before_zero,
+            label_position,
+            unit_label,
+            unit_label_position,
+            decimals,
+            label_size,
+            fit,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let ElementKind::ScaleBar {
+            subdivisions: s0,
+            divisions_before_zero: z0,
+            label_position: lp0,
+            unit_label: u0,
+            unit_label_position: up0,
+            decimals: d0,
+            label_size: ls0,
+            fit: f0,
+            ..
+        } = ElementKind::scale_bar(*frame)
+        else {
+            return false;
+        };
+        (*subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *label_size, *fit)
+            != (s0, z0, lp0, &u0, up0, d0, ls0, f0)
     }
 
     pub fn code(&self) -> &'static str {
@@ -2549,7 +2756,23 @@ impl Layout {
                     text.truncate(end);
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
-                ElementKind::ScaleBar { divisions, .. } => *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS),
+                ElementKind::ScaleBar { divisions, subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. } => {
+                    *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
+                    *subdivisions = (*subdivisions).min(MAX_SCALE_SUBDIVISIONS);
+                    *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
+                    *decimals = (*decimals).min(MAX_SCALE_DECIMALS);
+                    *label_size =
+                        finite_or(*label_size, DEFAULT_SCALE_LABEL_SIZE).clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end());
+                    // The label is one line: a break in a hand-edited file is a space.
+                    if let Some(label) = unit_label {
+                        if label.contains(['\n', '\r']) {
+                            *label = label.replace(['\n', '\r'], " ");
+                        }
+                        let end = label.char_indices().nth(MAX_UNIT_LABEL_CHARS).map_or(label.len(), |(i, _)| i);
+                        cut |= end < label.len();
+                        label.truncate(end);
+                    }
+                }
                 ElementKind::Rectangle { width, .. } | ElementKind::Ellipse { width, .. } => {
                     *width = finite_or(*width, 1.0).clamp(0.0, 50.0)
                 }
@@ -4105,5 +4328,104 @@ mod tests {
         assert_eq!(back, l);
         let mut text = ElementKind::text("t", 12.0, Rgba::rgb(0, 0, 0), false);
         assert!(!text.takes_ink() && text.ink_mut().is_none(), "a text's colour is its own option");
+    }
+
+    #[test]
+    fn scale_bars_without_details_save_as_before() {
+        // As main writes a plain bar: colour and fill always, nothing new.
+        let plain = r#"{"ScaleBar":{"frame":2,"units":"Auto","divisions":4,"style":"Alternating","color":[34,34,34,255],"fill":[255,255,255,255]}}"#;
+        let bar: ElementKind = serde_json::from_str(plain).unwrap();
+        assert_eq!(serde_json::to_string(&bar).unwrap(), plain);
+        assert_eq!(bar, ElementKind::scale_bar(2));
+        assert!(!bar.scale_bar_uses_details());
+        let ElementKind::ScaleBar {
+            subdivisions,
+            divisions_before_zero,
+            label_position,
+            unit_label,
+            unit_label_position,
+            decimals,
+            label_size,
+            fit,
+            ..
+        } = &bar
+        else {
+            panic!("a scale bar")
+        };
+        assert_eq!((*subdivisions, *divisions_before_zero, *decimals, *label_size), (0, 0, 0, 8.0));
+        assert_eq!(
+            (*label_position, unit_label.clone(), *unit_label_position, *fit),
+            (ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, ScaleBarFit::AdjustDivisionValue)
+        );
+        // Every setting, saved under its own key and read back equal.
+        let mut all = bar.clone();
+        if let ElementKind::ScaleBar {
+            subdivisions,
+            divisions_before_zero,
+            label_position,
+            unit_label,
+            unit_label_position,
+            decimals,
+            label_size,
+            fit,
+            ..
+        } = &mut all
+        {
+            (*subdivisions, *divisions_before_zero, *label_position) = (4, 1, ScaleLabelPosition::Below);
+            (*unit_label, *unit_label_position) = (Some("Kilometres".into()), UnitLabelPosition::AfterBar);
+            (*decimals, *label_size, *fit) = (2, 10.5, ScaleBarFit::AdjustWidth);
+        }
+        assert!(all.scale_bar_uses_details());
+        let s = serde_json::to_string(&all).unwrap();
+        assert!(s.starts_with(r#"{"ScaleBar":{"frame":2,"units":"Auto","divisions":4,"style":"Alternating","color":[34,34,34,255],"fill":[255,255,255,255],"#), "{s}");
+        for part in [
+            r#""subdivisions":4"#,
+            r#""divisions_before_zero":1"#,
+            r#""label_position":"below""#,
+            r#""unit_label":"Kilometres""#,
+            r#""unit_label_position":"afterBar""#,
+            r#""decimals":2"#,
+            r#""label_size":10.5"#,
+            r#""fit":"adjustWidth""#,
+        ] {
+            assert!(s.contains(part), "{part} in {s}");
+        }
+        assert_eq!(serde_json::from_str::<ElementKind>(&s).unwrap(), all);
+        // An empty unit label is a setting too: it prints none.
+        let mut blank = bar.clone();
+        if let ElementKind::ScaleBar { unit_label, .. } = &mut blank {
+            *unit_label = Some(String::new());
+        }
+        assert!(blank.scale_bar_uses_details());
+        assert!(serde_json::to_string(&blank).unwrap().contains(r#""unit_label":"""#));
+        // A loaded layout's out-of-range values are brought into range, and said.
+        let text = format!(
+            r#"{{"name":"x","width":200,"height":100,"elements":[
+            {{"id":1,"name":"a","x":0,"y":0,"w":10,"h":10,"kind":{{"MapFrame":{{"map":"m","center":{{"x":0,"y":0}},"scale":1000}}}}}},
+            {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"label_size":1e9,"unit_label":"{}"}}}}}},
+            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\nb"}}}}}}]}}"#,
+            "x".repeat(150)
+        );
+        let mut l: Layout = serde_json::from_str(&text).unwrap();
+        let repairs = l.clamp();
+        let got = |id| match l.element(id).map(|e| &e.kind) {
+            Some(ElementKind::ScaleBar { subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. }) => {
+                (*subdivisions, *divisions_before_zero, *decimals, *label_size, unit_label.clone().unwrap_or_default())
+            }
+            _ => (0, 0, 0, 0.0, String::new()),
+        };
+        assert_eq!(got(2), (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS)));
+        assert_eq!(got(3), (0, 0, 0, 4.0, "a b".to_string()));
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
+        for v in ScaleLabelPosition::ALL {
+            assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
+        }
+        for v in UnitLabelPosition::ALL {
+            assert_eq!(UnitLabelPosition::from_name(v.code()), Some(v));
+        }
+        for v in ScaleBarFit::ALL {
+            assert_eq!(ScaleBarFit::from_name(v.code()), Some(v));
+        }
+        assert_eq!(ScaleBarFit::from_name("manual"), None);
     }
 }
