@@ -18,6 +18,7 @@ pub mod graticule;
 pub mod label_by;
 pub mod layout;
 pub mod lod;
+pub mod look;
 pub mod palette;
 pub mod paths;
 pub mod planets;
@@ -1525,7 +1526,7 @@ pub const MAX_GROUP_DEPTH: usize = 8;
 /// ordinary layers, kept together in the drawing order; a layer belongs to one group at most.
 /// A group may sit in another (#836, `parent`): its layers, and its subgroups' at any depth,
 /// stay together in the drawing order, and every group above it applies too.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LayerGroup {
     pub id: u32,
     pub name: String,
