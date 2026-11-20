@@ -940,18 +940,18 @@ pub enum ScaleBarFit {
     #[default]
     AdjustDivisionValue,
     /// Keep the value of a division and the bar's width; the number of divisions changes.
-    AdjustDivisions,
+    AdjustDivision,
     /// Keep the value and the number of divisions; the bar's width changes.
     AdjustWidth,
 }
 
 impl ScaleBarFit {
-    pub const ALL: [ScaleBarFit; 3] = [ScaleBarFit::AdjustDivisionValue, ScaleBarFit::AdjustDivisions, ScaleBarFit::AdjustWidth];
+    pub const ALL: [ScaleBarFit; 3] = [ScaleBarFit::AdjustDivisionValue, ScaleBarFit::AdjustDivision, ScaleBarFit::AdjustWidth];
 
     pub fn code(self) -> &'static str {
         match self {
             ScaleBarFit::AdjustDivisionValue => "adjustDivisionValue",
-            ScaleBarFit::AdjustDivisions => "adjustDivisions",
+            ScaleBarFit::AdjustDivision => "adjustDivision",
             ScaleBarFit::AdjustWidth => "adjustWidth",
         }
     }
@@ -959,7 +959,7 @@ impl ScaleBarFit {
     pub fn label(self) -> &'static str {
         match self {
             ScaleBarFit::AdjustDivisionValue => "Adjust division value",
-            ScaleBarFit::AdjustDivisions => "Adjust number of divisions",
+            ScaleBarFit::AdjustDivision => "Adjust number of divisions",
             ScaleBarFit::AdjustWidth => "Adjust width",
         }
     }
@@ -2765,9 +2765,7 @@ impl Layout {
                         finite_or(*label_size, DEFAULT_SCALE_LABEL_SIZE).clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end());
                     // The label is one line: a break in a hand-edited file is a space.
                     if let Some(label) = unit_label {
-                        if label.contains(['\n', '\r']) {
-                            *label = label.replace(['\n', '\r'], " ");
-                        }
+                        *label = label.replace("\r\n", " ").replace(['\n', '\r'], " ");
                         let end = label.char_indices().nth(MAX_UNIT_LABEL_CHARS).map_or(label.len(), |(i, _)| i);
                         cut |= end < label.len();
                         label.truncate(end);
@@ -4377,6 +4375,12 @@ mod tests {
         }
         assert!(all.scale_bar_uses_details());
         let s = serde_json::to_string(&all).unwrap();
+        // The middle fit saves as the camelCase of its variant.
+        let mut middle = all.clone();
+        if let ElementKind::ScaleBar { fit, .. } = &mut middle {
+            *fit = ScaleBarFit::AdjustDivision;
+        }
+        assert!(serde_json::to_string(&middle).unwrap().contains(r#""fit":"adjustDivision""#));
         assert!(s.starts_with(r#"{"ScaleBar":{"frame":2,"units":"Auto","divisions":4,"style":"Alternating","color":[34,34,34,255],"fill":[255,255,255,255],"#), "{s}");
         for part in [
             r#""subdivisions":4"#,
@@ -4403,7 +4407,7 @@ mod tests {
             r#"{{"name":"x","width":200,"height":100,"elements":[
             {{"id":1,"name":"a","x":0,"y":0,"w":10,"h":10,"kind":{{"MapFrame":{{"map":"m","center":{{"x":0,"y":0}},"scale":1000}}}}}},
             {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"label_size":1e9,"unit_label":"{}"}}}}}},
-            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\nb"}}}}}}]}}"#,
+            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4415,7 +4419,7 @@ mod tests {
             _ => (0, 0, 0, 0.0, String::new()),
         };
         assert_eq!(got(2), (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS)));
-        assert_eq!(got(3), (0, 0, 0, 4.0, "a b".to_string()));
+        assert_eq!(got(3), (0, 0, 0, 4.0, "a b c d".to_string()));
         assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
