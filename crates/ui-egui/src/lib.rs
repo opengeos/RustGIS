@@ -2758,6 +2758,14 @@ impl RustGisApp {
         autosave::end(self);
     }
 
+    /// The phone's activity ending (Back): the recovery copy of the latest edit is finished
+    /// before the process ends, and kept, as an exit there doesn't ask about unsaved work.
+    pub fn finish_recovery_copy(&mut self) {
+        if let Some(store) = &self.services.recovery {
+            store.flush();
+        }
+    }
+
     /// The app closing (the desktop app's `on_exit`): an export still writing is cancelled and
     /// given a moment to stop, so it leaves no temporary file beside its destination.
     #[cfg(not(target_arch = "wasm32"))]

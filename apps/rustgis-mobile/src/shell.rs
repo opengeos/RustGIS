@@ -466,6 +466,12 @@ fn use_picker<P: Phone + 'static>(
 }
 
 impl<P: Phone> eframe::App for App<P> {
+    /// The activity ends without asking about unsaved work: the recovery copy of the latest
+    /// edit is finished first, so the next launch offers it.
+    fn on_exit(&mut self) {
+        self.app.finish_recovery_copy();
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // The GPU map backend draws inside egui's wgpu pass; hand over the render state.
         self.app.set_render_state(frame.wgpu_render_state().cloned());
