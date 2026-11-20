@@ -109,9 +109,14 @@ impl WebOptions {
         self = self.with_rest(query.split('&').filter(|p| !p.is_empty()).skip(MAX_PARTS).count());
         for part in query.split('&').filter(|p| !p.is_empty()).take(MAX_PARTS) {
             match part.split_once('=') {
-                // A name with a space in it (written or encoded) holds a word of its own, which may be
-                // a key: a login, as in a source's options ([`WebOptions::of`]).
-                Some((k, v)) if is_login(k) || v.is_empty() || k.contains(char::is_whitespace) || k.contains('+') || k.contains("%20") => {
+                // A name with whitespace in it (written, `+`, or percent-encoded: decoded once to
+                // tell) holds a word of its own, which may be a key: a login, as in a source's
+                // options ([`WebOptions::of`]).
+                Some((k, v))
+                    if is_login(k)
+                        || v.is_empty()
+                        || rustgis_data::address::percent_decode(&k.replace('+', " ")).contains(char::is_whitespace) =>
+                {
                     self.login = true;
                 }
                 Some((k, _)) if !k.is_empty() => self.note(k),
@@ -1041,6 +1046,15 @@ mod tests {
             panic!("an ArcGIS source")
         };
         assert!(options.login && options.ignored.is_empty(), "{options:?}");
+        // Any whitespace encoded (a tab) is the same; an ordinary option is still named.
+        let Source::ArcGis { options, .. } = read(
+            "arcgisfeatureserver",
+            "url='https://example.com/arcgis/rest/services/P/FeatureServer/0?S3CRET%09TOKEN=x&f=json'",
+            "/data",
+        ) else {
+            panic!("an ArcGIS source")
+        };
+        assert!(options.login && options.ignored == ["f=…"], "{options:?}");
         let Source::ArcGis { url, .. } =
             read("arcgismapserver", "url='https://example.com/arcgis/rest/services/T/MapServer?token=s3cret'", "/data")
         else {
