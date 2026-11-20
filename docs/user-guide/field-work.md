@@ -217,9 +217,10 @@ after packaging; legacy recovery cannot change that association.
 - **Choosing a folder** is not possible with the phone's picker; the app says so where one is
   asked for.
 - **Recovery** keeps a copy of completed edits in the app's private storage. If the app stops
-  with unsaved work, the next launch offers to recover it. While a large copy is writing, further
-  edits go into the next copy together. If the app stops before a write finishes, recovery uses
-  the last complete copy. Recovered field packages can still be sent back with their photos.
+  with unsaved work, the next launch offers to recover it. The app waits for two quiet seconds
+  before submitting a copy, or submits one after 30 seconds of continuous editing. If the system
+  stops the app before a new copy finishes, recovery uses the last complete copy. Recovered field
+  packages can still be sent back with their photos.
 - **Preferences and saved passwords** are not available on a phone yet.
 - **HTTPS** on Android is checked against a bundled list of trusted roots rather than the
   device's own, and the app says so once. An iPhone or iPad uses the device's own.

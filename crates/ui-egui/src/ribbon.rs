@@ -3797,7 +3797,7 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         group(ui, "Performance", |ui| threads_menu(app, ui));
     }
     // The interval setting is for desktop recovery. Phones checkpoint completed edits.
-    if app.services.recovery.is_some() && !app.autosave.every_edit {
+    if app.services.recovery.is_some() && !app.autosave.phone {
         group(ui, "Autosave", |ui| autosave_menu(app, ui));
     }
 }

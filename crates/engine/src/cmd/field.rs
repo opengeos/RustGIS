@@ -917,23 +917,35 @@ fn unpack_into(bytes: &[u8], dir: &Path) -> Result<String, String> {
 
 /// Reads a field package with paths to its unpacked basemaps and photos. Absolute paths to
 /// photos stay usable after opening a recovery copy, which has no unpack directory of its own.
+/// References that cannot store an absolute path are left relative and reported on open.
 pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     let mut project = Project::from_import_json(text, Some(dir))?;
     let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
+    let mut relative = 0_usize;
     if photos.is_dir() {
         for map in &mut project.maps {
             rewrite_photos(map, |path| {
                 if let Some(name) = path.strip_prefix("photos/").filter(|name| plain_file(name)) {
                     let file = photos.join(name);
-                    if file.is_file()
-                        && let Some(path) = file.to_str()
-                    {
-                        return path.to_string();
+                    if file.is_file() {
+                        if let Some(path) = file.to_str() {
+                            return path.to_string();
+                        }
+                        relative += 1;
                     }
                 }
                 path.to_string()
             });
         }
+    }
+    if relative > 0 {
+        project.read_notices.push((
+            crate::project::ReadPart::Maps,
+            crate::notice_text::NoticeText::format(
+                "{count} unpacked field photo reference(s) kept their relative paths because the unpack folder is not UTF-8. They may stop resolving after Save As or recovery.",
+                [("count", relative.to_string().into())],
+            ),
+        ));
     }
     Ok(project)
 }
@@ -1270,10 +1282,31 @@ mod tests {
         // Reopening a package on the phone points the feature to its unpacked copy.
         let unpacked_back = temp.path().join("unpacked-return");
         let text = unpack_into(&back, &unpacked_back).unwrap();
-        let reopened = Session::new(project_in(&text, &unpacked_back).unwrap());
+        let mut reopened_project = project_in(&text, &unpacked_back).unwrap();
+        let photo_notices = |project: &mut Project| {
+            project
+                .take_read_notices(&[crate::project::ReadPart::Maps])
+                .iter()
+                .map(crate::notice_text::NoticeText::english)
+                .filter(|notice| notice.contains("unpacked field photo reference"))
+                .collect::<Vec<_>>()
+        };
+        assert!(photo_notices(&mut reopened_project).is_empty());
+        let reopened = Session::new(reopened_project);
         let unpacked_photo = unpacked_back.join("photos/photo-1.jpg");
         assert_eq!(value(&reopened, "Cities", 0, "photos"), unpacked_photo.display().to_string());
         assert_eq!(std::fs::read(unpacked_photo).unwrap(), b"jpeg bytes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let dir = temp.path().join(std::ffi::OsStr::from_bytes(b"non-utf8-\xff"));
+            let text = unpack_into(&back, &dir).unwrap();
+            let mut project = project_in(&text, &dir).unwrap();
+            let notices = photo_notices(&mut project);
+            assert_eq!(notices.len(), 1);
+            assert!(notices[0].starts_with("1 unpacked field photo reference"));
+            assert_eq!(value(&Session::new(project), "Cities", 0, "photos"), "photos/photo-1.jpg");
+        }
         // On the phone it was taken on, not here: brought back, it is copied in.
         std::fs::remove_file(&photo).unwrap();
         // Meanwhile at home, the renamed city was changed too: a conflict, said.

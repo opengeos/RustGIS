@@ -36,7 +36,8 @@
 //! app has one (Settings › Autosave; a copy left there is offered by the recovery dialog).
 //! `"touch": true` on the first line gives the run a stand-in for a phone's touch interface (the
 //! map alone), kept as a phone's shell keeps it: the View tab then has Touch Interface.
-//! With `"recovery"` it uses the phone's foreground recovery policy.
+//! The phone's foreground recovery policy requires both `"recovery"` and `"touch": true`.
+//! A recovery folder without touch uses the desktop interval.
 //! `"gridFolders": true` on the first line reads and keeps datum grids in RustGIS's grid folder, as
 //! the desktop app does (Settings › Datum Grids; set `RUSTGIS_APP_DATA_DIR` for a run's own).
 //! `"memorySecrets": true` on the first line supplies an isolated in-memory credential store for

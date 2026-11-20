@@ -2747,7 +2747,7 @@ impl RustGisApp {
     /// and must be installed before the first frame, so it can offer the last run's copy.
     pub fn with_edit_recovery(mut self, store: Box<dyn RecoveryStore>) -> Self {
         self.services.recovery = Some(store);
-        self.autosave.every_edit = true;
+        self.autosave.phone = true;
         autosave::next_offer(&mut self);
         self
     }
@@ -2761,9 +2761,7 @@ impl RustGisApp {
     /// The phone's activity ending (Back): the recovery copy of the latest edit is finished
     /// before the process ends, and kept, as an exit there doesn't ask about unsaved work.
     pub fn finish_recovery_copy(&mut self) {
-        if let Some(store) = &self.services.recovery {
-            store.flush();
-        }
+        autosave::finish(self);
     }
 
     /// The app closing (the desktop app's `on_exit`): an export still writing is cancelled and
@@ -6531,7 +6529,7 @@ impl RustGisApp {
         // reach.
         self.note_last_project();
         saveprompt::close_requested(self, ctx);
-        if !self.autosave.every_edit {
+        if !self.autosave.phone {
             autosave::tick(self, ctx);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -6869,9 +6867,9 @@ impl RustGisApp {
         pluginstart::frame_drawn(self, &ctx);
         // Cancel, save prompts and any project changes from UI controls take effect first.
         chrome::advance_history_jump(self, &ctx);
-        // Capture, photo attachment and other edits land during UI handling. Submit the copy
-        // now, so leaving for Home immediately after the edit needn't wait for another frame.
-        if self.autosave.every_edit {
+        // Capture and photo attachment land during UI handling. Start the checkpoint
+        // deadline in the same frame, after those edits.
+        if self.autosave.phone {
             autosave::tick(self, &ctx);
         }
         // CJK text this frame drew with no face for it: the next frame's `logic` deals with it
