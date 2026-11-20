@@ -649,9 +649,11 @@ pub(crate) fn menu(
     let id = button.id.with("menu");
     let pass = ui.ctx().cumulative_pass_nr();
     let mut s: MenuState = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-    // Not shown last pass (its dialog closed, its pane hidden): closed, not open again on return.
+    // Not shown last pass (its dialog closed, its pane hidden): closed, not open again on return,
+    // and a row focused then is long gone (the focus mustn't come back to the button for it).
     if s.pass + 1 < pass {
         s.open = false;
+        s.row_focused = false;
     }
     // Enter on the button (focused from the keyboard) while the list is open is the list's: it
     // accepts the highlighted item rather than close the list.
@@ -1048,6 +1050,32 @@ mod tests {
         h.run();
         assert!(h.query_by_label("item00").is_none(), "the list closed");
         assert!(focused(&h, "Open"), "the focus back on the button");
+    }
+
+    /// A menu hidden (its dialog closed) with a row focused doesn't take the focus to its button
+    /// when it shows again.
+    #[test]
+    fn a_menu_shown_again_leaves_the_focus_alone() {
+        use egui_kittest::kittest::Queryable;
+        let items: Vec<String> = (0..4).map(|i| format!("item{i:02}")).collect();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, shown: &mut bool| {
+                if *shown {
+                    let _ = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, |_, _, _| {});
+                }
+            },
+            true,
+        );
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        h.get_by_label("item01").focus();
+        h.run();
+        *h.state_mut() = false;
+        h.run();
+        *h.state_mut() = true;
+        h.run();
+        assert!(h.query_by_label("Open").is_some_and(|n| !n.is_focused()), "the button didn't take the focus");
     }
 
     /// From a row a screen reader focused, Tab closes the list and goes on to the widget after its
