@@ -754,7 +754,7 @@ impl Layer {
             .total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
             .saturating_add(self.display_levels.iter().map(|d| d.bytes).sum::<usize>())
             // The globe's copy of a held layer, kept beside the flat projection.
-            .saturating_add(if self.lonlat.fits(self) { lod::cache_bytes(&self.lonlat.geoms) } else { 0 })
+            .saturating_add(if self.lonlat.fits(self) { self.lonlat.bytes } else { 0 })
     }
 
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
@@ -1110,8 +1110,10 @@ impl Layer {
         if !self.lonlat.fits(self) {
             // A system that can't be converted draws nothing, as on a flat map.
             let to_lonlat = crs.to(Crs::LonLat).ok();
-            let geoms = self.dataset.features.rows().map(|r| Some(to_lonlat.as_ref()?.geometry(r.geometry()?))).collect();
-            self.lonlat = LonLatCopy { geoms: std::sync::Arc::new(geoms), rev: self.geometry_rev, crs: Some(crs) };
+            let geoms: Vec<Option<Geometry>> =
+                self.dataset.features.rows().map(|r| Some(to_lonlat.as_ref()?.geometry(r.geometry()?))).collect();
+            let bytes = lod::cache_bytes(&geoms);
+            self.lonlat = LonLatCopy { geoms: std::sync::Arc::new(geoms), bytes, rev: self.geometry_rev, crs: Some(crs) };
         }
         &self.lonlat.geoms
     }
@@ -1316,6 +1318,11 @@ impl Layer {
     /// a pointer. Display-only results preserve this layer's exact cache; optional copies are
     /// trimmed to its remaining budget. False when the rows or source settings don't match.
     pub fn adopt_cache(&mut self, other: &Layer) -> bool {
+        // The globe's copy goes with the rows and geometry alone: a frame drawn only on the globe
+        // has no flat projection to share.
+        if other.dataset.features.shares(&self.dataset.features) && other.geometry_rev == self.geometry_rev && other.lonlat.fits(other) {
+            self.lonlat = other.lonlat.clone();
+        }
         let fits = other.dataset.features.shares(&self.dataset.features)
             && other.geometry_rev == self.geometry_rev
             && (other.is_cached(&other.projected_for) || other.display_cache().is_some())
@@ -1337,9 +1344,6 @@ impl Layer {
                 self.projected_rev = other.projected_rev;
                 self.projected_for.clone_from(&other.projected_for);
                 self.projected_crs = other.projected_crs;
-            }
-            if other.lonlat.fits(other) {
-                self.lonlat = other.lonlat.clone();
             }
             let budget = self.lod_budget();
             self.trim_thinned_levels(budget);
@@ -3403,6 +3407,8 @@ impl Layer {
 #[derive(Clone, Debug, Default)]
 struct LonLatCopy {
     geoms: std::sync::Arc<Vec<Option<Geometry>>>,
+    /// Its size, counted once when it is made ([`Layer::view_cache_bytes`]).
+    bytes: usize,
     rev: u64,
     crs: Option<Crs>,
 }
@@ -4257,6 +4263,11 @@ mod tests {
         let before = l.view_cache_bytes();
         let globe = l.lonlat_in().as_ptr();
         assert!(l.view_cache_bytes() > before, "the globe copy is counted in the layer's cache memory");
+        // A copy drawn only on the globe hands its copy back, with no flat projection to share.
+        let mut receiver = l.clone();
+        receiver.clear_cache();
+        receiver.adopt_cache(&l);
+        assert_eq!(receiver.lonlat_cache().as_ptr(), globe, "the globe copy wasn't adopted");
         let Some(Geometry::Point(c)) = &l.lonlat_cache()[0] else { panic!("a point") };
         assert!((c.x - 11.5).abs() < 1e-9 && (c.y - 48.7).abs() < 1e-9, "{c:?}");
         l.projected();

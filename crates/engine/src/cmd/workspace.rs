@@ -498,9 +498,12 @@ fn selected_lines(s: &Session, p: &Value, all: bool) -> Result<Vec<Vec<Coord>>, 
     };
     // Sampled in longitude/latitude, whatever system the layer holds its coordinates in.
     let mut out: Vec<Vec<Coord>> = Vec::new();
+    let to = l.dataset.lonlat_conversion().map_err(|e| format!("{n}: {e}"))?;
     for f in rows.iter().filter_map(|r| l.dataset.features.row(*r)) {
         let Some(g) = f.geometry().filter(|g| matches!(g, Geometry::Line(_))) else { continue };
-        if let Geometry::Line(parts) = &*l.dataset.geometry_to_lonlat(g).map_err(|e| format!("{n}: feature {}: {e}", f.id()))? {
+        if let Geometry::Line(parts) =
+            &*rustgis_data::Dataset::geometry_to_lonlat_by(&to, g).map_err(|e| format!("{n}: feature {}: {e}", f.id()))?
+        {
             let v: Vec<Coord> = parts.iter().flatten().copied().collect();
             if v.len() >= 2 {
                 out.push(v);
@@ -901,7 +904,7 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             // the two aren't held in the same system.
             let unchanged_offline = |fid: u64, lonlat_base: Option<&&rustgis_data::Feature>, lonlat_now: &rustgis_data::Feature| match &raw
             {
-                Some((base, now)) => base.get(&fid).is_some_and(|b| now.get(&fid).is_some_and(|n| same_row(*b, *n))),
+                Some((raw_base, raw_now)) => raw_base.get(&fid).is_some_and(|b| raw_now.get(&fid).is_some_and(|n| same_row(*b, *n))),
                 None => lonlat_base.is_some_and(|b| *b == lonlat_now),
             };
             let same_as_last = match (&raw, &baseline) {

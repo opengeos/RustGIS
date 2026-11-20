@@ -634,8 +634,8 @@ fn a_web_scene_leaves_out_what_it_cannot_place() {
 }
 
 /// A held layer's feature with a place that can't be given in longitude/latitude is drawn without
-/// it, and that is said, once for each version of the layer's geometry; a layer whose places all convert
-/// says nothing.
+/// it, and that is said in one notice for every such layer, once for each version of a layer's
+/// geometry; layers whose places all convert say nothing.
 #[test]
 fn a_held_layers_undrawable_features_are_said_once() {
     let mut s = session(UTM);
@@ -650,9 +650,13 @@ fn a_held_layers_undrawable_features_are_said_once() {
     let _ = s.run("select.clear", &Value::Null);
     assert!(said_of(&s, mark).is_empty(), "{:?}", said_of(&s, mark));
     // Far beyond any place UTM 32N holds.
-    let wells = s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap();
-    wells.dataset.push(Some(Geometry::Point(Coord::new(1e12, 1e12))), vec![]);
-    wells.touch_geometry();
+    for name in ["Wells", "Roads"] {
+        let l = s.map_mut().layers.iter_mut().find(|l| l.name == name).unwrap();
+        let far = Coord::new(1e12, 1e12);
+        let g = if name == "Wells" { Geometry::Point(far) } else { Geometry::Line(vec![vec![far, Coord::new(far.x + 1.0, far.y)]]) };
+        l.dataset.push(Some(g), vec![]);
+        l.touch_geometry();
+    }
     let mark = s.notice_mark();
     let _ = s.run("select.clear", &Value::Null);
     let _ = s.run("select.clear", &Value::Null);
@@ -660,7 +664,7 @@ fn a_held_layers_undrawable_features_are_said_once() {
     assert_eq!(
         said,
         [
-            "Map 'Map', layer 'Wells': 1 feature(s) have a place that can't be given in longitude/latitude: the map and the globe draw them without it, and labels' lines, block diagrams and terrain water leave them out"
+            "2 feature(s) have a place that can't be given in longitude/latitude: the map and the globe draw them without it, and labels' lines, block diagrams and terrain water leave them out (map 'Map', layer 'Roads' (1); map 'Map', layer 'Wells' (1))"
         ]
     );
 }
