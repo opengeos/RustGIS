@@ -84,10 +84,26 @@ fn lonlat(s: &Session, layer: &str) -> Vec<Option<Geometry>> {
     l.dataset.in_lonlat().unwrap().features.iter().map(|f| f.geometry.clone()).collect()
 }
 
+/// A geometry's shape: its kind, then how many parts it has and how many places each part (or
+/// ring) has.
+fn shape(g: &Option<Geometry>) -> Vec<usize> {
+    match g {
+        None => vec![0],
+        Some(Geometry::Point(_)) => vec![1],
+        Some(Geometry::MultiPoint(v)) => vec![2, v.len()],
+        Some(Geometry::Line(parts)) => [3, parts.len()].into_iter().chain(parts.iter().map(Vec::len)).collect(),
+        Some(Geometry::Polygon(polys)) => [4, polys.len()]
+            .into_iter()
+            .chain(polys.iter().flat_map(|rings| std::iter::once(rings.len()).chain(rings.iter().map(Vec::len))))
+            .collect(),
+    }
+}
+
 /// Every coordinate of `a` within [`CLOSE`] of `b`'s, in the same shapes.
 fn assert_close(a: &[Option<Geometry>], b: &[Option<Geometry>], what: &str) {
     assert_eq!(a.len(), b.len(), "{what}: feature count");
     for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(shape(a), shape(b), "{what}: feature {i}'s shape");
         let (mut ca, mut cb) = (Vec::new(), Vec::new());
         if let Some(g) = a {
             g.for_each_coord(|c| ca.push(c));
@@ -216,6 +232,7 @@ fn a_held_layer_is_analysed_alike() {
                 .collect::<Vec<_>>()
         });
         assert!(!a.is_empty(), "{layer}: no measures");
+        assert_eq!(a.len(), b.len(), "{layer}: how many measures");
         for (p, q) in a.iter().zip(&b) {
             assert!((p - q).abs() <= 1e-6 * p.abs().max(1.0), "{layer}: {a:?} vs {b:?}");
         }
@@ -236,7 +253,9 @@ fn a_held_layer_is_edited_alike() {
     run_both(&mut ss, "edit.move", &json!({"dx": 250.0, "dy": -100.0}));
     let [a, b] = [lonlat(&ss[0], "Parcels"), lonlat(&ss[1], "Parcels")];
     // A move in metres on the map: the two agree to well within a centimetre.
+    assert_eq!(a.len(), b.len(), "move: feature count");
     for (p, q) in a.iter().zip(&b) {
+        assert_eq!(shape(p), shape(q), "move: shape");
         let (mut ca, mut cb) = (Vec::new(), Vec::new());
         p.as_ref().unwrap().for_each_coord(|c| ca.push(c));
         q.as_ref().unwrap().for_each_coord(|c| cb.push(c));
@@ -431,6 +450,19 @@ fn a_held_layer_is_rasterized_alike() {
     let mut ss = both();
     let [a, b] = run_both(&mut ss, "raster.rasterize", &json!({"layer": "Parcels", "field": "n", "cellSize": 0.0007, "nodata": -1}));
     assert_eq!(a, b);
+    // And the same cells: every value, the no-data ones too.
+    let [ga, gb] = [(&ss[0], &a), (&ss[1], &b)]
+        .map(|(s, v)| s.map().layer(v["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap());
+    assert_eq!((ga.width, ga.height), (gb.width, gb.height));
+    let cells = |g: &rustgis_data::raster::Raster| {
+        (0..g.height)
+            .flat_map(|y| (0..g.width).map(move |x| (x, y)))
+            .map(|(x, y)| g.value(0, i64::from(x), i64::from(y)))
+            .collect::<Vec<_>>()
+    };
+    let (ca, cb) = (cells(&ga), cells(&gb));
+    assert!(ca.iter().any(Option::is_some) && ca.iter().any(Option::is_none), "burned and empty cells");
+    assert_eq!(ca, cb);
 }
 
 /// Calculating a geometry property into a field, and `$area`/`$length` in a field calculation,
@@ -488,6 +520,7 @@ fn a_held_layer_feeds_other_layers_alike() {
     let (na, nb) = (made(&ss[0], &a), made(&ss[1], &b));
     let [pa, pb] = [lonlat(&ss[0], &na), lonlat(&ss[1], &nb)];
     assert!(!pa.is_empty(), "no annotation");
+    assert_eq!(pa.len(), pb.len(), "annotation count");
     // A label's place is its polygon's label point, found in each system: within a centimetre.
     for (p, q) in pa.iter().zip(&pb) {
         let (Some(Geometry::Point(p)), Some(Geometry::Point(q))) = (p, q) else { panic!("points") };
@@ -513,4 +546,58 @@ fn a_held_layer_feeds_other_layers_alike() {
     let [a, b] = run_both(&mut ss, "analysis.simulate", &json!({"layer": "Parcels", "count": 5, "seed": 3}));
     assert_eq!(a["points"], b["points"]);
     assert_close(&lonlat(&ss[0], &made(&ss[0], &a)), &lonlat(&ss[1], &made(&ss[1], &b)), "simulation");
+}
+
+/// An offline area's edits sync back alike, also when they come back in longitude/latitude (as a
+/// field package's do) to a source held in UTM: a moved well and a changed value reach the
+/// source, and it keeps every place the edits didn't touch exactly as it held it.
+#[test]
+fn a_held_layers_offline_edits_sync_alike() {
+    let mut ss = both();
+    let before: Vec<Option<Geometry>> =
+        ss[1].map().layer_by_name("Wells").unwrap().dataset.features.iter().map(|f| f.geometry.clone()).collect();
+    run_both(&mut ss, "offline.download", &json!({"name": "Field", "extent": [11.4, 48.6, 11.6, 48.8]}));
+    run_both(&mut ss, "offline.open", &json!({"name": "Field"}));
+    let g = json!({"type": "Point", "coordinates": [11.505, 48.705]});
+    run_both(&mut ss, "edit.setGeometry", &json!({"layer": "Wells", "row": 0, "geometry": g}));
+    run_both(&mut ss, "edit.setValue", &json!({"layer": "Wells", "row": 1, "field": "n", "value": 99}));
+    run_both(&mut ss, "map.activate", &json!({"name": "Map"}));
+    ss[0].run("offline.sync", &json!({"name": "Field"})).unwrap();
+    // The held session's edits come back as a field package brings them: in longitude/latitude,
+    // beside a source and a last synced copy held in UTM.
+    let mut returned = ss[1].project.maps.iter().find(|m| m.name == "Field (offline)").unwrap().clone();
+    for l in &mut returned.layers {
+        l.dataset = l.dataset.in_lonlat().unwrap().into_owned();
+    }
+    let ai = ss[1].project.offline_areas.iter().position(|a| a.name == "Field").unwrap();
+    crate::cmd::workspace::sync_area(&mut ss[1], ai, &returned).unwrap();
+    assert_close(&lonlat(&ss[0], "Wells"), &lonlat(&ss[1], "Wells"), "synced");
+    let held = &ss[1].map().layer_by_name("Wells").unwrap().dataset;
+    assert_eq!(held.coord_crs(), UTM);
+    let n = held.field_index("n").unwrap();
+    assert_eq!(held.value(1, n), &Cell::Int(99));
+    // Feature 0 moved; every other place is as it was held, to the bit.
+    let after: Vec<Option<Geometry>> = held.features.iter().map(|f| f.geometry.clone()).collect();
+    assert_eq!(after.len(), before.len());
+    assert_ne!(after[0], before[0]);
+    assert_eq!(after[1..], before[1..]);
+}
+
+/// A web scene leaves out, and says, a feature of a held layer with a place that can't be given
+/// in longitude/latitude, rather than failing the whole scene.
+#[test]
+fn a_web_scene_leaves_out_what_it_cannot_place() {
+    let mut s = session(UTM);
+    let dir = Dir::new("unplaced");
+    // Far beyond any place UTM 32N holds.
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap().dataset.push(Some(Geometry::Point(Coord::new(1e12, 1e12))), vec![]);
+    let mark = s.notice_mark();
+    let path = dir.path().join("scene.gltf");
+    s.run("share.webScene", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(path.exists());
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(
+        said.iter().any(|n| n.contains("1 feature(s) left out of the scene: a place can't be given in longitude/latitude")),
+        "{said:?}"
+    );
 }

@@ -6431,8 +6431,10 @@ fn square_lines(
         let Some(layer) = map.layer_by_name(&name) else { continue };
         let mut runs = Vec::new();
         // Read in longitude/latitude, whatever system the layer holds its coordinates in; a
-        // feature that can't be given there squares nothing.
-        for g in layer.dataset.features.iter().filter_map(|f| layer.dataset.geometry_to_lonlat(f.geometry.as_ref()?).ok()) {
+        // feature that can't be given there squares nothing (nor any, in a system that can't be
+        // converted), as the map draws none of it.
+        let Ok(to) = layer.dataset.lonlat_conversion() else { continue };
+        for g in layer.dataset.features.iter().filter_map(|f| rustgis_data::Dataset::converted_to_lonlat(&to, f.geometry.as_ref()?)) {
             let (parts, rings): (Vec<&Vec<Coord>>, bool) = match &*g {
                 Geometry::Line(parts) => (parts.iter().collect(), false),
                 Geometry::Polygon(polys) => (polys.iter().flatten().collect(), true),

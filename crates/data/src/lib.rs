@@ -493,12 +493,19 @@ impl Dataset {
     /// naming its system, when its system can't be converted or one of its places can't be.
     pub fn geometry_to_lonlat<'a>(&self, g: &'a Geometry) -> std::result::Result<Cow<'a, Geometry>, String> {
         let to = self.coord_crs().to(raster::Crs::LonLat)?;
-        if to.is_identity() {
-            return Ok(Cow::Borrowed(g));
-        }
-        convert_keeping_missing(&to, g, &HeldPlaces::default())
-            .map(Cow::Owned)
+        Self::converted_to_lonlat(&to, g)
             .ok_or_else(|| format!("a place of this feature in {} can't be given in longitude/latitude", to.source().label()))
+    }
+
+    /// One of its geometries in longitude/latitude by `to`, its [`Dataset::lonlat_conversion`]
+    /// made once for many geometries (as a frame draws them), as [`Dataset::geometry_to_lonlat`]
+    /// converts it: borrowed when `to` is the identity, a missing coordinate kept, `None` when one
+    /// of its places can't be converted.
+    pub fn converted_to_lonlat<'a>(to: &raster::Reprojection, g: &'a Geometry) -> Option<Cow<'a, Geometry>> {
+        if to.is_identity() {
+            return Some(Cow::Borrowed(g));
+        }
+        convert_keeping_missing(to, g, &HeldPlaces::default()).map(Cow::Owned)
     }
 
     /// An edited geometry in longitude/latitude, written back in its own coordinates

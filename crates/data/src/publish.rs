@@ -454,6 +454,7 @@ fn in_file<'a>(ds: &'a Dataset, crs: Option<Crs>, as_held: Option<(&Dataset, &Da
     }
     let mut out = ds.clone();
     out.features = rows.into();
+    out.held_in = c;
     Ok(std::borrow::Cow::Owned(out))
 }
 
@@ -798,6 +799,7 @@ mod tests {
         assert!(matches!(same, std::borrow::Cow::Borrowed(_)));
         let other = in_file(&ds, Some(etrs), Some((&ds, &ds))).unwrap();
         assert_eq!(other.features[0].geometry, Some(Geometry::Point(utm.to(etrs).unwrap().point(at).unwrap())));
+        assert_eq!(other.coord_crs(), etrs);
     }
 
     /// A small polygon layer of parcels with an owner, an area with decimals and a count.
