@@ -51,7 +51,8 @@ impl LayerLook {
             None => None,
         };
         let rows = layer.dataset.features.allocation_key();
-        let mut kept = Layer { raster: None, ..layer.clone() };
+        // Saving back to a database or GeoPackage keeps per-row versions, which aren't drawn.
+        let mut kept = Layer { raster: None, postgis: None, gpkg: None, synced: None, ..layer.clone() };
         kept.dataset.features = Default::default();
         kept.clear_cache();
         // What these share with the layer could hold its rows: a time binding keeps the rows its
