@@ -271,8 +271,8 @@ pub fn commands() -> Vec<C> {
             let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
             let area = s.project.offline_areas.remove(ai);
             let kept = offline_map_index(&s.project, &area);
-            // A copy kept as the only map is no longer the area's: a saved association with a
-            // missing area makes the project unreadable.
+            // A copy kept as the only map is no longer the area's: neither its saved association
+            // nor its title may still claim the area that is gone.
             for m in &mut s.project.maps {
                 if !area.id.is_empty() && m.offline_area_id.as_deref() == Some(area.id.as_str()) {
                     m.offline_area_id = None;
@@ -288,6 +288,12 @@ pub fn commands() -> Vec<C> {
                 if a == i {
                     s.active_layer = s.map().layers.first().map(|l| l.id);
                 }
+            } else if let Some(m) = kept.and_then(|i| s.project.maps.get_mut(i))
+                && m.name.eq_ignore_ascii_case(&offline_map_name(&area.name))
+            {
+                m.name = format!("{} (kept)", area.name);
+                let kept = m.name.clone();
+                s.notify(format!("The offline area's map was the only one, so it was kept as '{kept}'"), false);
             }
             Ok(Value::Null)
         }).roles(&[]).effects(crate::policy::Effects::NONE)

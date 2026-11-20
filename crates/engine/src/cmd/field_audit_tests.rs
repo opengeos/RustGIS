@@ -149,6 +149,9 @@ fn removing_an_area_clears_the_association_of_the_copy_it_keeps() {
     home.run("offline.remove", &json!({"name": "Crew"})).unwrap();
     assert_eq!(home.project.maps.len(), 1);
     assert!(home.project.maps[0].offline_area_id.is_none());
+    // Nor does its title still name the area's copy.
+    assert_eq!(home.project.maps[0].name, "Crew (kept)");
+    assert!(home.notices.iter().any(|n| n.text.contains("kept as 'Crew (kept)'")), "{:?}", home.notices);
     let path = temp.0.join("removed.rgis");
     home.run("project.save", &json!({"path": path})).unwrap();
     home.run("project.open", &json!({"path": path})).unwrap();
