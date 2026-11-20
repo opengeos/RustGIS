@@ -571,9 +571,9 @@ fn rows(
                     }
                 });
             } else {
-                let widest = *scroll.widest.get_or_insert_with(|| widest(ui, items, &icon));
+                let width = *scroll.widest.get_or_insert_with(|| widest(ui, items, &icon));
                 area.show_rows(ui, row - spacing, items.len(), |ui, range| {
-                    ui.set_min_width(widest);
+                    ui.set_min_width(width);
                     // The highlighted row may be out of the range drawn: where it would be.
                     if scroll.to != Some(selected) {
                         let top = ui.max_rect().top() + (selected as f32 - range.start as f32) * row;
@@ -755,9 +755,17 @@ pub(crate) fn menu(
     if accepted.is_some() || !s.open {
         // A row had the focus: it goes back to the button rather than to nothing, as the row goes.
         // Escape in the pass after an arrow gave a row the focus has dropped it already (the row
-        // hadn't kept Escape from egui yet): the row had it last pass, then.
+        // hadn't kept Escape from egui yet): the row had it last pass, then. Tab goes on past the
+        // list instead, as from the button: the row lets go, and egui's move to the next widget
+        // (pending, the row not drawn to take it) gives the focus to the next one that wants it.
         if on_row || (s.row_focused && ui.memory(|m| m.focused()).is_none()) {
-            button.request_focus();
+            if ui.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift) {
+                if let Some(row) = ui.memory(|m| m.focused()) {
+                    ui.memory_mut(|m| m.surrender_focus(row));
+                }
+            } else {
+                button.request_focus();
+            }
         }
         s.row_focused = false;
         s.open = false;
@@ -1040,6 +1048,31 @@ mod tests {
         h.run();
         assert!(h.query_by_label("item00").is_none(), "the list closed");
         assert!(focused(&h, "Open"), "the focus back on the button");
+    }
+
+    /// From a row a screen reader focused, Tab closes the list and goes on to the widget after its
+    /// button, and Shift+Tab back to the button, as from the button itself.
+    #[test]
+    fn tab_from_a_focused_row_goes_on_past_the_list() {
+        use egui_kittest::kittest::Queryable;
+        for (shift, to) in [(false, "Under"), (true, "Open")] {
+            let items: Vec<String> = (0..4).map(|i| format!("item{i:02}")).collect();
+            let mut h = egui_kittest::Harness::new_ui(move |ui| {
+                let _ = ui.button("Before");
+                let _ = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, |_, _, _| {});
+                let _ = ui.button("Under");
+            });
+            h.run();
+            h.get_by_label("Open").click();
+            h.run();
+            h.get_by_label("item01").focus();
+            h.run();
+            let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+            h.key_press_modifiers(modifiers, egui::Key::Tab);
+            h.run();
+            assert!(h.query_by_label("item00").is_none(), "the list closed");
+            assert!(h.query_by_label(to).is_some_and(|n| n.is_focused()), "shift {shift}: the focus on {to}");
+        }
     }
 
     /// Without a screen reader only the rows in view are drawn (each asks for its icon), the
