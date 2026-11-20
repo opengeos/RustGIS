@@ -500,9 +500,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   group), **None**, which leaves its room to the bars, or **Own**, typed in **Title text**.
   **Values** writes each bar's value past its end, its thousands apart with commas (points
   with a layout's decimal comma), with up to two **Decimals** by default, the zeros they end
-  in dropped, or a fixed 0 to 6; on narrow columns they are written smaller to fit. **Bar
-  color** sets the bars' colour. **Labels** puts the labels of bars running across at the left
-  of their column, or **By the bars**, against them. Keep a title out of the chart to style it
+  in dropped, or a fixed 0 to 6; on narrow columns, or beside bars they would leave less than
+  half the chart, they are written smaller to fit. **Bar color** sets the bars' colour.
+  **Labels** puts the labels of bars running across at the left of their column, or **By the
+  bars**, against them. Keep a title out of the chart to style it
   as you like with a text element. From a command:
   `layout.update={"element":6,"orientation":"vertical","values":true,"decimals":0,"title":"","barColor":"#C2185B","labelAlign":"right"}`,
   `"title":null` for the title it is given again and `"barColor":null` for the default blue;

@@ -3496,6 +3496,13 @@ impl ChartBars<'_> {
         }
     }
 
+    /// What part `v` is of the span from the lowest value (or zero) to the highest (or zero). A span
+    /// past a number's range (the largest number and its opposite) is taken by halves.
+    fn share(&self, v: f64) -> f32 {
+        let span = self.max - self.min;
+        (if span.is_finite() { v / span } else { (v / 2.0) / (self.max / 2.0 - self.min / 2.0) }) as f32
+    }
+
     /// The widest of the values written at `size` pixels past the bars running one way:
     /// positive ones, or negative ones (`negative`); 0 without values.
     fn widest(&self, size: f32, negative: bool) -> f32 {
@@ -3511,7 +3518,6 @@ impl ChartBars<'_> {
     /// room kept for it at the side its bar runs to.
     fn across(&self, pm: &mut Canvas, labelled: bool) {
         let (r, ppp, px) = (self.r, self.ppp, self.px);
-        let span = self.max - self.min;
         let label_w = if labelled { r.width() * 0.32 } else { 0.0 };
         let bh = ((r.height() - self.title_h) / self.vals.len() as f32).min(18.0 * ppp);
         let size = px.min(bh * 0.9);
@@ -3533,11 +3539,11 @@ impl ChartBars<'_> {
         }
         let bar_area = beside - room_lo - room_hi;
         // Where the bars start: the left of the bar area when none is negative.
-        let zero = r.x() + label_w + room_lo + bar_area * (-self.min / span) as f32;
+        let zero = r.x() + label_w + room_lo + bar_area * self.share(-self.min);
         let right = self.look.label_align == TextAlign::Right;
         for (i, (v, name)) in self.vals.iter().enumerate() {
             let y = r.y() + self.title_h + bh * i as f32;
-            let w = (bar_area * (v.abs() / span) as f32).max(1.0);
+            let w = (bar_area * self.share(v.abs())).max(1.0);
             let x = if *v < 0.0 { zero - w } else { zero };
             self.bar(pm, x, y + bh * 0.15, w, bh * 0.7);
             if labelled {
@@ -3562,7 +3568,6 @@ impl ChartBars<'_> {
     /// each value over a column (under one going down), made smaller to fit a narrow column.
     fn columns(&self, pm: &mut Canvas, labelled: bool) {
         let (r, ppp, px) = (self.r, self.ppp, self.px);
-        let span = self.max - self.min;
         let slot = r.width() / self.vals.len() as f32;
         let widest = self.widest(px, false).max(self.widest(px, true));
         let value_px = if widest > slot * 0.95 { px * slot * 0.95 / widest } else { px };
@@ -3577,10 +3582,10 @@ impl ChartBars<'_> {
             return;
         }
         // Where the columns stand: the bottom of the plot when none is negative.
-        let zero = top + plot_h * (self.max / span) as f32;
+        let zero = top + plot_h * self.share(self.max);
         for (i, (v, name)) in self.vals.iter().enumerate() {
             let cx = r.x() + slot * (i as f32 + 0.5);
-            let h = (plot_h * (v.abs() / span) as f32).max(1.0);
+            let h = (plot_h * self.share(v.abs())).max(1.0);
             let y = if *v < 0.0 { zero } else { zero - h };
             self.bar(pm, cx - slot * 0.35, y, slot * 0.7, h);
             if let Some(t) = self.values.get(i) {
@@ -3787,6 +3792,19 @@ mod tests {
         let blue = (0..200).filter(|x| bar_blue(&c, *x, 25) || bar_blue(&c, *x, 43)).count();
         assert!(blue >= 97, "{blue} px of bar");
         assert!(chart_inked(&c, 150..200, 18..32), "its value beside it");
+    }
+
+    /// The largest number and its opposite span past a number's range: each bar still takes its
+    /// half of the chart, across or as columns.
+    #[test]
+    fn a_charts_bars_past_a_numbers_range_take_their_half() {
+        let across = chart_drawn(&[(f64::MAX, "a"), (-f64::MAX, "b")], serde_json::json!({}));
+        let row = |y: u32| (0..200).filter(|x| bar_blue(&across, *x, y)).count();
+        assert!(row(25) > 50 && row(43) > 50, "{} and {} px", row(25), row(43));
+        let columns = chart_drawn(&[(f64::MAX, "a"), (-f64::MAX, "b")], serde_json::json!({"orientation": "Vertical"}));
+        let up = (0..120).filter(|y| bar_blue(&columns, 50, *y)).count();
+        let down = (0..120).filter(|y| bar_blue(&columns, 150, *y)).count();
+        assert!(up > 30 && down > 30, "{up} and {down} px");
     }
 
     /// No title gives its room to the bars; a bar colour is drawn as given.
