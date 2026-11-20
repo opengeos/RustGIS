@@ -7,6 +7,12 @@ use rustgis_data::raster::{Crs, crs};
 use rustgis_engine::grids;
 use rustgis_engine::{Project, Session};
 
+/// Runs a command, after which the session says the grid notes of what was converted (unlike the
+/// frame path, which looks at most once a second).
+fn after_a_command(s: &mut Session) {
+    s.run("info.project", &serde_json::Value::Null).unwrap();
+}
+
 /// PROJ's grid server, which has nothing here: the test looks at what is asked for, not at what
 /// arrives.
 fn server(_url: &str, _max: usize, _timeout: std::time::Duration) -> Result<Vec<u8>, String> {
@@ -30,7 +36,7 @@ fn a_pairs_missing_grid_is_said_once_and_downloaded_when_turned_on() {
         s.offers_grid_downloads = offers;
         // What a command converts on the session's thread (an export to another system).
         Crs::Epsg(21781).to(Crs::Epsg(2056)).unwrap();
-        s.notice_landed_rasters();
+        after_a_command(&mut s);
         let texts: Vec<&String> = s.notices.iter().map(|n| &n.text).collect();
         let notes: Vec<&&String> = texts.iter().filter(|t| t.contains("EPSG:21781 to EPSG:2056")).collect();
         assert_eq!(notes.len(), 1, "{texts:?}");
@@ -38,11 +44,11 @@ fn a_pairs_missing_grid_is_said_once_and_downloaded_when_turned_on() {
         assert_eq!(notes[0].contains("Settings › Datum Grids › Download Datum Grids"), offers, "{texts:?}");
         // Not again for the same pair.
         Crs::Epsg(21781).to(Crs::Epsg(2056)).unwrap();
-        s.notice_landed_rasters();
+        after_a_command(&mut s);
         assert_eq!(s.notices.iter().filter(|n| n.text.contains("EPSG:21781 to EPSG:2056")).count(), 1);
         // A conversion on one datum (UTM 32N to LAEA Europe, both ETRS89) needs no grid.
         Crs::Epsg(25832).to(Crs::Epsg(3035)).unwrap();
-        s.notice_landed_rasters();
+        after_a_command(&mut s);
         assert!(!s.notices.iter().any(|n| n.text.contains("EPSG:25832 to EPSG:3035")), "{:?}", s.notices);
         last = Some(s);
     }
