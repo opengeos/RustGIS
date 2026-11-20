@@ -2068,10 +2068,11 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     {
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
         // Opened ahead in the desktop app ([`in_place_ahead`]).
-        let opened = super::reads::take::<Opened>(s, &in_place_key(path, None))
-            .unwrap_or_else(|| Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name)?)));
-        match opened {
-            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(src), None),
+        let Opened { source, whole, .. } = take_opened(s, path, None).unwrap_or_else(|| {
+            Opened::here(|| Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name)?)))
+        });
+        match source {
+            Ok(src) => return add_source_read(s, p, Origin::Path(path), Some(src), whole, None),
             // Not a FeatureCollection: read whole below, on this thread (the UI thread in the
             // desktop app, as only small GeoJSON files are read ahead), so within the size every
             // computer reads, as before #2408, not the larger limit: the window isn't held longer.
@@ -2105,11 +2106,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let stream = streams_shapefile(p, path);
         if stream {
             // Opened ahead in the desktop app ([`in_place_ahead`]), in the same system.
-            let key = in_place_key(path, ps(p, "crs").map(str::trim));
-            let src = super::reads::take::<Opened>(s, &key)
-                .unwrap_or_else(|| Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs))?)))
-                .map_err(|e| e.to_string())?;
-            return add_source_with(s, p, Origin::Path(path), Some(src), None);
+            let Opened { source, whole, .. } = take_opened(s, path, ps(p, "crs").map(str::trim)).unwrap_or_else(|| {
+                Opened::here(|| Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs))?)))
+            });
+            return add_source_read(s, p, Origin::Path(path), Some(source.map_err(|e| e.to_string())?), whole, None);
         }
         // Read ahead in the desktop app ([`add_data_ahead`]).
         let read = match super::reads::take(s, &whole_key(path)) {
@@ -2122,8 +2122,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if path.to_ascii_lowercase().ends_with(".shp") && streams_shapefile(p, path) {
         // Opened ahead in the desktop app ([`in_place_ahead`]).
-        return match super::reads::take::<Opened>(s, &in_place_key(path, None)) {
-            Some(opened) => add_source_with(s, p, Origin::Path(path), Some(opened.map_err(|e| format!("{path}: {e}"))?), None),
+        return match take_opened(s, path, None) {
+            Some(Opened { source, whole, .. }) => {
+                add_source_read(s, p, Origin::Path(path), Some(source.map_err(|e| format!("{path}: {e}"))?), whole, None)
+            }
             None => add_source(s, p, Origin::Path(path), None),
         };
     }
@@ -2489,9 +2491,60 @@ fn streams_geojson(p: &Value, path: &str) -> bool {
         .unwrap_or_else(|| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > rustgis_data::source::geojson::IN_PLACE_ABOVE))
 }
 
-/// A large Shapefile or GeoJSON file, read in place, as Add Data opens it (#2446).
+/// A large Shapefile or GeoJSON file, read in place, as Add Data opens it ahead (#2446).
 #[cfg(not(target_arch = "wasm32"))]
-type Opened = Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>;
+struct Opened {
+    /// The file's size and modification time as it was opened: an opening of a file changed
+    /// since isn't taken, as its features' places and boxes are those of what it held then.
+    stamp: Option<(u64, std::time::SystemTime)>,
+    source: Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>,
+    /// Its features read whole, when Add Data loads the file instead of keeping it in place (it
+    /// holds few enough, and `"stream"` isn't given), so the window doesn't wait for that read.
+    whole: Option<rustgis_data::Result<(rustgis_data::Dataset, rustgis_data::ReadReport)>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Opened {
+    /// Opens a file where the command runs (the command line, Python, or no opening made ahead).
+    fn here(open: impl FnOnce() -> rustgis_data::Result<Box<dyn rustgis_data::source::FeatureSource>>) -> Self {
+        Self { stamp: None, source: open(), whole: None }
+    }
+
+    /// Opens `path` on the read thread, and reads its features whole there too when `may_load`
+    /// and it holds no more than [`STREAM_ABOVE`](rustgis_map::source::STREAM_ABOVE), as
+    /// [`add_source_read`] then loads it rather than keeping it in place.
+    fn ahead(
+        path: &str,
+        may_load: bool,
+        open: impl FnOnce() -> rustgis_data::Result<Box<dyn rustgis_data::source::FeatureSource>>,
+    ) -> Self {
+        let stamp = file_stamp(path);
+        let source = open();
+        let whole = match &source {
+            Ok(src) if may_load && src.info().count.is_some_and(|c| c <= rustgis_map::source::STREAM_ABOVE) => {
+                Some(rustgis_data::source::materialize(src.as_ref()))
+            }
+            _ => None,
+        };
+        Self { stamp, source, whole }
+    }
+}
+
+/// A file's size and modification time, when both can be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_stamp(path: &str) -> Option<(u64, std::time::SystemTime)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()?))
+}
+
+/// Add Data's opening of `path` in the system `crs` names, made ahead in the desktop app
+/// ([`in_place_ahead`]), while the file is as it was then; `None` otherwise (the command line,
+/// Python, or a file changed since), for the command to open it itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn take_opened(s: &mut Session, path: &str, crs: Option<&str>) -> Option<Opened> {
+    let opened = super::reads::take::<Opened>(s, &in_place_key(path, crs))?;
+    (opened.stamp.is_some() && opened.stamp == file_stamp(path)).then_some(opened)
+}
 
 /// The key of Add Data's opening of `path` in place, in the coordinate system `crs` names (see
 /// [`super::reads`]).
@@ -2503,8 +2556,9 @@ fn in_place_key(path: &str, crs: Option<&str>) -> String {
 /// The opening of a large Shapefile or GeoJSON file that Add Data reads in place, made ahead on a
 /// thread of its own (#2446): it reads the whole file once, to index a Shapefile's records or
 /// find a GeoJSON file's features, which takes minutes for a file of millions. As [`add_data`]
-/// decides ([`streams_geojson`], [`streams_shapefile`]), but a `.json` given a coordinate system
-/// or a layer, which may be a city model told as it is added, so it is opened there as before.
+/// decides ([`streams_geojson`], [`streams_shapefile`]), but a `.json` of at most 256 MiB given a
+/// coordinate system or a layer, which may be a city model told as it is added, so it is opened
+/// there as before.
 /// Cancel is looked at every few thousand features or records; a file read into memory to be
 /// scanned (a GeoJSON file of at most 256 MiB) is read in one step without a look.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2515,12 +2569,18 @@ fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
     let given = |k: &str| ps(p, k).is_some_and(|v| !v.trim().is_empty());
     if is_geojson(path)
         && !rustgis_data::cityjson::is_cityjson_name(path)
-        && !(lower.ends_with(".json") && (given("crs") || given("layer")))
+        // Up to the size every computer reads, add_data reads such a .json whole first to tell a
+        // city model; a larger one it opens in place, as here.
+        && !(lower.ends_with(".json")
+            && (given("crs") || given("layer"))
+            && std::fs::metadata(path).is_ok_and(|m| m.len() <= rustgis_data::io::BYTES_FLOOR))
         && streams_geojson(p, path)
     {
-        let path = path.to_string();
-        return Some(super::reads::ahead(NAME, in_place_key(&path, None), move || -> Opened {
-            Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(&path), &name)?))
+        let (path, may_load) = (path.to_string(), b(p, "stream").is_none());
+        return Some(super::reads::ahead(NAME, in_place_key(&path, None), move || {
+            Opened::ahead(&path, may_load, || {
+                Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(&path), &name)?))
+            })
         }));
     }
     if !lower.ends_with(".shp") {
@@ -2534,9 +2594,9 @@ fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
     let text = ps(&q, "crs").map(str::trim).filter(|c| !c.is_empty());
     // One add_data can't parse it refuses as it runs.
     let crs = text.map(rustgis_data::raster::Crs::parse).transpose().ok()?;
-    let (key, path) = (in_place_key(path, text), path.to_string());
-    Some(super::reads::ahead(NAME, key, move || -> Opened {
-        Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(&path), &name, crs)?))
+    let (key, path, may_load) = (in_place_key(path, text), path.to_string(), b(&q, "stream").is_none());
+    Some(super::reads::ahead(NAME, key, move || {
+        Opened::ahead(&path, may_load, || Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(&path), &name, crs)?)))
     }))
 }
 
@@ -3110,7 +3170,20 @@ fn add_source_with(
     s: &mut Session,
     p: &Value,
     origin: Origin<'_>,
+    opened: Option<Box<dyn rustgis_data::source::FeatureSource>>,
+    zoom: Option<bool>,
+) -> CmdResult {
+    add_source_read(s, p, origin, opened, None, zoom)
+}
+
+/// [`add_source_with`], with the open source's features already read whole (`whole`, made ahead
+/// on the read thread, #2446) when it is loaded rather than kept in place.
+fn add_source_read(
+    s: &mut Session,
+    p: &Value,
+    origin: Origin<'_>,
     mut opened: Option<Box<dyn rustgis_data::source::FeatureSource>>,
+    mut whole: Option<rustgis_data::Result<(rustgis_data::Dataset, rustgis_data::ReadReport)>>,
     zoom: Option<bool>,
 ) -> CmdResult {
     use rustgis_data::source;
@@ -3254,7 +3327,7 @@ fn add_source_with(
                 false,
             );
         } else {
-            let (mut ds, report) = source::materialize(src.as_ref()).map_err(err)?;
+            let (mut ds, report) = whole.take().unwrap_or_else(|| source::materialize(src.as_ref())).map_err(err)?;
             ds.name = name;
             ds.source = Some(label.clone());
             features += ds.features.len() as u64;
