@@ -1914,13 +1914,26 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         let current = Fix { lon: 30.0, lat: -2.0, accuracy: Some(5.0), time: Some(10_000), elapsed_realtime_nanos: None };
         app.report_position(current);
-        app.report_position(Fix { accuracy: Some(4.0), time: Some(9_999), ..current });
-        assert_eq!(app.position, Some(current));
-        app.report_position(Fix { accuracy: None, time: Some(14_999), ..current });
-        assert_eq!(app.position, Some(current));
-        let stale = Fix { accuracy: None, time: Some(15_000), ..current };
+        // A little less accurate: GPS jitter still moves the marker.
+        let jitter = Fix { accuracy: Some(8.0), time: Some(11_000), ..current };
+        app.report_position(jitter);
+        assert_eq!(app.position, Some(jitter));
+        // Much less accurate and recent: held back until five seconds have passed.
+        app.report_position(Fix { accuracy: None, time: Some(15_999), ..jitter });
+        assert_eq!(app.position, Some(jitter));
+        let stale = Fix { accuracy: None, time: Some(16_000), ..jitter };
         app.report_position(stale);
         assert_eq!(app.position, Some(stale));
+        // A late fix, a little older than the shown one, is dropped even though it is better.
+        app.report_position(Fix { accuracy: Some(1.0), time: Some(15_999), ..current });
+        assert_eq!(app.position, Some(stale));
+        // The clock set back: the fix is taken instead of freezing the position.
+        let after_step = Fix { accuracy: Some(5.0), time: Some(1_000), ..current };
+        app.report_position(after_step);
+        assert_eq!(app.position, Some(after_step));
+        let next = Fix { accuracy: Some(5.0), time: Some(2_000), ..current };
+        app.report_position(next);
+        assert_eq!(app.position, Some(next));
     }
 
     #[test]

@@ -1211,24 +1211,36 @@ impl RustGisApp {
     }
 }
 
-/// Compares fix times on the same clock. Android uses the monotonic time even if the wall
-/// clock changed between fixes. Core Location on iOS gives a UTC timestamp.
+/// Whether `fix` replaces the shown position: not when it is older, nor when it is much less
+/// accurate and the shown one is recent. Android compares its monotonic time, which a change to
+/// the wall clock doesn't move. iOS has only the fix's UTC timestamp: a fix a little behind the
+/// shown one is a late one and is dropped, while one further behind than the hold means the clock
+/// was set back, and it is taken rather than freezing the position until the clock catches up.
 fn replaces_live_position(current: rustgis_engine::platform::Fix, fix: rustgis_engine::platform::Fix) -> bool {
     use std::time::Duration;
+    const HOLD: Duration = Duration::from_secs(5);
 
     let age = match (current.elapsed_realtime_nanos, fix.elapsed_realtime_nanos) {
-        (Some(current), Some(new)) => new.checked_sub(current).map(Duration::from_nanos),
-        (None, None) => {
-            let Some((current, new)) = current.time.zip(fix.time) else { return true };
-            (new >= current).then(|| Duration::from_millis(new.abs_diff(current)))
-        }
+        (Some(current), Some(new)) => match new.checked_sub(current) {
+            Some(age) => Duration::from_nanos(age),
+            None => return false,
+        },
+        (None, None) => match current.time.zip(fix.time) {
+            Some((current, new)) if new >= current => Duration::from_millis(new.abs_diff(current)),
+            Some((current, new)) => return Duration::from_millis(new.abs_diff(current)) >= HOLD,
+            None => return true,
+        },
         _ => return true,
     };
     // At the usual one fix per second this bridges a brief GPS dropout. After five seconds a
     // walking crew may already be outside the old fix's accuracy radius.
-    age.is_some_and(|age| {
-        age >= Duration::from_secs(5) || fix.accuracy.unwrap_or(f64::INFINITY) <= current.accuracy.unwrap_or(f64::INFINITY)
-    })
+    if age >= HOLD {
+        return true;
+    }
+    // Held back only when much worse (a network fix after a GPS one), so the usual jitter of a
+    // few metres in GPS accuracy still moves the marker with every fix.
+    let shown = current.accuracy.unwrap_or(f64::INFINITY);
+    fix.accuracy.unwrap_or(f64::INFINITY) <= shown * 2.0
 }
 
 pub struct RustGisApp {
