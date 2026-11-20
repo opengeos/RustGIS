@@ -93,6 +93,25 @@ fn with_label(s: &Session, id: u32, field: &str, label: &str) -> usize {
 
 const AREA: [f64; 4] = [-20.0, -40.0, 60.0, 40.0];
 
+/// A map imported from another project under an offline title is renamed, so an area of the
+/// same name here doesn't take it for its offline copy (and sync it as the area's edits).
+#[test]
+fn an_imported_offline_titled_map_is_not_taken_for_an_area_copy() {
+    let temp = Temp::new("import-offline-title");
+    let mut home = home(&temp);
+    package(&mut home, &json!({"name": "Crew", "extent": AREA})).unwrap();
+    let maps = home.project.maps.len();
+    let mut other = crate::Project::default();
+    other.maps[0].name = "Crew (offline)".into();
+    other.maps[0].offline_area_id = Some("elsewhere".into());
+    home.run("map.import", &json!({"text": serde_json::to_string(&other).unwrap()})).unwrap();
+    assert!(home.project.maps.iter().any(|m| m.name == "Crew (imported)" && m.offline_area_id.is_none()));
+    assert!(home.notices.iter().any(|n| n.text.contains("renamed")), "{:?}", home.notices);
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    assert_eq!(home.map().name, "Crew (offline)");
+    assert_eq!(home.project.maps.len(), maps + 2);
+}
+
 /// A legacy home tab gains its association on rename, so callers still find it after save and reopen.
 #[test]
 fn bring_back_refreshes_a_renamed_home_offline_map() {

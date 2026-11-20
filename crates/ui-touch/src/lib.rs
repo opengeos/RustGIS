@@ -267,10 +267,13 @@ fn stop_track(app: &mut RustGisApp, ctx: &egui::Context) -> bool {
     false
 }
 
-/// Field provenance survives a tab rename. Old field packages can still have just the title.
+/// Field provenance survives a tab rename. Old field packages can still have just the title. A
+/// field package goes back with its one map only, so a field project with a map added doesn't
+/// offer it (sending would refuse it).
 fn can_send_field_package(app: &RustGisApp) -> bool {
     let map = app.session.map();
-    app.session.project.field_origin.is_some() || map.offline_area_id.is_some() || map.name.ends_with(" (offline)")
+    let project = &app.session.project;
+    map.offline_area_id.is_some() || map.name.ends_with(" (offline)") || (project.field_origin.is_some() && project.maps.len() == 1)
 }
 
 /// Draws where the device is: a dot, in a ring as wide as the position is good to.
