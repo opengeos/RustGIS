@@ -950,6 +950,206 @@ fn built() -> &'static std::sync::Mutex<Built> {
 /// custom table is. One past it is built each time it is asked for.
 const MAX_BUILT: usize = 4 * MAX_CUSTOM;
 
+/// The direct operation between two systems terrio-crs computes (`cs2cs A B`, but never a
+/// ballpark): a transformation between their datums where the registry has one (DHDN to ETRS89,
+/// SAD69 to SIRGAS 2000), none between two systems on the same datum, and through a common datum
+/// otherwise. Where its best transformation needs a grid RustGIS doesn't have, terrio-crs takes the
+/// next, as PROJ does, and the pair is noted for the missing-grid notice, its grids for download
+/// ([`missing_grids_between`]). Where the datums have no transformation between them but a
+/// ballpark, it has none, and the conversion goes through WGS 84.
+pub(crate) struct DirectOperation {
+    op: terrio_crs::Transformer,
+    /// A geographic target's turn in its unit (360° in grads is 400) and whether its longitude is
+    /// the second coordinate: a longitude is put on the same turn as the one through WGS 84.
+    turn: Option<(f64, bool)>,
+    /// How far, in the target's units, its coordinates may be from those through WGS 84: 5 km
+    /// (0.05°), more than any two transformations between the same datums differ by, and far less
+    /// than a world projection's other edge, where a place on one edge may come back.
+    slack: f64,
+    /// The grids its best transformation needs at the middle of the source's area of use that
+    /// RustGIS doesn't have, those it can download.
+    missing: Vec<MissingGrid>,
+}
+
+impl std::fmt::Debug for DirectOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DirectOperation")
+    }
+}
+
+impl DirectOperation {
+    /// Coordinates `c` of the source system in the target's, `via` being the place through WGS 84
+    /// (which judges whether it is one: a place past a pole or a world projection's edge, or one
+    /// the target folds, and on which edge or side of the antimeridian it lies). `None` where the
+    /// direct operation can't convert it, or puts it elsewhere than a datum shift from `via`.
+    fn point(&self, c: Coord, via: Coord) -> Option<Coord> {
+        let (x, y) = self.op.transform(c.x, c.y).ok()?;
+        let mut out = Coord::new(x, y);
+        if !out.is_finite() {
+            return None;
+        }
+        if let Some((turn, lat_first)) = self.turn {
+            let (lon, at) = if lat_first { (&mut out.y, via.y) } else { (&mut out.x, via.x) };
+            *lon += turn * ((at - *lon) / turn).round();
+        }
+        ((out.x - via.x).abs() <= self.slack && (out.y - via.y).abs() <= self.slack).then_some(out)
+    }
+}
+
+/// The direct operation between two systems, for a [`super::Reprojection`] to hold: built again
+/// when grids arrive while it is held (a long export), as each system's transformer is.
+pub(crate) struct DirectPair {
+    source: Crs,
+    target: Crs,
+    from: Transformer,
+    to: Transformer,
+    /// The operation as first built, for the grids of generation `built_for`: what every place
+    /// takes, without a lock, until grids arrive.
+    first: std::sync::Arc<DirectOperation>,
+    built_for: u64,
+    /// Built again for the grids there are since, with their generation.
+    again: std::sync::RwLock<Option<(u64, Option<std::sync::Arc<DirectOperation>>)>>,
+}
+
+impl std::fmt::Debug for DirectPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DirectPair({:?} to {:?})", self.source, self.target)
+    }
+}
+
+impl DirectPair {
+    /// The direct operation from `source` to `target`, whose transformers are `from` and `to`;
+    /// `None` when either isn't computed by terrio-crs (longitude/latitude, Web Mercator), is
+    /// another body's, or terrio-crs has no such operation. Notes the pair for the missing-grid
+    /// notice ([`note_used`]), as asking for a system's transformer notes the system.
+    pub(crate) fn new(source: Crs, target: Crs, from: &Transformer, to: &Transformer) -> Option<DirectPair> {
+        let key = pair_key(from, to)?;
+        let built_for = grid_generation();
+        let first = direct_operation(source, target, from, to)?;
+        note_used(&key, || format!("{} to {}", source.label(), target.label()));
+        let again = std::sync::RwLock::new(None);
+        Some(DirectPair { source, target, from: from.clone(), to: to.clone(), first, built_for, again })
+    }
+
+    /// [`DirectOperation::point`], by the operation built for the grids there are now: as first
+    /// built, for one atomic load, until grids arrive.
+    pub(crate) fn point(&self, c: Coord, via: Coord) -> Option<Coord> {
+        let generation = grid_generation();
+        if generation == self.built_for {
+            return self.first.point(c, via);
+        }
+        let kept =
+            self.again.read().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(g, _)| *g == generation).map(|(_, op)| op.clone());
+        let op = match kept {
+            Some(op) => op,
+            None => {
+                let op = direct_operation(self.source, self.target, &self.from, &self.to);
+                *self.again.write().unwrap_or_else(|e| e.into_inner()) = Some((generation, op.clone()));
+                op
+            }
+        };
+        op?.point(c, via)
+    }
+}
+
+/// What the direct operation between two systems is noted under for the missing-grid notice
+/// ([`needs_a_missing_grid`]): both systems' keys, which no system's key is. `None` for a system
+/// terrio-crs doesn't compute.
+fn pair_key(from: &Transformer, to: &Transformer) -> Option<String> {
+    let (Kind::Terrio(a), Kind::Terrio(b)) = (&from.kind, &to.kind) else { return None };
+    let (a, b) = (a.key.as_deref()?, b.key.as_deref()?);
+    // The first key's length, so no two pairs' keys run together into the same text (a WKT's key
+    // may hold any character).
+    Some(format!("PAIR {} {a}{b}", a.len()))
+}
+
+/// A direct operation built ([`direct_operation`]).
+struct DirectBuilt {
+    /// The grid generation it was built for.
+    generation: u64,
+    /// Its source and target systems.
+    systems: (Crs, Crs),
+    /// `None` for a pair without one.
+    op: Option<std::sync::Arc<DirectOperation>>,
+}
+
+/// The direct operations built, by their pair's key ([`pair_key`]).
+type Direct = std::collections::HashMap<String, DirectBuilt>;
+
+fn direct() -> &'static std::sync::Mutex<Direct> {
+    static DIRECT: std::sync::OnceLock<std::sync::Mutex<Direct>> = std::sync::OnceLock::new();
+    DIRECT.get_or_init(Default::default)
+}
+
+/// The direct operation from `source` to `target` (their transformers `from` and `to`), built once
+/// a run per pair and again when grids arrive. Building it asks which grids its best transformation
+/// needs at the middle of the source's area of use (else, where it has none or can't hold it, the
+/// target's), as a system's own are
+/// asked where its data usually are ([`probe_grid`]): one missing notes the pair for the
+/// missing-grid notice. A grid needed only elsewhere in the area isn't noted.
+fn direct_operation(source: Crs, target: Crs, from: &Transformer, to: &Transformer) -> Option<std::sync::Arc<DirectOperation>> {
+    let key = pair_key(from, to)?;
+    let (Kind::Terrio(a), Kind::Terrio(b)) = (&from.kind, &to.kind) else { return None };
+    let generation = grid_generation();
+    if let Some(d) = direct().lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+        && d.generation == generation
+    {
+        return d.op.clone();
+    }
+    let (f, t) = (a.peek(), b.peek());
+    let op = if f.sr.is_earth() && t.sr.is_earth() { build_direct(&f.sr, &t, source, target, from, &key) } else { None };
+    let mut kept = direct().lock().unwrap_or_else(|e| e.into_inner());
+    if kept.len() < MAX_BUILT || kept.contains_key(&key) {
+        kept.insert(key, DirectBuilt { generation, systems: (source, target), op: op.clone() });
+    }
+    op
+}
+
+/// [`direct_operation`]'s operation, built: from `from_sr` to the system `to` computes.
+fn build_direct(
+    from_sr: &terrio_crs::SpatialRef,
+    to: &Terrio,
+    source: Crs,
+    target: Crs,
+    from: &Transformer,
+    key: &str,
+) -> Option<std::sync::Arc<DirectOperation>> {
+    let options = terrio_crs::TransformOptions { allow_ballpark: Some(false), ..Default::default() };
+    // Its notes are found by asking where it is used (below), not by the places it takes.
+    let op = terrio_crs::Transformer::with_options(from_sr, &to.sr, &options).ok()?.with_warning_handler(|_| {});
+    let turn = to.geographic.then(|| (360.0 / to.unit, to.lat_first));
+    let slack = match to.params.as_ref().filter(|_| !to.geographic) {
+        Some(p) => 5_000.0 / if p.to_meter > 0.0 { p.to_meter } else { 1.0 },
+        None if to.geographic => 0.05 / to.unit,
+        None => 5_000.0,
+    };
+    let at = [source, target].into_iter().find_map(|crs| area_of_use(crs).and_then(|c| from.from_lonlat(c)));
+    let grids = at.and_then(|c| op.best_operation_grids_at(c.x, c.y, 0.0).ok()).unwrap_or_default();
+    if grids.iter().any(|g| !g.available && !g.optional) {
+        let mut needs = needs_grid().lock().unwrap_or_else(|e| e.into_inner());
+        if !needs.iter().any(|d| d == key) {
+            needs.push(key.to_string());
+        }
+    }
+    let missing = grids.into_iter().filter(downloadable).filter_map(|g| Some(MissingGrid { url: g.url?, name: g.name })).collect();
+    Some(std::sync::Arc::new(DirectOperation { op, turn, slack, missing }))
+}
+
+/// The datum grids the direct operation from `source` to `target` needs where the source's data
+/// usually are that RustGIS doesn't have and can download, as [`missing_grids`] gives a system's:
+/// none where either is longitude/latitude or Web Mercator (that is the other's own), or there is
+/// no direct operation.
+pub fn missing_grids_between(source: Crs, target: Crs) -> Vec<MissingGrid> {
+    let (Ok(from), Ok(to)) = (source.transformer(), target.transformer()) else { return Vec::new() };
+    direct_operation(source, target, &from, &to).map(|op| op.missing.clone()).unwrap_or_default()
+}
+
+/// The two systems whose direct operation is noted under `key` ([`DirectPair::new`] notes it), for the
+/// grids it needs; `None` for a key that isn't a pair's, or one not kept.
+pub fn pair_systems(key: &str) -> Option<(Crs, Crs)> {
+    direct().lock().unwrap_or_else(|e| e.into_inner()).get(key).map(|d| d.systems)
+}
+
 /// Transformer `t`, built for `key` while the grids were those of `generation`
 /// ([`grid_generation`]), kept in [`built`] and shared: the first one built is kept, as another
 /// thread may have built it meanwhile. One built before a grid arrived isn't kept, as it was
@@ -1585,6 +1785,8 @@ fn rebuilt(key: &str) -> Option<std::sync::Arc<Terrio>> {
 
 /// A system terrio-crs computes: the transformers to and from longitude/latitude, built once.
 struct Terrio {
+    /// The system itself, for a direct operation to another ([`direct_operation`]).
+    sr: terrio_crs::SpatialRef,
     to_lonlat: terrio_crs::Transformer,
     from_lonlat: terrio_crs::Transformer,
     /// For a projection: WGS 84 longitude/latitude onto its own datum's, and its coordinates back
@@ -2042,6 +2244,7 @@ impl Transformer {
         let (wraps, eck4) = (method(&WRAPPING), method(&["eck4"]));
         let unit = if geographic { sr.to_wkt().map_or(1.0, |w| super::wkt::angle_unit_degrees(&w)) } else { 1.0 };
         let t = Terrio {
+            sr: sr.clone(),
             to_lonlat,
             from_lonlat,
             own,

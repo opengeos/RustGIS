@@ -2890,12 +2890,19 @@ impl Session {
             // else where to turn them on, where this front end has the setting.
             // The systems behind them, by definition, for downloading the grids a note says are missing.
             let behind = self.systems_in_use();
+            // And the direct operations between two systems a command converted between (an
+            // export from a layer's system to another), whose grids are their own.
+            let pairs: Vec<(&str, (rustgis_data::raster::Crs, rustgis_data::raster::Crs))> =
+                found.iter().filter_map(|(d, _)| Some((d.as_str(), rustgis_data::raster::crs::pair_systems(d)?))).collect();
             let mut coming: Vec<String> = Vec::new();
-            for (_, crs) in behind.iter().filter(|(def, _)| found.iter().any(|(d, _)| d == def)) {
-                for name in crate::grids::want(*crs) {
-                    if !coming.contains(&name) {
-                        coming.push(name);
-                    }
+            let wanted = behind
+                .iter()
+                .filter(|(def, _)| found.iter().any(|(d, _)| d == def))
+                .flat_map(|(_, crs)| crate::grids::want(*crs))
+                .chain(pairs.iter().flat_map(|(_, (a, b))| crate::grids::want_between(*a, *b)));
+            for name in wanted {
+                if !coming.contains(&name) {
+                    coming.push(name);
                 }
             }
             let tail = if !self.offers_grid_downloads {
@@ -2905,7 +2912,9 @@ impl Session {
                 self.sync_grid_turns();
                 self.grid_downloads_said.extend(coming.iter().cloned());
                 format!(". RustGIS is downloading {}", names_said(&coming))
-            } else if crate::grids::enabled() && found.iter().all(|(d, _)| behind.iter().any(|(b, _)| b == d)) {
+            } else if crate::grids::enabled()
+                && found.iter().all(|(d, _)| behind.iter().any(|(b, _)| b == d) || pairs.iter().any(|(p, _)| p == d))
+            {
                 ". None of the grids they need can be downloaded from PROJ's grid server now".to_string()
             } else if crate::grids::enabled() {
                 // A system only a command used (an export's target): its grids aren't asked for
@@ -2914,6 +2923,7 @@ impl Session {
             } else if behind
                 .iter()
                 .any(|(d, crs)| found.iter().any(|(f, _)| f == d) && !rustgis_data::raster::crs::missing_grids(*crs).is_empty())
+                || pairs.iter().any(|(_, (a, b))| !rustgis_data::raster::crs::missing_grids_between(*a, *b).is_empty())
             {
                 ". Settings › Datum Grids › Download Datum Grids gets them from PROJ's grid server".to_string()
             } else {

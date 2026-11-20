@@ -199,13 +199,28 @@ pub fn want(crs: Crs) -> Vec<String> {
     want_in(crs, false)
 }
 
+/// [`want`] for the direct operation from `source` to `target`
+/// ([`crs::missing_grids_between`]): the grids a conversion between them needs beyond each one's own.
+pub fn want_between(source: Crs, target: Crs) -> Vec<String> {
+    if !enabled() {
+        return Vec::new();
+    }
+    want_grids(crs::missing_grids_between(source, target), false)
+}
+
 /// [`want`]; `first`: ahead of the grids queued before, for a read waiting for them.
 fn want_in(crs: Crs, first: bool) -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
+    want_grids(crs::missing_grids(crs), first)
+}
+
+/// Queues `grids` that aren't on their way or settled, and gives the names of those started or
+/// already on their way; `first`: ahead of the grids queued before.
+fn want_grids(grids: Vec<MissingGrid>, first: bool) -> Vec<String> {
     let mut coming = Vec::new();
-    for grid in crs::missing_grids(crs) {
+    for grid in grids {
         match claim(&grid.name) {
             Claim::Mine => {
                 coming.push(grid.name.clone());
