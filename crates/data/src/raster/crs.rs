@@ -969,6 +969,16 @@ pub(crate) struct DirectOperation {
     /// The grids its best transformation needs at the middle of the source's area of use that
     /// RustGIS doesn't have, those it can download.
     missing: Vec<MissingGrid>,
+    /// Its pair's key ([`pair_key`]), what its notes are kept under.
+    key: String,
+}
+
+// What it noted and the session hasn't asked for yet is the pair's as it goes (built again when
+// grids arrive), not a system's RustGIS can't name ([`record_warning`]).
+impl Drop for DirectOperation {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 impl std::fmt::Debug for DirectOperation {
@@ -978,6 +988,13 @@ impl std::fmt::Debug for DirectOperation {
 }
 
 impl DirectOperation {
+    /// Notes what it had to do (a missing grid) under its pair's key ([`record_warning`]).
+    fn flush(&self) {
+        let before = FLUSHING.try_with(|l| l.replace(Some(self.key.clone()))).ok().flatten();
+        self.op.flush_warnings();
+        let _ = FLUSHING.try_with(|l| l.replace(before));
+    }
+
     /// Coordinates `c` of the source system in the target's, `via` being the place through WGS 84
     /// (which judges whether it is one: a place past a pole or a world projection's edge, or one
     /// the target folds, and on which edge or side of the antimeridian it lies). `None` where the
@@ -1032,7 +1049,7 @@ impl DirectPair {
     }
 
     /// [`DirectOperation::point`], by the operation built for the grids there are now: as first
-    /// built, for one atomic load, until grids arrive.
+    /// built until grids arrive (one atomic load), then as built again (a read lock).
     pub(crate) fn point(&self, c: Coord, via: Coord) -> Option<Coord> {
         let generation = grid_generation();
         if generation == self.built_for {
@@ -1084,9 +1101,10 @@ fn direct() -> &'static std::sync::Mutex<Direct> {
 /// The direct operation from `source` to `target` (their transformers `from` and `to`), built once
 /// a run per pair and again when grids arrive. Building it asks which grids its best transformation
 /// needs at the middle of the source's area of use (else, where it has none or can't hold it, the
-/// target's), as a system's own are
-/// asked where its data usually are ([`probe_grid`]): one missing notes the pair for the
-/// missing-grid notice. A grid needed only elsewhere in the area isn't noted.
+/// target's), as a system's own are asked where its data usually are ([`probe_grid`]): one
+/// missing notes the pair for the missing-grid notice. A place elsewhere whose best
+/// transformation's grid is missing notes it too, once the session asks
+/// ([`needs_a_missing_grid`]).
 fn direct_operation(source: Crs, target: Crs, from: &Transformer, to: &Transformer) -> Option<std::sync::Arc<DirectOperation>> {
     let key = pair_key(from, to)?;
     let (Kind::Terrio(a), Kind::Terrio(b)) = (&from.kind, &to.kind) else { return None };
@@ -1115,8 +1133,9 @@ fn build_direct(
     key: &str,
 ) -> Option<std::sync::Arc<DirectOperation>> {
     let options = terrio_crs::TransformOptions { allow_ballpark: Some(false), ..Default::default() };
-    // Its notes are found by asking where it is used (below), not by the places it takes.
-    let op = terrio_crs::Transformer::with_options(from_sr, &to.sr, &options).ok()?.with_warning_handler(|_| {});
+    // Its missing grids are noted where its data usually are (below), and at the places it takes
+    // as the session asks ([`needs_a_missing_grid`] flushes them under the pair's key).
+    let op = terrio_crs::Transformer::with_options(from_sr, &to.sr, &options).ok()?.with_warning_handler(record_warning);
     let turn = to.geographic.then(|| (360.0 / to.unit, to.lat_first));
     let slack = match to.params.as_ref().filter(|_| !to.geographic) {
         Some(p) => 5_000.0 / if p.to_meter > 0.0 { p.to_meter } else { 1.0 },
@@ -1132,7 +1151,7 @@ fn build_direct(
         }
     }
     let missing = grids.into_iter().filter(downloadable).filter_map(|g| Some(MissingGrid { url: g.url?, name: g.name })).collect();
-    Some(std::sync::Arc::new(DirectOperation { op, turn, slack, missing }))
+    Some(std::sync::Arc::new(DirectOperation { op, turn, slack, missing, key: key.to_string() }))
 }
 
 /// The datum grids the direct operation from `source` to `target` needs where the source's data
@@ -2175,6 +2194,13 @@ pub fn needs_a_missing_grid(def: &str) -> bool {
         }
     }
     drop(map);
+    // A pair's direct operation ([`pair_key`]), noted under its key.
+    if def.starts_with("PAIR ") {
+        let op = direct().lock().unwrap_or_else(|e| e.into_inner()).get(def).and_then(|d| d.op.clone());
+        if let Some(op) = op {
+            op.flush();
+        }
+    }
     needs_grid().lock().unwrap_or_else(|e| e.into_inner()).iter().any(|d| d == def)
 }
 
