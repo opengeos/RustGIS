@@ -1660,7 +1660,8 @@ pub struct Map {
     pub groups: Vec<LayerGroup>,
     pub basemap: Basemap,
     /// The blank basemap's paper (#2532): its colour where a blank map would draw white, so a
-    /// map frame can sit on a coloured page. Opaque; only kept with [`Basemap::Blank`].
+    /// map frame can sit on a coloured page. Drawn opaque ([`Map::blank_paper`]); only kept with
+    /// [`Basemap::Blank`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paper: Option<Rgba>,
     /// Web tile basemaps and overlays (index 0 on top), each drawn over the map layer it names

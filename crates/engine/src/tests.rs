@@ -15472,10 +15472,8 @@ fn the_globe_has_stars_that_turn_off() {
     assert!(corner(&mut s) == starry);
 }
 
-/// A blank basemap's paper colour (#2532): kept until null or another basemap, opaque #RRGGBB only,
-/// a warning (not an error) when given with another basemap, and drawn in a layout's map frame.
-/// A publication's globe locator draws the map's blank paper (#2532), so the disc's backdrop is
-/// the page's colour too.
+/// A publication's globe locator keeps the map's blank paper (#2532), so the space around its
+/// disc is the page's colour too.
 #[test]
 fn a_globe_locator_keeps_the_blank_paper() {
     let mut s = world();
@@ -15486,6 +15484,8 @@ fn a_globe_locator_keeps_the_blank_paper() {
     assert_eq!(m.blank_paper(), Some(rustgis_map::Rgba::rgb(0xF1, 0xEA, 0xDF)));
 }
 
+/// A blank basemap's paper colour (#2532): kept until null or another basemap, opaque #RRGGBB only,
+/// a warning (not an error) when given with another basemap, and drawn in a layout's map frame.
 #[test]
 fn a_blank_basemap_takes_a_paper_colour() {
     let cream = rustgis_map::Rgba::rgb(0xF1, 0xEA, 0xDF);
