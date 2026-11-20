@@ -113,7 +113,7 @@ impl WebOptions {
                 // tell) holds a word of its own, which may be a key: a login, as in a source's
                 // options ([`WebOptions::of`]).
                 Some((k, v))
-                    if is_login(k)
+                    if is_login(&rustgis_data::address::percent_decode(k))
                         || v.is_empty()
                         || rustgis_data::address::percent_decode(&k.replace('+', " ")).contains(char::is_whitespace) =>
                 {
@@ -164,6 +164,11 @@ impl WebOptions {
                 continue;
             }
             if read.iter().any(|r| r.eq_ignore_ascii_case(k)) {
+                continue;
+            }
+            // A login's name written encoded (`api%5Fkey`) is a login all the same.
+            if is_login(&rustgis_data::address::percent_decode(k)) {
+                out.login = true;
                 continue;
             }
             // A segment with no value (`…&abc&…`, or `abc=`) may be a key or a password written
@@ -1043,6 +1048,17 @@ mod tests {
         };
         assert_eq!((url.as_str(), layer.as_str(), features), ("https://example.com/arcgis/rest/services/P/FeatureServer", "0", true));
         assert!(options.login && options.ignored == ["f=…"], "{options:?}");
+        // A login's name written encoded is a login, never named.
+        let Source::ArcGis { options, .. } =
+            read("arcgisfeatureserver", "url='https://example.com/arcgis/rest/services/P/FeatureServer/0?api%5Fkey=abc'", "/data")
+        else {
+            panic!("an ArcGIS source")
+        };
+        assert!(options.login && options.ignored.is_empty(), "{options:?}");
+        let Source::Wcs { options, .. } = read("wcs", "identifier=dem&to%6Ben=abc&url=https://wcs.example.com/", "/data") else {
+            panic!("a WCS source")
+        };
+        assert!(options.login && options.ignored.is_empty(), "{options:?}");
         // A name with an encoded space holds a word of its own: a login, never named.
         let Source::ArcGis { options, .. } =
             read("arcgisfeatureserver", "url='https://example.com/arcgis/rest/services/P/FeatureServer/0?S3CRET%20TOKEN=x'", "/data")

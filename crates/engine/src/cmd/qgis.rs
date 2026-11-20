@@ -599,7 +599,7 @@ fn add_layer(
             if view.is_some() {
                 report.approximated(
                     name,
-                    "its coverage, read once over the view the project was saved with: outside it, the layer has no data",
+                    "its coverage, read once over the view the project was saved with (wider where the view crosses the antimeridian or holds a pole): the layer has data only inside the box read",
                 );
             } else {
                 report.approximated(
