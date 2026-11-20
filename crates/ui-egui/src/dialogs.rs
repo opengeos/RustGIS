@@ -813,8 +813,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         }
     };
     window.show(ctx, |ui| {
-        // Keep tall forms and rows with minimum widths reachable in compact dialogs.
-        if compact {
+        if which == "coordinateSystem" {
+            // The fixed-height panes can overflow even at full width. Reserve the title bar
+            // and frame, then let the body shrink to the form when it fits.
+            let heading = egui::TextStyle::Heading.resolve(ui.style());
+            let title_height = ui.fonts_mut(|fonts| fonts.row_height(&heading)) + frame.inner_margin.sum().y + frame.stroke.width;
+            let body_height = (ctx.content_rect().height() - frame.total_margin().sum().y - title_height).max(0.0);
+            ui.set_max_height(body_height);
+            egui::ScrollArea::new([compact, true]).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, contents);
+        } else if compact {
+            // Keep tall forms and rows with minimum widths reachable in compact dialogs.
             egui::ScrollArea::both().auto_shrink([false, true]).show(ui, contents);
         } else {
             contents(ui);
@@ -2984,6 +2992,39 @@ mod tests {
         app.dialogs.open("addUrl", &app.session).unwrap();
         h.run();
         assert_eq!(title(&h), moved);
+    }
+
+    #[test]
+    fn coordinate_system_actions_are_reachable_in_a_short_desktop_window() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = RustGisApp::with_sample();
+        app.dialogs.open("coordinateSystem", &app.session).unwrap();
+        app.dialogs.text = "robinson".into();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1000.0, 360.0))
+            .allow_missing_glyphs()
+            .with_context_setup(|ctx| crate::theme::install_fonts(ctx, &[], None))
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        h.run();
+        h.hover_at(egui::pos2(790.0, 240.0));
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -1000.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        h.run();
+
+        let apply = h.get_by_role_and_label(Role::Button, "Apply");
+        assert!(h.ctx.content_rect().contains_rect(apply.rect()), "Apply is outside the viewport");
+        apply.click();
+        h.run();
+        assert_eq!(h.state().session.map().projection.code(), "robinson");
+        assert_eq!(h.state().dialogs.open, None);
     }
 
     /// A clause's buttons add a field as the expression names it (`"Pop Est"` in quotes, a plain
