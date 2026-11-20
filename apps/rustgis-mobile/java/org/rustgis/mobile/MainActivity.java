@@ -310,7 +310,8 @@ public class MainActivity extends NativeActivity {
             @Override
             public void onLocationChanged(android.location.Location fix) {
                 add("position\t" + fix.getLongitude() + "\t" + fix.getLatitude() + "\t"
-                        + (fix.hasAccuracy() ? Float.toString(fix.getAccuracy()) : "") + "\t" + fix.getTime());
+                        + (fix.hasAccuracy() ? Float.toString(fix.getAccuracy()) : "") + "\t" + fix.getTime()
+                        + "\t" + fix.getElapsedRealtimeNanos());
             }
 
             @Override

@@ -1197,17 +1197,38 @@ const CAPTURE_MIN_DPI: f64 = 36.0;
 pub const FIXES_KEPT: usize = 200_000;
 
 impl RustGisApp {
-    /// Keeps a position the shell reported: the last one in [`RustGisApp::position`], and each in
-    /// [`RustGisApp::fixes`] until an interface takes them (the oldest dropped past
-    /// [`FIXES_KEPT`]).
+    /// Updates the live position if this fix is recent and accurate enough. Queues every fix
+    /// for tracking and averaging (the oldest dropped past [`FIXES_KEPT`]).
     pub fn report_position(&mut self, fix: rustgis_engine::platform::Fix) {
-        self.position = Some(fix);
+        if self.position.is_none_or(|current| replaces_live_position(current, fix)) {
+            self.position = Some(fix);
+        }
         if self.fixes.len() >= FIXES_KEPT {
             self.fixes.pop_front();
             self.fixes_dropped += 1;
         }
         self.fixes.push_back(fix);
     }
+}
+
+/// Compares fix times on the same clock. Android uses the monotonic time even if the wall
+/// clock changed between fixes. Core Location on iOS gives a UTC timestamp.
+fn replaces_live_position(current: rustgis_engine::platform::Fix, fix: rustgis_engine::platform::Fix) -> bool {
+    use std::time::Duration;
+
+    let age = match (current.elapsed_realtime_nanos, fix.elapsed_realtime_nanos) {
+        (Some(current), Some(new)) => new.checked_sub(current).map(Duration::from_nanos),
+        (None, None) => {
+            let Some((current, new)) = current.time.zip(fix.time) else { return true };
+            (new >= current).then(|| Duration::from_millis(new.abs_diff(current)))
+        }
+        _ => return true,
+    };
+    // At the usual one fix per second this bridges a brief GPS dropout. After five seconds a
+    // walking crew may already be outside the old fix's accuracy radius.
+    age.is_some_and(|age| {
+        age >= Duration::from_secs(5) || fix.accuracy.unwrap_or(f64::INFINITY) <= current.accuracy.unwrap_or(f64::INFINITY)
+    })
 }
 
 pub struct RustGisApp {
@@ -1244,13 +1265,12 @@ pub struct RustGisApp {
     /// Whether the user wants the device's position shown: a shell that can report one (a
     /// phone's) starts and stops its positioning by this, and fills in [`RustGisApp::position`].
     pub locate: bool,
-    /// Where the device is, as the shell last reported it; `None` until it has, and again once
-    /// positioning is off. An interface draws it on the map and can capture at it.
+    /// The selected live fix for the marker and capture cross, if positioning is on and a fix
+    /// has arrived.
     pub position: Option<rustgis_engine::platform::Fix>,
-    /// Every position the shell reported since an interface last took them, oldest first (at most
-    /// [`FIXES_KEPT`]: the oldest go first). [`RustGisApp::position`] is only the last: a track
-    /// or an average needs each, including those that arrived together after the app was out of
-    /// sight.
+    /// Every fix the shell reported since an interface last took them, in arrival order (at most
+    /// [`FIXES_KEPT`]). A track or average needs each, including those that arrived together after
+    /// the app was out of sight.
     pub fixes: std::collections::VecDeque<rustgis_engine::platform::Fix>,
     /// Whether the interface wants positions while the app is out of sight too (a track being
     /// recorded): a phone's shell keeps them coming then, with the notice its system requires.
