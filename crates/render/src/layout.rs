@@ -186,6 +186,26 @@ pub(crate) fn page_geometry(layout: &Layout, dpi: f64) -> (u32, u32, f64) {
 /// text uses this page and its first frame, rotated text is checked after its turn, and a
 /// wrapped text by the lines it is broken into.
 pub fn clipped_text(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) -> Vec<(u32, String)> {
+    text_losses(layout, maps, dpi, info).into_iter().map(|l| (l.id, l.name)).collect()
+}
+
+/// A text element (or a legend's title) [`clipped_text`] finds cut off, with the lines of it
+/// left out of the page (#2346).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextLoss {
+    pub id: u32,
+    pub name: String,
+    /// Its lines with ink that aren't drawn: below its box, or past the 200 a text draws. 0 when
+    /// only its ink crosses the page's edge.
+    pub left_out: usize,
+    /// It has more lines left out than `left_out` counts: a wrapped text is broken only up to
+    /// the line past the 200 drawn ([`wrapped`]).
+    pub at_least: bool,
+}
+
+/// [`clipped_text`], with how many of each text's lines are left out of its box ([`TextLoss`]):
+/// what the layout view, an export and the commands say, so they never tell it apart.
+pub fn text_losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) -> Vec<TextLoss> {
     let (w, h, k) = page_geometry(layout, dpi);
     let ppp = (k / PT_PER_MM) as f32;
     let first = layout.first_frame().and_then(|id| layout.element(id)).and_then(|e| {
@@ -199,7 +219,7 @@ pub fn clipped_text(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) ->
         .filter(|e| e.visible)
         .filter_map(|e| {
             let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, (e.w * k) as f32, (e.h * k) as f32)?;
-            let (s, size, face, align, spacing, rotation, title) = match &e.kind {
+            let (s, size, face, align, spacing, rotation, title, broken) = match &e.kind {
                 ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap }
                     if color.a() > 0 =>
                 {
@@ -207,12 +227,12 @@ pub fn clipped_text(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) ->
                     let s = expand(t, layout, info, first);
                     // Its lines as they are drawn: a wrapped text's, broken to its box.
                     let s = if *wrap { wrapped(&s, e.w, *size, style) } else { s };
-                    (s, *size as f32, style.face, *align, *letter_spacing as f32, *rotation as f32, false)
+                    (s, *size as f32, style.face, *align, *letter_spacing as f32, *rotation as f32, false, *wrap)
                 }
                 ElementKind::Legend { title, frame, .. } => {
                     let ElementKind::MapFrame { map, .. } = &layout.element(*frame)?.kind else { return None };
                     map_index(maps, map)?;
-                    (title.clone(), 12.0, text::Face { bold: true, ..Default::default() }, TextAlign::Left, 0.0, 0.0, true)
+                    (title.clone(), 12.0, text::Face { bold: true, ..Default::default() }, TextAlign::Left, 0.0, 0.0, true, false)
                 }
                 _ => return None,
             };
@@ -221,13 +241,19 @@ pub fn clipped_text(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) ->
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
             // Legend titles are drawn on one line, unlike text elements' explicit line breaks.
             let lines = std::iter::once(s.as_str()).filter(|_| title).chain(s.lines().filter(|_| !title));
-            let cut = lines.enumerate().any(|(i, line)| {
-                let ink = text::styled_bounds(line, px, face, spacing * 1.33 * ppp);
+            let (mut cut, mut left_out) = (false, 0);
+            for (i, line) in lines.enumerate() {
                 let drawn = i < 200 && (title || cy <= r.bottom() + px);
-                let cut = ink.is_some_and(|ink| {
-                    if !drawn {
-                        return true;
+                // A line not drawn is only looked at for a letter, as a wrapped text tells its
+                // ink ([`crate::report::wrap_lines`]): a long text isn't shaped past its box.
+                if !drawn {
+                    if line.chars().any(|c| !c.is_whitespace()) {
+                        (cut, left_out) = (true, left_out + 1);
                     }
+                    continue;
+                }
+                let ink = text::styled_bounds(line, px, face, spacing * 1.33 * ppp);
+                cut |= ink.is_some_and(|ink| {
                     let left = match align {
                         TextAlign::Left => r.x(),
                         TextAlign::Center => r.x() + (r.width() - ink.width()) / 2.0 - ink.left(),
@@ -243,17 +269,20 @@ pub fn clipped_text(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) ->
                     corners.iter().any(|p| p.x < 0.0 || p.y < 0.0 || p.x > w as f32 || p.y > h as f32)
                 });
                 cy += px * 1.25;
-                cut
-            });
-            cut.then(|| (e.id, e.name.clone()))
+            }
+            // A wrapped text ends at the line past the 200 drawn ([`wrapped`]): it may go on.
+            let at_least = broken && s.lines().nth(200).is_some();
+            cut.then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least })
         })
         .collect()
 }
 
 /// One counted notice per kind, naming the affected elements by their stable address. Exports
 /// can merge repeated element IDs across series pages before calling this, so a PDF's fallback
-/// rendering and repeated pages never multiply the count.
-pub fn clipped_text_notice(clipped: &[(u32, String)]) -> Option<String> {
+/// rendering and repeated pages never multiply the count. Its advice fits the texts of `layout`
+/// named: breaking lines by hand or wrapping them for a text not wrapped (#2346), only the box or
+/// the size for one already wrapped to its box.
+pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option<String> {
     if clipped.is_empty() {
         return None;
     }
@@ -261,10 +290,30 @@ pub fn clipped_text_notice(clipped: &[(u32, String)]) -> Option<String> {
     if clipped.len() > 10 {
         names.push_str(&format!(" and {} more", clipped.len() - 10));
     }
-    Some(format!(
-        "Text is cut off in {} layout element(s): {names}; resize or move the text, reduce its size, or add line breaks",
-        clipped.len()
-    ))
+    // A legend's title, or an element gone since, keeps the advice it always had.
+    let unwrapped =
+        clipped.iter().any(|(id, _)| !matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::Text { wrap: true, .. })));
+    let advice = if unwrapped {
+        "resize or move the text, reduce its size, add line breaks, or turn on Wrap to the box"
+    } else {
+        "resize or move the text, or reduce its size"
+    };
+    Some(format!("Text is cut off in {} layout element(s): {names}; {advice}", clipped.len()))
+}
+
+/// What a text that loses lines below its box is told (#2346), from its [`TextLoss`]: `None`
+/// when none of its lines is left out.
+pub fn lines_left_out_notice(loss: &TextLoss) -> Option<String> {
+    let n = loss.left_out;
+    if n == 0 && !loss.at_least {
+        return None;
+    }
+    let (count, verbs) = match (n, loss.at_least) {
+        (1, false) => ("1 line".to_string(), "doesn't fit its box and isn't"),
+        (n, false) => (format!("{n} lines"), "don't fit its box and aren't"),
+        (n, true) => (format!("{} or more lines", n.max(1)), "don't fit its box and aren't"),
+    };
+    Some(format!("{count} of the text \"{}\" ({}) {verbs} drawn; make the box taller or the text smaller", loss.name, loss.id))
 }
 
 /// One element on transparency, allocating only its on-page pixel bounds.
@@ -5495,6 +5544,73 @@ mod tests {
         assert_eq!(clipped_text(&l, &[], 96.0, &info), vec![(id, "Note".into())]);
         let (l, _) = page("\n\n\n");
         assert!(clipped_text(&l, &[], 96.0, &info).is_empty(), "only blank lines past it");
+        // Counted as more than the one line seen: the wrapped text was broken no further.
+        let (l, id) = page("\nZ");
+        let loss = text_losses(&l, &[], 96.0, &info);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true }]);
+        let said = lines_left_out_notice(&loss[0]).unwrap();
+        assert!(said.starts_with("1 or more lines of the text \"Note\""), "{said}");
+    }
+
+    /// The lines of a text left out below its box are counted, blank ones not, and said in the
+    /// singular or the plural; a text whose lines all fit says nothing (#2346).
+    #[test]
+    fn a_text_counts_the_lines_left_out_of_its_box() {
+        let info = PageInfo::default();
+        let mut l = note_page("one\ntwo\n\nfour\nfive", false, TextAlign::Left, 0.0);
+        let id = l.elements[0].id;
+        let losses = |l: &Layout| text_losses(l, &[], 96.0, &info);
+        assert!(losses(&l).is_empty(), "all fit");
+        l.element_mut(id).unwrap().h = 2.0;
+        let loss = losses(&l);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false }]);
+        let said = lines_left_out_notice(&loss[0]).unwrap();
+        assert!(said.starts_with(&format!("3 lines of the text \"Note\" ({id}) don't fit its box and aren't drawn")), "{said}");
+        if let ElementKind::Text { text, .. } = &mut l.element_mut(id).unwrap().kind {
+            *text = "one\ntwo".into();
+        }
+        let said = lines_left_out_notice(&losses(&l)[0]).unwrap();
+        assert!(said.starts_with(&format!("1 line of the text \"Note\" ({id}) doesn't fit its box and isn't drawn")), "{said}");
+        // Off the page but all drawn: cut, with no line left out to count.
+        let e = l.element_mut(id).unwrap();
+        (e.h, e.x) = (60.0, 99.0);
+        let loss = losses(&l);
+        assert_eq!(loss.len(), 1);
+        assert_eq!(lines_left_out_notice(&loss[0]), None);
+    }
+
+    /// A long text counts every line left out below its box, each only looked at for a letter
+    /// past the box: none is shaped there (#2346).
+    #[test]
+    fn a_long_text_counts_every_line_left_out() {
+        let info = PageInfo::default();
+        let mut l = note_page(&vec!["x"; 3000].join("\n"), false, TextAlign::Left, 0.0);
+        let id = l.elements[0].id;
+        l.element_mut(id).unwrap().h = 2.0;
+        let loss = text_losses(&l, &[], 96.0, &info);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false }]);
+        // Blank lines below the box and then one letter: that one line is left out.
+        let mut l = note_page(&format!("x{}\nZ", "\n".repeat(2000)), false, TextAlign::Left, 0.0);
+        l.element_mut(id).unwrap().h = 2.0;
+        assert_eq!(text_losses(&l, &[], 96.0, &info), vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false }]);
+    }
+
+    /// The cut-off notice suggests breaking lines or wrapping them for a text not wrapped, and
+    /// only the box or the size when every text it names is wrapped already (#2346).
+    #[test]
+    fn the_cut_off_notice_suggests_wrapping_a_text_not_wrapped() {
+        let info = PageInfo::default();
+        for wrap in [false, true] {
+            let mut l = note_page(NOTE, wrap, TextAlign::Left, 0.0);
+            let id = l.elements[0].id;
+            l.element_mut(id).unwrap().h = 2.0;
+            let note = clipped_text_notice(&l, &clipped_text(&l, &[], 96.0, &info)).unwrap();
+            assert!(note.starts_with(&format!("Text is cut off in 1 layout element(s): Note ({id}); ")), "{note}");
+            assert_eq!(note.contains("Wrap to the box"), !wrap, "{note}");
+            assert_eq!(note.contains("add line breaks"), !wrap, "{note}");
+            assert!(note.contains("reduce its size"), "{note}");
+        }
+        assert_eq!(clipped_text_notice(&Layout::new("L", 10.0, 10.0), &[]), None);
     }
 
     /// The same lines at every resolution: they are measured at one (#2346), so the layout view,
