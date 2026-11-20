@@ -3397,7 +3397,7 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
 
 /// What a text is given that changes the lines it breaks into or the room they have, or shows it
 /// (#2346): a move or a turn doesn't, nor a colour (the Format pane sets one at each step of a
-/// pick).
+/// pick), except one that shows a text without ink, which `update` tells apart.
 const TEXT_FIT_KEYS: [&str; 12] =
     ["text", "size", "w", "h", "wrap", "font", "fallback", "bold", "italic", "letterSpacing", "align", "visible"];
 
@@ -4782,6 +4782,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     let l = active(s, p)?;
     let e = l.element_mut(id).ok_or_else(|| format!("no element {id}"))?;
+    // A text with no ink isn't measured: given a colour that shows it, it is told (#2346).
+    let shown = col.is_some_and(|c| c.a() > 0) && matches!(&e.kind, ElementKind::Text { color, .. } if color.a() == 0);
     let num = |k: &str, lo: f64, hi: f64| f(p, k).map(|v| v.clamp(lo, hi));
     if let Some(v) = num("x", -5000.0, 5000.0) {
         e.x = v;
@@ -4970,7 +4972,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if excluding {
         say_raster_keys(s, li, id);
     }
-    if TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
         say_text_fit(s, li, id);
     }
     // A chart told what to draw says what it leaves out of it.

@@ -5640,7 +5640,7 @@ mod tests {
         assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false, below_box: true, past_limit: true }]);
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.ends_with("make the box taller or the text smaller, and split it, as a text draws at most 200 lines"), "{said}");
-        // A box tall enough for 200 lines: the rest are past the limit, which no box draws (#2542).
+        // A box tall enough for 200 lines: the rest are past the limit, which no box draws (#2346).
         let mut tall = note_page(&vec!["x"; 250].join("\n"), false, TextAlign::Left, 0.0);
         tall.height = 2000.0;
         tall.element_mut(id).unwrap().h = 1900.0;

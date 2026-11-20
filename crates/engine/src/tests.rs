@@ -39350,6 +39350,11 @@ fn text_elements_say_the_lines_left_out_of_their_box() {
     // Hidden, it loses nothing on the page; shown again, it says what it loses.
     assert!(said(&mut s, "layout.update", json!({"element": id, "visible": false})).1.is_empty());
     assert_eq!(said(&mut s, "layout.update", json!({"element": id, "visible": true})).1.len(), 1);
+    // Without ink it shows nothing; given ink again, it says what it loses, and another colour after
+    // that (each step of a pick) says nothing more.
+    assert!(said(&mut s, "layout.update", json!({"element": id, "color": "#00000000"})).1.is_empty());
+    assert_eq!(said(&mut s, "layout.update", json!({"element": id, "color": "#1F2937"})).1.len(), 1);
+    assert!(said(&mut s, "layout.update", json!({"element": id, "color": "#374151"})).1.is_empty());
     // Room for them all: nothing to say.
     assert!(said(&mut s, "layout.update", json!({"element": id, "h": 40})).1.is_empty());
     // Wrapped in a narrow box, its sentence breaks into more lines than the box holds.
