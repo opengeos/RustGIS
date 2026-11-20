@@ -526,11 +526,17 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   with a layout's decimal comma), with up to two **Decimals** by default, the zeros they end
   in dropped, or a fixed 0 to 6; on narrow columns, or beside bars they would leave less than
   half the chart, they are written smaller to fit. **Bar color** sets the bars' colour.
+  **Color by class** draws each bar in the colour its features have on the map, by the layer's
+  symbology: a bar per feature in its feature's, a grouped bar in the colour its features share,
+  so grouping by the field the layer's Unique Values class by gives each bar its class's colour.
+  A bar whose features have several colours, and an Other bar, keep the bar colour, and the
+  chart says how many bars do. The bars follow the symbology when it changes.
   **Labels** puts the labels of bars running across at the left of their column, or **By the
   bars**, against them. Keep a title out of the chart to style it
   as you like with a text element. From a command:
   `layout.update={"element":6,"orientation":"vertical","values":true,"decimals":0,"title":"","barColor":"#C2185B","labelAlign":"right"}`,
   `"title":null` for the title it is given again and `"barColor":null` for the default blue;
+  `"classes":true` colours the bars by class;
   `layout.addElement` takes them too.
 - **Rulers and guides**: rulers start on along the top and left and show millimetres from the page's corner.
   Drag out of a ruler to add a guide, drag a guide to move it, and drag it back onto a ruler to

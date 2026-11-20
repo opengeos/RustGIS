@@ -2058,6 +2058,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         decimals,
                         title,
                         label_align,
+                        classes,
                         ..
                     } => {
                         // The feature layers of the frame's map, and the fields of the chart's layer (#2487).
@@ -2197,6 +2198,13 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             }
                             ui.end_row();
                         }
+                        // Each bar in its features' colour on the map; the colour below for the rest (#2487).
+                        let input_label = ui.label(tl!("Color by class"));
+                        let mut on = *classes;
+                        if ui.checkbox(&mut on, "").labelled_by(input_label.id).changed() {
+                            update(app, json!({"classes": on}));
+                        }
+                        ui.end_row();
                         ui.label(tl!("Bar color"));
                         let mut c = crate::theme::c32(e.kind.chart_look().unwrap_or_default().bar_color);
                         let resp = crate::widgets::color_button(ui, &mut c);
