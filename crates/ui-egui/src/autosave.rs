@@ -26,6 +26,10 @@ const MAX_MINUTES: u64 = 60;
 const PHONE_INTERVAL: Duration = Duration::from_secs(2);
 /// Wait longer before retrying a failed phone copy of the same state.
 const PHONE_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+/// Desktop can wait for the recovery writer during its clean exit.
+const DESKTOP_FLUSH_WAIT: Duration = Duration::from_secs(30);
+/// Leave time for the rest of teardown within Android's five-second input timeout.
+const PHONE_FLUSH_WAIT: Duration = Duration::from_secs(2);
 /// The intervals Settings › Autosave offers (`0` is off).
 pub(crate) const CHOICES: [u32; 7] = [0, 1, 2, 5, 10, 15, 30];
 
@@ -68,8 +72,12 @@ pub trait RecoveryStore {
     }
     /// Removes this run's copy (the work was saved, or replaced, or the app closes cleanly).
     fn clear(&self);
-    /// Waits, for a bounded time, until what was asked for has been done: before the app exits.
-    fn flush(&self);
+    /// Waits for queued work to finish with the desktop's clean-exit budget.
+    fn flush(&self) {
+        self.flush_for(DESKTOP_FLUSH_WAIT);
+    }
+    /// Waits for queued work to finish, up to the caller's timeout.
+    fn flush_for(&self, timeout: Duration);
     /// The copy an earlier run left that is offered now: the newest of those waiting to be
     /// recovered or discarded (runs that crashed again after Later each leave one).
     fn pending(&self) -> Option<Recovery>;
@@ -263,13 +271,14 @@ fn tick_at(app: &mut RustGisApp, ctx: Option<&egui::Context>, now: Instant) {
     app.autosave.last = Some(now);
 }
 
-/// Submits any remaining phone edit immediately and waits for the writer before shutdown.
+/// Submits any remaining phone edit immediately. If the wait expires, the latest copy may still
+/// be queued or writing. The last complete copy, if any, stays available for the next launch.
 pub(crate) fn finish(app: &mut RustGisApp) {
     if app.autosave.phone {
         tick_at(app, None, Instant::now());
     }
     if let Some(store) = &app.services.recovery {
-        store.flush();
+        store.flush_for(PHONE_FLUSH_WAIT);
     }
 }
 
@@ -494,8 +503,6 @@ mod folder {
     const MAX_WAITING: usize = 5;
     /// The first line of a copy, describing it, is at most this long.
     const MAX_HEADER: u64 = 64 * 1024;
-    /// How long a clean exit waits for a copy still being written.
-    const FLUSH_WAIT: Duration = Duration::from_secs(30);
 
     type Snapshot = (Box<Project>, Recovery);
     type Pending = Arc<Mutex<Option<Snapshot>>>;
@@ -824,13 +831,13 @@ mod folder {
             self.send(Job::Clear);
         }
 
-        /// Waits up to [`FLUSH_WAIT`] for the background thread to reach this point. A copy still
-        /// being written then is left, and offered at the next start as if this run hadn't closed.
-        fn flush(&self) {
+        /// Waits for queued work up to the caller's deadline. If the process ends first, the last
+        /// complete copy still on disk is offered at the next start.
+        fn flush_for(&self, timeout: Duration) {
             let (done, wait) = channel();
             self.send(Job::Flush(done));
-            if wait.recv_timeout(FLUSH_WAIT).is_err() {
-                log::warn!("autosave: a recovery copy was still being written at exit");
+            if wait.recv_timeout(timeout).is_err() {
+                log::warn!("autosave: the recovery writer did not finish flushing at exit");
             }
         }
 
@@ -891,9 +898,9 @@ mod folder {
         use std::sync::mpsc::channel;
         use std::sync::{Arc, Mutex};
 
-        use rustgis_engine::Project;
+        use rustgis_engine::{Project, Session};
 
-        use super::{Job, LIVE, Queue, Recovery, work_with};
+        use super::{FolderStore, Job, LIVE, Queue, Recovery, work_with};
 
         /// Writes copies as the store does, except projects named "newer…", which are refused
         /// as too large.
@@ -1006,6 +1013,37 @@ mod folder {
             assert_eq!(take().as_deref(), Some("after save"));
         }
 
+        /// A stalled worker cannot keep Back waiting past the phone's exit budget.
+        #[test]
+        fn phone_exit_leaves_the_last_complete_copy_when_the_writer_stalls() {
+            use std::time::Duration;
+
+            let dir = tempfile::tempdir().unwrap();
+            let previous = Recovery { name: "previous edit".into(), ..Recovery::default() };
+            super::write(dir.path(), Project::new("previous edit"), &previous).unwrap();
+            let (jobs, rx) = channel();
+            // Hold the worker's receiver without processing any jobs.
+            let store = FolderStore {
+                jobs: Mutex::new(Queue { jobs, latest: None }),
+                waiting: Mutex::default(),
+                error: Arc::default(),
+                wake: Arc::default(),
+            };
+            let mut app = crate::RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(store));
+            app.session.mark_unsaved();
+            let (exited, exit) = channel();
+            let stalled = std::thread::spawn(move || {
+                // test-wait: watchdog releases a stalled flush if the phone exceeds its exit budget.
+                let timely = exit.recv_timeout(Duration::from_secs(4)).is_ok();
+                drop(rx);
+                timely
+            });
+            app.finish_recovery_copy();
+            let _ = exited.send(());
+            assert!(stalled.join().unwrap(), "exit kept waiting for the stalled writer");
+            assert_eq!(super::describe(&dir.path().join(LIVE)).name, previous.name);
+        }
+
         /// A skipped copy is written when the newer one that replaced it fails, and
         /// still in order: a removal queued after both removes it.
         #[test]
@@ -1054,7 +1092,7 @@ mod tests {
             self.0.borrow_mut().2 += 1;
         }
         /// Nothing is in flight.
-        fn flush(&self) {}
+        fn flush_for(&self, _: Duration) {}
         /// Nothing waits.
         fn pending(&self) -> Option<Recovery> {
             None
@@ -1258,6 +1296,35 @@ mod tests {
         assert_eq!(result["added"], 1);
         assert_eq!(result["photos"], 1);
         assert_eq!(std::fs::read(dir.join("Survey photos/site.jpg")).unwrap(), b"photo bytes");
+        restarted.services.recovery.as_ref().unwrap().flush();
+    }
+
+    /// Hidden fill settings are ordinary project data and survive package recovery.
+    #[test]
+    fn phone_recovers_a_field_packages_hidden_fill() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new(Project::new("Survey"));
+        session.map_mut().name = "Survey (offline)".into();
+        session.run("layer.template", &json!({"template": "polygons", "name": "Parcels"})).unwrap();
+        session.run("layer.color", &json!({"layer": "Parcels", "color": "#33669964"})).unwrap();
+        let parcels = session.map().layer_by_name("Parcels").unwrap();
+        let renderer = parcels.renderer.clone();
+        let layer = parcels.id;
+        session.active_layer = Some(layer);
+        session.restore_recovery_paths(None, Some(dir.path().join("Survey.rgisfield")));
+        let mut app = RustGisApp::new(session).with_edit_recovery(Box::new(super::FolderStore::open(dir.path()).unwrap()));
+        app.run("layer.noFill", json!({"layer": "Parcels"})).unwrap();
+        app.finish_recovery_copy();
+        drop(app);
+
+        let mut restarted =
+            RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(super::FolderStore::open(dir.path()).unwrap()));
+        restarted.run("ui.recover", json!(null)).unwrap();
+        restarted.session.active_layer = Some(layer);
+        let mark = restarted.session.notice_mark();
+        restarted.run("layer.restoreFill", json!({"layer": "Parcels"})).unwrap();
+        assert!(restarted.session.notices_since(mark).is_empty());
+        assert_eq!(restarted.session.map().layer_by_name("Parcels").unwrap().renderer, renderer);
         restarted.services.recovery.as_ref().unwrap().flush();
     }
 

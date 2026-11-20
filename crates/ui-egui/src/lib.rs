@@ -2745,6 +2745,7 @@ impl RustGisApp {
 
     /// Enables foreground recovery for a phone. The store must be in the app's private storage
     /// and must be installed before the first frame, so it can offer the last run's copy.
+    /// Call this after [`Self::with_services`], which replaces the entire service bundle.
     pub fn with_edit_recovery(mut self, store: Box<dyn RecoveryStore>) -> Self {
         self.services.recovery = Some(store);
         self.autosave.phone = true;
@@ -2758,8 +2759,8 @@ impl RustGisApp {
         autosave::end(self);
     }
 
-    /// The phone's activity ending (Back): the recovery copy of the latest edit is finished
-    /// before the process ends, and kept, as an exit there doesn't ask about unsaved work.
+    /// The phone's activity ending (Back): submit the latest edit and give the writer a short
+    /// chance to finish. The last complete copy stays available for the next launch.
     pub fn finish_recovery_copy(&mut self) {
         autosave::finish(self);
     }

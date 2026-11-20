@@ -58,8 +58,8 @@ fn android_main(android: AndroidApp) {
     if let Err(e) = shell::run(app, phone, pushed, options) {
         log::error!("the app stopped: {e}");
     }
-    // The activity is gone (Back, or the system destroyed it). winit's event loop can't be
-    // made twice in a process, so a process left alive would answer the next launch with a
-    // blank window: end it, and the next launch can offer the foreground recovery copy.
+    // If the event loop returns, exit the process so the next launch can create a new loop.
+    // Activity destruction alone does not make winit exit the loop. Recovery checkpoints are
+    // submitted during editing so a restart can offer a complete copy even if on_exit is skipped.
     std::process::exit(0);
 }

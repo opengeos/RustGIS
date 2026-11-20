@@ -216,12 +216,13 @@ after packaging; legacy recovery cannot change that association.
   download code that adds to what it does.
 - **Choosing a folder** is not possible with the phone's picker; the app says so where one is
   asked for.
-- **Recovery** keeps a copy of completed edits in the app's private storage. If the app stops
-  with unsaved work, the next launch offers to recover it. The first edit submits a copy
-  immediately. Edits made within two seconds of a submission are grouped into another copy due
-  at the end of that interval. If the system stops the app before the next copy is submitted
-  or finishes writing, recovery uses the last complete copy. Recovered field packages can still
-  be sent back with their photos.
+- **Recovery** keeps a copy of completed edits in the app's private storage. On the next launch,
+  the app offers to recover unsaved work if a complete copy is available. The first edit submits
+  a copy immediately. Edits made within two seconds of a submission are grouped into another copy
+  due at the end of that interval. When the exit hook runs, it submits any waiting edit and gives
+  the writer up to two seconds to finish. The system can stop the app without running that hook.
+  If a copy is still waiting or being written when the process ends, recovery uses the most recent
+  completed copy, if one exists. Recovered field packages can still be sent back with their photos.
 - **Preferences and saved passwords** are not available on a phone yet.
 - **HTTPS** on Android is checked against a bundled list of trusted roots rather than the
   device's own, and the app says so once. An iPhone or iPad uses the device's own.

@@ -1245,6 +1245,45 @@ mod tests {
         l.dataset.value(row, l.dataset.field_index(field).unwrap()).to_string()
     }
 
+    /// A package names the unpacked photo by absolute path so it can be saved or recovered elsewhere.
+    #[test]
+    fn field_photo_fixture_resolves_to_the_unpacked_file() {
+        let temp = Temp::new("field-photo-fixture");
+        let relative = "photos/site.jpg";
+        let archive = rustgis_data::zip::write(&[
+            ("Survey.rgis".into(), include_bytes!("../../../../schema/fixtures/field_photos.rgis").to_vec()),
+            (relative.into(), b"photo bytes".to_vec()),
+        ])
+        .unwrap();
+        let photo_notices = |project: &mut Project| {
+            project
+                .take_read_notices(&[crate::project::ReadPart::Maps])
+                .iter()
+                .map(crate::notice_text::NoticeText::english)
+                .filter(|notice| notice.contains("unpacked field photo reference"))
+                .collect::<Vec<_>>()
+        };
+        let unpacked = temp.path().join("unpacked");
+        let text = unpack_into(&archive, &unpacked).unwrap();
+        let mut project = project_in(&text, &unpacked).unwrap();
+        assert!(photo_notices(&mut project).is_empty());
+        let photo = unpacked.join(relative);
+        assert_eq!(value(&Session::new(project), "Sites", 0, "photos"), photo.display().to_string());
+        assert_eq!(std::fs::read(photo).unwrap(), b"photo bytes");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let unpacked = temp.path().join(std::ffi::OsStr::from_bytes(b"non-utf8-\xff"));
+            let text = unpack_into(&archive, &unpacked).unwrap();
+            let mut project = project_in(&text, &unpacked).unwrap();
+            let notices = photo_notices(&mut project);
+            assert_eq!(notices.len(), 1);
+            assert!(notices[0].starts_with("1 unpacked field photo reference"));
+            assert_eq!(value(&Session::new(project), "Sites", 0, "photos"), relative);
+        }
+    }
+
     #[test]
     fn the_fields_edits_and_photos_come_back_to_the_map_they_were_packaged_from() {
         let temp = Temp::new("round-trip");
@@ -1279,34 +1318,6 @@ mod tests {
         assert_eq!(area, "Trip");
         let entries = rustgis_data::zip::read(&back).unwrap();
         assert!(entries.iter().any(|(n, b)| n == "photos/photo-1.jpg" && b == b"jpeg bytes"));
-        // Reopening a package on the phone points the feature to its unpacked copy.
-        let unpacked_back = temp.path().join("unpacked-return");
-        let text = unpack_into(&back, &unpacked_back).unwrap();
-        let mut reopened_project = project_in(&text, &unpacked_back).unwrap();
-        let photo_notices = |project: &mut Project| {
-            project
-                .take_read_notices(&[crate::project::ReadPart::Maps])
-                .iter()
-                .map(crate::notice_text::NoticeText::english)
-                .filter(|notice| notice.contains("unpacked field photo reference"))
-                .collect::<Vec<_>>()
-        };
-        assert!(photo_notices(&mut reopened_project).is_empty());
-        let reopened = Session::new(reopened_project);
-        let unpacked_photo = unpacked_back.join("photos/photo-1.jpg");
-        assert_eq!(value(&reopened, "Cities", 0, "photos"), unpacked_photo.display().to_string());
-        assert_eq!(std::fs::read(unpacked_photo).unwrap(), b"jpeg bytes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt as _;
-            let dir = temp.path().join(std::ffi::OsStr::from_bytes(b"non-utf8-\xff"));
-            let text = unpack_into(&back, &dir).unwrap();
-            let mut project = project_in(&text, &dir).unwrap();
-            let notices = photo_notices(&mut project);
-            assert_eq!(notices.len(), 1);
-            assert!(notices[0].starts_with("1 unpacked field photo reference"));
-            assert_eq!(value(&Session::new(project), "Cities", 0, "photos"), "photos/photo-1.jpg");
-        }
         // On the phone it was taken on, not here: brought back, it is copied in.
         std::fs::remove_file(&photo).unwrap();
         // Meanwhile at home, the renamed city was changed too: a conflict, said.

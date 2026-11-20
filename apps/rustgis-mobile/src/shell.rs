@@ -466,8 +466,8 @@ fn use_picker<P: Phone + 'static>(
 }
 
 impl<P: Phone> eframe::App for App<P> {
-    /// The activity ends without asking about unsaved work: the recovery copy of the latest
-    /// edit is finished first, so the next launch offers it.
+    /// When the event loop exits, give the recovery writer a short chance to finish the latest
+    /// edit. The next launch offers the last complete copy, if one exists.
     fn on_exit(&mut self) {
         self.app.finish_recovery_copy();
     }
