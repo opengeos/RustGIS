@@ -3143,12 +3143,18 @@ fn composited(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), opacity: f32,
     let (cw, ch) = (cw.min(pm.width()), ch.min(pm.height()));
     if let Some(mut picture) = pm.sub(cw, ch) {
         draw(&mut picture, (left, top));
-        // A recording keeps what lies past its picture's edge, so it is cut here, at the box.
-        let clip = Rect::from_xywh(x, y, w, h).map(|r| crate::vector::Clip {
-            path: PathBuilder::from_rect(r),
-            rule: FillRule::Winding,
-            transform: Transform::identity(),
-        });
+        let Some(r) = Rect::from_xywh(x, y, w, h) else { return };
+        let clip = if picture.is_recording() {
+            // A recording keeps what lies past its picture's edge, so it is cut here, at the box.
+            Some(crate::vector::Clip { path: PathBuilder::from_rect(r), rule: FillRule::Winding, transform: Transform::identity() })
+        } else {
+            // Pixels are cut in the picture, by a mask its size rather than the page's.
+            if let Some(mut m) = Mask::new(cw, ch) {
+                m.fill_path(&PathBuilder::from_rect(r), FillRule::Winding, true, Transform::from_translate(-left, -top));
+                picture.pixels().apply_mask(&m);
+            }
+            None
+        };
         pm.place(picture, Transform::from_translate(left, top), opacity, rustgis_map::effects::Blend::Normal, clip);
     }
 }
