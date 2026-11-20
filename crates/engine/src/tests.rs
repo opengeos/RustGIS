@@ -39292,6 +39292,13 @@ fn layout_charts_group_order_cut_and_say_what_they_leave_out() {
         let told = said(&s, mark);
         assert!(told.iter().any(|t| t.contains("'region' isn't a number: the chart now measures people")), "{change}: {told:?}");
     }
+    // Named with its own layer, the field is picked by the layer's rule, and said as well.
+    s.run("layout.update", &json!({"element": counted, "field": "region", "group": "region", "statistic": "count"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": counted, "layer": "Places", "statistic": "sum"})).unwrap();
+    assert_eq!(field(&s, counted), "people");
+    let told = said(&s, mark);
+    assert!(told.iter().any(|t| t.contains("Places has no field 'region' the chart can measure: it now measures people")), "{told:?}");
     s.run("layout.update", &json!({"element": chart, "group": "", "label": ""})).unwrap();
     assert_eq!((options(&s).1, options(&s).2), (None, None));
     // Moved to a layer without its group field: the group is let go, and said.

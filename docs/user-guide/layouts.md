@@ -483,8 +483,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   instead (features with none together as "(blank)"), its **Statistic** of the field over that
   value's features: sum, count (features, numbers or not, so a count can chart a text field),
   mean, minimum or maximum. A text field charted that way gives way to the layer's first numeric
-  field when the chart stops grouping or counting, and the chart says so. **Order** puts the largest first, the smallest first, the labels A to
-  Z or the bars in the layer's order. **Bars** sets how many are drawn (1 to 100, 20 by default);
+  field when the chart stops grouping or counting, and the chart says so. **Order** puts the
+  largest first, the smallest first, the labels A to Z or the bars in the layer's order. **Bars** sets how many are drawn (1 to 100, 20 by default);
   **Past the limit** leaves the rest out, which the chart says, or gathers them in a last
   **Other bar**, its statistic over their features (their sum when not grouped), last whatever
   the order. A negative value is drawn the other way from a line at zero. Features with no number

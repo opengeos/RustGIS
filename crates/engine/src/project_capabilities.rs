@@ -166,14 +166,17 @@ fn charts_data(e: &rustgis_map::layout::Element) -> bool {
 
 /// A layout command that groups, orders or cuts a chart, or gathers its rest in an Other bar:
 /// an older reader warns that it ignores those keys and draws a bar per feature, the 20 largest.
-/// One that gives the defaults, or takes a group away, keeps a chart as an older reader draws it.
+/// One that gives the defaults, or takes a group away, keeps a chart as an older reader draws it;
+/// a label given to `layout.update`, which an older reader's update doesn't take, needs it too.
 fn command_uses_chart_data(id: &str, params: &Value) -> bool {
     use rustgis_map::layout::{CHART_BARS, ChartOrder};
     use rustgis_map::report::StatKind;
     match id {
         "layout.addElement" | "layout.update" => {
             let text = |k: &str| params.get(k).and_then(Value::as_str).map(str::trim);
-            text("group").is_some_and(|g| !g.is_empty())
+            // An older reader's update takes no chart label: it would say nothing and keep the old.
+            (id == "layout.update" && params.get("label").is_some_and(|v| !v.is_null()))
+                || text("group").is_some_and(|g| !g.is_empty())
                 || text("statistic").and_then(StatKind::from_code).is_some_and(|s| s != StatKind::default())
                 || text("order").and_then(ChartOrder::from_code).is_some_and(|o| o != ChartOrder::default())
                 || params.get("bars").and_then(Value::as_u64).is_some_and(|n| n != CHART_BARS as u64)
@@ -777,7 +780,9 @@ mod tests {
             ("layout.update", json!({"element": 2, "other": "on"}), true),
             ("layout.update", json!({"element": 2, "group": ""}), false),
             ("layout.update", json!({"element": 2, "statistic": "sum", "order": "descending", "bars": 20, "other": false}), false),
-            ("layout.update", json!({"element": 2, "label": "name"}), false),
+            ("layout.update", json!({"element": 2, "label": "name"}), true),
+            ("layout.update", json!({"element": 2, "label": ""}), true),
+            ("layout.addElement", json!({"kind": "chart", "label": "name"}), false),
             ("layout.import", json!({"text": layout.to_string()}), true),
             ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
             ("layout.import", json!({"path": "regions.rgislayout"}), false),

@@ -4108,9 +4108,10 @@ fn chart_update(
     if checked.is_none() && !gives_chart_options(p) {
         return Ok(None);
     }
+    let stored = field.as_str();
     let (layer, field) = match checked {
-        Some((name, f)) => (name.as_str(), f.as_deref().unwrap_or(field)),
-        None => (layer.as_str(), field.as_str()),
+        Some((name, f)) => (name.as_str(), f.as_deref().unwrap_or(stored)),
+        None => (layer.as_str(), stored),
     };
     let ds = frame_dataset(s, l, *frame, layer).ok_or_else(|| format!("no feature layer '{layer}' in the frame's map"))?;
     // On a new layer, a label or group field it hasn't is let go, and said.
@@ -4135,6 +4136,10 @@ fn chart_update(
     let f = ds.field_index(field).and_then(|i| ds.fields.get(i)).ok_or_else(|| format!("no field '{field}' in {layer}"))?;
     if gives(p, "field") || chart_takes(f, &o) {
         chart_measures(f, &o)?;
+        // A field picked for it (on a new layer without one it can measure) is said too.
+        if !gives(p, "field") && field != stored {
+            said.push(format!("{layer} has no field '{stored}' the chart can measure: it now measures {field}"));
+        }
         return Ok(Some((o, None, said)));
     }
     let to = ds.fields.iter().find(|f| f.ty.is_numeric()).ok_or_else(|| {
@@ -4145,7 +4150,9 @@ fn chart_update(
 }
 
 /// What a chart leaves out of what it is told to draw (an existing loss made said): the bars
-/// past its limit, and the features with no number in its field.
+/// past its limit, and the features with no number in its field. It reads each feature of the
+/// chart's layer once, on the command's thread, as drawing the chart does on every draw of the
+/// page: run only when a chart is added or told what to draw, not when it is moved or styled.
 fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
     let said = {
         let Some(l) = s.project.layouts.get(li) else { return };
