@@ -4972,9 +4972,6 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if excluding {
         say_raster_keys(s, li, id);
     }
-    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
-        say_text_fit(s, li, id);
-    }
     // A chart told what to draw says what it leaves out of it.
     if !chart_said.is_empty() || ((checked.is_some() || gives_chart_options(p)) && is_chart(s, li, id)) {
         for said in chart_said {
@@ -5002,6 +4999,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         if (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled {
             refit_scale_box(s, li, &basis);
         }
+    }
+    // After the scale box is refitted: a text is measured in the box it is saved with.
+    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+        say_text_fit(s, li, id);
     }
     if let Some(w) = font_told {
         return Ok(json!({"warning": w}));
