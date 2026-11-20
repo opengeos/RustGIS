@@ -96,7 +96,7 @@ fn a_qgis_projects_web_service_layers_come_in_from_their_services() {
     for id in [5, 6] {
         assert!(notes.contains(&format!("its map layer {id} alone, which the service doesn't list: the whole map")), "{notes}");
     }
-    assert!(notes.contains("the same tiles as Topo"), "{notes}");
+    assert!(notes.contains("the same tiles as Topo, which takes its place"), "{notes}");
     // A type the service doesn't list: noted, the others still in.
     assert!(notes.contains(r#""kind":"skipped","layer":"Missing","text":"the layer: "#) && notes.contains("no layer 'nope'"), "{notes}");
     assert!(s.map().layer_by_name("Missing").is_none());

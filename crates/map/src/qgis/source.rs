@@ -483,6 +483,10 @@ fn arcgis(provider: &str, datasource: &str) -> Source {
             Some(_) => {
                 let mut whole = layer(url, "map".into(), false);
                 if let Source::ArcGis { options, .. } = &mut whole {
+                    // First, within the 32 named: the last one named makes room, counted instead.
+                    if options.ignored.len() >= 32 && options.ignored.pop().is_some() {
+                        options.more += 1;
+                    }
                     options.ignored.insert(0, noted_option("layer=…"));
                 }
                 whole
