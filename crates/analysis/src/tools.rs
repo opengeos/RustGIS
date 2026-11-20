@@ -4842,7 +4842,10 @@ const LOOK_EVERY: usize = 4096;
 /// less than 1e-9 to its left and less than 1e-9 above or below it, else is kept. The points kept
 /// so far are found through cells of 4e-9 around each point, so a run of points sharing an x (a
 /// survey line, a grid's column) costs as little as any other: linear work, looking at Cancel
-/// every [`LOOK_EVERY`] points. The sort is one short step without a look. (A cell is four times
+/// every [`LOOK_EVERY`] points. A point first scans back a few steps, as the merge always did,
+/// which settles nearly every one; only a point in a longer run within 1e-9 to its left looks in
+/// the cells, and only such runs are filed in them. The cells hold no list of their own: each
+/// holds its latest point filed, and each point the one filed before it in its cell. The sort is one short step without a look. (A cell is four times
 /// the tolerance so a point's cell number, rounded, is never more than one cell from its
 /// neighbour's: two coordinates within 1e-9 of each other but not equal are under 2^23, where the
 /// rounding is a fraction of a cell. From 2^24 on, where only equal coordinates are that close, a
@@ -4850,23 +4853,64 @@ const LOOK_EVERY: usize = 4096;
 /// coordinates don't all share the last cell.)
 fn merge_coincident(mut points: Vec<(Coord, f64)>) -> Result<Vec<(Coord, f64)>, String> {
     const NEAR: f64 = 1e-9;
+    // How far back each point scans before it looks in the cells.
+    const SCAN: usize = 8;
     let cell = coincident_cell;
     points.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then_with(|| a.0.y.total_cmp(&b.0.y)));
     let mut kept: Vec<(Coord, f64, usize)> = Vec::with_capacity(points.len());
-    let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    // The cells, filed only when a run needs them: the latest point filed in each cell, and for
+    // each point filed the one filed before it in its cell. Points are filed in the order kept, from
+    // the first within 1e-9 to the left of the point that needs them (`window`: none before it can
+    // be near it or any point after it), up to `filed`.
+    let mut latest: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut before: Vec<Option<usize>> = Vec::new();
+    let (mut window, mut filed) = (0usize, 0usize);
     for (n, (c, v)) in points.into_iter().enumerate() {
         if n % LOOK_EVERY == 0 {
             crate::control::check()?;
         }
-        let (cx, cy) = (cell(c.x), cell(c.y));
+        // The points kept just before it first, as the scan back always went: most points end it
+        // within a few steps (a point found, or one past 1e-9 to the left). A run that goes on (a
+        // shared x) is looked up in the cells instead.
         let mut joins: Option<usize> = None;
-        for dx in -1..=1 {
+        let mut settled = false;
+        for (i, (k, _, _)) in kept.iter().enumerate().rev().take(SCAN) {
+            if c.x - k.x >= NEAR {
+                settled = true;
+                break;
+            }
+            if (c.y - k.y).abs() < NEAR {
+                joins = Some(i);
+                settled = true;
+                break;
+            }
+        }
+        settled |= kept.len() <= SCAN;
+        if !settled {
+            while kept.get(window).is_some_and(|(k, _, _)| c.x - k.x >= NEAR) {
+                window += 1;
+            }
+            for i in filed.max(window)..kept.len() {
+                if let (Some((k, _, _)), Some(slot)) = (kept.get(i), before.get_mut(i)) {
+                    *slot = latest.insert((cell(k.x), cell(k.y)), i);
+                }
+            }
+            filed = kept.len();
+        }
+        // (A point kept is never to the right of it, so never a column of cells to its right.)
+        let (cx, cy) = (cell(c.x), cell(c.y));
+        for dx in (-1..=0).filter(|_| !settled) {
             for dy in -1..=1 {
-                for &i in cells.get(&(cx.saturating_add(dx), cy.saturating_add(dy))).into_iter().flatten() {
-                    let near = kept.get(i).is_some_and(|(k, _, _)| c.x - k.x < NEAR && (c.y - k.y).abs() < NEAR);
-                    if near && joins.is_none_or(|j| i > j) {
-                        joins = Some(i);
+                // A cell's points, latest first: its first near one is its latest.
+                let mut at = latest.get(&(cx.saturating_add(dx), cy.saturating_add(dy))).copied();
+                while let Some(i) = at {
+                    if kept.get(i).is_some_and(|(k, _, _)| c.x - k.x < NEAR && (c.y - k.y).abs() < NEAR) {
+                        if joins.is_none_or(|j| i > j) {
+                            joins = Some(i);
+                        }
+                        break;
                     }
+                    at = before.get(i).copied().flatten();
                 }
             }
         }
@@ -4876,7 +4920,7 @@ fn merge_coincident(mut points: Vec<(Coord, f64)>) -> Result<Vec<(Coord, f64)>, 
                 *count += 1;
             }
             None => {
-                cells.entry((cx, cy)).or_default().push(kept.len());
+                before.push(None);
                 kept.push((c, v, 1));
             }
         }
@@ -4961,15 +5005,27 @@ pub fn projected_crs(text: &str) -> Result<(Crs, Option<String>), String> {
 }
 
 /// `pts` (longitude/latitude) in `crs`, and a note counting those left out because the system
-/// can't hold them (see [`in_projected`]). One short step without a Cancel check: a point costs a
-/// projection and its round trip, far less than the interpolation that follows.
+/// can't hold them (see [`in_projected`]). A point costs a projection and its round trip: Cancel is
+/// looked at every [`LOOK_EVERY`] points.
 pub fn points_in(crs: Crs, pts: Vec<(Coord, f64)>) -> Result<(Vec<(Coord, f64)>, Option<String>), String> {
     if crs == Crs::LonLat {
         return Ok((pts, None));
     }
     let to = crs.transformer()?;
     let n = pts.len();
-    let kept: Vec<(Coord, f64)> = pts.into_iter().filter_map(|(c, v)| in_projected(crs, &to, c).map(|c| (c, v))).collect();
+    // (In the points' own storage, as a filtered collect of the same kind reuses it.)
+    let kept: Vec<(Coord, f64)> = pts
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, (c, v))| {
+            if i % LOOK_EVERY == 0
+                && let Err(cancelled) = crate::control::check()
+            {
+                return Some(Err(cancelled));
+            }
+            in_projected(crs, &to, c).map(|c| Ok((c, v)))
+        })
+        .collect::<Result<_, crate::control::Cancelled>>()?;
     let beyond = n - kept.len();
     Ok((kept, beyond_note(crs, beyond)))
 }
@@ -11491,6 +11547,28 @@ mod tests {
         assert!(counting.looked() <= 25, "{}", counting.looked());
         // Cancelled at the merge's fifth look, after 16,384 points merged: it stops there. (A look
         // added to reading the rows would move this.)
+        let cancelled = crate::control::Control::cancelled_at_look(15);
+        let e = crate::run_with("kriging", &m, &params, &cancelled).unwrap_err();
+        assert!(e.contains("cancelled"), "{e}");
+        assert_eq!(cancelled.looked(), 15);
+    }
+
+    /// Kriging's preparation in a projected system looks at Cancel while it projects the points
+    /// too: 40,000 points sharing a longitude, in Web Mercator.
+    #[test]
+    fn kriging_looks_at_cancel_while_it_projects_its_points() {
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        for i in 0..40_000 {
+            pts.push(Some(Geometry::Point(Coord::new(0.0, f64::from(i) * 0.001))), vec![Value::Float(1.0)]);
+        }
+        let m = Map(HashMap::from([("pts".to_string(), pts)]));
+        let params = serde_json::json!({"input": "pts", "field": "v", "crs": "EPSG:3857", "extent": "0,0,1000,1000", "pixelSize": 1000});
+        let counting = crate::control::Control::cancelled_at_look(u64::MAX);
+        let _ = crate::run_with("kriging", &m, &params, &counting);
+        // Ten looks each reading, projecting and merging, then the grid's few: the count is what
+        // shows the projection's ten (without them it is 20 and a few).
+        assert!((30..=35).contains(&counting.looked()), "{}", counting.looked());
+        // Cancelled at its 15th look (the projection's fifth): it stops there.
         let cancelled = crate::control::Control::cancelled_at_look(15);
         let e = crate::run_with("kriging", &m, &params, &cancelled).unwrap_err();
         assert!(e.contains("cancelled"), "{e}");
