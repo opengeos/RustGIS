@@ -191,7 +191,7 @@ fn same_time(a: Option<&crate::time::TimeBinding>, b: Option<&crate::time::TimeB
 
 /// Whether two datasets hold what a frame draws alike, their rows aside (compared by allocation).
 fn same_dataset(a: &Dataset, b: &Dataset) -> bool {
-    let Dataset { name, geometry_type, fields, features: _, source, crs, crs_incomplete, zm_dropped, windowed } = a;
+    let Dataset { name, geometry_type, fields, features: _, source, crs, crs_incomplete, zm_dropped, windowed, held_in } = a;
     *name == b.name
         && *geometry_type == b.geometry_type
         && *fields == b.fields
@@ -200,6 +200,7 @@ fn same_dataset(a: &Dataset, b: &Dataset) -> bool {
         && *crs_incomplete == b.crs_incomplete
         && *zm_dropped == b.zm_dropped
         && *windowed == b.windowed
+        && *held_in == b.held_in
 }
 
 /// What a frame draws from a map apart from its layers: its basemap, tile layers, groups,
