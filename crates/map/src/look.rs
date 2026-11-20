@@ -1,7 +1,8 @@
 //! What a frame draws a map and each of its layers from, kept to tell whether a picture drawn
 //! earlier still shows them (#1057). A renderer keeps a [`LayerLook`] for each layer it drew and
 //! a [`MapLook`] for the rest of the map, and draws again only from the first layer whose look
-//! no longer matches.
+//! no longer matches. Neither look records where a layer is in the drawing order: the renderer
+//! compares them place by place, each with its layer's id.
 //!
 //! A look is compared field by field, with every field of [`Layer`] and [`Map`] named, so a field
 //! added later has to be placed: drawn (compared) or not (left out with a reason). Rows are
@@ -217,9 +218,9 @@ impl MapLook {
     pub fn of(map: &Map) -> MapLook {
         let Map {
             name,
-            offline_area_id,
+            offline_area_id: _,
             layers: _,
-            service_groups,
+            service_groups: _,
             groups,
             basemap,
             tiles,
@@ -234,7 +235,7 @@ impl MapLook {
             label_display,
             label_lock,
             label_lock_line_anchors,
-            editing,
+            editing: _,
             swipe,
             view,
             thumbnail: _,
@@ -247,9 +248,9 @@ impl MapLook {
         MapLook {
             map: Map {
                 name: name.clone(),
-                offline_area_id: offline_area_id.clone(),
+                offline_area_id: None,
                 layers: Vec::new(),
-                service_groups: service_groups.clone(),
+                service_groups: Vec::new(),
                 groups: groups.clone(),
                 basemap: *basemap,
                 tiles: tiles.clone(),
@@ -263,7 +264,7 @@ impl MapLook {
                 label_display: *label_display,
                 label_lock: label_lock.clone(),
                 label_lock_line_anchors: label_lock_line_anchors.clone(),
-                editing: editing.clone(),
+                editing: Default::default(),
                 swipe: *swipe,
                 view: view.clone(),
                 thumbnail: None,
