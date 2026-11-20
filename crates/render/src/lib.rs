@@ -3282,8 +3282,12 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
 /// horizon, from the basemap. A body without the Earth's atmosphere has neither: the ground
-/// fades into the black of space (#223).
+/// fades into the black of space (#223). A blank basemap's paper colour is both, as it is (#2532):
+/// the block stands on the page's own colour.
 pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
+    if let Some(paper) = map.blank_paper() {
+        return (paper, paper);
+    }
     if !map.body().is_earth() {
         let space = globe_space(true);
         return (space, space);
@@ -9470,6 +9474,29 @@ mod tests {
         );
         let (water, ..) = m.basemap.palette();
         assert_eq!(scene.clear, mesh::premul(water), "the clear colour is the basemap's water");
+    }
+
+    /// A blank basemap's paper colour (#2532) is the flat view's canvas on the CPU and the GPU's
+    /// clear colour, and a tilted view's sky and fog as it is; another basemap leaves it unused.
+    #[test]
+    fn a_blank_paper_colour_is_the_canvas_the_clear_colour_and_the_sky() {
+        let cream = Rgba::rgb(0xF1, 0xEA, 0xDF);
+        let mut m = Map::new("Map");
+        (m.basemap, m.graticule, m.paper) = (rustgis_map::Basemap::Blank, false, Some(cream));
+        let view = View { width: 200.0, height: 120.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
+        let pm = render(&mut m, &view).unwrap().pixmap;
+        let p = pm.pixel(5, 5).unwrap();
+        assert_eq!((p.red(), p.green(), p.blue(), p.alpha()), (0xF1, 0xEA, 0xDF, 255));
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert_eq!(scene.clear, mesh::premul(cream));
+        assert_eq!(tilt_sky(&m), (cream, cream), "no white mixed in");
+        m.paper = None;
+        let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(m.palette().0, white, "without a colour, blank stays white");
+        m.paper = Some(cream);
+        m.basemap = rustgis_map::Basemap::Paper;
+        assert_eq!(m.palette(), m.basemap.palette(), "another basemap keeps its own colours");
+        assert_ne!(tilt_sky(&m).0, cream);
     }
 
     #[test]
