@@ -398,8 +398,10 @@ pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
     let name = if r.name.trim().is_empty() { tl_raw!("Untitled").to_string() } else { r.name.clone() };
     let file = r.path.as_deref().map(|p| std::path::Path::new(p).file_name().map_or(p.to_string(), |n| n.to_string_lossy().into_owned()));
     let mut decision = None;
-    egui::Modal::new(egui::Id::unique("autosave_recover")).show(ctx, |ui| {
-        ui.set_width(420.0_f32.min((ctx.content_rect().width() - 32.0).max(1.0)));
+    let frame = egui::Frame::popup(&ctx.global_style());
+    let width = crate::widgets::dialog_width(ctx, 420.0, frame);
+    egui::Modal::new(egui::Id::unique("autosave_recover")).frame(frame).show(ctx, |ui| {
+        ui.set_width(width);
         ui.label(egui::RichText::new(tl!("Recover unsaved work?")).font(semibold(15.0)));
         ui.add_space(4.0);
         // On a phone the OS can stop a backgrounded app as part of normal use.
@@ -445,7 +447,7 @@ pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(crate::i18n::fmt("It didn't open: {error}", &[("error", e)])).color(t.red));
         }
         ui.add_space(10.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min).with_main_wrap(true), |ui| {
             // A copy that didn't open isn't offered again; Discard and Later remain.
             if app.autosave.offer_error.is_none()
                 && !blocked

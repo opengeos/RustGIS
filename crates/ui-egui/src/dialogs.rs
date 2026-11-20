@@ -377,22 +377,28 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         app.dialogs.reset_collapse = false;
     }
 
-    // Opens centred and can be moved; each dialog remembers where it was put.
-    let window = egui::Window::new(tl!(title))
-        .id(window_id)
-        .open(&mut open)
-        .collapsible(is_add_service)
-        .resizable(false)
-        .pivot(Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0));
-    let window = if is_add_service { window.auto_sized() } else { window };
-    window.show(ctx, |ui| {
-        ui.set_width(match which {
-            "coordinateSystem" | "zarr" => 660.0,
-            "addTiles" | "addUrl" | "addService" | "s3" => 560.0,
-            "newConnection" | "editConnection" | "chooseConnection" | "s3Connections" => 520.0,
-            _ => 440.0,
-        });
+    let preferred_width = match which {
+        "coordinateSystem" | "zarr" => 660.0,
+        "addTiles" | "addUrl" | "addService" | "s3" => 560.0,
+        "newConnection" | "editConnection" | "chooseConnection" | "s3Connections" => 520.0,
+        _ => 440.0,
+    };
+    let frame = egui::Frame::window(&ctx.global_style());
+    let width = crate::widgets::dialog_width(ctx, preferred_width, frame);
+    let compact = app.touch.is_some() || width < preferred_width;
+    let window = egui::Window::new(tl!(title)).id(window_id).frame(frame).open(&mut open).collapsible(is_add_service).resizable(false);
+    let window = if compact {
+        // Recenter after a rotation or keyboard resize. Scrolling keeps tall forms and rows
+        // with their own minimum widths reachable inside the viewport.
+        let outer_width = width + frame.total_margin().sum().x;
+        window.anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO).min_width(outer_width).max_width(outer_width)
+    } else {
+        // The desktop dialog remembers where it was moved.
+        let window = window.pivot(Align2::CENTER_CENTER).default_pos(ctx.content_rect().center() + vec2(0.0, -40.0));
+        if is_add_service { window.auto_sized() } else { window }
+    };
+    let mut contents = |ui: &mut egui::Ui| {
+        ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         match which {
             "selectByAttributes" => close = select_by_attributes(app, ui, &t),
@@ -403,21 +409,32 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let by_grid = earth && !app.dialogs.text.trim().is_empty();
                 egui::Grid::new("xy").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                     let input_label = ui.label(tl!("Longitude (X)"));
-                    ui.add_enabled(!by_grid, egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("-74.006 · 74°0′22″W").desired_width(300.0))
-                        .labelled_by(input_label.id);
+                    ui.add_enabled(
+                        !by_grid,
+                        egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("-74.006 · 74°0′22″W").desired_width(300.0),
+                    )
+                    .labelled_by(input_label.id);
                     ui.end_row();
                     let input_label = ui.label(tl!("Latitude (Y)"));
-                    ui.add_enabled(!by_grid, egui::TextEdit::singleline(&mut app.dialogs.b).hint_text("40.7128 · 40°42′46″N").desired_width(300.0))
-                        .labelled_by(input_label.id);
+                    ui.add_enabled(
+                        !by_grid,
+                        egui::TextEdit::singleline(&mut app.dialogs.b).hint_text("40.7128 · 40°42′46″N").desired_width(300.0),
+                    )
+                    .labelled_by(input_label.id);
                     ui.end_row();
                     if earth {
                         let input_label = ui.label(tl!("Or grid reference"));
-                        ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("18TWL8395907350 · 18north 583959 4507351").desired_width(300.0))
-                            .labelled_by(input_label.id);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.dialogs.text)
+                                .hint_text("18TWL8395907350 · 18north 583959 4507351")
+                                .desired_width(300.0),
+                        )
+                        .labelled_by(input_label.id);
                         ui.end_row();
                     }
                     let input_label = ui.label(tl!("Scale 1:"));
-                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).hint_text(tl!("keep current")).desired_width(300.0)).labelled_by(input_label.id);
+                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).hint_text(tl!("keep current")).desired_width(300.0))
+                        .labelled_by(input_label.id);
                     ui.end_row();
                 });
                 // Below the boxes, wrapped to the dialog's width rather than widening it.
@@ -449,7 +466,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let input_label = ui.label(tl!("Source coordinate system"));
                 let recent = app.ui.recent_crs.clone();
                 let width = ui.available_width();
-                let (response, _) = crate::crspicker::crs_box(ui, "addShapefile", &mut app.dialogs.text, &recent, crate::crspicker::Offer::All, width, "EPSG:2263", &t);
+                let (response, _) = crate::crspicker::crs_box(
+                    ui,
+                    "addShapefile",
+                    &mut app.dialogs.text,
+                    &recent,
+                    crate::crspicker::Offer::All,
+                    width,
+                    "EPSG:2263",
+                    &t,
+                );
                 let response = response.labelled_by(input_label.id);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(tl!("In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP."));
@@ -466,7 +492,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let input_label = ui.label(tl!("Source coordinate system"));
                 let recent = app.ui.recent_crs.clone();
                 let width = ui.available_width();
-                let (label, _) = crate::crspicker::crs_box(ui, "defineProjection", &mut app.dialogs.text, &recent, crate::crspicker::Offer::All, width, "EPSG:2263", &t);
+                let (label, _) = crate::crspicker::crs_box(
+                    ui,
+                    "defineProjection",
+                    &mut app.dialogs.text,
+                    &recent,
+                    crate::crspicker::Offer::All,
+                    width,
+                    "EPSG:2263",
+                    &t,
+                );
                 let label = label.labelled_by(input_label.id);
                 label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(egui::RichText::new(tl!("Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.")).weak());
@@ -542,7 +577,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-                    for (label, v) in [("Longitude", &mut app.dialogs.a), ("Latitude", &mut app.dialogs.b), ("Scale 1:", &mut app.dialogs.c)] {
+                    for (label, v) in
+                        [("Longitude", &mut app.dialogs.a), ("Latitude", &mut app.dialogs.b), ("Scale 1:", &mut app.dialogs.c)]
+                    {
                         let input_label = ui.label(tl!(label));
                         ui.add(egui::TextEdit::singleline(v).desired_width(160.0)).labelled_by(input_label.id);
                         ui.end_row();
@@ -558,7 +595,11 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         if s.is_empty() {
                             return Ok(None);
                         }
-                        s.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some).ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl_raw!(what))]))
+                        s.parse::<f64>()
+                            .ok()
+                            .filter(|v| v.is_finite())
+                            .map(Some)
+                            .ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl_raw!(what))]))
                     };
                     let (lon, lat, scale) = (n(&app.dialogs.a, "Longitude")?, n(&app.dialogs.b, "Latitude")?, n(&app.dialogs.c, "Scale")?);
                     app.run("map.camera", json!({"lon": lon, "lat": lat, "scale": scale})).map(|_| ())
@@ -588,7 +629,13 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     // the command checks against its range.
                     let mut p = json!({});
                     let d = &app.dialogs;
-                    for (key, label, v) in [("frames", "Frames", &d.a), ("turn", "Turn", &d.b), ("width", "Width", &d.c), ("height", "Height", &d.d), ("speed", "Frame time", &d.e)] {
+                    for (key, label, v) in [
+                        ("frames", "Frames", &d.a),
+                        ("turn", "Turn", &d.b),
+                        ("width", "Width", &d.c),
+                        ("height", "Height", &d.d),
+                        ("speed", "Frame time", &d.e),
+                    ] {
                         let v = v.trim();
                         if !v.is_empty() {
                             let n = v.parse::<f64>().ok().filter(|n| n.is_finite());
@@ -617,14 +664,27 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     ui.end_row();
                     let input_label = ui.label(tl!("Data type"));
                     // Each type as the command names it, and as the interface shows it.
-                    let types =
-                        [("Long", tl!("Long")), ("Double", tl!("Double")), ("Text", tl!("Text")), ("Boolean", tl!("Boolean")), ("Date", tl!("Date")), ("DateTime", tl!("Date and time"))];
-                    let shown = types.iter().find(|(ty, _)| *ty == app.dialogs.b).map_or_else(|| app.dialogs.b.clone(), |(_, label)| label.to_string());
-                    egui::ComboBox::from_id_salt("af_type").selected_text(shown).show_ui(ui, |ui| {
-                        for (ty, label) in &types {
-                            ui.selectable_value(&mut app.dialogs.b, ty.to_string(), label.to_string());
-                        }
-                    }).response.labelled_by(input_label.id);
+                    let types = [
+                        ("Long", tl!("Long")),
+                        ("Double", tl!("Double")),
+                        ("Text", tl!("Text")),
+                        ("Boolean", tl!("Boolean")),
+                        ("Date", tl!("Date")),
+                        ("DateTime", tl!("Date and time")),
+                    ];
+                    let shown = types
+                        .iter()
+                        .find(|(ty, _)| *ty == app.dialogs.b)
+                        .map_or_else(|| app.dialogs.b.clone(), |(_, label)| label.to_string());
+                    egui::ComboBox::from_id_salt("af_type")
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            for (ty, label) in &types {
+                                ui.selectable_value(&mut app.dialogs.b, ty.to_string(), label.to_string());
+                            }
+                        })
+                        .response
+                        .labelled_by(input_label.id);
                     ui.end_row();
                 });
                 close = buttons(app, ui, "Add", |app| {
@@ -639,10 +699,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
                 /// The same, from the dialog's table and the session apart, so the box can be
                 /// written while it's read.
-                fn data_of(
-                    table: Option<(u64, u32)>,
-                    session: &rustgis_engine::Session,
-                ) -> Option<&rustgis_engine::data::Dataset> {
+                fn data_of(table: Option<(u64, u32)>, session: &rustgis_engine::Session) -> Option<&rustgis_engine::data::Dataset> {
                     match table {
                         Some((opened, id)) => session.project.table(id).filter(|_| opened == session.opened).map(|t| &t.dataset),
                         None => session.active_layer.and_then(|id| session.map().layer(id)).map(|l| &l.dataset),
@@ -651,11 +708,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let fields: Vec<String> = data(app).map(|d| calculation_fields(d).map(|f| f.name.clone()).collect()).unwrap_or_default();
                 ui.horizontal(|ui| {
                     let input_label = ui.label(tl!("Field"));
-                    egui::ComboBox::from_id_salt("cf_field").selected_text(app.dialogs.a.clone()).width(220.0).show_ui(ui, |ui| {
-                        for f in &fields {
-                            ui.selectable_value(&mut app.dialogs.a, f.clone(), f);
-                        }
-                    }).response.labelled_by(input_label.id);
+                    egui::ComboBox::from_id_salt("cf_field")
+                        .selected_text(app.dialogs.a.clone())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for f in &fields {
+                                ui.selectable_value(&mut app.dialogs.a, f.clone(), f);
+                            }
+                        })
+                        .response
+                        .labelled_by(input_label.id);
                 });
                 let input_label = ui.label(format!("{} =", app.dialogs.a));
                 // Suggestions as it's typed: the fields, functions, variables and keywords (#1240).
@@ -670,16 +732,22 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 crate::exprcomplete::expr_edit(ui, id, &mut app.dialogs.text, ds, style).labelled_by(input_label.id);
                 // Read once no suggestion is offered: a word still being chosen isn't an error yet.
                 let text = app.dialogs.text.trim();
-                let reads = data(app).filter(|_| !text.is_empty() && !crate::exprcomplete::offering(ui, id)).map(|d| rustgis_engine::cmd::edit::check_calculation(text, d));
+                let reads = data(app)
+                    .filter(|_| !text.is_empty() && !crate::exprcomplete::offering(ui, id))
+                    .map(|d| rustgis_engine::cmd::edit::check_calculation(text, d));
                 if let Some(Err(e)) = reads {
                     let t = Tokens::get(ui.ctx());
                     ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
                 }
                 // A standalone table has no selection: every row.
                 let help = if app.dialogs.table.is_some() {
-                    tl!("Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to every row of the table.")
+                    tl!(
+                        "Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to every row of the table."
+                    )
                 } else {
-                    tl!("Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to the selected rows, or every row when none is selected.")
+                    tl!(
+                        "Fields, numbers, 'text', + - * / % ^, || to join text, comparisons, CASE and functions such as round(), upper(), if() or scale_linear(). Applies to the selected rows, or every row when none is selected."
+                    )
                 };
                 ui.label(egui::RichText::new(help).small().weak());
                 close = buttons(app, ui, "Calculate", |app| {
@@ -736,6 +804,13 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         }
         if let Some(i) = &app.dialogs.info {
             ui.label(egui::RichText::new(i).color(t.green));
+        }
+    };
+    window.show(ctx, |ui| {
+        if compact {
+            egui::ScrollArea::both().auto_shrink([false, true]).show(ui, contents);
+        } else {
+            contents(ui);
         }
     });
     if (!open || close) && app.dialogs.open == Some(which) {
