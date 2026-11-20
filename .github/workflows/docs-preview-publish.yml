@@ -16,14 +16,21 @@
 # no longer the pull request's head (a newer push) publishes nothing. Dependabot runs get no
 # secrets, so they publish nothing either.
 #
-# A fork's site is unreviewed HTML and JavaScript. It publishes on every push when the pull
-# request's author already has a commit here, usually from a merged pull request (GitHub's
-# `CONTRIBUTOR` association: "has previously committed to the repository").
-# A first-time contributor's preview is published only when the run was started by someone with
-# write access: a maintainer who added the `preview` label or re-ran the docs-preview workflow.
-# The label is then taken off, so every new commit needs a new approval. A maintainer's own push
-# to a fork's branch (a maintainer edit) starts the run, so it counts as their approval.
-# Same-repository pull requests come from people with write access and publish on every push.
+# A fork's site is unreviewed HTML and JavaScript, and every preview shares one origin
+# (preview.rustgis.app): its scripts can read and change what other previews keep in the browser.
+# A fork's preview is published only when the run was started by someone with write access: a
+# maintainer who added the `preview` label or re-ran the docs-preview workflow, whether or not the
+# author has contributed before. The label is then taken off, so every new commit needs a new
+# approval. A maintainer's own push to a fork's branch (a maintainer edit) starts the run, so it
+# counts as their approval. Same-repository pull requests come from people with write access and
+# publish on every push.
+#
+# The web app is marked as a preview here, after the build (and so is every other preview's app on
+# gh-pages that isn't yet): it then keeps its settings (an AI provider key among them) in memory,
+# installs no service worker, and clears what earlier previews left in the origin's storage and
+# caches. That keeps what a user enters out of later previews' reach. A preview open at the same
+# time can still reach into another's page (same origin, through a frame or window), which only the
+# approval above guards against.
 name: docs-preview-publish
 
 on:
@@ -92,8 +99,8 @@ jobs:
           fi
           # Captured first so a failing call fails the step (`read < <(…)` would hide it).
           info=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
-            --jq '[.state, .head.sha, (.head.repo.full_name // "-"), .author_association] | @tsv')
-          IFS=$'\t' read -r state sha repo association <<< "$info"
+            --jq '[.state, .head.sha, (.head.repo.full_name // "-")] | @tsv')
+          IFS=$'\t' read -r state sha repo <<< "$info"
           # A deleted fork has no head repository; the head commit must still match.
           [ "$repo" = - ] && repo="$RUN_REPO"
           if [ "$sha" != "$RUN_SHA" ] || [ "$repo" != "$RUN_REPO" ]; then
@@ -105,12 +112,7 @@ jobs:
           [ "$repo" != "$GITHUB_REPOSITORY" ] && fork=true
           if [ "$state" = open ] && [ "$HAS_SITE" = true ]; then
             mode=deploy
-            # A returning contributor (an earlier commit here) publishes on every push. `returning`
-            # isn't `true`, so the label is left alone and the comment asks for no approval.
-            if [ "$fork" = true ] && [ "$association" = CONTRIBUTOR ]; then
-              echo "Fork preview approved: the author has contributed before."
-              fork=returning
-            elif [ "$fork" = true ]; then
+            if [ "$fork" = true ]; then
               # Someone who isn't a collaborator is a 404; any other failure fails the step
               # rather than passing for "not approved".
               if ! permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${STARTED_BY}/permission" \
@@ -173,6 +175,35 @@ jobs:
           find site -type l -print -delete
           find site -name .git -prune -print -exec rm -rf {} +
 
+      # The pull request's app built from its own code: marking it after the build means a branch
+      # can't leave the marking out by mistake. No service worker is published with it.
+      - name: Mark the web app as a preview
+        if: steps.pr.outputs.mode == 'deploy' || steps.pr.outputs.mode == 'remove'
+        env:
+          MODE: ${{ steps.pr.outputs.mode }}
+        run: |
+          set -euo pipefail
+          # The publish step marks the other previews' apps with the same script.
+          cat > "$RUNNER_TEMP/mark-preview.sh" <<'SCRIPT'
+          # mark_preview <app folder>: drops its service worker and marks its index.html as a
+          # preview; fails when it can't. The mark goes on the first line that is only `<head>`
+          # (as Trunk keeps index.html's), not on a `<head>` inside a comment or a script.
+          mark_preview() {
+            rm -f "$1/sw.js"
+            [ -f "$1/index.html" ] || return 0
+            grep -q '^<head><meta name="rustgis-preview"' "$1/index.html" && return 0
+            sed -i '0,/^[[:space:]]*<head>[[:space:]]*$/s//<head><meta name="rustgis-preview" content="shared-origin">/' "$1/index.html"
+            grep -q '^<head><meta name="rustgis-preview"' "$1/index.html"
+          }
+          SCRIPT
+          . "$RUNNER_TEMP/mark-preview.sh"
+          # Unmarked, the app would keep what the user enters where other previews can read it.
+          if [ "$MODE" = deploy ] && ! mark_preview site/app; then
+            echo "::error::The web app's index.html has no line that is only <head>, so it can't be marked as a preview."
+            exit 1
+          fi
+          [ "$MODE" = deploy ] && echo "Web app marked as a preview."
+
       - name: Configure the preview repository deploy key
         if: env.HAS_KEY == 'true' && (steps.pr.outputs.mode == 'deploy' || steps.pr.outputs.mode == 'remove')
         env:
@@ -212,6 +243,16 @@ jobs:
             if [ "$MODE" = deploy ]; then
               cp -r site "pages/${dir}"
             fi
+            # Previews published before apps were marked: marked now, or their app removed.
+            if [ -f "$RUNNER_TEMP/mark-preview.sh" ]; then
+              . "$RUNNER_TEMP/mark-preview.sh"
+            fi
+            for app in pages/pr-*/app; do
+              [ -d "$app" ] || continue
+              if declare -F mark_preview > /dev/null; then
+                mark_preview "$app" || { echo "::warning::${app#pages/} couldn't be marked as a preview; removed."; rm -rf "$app"; }
+              fi
+            done
             touch pages/.nojekyll
             git -C pages config user.name "github-actions[bot]"
             git -C pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
