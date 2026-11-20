@@ -43,6 +43,10 @@ const THREADS_FROM_VERTICES: usize = 50_000;
 /// which vertices to keep, and the kept ones, before the row is counted in the budget.
 const SCRATCH_PER_VERTEX: usize = 48;
 
+/// And per part (a line's run, a polygon's ring or polygon), with or without vertices: the list
+/// the row's copy holds it in.
+const SCRATCH_PER_PART: usize = std::mem::size_of::<Vec<Coord>>();
+
 /// Inputs of an unsuccessful display attempt, so unchanged frames do not repeat the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rejected {
@@ -156,7 +160,7 @@ pub(crate) fn thin_budgeted(geoms: &[Option<Geometry>], tol: f64, budget: usize)
 /// `build` of each item's geometry (`geometry`), in order ([`map_budgeted_on`]), on up to the
 /// user's thread count ([`rustgis_data::threads`]): one below [`THREADS_FROM_VERTICES`], and no
 /// more than [`rustgis_data::memory::thread_scratch`] holds, beyond one thread's, with each thread
-/// building the biggest row at once ([`SCRATCH_PER_VERTEX`]).
+/// building the biggest row at once ([`row_scratch`]).
 fn map_budgeted<T: Sync>(
     items: &[T],
     budget: usize,
@@ -164,20 +168,31 @@ fn map_budgeted<T: Sync>(
     build: impl Fn(&Geometry) -> Geometry + Sync,
 ) -> Option<Vec<Option<Geometry>>> {
     let (total, biggest) =
-        items.iter().filter_map(&geometry).map(vertices).fold((0usize, 0usize), |(t, b), v| (t.saturating_add(v), b.max(v)));
+        items.iter().filter_map(&geometry).fold((0usize, 0usize), |(t, b), g| (t.saturating_add(vertices(g)), b.max(row_scratch(g))));
     let threads = threads_for(total, biggest, rustgis_data::threads::for_items(items.len()), rustgis_data::memory::thread_scratch());
     map_budgeted_on(items, budget, threads, |item| geometry(item).map(&build))
 }
 
-/// The threads to build a level of `total` vertices, the biggest row `biggest`, on: at most
-/// `most`, one below [`THREADS_FROM_VERTICES`], and as many as `scratch` bytes hold beyond one
-/// thread's, each building a row as big as the biggest.
+/// The threads to build a level of `total` vertices on, the biggest row taking `biggest` bytes to
+/// build ([`row_scratch`]): at most `most`, one below [`THREADS_FROM_VERTICES`], and as many as
+/// `scratch` bytes hold beyond one thread's, each building a row as big as the biggest.
 fn threads_for(total: usize, biggest: usize, most: usize, scratch: usize) -> usize {
     if total < THREADS_FROM_VERTICES {
         return 1;
     }
-    let affordable = (scratch / biggest.saturating_mul(SCRATCH_PER_VERTEX).max(1)).saturating_add(1);
+    let affordable = (scratch / biggest.max(1)).saturating_add(1);
     most.min(affordable).max(1)
+}
+
+/// What building a level's copy of `g` takes before the row is counted in the budget: its
+/// vertices ([`SCRATCH_PER_VERTEX`]) and its parts, empty ones too ([`SCRATCH_PER_PART`]).
+fn row_scratch(g: &Geometry) -> usize {
+    let parts = match g {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => 1,
+        Geometry::Line(parts) => parts.len(),
+        Geometry::Polygon(polys) => polys.iter().map(|rings| rings.len().saturating_add(1)).fold(0, usize::saturating_add),
+    };
+    vertices(g).saturating_mul(SCRATCH_PER_VERTEX).saturating_add(parts.saturating_mul(SCRATCH_PER_PART))
 }
 
 /// `build` of each item, in order, on up to `threads` threads taking turns at chunks of rows (at
@@ -548,13 +563,24 @@ mod tests {
     /// building a row as big as its biggest.
     #[test]
     fn threads_follow_the_vertices_and_the_scratch() {
-        let row = 1_000_000 * SCRATCH_PER_VERTEX;
-        assert_eq!(threads_for(THREADS_FROM_VERTICES - 1, 10, 16, usize::MAX), 1);
-        assert_eq!(threads_for(THREADS_FROM_VERTICES, 10, 16, usize::MAX), 16);
-        assert_eq!(threads_for(10_000_000, 1_000_000, 16, 3 * row), 4);
-        assert_eq!(threads_for(10_000_000, 1_000_000, 16, row / 2), 1);
+        let line = |n: usize| Geometry::Line(vec![(0..n).map(|i| Coord::new(i as f64, 0.0)).collect()]);
+        let row = row_scratch(&line(1_000_000));
+        assert_eq!(row, 1_000_000 * SCRATCH_PER_VERTEX + SCRATCH_PER_PART);
+        assert_eq!(threads_for(THREADS_FROM_VERTICES - 1, 480, 16, usize::MAX), 1);
+        assert_eq!(threads_for(THREADS_FROM_VERTICES, 480, 16, usize::MAX), 16);
+        assert_eq!(threads_for(10_000_000, row, 16, 3 * row), 4);
+        assert_eq!(threads_for(10_000_000, row, 16, row / 2), 1);
         assert_eq!(threads_for(10_000_000, 0, 16, 0), 1);
-        assert_eq!(threads_for(10_000_000, 1_000_000, 1, usize::MAX), 1);
+        assert_eq!(threads_for(10_000_000, row, 1, usize::MAX), 1);
+        // Parts count without vertices: a row of 700,000 empty runs or rings takes as much to
+        // build as one of about 350,000 vertices, and starts as few threads.
+        let empty_runs = Geometry::Line(vec![Vec::new(); 700_000]);
+        let empty_rings = Geometry::Polygon(vec![vec![Vec::new(); 700_000]]);
+        assert_eq!(vertices(&empty_runs), 0);
+        for g in [&empty_runs, &empty_rings] {
+            assert!(row_scratch(g) >= 700_000 * SCRATCH_PER_PART);
+            assert_eq!(threads_for(10_000_000, row_scratch(g), 16, 4 * row_scratch(g)), 5);
+        }
     }
 
     /// A level over its budget is refused on many threads exactly where one thread refuses it: a
