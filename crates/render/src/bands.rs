@@ -50,6 +50,12 @@ const THREADS_FROM_PIXELS: u64 = 1 << 20;
 /// What a kept thing's setup (its edges, its paint's pipeline) counts in pixels.
 const PER_OP_PIXELS: u64 = 256;
 
+/// What a band drawing a path takes beside it, as a multiple of the path's size ([`path_bytes`],
+/// about 9 bytes a point): tiny-skia moves a copy of it to the band (any transform but none at all;
+/// a second one on a band wider than 8191 pixels), and builds its edge list, about 80 bytes a
+/// segment, up to twice that while the list grows.
+const SCRATCH_GROWTH: usize = 20;
+
 /// How many kept things a band draws between looks at Cancel ([`crate::cancel`]).
 const LOOK_EVERY: usize = 256;
 
@@ -275,11 +281,14 @@ impl Bands {
         }
         let (w, h) = (pm.width(), pm.height());
         let bands = h.div_ceil(BAND_ROWS) as usize;
-        let threads = threads_for(&kept, w, h, most);
+        let scratch = rustgis_data::memory::thread_scratch();
+        let threads = threads_for(&kept, w, h, most, scratch);
         stroke_wide(&mut kept, threads, &stopped);
         if stopped() {
             return;
         }
+        // Again with the wide strokes' outlines as made, for the bands.
+        let threads = threads.min(threads_for(&kept, w, h, most, scratch));
         // Each band's kept things, in order, so a band visits only what reaches it.
         let mut lists: Vec<Vec<u32>> = vec![Vec::new(); bands];
         for (n, k) in kept.iter().enumerate() {
@@ -321,8 +330,11 @@ impl Bands {
 }
 
 /// How many threads draw `kept` on a `w` × `h` frame, at most `most`: one below
-/// [`THREADS_FROM_PIXELS`] of work, counted as the pixels each kept thing reaches.
-fn threads_for(kept: &[Kept], w: u32, h: u32, most: usize) -> usize {
+/// [`THREADS_FROM_PIXELS`] of work, counted as the pixels each kept thing reaches; and no more than
+/// `scratch` bytes ([`rustgis_data::memory::thread_scratch`]) hold, beyond one thread's, when each
+/// band draws the biggest kept path at once ([`SCRATCH_GROWTH`]; a wide stroke not yet outlined as
+/// [`OUTLINE_GROWTH`] times its path).
+fn threads_for(kept: &[Kept], w: u32, h: u32, most: usize, scratch: usize) -> usize {
     let reach = |k: &Kept| -> u64 {
         let rows = (k.rows.1.min(h as f32) - k.rows.0.max(0.0)).max(0.0);
         let rows = if rows.is_finite() { rows as u64 } else { u64::from(h) };
@@ -330,7 +342,20 @@ fn threads_for(kept: &[Kept], w: u32, h: u32, most: usize) -> usize {
         rows * cols + PER_OP_PIXELS
     };
     let work: u64 = kept.iter().map(reach).fold(0, u64::saturating_add);
-    if work < THREADS_FROM_PIXELS { 1 } else { most.clamp(1, h.div_ceil(BAND_ROWS).max(1) as usize) }
+    if work < THREADS_FROM_PIXELS {
+        return 1;
+    }
+    let biggest = kept
+        .iter()
+        .map(|k| match &k.op {
+            Op::Fill { path, .. } => path_bytes(path),
+            Op::Stroke { path, paint, stroke, ts } => path_bytes(path) * if hairline(paint, stroke, *ts) { 1 } else { OUTLINE_GROWTH },
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    let affordable = (scratch / biggest.saturating_mul(SCRATCH_GROWTH).max(1)).saturating_add(1);
+    most.min(affordable).clamp(1, h.div_ceil(BAND_ROWS).max(1) as usize)
 }
 
 /// Draws `op` on `band`, whose first row is the frame's row `top`.
@@ -849,14 +874,54 @@ mod tests {
             FillRule::Winding,
             Transform::identity()
         ));
-        assert_eq!(threads_for(&bands.kept, w, h, 8), 1);
+        assert_eq!(threads_for(&bands.kept, w, h, 8, 1 << 30), 1);
         assert!(bands.fill(
             &PathBuilder::from_rect(Rect::from_xywh(0.0, 0.0, 2000.0, 2000.0).unwrap()),
             &paint,
             FillRule::Winding,
             Transform::identity()
         ));
-        assert_eq!(threads_for(&bands.kept, w, h, 8), 8);
+        assert_eq!(threads_for(&bands.kept, w, h, 8, 1 << 30), 8);
+    }
+
+    /// Every band moves a copy of a path it draws: a big path starts only the threads the scratch
+    /// memory holds, beyond the calling thread's.
+    #[test]
+    fn a_big_path_starts_only_the_threads_scratch_holds() {
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        for i in 0..1_000_000 {
+            pb.line_to((i % 2000) as f32, (i / 500) as f32);
+        }
+        let path = pb.finish().unwrap();
+        let mut bands = Bands::default();
+        assert!(bands.fill(&path, &solid(0, 0, 0, 255), FillRule::Winding, Transform::identity()));
+        let each = path_bytes(&path) * SCRATCH_GROWTH;
+        assert_eq!(threads_for(&bands.kept, 2000, 2000, 16, 2 * each), 3);
+        assert_eq!(threads_for(&bands.kept, 2000, 2000, 16, each / 2), 1);
+        assert_eq!(threads_for(&bands.kept, 2000, 2000, 16, 100 * each), 16);
+        // Stroked wider than a hairline, a path becomes an outline several times its size; as a
+        // hairline, it is drawn as it is.
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        for i in 0..200_000 {
+            pb.line_to((i % 2000) as f32, (i / 100) as f32);
+        }
+        let path = pb.finish().unwrap();
+        let each = path_bytes(&path) * SCRATCH_GROWTH;
+        let mut wide = Bands::default();
+        assert!(wide.stroke(&path, &solid(0, 0, 0, 255), &Stroke { width: 3.0, ..Stroke::default() }, Transform::identity()));
+        assert_eq!(threads_for(&wide.kept, 2000, 2000, 16, OUTLINE_GROWTH * each), 2);
+        let mut thin = Bands::default();
+        assert!(thin.stroke(&path, &solid(0, 0, 0, 255), &Stroke { width: 0.5, ..Stroke::default() }, Transform::identity()));
+        assert_eq!(threads_for(&thin.kept, 2000, 2000, 16, OUTLINE_GROWTH * each), 9);
+        // No path at all (frame-wide pixmaps): every thread, whatever the scratch.
+        let mut pictures = Bands::default();
+        let picture = Arc::new(Pixmap::new(2000, 100).unwrap());
+        for y in 0..20 {
+            pictures.shared_pixmap(&picture, &PixmapPaint::default(), Transform::from_translate(0.0, y as f32 * 100.0));
+        }
+        assert_eq!(threads_for(&pictures.kept, 2000, 2000, 16, usize::MAX), 16);
     }
 
     /// Too small a frame, or a recording canvas, keeps nothing: drawn straight away as before.

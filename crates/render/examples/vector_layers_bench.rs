@@ -144,10 +144,14 @@ fn main() {
         format!("{:>3} frames, median {median:6.0} ms, slowest {max:6.0} ms, total {:7.0} ms", s.len(), s.iter().sum::<f64>())
     };
     show(&mut m, None);
-    if let Some((ppp, name)) =
-        std::env::var("BENCH_ONLY").ok().as_deref().and_then(|o| o.split_once(',')).map(|(p, n)| (p.to_string(), n.to_string()))
-        && let (Ok(ppp), Some((_, cams))) = (ppp.parse::<f64>(), sequences.iter().find(|s| s.0 == name))
-    {
+    // `BENCH_ONLY` that names no pixel scale and sequence stops the run, not runs everything.
+    if let Ok(only) = std::env::var("BENCH_ONLY") {
+        let Some((ppp, name, cams)) = only.split_once(',').and_then(|(p, n)| {
+            let cams = &sequences.iter().find(|s| s.0 == n)?.1;
+            Some((p.parse::<f64>().ok().filter(|p| p.is_finite() && *p > 0.0)?, n, cams))
+        }) else {
+            fail(format!("BENCH_ONLY={only}: a pixel scale and a sequence, such as 2,zoom"))
+        };
         for _ in 0..3 {
             let times = run(&mut m, cams, ppp);
             let each: Vec<String> = times.iter().zip(cams.iter()).map(|(t, c)| format!("{:.1}m:{t:.0}", c.res)).collect();
