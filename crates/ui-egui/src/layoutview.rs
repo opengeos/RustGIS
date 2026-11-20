@@ -1657,14 +1657,19 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
-/// What the Format pane says of a text's lines left out of its box (#2346), as the page drawn
-/// counts them: `None` when they all fit.
+/// What the Format pane says of a text's lines left out (#2346), below its box or past the 200
+/// a text draws, as the page drawn counts them: `None` when they all fit.
 fn lines_left_out_label(loss: &rustgis_engine::render::layout::TextLoss) -> Option<String> {
-    match (loss.left_out, loss.at_least) {
-        (0, false) => None,
-        (1, false) => Some(tl!("1 line doesn't fit the box").to_string()),
-        (n, false) => Some(crate::i18n::fmt("{n} lines don't fit the box", &[("n", &n.to_string())])),
-        (m, true) => Some(crate::i18n::fmt("{n} or more lines don't fit the box", &[("n", &m.max(1).to_string())])),
+    // Lines past the 200 a text draws aren't the box's: no box draws them.
+    let n = || loss.left_out.max(1).to_string();
+    match (loss.left_out, loss.at_least, loss.past_limit) {
+        (0, false, _) => None,
+        (1, false, false) => Some(tl!("1 line doesn't fit the box").to_string()),
+        (_, false, false) => Some(crate::i18n::fmt("{n} lines don't fit the box", &[("n", &n())])),
+        (_, true, false) => Some(crate::i18n::fmt("{n} or more lines don't fit the box", &[("n", &n())])),
+        (1, false, true) => Some(tl!("1 line isn't drawn: a text draws 200 at most").to_string()),
+        (_, false, true) => Some(crate::i18n::fmt("{n} lines aren't drawn: a text draws 200 at most", &[("n", &n())])),
+        (_, true, true) => Some(crate::i18n::fmt("{n} or more lines aren't drawn: a text draws 200 at most", &[("n", &n())])),
     }
 }
 

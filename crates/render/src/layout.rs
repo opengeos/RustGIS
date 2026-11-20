@@ -201,6 +201,12 @@ pub struct TextLoss {
     /// It has more lines left out than `left_out` counts: a wrapped text is broken only up to
     /// the line past the 200 drawn ([`wrapped`]).
     pub at_least: bool,
+    /// Some of them are left out below its box, among the first 200: a taller box or a smaller
+    /// text draws them.
+    pub below_box: bool,
+    /// Some of them come past the 200 lines a text draws, whatever its box: only splitting the
+    /// text draws them.
+    pub past_limit: bool,
 }
 
 /// [`clipped_text`], with how many of each text's lines are left out of its box ([`TextLoss`]):
@@ -252,7 +258,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
             // Legend titles are drawn on one line, unlike text elements' explicit line breaks.
             let lines = std::iter::once(s.as_str()).filter(|_| title).chain(s.lines().filter(|_| !title));
-            let (mut cut, mut left_out) = (false, 0);
+            let (mut cut, mut left_out, mut below_box, mut past_limit) = (false, 0, false, false);
             for (i, line) in lines.enumerate() {
                 let drawn = i < 200 && (title || cy <= r.bottom() + px);
                 // A line not drawn is only looked at for a letter, as a wrapped text tells its
@@ -260,6 +266,11 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                 if !drawn {
                     if line.chars().any(|c| !c.is_whitespace()) {
                         (cut, left_out) = (true, left_out + 1);
+                        if i < 200 {
+                            below_box = true;
+                        } else {
+                            past_limit = true;
+                        }
                     }
                     continue;
                 }
@@ -283,7 +294,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             }
             // A wrapped text ends at the line past the 200 drawn ([`wrapped`]): it may go on.
             let at_least = broken && s.lines().nth(200).is_some();
-            cut.then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least })
+            cut.then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least, below_box, past_limit })
         })
         .collect()
 }
@@ -321,19 +332,33 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
     Some(format!("Text is cut off in {} layout element(s): {names}; {advice}", clipped.len()))
 }
 
-/// What a text that loses lines below its box is told (#2346), from its [`TextLoss`]: `None`
-/// when none of its lines is left out.
+/// What a text that loses lines is told (#2346), from its [`TextLoss`]: `None` when none of its
+/// lines is left out. Lines below its box want a taller box or a smaller text; lines past the 200
+/// a text draws, splitting the text, as no box draws them.
 pub fn lines_left_out_notice(loss: &TextLoss) -> Option<String> {
     let n = loss.left_out;
     if n == 0 && !loss.at_least {
         return None;
     }
-    let (count, verbs) = match (n, loss.at_least) {
-        (1, false) => ("1 line".to_string(), "doesn't fit its box and isn't"),
-        (n, false) => (format!("{n} lines"), "don't fit its box and aren't"),
-        (n, true) => (format!("{} or more lines", n.max(1)), "don't fit its box and aren't"),
+    let (count, one) = match (n, loss.at_least) {
+        (1, false) => ("1 line".to_string(), true),
+        (n, false) => (format!("{n} lines"), false),
+        (n, true) => (format!("{} or more lines", n.max(1)), false),
     };
-    Some(format!("{count} of the text \"{}\" ({}) {verbs} drawn; make the box taller or the text smaller", loss.name, loss.id))
+    let said = match (loss.below_box, loss.past_limit) {
+        (_, false) => {
+            let verbs = if one { "doesn't fit its box and isn't" } else { "don't fit its box and aren't" };
+            format!("{verbs} drawn; make the box taller or the text smaller")
+        }
+        (false, true) => {
+            format!("{} drawn: a text draws at most 200 lines; split it into more than one text", if one { "isn't" } else { "aren't" })
+        }
+        (true, true) => format!(
+            "{} drawn: make the box taller or the text smaller, and split it, as a text draws at most 200 lines",
+            if one { "isn't" } else { "aren't" }
+        ),
+    };
+    Some(format!("{count} of the text \"{}\" ({}) {said}", loss.name, loss.id))
 }
 
 /// One element on transparency, allocating only its on-page pixel bounds.
@@ -5567,9 +5592,10 @@ mod tests {
         // Counted as more than the one line seen: the wrapped text was broken no further.
         let (l, id) = page("\nZ");
         let loss = text_losses(&l, &[], 96.0, &info);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true }]);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true, below_box: false, past_limit: true }]);
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.starts_with("1 or more lines of the text \"Note\""), "{said}");
+        assert!(said.ends_with("aren't drawn: a text draws at most 200 lines; split it into more than one text"), "{said}");
     }
 
     /// The lines of a text left out below its box are counted, blank ones not, and said in the
@@ -5583,7 +5609,7 @@ mod tests {
         assert!(losses(&l).is_empty(), "all fit");
         l.element_mut(id).unwrap().h = 2.0;
         let loss = losses(&l);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false }]);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false, below_box: true, past_limit: false }]);
         // The element alone is measured the same, and another id finds nothing.
         assert_eq!(text_loss(&l, &[], 96.0, &info, id).as_ref(), loss.first());
         assert_eq!(text_loss(&l, &[], 96.0, &info, id + 1), None);
@@ -5611,11 +5637,27 @@ mod tests {
         let id = l.elements[0].id;
         l.element_mut(id).unwrap().h = 2.0;
         let loss = text_losses(&l, &[], 96.0, &info);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false }]);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false, below_box: true, past_limit: true }]);
+        let said = lines_left_out_notice(&loss[0]).unwrap();
+        assert!(said.ends_with("make the box taller or the text smaller, and split it, as a text draws at most 200 lines"), "{said}");
+        // A box tall enough for 200 lines: the rest are past the limit, which no box draws (#2542).
+        let mut tall = note_page(&vec!["x"; 250].join("\n"), false, TextAlign::Left, 0.0);
+        tall.height = 2000.0;
+        tall.element_mut(id).unwrap().h = 1900.0;
+        let loss = text_losses(&tall, &[], 96.0, &info);
+        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 50, at_least: false, below_box: false, past_limit: true }]);
+        let said = lines_left_out_notice(&loss[0]).unwrap();
+        assert_eq!(
+            said,
+            format!("50 lines of the text \"Note\" ({id}) aren't drawn: a text draws at most 200 lines; split it into more than one text")
+        );
         // Blank lines below the box and then one letter: that one line is left out.
         let mut l = note_page(&format!("x{}\nZ", "\n".repeat(2000)), false, TextAlign::Left, 0.0);
         l.element_mut(id).unwrap().h = 2.0;
-        assert_eq!(text_losses(&l, &[], 96.0, &info), vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false }]);
+        assert_eq!(
+            text_losses(&l, &[], 96.0, &info),
+            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false, below_box: false, past_limit: true }]
+        );
     }
 
     /// The cut-off notice suggests breaking lines or wrapping them for a text not wrapped, and

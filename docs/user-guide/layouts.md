@@ -391,7 +391,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   box are said as soon as they are: `layout.addElement` and `layout.update` warn how many lines
   don't fit when they set a text, its size, font or fallback font, bold, italic, alignment,
   spacing, wrap or box, or show it, and the Format pane shows the count under **Wrap to the
-  box** (a text wrapped past the 200 lines a text draws counts them as "or more").
+  box** (a text wrapped past the 200 lines a text draws counts them as "or more"). A text draws
+  200 lines at most, whatever its box: lines past them are said apart, with the advice to split
+  the text into more than one, since a taller box doesn't draw them.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
   `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn; the Format pane's
   **Insert Dynamic Text** menu, under the text, lists each with what it shows. The text, its
