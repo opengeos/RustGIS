@@ -973,6 +973,28 @@ impl Dataset {
         }
     }
 
+    /// How many of its features have a place that can't be given in longitude/latitude, which
+    /// the map, the globe and the drawings made from either leave out: none while its coordinates
+    /// are longitude/latitude, as every dataset's are today. Refused, naming its system, when the
+    /// system can't be converted at all (then none of it is drawn).
+    pub fn unplaced_in_lonlat(&self) -> std::result::Result<usize, String> {
+        let to = self.lonlat_conversion()?;
+        if to.is_identity() {
+            return Ok(0);
+        }
+        // Counted, not converted: a place that isn't a number is kept, as a conversion keeps it.
+        let unplaced = |g: &Geometry| {
+            let lost = std::cell::Cell::new(false);
+            g.for_each_coord(|c| {
+                if !lost.get() && c.is_finite() && to.point(c).is_none() {
+                    lost.set(true);
+                }
+            });
+            lost.get()
+        };
+        Ok(self.features.rows().filter_map(|r| r.geometry()).filter(|g| unplaced(g)).count())
+    }
+
     /// The dataset in longitude/latitude, the space analysis tools work in: borrowed while its
     /// coordinates are longitude/latitude ([`Dataset::coord_crs`]), as every dataset's are today;
     /// otherwise a copy with every geometry converted, missing coordinates kept. Refused, naming
