@@ -115,7 +115,7 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let ds = rustgis_engine::cmd::report::layer_of(&app.session, i).ok().map(|l| &l.dataset);
         let width = ui.available_width();
         let resp = crate::exprcomplete::expr_edit(ui, egui::Id::unique(("report_where", i)), &mut app.reports.where_clause, ds, |e| {
-            e.hint_text("pop_max > 1000000").char_limit(rustgis_engine::data::query::MAX_LEN).desired_width(width)
+            e.hint_text("pop_max > 1000000").desired_width(width)
         })
         .labelled_by(input_label.id);
         if resp.lost_focus() {

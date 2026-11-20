@@ -514,7 +514,7 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let hint = if app.forms.calc { tl!("field * 2, 'text', a + b") } else { tl!("SQL that must be true, e.g. pop > 0") };
         // Suggestions from the layer's fields (#1240).
         let _ = crate::exprcomplete::expr_edit(ui, egui::Id::unique("rule_expression"), &mut app.forms.expression, Some(&l.dataset), |e| {
-            e.hint_text(hint).char_limit(rustgis_engine::data::query::MAX_LEN).desired_width(190.0)
+            e.hint_text(hint).desired_width(190.0)
         });
         if ui.button(tl!("Add")).clicked() {
             let kind = if app.forms.calc { "calculation" } else { "constraint" };
