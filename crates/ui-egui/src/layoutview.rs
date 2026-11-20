@@ -763,7 +763,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 }
                 app.layout.text_warning = note;
             }
-            app.layout.text_losses = Some((li, losses));
+            // The Format pane is drawn before the page: a count that changed shows on the next
+            // frame, without waiting for an input event.
+            let losses = Some((li, losses));
+            if app.layout.text_losses != losses {
+                app.layout.text_losses = losses;
+                ui.ctx().request_repaint();
+            }
             // Waiting for the frames draws it again anyway: the legends are asked about once
             // they are whole.
             let legends = !frames && pending.legends;
@@ -1654,11 +1660,10 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// What the Format pane says of a text's lines left out of its box (#2346), as the page drawn
 /// counts them: `None` when they all fit.
 fn lines_left_out_label(loss: &rustgis_engine::render::layout::TextLoss) -> Option<String> {
-    let n = loss.left_out.to_string();
     match (loss.left_out, loss.at_least) {
         (0, false) => None,
         (1, false) => Some(tl!("1 line doesn't fit the box").to_string()),
-        (_, false) => Some(crate::i18n::fmt("{n} lines don't fit the box", &[("n", &n)])),
+        (n, false) => Some(crate::i18n::fmt("{n} lines don't fit the box", &[("n", &n.to_string())])),
         (m, true) => Some(crate::i18n::fmt("{n} or more lines don't fit the box", &[("n", &m.max(1).to_string())])),
     }
 }

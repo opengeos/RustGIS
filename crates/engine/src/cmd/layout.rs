@@ -3387,9 +3387,8 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
         pages: series.as_ref().map_or(1, |i| i.0),
         page_name: series.map(|i| i.1).unwrap_or_default(),
     };
-    let said = rustgis_render::layout::text_losses(l, &s.project.maps, 300.0, &info)
-        .iter()
-        .find(|loss| loss.id == id)
+    let said = rustgis_render::layout::text_loss(l, &s.project.maps, 300.0, &info, id)
+        .as_ref()
         .and_then(rustgis_render::layout::lines_left_out_notice);
     if let Some(said) = said {
         s.warn(said);

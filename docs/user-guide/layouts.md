@@ -386,9 +386,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   The notice counts and names the affected elements with their IDs. A line may extend beyond
   its element's width while remaining on the page; that alone is not clipped. Reduce the size,
   add line breaks, turn on **Wrap to the box**, or resize or move the element to keep all its text;
-  when every text it names is already wrapped, the notice suggests only the size and the box.
-  Lines left out below a text's box are said as soon as they are: `layout.addElement` and
-  `layout.update` warn how many lines don't fit when they set a text, its size, font, alignment,
+  when every text it names is already wrapped, the notice suggests only the size and the box, and
+  a legend's title, which has no wrap, is told to add line breaks. Lines left out below a text's
+  box are said as soon as they are: `layout.addElement` and `layout.update` warn how many lines
+  don't fit when they set a text, its size, font or fallback font, bold, italic, alignment,
   spacing, wrap or box, or show it, and the Format pane shows the count under **Wrap to the
   box** (a text wrapped past the 200 lines a text draws counts them as "or more").
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,

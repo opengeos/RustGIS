@@ -206,6 +206,16 @@ pub struct TextLoss {
 /// [`clipped_text`], with how many of each text's lines are left out of its box ([`TextLoss`]):
 /// what the layout view, an export and the commands say, so they never tell it apart.
 pub fn text_losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) -> Vec<TextLoss> {
+    losses(layout, maps, dpi, info, None)
+}
+
+/// [`text_losses`] for the element `id` alone, measuring no other: `None` when it isn't cut off.
+pub fn text_loss(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, id: u32) -> Option<TextLoss> {
+    losses(layout, maps, dpi, info, Some(id)).pop()
+}
+
+/// The texts cut off, of the whole page or of the element `only`.
+fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option<u32>) -> Vec<TextLoss> {
     let (w, h, k) = page_geometry(layout, dpi);
     let ppp = (k / PT_PER_MM) as f32;
     let first = layout.first_frame().and_then(|id| layout.element(id)).and_then(|e| {
@@ -216,9 +226,10 @@ pub fn text_losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) -> 
     layout
         .elements
         .iter()
-        .filter(|e| e.visible)
+        .filter(|e| e.visible && only.is_none_or(|id| id == e.id))
         .filter_map(|e| {
-            let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, (e.w * k) as f32, (e.h * k) as f32)?;
+            // At least a pixel each way, as the page draws it.
+            let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, ((e.w * k) as f32).max(1.0), ((e.h * k) as f32).max(1.0))?;
             let (s, size, face, align, spacing, rotation, title, broken) = match &e.kind {
                 ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap }
                     if color.a() > 0 =>
@@ -281,7 +292,8 @@ pub fn text_losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo) -> 
 /// can merge repeated element IDs across series pages before calling this, so a PDF's fallback
 /// rendering and repeated pages never multiply the count. Its advice fits the texts of `layout`
 /// named: breaking lines by hand or wrapping them for a text not wrapped (#2346), only the box or
-/// the size for one already wrapped to its box.
+/// the size when all are wrapped to their boxes, and line breaks without the wrap for a legend's
+/// title, which has none.
 pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option<String> {
     if clipped.is_empty() {
         return None;
@@ -290,13 +302,21 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
     if clipped.len() > 10 {
         names.push_str(&format!(" and {} more", clipped.len() - 10));
     }
-    // A legend's title, or an element gone since, keeps the advice it always had.
-    let unwrapped =
-        clipped.iter().any(|(id, _)| !matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::Text { wrap: true, .. })));
-    let advice = if unwrapped {
+    // Each text's wrap; `None` for a legend's title or an element gone since, which keep the
+    // advice they always had.
+    let wraps = clipped
+        .iter()
+        .map(|(id, _)| match layout.element(*id).map(|e| &e.kind) {
+            Some(ElementKind::Text { wrap, .. }) => Some(*wrap),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let advice = if wraps.contains(&Some(false)) {
         "resize or move the text, reduce its size, add line breaks, or turn on Wrap to the box"
-    } else {
+    } else if wraps.iter().all(|w| *w == Some(true)) {
         "resize or move the text, or reduce its size"
+    } else {
+        "resize or move the text, reduce its size, or add line breaks"
     };
     Some(format!("Text is cut off in {} layout element(s): {names}; {advice}", clipped.len()))
 }
@@ -5564,6 +5584,9 @@ mod tests {
         l.element_mut(id).unwrap().h = 2.0;
         let loss = losses(&l);
         assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false }]);
+        // The element alone is measured the same, and another id finds nothing.
+        assert_eq!(text_loss(&l, &[], 96.0, &info, id).as_ref(), loss.first());
+        assert_eq!(text_loss(&l, &[], 96.0, &info, id + 1), None);
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.starts_with(&format!("3 lines of the text \"Note\" ({id}) don't fit its box and aren't drawn")), "{said}");
         if let ElementKind::Text { text, .. } = &mut l.element_mut(id).unwrap().kind {
@@ -5610,6 +5633,12 @@ mod tests {
             assert_eq!(note.contains("add line breaks"), !wrap, "{note}");
             assert!(note.contains("reduce its size"), "{note}");
         }
+        // A legend's title, or an element gone since, has no wrap to turn on: line breaks, as before.
+        let l = note_page(NOTE, true, TextAlign::Left, 0.0);
+        let note = clipped_text_notice(&l, &[(999, "Gone".into())]).unwrap();
+        assert!(note.ends_with("resize or move the text, reduce its size, or add line breaks"), "{note}");
+        let both = clipped_text_notice(&l, &[(l.elements[0].id, "Note".into()), (999, "Gone".into())]).unwrap();
+        assert!(!both.contains("Wrap to the box") && both.contains("add line breaks"), "{both}");
         assert_eq!(clipped_text_notice(&Layout::new("L", 10.0, 10.0), &[]), None);
     }
 
