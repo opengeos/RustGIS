@@ -577,13 +577,12 @@ fn add_layer(
             if *style {
                 report.approximated(name, "the vector tile style QGIS was given: drawn in the service's own style");
             }
-            if *features && added.get("index").is_some() {
-                tiles_not_features(name, layer, None, report);
-            }
-            if !*features || added.get("index").is_some() {
-                // (A tile layer answers its index; anything else must be a new map layer.)
-                if added.get("index").is_none() {
-                    added_one(s, before)?;
+            // A tile layer answers its index: its settings, and for features asked, what tiles
+            // can't take. Anything else is a new map layer (features, or an image or a map drawn
+            // as one), which takes the layer's style below, as a file's does.
+            if added.get("index").is_some() {
+                if *features {
+                    tiles_not_features(name, layer, None, report);
                 }
                 *tile = landed(s, &added);
                 web_settings(s, &added, before, layer, report);
@@ -673,7 +672,10 @@ fn tiles_not_features(name: &str, layer: &qgis::ProjectLayer, service_filter: Op
     for q in layer.definition_query.iter().map(String::as_str).chain(service_filter) {
         report.skipped(name, format!("its filter `{q}`: the service gives the layer as tiles, which take none"));
     }
-    report.approximated(name, "its style: the service gives the layer as tiles, drawn in RustGIS's colours");
+    // A style of its own (a renderer QGIS saved), not drawn: said; none, nothing to say.
+    if layer.style.renderer.is_some() {
+        report.approximated(name, "its style: the service gives the layer as tiles, drawn in RustGIS's colours");
+    }
 }
 
 /// Notes what a web service layer's source says that RustGIS doesn't read: its other options, by
