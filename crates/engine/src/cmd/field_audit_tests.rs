@@ -93,6 +93,61 @@ fn with_label(s: &Session, id: u32, field: &str, label: &str) -> usize {
 
 const AREA: [f64; 4] = [-20.0, -40.0, 60.0, 40.0];
 
+/// A legacy home tab gains its association on rename, so callers still find it after save and reopen.
+#[test]
+fn bring_back_refreshes_a_renamed_home_offline_map() {
+    let temp = Temp::new("rename-home-offline");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    let (_, out) = package(&mut home, &json!({"name": "Crew", "extent": AREA})).unwrap();
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    // A home project saved before maps carried their area ID.
+    home.map_mut().offline_area_id = None;
+    home.run("map.rename", &json!({"name": "Renamed at home"})).unwrap();
+    let path = temp.0.join("home.rgis");
+    home.run("project.save", &json!({"path": path})).unwrap();
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(saved["requires"].as_array().unwrap().contains(&json!("offline-map-area-id")));
+    home.run("project.open", &json!({"path": path})).unwrap();
+    assert_eq!(home.map().name, "Renamed at home");
+
+    let mut field = phone(&temp, &out, "phone");
+    let cities = layer(&field, "Cities");
+    let name = text_field(&field, cities);
+    let count = |s: &Session, label| with_label(s, layer(s, "Cities"), &name, label);
+    add_point(&mut field, cities, &name, "Captured after rename", [10.0, 5.0]);
+    let (done, _) = bring_back(&temp, &mut field, &mut home, "phone");
+    assert_eq!(done["area"], "Crew");
+    assert_eq!(done["added"], 1);
+    assert_eq!(count(&home, "Captured after rename"), 1);
+
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    assert_eq!(count(&home, "Captured after rename"), 1);
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    assert_eq!(home.map().name, "Renamed at home");
+    assert_eq!(home.project.maps.len(), 2);
+
+    // Reusing the old title for another map must not redirect Sync, Package or Remove.
+    home.run("map.new", &json!({"name": "Crew (offline)"})).unwrap();
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    assert_eq!(home.map().name, "Renamed at home");
+    add_point(&mut home, cities, &name, "Edited at home", [11.0, 5.0]);
+    let (area, bytes) = package(&mut home, &Value::Null).unwrap();
+    assert_eq!(area, "Crew");
+    assert_eq!(home.project.offline_areas.len(), 1);
+    let repacked = phone(&temp, &bytes, "repacked");
+    assert_eq!(repacked.map().name, "Crew (offline)");
+    assert_eq!(count(&repacked, "Edited at home"), 1);
+    assert_eq!(repacked.project.field_origin.as_ref().unwrap().area, home.project.offline_areas[0].id);
+
+    home.run("offline.sync", &json!({"name": "Crew"})).unwrap();
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    assert_eq!(count(&home, "Edited at home"), 1);
+    home.run("offline.remove", &json!({"name": "Crew"})).unwrap();
+    assert!(home.project.maps.iter().all(|map| map.name != "Renamed at home"));
+    assert!(home.project.maps.iter().any(|map| map.name == "Crew (offline)"));
+}
+
 /// One package, copied to two phones (emailed to a crew, AirDropped to a second device). Each fixes
 /// a city and captures a point. A is brought back first. B's copy is of a state the area has left:
 /// bringing it back would undo A's fix and delete A's point (B's copy lacks it), so it is refused
