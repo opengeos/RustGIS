@@ -1382,6 +1382,36 @@ fn gpu_mesh_limit_spans_a_streamed_layers_batches() {
     assert!(scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })), "the rest drawn on the CPU");
 }
 
+/// A tilted view of a streamed layer too dense to mesh, on the GPU backend, is drawn on the CPU
+/// as the CPU backend draws it. The GPU frame tried first stops at the layer's batch past the
+/// limit (#2540), which is no error of its source.
+#[test]
+fn a_tilted_view_of_a_streamed_layer_too_dense_to_mesh_is_drawn_on_the_cpu() {
+    let mut ds = Dataset::new("dense", GeometryType::Polygon, vec![]);
+    for i in 0..270 {
+        for j in 0..270 {
+            let (x, y) = (i as f64 * 0.01, j as f64 * 0.01);
+            let ring = vec![Coord::new(x, y), Coord::new(x + 0.008, y), Coord::new(x, y + 0.008)];
+            ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        }
+    }
+    let mut map = Map::new("dense");
+    map.add_dataset(ds);
+    map.layers[0] = streamed(&map.layers[0], 72_900 / 8 + 1);
+    let camera = Camera { center: lonlat_to_merc(Coord::new(1.35, 1.35)), res: 1000.0, bearing: 0.0, pitch: 50.0 };
+    let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: false };
+    // The GPU attempt alone: it declines, with no error for the source and no failed source.
+    crate::MESHED.with(|m| m.borrow_mut().clear());
+    let mut failed = None;
+    assert!(crate::gpu_turned(&mut map, &view, false, false, &mut failed, &crate::Env::default()).is_none());
+    assert!(crate::MESHED.with(|m| m.borrow().iter().any(|(_, too_dense)| *too_dense)), "a batch past the limit");
+    assert!(failed.is_none() && map.layers[0].source.as_ref().is_some_and(|s| s.error.is_none()), "no error: {failed:?}");
+    let Some(RenderOutput::Cpu(gpu)) = render_backend(&mut map, &view, Backend::Gpu) else { panic!("drawn on the CPU") };
+    let cpu = render_backend(&mut map, &view, Backend::Cpu);
+    let Some(RenderOutput::Cpu(cpu)) = cpu else { panic!("cpu") };
+    assert!(gpu.pixmap.data() == cpu.pixmap.data(), "as the CPU backend draws it");
+}
+
 /// Counts full render traversals independently of interaction-window reads.
 struct CountedLod {
     chunks: Chunks,
