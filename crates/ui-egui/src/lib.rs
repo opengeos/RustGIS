@@ -6867,8 +6867,8 @@ impl RustGisApp {
         pluginstart::frame_drawn(self, &ctx);
         // Cancel, save prompts and any project changes from UI controls take effect first.
         chrome::advance_history_jump(self, &ctx);
-        // Capture and photo attachment land during UI handling. Start the checkpoint
-        // deadline in the same frame, after those edits.
+        // Capture and photo attachment land during UI handling. Submit a due checkpoint
+        // in the same frame, after those edits.
         if self.autosave.phone {
             autosave::tick(self, &ctx);
         }

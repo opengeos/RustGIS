@@ -22,10 +22,10 @@ pub(crate) const MINUTES_PREF: &str = "autosave_minutes";
 pub(crate) const DEFAULT_MINUTES: u32 = 5;
 /// The longest interval `ui.autosave` takes.
 const MAX_MINUTES: u64 = 60;
-/// Enough time to group successive edits without long exposure after an isolated change.
-const PHONE_QUIET: Duration = Duration::from_secs(2);
-/// The longest foreground editing can defer submitting a checkpoint.
-const PHONE_MAX_DELAY: Duration = Duration::from_secs(30);
+/// Minimum time between foreground phone checkpoint submissions.
+const PHONE_INTERVAL: Duration = Duration::from_secs(2);
+/// Wait longer before retrying a failed phone copy of the same state.
+const PHONE_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// The intervals Settings › Autosave offers (`0` is off).
 pub(crate) const CHOICES: [u32; 7] = [0, 1, 2, 5, 10, 15, 30];
 
@@ -95,14 +95,12 @@ pub struct AutosaveState {
     pub(crate) minutes: u32,
     /// Use the phone's foreground checkpoint policy in place of the desktop interval.
     pub(crate) phone: bool,
-    /// The most recent uncheckpointed edit and the start of its batch.
-    pending_edit: Option<PendingEdit>,
     /// The session revision the last copy was made at, while one is kept.
     written: Option<u64>,
     /// The last copy failed in the background: due again at the next interval, unchanged or not.
     /// Kept apart from `written`, so a save still removes the earlier copy the failure left.
     failed: bool,
-    /// When the last copy was made.
+    /// When the last copy was submitted (or adopted on desktop).
     last: Option<Instant>,
     /// The copy an earlier run left, while the user hasn't recovered or discarded it.
     offer: Option<Recovery>,
@@ -120,20 +118,12 @@ pub struct AutosaveState {
     wake_set: bool,
 }
 
-/// Only revision and timing information are kept until a phone checkpoint is due.
-struct PendingEdit {
-    state: u64,
-    first: Instant,
-    latest: Instant,
-}
-
 impl Default for AutosaveState {
     /// Every few minutes ([`DEFAULT_MINUTES`]), nothing written yet and nothing offered.
     fn default() -> Self {
         AutosaveState {
             minutes: DEFAULT_MINUTES,
             phone: false,
-            pending_edit: None,
             written: None,
             failed: false,
             last: None,
@@ -209,7 +199,7 @@ fn changed_since(r: &Recovery) -> bool {
 }
 
 /// Keeps the recovery copy in step with the project. Desktop uses the configured interval.
-/// Phones submit once the edits settle or reach the foreground deadline.
+/// Phones submit the first edit immediately and group later edits within the submission interval.
 pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     tick_at(app, Some(ctx), Instant::now());
 }
@@ -238,7 +228,6 @@ fn tick_at(app: &mut RustGisApp, ctx: Option<&egui::Context>, now: Instant) {
         if app.autosave.written.take().is_some() {
             store.clear();
         }
-        app.autosave.pending_edit = None;
         app.autosave.failed = false;
         return;
     }
@@ -246,24 +235,16 @@ fn tick_at(app: &mut RustGisApp, ctx: Option<&egui::Context>, now: Instant) {
     // (including Undo and Redo) need another copy.
     let state = if phone { app.session.state() } else { app.session.revision };
     let changed = app.autosave.written != Some(state);
-    if !changed {
-        app.autosave.pending_edit = None;
-        if !app.autosave.failed {
-            return;
-        }
+    if !changed && !app.autosave.failed {
+        return;
     }
     if let Some(ctx) = ctx {
-        let remaining = if phone && changed {
-            let edit = app.autosave.pending_edit.get_or_insert(PendingEdit { state, first: now, latest: now });
-            if edit.state != state {
-                edit.state = state;
-                edit.latest = now;
-            }
-            (edit.latest + PHONE_QUIET).min(edit.first + PHONE_MAX_DELAY).saturating_duration_since(now)
-        } else {
-            let interval = if phone { PHONE_MAX_DELAY } else { Duration::from_secs(u64::from(app.autosave.minutes) * 60) };
-            app.autosave.last.map_or(Duration::ZERO, |last| (last + interval).saturating_duration_since(now))
+        let interval = match (phone, changed) {
+            (true, true) => PHONE_INTERVAL,
+            (true, false) => PHONE_RETRY_INTERVAL,
+            (false, _) => Duration::from_secs(u64::from(app.autosave.minutes) * 60),
         };
+        let remaining = app.autosave.last.map_or(Duration::ZERO, |last| (last + interval).saturating_duration_since(now));
         if !remaining.is_zero() {
             ctx.request_repaint_after(remaining);
             return;
@@ -278,7 +259,6 @@ fn tick_at(app: &mut RustGisApp, ctx: Option<&egui::Context>, now: Instant) {
         store.write(app.session.project.clone(), about(app));
     }
     app.autosave.written = Some(state);
-    app.autosave.pending_edit = None;
     app.autosave.failed = false;
     app.autosave.last = Some(now);
 }
@@ -363,8 +343,10 @@ pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
         store.adopt_pending();
     }
     app.autosave.written = Some(if app.autosave.phone { app.session.state() } else { app.session.revision });
-    app.autosave.last = Some(Instant::now());
-    app.autosave.pending_edit = None;
+    // The adopted copy is already on disk. On the phone, only submissions throttle new edits.
+    if !app.autosave.phone {
+        app.autosave.last = Some(Instant::now());
+    }
     next_offer(app);
     let text = crate::i18n::fmt("Recovered unsaved work in {name}. Save to keep it.", &[("name", &app.session.project.name)]);
     app.session.notify(text, false);
@@ -1054,7 +1036,7 @@ mod tests {
     use rustgis_engine::{Project, Session};
     use serde_json::json;
 
-    use super::{Duration, Instant, PHONE_MAX_DELAY, PHONE_QUIET, Recovery, RecoveryStore, kept_line, now_secs, tick, tick_at};
+    use super::{Duration, Instant, PHONE_INTERVAL, Recovery, RecoveryStore, kept_line, now_secs, tick, tick_at};
     use crate::{RustGisApp, Services};
 
     /// A store that counts the copies and removals asked of it and fails the next copy when
@@ -1135,50 +1117,72 @@ mod tests {
     }
 
     #[test]
-    fn phone_waits_for_quiet_and_only_project_edits_reset_the_deadline() {
-        let counting = Counting::default();
-        let mut app = RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(counting.clone()));
+    fn phone_submits_one_edit_immediately_and_clears_after_save() {
+        let store = Counting::default();
+        let mut app = RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(store.clone()));
         let ctx = egui::Context::default();
         let start = Instant::now();
-        let next_edit = start + Duration::from_secs(1);
-        app.run("layer.template", json!({"template": "points", "name": "Sites"})).unwrap();
-        app.run("edit.enable", json!({"on": true})).unwrap();
         tick_at(&mut app, Some(&ctx), start);
-        assert_eq!(counting.0.borrow().0, 0);
-        app.run("edit.addFeature", json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [10, 5]}})).unwrap();
-        tick_at(&mut app, Some(&ctx), next_edit);
-        app.run("tool.set", json!({"tool": "select"})).unwrap();
-        tick_at(&mut app, Some(&ctx), start + PHONE_QUIET);
-        assert_eq!(counting.0.borrow().0, 0, "the new edit postponed the checkpoint");
-        tick_at(&mut app, Some(&ctx), next_edit + PHONE_QUIET);
-        assert_eq!(counting.0.borrow().0, 1, "the view change did not postpone it again");
+        assert_eq!(store.0.borrow().0, 0, "a clean project needs no copy");
+
+        app.run("layer.template", json!({"template": "points", "name": "Sites"})).unwrap();
+        tick_at(&mut app, Some(&ctx), start);
+        assert_eq!(store.0.borrow().0, 1, "the edit submits in the same frame");
+
         app.session.mark_saved();
-        tick_at(&mut app, Some(&ctx), next_edit + PHONE_QUIET);
-        assert_eq!(counting.0.borrow().2, 1, "an explicit save clears the copy");
+        tick_at(&mut app, Some(&ctx), start);
+        assert_eq!(store.0.borrow().2, 1, "an explicit save clears the copy");
     }
 
     #[test]
-    fn phone_checkpoints_at_the_cap_and_finishes_new_edits_on_exit() {
-        let counting = Counting::default();
-        let mut app = RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(counting.clone()));
+    fn phone_submits_a_burst_once_immediately_and_once_at_the_deadline() {
+        let store = Counting::default();
+        let mut app = RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(store.clone()));
         let ctx = egui::Context::default();
         let start = Instant::now();
         app.run("layer.template", json!({"template": "points", "name": "Sites"})).unwrap();
         tick_at(&mut app, Some(&ctx), start);
-        for second in 1..=PHONE_MAX_DELAY.as_secs() {
+        assert_eq!(store.0.borrow().0, 1);
+
+        for millis in [500, 1_000, 1_999] {
             app.run("edit.addFeature", json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [10, 5]}})).unwrap();
-            tick_at(&mut app, Some(&ctx), start + Duration::from_secs(second));
-            assert_eq!(counting.0.borrow().0, usize::from(second == PHONE_MAX_DELAY.as_secs()));
+            tick_at(&mut app, Some(&ctx), start + Duration::from_millis(millis));
+            assert_eq!(store.0.borrow().0, 1, "still within the interval");
         }
-        app.run("edit.addFeature", json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [11, 5]}})).unwrap();
-        tick_at(&mut app, Some(&ctx), start + PHONE_MAX_DELAY + Duration::from_secs(1));
-        assert_eq!(counting.0.borrow().0, 1);
-        app.finish_recovery_copy();
-        assert_eq!(counting.0.borrow().0, 2, "exit takes the final edit without waiting for quiet");
+        let latest = app.session.state();
+        tick_at(&mut app, Some(&ctx), start + PHONE_INTERVAL);
+        assert_eq!(store.0.borrow().0, 2, "the last edit did not move the deadline");
+        assert_eq!(app.autosave.written, Some(latest));
+        app.run("tool.set", json!({"tool": "select"})).unwrap();
+        tick_at(&mut app, Some(&ctx), start + 2 * PHONE_INTERVAL);
+        assert_eq!(store.0.borrow().0, 2, "a view change needs no copy");
     }
 
-    /// Capture in a UI frame, let the quiet deadline pass, then drop the app without an exit
-    /// hook. The next run can return the point and its photo to the home project.
+    #[test]
+    fn phone_exit_writes_the_edit_still_within_the_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app =
+            RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(super::FolderStore::open(dir.path()).unwrap()));
+        let ctx = egui::Context::default();
+        let start = Instant::now();
+        app.run("layer.template", json!({"template": "points", "name": "Sites"})).unwrap();
+        tick_at(&mut app, Some(&ctx), start);
+        app.run("edit.addFeature", json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [10, 5]}})).unwrap();
+        tick_at(&mut app, Some(&ctx), start + Duration::from_secs(1));
+        assert_ne!(app.autosave.written, Some(app.session.state()));
+
+        app.finish_recovery_copy();
+        drop(app);
+
+        let mut restarted =
+            RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(super::FolderStore::open(dir.path()).unwrap()));
+        restarted.run("ui.recover", json!(null)).unwrap();
+        assert_eq!(restarted.session.map().layers[0].dataset.features.len(), 1);
+        restarted.services.recovery.as_ref().unwrap().flush();
+    }
+
+    /// Capture and checkpoint in one UI frame. With no exit hook or later frame, the next
+    /// run can return the point and its photo to the home project once the writer has finished.
     #[test]
     fn phone_offers_a_captured_point_and_can_bring_the_recovered_package_back() {
         use rustgis_engine::data::zip;
@@ -1233,8 +1237,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui));
         frame.textures_delta.clear();
-        assert!(app.autosave.pending_edit.is_some(), "the editing frame starts the timer");
-        tick_at(&mut app, Some(&ctx), Instant::now() + PHONE_QUIET);
+        assert_eq!(app.autosave.written, Some(app.session.state()), "the editing frame submits the copy");
         app.services.recovery.as_ref().unwrap().flush();
         drop(app);
 
