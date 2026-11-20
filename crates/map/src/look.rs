@@ -205,6 +205,20 @@ fn same_dataset(a: &Dataset, b: &Dataset) -> bool {
         && *held_in == b.held_in
 }
 
+/// Whether two layer groups apply alike to their layers: whether the Layers pane shows a group
+/// open doesn't change the map.
+fn same_group(a: &crate::LayerGroup, b: &crate::LayerGroup) -> bool {
+    let crate::LayerGroup { id, name, visible, expanded: _, transparency, min_scale, max_scale, children, parent } = a;
+    *id == b.id
+        && *name == b.name
+        && *visible == b.visible
+        && transparency.to_bits() == b.transparency.to_bits()
+        && *min_scale == b.min_scale
+        && *max_scale == b.max_scale
+        && *children == b.children
+        && *parent == b.parent
+}
+
 /// What a frame draws from a map apart from its layers: its basemap, tile layers, groups,
 /// projection, view settings and the rest (see the module).
 #[derive(Clone, Debug)]
@@ -313,7 +327,8 @@ impl MapLook {
             instance_id,
         } = &self.map;
         *name == map.name
-            && *groups == map.groups
+            && groups.len() == map.groups.len()
+            && groups.iter().zip(&map.groups).all(|(a, b)| same_group(a, b))
             && *basemap == map.basemap
             && *tiles == map.tiles
             && *camera == map.camera
@@ -453,6 +468,26 @@ mod tests {
         map.bookmarks.push(Bookmark { name: "home".into(), camera: map.camera, description: String::new() });
         map.add_layer(layer());
         assert!(before.same(&MapLook::of(&map)), "bookmarks and layers aren't part of the map's own look");
+        map.groups.push(crate::LayerGroup {
+            id: 1,
+            name: "g".into(),
+            visible: true,
+            expanded: true,
+            transparency: 0.0,
+            min_scale: None,
+            max_scale: None,
+            children: Vec::new(),
+            parent: None,
+        });
+        let grouped = MapLook::of(&map);
+        if let Some(g) = map.groups.first_mut() {
+            g.expanded = false;
+        }
+        assert!(grouped.same(&MapLook::of(&map)), "a group shown closed in the Layers pane draws the same");
+        if let Some(g) = map.groups.first_mut() {
+            g.visible = false;
+        }
+        assert!(!grouped.same(&MapLook::of(&map)));
         map.graticule = !map.graticule;
         assert!(!before.same(&MapLook::of(&map)));
     }
