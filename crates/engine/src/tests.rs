@@ -48424,17 +48424,19 @@ fn reads_made_ahead_are_taken_by_the_command() {
         assert!(r.get("layer").is_some() || r.get("layers").is_some(), "{name}: {r}");
     }
     assert_eq!(s.map().layers.len(), 4, "{:?}", s.map().layers.iter().map(|l| &l.name).collect::<Vec<_>>());
-    // A file read in place (and any the command reads differently) reads as it runs.
+    // A GeoPackage, which opens without reading it whole (and any file the command reads
+    // differently), reads as it runs.
     let gpkg = json!({"path": dir.join("table.gpkg").display().to_string()});
     assert!(!crate::cmd::reads::read_ahead(&mut s, "layer.addData", &gpkg).unwrap().reads());
 
     // Load All's read, on a copy of the streamed layer.
     let path = dir.join("streamed.geojson");
     std::fs::write(&path, points).unwrap();
-    let inline =
+    let opening =
         crate::cmd::reads::read_ahead(&mut s, "layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
-    assert!(!inline.reads(), "an in-place opening still owns its original inline command");
-    let id = crate::cmd::reads::read_land(&mut s, inline.run(&Control::new()).unwrap()).unwrap()["layer"].as_u64().unwrap();
+    assert!(opening.reads(), "a file read in place is opened ahead too (#2446)");
+    let id = crate::cmd::reads::read_land(&mut s, opening.run(&Control::new()).unwrap()).unwrap()["layer"].as_u64().unwrap();
+    assert!(s.read_ahead.is_none(), "the opening was taken");
     assert!(s.map().layer(id as u32).unwrap().is_streamed());
     let p = json!({"layer": id});
     let read = crate::cmd::reads::read_ahead(&mut s, "layer.loadAll", &p).unwrap().run(&Control::new()).unwrap();
@@ -54576,12 +54578,13 @@ fn standalone_dbf_add_data_uses_tables_and_companion_shapefile() {
         )
         .unwrap();
     }
-    // Read-ahead and dispatch must agree on the SHP path, including the streamed route.
+    // Read-ahead and dispatch must agree on the SHP path, including the streamed route, which is
+    // opened ahead too (#2446).
     for stream in [false, true] {
         let mut paired = Session::new(Project::default());
         let p = json!({"path": path, "stream": stream});
         let ahead = crate::cmd::reads::read_ahead(&mut paired, "layer.addData", &p).unwrap();
-        assert_eq!(ahead.reads(), !stream);
+        assert!(ahead.reads(), "stream {stream}: the companion Shapefile is read ahead");
         let read = ahead.run(&rustgis_analysis::control::Control::new()).unwrap();
         if !stream {
             std::fs::remove_file(&shp).unwrap();

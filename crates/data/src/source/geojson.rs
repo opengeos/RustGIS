@@ -66,9 +66,30 @@ struct Scan {
     swapped: usize,
     /// The places of features whose heights reading drops.
     zm: Vec<u32>,
+    /// Features [`paced`](Scan::pace) so far, and the byte the progress was counted to.
+    paced: usize,
+    paced_to: u64,
+    /// Cancel was pressed: the scan stops.
+    stopped: bool,
 }
 
+/// Features between looks at Cancel (and progress counts) while a file is scanned or converted.
+const PACE: usize = 4096;
+
 impl Scan {
+    /// Says the scan has come `at` bytes into the file, and looks at Cancel: at the first feature
+    /// and every [`PACE`] after it (#2446).
+    fn pace(&mut self, at: u64) -> Result<()> {
+        let n = self.paced;
+        self.paced += 1;
+        if !n.is_multiple_of(PACE) {
+            return Ok(());
+        }
+        let done = at.saturating_sub(self.paced_to);
+        self.paced_to = self.paced_to.max(at);
+        crate::progress::step(usize::try_from(done).unwrap_or(usize::MAX))
+    }
+
     /// One element of `"features"`, read from `len` bytes at `offset` (with the comma and
     /// whitespace before it).
     fn feature(&mut self, f: &Json, offset: u64, len: u64) {
@@ -146,20 +167,25 @@ impl GeoJsonSource {
     pub(crate) fn open_with(path: &Path, name: &str, in_memory: u64) -> Result<GeoJsonSource> {
         use serde::de::DeserializeSeed;
         let mut scan = Scan::default();
-        let rest = if std::fs::metadata(path)?.len() <= in_memory {
+        let size = std::fs::metadata(path)?.len();
+        // How far the scan has come, in bytes of the file; Cancel stops it, said as such rather than
+        // as the JSON error it ends with.
+        crate::progress::begin(usize::try_from(size).unwrap_or(usize::MAX));
+        let failed = |e: serde_json::Error| if crate::progress::check().is_err() { DataError::Cancelled } else { bad(e) };
+        let rest = if size <= in_memory {
             let text = crate::provenance::read_to_string(path)?;
             // Its objects and vertices would all become a JSON tree, only to be refused below.
             if crate::cityjson::looks_like_cityjson(&text) {
                 return Err(DataError::Unsupported("only GeoJSON FeatureCollections are read in place".into()));
             }
-            crate::io::stream_features(&text, &mut InText { scan: &mut scan, start: text.as_ptr() as usize }).map_err(bad)?
+            crate::io::stream_features(&text, &mut InText { scan: &mut scan, start: text.as_ptr() as usize }).map_err(failed)?
         } else {
             let read = std::rc::Rc::new(std::cell::Cell::new(0u64));
             let file = Counting { inner: BufReader::with_capacity(BUFFER, crate::provenance::open(path)?), read: read.clone() };
             let mut de = serde_json::Deserializer::from_reader(file);
-            let rest = Top { scan: &mut scan, read }.deserialize(&mut de).map_err(bad)?;
+            let rest = Top { scan: &mut scan, read }.deserialize(&mut de).map_err(failed)?;
             // Only whitespace may follow, as when read whole.
-            de.end().map_err(bad)?;
+            de.end().map_err(failed)?;
             rest
         };
         if rest.get("type").and_then(Json::as_str) != Some("FeatureCollection") {
@@ -380,6 +406,9 @@ fn convert_pass(path: &Path, places: &[Place], t: &crate::raster::Transformer) -
     let (mut pos, mut buf) = (0u64, Vec::new());
     let mut pass = Pass { failed: Vec::new(), dropped: [0; 3], extent: Extent::EMPTY };
     for (i, place) in places.iter().enumerate() {
+        if i.is_multiple_of(PACE) {
+            crate::progress::check()?;
+        }
         // A feature that can't be read now is left to the reads, which skip it.
         if let Some(json) = read_place(&mut f, &mut pos, &mut buf, place)
             && let Ok(Some(g)) = geojson_geometry(&json)
@@ -476,11 +505,13 @@ impl<'de> serde::de::Visitor<'de> for Elements<'_> {
         f.write_str("an array of features")
     }
 
+    /// Scans each feature with its place in the file, ending with an error once Cancel is pressed.
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
         loop {
             let start = self.read.get();
             let Some(f) = seq.next_element::<Json>()? else { break };
             self.scan.feature(&f, start, self.read.get().saturating_sub(start));
+            self.scan.pace(self.read.get()).map_err(|_| serde::de::Error::custom("cancelled"))?;
         }
         Ok(())
     }
@@ -498,6 +529,7 @@ impl FeatureSink for InText<'_> {
         *self.scan = Scan::default();
     }
 
+    /// Scans one feature, its place where its text is in the file's; Cancel pressed stops the read.
     fn feature(&mut self, raw: &str) {
         let offset = (raw.as_ptr() as usize).saturating_sub(self.start) as u64;
         match serde_json::from_str::<Json>(raw) {
@@ -505,5 +537,12 @@ impl FeatureSink for InText<'_> {
             // Valid JSON, but with a number that doesn't fit.
             Err(_) => self.scan.skipped += 1,
         }
+        if self.scan.pace(offset + raw.len() as u64).is_err() {
+            self.scan.stopped = true;
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.scan.stopped
     }
 }

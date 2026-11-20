@@ -30,9 +30,15 @@ fn connect(path: &Path, write: bool) -> Result<Connection> {
 }
 
 impl DiskIndex {
+    /// The `.shp`'s index from the cache when one was built for this file as it is now, else built
+    /// there by scanning its records (looking at Cancel and counting progress as it goes); an error
+    /// when neither can be had, for [`Index::open`] to scan the records instead.
     pub fn open(path: &Path, len: u64, notes: &mut Vec<String>) -> Result<Self> {
         use super::cache;
         use crate::source::external::{fnv1a, stamp};
+        // Cancel is looked at once even when the index is reused, so an opening can always be
+        // stopped before the layer is added (#2446).
+        crate::progress::check()?;
         let canonical = path.canonicalize()?;
         let signature = format!("shp-index-v7:{canonical:?}:{:?}", stamp(path)?);
         let mut dir = cache::index_dir();
@@ -94,7 +100,14 @@ impl DiskIndex {
         let (count, note) = {
             let mut record = tx.prepare("INSERT INTO records VALUES(?1,?2,?3)").map_err(sql)?;
             let mut bounds = tx.prepare("INSERT INTO bounds VALUES(?1,?2,?3,?4,?5)").map_err(sql)?;
+            // How far the build has come, in bytes of the .shp, every so many records (#2446).
+            crate::progress::begin(usize::try_from(len).unwrap_or(usize::MAX));
+            let mut paced = 0u32;
             scan_boxed(path, len, |id, place, b| {
+                if id.is_multiple_of(4096) {
+                    crate::progress::step(place.offset.saturating_sub(paced) as usize)?;
+                    paced = place.offset;
+                }
                 record.execute(params![id, place.offset, place.len]).map_err(sql)?;
                 if union(&mut all_bounds, b) {
                     let [x0, y0, x1, y1] = b;

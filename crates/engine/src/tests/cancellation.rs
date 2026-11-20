@@ -178,6 +178,12 @@ pub(super) fn long_commands(boundaries: bool) {
         assert!(control.looked() > 0, "edit.previewShapeConversion never looks at Cancel");
         assert!(contents(&shapes.project) == before, "edit.previewShapeConversion changed the project after Cancel");
     }
+    // A Shapefile and a GeoJSON file read in place are opened on the same queue: the Shapefile's
+    // records indexed, the GeoJSON file's features found, Cancel looked at as they go (#2446).
+    for file in ["in-place.shp", "in-place.geojson"] {
+        s.run("share.exportLayer", &json!({"layer": "Cities", "path": out(file)})).unwrap();
+        exercise(&s, "layer.addData", &json!({"path": out(file), "stream": true}), Kind::Read, &dir.0, boundaries);
+    }
     // A PDF's page is read on the same queue: the file, then its drawing, Cancel looked at between
     // (#2336).
     s.run("layout.new", &json!({"page": "a4", "template": "map"})).unwrap();

@@ -2064,13 +2064,14 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         && !rustgis_data::cityjson::is_cityjson_name(path)
         // One read whole ahead keeps that route, though the file grew since.
         && !super::reads::placed_for(s, &whole_key(path))
-        && b(p, "stream").unwrap_or_else(|| {
-            std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > rustgis_data::source::geojson::IN_PLACE_ABOVE)
-        })
+        && streams_geojson(p, path)
     {
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
-        match rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name) {
-            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)), None),
+        // Opened ahead in the desktop app ([`in_place_ahead`]).
+        let opened = super::reads::take::<Opened>(s, &in_place_key(path, None))
+            .unwrap_or_else(|| Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name)?)));
+        match opened {
+            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(src), None),
             // Not a FeatureCollection: read whole below, on this thread (the UI thread in the
             // desktop app, as only small GeoJSON files are read ahead), so within the size every
             // computer reads, as before #2408, not the larger limit: the window isn't held longer.
@@ -2101,12 +2102,14 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     {
         let crs = super::parse_crs(s, crs)?;
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
-        let stream = b(p, "stream").unwrap_or_else(|| {
-            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        });
+        let stream = streams_shapefile(p, path);
         if stream {
-            let src = rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
-            return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)), None);
+            // Opened ahead in the desktop app ([`in_place_ahead`]), in the same system.
+            let key = in_place_key(path, ps(p, "crs").map(str::trim));
+            let src = super::reads::take::<Opened>(s, &key)
+                .unwrap_or_else(|| Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs))?)))
+                .map_err(|e| e.to_string())?;
+            return add_source_with(s, p, Origin::Path(path), Some(src), None);
         }
         // Read ahead in the desktop app ([`add_data_ahead`]).
         let read = match super::reads::take(s, &whole_key(path)) {
@@ -2117,12 +2120,12 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
     #[cfg(not(target_arch = "wasm32"))]
-    if path.to_ascii_lowercase().ends_with(".shp")
-        && b(p, "stream").unwrap_or_else(|| {
-            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        })
-    {
-        return add_source(s, p, Origin::Path(path), None);
+    if path.to_ascii_lowercase().ends_with(".shp") && streams_shapefile(p, path) {
+        // Opened ahead in the desktop app ([`in_place_ahead`]).
+        return match super::reads::take::<Opened>(s, &in_place_key(path, None)) {
+            Some(opened) => add_source_with(s, p, Origin::Path(path), Some(opened.map_err(|e| format!("{path}: {e}"))?), None),
+            None => add_source(s, p, Origin::Path(path), None),
+        };
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
@@ -2468,12 +2471,83 @@ fn read_synced(path: &str, read: impl FnOnce() -> WholeRead) -> WholeRead {
     Ok((ds, report))
 }
 
+/// Whether Add Data reads the Shapefile at `path` in place: as `p` says (with
+/// [`past_cap_shapefile`] applied), else when it holds more records than
+/// [`STREAM_ABOVE`](rustgis_map::source::STREAM_ABOVE).
+#[cfg(not(target_arch = "wasm32"))]
+fn streams_shapefile(p: &Value, path: &str) -> bool {
+    b(p, "stream")
+        .unwrap_or_else(|| rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE))
+}
+
+/// Whether Add Data reads the GeoJSON file at `path` in place (when it is a FeatureCollection): as
+/// `p` says, else when it is larger than
+/// [`IN_PLACE_ABOVE`](rustgis_data::source::geojson::IN_PLACE_ABOVE).
+#[cfg(not(target_arch = "wasm32"))]
+fn streams_geojson(p: &Value, path: &str) -> bool {
+    b(p, "stream")
+        .unwrap_or_else(|| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > rustgis_data::source::geojson::IN_PLACE_ABOVE))
+}
+
+/// A large Shapefile or GeoJSON file, read in place, as Add Data opens it (#2446).
+#[cfg(not(target_arch = "wasm32"))]
+type Opened = Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>;
+
+/// The key of Add Data's opening of `path` in place, in the coordinate system `crs` names (see
+/// [`super::reads`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn in_place_key(path: &str, crs: Option<&str>) -> String {
+    format!("in-place:{}", json!([path, crs]))
+}
+
+/// The opening of a large Shapefile or GeoJSON file that Add Data reads in place, made ahead on a
+/// thread of its own (#2446): it reads the whole file once, to index a Shapefile's records or
+/// find a GeoJSON file's features, which takes minutes for a file of millions. As [`add_data`]
+/// decides ([`streams_geojson`], [`streams_shapefile`]), but a `.json` given a coordinate system
+/// or a layer, which may be a city model told as it is added, so it is opened there as before.
+/// Cancel is looked at every few thousand features or records; a file read into memory to be
+/// scanned (a GeoJSON file of at most 256 MiB) is read in one step without a look.
+#[cfg(not(target_arch = "wasm32"))]
+fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
+    const NAME: &str = "Add Data";
+    let lower = path.to_ascii_lowercase();
+    let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer").to_string();
+    let given = |k: &str| ps(p, k).is_some_and(|v| !v.trim().is_empty());
+    if is_geojson(path)
+        && !rustgis_data::cityjson::is_cityjson_name(path)
+        && !(lower.ends_with(".json") && (given("crs") || given("layer")))
+        && streams_geojson(p, path)
+    {
+        let path = path.to_string();
+        return Some(super::reads::ahead(NAME, in_place_key(&path, None), move || -> Opened {
+            Ok(Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(&path), &name)?))
+        }));
+    }
+    if !lower.ends_with(".shp") {
+        return None;
+    }
+    let q = past_cap_shapefile(path, p).unwrap_or_else(|| p.clone());
+    let stream = streams_shapefile(&q, path);
+    if !stream {
+        return None;
+    }
+    let text = ps(&q, "crs").map(str::trim).filter(|c| !c.is_empty());
+    // One add_data can't parse it refuses as it runs.
+    let crs = text.map(rustgis_data::raster::Crs::parse).transpose().ok()?;
+    let (key, path) = (in_place_key(path, text), path.to_string());
+    Some(super::reads::ahead(NAME, key, move || -> Opened {
+        Ok(Box::new(rustgis_data::source::shp::ShpSource::open_path_in(Path::new(&path), &name, crs)?))
+    }))
+}
+
 /// Add Data's read of the file `p` names, made before it runs ([`super::reads`]): a raster read
 /// whole or converted by GDAL, a GeoJSON read whole, delimited text, a spreadsheet or a city model
-/// (CityJSON or CityGML) or DXF drawing read into its layers, a Shapefile read whole, or a
-/// standalone dBASE table. `None` for any other file, which [`add_data`] reads as it adds it. Each is picked only where `add_data`
-/// takes that read, so a read made is never wasted; a few it makes whole are left to it (a `.json`
-/// with a coordinate system or layer given, a large GeoJSON that isn't a FeatureCollection).
+/// (CityJSON or CityGML) or DXF drawing read into its layers, a Shapefile read whole, a large
+/// Shapefile or GeoJSON file opened in place ([`in_place_ahead`]), or a standalone dBASE table.
+/// `None` for any other file, which [`add_data`] reads as it adds it. Each is picked only where
+/// `add_data` takes that read, so a read made is never wasted; a few it makes whole are left to it
+/// (a `.json` with a coordinate system or layer given, a large GeoJSON that isn't a
+/// FeatureCollection).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     use super::reads::ahead;
@@ -2482,7 +2556,14 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     if let Some(shp) = rustgis_data::io::shapefile_for_dbf(Path::new(&path)) {
         let mut q = p.clone();
         q["path"] = json!(shp.display().to_string());
+        // Opened in place, it is taken by its own key as add_data goes on to the Shapefile.
+        if let Some(work) = in_place_ahead(&q, &shp.display().to_string()) {
+            return Some(work);
+        }
         return add_data_ahead(&q).map(|work| work.with_key(dbf_shapefile_key(&path)));
+    }
+    if let Some(work) = in_place_ahead(p, &path) {
+        return Some(work);
     }
     let scan = super::raster::wants_scan(p, &path).ok()?;
     if !scan && rustgis_data::photo::is_photo_name(&path) && !rustgis_data::raster::world::places(Path::new(&path)) {
@@ -2528,9 +2609,7 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     // past the whole-file reader's cap, or with more records than it takes, is read in place).
     if lower.ends_with(".shp") {
         let q = past_cap_shapefile(&path, p).unwrap_or_else(|| p.clone());
-        let stream = b(&q, "stream").unwrap_or_else(|| {
-            rustgis_data::source::shp::record_count(Path::new(&path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        });
+        let stream = streams_shapefile(&q, &path);
         if stream {
             return None;
         }
