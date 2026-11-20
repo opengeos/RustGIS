@@ -472,7 +472,10 @@ fn units(layer: &rustgis_map::Layer, b: &Block, env: &rustgis_data::query::Env) 
         if keep.as_ref().is_some_and(|k| !k.get(row).copied().unwrap_or(false)) {
             continue;
         }
-        let Some(Geometry::Polygon(polys)) = &ft.geometry else { continue };
+        // In longitude/latitude, whatever system the layer holds its coordinates in; a polygon
+        // that can't be given there makes no contact, as the map draws none of it.
+        let Some(lonlat) = ft.geometry.as_ref().and_then(|g| layer.dataset.geometry_to_lonlat(g).ok()) else { continue };
+        let Geometry::Polygon(polys) = &*lonlat else { continue };
         for rings in polys {
             let mut e = Extent::EMPTY;
             rings.iter().flatten().for_each(|c| e.expand(*c));

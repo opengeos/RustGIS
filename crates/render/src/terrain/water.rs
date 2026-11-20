@@ -489,7 +489,10 @@ fn polygons(layer: &rustgis_map::Layer, level: Option<&str>, drawn: Option<&[boo
         if drawn.is_some_and(|d| !d.get(row).copied().unwrap_or(false)) {
             continue;
         }
-        let Some(Geometry::Polygon(parts)) = &ft.geometry else { continue };
+        // In longitude/latitude, whatever system the layer holds its coordinates in; a polygon
+        // that can't be given there holds no water, as the map draws none of it.
+        let Some(lonlat) = ft.geometry.as_ref().and_then(|g| layer.dataset.geometry_to_lonlat(g).ok()) else { continue };
+        let Geometry::Polygon(parts) = &*lonlat else { continue };
         let given = field.and_then(|i| ft.attrs.get(i)).and_then(rustgis_data::Value::as_f64).filter(|v| v.is_finite());
         for rings in parts {
             let rings: Vec<Vec<Coord>> = rings.iter().map(|r| r.iter().map(|c| lonlat_to_merc(*c)).collect()).collect();

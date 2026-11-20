@@ -476,14 +476,17 @@ fn selected_lines(s: &Session, p: &Value, all: bool) -> Result<Vec<Vec<Coord>>, 
         _ if all => l.selection.clone(),
         _ => l.selection.iter().take(1).copied().collect(),
     };
-    let out: Vec<Vec<Coord>> = rows
-        .iter()
-        .filter_map(|r| match l.dataset.features.get(*r)?.geometry.as_ref()? {
-            Geometry::Line(parts) => Some(parts.iter().flatten().copied().collect()),
-            _ => None,
-        })
-        .filter(|v: &Vec<Coord>| v.len() >= 2)
-        .collect();
+    // Sampled in longitude/latitude, whatever system the layer holds its coordinates in.
+    let mut out: Vec<Vec<Coord>> = Vec::new();
+    for f in rows.iter().filter_map(|r| l.dataset.features.row(*r)) {
+        let Some(g) = f.geometry().filter(|g| matches!(g, Geometry::Line(_))) else { continue };
+        if let Geometry::Line(parts) = &*l.dataset.geometry_to_lonlat(g).map_err(|e| format!("{n}: feature {}: {e}", f.id()))? {
+            let v: Vec<Coord> = parts.iter().flatten().copied().collect();
+            if v.len() >= 2 {
+                out.push(v);
+            }
+        }
+    }
     if out.is_empty() { Err("no usable lines".into()) } else { Ok(out) }
 }
 

@@ -793,7 +793,7 @@ mod tests {
         let at = Coord::new(500_000.0, 5_400_000.0);
         let mut ds = Dataset::new("held", GeometryType::Point, vec![]);
         ds.push(Some(Geometry::Point(at)), vec![]);
-        let _held = crate::tests::HeldIn::new(utm);
+        ds.held_in = utm;
         let same = in_file(&ds, Some(utm), None).unwrap();
         assert!(matches!(same, std::borrow::Cow::Borrowed(_)));
         let other = in_file(&ds, Some(etrs), Some((&ds, &ds))).unwrap();

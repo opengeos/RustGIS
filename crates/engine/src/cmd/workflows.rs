@@ -1567,8 +1567,11 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
     // Features without a place or a number are left out, and said (by kind, with a count).
     let (mut no_point, mut no_value) = (0usize, 0usize);
     let mut pts: Vec<(Coord, f64)> = Vec::with_capacity(ds.features.len());
+    // Each place in longitude/latitude, whatever system the layer holds its coordinates in; one
+    // that can't be given there has no place.
+    let to = ds.lonlat_conversion()?;
     for (r, ft) in ds.features.iter().enumerate() {
-        let Some(c) = ft.geometry.as_ref().and_then(|g| g.label_point()).filter(|c| c.is_finite()) else {
+        let Some(c) = ft.geometry.as_ref().and_then(|g| g.label_point()).and_then(|c| to.point(c)).filter(|c| c.is_finite()) else {
             no_point += 1;
             continue;
         };
@@ -1704,8 +1707,11 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
         rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
         rustgis_map::rows::Rows::Subset(rows) => rows,
     };
+    // The network in longitude/latitude, as `from` and `to` are, whatever system the layer holds
+    // its coordinates in.
+    let lines = l.dataset.in_lonlat()?;
     let r = network::shortest_route(
-        &l.dataset,
+        &lines,
         &rows,
         point(p, "from")?,
         point(p, "to")?,
@@ -1830,6 +1836,9 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
         rustgis_map::rows::Rows::Subset(rows) => rows,
     };
+    // Placed in longitude/latitude, as the points' layer holds them, whatever system the polygons'
+    // layer holds its coordinates in.
+    let polygons = l.dataset.in_lonlat()?;
     let seed = f(p, "seed").map_or(42, |v| v.max(0.0) as u64);
     let pts: Vec<(usize, Coord)> = match ps(p, "field") {
         Some(fname) => {
@@ -1839,7 +1848,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
             let mut out = Vec::new();
             for r in &rows {
                 let n = (l.dataset.value(*r, fi).as_f64().unwrap_or(0.0) * rate).round().clamp(0.0, 100_000.0) as usize;
-                out.extend(network::random_points(&l.dataset, &[*r], n, seed.wrapping_add(*r as u64)));
+                out.extend(network::random_points(&polygons, &[*r], n, seed.wrapping_add(*r as u64)));
                 if out.len() > 1_000_000 {
                     return Err("that would make more than a million points; lower the rate".into());
                 }
@@ -1851,7 +1860,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
             if rows.len().saturating_mul(per) > 1_000_000 {
                 return Err("that would make more than a million points; lower the count".into());
             }
-            network::random_points(&l.dataset, &rows, per, seed)
+            network::random_points(&polygons, &rows, per, seed)
         }
     };
     let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("polygon", FieldType::Integer)]);

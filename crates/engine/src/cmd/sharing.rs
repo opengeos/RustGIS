@@ -1091,6 +1091,9 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                 scene.limited += 1;
                 continue;
             }
+            // Placed from longitude/latitude, whatever system the layer holds its coordinates in.
+            let lonlat = l.dataset.geometry_to_lonlat(g).map_err(|e| format!("{}: feature {}: {e}", l.name, ft.id))?;
+            let g = &*lonlat;
             // A position too far for 32 bits would make the scene invalid: the feature is left out,
             // and said. Only what would be drawn counts (not a degenerate ring or a one-vertex line).
             let far = |c: &Coord| {

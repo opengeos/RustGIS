@@ -402,8 +402,9 @@ impl<'de> Deserialize<'de> for Features {
 }
 
 /// A feature class: a named table of features sharing a schema and geometry type.
-/// Geometry coordinates are always WGS 84 longitude/latitude, including datasets created by
-/// tools and plugins. Projected source coordinates must be normalized before insertion.
+/// Its geometry is in the system it holds its coordinates in ([`Dataset::held_in`]): WGS 84
+/// longitude/latitude for every dataset read or made today, including those of tools and
+/// plugins (#2032 C2 lets readers hold a file's own system).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Dataset {
     pub name: String,
@@ -413,8 +414,8 @@ pub struct Dataset {
     /// Where it was read from, if anywhere.
     #[serde(default)]
     pub source: Option<String>,
-    /// The coordinate system it was read in, when that isn't longitude/latitude. Its geometry is
-    /// always longitude/latitude; this is what an export writes by default.
+    /// The coordinate system it was read in, when that isn't longitude/latitude: what an export
+    /// writes by default. Its geometry is in [`Dataset::held_in`], longitude/latitude today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crs: Option<raster::Crs>,
     /// Import lost geometry while interpreting source coordinates. Defining a projection cannot
@@ -429,21 +430,60 @@ pub struct Dataset {
     /// so they aren't saved: the source is read again instead.
     #[serde(skip)]
     pub windowed: bool,
+    /// The system its geometry is in ([`Dataset::coord_crs`]): longitude/latitude unless it was
+    /// put in another with [`Dataset::hold_in`]. A project saves its features in
+    /// longitude/latitude, as older releases read them, so a saved dataset reads back held there.
+    #[serde(skip, default = "held_in_lonlat")]
+    pub held_in: raster::Crs,
+}
+
+/// What a dataset read from a project holds its coordinates in ([`Dataset::held_in`]).
+fn held_in_lonlat() -> raster::Crs {
+    raster::Crs::LonLat
 }
 
 impl Dataset {
-    /// The coordinate system its geometry is in: longitude/latitude (WGS 84), as every dataset's
-    /// is today, whatever system it was read in ([`Dataset::crs`]). Drawing converts geometry from
-    /// it ([`raster::Crs::to`]), so a dataset that keeps the coordinates it was read in can say so
-    /// here without the map changing. Longitude/latitude never fails to convert. The map draws none of
-    /// a layer whose conversion fails (`Layer::projected_in`) and doesn't say so yet: before this
-    /// returns another system, that needs a notice, as AGENTS.md's "Never silent" asks.
+    /// The coordinate system its geometry is in ([`Dataset::held_in`]): longitude/latitude (WGS 84)
+    /// for every dataset read or made today, whatever system it was read in ([`Dataset::crs`]).
+    /// Drawing converts geometry from it ([`raster::Crs::to`]), so a dataset that keeps the
+    /// coordinates it was read in can say so here without the map changing. Longitude/latitude
+    /// never fails to convert, and [`Dataset::hold_in`] only holds a dataset where every place
+    /// converts. The map draws none of a layer whose conversion fails (`Layer::projected_in`) and
+    /// doesn't say so yet: before a reader holds a file's own system (#2032 C2b), that needs a
+    /// notice, as AGENTS.md's "Never silent" asks.
     pub fn coord_crs(&self) -> raster::Crs {
-        #[cfg(test)]
-        if let Some(held) = tests::held_in() {
-            return held;
+        self.held_in
+    }
+
+    /// Converts its geometry into `crs` and holds it there ([`Dataset::held_in`]); a missing
+    /// coordinate (NaN, infinite) stays as it is. Refused, naming the first feature, when its
+    /// system can't be converted to `crs` or one of its places can't be held there (in Web
+    /// Mercator, one past 85.05°, which it would hold at 85.05°); and for a window onto a source
+    /// read in place, whose rows are read again in longitude/latitude. Nothing changes then.
+    pub fn hold_in(&mut self, crs: raster::Crs) -> std::result::Result<(), String> {
+        if self.windowed && crs != self.held_in {
+            return Err(format!("{}: a layer read in place is held as its source is read", self.name));
         }
-        raster::Crs::LonLat
+        let to = self.held_in.to(crs)?;
+        if !to.is_identity() {
+            let lonlat = self.lonlat_conversion()?;
+            let mut features = self.features.clone();
+            for f in &mut features {
+                if let Some(g) = &f.geometry {
+                    let mut past = false;
+                    if crs == raster::Crs::WebMercator {
+                        g.for_each_coord(|c| past |= c.is_finite() && lonlat.point(c).is_some_and(|l| l.y.abs() > rustgis_geom::MAX_LAT));
+                    }
+                    let held = (!past).then(|| convert_keeping_missing(&to, g, &HeldPlaces::default())).flatten();
+                    f.geometry = Some(
+                        held.ok_or_else(|| format!("{}: feature {} has a place that can't be held in {}", self.name, f.id, crs.label()))?,
+                    );
+                }
+            }
+            self.features = features;
+        }
+        self.held_in = crs;
+        Ok(())
     }
 
     /// One of its geometries in longitude/latitude, the space edits work in (a vertex dragged to a
@@ -537,7 +577,11 @@ impl Serialize for Dataset {
         st.serialize_field("geometry_type", &self.geometry_type)?;
         st.serialize_field("fields", &self.fields)?;
         let none: &[Feature] = &[];
-        st.serialize_field("features", if self.windowed { none } else { self.features.as_slice() })?;
+        // In longitude/latitude, as every release reads a saved dataset's features. A place that
+        // can't be given there fails the save, naming its feature, rather than being saved
+        // wrong; `hold_in` only holds a dataset whose places all convert.
+        let lonlat = if self.windowed { None } else { Some(self.in_lonlat().map_err(serde::ser::Error::custom)?) };
+        st.serialize_field("features", lonlat.as_ref().map_or(none, |d| d.features.as_slice()))?;
         st.serialize_field("source", &self.source)?;
         if let Some(crs) = &self.crs {
             st.serialize_field("crs", crs)?;
@@ -848,6 +892,7 @@ impl Dataset {
             crs_incomplete: false,
             zm_dropped: false,
             windowed: false,
+            held_in: raster::Crs::LonLat,
         }
     }
 
@@ -924,15 +969,15 @@ impl Dataset {
     /// The dataset in longitude/latitude, the space analysis tools work in: borrowed while its
     /// coordinates are longitude/latitude ([`Dataset::coord_crs`]), as every dataset's are today;
     /// otherwise a copy with every geometry converted, missing coordinates kept. Refused, naming
-    /// the first feature that can't be, when one of its places can't be converted. Once a dataset
-    /// records its own system (C2 of #2032), the copy is to be recorded as longitude/latitude, so
-    /// that it isn't converted again.
+    /// the first feature that can't be, when one of its places can't be converted. The copy is
+    /// held in longitude/latitude ([`Dataset::held_in`]), so it isn't converted again.
     pub fn in_lonlat(&self) -> std::result::Result<Cow<'_, Dataset>, String> {
         let to = self.lonlat_conversion()?;
         if to.is_identity() {
             return Ok(Cow::Borrowed(self));
         }
         let mut out = self.clone();
+        out.held_in = raster::Crs::LonLat;
         for f in &mut out.features {
             if let Some(g) = &mut f.geometry {
                 *g = convert_keeping_missing(&to, g, &HeldPlaces::default()).ok_or_else(|| {
@@ -980,6 +1025,7 @@ impl Dataset {
                 f.geometry = Some(self.edit_from_lonlat(g, &held).map_err(|e| format!("{}: feature {}: {e}", self.name, f.id))?);
             }
         }
+        results.held_in = self.held_in;
         Ok(results)
     }
 
@@ -1149,32 +1195,36 @@ fn convert_keeping_missing(to: &raster::Reprojection, g: &Geometry, held: &HeldP
 mod tests {
     use super::*;
 
-    thread_local! {
-        /// The system this thread's tests hold every dataset's coordinates in ([`HeldIn`]).
-        static HELD_IN: std::cell::Cell<Option<raster::Crs>> = const { std::cell::Cell::new(None) };
-    }
-
-    /// What [`Dataset::coord_crs`] says on this thread while a [`HeldIn`] is alive: what a dataset
-    /// that keeps the coordinates it was read in (#2032 C2) will say, for the paths that convert
-    /// from it to be tried before it does.
-    pub(crate) fn held_in() -> Option<raster::Crs> {
-        HELD_IN.try_with(std::cell::Cell::get).ok().flatten()
-    }
-
-    /// Every dataset on this thread is taken to hold its coordinates in a system until dropped,
-    /// on the thread that made it (it can't be sent to another).
-    pub(crate) struct HeldIn(Option<raster::Crs>, std::marker::PhantomData<*const ()>);
-
-    impl HeldIn {
-        pub(crate) fn new(crs: raster::Crs) -> HeldIn {
-            HeldIn(HELD_IN.with(|h| h.replace(Some(crs))), std::marker::PhantomData)
-        }
-    }
-
-    impl Drop for HeldIn {
-        fn drop(&mut self) {
-            let _ = HELD_IN.try_with(|h| h.set(self.0));
-        }
+    /// A dataset held in another system converts into it, and back, at the same places; one
+    /// reaching past where Web Mercator ends, or a window onto a source read in place, is refused
+    /// and left as it was.
+    #[test]
+    fn a_dataset_is_held_where_its_places_convert() {
+        let utm = raster::Crs::Epsg(32632);
+        let mut ds = Dataset::new("held", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(11.5, 48.7))), vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(f64::NAN, 48.7))), vec![]);
+        let plain = ds.clone();
+        ds.hold_in(utm).unwrap();
+        assert_eq!(ds.coord_crs(), utm);
+        let Some(Geometry::Point(p)) = ds.features[0].geometry else { panic!("a point") };
+        assert_eq!(Some(p), utm.transformer().unwrap().from_lonlat(Coord::new(11.5, 48.7)));
+        assert!(matches!(ds.features[1].geometry, Some(Geometry::Point(c)) if c.x.is_nan()));
+        ds.hold_in(raster::Crs::LonLat).unwrap();
+        let Some(Geometry::Point(back)) = ds.features[0].geometry else { panic!("a point") };
+        assert!((back.x - 11.5).abs() < 1e-9 && (back.y - 48.7).abs() < 1e-9, "{back:?}");
+        // Past 85.05°: refused, nothing changed.
+        let mut polar = plain.clone();
+        polar.push(Some(Geometry::Point(Coord::new(0.0, 89.0))), vec![]);
+        let before = polar.clone();
+        let err = polar.hold_in(raster::Crs::WebMercator).unwrap_err();
+        assert!(err.contains("feature 3"), "{err}");
+        assert_eq!(polar, before);
+        // A window onto a source is read again in longitude/latitude.
+        let mut window = plain;
+        window.windowed = true;
+        assert!(window.hold_in(utm).is_err());
+        assert_eq!(window.coord_crs(), raster::Crs::LonLat);
     }
 
     /// An export in Web Mercator counts the places past where it ends by their latitude, from the
@@ -1182,12 +1232,12 @@ mod tests {
     #[test]
     fn web_mercators_end_is_counted_by_latitude() {
         let utm = raster::Crs::Epsg(32632);
-        let t = utm.transformer().unwrap();
         let mut ds = Dataset::new("held", GeometryType::Point, vec![]);
         for lat in [48.7, 86.0] {
-            ds.push(Some(Geometry::Point(t.from_lonlat(Coord::new(9.0, lat)).unwrap())), vec![]);
+            ds.push(Some(Geometry::Point(Coord::new(9.0, lat))), vec![]);
         }
-        let _held = HeldIn::new(utm);
+        ds.hold_in(utm).unwrap();
+        assert_eq!(ds.coord_crs(), utm);
         let note = web_mercator_note(&[(&ds, ds.extent())], "out.gpkg").unwrap_or_default();
         assert_eq!(note, web_mercator_said(&[("held", Some(1))], "out.gpkg").unwrap_or_default());
         assert!(!note.is_empty());
