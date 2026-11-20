@@ -68,6 +68,8 @@ mod mapgpu;
 mod mapmenu;
 mod mapview;
 mod markerimages;
+mod markerpick;
+pub use markerpick::MarkerImage;
 mod measure_units;
 mod modelbuilder;
 mod navui;
@@ -993,6 +995,8 @@ pub struct UiState {
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
+    /// A marker whose «Image…» waits for its file (web and phone).
+    pub pending_marker_image: Option<MarkerImage>,
     /// The value picked under Edit › Dynamic Text (a token such as `{scale}`): the text tool's
     /// dialog starts with it. Cleared when the tool changes.
     pub dynamic_text: Option<&'static str>,
@@ -1091,6 +1095,7 @@ impl Default for UiState {
             open_url: None,
             copy_image: None,
             pending_picture: None,
+            pending_marker_image: None,
             pending_layout_picture: false,
             pending_open: None,
             web_file: None,
@@ -2257,6 +2262,11 @@ impl RustGisApp {
         if self.ui.pending_picture.is_some() && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
             use base64::Engine;
             return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        }
+        if [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e))
+            && let Some(marker) = self.ui.pending_marker_image.take()
+        {
+            return marker.apply(self, bytes);
         }
         // A drawing asks for its coordinate system and whether its blocks are drawn first. Picker
         // and script options (`crs`, `blocks`) add it straight away, as the branch below does.
@@ -4051,6 +4061,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     // `null`: the dialog, for the file picked.
                     self.ui.pending_csv = Some(opts.unwrap_or(Value::Null));
@@ -4082,6 +4093,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     // `null`: the dialog, for the file picked.
@@ -4248,6 +4260,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     self.ui.pending_shapefile = Some(json!({"crs": text}));
@@ -4270,6 +4283,7 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     if let Some(snapshot) = &self.services.open_options {
@@ -4345,6 +4359,7 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4488,6 +4503,7 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4502,6 +4518,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = true;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4808,6 +4825,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = Some("presentation.imagePage");
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -5342,6 +5360,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_open = None;
+                    self.ui.pending_marker_image = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
                     }

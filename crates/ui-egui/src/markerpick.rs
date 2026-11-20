@@ -1,0 +1,242 @@
+//! «Image…» in the marker menus (#2266 part B): the symbol editor's Shape, the stroke editor's
+//! Shape and the fill editor's Marker each end with it, and it makes a PNG or JPEG file the
+//! marker. The file is read into the command that sets the marker (`layer.marker`,
+//! `layer.lineStrokes`, `layer.fillLayers`), which keeps the image as it does one given by
+//! script. A file that isn't a PNG or JPEG, one too large, or one that doesn't decode is said in
+//! a notice and leaves the marker as it was.
+
+use std::io::Read;
+
+use egui::Ui;
+use rustgis_engine::map::symbology::MAX_PICTURE_BYTES;
+use serde_json::{Value, json};
+
+use crate::RustGisApp;
+
+/// A marker waiting for its image: the command that sets it, with the image's place in its
+/// parameters (a JSON pointer) left empty until the file is read. Built when «Image…» is clicked,
+/// from what the editor shows then.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkerImage {
+    cmd: &'static str,
+    params: Value,
+    at: String,
+    /// Images that can't be drawn the other marks of the call send back as circles.
+    replaced: usize,
+}
+
+impl MarkerImage {
+    /// A point symbol's marker on layer `layer`, through `layer.marker`.
+    pub(crate) fn symbol(layer: u32) -> Self {
+        Self { cmd: "layer.marker", params: json!({"layer": layer, "image": ""}), at: "/image".into(), replaced: 0 }
+    }
+
+    /// Mark `i` of `params`' `list` (`"strokes"` with `"markers"`, or `"fills"`), as the editor
+    /// sends it (`params` for every mark in the list, on layer `layer`): it becomes an image.
+    pub(crate) fn in_list(cmd: &'static str, mut params: Value, layer: u32, list: &str, i: usize, replaced: usize) -> Self {
+        params["layer"] = json!(layer);
+        let markers = if list == "strokes" { "/markers" } else { "" };
+        let mark = if list == "strokes" { "mark" } else { "marker" };
+        let place = format!("/{list}/{i}{markers}");
+        if let Some(m) = params.pointer_mut(&place).filter(|m| m.is_object()) {
+            m[mark] = json!("image");
+            m["char"] = Value::Null;
+            m["font"] = Value::Null;
+            m["image"] = json!("");
+        }
+        Self { cmd, params, at: format!("{place}/image"), replaced }
+    }
+
+    /// Runs the command with `bytes` as the image, as base64. A file that is too large, or that
+    /// doesn't decode as a PNG or JPEG (another format, or a broken one), is said in a notice in a
+    /// file's terms (the command's speak of base64) and runs nothing.
+    pub(crate) fn apply(mut self, app: &mut RustGisApp, bytes: &[u8]) -> Result<Value, String> {
+        use base64::Engine;
+        // The size first, so a file too large isn't decoded.
+        let b64 = (bytes.len().div_ceil(3) * 4 <= MAX_PICTURE_BYTES).then(|| base64::engine::general_purpose::STANDARD.encode(bytes));
+        let refused = match &b64 {
+            None => Some(tl!("This image is too large for a marker: at most about 1.5 MiB")),
+            Some(b64) if !rustgis_engine::render::picture_marker_readable(b64) => Some(tl!("A marker's image is a PNG or JPEG file")),
+            Some(_) => None,
+        };
+        if let Some(e) = refused {
+            app.session.notify(e, true);
+            return Err(e.to_string());
+        }
+        if let (Some(slot), Some(b64)) = (self.params.pointer_mut(&self.at), b64) {
+            *slot = json!(b64);
+        }
+        let r = app.run(self.cmd, self.params);
+        if r.is_ok() {
+            crate::panes::notify_image_replaced(app, self.replaced);
+        }
+        r
+    }
+}
+
+/// The marker menus' last entry, after the shapes (and Character): picks an image file as the
+/// marker, or another for the one it has (`on`).
+pub(crate) fn entry(ui: &mut Ui, on: bool) -> bool {
+    ui.selectable_label(on, tl!("Image…")).on_hover_text(tl!("A PNG or JPEG file as the marker")).clicked()
+}
+
+/// Asks for the image of `marker`: the system's dialog on a computer, read at once; the browser's
+/// or the phone's picker elsewhere, whose file [`RustGisApp::open_bytes`] gives to the marker.
+pub(crate) fn pick(app: &mut RustGisApp, marker: MarkerImage) {
+    if let Some(open) = &app.services.open_async {
+        // A picker cancelled earlier mustn't claim this file.
+        app.ui.pending_layout_picture = false;
+        app.ui.pending_picture = None;
+        app.ui.pending_open = None;
+        app.ui.pending_marker_image = Some(marker);
+        if let Some(snapshot) = &app.services.open_options {
+            snapshot(&app.ui);
+        }
+        open("picture");
+    } else if let Some(path) = crate::dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
+        match read_capped(&path) {
+            Ok(bytes) => {
+                let _ = marker.apply(app, &bytes);
+            }
+            Err(e) => app.session.notify(e, true),
+        }
+    }
+}
+
+/// The file at `path`, read no further than one byte past [`MAX_PICTURE_BYTES`]: a file that
+/// long is longer still as base64, so [`MarkerImage::apply`] refuses it as too large, and a huge
+/// file isn't read whole to be refused.
+fn read_capped(path: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(MAX_PICTURE_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|e| crate::i18n::fmt("{path}: {error}", &[("path", path), ("error", &e.to_string())]))?;
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustgis_engine::map::fills::FillPattern;
+    use rustgis_engine::map::symbology::{LineMark, Marker};
+
+    fn png() -> Vec<u8> {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 120, 230, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    }
+
+    fn drawn(m: Marker) -> bool {
+        matches!(m, Marker::Picture(p) if rustgis_engine::render::picture_marker_draws(p))
+    }
+
+    fn layer<'a>(app: &'a RustGisApp, name: &str) -> &'a rustgis_engine::map::Layer {
+        app.session.map().layer_by_name(name).unwrap()
+    }
+
+    fn id(app: &RustGisApp, name: &str) -> u32 {
+        layer(app, name).id
+    }
+
+    /// Picks `path` with the system's dialog, as a click on «Image…» does on a computer.
+    fn pick_file(app: &mut RustGisApp, path: &std::path::Path, marker: MarkerImage) {
+        crate::dialogs::PICKED.with(|p| *p.borrow_mut() = Some(path.display().to_string()));
+        pick(app, marker);
+    }
+
+    /// «Image…» makes the file the marker of a point symbol, of one mark in a stack of strokes
+    /// (the others as they were) and of a dot fill, on the layer it was clicked for even when
+    /// another is active.
+    #[test]
+    fn a_picked_file_becomes_the_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("icon.png");
+        std::fs::write(&file, png()).unwrap();
+        let mut app = RustGisApp::with_sample();
+        let (cities, rivers, lakes) = (id(&app, "Cities"), id(&app, "Rivers"), id(&app, "Lakes"));
+        app.session.active_layer = Some(rivers);
+
+        pick_file(&mut app, &file, MarkerImage::symbol(cities));
+        assert!(drawn(layer(&app, "Cities").renderer.base_symbol().marker));
+        assert!(!drawn(layer(&app, "Rivers").renderer.base_symbol().marker));
+
+        let strokes = json!([{"width": 3}, {"markers": {"mark": "triangle", "size": 7, "at": "middle"}}]);
+        app.run("layer.lineStrokes", json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+        let list = layer(&app, "Rivers").line_strokes.clone();
+        pick_file(&mut app, &file, crate::panes::stroke_image(rivers, None, &list, 1));
+        let now = &layer(&app, "Rivers").line_strokes;
+        assert_eq!(now[0], list[0], "the other stroke as it was");
+        assert!(matches!(now[1].markers.map(|m| m.mark), Some(LineMark::Marker(m)) if drawn(m)));
+        assert_eq!(now[1].markers.map(|m| (m.size, m.at)), list[1].markers.map(|m| (m.size, m.at)), "its size and place kept");
+
+        let fills = json!([{"color": "#00C800"}, {"pattern": "dots", "marker": "square", "size": 5}]);
+        app.run("layer.fillLayers", json!({"layer": "Lakes", "fills": fills})).unwrap();
+        let list = layer(&app, "Lakes").fill_layers.clone();
+        pick_file(&mut app, &file, crate::fill_editor::fill_image(lakes, None, &list, 1));
+        let now = &layer(&app, "Lakes").fill_layers;
+        assert_eq!(now[0], list[0]);
+        assert!(matches!(now[1].pattern, FillPattern::Dots { marker, size: 5.0, .. } if drawn(marker)));
+    }
+
+    /// A file that isn't a PNG or JPEG, a PNG that doesn't decode, or one too large, is said in a
+    /// file's terms and changes nothing (no undo step either); a dialog cancelled changes nothing
+    /// and says nothing.
+    #[test]
+    fn a_file_that_cant_be_a_marker_is_said_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = RustGisApp::with_sample();
+        let cities = id(&app, "Cities");
+        let before = layer(&app, "Cities").renderer.base_symbol();
+        let gif = dir.path().join("icon.gif");
+        std::fs::write(&gif, b"GIF89a\x01\x00\x01\x00").unwrap();
+        let broken = dir.path().join("broken.png");
+        std::fs::write(&broken, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
+        let mut big = png();
+        big.resize(MAX_PICTURE_BYTES, 0);
+        let large = dir.path().join("large.png");
+        std::fs::write(&large, &big).unwrap();
+        let steps = app.session.undo_depth();
+        let refusals = [
+            (&gif, "A marker's image is a PNG or JPEG file"),
+            (&broken, "A marker's image is a PNG or JPEG file"),
+            (&large, "This image is too large for a marker: at most about 1.5 MiB"),
+        ];
+        for (file, said) in refusals {
+            pick_file(&mut app, file, MarkerImage::symbol(cities));
+            assert_eq!(layer(&app, "Cities").renderer.base_symbol(), before);
+            assert!(app.session.notices.iter().any(|n| n.error && n.text == said), "{said}: {:?}", app.session.notices);
+        }
+        let notices = app.session.notices.len();
+        pick(&mut app, MarkerImage::symbol(cities));
+        assert_eq!(layer(&app, "Cities").renderer.base_symbol(), before);
+        assert_eq!(app.session.notices.len(), notices);
+        assert_eq!(app.session.undo_depth(), steps);
+    }
+
+    /// In the browser «Image…» asks the picker for a picture and the file it gives becomes the
+    /// marker; another picker started after it takes its file, and a file that isn't a picture
+    /// leaves the marker waiting.
+    #[test]
+    fn the_browsers_picture_goes_to_the_marker_that_asked() {
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = RustGisApp::with_sample();
+        let ask = asked.clone();
+        app.services.open_async = Some(Box::new(move |purpose| ask.lock().unwrap().push(purpose.to_string())));
+        let cities = id(&app, "Cities");
+
+        pick(&mut app, MarkerImage::symbol(cities));
+        assert_eq!(*asked.lock().unwrap(), ["picture"]);
+        assert!(app.ui.pending_marker_image.is_some());
+        app.open_bytes("icon.png", &png()).unwrap();
+        assert!(drawn(layer(&app, "Cities").renderer.base_symbol().marker));
+        assert!(app.ui.pending_marker_image.is_none());
+
+        app.run("layer.marker", json!({"layer": "Cities", "shape": "square"})).unwrap();
+        pick(&mut app, MarkerImage::symbol(cities));
+        let _ = app.run("ui.importLayout", Value::Null);
+        assert!(app.ui.pending_marker_image.is_none(), "the layout picker took over");
+        assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square);
+    }
+}
