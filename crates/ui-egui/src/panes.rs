@@ -529,7 +529,7 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, stack: Sta
 fn size_rows_scale(l: &Layer, sized: &[LegendEntry]) -> f32 {
     let across = |e: &LegendEntry| {
         let marks = Stack::of(l, &e.strokes, &e.fills).strokes;
-        if marks.is_empty() { e.symbol.size } else { 2.0 * marks_reach(marks) }
+        if marks.is_empty() { e.symbol.size } else { 2.0 * marks_reach(marks, &e.symbol) }
     };
     let top = sized.iter().map(across).fold(0.0, f32::max);
     if top > 14.0 { 14.0 / top } else { 1.0 }
@@ -547,7 +547,7 @@ fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, k: Optio
     match g {
         GeometryType::Point if !stack.strokes.is_empty() => {
             // The marks as large as the map draws them (a size row's at its scale), smaller only to fit.
-            let k = k.unwrap_or(1.0).min(half / marks_reach(stack.strokes));
+            let k = k.unwrap_or(1.0).min(half / marks_reach(stack.strokes, s));
             marks_preview(&p.with_clip_rect(r), r.center(), stack.strokes, s, k);
         }
         GeometryType::Polyline if !stack.strokes.is_empty() => {
@@ -6066,9 +6066,17 @@ fn symbol_mark(s: &Symbol) -> LineStroke {
     LineStroke { markers: Some(m), ..LineStroke::default() }
 }
 
-/// How far a point's marks reach from it, in points (at least 1): their offsets and half sizes.
-fn marks_reach(marks: &[LineStroke]) -> f32 {
-    marks.iter().filter_map(|st| st.markers.map(|m| m.offset_along.hypot(st.offset) + m.size / 2.0)).fold(1.0_f32, f32::max)
+/// How far stroke `st`'s marker reaches from its middle, in points: its half size, and half its
+/// outline's width when it draws one (the stroke's width, else `base`'s).
+fn mark_reach(st: &LineStroke, m: &LineMarkers, base: &Symbol) -> f32 {
+    let outline = if m.outline.is_some_and(|o| o.a() > 0) { st.resolve(base).1.max(0.0) } else { 0.0 };
+    (m.size + outline) / 2.0
+}
+
+/// How far a point's marks reach from it, in points (at least 1): their offsets and
+/// [`mark_reach`]es.
+fn marks_reach(marks: &[LineStroke], base: &Symbol) -> f32 {
+    marks.iter().filter_map(|st| st.markers.map(|m| m.offset_along.hypot(st.offset) + mark_reach(st, &m, base))).fold(1.0_f32, f32::max)
 }
 
 /// A point layer's `marks` round `centre`, bottom first, scaled by `k`, shifted as they are on the
@@ -6088,9 +6096,10 @@ fn marks_preview(p: &egui::Painter, centre: egui::Pos2, marks: &[LineStroke], ba
 }
 
 /// How far a line's stacked `strokes` reach either side of it, in points (at least 1): their
-/// offsets and half widths (a marker's half size).
+/// offsets and half widths (a marker's [`mark_reach`]).
 fn strokes_reach(strokes: &[LineStroke], base: &Symbol) -> f32 {
-    strokes.iter().map(|st| st.offset.abs() + st.resolve(base).1.max(st.markers.map_or(0.0, |m| m.size)) / 2.0).fold(1.0_f32, f32::max)
+    let reach = |st: &LineStroke| (st.resolve(base).1 / 2.0).max(st.markers.map_or(0.0, |m| mark_reach(st, &m, base)));
+    strokes.iter().map(|st| st.offset.abs() + reach(st)).fold(1.0_f32, f32::max)
 }
 
 /// A line's stacked `strokes` along a straight line from `x.0` to `x.1` at `y`, bottom first,
@@ -6105,7 +6114,10 @@ fn strokes_preview(p: &egui::Painter, (x0, x1): (f32, f32), y: f32, strokes: &[L
         let (c, w) = st.resolve(base);
         let y = y + st.offset * k;
         if let Some(m) = &st.markers {
-            marker_preview(p, m, (x0, x1), y, k, c32(c), w * k);
+            // (Along a line, as on the map, hash marks of no width aren't drawn.)
+            if !matches!(m.mark, LineMark::Hash) || w > 0.0 {
+                marker_preview(p, m, (x0, x1), y, k, c32(c), w * k);
+            }
             continue;
         }
         // A line of no width isn't drawn on the map; one under half a point shows at half.
@@ -6529,7 +6541,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         ui.painter().rect_filled(r, CornerRadius::same(4), t.ribbon);
         if points {
             let marks = if strokes.is_empty() { vec![symbol_mark(&base)] } else { strokes.clone() };
-            marks_preview(ui.painter(), r.center(), &marks, &base, (18.0 / marks_reach(&marks)).min(1.0));
+            marks_preview(ui.painter(), r.center(), &marks, &base, (18.0 / marks_reach(&marks, &base)).min(1.0));
         } else {
             let line = if strokes.is_empty() { vec![LineStroke::default()] } else { strokes.clone() };
             let k = (18.0 / strokes_reach(&line, &base)).min(1.0);
@@ -7851,6 +7863,15 @@ mod tests {
         let unseen = json!([{"color": "#000000", "width": 6}, {"color": "#0000FF", "width": 0}]);
         app.run("layer.lineStrokes", json!({"layer": "Rivers", "strokes": unseen})).unwrap();
         assert!(!inks(&patch_shapes(&app, "Rivers", true, None)).contains(&blue), "no line of no width");
+        let ticks = json!([{"color": "#0000FF", "width": 0, "markers": {"mark": "hash", "size": 6}}]);
+        app.run("layer.lineStrokes", json!({"layer": "Rivers", "strokes": ticks})).unwrap();
+        assert!(!inks(&patch_shapes(&app, "Rivers", true, None)).contains(&blue), "no hash marks of no width along a line");
+        // A wide outline counts in the fit: the whole mark stays in the box.
+        let ringed = json!([{"color": "#FF0000", "width": 8, "markers": {"mark": "circle", "size": 10, "outline": "#0000FF"}}]);
+        app.run("layer.lineStrokes", json!({"layer": "Cities", "strokes": ringed})).unwrap();
+        let shapes = patch_shapes(&app, "Cities", true, None);
+        assert!(inks(&shapes).contains(&blue), "the outline");
+        assert!(shapes.iter().all(|c| r.expand(0.01).contains_rect(c.shape.visual_bounding_rect())), "inside the box, outline and all");
     }
 
     /// The stroke and fill editors send an image back with every change, so it is kept; one that
