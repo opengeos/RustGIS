@@ -105,6 +105,13 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     use rustgis_data::progress;
     progress::check().map_err(|e| e.to_string())?;
     let mut losses = Vec::new();
+    let mut archive_errors = Vec::new();
+    // These used to be errors as soon as the sender hit them, even if the write later failed.
+    // Keep a second copy of the text for the recipient's manifest.
+    let mut archive_error = |s: &mut Session, text: String| {
+        s.notify(text.clone(), true);
+        archive_errors.push(text);
+    };
     let legacy_return = if p.get("legacyReturn").is_some() {
         legacy_user(s)?;
         super::b(p, "legacyReturn").ok_or("legacyReturn must be true or false")?
@@ -230,21 +237,24 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
             ));
     }
     if !uploaded.is_empty() {
-        losses.push(format!(
+        archive_error(
+            s,
+            format!(
                 "{} tile archive(s) added to this browser couldn't be put in the field package, as they live only in its memory: {}. Add them to the field from the file",
                 uploaded.len(),
                 uploaded.join(", ")
-            ));
+            ),
+        );
     }
     if !unread.is_empty() {
-        losses.push(format!("{} tile archive(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")));
+        archive_error(s, format!("{} tile archive(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")));
     }
     // Coming back, the photos taken in the field go with their features.
     if coming_back {
         let photos = take_photos(&mut map, &mut budget);
         if !photos.unread.is_empty() {
             let unread = &photos.unread;
-            losses.push(format!("{} photo(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")));
+            archive_error(s, format!("{} photo(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")));
         }
         if !photos.not_pictures.is_empty() {
             let named = &photos.not_pictures;
@@ -331,7 +341,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
             .find(|saved| saved.name.eq_ignore_ascii_case(&area))
             .ok_or("the offline area was not found")?
             .extent;
-        let available = project_room(&entries);
+        let available = project_room(companion_bytes(&entries));
         copied = copy_streams(&mut map, extent, stream_budget(available), &mut losses)?;
     }
     project.maps = vec![map];
@@ -367,7 +377,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         "{area}: a RustGIS field package.\nOpen it with RustGIS on a phone or a computer (Open Project). Its basemaps are in {BASEMAPS}/.\n"
     );
     entries.push(("README.txt".into(), readme.into_bytes()));
-    let room = project_room(&entries);
+    let companions = companion_bytes(&entries);
     let too_large = || "the field package would be too large: leave a tile archive or some data out".to_string();
     if !copied.is_empty() {
         let map = project.maps.first().ok_or("the field package holds no map")?;
@@ -378,10 +388,10 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
             names.join(", ")
         ));
     }
-    let mut manifest = manifest_bytes(&losses)?;
+    let mut manifest = manifest_bytes(&archive_errors, &losses)?;
     progress::check().map_err(|e| e.to_string())?;
     let (mut text, mut report) =
-        crate::durable::output(&mut project, None, |p| crate::project::json_within(p, room.saturating_sub(manifest.len() as u64)))?;
+        crate::durable::output(&mut project, None, |p| crate::project::json_within(p, project_room(companions + manifest.len() as u64)))?;
     if text.is_none() && !copied.is_empty() {
         // Row storage and encoded JSON measure different things. The package's hard limit
         // also includes loaded layers and basemaps, so retry once without the streamed copies.
@@ -400,9 +410,10 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
                 true
             }
         });
-        manifest = manifest_bytes(&losses)?;
-        (text, report) =
-            crate::durable::output(&mut project, None, |p| crate::project::json_within(p, room.saturating_sub(manifest.len() as u64)))?;
+        manifest = manifest_bytes(&archive_errors, &losses)?;
+        (text, report) = crate::durable::output(&mut project, None, |p| {
+            crate::project::json_within(p, project_room(companions + manifest.len() as u64))
+        })?;
     }
     let text = text.ok_or_else(too_large)?;
     progress::check().map_err(|e| e.to_string())?;
@@ -417,9 +428,8 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     Ok((area, bytes))
 }
 
-/// Desktop export worker: build and write against a shared-row project snapshot, then install
-/// the home identities and offline area only after a completed write. If the home project changed
-/// meanwhile, leave its current state intact and tell the sender that the file must be remade.
+/// Builds and stages the package against a shared-row project snapshot. Delivery checks
+/// the live home state before installing the file and recording the new identities or area.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work, String> {
     if p.get("legacyReturn").is_some() {
@@ -439,19 +449,31 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         copy.view_size = view;
         copy.opened_package = opened_package;
         let before = (copy.project.origin_id.clone(), area_ids(&copy.project));
-        let (area, bytes, mut notes) = package_output(&mut copy, &p)?;
-        let answer = packaged(&path, &area, bytes.len());
-        rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-        notes.extend(copy.notices.into_iter().map(|n| n.text));
-        notes.extend(construction_notes);
+        let staged = package_output(&mut copy, &p).and_then(|(area, bytes, notes)| {
+            let answer = packaged(&path, &area, bytes.len());
+            let file = rustgis_data::io::stage_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+            // A concurrent sync can advance a home area's generation. A return from the
+            // field owns its snapshot without any home update.
+            let outbound = copy.project.offline_areas.iter().any(|saved| saved.name.eq_ignore_ascii_case(&area));
+            Ok((answer, file, notes, outbound))
+        });
+        rustgis_data::progress::check().map_err(|e| e.to_string())?;
+        let (errors, other): (Vec<_>, Vec<_>) = copy.notices.into_iter().partition(|n| n.error);
+        let diagnostics = errors.into_iter().map(|n| (n.severity, n.text)).collect();
         let next = copy.project;
-        // A newer home state may no longer accept the package (a concurrent sync can advance
-        // its generation). A return from the field owns its snapshot without any home update.
-        let outbound = next.offline_areas.iter().any(|saved| saved.name.eq_ignore_ascii_case(&area));
         let change = (before != (next.origin_id.clone(), area_ids(&next))).then_some((next.origin_id, next.offline_areas));
-        let then: super::exports::Then = Box::new(move |s, _| {
+        let control = rustgis_analysis::control::current();
+        let then: super::exports::Then = Box::new(move |s, answer| {
+            let (result, file, notes, outbound) = staged?;
             if outbound && (s.opened != opened || s.state() != state) {
                 return Err("the home project changed during packaging; make a new package before sending it to the field".into());
+            }
+            // Only a rename and directory sync run on the window thread. Cancel still
+            // applies until the rename, including when the worker has finished staging.
+            {
+                let _probe = rustgis_data::progress::install(control.map(|c| c as std::sync::Arc<dyn rustgis_data::progress::Probe>));
+                not_the_project(s, file.destination())?;
+                file.commit().map_err(|e| format!("{path}: {e}"))?;
             }
             if let Some((origin, areas)) = change {
                 field_edit(s, "Prepare home project for field package", |s| {
@@ -460,17 +482,21 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                     Ok(Value::Null)
                 })?;
             }
-            for note in notes {
-                s.notify_written(note, false);
+            let mark = s.notice_mark();
+            super::exports::say(s, other.into_iter().map(|n| (n.severity, n.text)).collect());
+            for note in notes.into_iter().chain(construction_notes) {
+                s.notify(note, false);
             }
+            s.retain_written_notices(mark);
+            *answer = result;
             Ok(())
         });
         Ok(super::exports::Wrote {
-            answer,
+            answer: Value::Null,
             notes: Vec::new(),
             then: Some(then),
-            written_path: Some(path),
-            diagnostics: Vec::new(),
+            written_path: None,
+            diagnostics,
             refused_notes: Vec::new(),
             owner: None,
             crs_used: Vec::new(),
@@ -485,15 +511,19 @@ fn area_ids(project: &Project) -> Vec<(String, String)> {
     project.offline_areas.iter().map(|a| (a.id.clone(), a.generation.clone())).collect()
 }
 
-/// Bytes available for project JSON and notices once the companion files have been counted.
-fn project_room(entries: &[(String, Vec<u8>)]) -> u64 {
-    crate::project::max_bytes().min(MOST_UNPACKED as u64).saturating_sub(entries.iter().map(|(_, b)| b.len() as u64).sum())
+fn companion_bytes(entries: &[(String, Vec<u8>)]) -> u64 {
+    entries.iter().map(|(_, bytes)| bytes.len() as u64).sum()
+}
+
+/// The project JSON must fit its own limit and the space left in the unpacked ZIP.
+fn project_room(companions: u64) -> u64 {
+    crate::project::max_bytes().min((MOST_UNPACKED as u64).saturating_sub(companions))
 }
 
 /// Retain one map's worth of clipped streamed rows within a shared budget. Leave some of the
 /// package room for the JSON and plan for both encoders and the other data already in memory.
 fn stream_budget(room: u64) -> usize {
-    let memory = rustgis_data::memory::planned(8 << 20, 128 << 20, 4);
+    let memory = rustgis_data::memory::planned(8 << 20, 128 << 20, 1);
     memory.min(usize::try_from(room / 2).unwrap_or(usize::MAX))
 }
 
@@ -630,15 +660,16 @@ fn copy_stream(
 
 /// Only portable, redacted summaries go into the archive. Keep the list within the receiver's
 /// diagnostic limits even when a project has thousands of missing layers.
-fn manifest_bytes(losses: &[String]) -> Result<Vec<u8>, String> {
-    if losses.is_empty() {
+fn manifest_bytes(errors: &[String], losses: &[String]) -> Result<Vec<u8>, String> {
+    let total = errors.len() + losses.len();
+    if total == 0 {
         return Ok(Vec::new());
     }
-    let mut notes: Vec<_> = losses.iter().take(MAX_NOTICES).map(|s| Session::redacted(s).into_string()).collect();
+    let mut notes: Vec<_> = errors.iter().chain(losses).take(MAX_NOTICES).map(|s| Session::redacted(s).into_string()).collect();
     // JSON can grow when text has escapes. Drop the tail and count it if the byte limit is hit.
     loop {
         let mut candidate = notes.clone();
-        let omitted = losses.len().saturating_sub(notes.len());
+        let omitted = total - notes.len();
         if omitted > 0 {
             candidate.push(format!("{omitted} more field package notice(s) were reported when the package was made"));
         }
@@ -661,8 +692,9 @@ fn photos_field(layer: &rustgis_map::Layer) -> Option<usize> {
 fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> String) {
     for l in map.layers.iter_mut().filter(|l| !l.is_raster()) {
         let Some(fi) = photos_field(l) else { continue };
-        for f in &mut l.dataset.features {
-            let Some(rustgis_data::Value::Text(held)) = f.attrs.get(fi) else { continue };
+        let features = &mut l.dataset.features;
+        for row in 0..features.len() {
+            let rustgis_data::Value::Text(held) = features.value(row, fi) else { continue };
             // Only the paths rewritten change: the rest of the text stays as it was written, so
             // a feature isn't seen as edited for its spacing.
             let (mut out, mut last) = (String::new(), 0);
@@ -679,9 +711,7 @@ fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> S
                 continue;
             }
             out.push_str(held.get(last..).unwrap_or_default());
-            if let Some(slot) = f.attrs.get_mut(fi) {
-                *slot = rustgis_data::Value::Text(out);
-            }
+            let _ = features.set_value(row, fi, rustgis_data::Value::Text(out));
         }
     }
 }
@@ -970,16 +1000,28 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         }
         keep
     });
-    if !reference.is_empty() {
-        s.notify(
-            format!(
-                "Bring Back skipped {} layer(s) copied from sources read in place at home. Any edits to them stay in the field project: {}",
-                reference.len(),
-                reference.join(", ")
-            ),
-            false,
-        );
-    }
+    let skipped_photos = if !reference.is_empty() && !photos.is_empty() {
+        let before = photos.len();
+        // An entry may be shared by a kept feature and a dropped one. Only discard entries
+        // left without a reference among the layers passed to Sync.
+        let mut unused: std::collections::HashSet<_> = photos.iter().map(|(name, _)| name.clone()).collect();
+        let prefix = format!("{PHOTOS}/");
+        for layer in edited.layers.iter().filter(|l| !l.is_raster()) {
+            let Some(field) = photos_field(layer) else { continue };
+            for value in layer.dataset.features.column(field) {
+                let rustgis_data::Value::Text(text) = value else { continue };
+                for span in photo_paths(text) {
+                    if let Some(name) = text.get(span).and_then(|path| path.strip_prefix(&prefix)) {
+                        unused.remove(name);
+                    }
+                }
+            }
+        }
+        photos.retain(|(name, _)| !unused.contains(name));
+        before - photos.len()
+    } else {
+        0
+    };
     // The photos, beside the project, and the features naming them there.
     let mut put = 0usize;
     let mut renamed = 0usize;
@@ -1084,6 +1126,19 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         if renamed > 0 {
             summary.push_str(&format!(" ({renamed} under a new name: one of its name was there already)"));
         }
+    }
+    if !reference.is_empty() {
+        s.notify(
+            format!(
+                "Bring Back skipped {} layer(s) copied from sources read in place at home. Any edits to them stay in the field project: {}",
+                reference.len(),
+                reference.join(", ")
+            ),
+            false,
+        );
+    }
+    if skipped_photos > 0 {
+        s.notify(format!("Bring Back skipped {skipped_photos} photo(s) without a feature in the layers being brought back"), false);
     }
     if strange > 0 {
         s.notify(format!("{strange} photo(s) in the field package weren't brought back: their names aren't plain file names"), true);
@@ -1318,6 +1373,121 @@ mod tests {
     }
 
     #[test]
+    fn companions_do_not_reduce_the_project_json_limit() {
+        crate::project::with_max_bytes(1024, || {
+            assert_eq!(project_room(128), 1024);
+            assert_eq!(project_room(MOST_UNPACKED as u64 - 64), 64);
+            assert_eq!(project_room(MOST_UNPACKED as u64 + 1), 0);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_photo_is_a_sender_error_and_a_receiver_notice() {
+        let temp = Temp::new("unreadable-photo");
+        let path = temp.path().join("unreadable.jpg");
+        std::os::unix::fs::symlink("unreadable.jpg", &path).unwrap();
+        let mut home = sample();
+        let (_, bytes) = package(&mut home, &json!({"name":"Site", "extent":[-180, -85, 180, 85]})).unwrap();
+        let dir = temp.path().join("out");
+        let (text, _) = unpack_into(&bytes, &dir).unwrap();
+        let mut crew = Session::new(project_in(&text, &dir).unwrap());
+        crew.run("edit.addField", &json!({"layer":"Cities", "name":"photos", "type":"text"})).unwrap();
+        crew.run("edit.setValue", &json!({"layer":"Cities", "row":0, "field":"photos", "value":path})).unwrap();
+
+        let mark = crew.notice_mark();
+        let (_, bytes) = package(&mut crew, &Value::Null).unwrap();
+        let expected = "1 photo(s) couldn't be put in the field package";
+        assert_eq!(crew.notices_since(mark).iter().filter(|n| n.error && n.text.contains(expected)).count(), 1);
+        let (_, losses) = unpack_into(&bytes, &temp.path().join("back")).unwrap();
+        assert!(losses.iter().any(|note| note.contains(expected)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn stream_budget_is_in_bytes_on_a_constrained_host() {
+        const TEST: &str = "cmd::field::tests::stream_budget_is_in_bytes_on_a_constrained_host";
+        const CHILD: &str = "RUSTGIS_TEST_FIELD_BUDGET";
+        if std::env::var_os(CHILD).is_some() {
+            // A 256 MiB host gives the job 64 MiB, and the package has room for it.
+            assert_eq!(stream_budget(256 << 20), 64 << 20);
+            assert_eq!(stream_budget(32 << 20), 16 << 20);
+            return;
+        }
+        // The memory override is read once per process. Keep it out of concurrent tests.
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST])
+            .env(CHILD, "1")
+            .env(rustgis_data::memory::OVERRIDE, (256 << 20).to_string())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stdout));
+        assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn refused_field_export_leaves_the_destination_as_it_was() {
+        use crate::cmd::exports::{export_land, export_start};
+        let temp = Temp::new("refused");
+        let mut home = sample();
+        for existing in [false, true] {
+            let path = temp.path().join(format!("{existing}.rgisfield"));
+            if existing {
+                std::fs::write(&path, b"previous package").unwrap();
+            }
+            let params = json!({"path": path, "name": "Site", "extent": [-20, -40, 60, 40]});
+            let run = export_start(&mut home, "offline.package", &params).unwrap();
+            let started = run.started();
+            let wrote = run.run(&rustgis_analysis::control::Control::new());
+            assert!(wrote.is_ok());
+            home.run("map.rename", &json!({"name": format!("Changed {existing}")})).unwrap();
+            let err = export_land(&mut home, started, wrote).unwrap_err();
+            assert!(err.contains("the home project changed"), "{err}");
+            assert!(home.project.offline_areas.is_empty());
+            if existing {
+                assert_eq!(std::fs::read(&path).unwrap(), b"previous package");
+            } else {
+                assert!(!path.exists());
+            }
+            assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), usize::from(existing));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn archive_losses_are_sender_errors_and_receiver_notices() {
+        use crate::cmd::exports::{export_land, export_start};
+        let temp = Temp::new("archive-loss");
+        for (background, write_succeeds) in [(false, true), (false, false), (true, true), (true, false)] {
+            let mut home = sample();
+            let missing = temp.path().join("missing.mbtiles");
+            home.map_mut().tiles.push(TileLayer::new("Unread", TileKind::MbTiles, missing.display().to_string()));
+            home.map_mut().tiles.push(TileLayer::new("Uploaded", TileKind::MbTiles, format!("{}site.mbtiles", rustgis_map::tiles::UPLOAD)));
+            let path = if write_succeeds { temp.path().join("site.rgisfield") } else { temp.path().join("missing/site.rgisfield") };
+            let mark = home.notice_mark();
+            let params = json!({"path": path, "name": "Site", "extent": [-20, -40, 60, 40]});
+            let result = if background {
+                let run = export_start(&mut home, "offline.package", &params).unwrap();
+                let started = run.started();
+                export_land(&mut home, started, run.run(&rustgis_analysis::control::Control::new()))
+            } else {
+                home.run("offline.package", &params)
+            };
+            assert_eq!(result.is_ok(), write_succeeds, "{result:?}");
+            for name in ["Unread", "Uploaded"] {
+                assert!(home.notices_since(mark).iter().any(|n| n.error && n.text.contains(name)));
+            }
+            if write_succeeds {
+                let (_, losses) = unpack_into(&std::fs::read(&path).unwrap(), &temp.path().join(format!("field-{background}"))).unwrap();
+                for name in ["Unread", "Uploaded"] {
+                    assert!(losses.iter().any(|n| n.contains(name)));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_map_packaged_for_the_field_opens_with_its_basemap_and_comes_from_an_offline_area() {
         let temp = Temp::new("package");
         let archive = temp.path().join("site.mbtiles");
@@ -1370,12 +1540,13 @@ mod tests {
         for x in [1.0, 10.0] {
             places.push(Some(rustgis_data::Geometry::Point(rustgis_data::Coord::new(x, 1.0))), vec![]);
         }
-        let id = seed.map_mut().add_dataset(places);
+        let id = seed.map_mut().add_dataset(places.clone());
         seed.run("share.exportLayer", &json!({"layer": id, "path": source})).unwrap();
 
         let mut home = Session::new(Project::default());
         home.run("layer.addData", &json!({"name": "Streamed", "path": source, "layer": "Places", "stream": true})).unwrap();
         assert!(home.map().layer_by_name("Streamed").unwrap().is_streamed());
+        home.map_mut().add_dataset(places);
         let mark = home.notice_mark();
         let extent = rustgis_data::Extent::new(0.0, 0.0, 2.0, 2.0);
         let mut oversized = home.map().clone();
@@ -1409,12 +1580,30 @@ mod tests {
         std::fs::rename(&held, &source).unwrap();
         let mut home = Session::new(Project::from_json(&home_text).unwrap());
         crew.run("edit.addFeature", &json!({"layer":"Streamed", "geometry":{"type":"Point", "coordinates":[1.5, 1.5]}})).unwrap();
+        let photo = temp.path().join("reference.jpg");
+        let shared_photo = temp.path().join("shared.jpg");
+        std::fs::write(&photo, b"reference photo").unwrap();
+        std::fs::write(&shared_photo, b"shared photo").unwrap();
+        crew.run("edit.addField", &json!({"layer": "Streamed", "name": "photos", "type": "text"})).unwrap();
+        let named = format!("{}; {}", photo.display(), shared_photo.display());
+        crew.run("edit.setValue", &json!({"layer": "Streamed", "row": 0, "field": "photos", "value": named})).unwrap();
+        crew.run("edit.addField", &json!({"layer": "Places", "name": "photos", "type": "text"})).unwrap();
+        crew.run("edit.setValue", &json!({"layer": "Places", "row": 0, "field": "photos", "value": shared_photo})).unwrap();
+        home.path = Some(temp.path().join("home.rgis"));
         let (_, bytes) = package(&mut crew, &Value::Null).unwrap();
+        assert!(rustgis_data::zip::read(&bytes).unwrap().iter().any(|(name, _)| name == "photos/reference.jpg"));
+        std::fs::remove_file(&photo).unwrap();
+        std::fs::remove_file(&shared_photo).unwrap();
         let returned = temp.path().join("returned.rgisfield");
         std::fs::write(&returned, bytes).unwrap();
         let mark = home.notice_mark();
         let done = home.run("offline.bringBack", &json!({"path": returned})).unwrap();
         assert_eq!(done["added"], 0);
+        assert_eq!(done["photos"], 1);
+        let photos = temp.path().join("Site photos");
+        assert!(!photos.join("reference.jpg").exists());
+        assert_eq!(std::fs::read(photos.join("shared.jpg")).unwrap(), b"shared photo");
+        assert!(home.notices_since(mark).iter().any(|n| n.text.contains("Bring Back skipped 1 photo")));
         assert!(home.notices_since(mark).iter().any(|n| n.text.contains("Bring Back skipped 1 layer")));
         assert!(home.map().layer_by_name("Streamed").unwrap().is_streamed());
     }
