@@ -135,7 +135,8 @@ pub fn start() {
                         font_inbox,
                         notes.clone(),
                         cc.egui_ctx.clone(),
-                        embedded || preview,
+                        embedded,
+                        preview,
                     ));
                     app.embedded = embedded;
                     // Settings › Start-up, unless `?blank`, `?projection=EPSG:3010` (a preset id,
@@ -524,8 +525,8 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
 /// A pull request preview (`<meta name="rustgis-preview">`, added by the workflow that publishes
 /// it). Every preview shares one origin with every other, whose pages are unreviewed code: what
 /// one saves in the browser, another can read or change. A preview therefore keeps its settings
-/// as `?embed` does, in memory for the visit, and reads nothing saved there; `index.html` clears
-/// what earlier previews left and installs no service worker.
+/// in memory for the visit (`embed::visit_prefs`) and reads nothing saved there; `index.html`
+/// clears what earlier previews left and installs no service worker.
 fn shared_preview() -> bool {
     web_sys::window().and_then(|w| w.document()).and_then(|d| d.query_selector("meta[name=\"rustgis-preview\"]").ok().flatten()).is_some()
 }
@@ -1176,9 +1177,10 @@ fn clipboard() -> Option<web_sys::Clipboard> {
 
 /// The browser's services. Embedded, settings live in memory for the visit: the page that embeds
 /// the app must not read what the user saved on the site.
-/// `in_memory`: preferences and plugin settings last for the visit and never touch browser
-/// storage (`?embed`, and a pull request preview).
-fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, in_memory: bool) -> Services {
+/// `?embed` and a pull request preview never touch browser storage: embedded, preferences aren't
+/// kept (the page that embeds the app holds the work) and plugin settings last for the visit; in a
+/// preview, both last for the visit.
+fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, embedded: bool, preview: bool) -> Services {
     // Map tiles come through the browser's fetch (the app repaints when they arrive).
     rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher_with_origin(|url, ceiling, done, omit| {
         wasm_bindgen_futures::spawn_local(crate::request::handoff(
@@ -1221,17 +1223,21 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, i
     let font_sink = font_inbox.clone();
     let fetch_ctx = ctx.clone();
     let http_ctx = ctx.clone();
-    let (load_pref, save_pref) = crate::embed::pref_pair(
-        in_memory,
-        |key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()),
-        |key: &str, value: &str| {
-            if let Some(s) = storage() {
-                let _ = s.set_item(&format!("rustgis.{key}"), value);
-            }
-        },
-    );
+    let (load_pref, save_pref) = if preview && !embedded {
+        crate::embed::visit_prefs()
+    } else {
+        crate::embed::pref_pair(
+            embedded,
+            |key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()),
+            |key: &str, value: &str| {
+                if let Some(s) = storage() {
+                    let _ = s.set_item(&format!("rustgis.{key}"), value);
+                }
+            },
+        )
+    };
     // Plugins' settings, bound before `with_services` restores the plugins that were installed.
-    rustgis_ui_egui::rustgis_engine::plugins::settings::set_browser_storage(plugin_settings_storage(in_memory));
+    rustgis_ui_egui::rustgis_engine::plugins::settings::set_browser_storage(plugin_settings_storage(embedded || preview));
     let arcgis_ctx = ctx.clone();
     let copernicus_ctx = ctx.clone();
     let clipboard_ctx = ctx.clone();
