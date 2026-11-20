@@ -8,8 +8,9 @@ use rustgis_data::GeometryType;
 use rustgis_data::query::{Env, SeriesPage};
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
-    ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, Grid, GridKind, INK, Layout, LineHead, MAX_LEGEND_COLUMNS, Orientation,
-    PT_PER_MM, ScaleBarStyle, ScaleUnits, TextAlign, TickSide, frame_camera,
+    ArrowStyle, ChartLook, ColorScale, DEFAULT_SCALE_LABEL_SIZE, ElementKind, FrameShape, Grid, GridKind, INK, Layout, LineHead,
+    MAX_LEGEND_COLUMNS, Orientation, PT_PER_MM, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide,
+    UnitLabelPosition, frame_camera,
 };
 use rustgis_map::symbology::LegendEntry;
 use rustgis_map::{Map, Rgba};
@@ -660,12 +661,12 @@ fn draw_page(
                 let bearing = frame(*f).map_or(0.0, |fr| fr.2.bearing);
                 north_arrow(&mut pm, r, *style, *fill, *outline, ppp, bearing)
             }
-            ElementKind::ScaleBar { frame: f, units, divisions, style, color, fill, .. } => {
+            ElementKind::ScaleBar { frame: f, color, fill, .. } => {
                 if let Some(&(_, mi, cam, _, _)) = frame(*f)
                     && let Some(map) = maps.get(mi)
+                    && let Some(bar) = BarOptions::of(&e.kind)
                 {
-                    let bar = (*units, *divisions, *style);
-                    scale_bar(&mut pm, r, map.ground_res_at(&cam), bar, (*color, *fill), ppp, layout.decimal_comma);
+                    scale_bar(&mut pm, r, map.ground_res_at(&cam), &bar, (*color, *fill), ppp, layout.decimal_comma);
                 }
             }
             ElementKind::Legend { frame: f, title, all_classes, hide_other, show_no_data, exclude, columns, labels, color, text_size } => {
@@ -2103,7 +2104,7 @@ const BAR_SHARE: f64 = 0.85;
 /// A scale bar's labels' size, in points, and how far its bar starts in from the element's left
 /// edge, in pixels. [`scale_bar_width_pt`] counts that inset as as many points: when a point is a
 /// pixel or more, a pixel is no larger than a point, so the box is never too narrow.
-const BAR_LABEL_PT: f32 = 8.0;
+const BAR_LABEL_PT: f32 = DEFAULT_SCALE_LABEL_SIZE as f32;
 const BAR_INSET: f32 = 2.0;
 
 /// What a scale bar counts: its whole length in its unit, that unit in metres and its abbreviation.
@@ -2150,26 +2151,136 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
     Some(if w < width_pt && bar_plan(ground_per_pt, w, units) == Some(plan) { w } else { width_pt })
 }
 
-/// A scale bar filling most of the element's width, in `units`, with `divisions` labelled steps.
-/// `ground_per_pt` is ground metres per logical point of paper; `colors` are its lines, dark
-/// divisions and labels, then the alternating bar's light divisions.
-fn scale_bar(
-    pm: &mut Canvas,
-    r: Rect,
-    ground_per_pt: f64,
-    bar: (ScaleUnits, usize, ScaleBarStyle),
-    colors: (Rgba, Rgba),
-    ppp: f64,
-    comma: bool,
-) {
-    let (units, divisions, style) = bar;
+/// A scale bar's look: the fields of [`ElementKind::ScaleBar`] but its frame and colours.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarOptions<'a> {
+    units: ScaleUnits,
+    divisions: usize,
+    style: ScaleBarStyle,
+    subdivisions: usize,
+    divisions_before_zero: usize,
+    label_position: ScaleLabelPosition,
+    unit_label: Option<&'a str>,
+    unit_label_position: UnitLabelPosition,
+    decimals: usize,
+    label_size: f64,
+    fit: ScaleBarFit,
+}
+
+impl<'a> BarOptions<'a> {
+    /// A scale bar element's look; `None` for any other element.
+    fn of(kind: &'a ElementKind) -> Option<BarOptions<'a>> {
+        let ElementKind::ScaleBar {
+            units,
+            divisions,
+            style,
+            subdivisions,
+            divisions_before_zero,
+            label_position,
+            unit_label,
+            unit_label_position,
+            decimals,
+            label_size,
+            fit,
+            ..
+        } = kind
+        else {
+            return None;
+        };
+        Some(BarOptions {
+            units: *units,
+            divisions: *divisions,
+            style: *style,
+            subdivisions: *subdivisions,
+            divisions_before_zero: *divisions_before_zero,
+            label_position: *label_position,
+            unit_label: unit_label.as_deref(),
+            unit_label_position: *unit_label_position,
+            decimals: *decimals,
+            label_size: *label_size,
+            fit: *fit,
+        })
+    }
+}
+
+/// A new scale bar's look.
+#[cfg(test)]
+impl Default for BarOptions<'_> {
+    fn default() -> Self {
+        static PLAIN: std::sync::LazyLock<ElementKind> = std::sync::LazyLock::new(|| ElementKind::scale_bar(0));
+        BarOptions::of(&PLAIN).expect("a scale bar")
+    }
+}
+
+/// How long a scale bar is and how it divides: its whole length in its unit, any divisions before
+/// zero included, and its divisions after zero.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarFit {
+    total: f64,
+    after: usize,
+}
+
+/// A scale bar of `before` divisions before zero and `after` after it, counting in a unit `unit_m`
+/// metres long, fitted to `room_m` ground metres by `fit`: the roundest length divided as asked
+/// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit
+/// (`AdjustDivision`), or the asked divisions each a round length (`AdjustWidth`). `None` when it
+/// draws none.
+fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usize) -> Option<BarFit> {
+    let count = (before + after) as f64;
+    let (total, after) = match fit {
+        ScaleBarFit::AdjustDivisionValue => (rustgis_geom::nice_distance(room_m / unit_m), after),
+        ScaleBarFit::AdjustDivision => {
+            let value = rustgis_geom::nice_distance(room_m / unit_m / count);
+            let fits = (room_m / unit_m / value + 1e-9).floor() - before as f64;
+            let after = fits.clamp(1.0, rustgis_map::layout::MAX_SCALE_DIVISIONS as f64) as usize;
+            (value * (before + after) as f64, after)
+        }
+        ScaleBarFit::AdjustWidth => (rustgis_geom::nice_distance(room_m / unit_m / count) * count, after),
+    };
+    (total.is_finite() && total > 0.0).then_some(BarFit { total, after })
+}
+
+/// A scale bar filling most of the element's width as `bar` asks: its divisions after zero (and
+/// any before it) labelled, the first after zero split into its subdivisions. `ground_per_pt` is
+/// ground metres per logical point of paper; `colors` are its lines, dark divisions and labels,
+/// then the alternating bar's light divisions.
+fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, colors: (Rgba, Rgba), ppp: f64, comma: bool) {
+    use rustgis_map::layout::{MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS};
+    if !(ground_per_pt.is_finite() && ground_per_pt > 0.0 && ppp.is_finite() && ppp > 0.0) {
+        return;
+    }
     let (dark, light) = colors;
-    let divisions = divisions.clamp(1, rustgis_map::layout::MAX_SCALE_DIVISIONS);
-    let Some(BarPlan { total, unit_m, abbr }) = bar_plan(ground_per_pt, f64::from(r.width()) / ppp, units) else { return };
+    let after = bar.divisions.clamp(1, MAX_SCALE_DIVISIONS);
+    let before = bar.divisions_before_zero.min(MAX_SCALE_BEFORE_ZERO);
+    // One part is the division whole.
+    let parts = bar.subdivisions.clamp(1, MAX_SCALE_SUBDIVISIONS);
+    let width_pt = f64::from(r.width()) / ppp;
+    let Some(BarPlan { unit_m, abbr, .. }) = bar_plan(ground_per_pt, width_pt, bar.units) else { return };
+    // The points of the box its labels take from the bar: none yet.
+    let taken_pt = 0.0;
+    let room_m = ground_per_pt * width_pt * BAR_SHARE - ground_per_pt * taken_pt;
+    let Some(BarFit { total, after }) = bar_fit(room_m, unit_m, bar.fit, before, after) else { return };
+    let divs = before + after;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
+    let px = BAR_LABEL_PT * 1.33 * ppp as f32;
+    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
+    // Division `j` counts `j - before` from zero. Its label, the last with the unit.
+    let label = |j: usize| {
+        let k = j as isize - before as isize;
+        let v = decimal(scale_number((total * k as f64 / divs as f64).abs(), total / divs as f64), comma);
+        let v = if k < 0 { format!("-{v}") } else { v };
+        if j == divs { format!("{v} {abbr}") } else { v }
+    };
+    // Left of zero the first label is a negative one, centred on the bar's end: the bar starts far
+    // enough in for it.
+    let pad = if before > 0 { (half(&label(0)) - 2.0).max(0.0) } else { 0.0 };
     let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    let (x0, y0) = (r.x() + BAR_INSET, r.y() + r.height() * 0.62 - bar_h / 2.0);
-    let seg = len / divisions as f32;
+    let (x0, y0) = (r.x() + BAR_INSET + pad, r.y() + r.height() * 0.62 - bar_h / 2.0);
+    let seg = len / divs as f32;
+    let zero_x = x0 + seg * before as f32;
+    // Where the first division after zero is cut into its subdivisions.
+    let cuts: Vec<f32> = (1..parts).map(|p| zero_x + seg * p as f32 / parts as f32).collect();
+    let dark_at = |j: usize| (j as isize - before as isize).rem_euclid(2) == 0;
     let line = Stroke { width: 0.6 * ppp as f32, ..Stroke::default() };
     let stroke = |pm: &mut Canvas, pts: &[(f32, f32)], w: &Stroke| {
         let mut pb = PathBuilder::new();
@@ -2180,11 +2291,21 @@ fn scale_bar(
             pm.stroke_path(&p, &paint(dark, 1.0), w, Transform::identity(), None);
         }
     };
-    match style {
+    match bar.style {
         ScaleBarStyle::Alternating => {
-            for i in 0..divisions {
-                let c = if i % 2 == 0 { dark } else { light };
-                if let Some(b) = Rect::from_xywh(x0 + seg * i as f32, y0, seg, bar_h) {
+            for j in 0..divs {
+                let x = x0 + seg * j as f32;
+                if j == before && parts > 1 {
+                    // Alternating parts, the last dark against the light division after it.
+                    let part = seg / parts as f32;
+                    for p in 0..parts {
+                        let c = if (parts - 1 - p) % 2 == 0 { dark } else { light };
+                        if let Some(b) = Rect::from_xywh(x + part * p as f32, y0, part, bar_h) {
+                            pm.fill_rect(b, &paint(c, 1.0), Transform::identity(), None);
+                        }
+                    }
+                } else if let Some(b) = Rect::from_xywh(x, y0, seg, bar_h) {
+                    let c = if dark_at(j) { dark } else { light };
                     pm.fill_rect(b, &paint(c, 1.0), Transform::identity(), None);
                 }
             }
@@ -2194,35 +2315,41 @@ fn scale_bar(
         }
         ScaleBarStyle::Stepped => {
             let mut pts = vec![(x0, y0 + bar_h)];
-            for i in 0..divisions {
-                let y = if i % 2 == 0 { y0 } else { y0 + bar_h };
-                let (a, b) = (x0 + seg * i as f32, x0 + seg * (i + 1) as f32);
+            for j in 0..divs {
+                let y = if dark_at(j) { y0 } else { y0 + bar_h };
+                let (a, b) = (x0 + seg * j as f32, x0 + seg * (j + 1) as f32);
                 pts.extend([(a, y), (b, y)]);
             }
             pts.push((x0 + len, y0 + bar_h));
             stroke(pm, &pts, &Stroke { width: 1.0 * ppp as f32, ..Stroke::default() });
+            // The first division after zero is on the upper step: its ticks hang from it.
+            for &x in &cuts {
+                stroke(pm, &[(x, y0), (x, y0 + bar_h * 0.5)], &line);
+            }
         }
         ScaleBarStyle::Line => {
             let base = y0 + bar_h;
             stroke(pm, &[(x0, base), (x0 + len, base)], &Stroke { width: 1.0 * ppp as f32, ..Stroke::default() });
-            for i in 0..=divisions {
-                let tall = if i == 0 || i == divisions { bar_h } else { bar_h * 0.6 };
-                let x = x0 + seg * i as f32;
+            // Tall ticks at the ends and at zero.
+            for j in 0..=divs {
+                let tall = if j == 0 || j == divs || j == before { bar_h } else { bar_h * 0.6 };
+                let x = x0 + seg * j as f32;
                 stroke(pm, &[(x, base), (x, base - tall)], &line);
+            }
+            for &x in &cuts {
+                stroke(pm, &[(x, base), (x, base - bar_h * 0.3)], &line);
             }
         }
     }
     // Labels at the divisions, the last with the unit; one that would touch its neighbour is left
     // out (never the ends).
-    let px = BAR_LABEL_PT * 1.33 * ppp as f32;
     let ty = y0 - px * 0.7;
     let gap = 3.0 * ppp as f32;
-    let labels: Vec<(f32, String)> = (0..=divisions).map(|i| (x0 + seg * i as f32, bar_label(total, divisions, i, abbr, comma))).collect();
-    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
+    let labels: Vec<(f32, String)> = (0..=divs).map(|j| (x0 + seg * j as f32, label(j))).collect();
     let last = labels.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
     let mut right = f32::MIN;
     for (i, (x, s)) in labels.iter().enumerate() {
-        let end = i == divisions;
+        let end = i == divs;
         if !end && (x - half(s) < right + gap || x + half(s) + gap > last) && i != 0 {
             continue;
         }
@@ -8150,6 +8277,47 @@ Elaboração: RustGIS",
         assert!(x < -3.0, "{x}");
     }
 
+    /// A scale bar's default colour and fill.
+    const DEFAULT_COLORS: (Rgba, Rgba) = (Rgba::rgb(0x22, 0x22, 0x22), Rgba::rgb(0xFF, 0xFF, 0xFF));
+
+    /// A white `width` x 60 pixmap with `bar` drawn on it at 100 m of ground a point, a pixel a
+    /// point, with a decimal point, in the default colours.
+    fn draw_bar(bar: &BarOptions<'_>, width: u32) -> Pixmap {
+        let mut pm = Pixmap::new(width, 60).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let r = Rect::from_xywh(0.0, 0.0, width as f32, 60.0).unwrap();
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, bar, DEFAULT_COLORS, 1.0, false));
+        pm
+    }
+
+    /// Dark runs along row `y`.
+    fn dark_runs(pm: &Pixmap, y: u32) -> usize {
+        let dark: Vec<bool> = (0..pm.width()).map(|x| pm.pixel(x, y).is_some_and(ink)).collect();
+        dark.windows(2).filter(|w| !w[0] && w[1]).count() + usize::from(dark.first() == Some(&true))
+    }
+
+    /// The first and last columns with anything but white on row `y`.
+    fn marked_span(pm: &Pixmap, y: u32) -> Option<(u32, u32)> {
+        let marked = |x: &u32| pm.pixel(*x, y).is_some_and(|p| p.red() < 200 || p.green() < 200 || p.blue() < 200);
+        let first = (0..pm.width()).find(marked)?;
+        let last = (0..pm.width()).rev().find(marked)?;
+        Some((first, last))
+    }
+
+    /// The rows holding ink.
+    fn bar_ink_rows(pm: &Pixmap) -> Vec<u32> {
+        (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| pm.pixel(x, y).is_some_and(ink))).collect()
+    }
+
+    /// How much darker than white the pixels in rows `from..=to` are, summed.
+    fn darkness(pm: &Pixmap, from: u32, to: u32) -> u32 {
+        (from..=to)
+            .flat_map(|y| (0..pm.width()).map(move |x| (x, y)))
+            .filter_map(|(x, y)| pm.pixel(x, y))
+            .map(|p| 255 - u32::from(p.red()))
+            .sum()
+    }
+
     /// 64-bit FNV-1a over the pixmaps' bytes.
     fn fnv(pms: &[Pixmap]) -> u64 {
         pms.iter().flat_map(|p| p.data().iter()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
@@ -8160,8 +8328,8 @@ Elaboração: RustGIS",
         let mut pm = Pixmap::new(w, 60).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         let r = Rect::from_xywh(0.0, 0.0, w as f32, 60.0).unwrap();
-        let colors = (Rgba::rgb(0x22, 0x22, 0x22), Rgba::rgb(0xFF, 0xFF, 0xFF));
-        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, (units, divisions, style), colors, ppp, comma));
+        let bar = BarOptions { units, divisions, style, ..BarOptions::default() };
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, &bar, DEFAULT_COLORS, ppp, comma));
         pm
     }
 
@@ -8191,15 +8359,8 @@ Elaboração: RustGIS",
 
     #[test]
     fn scale_bars_count_in_their_units_and_divisions() {
-        let draw_in = |bar, colors| {
-            let mut pm = Pixmap::new(300, 60).unwrap();
-            pm.fill(tiny_skia::Color::WHITE);
-            // 100 m of ground per point: about 25 km across the bar.
-            let r = Rect::from_xywh(0.0, 0.0, 300.0, 60.0).unwrap();
-            crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, bar, colors, 1.0, false));
-            pm
-        };
-        let draw = |bar| draw_in(bar, (Rgba::rgb(0x22, 0x22, 0x22), Rgba::rgb(0xFF, 0xFF, 0xFF)));
+        // 100 m of ground per point: about 25 km across the bar.
+        let draw = |(units, divisions, style)| draw_bar(&BarOptions { units, divisions, style, ..BarOptions::default() }, 300);
         // Dark runs along the bar's middle row: one per dark division of an alternating bar.
         let runs = |pm: &Pixmap| {
             let y = (60.0 * 0.62) as u32;
@@ -8218,6 +8379,55 @@ Elaboração: RustGIS",
             let dark = (0..300).filter(|&x| pm.pixel(x, 37).is_some_and(ink)).count();
             assert!(dark < 20, "{style:?}: {dark} dark pixels across the bar");
             assert_ne!(pm.data(), four.data());
+        }
+        let with = |f: &dyn Fn(&mut BarOptions<'static>)| {
+            let mut b = BarOptions::default();
+            f(&mut b);
+            draw_bar(&b, 300)
+        };
+        let runs = |pm: &Pixmap| dark_runs(pm, 37);
+        assert_eq!(runs(&with(&|_| {})), 2);
+        // The first division cut in four alternating parts, the last dark: two runs there, one after.
+        assert_eq!(runs(&with(&|b| b.subdivisions = 4)), 3);
+        assert_eq!(with(&|b| b.subdivisions = 1).data(), with(&|_| {}).data(), "one part is the division whole");
+        // Two whole divisions before zero: six divisions, three dark.
+        assert_eq!(runs(&with(&|b| b.divisions_before_zero = 2)), 3);
+        assert_eq!(bar_ink_rows(&with(&|b| b.divisions_before_zero = 2)), bar_ink_rows(&with(&|_| {})), "the same rows, bar and labels");
+        // A single or stepped line gets short ticks inside its first division.
+        for style in [ScaleBarStyle::Line, ScaleBarStyle::Stepped] {
+            let plain = with(&|b| b.style = style);
+            let cut = with(&|b| {
+                b.style = style;
+                b.subdivisions = 3;
+            });
+            assert!(darkness(&cut, 35, 39) > darkness(&plain, 35, 39) + 100, "{style:?}");
+        }
+    }
+
+    #[test]
+    fn scale_bars_fit_their_box_by_the_strategy() {
+        // 79 px to use at 100 m a point: 7.9 km of ground, in kilometres.
+        let width = |fit| {
+            let bar = BarOptions { units: ScaleUnits::Kilometers, fit, ..BarOptions::default() };
+            let (a, b) = marked_span(&draw_bar(&bar, 93), 37).unwrap();
+            b - a
+        };
+        assert!((width(ScaleBarFit::AdjustDivisionValue) as i32 - 50).abs() <= 2, "a round 5 km in four 1.25 km divisions");
+        assert!((width(ScaleBarFit::AdjustDivision) as i32 - 70).abs() <= 2, "seven round 1 km divisions");
+        assert!((width(ScaleBarFit::AdjustWidth) as i32 - 40).abs() <= 2, "four 1 km divisions, narrower than the box");
+        // Extreme grounds, every fit, divisions before zero: never past the box, never empty.
+        for ground in [1e-4, 0.37, 100.0, 1e5, 1e7] {
+            for fit in ScaleBarFit::ALL {
+                for before in [0, 2] {
+                    let bar = BarOptions { fit, divisions_before_zero: before, divisions: 10, ..BarOptions::default() };
+                    let mut pm = Pixmap::new(120, 60).unwrap();
+                    pm.fill(tiny_skia::Color::WHITE);
+                    let r = Rect::from_xywh(10.0, 0.0, 100.0, 60.0).unwrap();
+                    crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, &bar, DEFAULT_COLORS, 1.0, false));
+                    let (a, b) = marked_span(&pm, 37).unwrap_or((0, 0));
+                    assert!(b > a && b < 120, "{ground} {fit:?} {before}: {a}..{b}");
+                }
+            }
         }
     }
 
@@ -8251,10 +8461,7 @@ Elaboração: RustGIS",
             let mut pm = Pixmap::new(320, 60).unwrap();
             pm.fill(tiny_skia::Color::WHITE);
             let r = Rect::from_xywh(0.0, 0.0, width, 60.0).unwrap();
-            let colors = (Rgba::rgb(0x22, 0x22, 0x22), Rgba::rgb(0xFF, 0xFF, 0xFF));
-            crate::canvas::with_canvas(&mut pm, |c| {
-                scale_bar(c, r, ground, (ScaleUnits::Auto, 4, ScaleBarStyle::Alternating), colors, 1.0, true)
-            });
+            crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, &BarOptions::default(), DEFAULT_COLORS, 1.0, true));
             pm
         };
         // 20 km on a bar of 300 points takes two thirds of it; 10 km at 37.2 m a point, a third.
@@ -8280,9 +8487,8 @@ Elaboração: RustGIS",
         type Px = tiny_skia::PremultipliedColorU8;
         // A red colour and a blue fill.
         let colors = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
-        let bar = (ScaleUnits::Auto, 4, ScaleBarStyle::Alternating);
         let r = Rect::from_xywh(0.0, 0.0, 300.0, 60.0).unwrap();
-        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, bar, colors, 1.0, false));
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &BarOptions::default(), colors, 1.0, false));
         let count = |hit: fn(Px) -> bool, y: u32| (0..300).filter(|&x| pm.pixel(x, y).is_some_and(hit)).count();
         let y = (60.0 * 0.62) as u32;
         // Along the bar: the dark divisions in the colour, the light ones in the fill, nothing in
