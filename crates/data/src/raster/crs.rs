@@ -739,7 +739,7 @@ impl Crs {
             // bundled PROJ definition.
             Crs::Epsg(c) => match epsg_proj4(c) {
                 Some(def) => {
-                    wait_for_grids(self);
+                    wait_for_grids(GridsOf::System(self));
                     note_used(def, || format!("EPSG:{c}"));
                     let t = match epsg_transformer(c) {
                         Some(t) => t,
@@ -752,7 +752,7 @@ impl Crs {
             },
             _ => {
                 let def = self.custom_def().ok_or("an unknown custom coordinate system")?;
-                wait_for_grids(self);
+                wait_for_grids(GridsOf::System(self));
                 note_used(&def.grid_key(), || def.label.clone());
                 def.transformer().map_err(|e| format!("{}: {e}", def.label))
             }
@@ -1038,9 +1038,11 @@ impl DirectPair {
     /// The direct operation from `source` to `target`, whose transformers are `from` and `to`;
     /// `None` when either isn't computed by terrio-crs (longitude/latitude, Web Mercator), is
     /// another body's, or terrio-crs has no such operation. Notes the pair for the missing-grid
-    /// notice ([`note_used`]), as asking for a system's transformer notes the system.
+    /// notice ([`note_used`]) and, on a read that may, waits for its grids first
+    /// ([`waiting_for_grids`]), as asking for a system's transformer does for the system.
     pub(crate) fn new(source: Crs, target: Crs, from: &Transformer, to: &Transformer) -> Option<DirectPair> {
         let key = pair_key(from, to)?;
+        wait_for_grids(GridsOf::Pair(source, target));
         let built_for = grid_generation();
         let first = direct_operation(source, target, from, to)?;
         note_used(&key, || format!("{} to {}", source.label(), target.label()));
@@ -1312,9 +1314,19 @@ fn downloadable(grid: &terrio_crs::GridUse) -> bool {
         && grid.url.as_deref().is_some_and(|u| u.strip_prefix("https://cdn.proj.org/").is_some_and(|n| n == grid.name))
 }
 
-/// What waits for the datum grids a system needs ([`set_grid_waiter`]): the system, and the read
-/// it waits for (a number of this thread's own), so a read's systems share one wait.
-type GridWaiter = fn(Crs, u64);
+/// What a read waits for the datum grids of ([`wait_for_grids`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridsOf {
+    /// A system's own, to and from WGS 84 ([`missing_grids`]).
+    System(Crs),
+    /// The direct operation's from one system to another ([`missing_grids_between`]).
+    Pair(Crs, Crs),
+}
+
+/// What waits for the datum grids a system or a pair of systems needs ([`set_grid_waiter`]): what
+/// it waits for, and the read it waits for (a number of this thread's own), so a read's systems
+/// share one wait.
+type GridWaiter = fn(GridsOf, u64);
 
 fn grid_waiter() -> &'static std::sync::RwLock<Option<GridWaiter>> {
     static WAITER: std::sync::RwLock<Option<GridWaiter>> = std::sync::RwLock::new(None);
@@ -1324,8 +1336,8 @@ fn grid_waiter() -> &'static std::sync::RwLock<Option<GridWaiter>> {
 thread_local! {
     /// This thread may wait for datum grids before it transforms ([`waiting_for_grids`]).
     static MAY_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The systems this read has already waited for: each is asked about once.
-    static WAITED: std::cell::RefCell<Vec<Crs>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The systems and pairs this read has already waited for: each is asked about once.
+    static WAITED: std::cell::RefCell<Vec<GridsOf>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The read on this thread ([`waiting_for_grids`]), counted.
     static READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -1345,16 +1357,17 @@ impl Drop for MayWait {
     }
 }
 
-/// Installs what gets the datum grids a system needs before a file in it is read on a thread that
-/// may wait ([`waiting_for_grids`]): the app's download, when its user turned it on. `None` takes
+/// Installs what gets the datum grids a system needs before a file in it is read (or a conversion
+/// between two systems before it is made) on a thread that may wait ([`waiting_for_grids`]): the app's download, when its user turned it on. `None` takes
 /// it away.
 pub fn set_grid_waiter(waiter: Option<GridWaiter>) {
     *grid_waiter().write().unwrap_or_else(|e| e.into_inner()) = waiter;
 }
 
-/// Runs `f`, a read on a thread of its own (never the window's), so that a system it transforms
-/// first gets the datum grids it needs ([`set_grid_waiter`]): its features then land where those
-/// grids put them, not where the next transformation does.
+/// Runs `f`, a read on a thread of its own (never the window's), so that a system it transforms,
+/// or a pair of systems it converts between, first gets the datum grids it needs
+/// ([`set_grid_waiter`]): its features then land where those grids put them, not where the next
+/// transformation does.
 pub fn waiting_for_grids<R>(f: impl FnOnce() -> R) -> R {
     let outer = !MAY_WAIT.try_with(std::cell::Cell::get).unwrap_or(false);
     if outer {
@@ -1372,17 +1385,17 @@ pub(crate) fn not_waiting_for_grids<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Waits for the grids `crs` needs, on a thread that may ([`waiting_for_grids`]), once a read.
-fn wait_for_grids(crs: Crs) {
+/// Waits for the grids `of` needs, on a thread that may ([`waiting_for_grids`]), once a read.
+fn wait_for_grids(of: GridsOf) {
     if !MAY_WAIT.try_with(std::cell::Cell::get).unwrap_or(false) {
         return;
     }
     let first = WAITED
         .try_with(|w| {
             let mut w = w.borrow_mut();
-            let first = !w.contains(&crs);
+            let first = !w.contains(&of);
             if first {
-                w.push(crs);
+                w.push(of);
             }
             first
         })
@@ -1393,7 +1406,7 @@ fn wait_for_grids(crs: Crs) {
     let Some(waiter) = *grid_waiter().read().unwrap_or_else(|e| e.into_inner()) else { return };
     // The waiter asks for transformers itself: not again from inside it.
     let _may = MayWait::set(false);
-    waiter(crs, READ.try_with(std::cell::Cell::get).unwrap_or(0));
+    waiter(of, READ.try_with(std::cell::Cell::get).unwrap_or(0));
 }
 
 /// The middle of the area of use of `crs`: an EPSG code's own, else that of the geographic system

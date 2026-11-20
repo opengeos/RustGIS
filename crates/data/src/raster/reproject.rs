@@ -39,7 +39,8 @@ impl Crs {
     /// does. Each call asks both systems for their transformers again ([`Crs::transformer`], which
     /// keeps them for the run), so every conversion notes its systems for the missing-grid notice
     /// and waits for their grids, as asking for a transformer itself does; and the direct
-    /// operation between them, kept for the run too, which notes the pair as a system is noted.
+    /// operation between them, kept for the run too, which notes the pair and waits for its grids
+    /// as a system's are.
     pub fn to(self, other: Crs) -> Result<Reprojection, String> {
         let same = self == other;
         let of = |crs: Crs| -> Result<Option<Transformer>, String> {
