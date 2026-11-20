@@ -4135,6 +4135,11 @@ fn frame_water(map: &Map, view: &View, labels_to: &Labels) -> Option<(std::sync:
     ground.water().cloned().map(|w| (w, pending))
 }
 
+/// Whether a GPU scene's commands hold a picture drawn on the CPU.
+fn holds_picture(cmds: &[gpu_scene::DrawCmd]) -> bool {
+    cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. }))
+}
+
 /// Draws one north-up frame. `labels_to` says where its labels go: a turned or tilted view the
 /// frame stands in for places them itself (and draws their icons). `full_res_rasters` marks an
 /// export, which draws everything as it will stay: rasters at full resolution, and labels in
@@ -4482,8 +4487,9 @@ fn render_frame(
         if cancel::requested() {
             break;
         }
-        // What is drawn so far already leaves a picture (see `pictureless`).
-        if pictureless && cpu_dirty {
+        // What is drawn so far already leaves a picture, waiting or in the scene (see
+        // `pictureless`).
+        if pictureless && (cpu_dirty || holds_picture(&cmds)) {
             return None;
         }
         if let Some(id) = below.take() {
@@ -5780,8 +5786,8 @@ fn render_frame(
     }
     pm.layer(None);
     // A frame stopped part-way (see `cancel`) is no frame: its tiles, labels and effects aren't
-    // worth working out.
-    if cancel::requested() {
+    // worth working out. Nor is one the last layer left a picture in (see `pictureless`).
+    if cancel::requested() || (pictureless && (cpu_dirty || holds_picture(&cmds))) {
         return None;
     }
     if let Some(id) = below {
@@ -9276,7 +9282,7 @@ mod tests {
         }
         let dense = m.add_dataset(d);
         // Added last, so on top: drawn after the dense layer.
-        let sparse = square_layer(&mut m, "sparse", 1.0, 0.2, 0.4);
+        square_layer(&mut m, "sparse", 1.0, 0.2, 0.4);
         let at = lonlat_to_merc(Coord::new(1.35, 0.5));
         for (bearing, pitch) in [(30.0, 0.0), (0.0, 50.0), (20.0, 60.0)] {
             let camera = Camera { center: at, res: 1000.0, bearing, pitch };
@@ -9300,7 +9306,32 @@ mod tests {
             assert!(MESHED.with(|m| m.borrow().iter().any(|(n, _)| n == "sparse")));
             m.layer_mut(dense).expect("dense").visible = true;
         }
-        assert!(m.layer_mut(sparse).is_some());
+    }
+
+    /// So does one with a layer drawn on the CPU for another reason: a polygon reaching too far
+    /// from its origin for f32, zoomed in all the way. The layer above it is never meshed.
+    #[test]
+    fn a_turned_or_tilted_view_stops_trying_the_gpu_after_a_layer_drawn_on_the_cpu() {
+        let mut m = Map::new("Map");
+        // The world's outline is too far for f32 this far in as well: none.
+        m.basemap = rustgis_map::Basemap::Blank;
+        // About 5 km across, over a view of a few centimetres.
+        square_layer(&mut m, "far", 1.0 - 0.025, 0.5 - 0.025, 0.05);
+        square_layer(&mut m, "near", 1.0, 0.5, 1e-7);
+        let at = lonlat_to_merc(Coord::new(1.0, 0.5));
+        for (bearing, pitch) in [(30.0, 0.0), (0.0, 50.0)] {
+            let camera = Camera { center: at, res: rustgis_map::camera::MIN_RES, bearing, pitch };
+            let view = View { width: 400.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false };
+            MESHED.with(|m| m.borrow_mut().clear());
+            let Some(RenderOutput::Cpu(gpu)) = render_backend(&mut m, &view, Backend::Gpu) else {
+                panic!("turned {bearing}°, tilted {pitch}°: drawn on the CPU")
+            };
+            let meshed = MESHED.with(|m| m.borrow().clone());
+            assert!(meshed.contains(&("far".into(), false)), "turned {bearing}°, tilted {pitch}°: tried: {meshed:?}");
+            assert!(!meshed.iter().any(|(n, _)| n == "near"), "turned {bearing}°, tilted {pitch}°: went on: {meshed:?}");
+            let cpu = render(&mut m, &view).expect("cpu");
+            assert!(gpu.pixmap.data() == cpu.pixmap.data(), "turned {bearing}°, tilted {pitch}°: as the CPU draws it");
+        }
     }
 
     #[test]
