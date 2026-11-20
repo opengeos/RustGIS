@@ -2447,7 +2447,7 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
             .font(egui::TextStyle::Monospace)
     })
     .labelled_by(input_label.id);
-    let fields = app.session.map().layer_by_name(&app.dialogs.layer).map(|l| l.dataset.fields.as_slice()).unwrap_or_default();
+    let fields = ds.map(|d| d.fields.as_slice()).unwrap_or_default();
     field_chips(ui, fields, &mut app.dialogs.text);
     // Live validation, once no suggestion is offered: a word still being chosen isn't an error yet.
     let offering = crate::exprcomplete::offering(ui, id);

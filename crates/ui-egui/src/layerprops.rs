@@ -1125,6 +1125,48 @@ mod tests {
         assert_eq!(query_box(&h), "", "the next Escape drops it");
     }
 
+    /// In the box of several lines, the list shows under the cursor's line and a call's signature
+    /// over its own line, not both by the box's first line.
+    #[test]
+    fn the_query_box_suggests_on_the_cursors_line() {
+        let mut h = harness(with_cities());
+        h.run();
+        open_tab(&mut h, "Query");
+        // The field buttons under the box are named too: the list's is the one not among them.
+        let chips: Vec<egui::Rect> = h.query_all_by_role_and_label(Role::Button, "name").map(|n| n.rect()).collect();
+        let listed = |h: &egui_kittest::Harness<'static, RustGisApp>| {
+            h.query_all_by_role_and_label(Role::Button, "name").map(|n| n.rect()).find(|r| !chips.contains(r)).expect("the field offered")
+        };
+        // The signature's first line: the help under it is the description.
+        let signature = |h: &mut egui_kittest::Harness<'static, RustGisApp>| {
+            h.key_press(egui::Key::ArrowLeft);
+            h.run_steps(3);
+            h.get_by_role_and_label(Role::Label, "sqrt(x)").rect()
+        };
+        h.get_by_role_and_label(Role::MultilineTextInput, "Where").click();
+        h.run();
+        h.event(egui::Event::Text("na".into()));
+        h.run();
+        let first = listed(&h);
+        h.key_press(egui::Key::Escape);
+        h.event(egui::Event::Text(" + sqrt()".into()));
+        h.run();
+        let over_first = signature(&mut h);
+        h.key_press(egui::Key::End);
+        h.event(egui::Event::Text("\n\nAND na".into()));
+        h.run();
+        let third = listed(&h);
+        assert!(third.top() > first.top() + first.height(), "the list {third:?} under the third line, not the first {first:?}");
+        h.key_press(egui::Key::Escape);
+        h.event(egui::Event::Text(" AND sqrt()".into()));
+        h.run();
+        let over_third = signature(&mut h);
+        assert!(
+            over_third.top() > over_first.top() + first.height(),
+            "the signature {over_third:?} over the third line, not the first {over_first:?}"
+        );
+    }
+
     /// The field and operator buttons add to the clause; it is kept while another tab is looked
     /// at, and dropped when another layer is chosen or the query changes from elsewhere.
     #[test]

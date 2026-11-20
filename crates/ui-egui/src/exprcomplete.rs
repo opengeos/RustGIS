@@ -180,7 +180,7 @@ pub(crate) fn expr_edit(
     ds: Option<&Dataset>,
     style: impl for<'t> FnOnce(egui::TextEdit<'t>) -> egui::TextEdit<'t>,
 ) -> egui::Response {
-    expr_box(ui, id, text, ds, |text| style(egui::TextEdit::singleline(text)))
+    expr_edit_lines(ui, id, text, ds, |text| style(egui::TextEdit::singleline(text)))
 }
 
 /// A box of several lines for an expression, as [`expr_edit`] is one of a line: `build` makes the
@@ -189,17 +189,6 @@ pub(crate) fn expr_edit(
 /// stays in view. While the list is open, Enter and Tab take its item, not a new line or the
 /// dialog's button, and Escape closes it, not the dialog or the box.
 pub(crate) fn expr_edit_lines(
-    ui: &mut Ui,
-    id: Id,
-    text: &mut String,
-    ds: Option<&Dataset>,
-    build: impl for<'t> FnOnce(&'t mut String) -> egui::TextEdit<'t>,
-) -> egui::Response {
-    expr_box(ui, id, text, ds, build)
-}
-
-/// The box of [`expr_edit`] and [`expr_edit_lines`], made by `build`.
-fn expr_box(
     ui: &mut Ui,
     id: Id,
     text: &mut String,
