@@ -524,6 +524,17 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, stack: Sta
     patch_sized(p, r, s, g, None, stack);
 }
 
+/// The one scale layer `l`'s size rows `sized` share, so the largest symbol, or its marks with
+/// their offsets, fills a patch's box (14 points) and the rows keep comparing.
+fn size_rows_scale(l: &Layer, sized: &[LegendEntry]) -> f32 {
+    let across = |e: &LegendEntry| {
+        let marks = Stack::of(l, &e.strokes, &e.fills).strokes;
+        if marks.is_empty() { e.symbol.size } else { 2.0 * marks_reach(marks) }
+    };
+    let top = sized.iter().map(across).fold(0.0, f32::max);
+    if top > 14.0 { 14.0 / top } else { 1.0 }
+}
+
 /// [`patch`], its point scaled by `k` for rows whose sizes compare (size legends), else drawn
 /// between 4 and 14 points across. A stack is drawn by the editors' previews, at the row's size
 /// and cut to `r`.
@@ -2185,9 +2196,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
         // At most 40 classes, then the size rows the legend ends with.
         let sizes = l.with_size_legend(Vec::new()).len().min(vector_legend.len());
         let (classes, sized) = vector_legend.split_at(vector_legend.len() - sizes);
-        // The size rows share one scale, so the patch's box keeps them apart.
-        let top = sized.iter().map(|e| e.symbol.size).fold(0.0, f32::max);
-        let k = if top > 14.0 { 14.0 / top } else { 1.0 };
+        let k = size_rows_scale(l, sized);
         for (e, scale) in classes.iter().take(40).map(|e| (e, None)).chain(sized.iter().map(|e| (e, Some(k)))) {
             let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &e.label));
@@ -7801,6 +7810,18 @@ mod tests {
         };
         assert_eq!(across(None), Some(10.0), "the mark as large as the map draws it");
         assert_eq!(across(Some(0.5)), Some(5.0), "a size row's at its scale");
+
+        // Size rows share the scale that fits the largest: its symbol, or its marks when larger.
+        let cities = map.layer_by_name("Cities").unwrap();
+        let row = |size: f32, mark: f32| LegendEntry {
+            label: String::new(),
+            symbol: Symbol { size, ..symbol("Cities") },
+            strokes: vec![LineStroke { markers: Some(LineMarkers { size: mark, ..LineMarkers::default() }), ..LineStroke::default() }],
+            fills: Vec::new(),
+            fallback: false,
+        };
+        assert_eq!(size_rows_scale(cities, &[row(10.0, 4.0), row(20.0, 7.0)]), 1.0, "marks that fit as drawn");
+        assert_eq!(size_rows_scale(cities, &[row(10.0, 14.0), row(20.0, 28.0)]), 0.5, "the largest marks, not the symbol");
     }
 
     /// The stroke and fill editors send an image back with every change, so it is kept; one that

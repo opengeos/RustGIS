@@ -3076,6 +3076,8 @@ fn stacked_swatch(
         view: &view,
         ppp: ppp * k,
         wireframe: false,
+        // (The swatch's own view: the stroke and fill paths don't cull today, and one that does
+        // still keeps the swatch, where an empty extent would drop it.)
         cull: crate::cull_extent(&view, crate::CULL_MARGIN),
         globe: None,
         sprites: Default::default(),
