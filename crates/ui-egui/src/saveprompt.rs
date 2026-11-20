@@ -201,7 +201,12 @@ enum Answer {
 
 /// The desktop returns from Save after writing. A phone's pending save keeps the continuation.
 fn save_then(app: &mut RustGisApp, what: Discard) {
-    if app.run("ui.save", Value::Null).is_err() {
+    if let Err(error) = app.run("ui.save", Value::Null) {
+        // A phone's native save can fail before any picker shows, and nothing else says so; the
+        // desktop's save reports its own failures.
+        if app.services.save_project.is_some() {
+            app.session.notify(error, true);
+        }
         return;
     }
     if let Some(pending) = &mut app.save_prompt.pending {
@@ -407,6 +412,23 @@ mod tests {
         }
         assert!(!h.state().session.dirty());
         assert_eq!(h.state().session.project.name, "Untitled");
+    }
+
+    /// A phone save refused before its picker shows (here, one already waiting) is said, and the
+    /// project stays as it was.
+    #[test]
+    fn native_project_save_refused_before_the_picker_is_said() {
+        let mut h = launch();
+        h.state_mut().services.open_async = Some(Box::new(|_| {}));
+        h.state_mut().services.save_project = Some(Box::new(|_, _| Err("No picker".into())));
+        edit(&mut h, "Edited");
+        h.state_mut().run_by_user("project.new", Value::Null).unwrap();
+        frames(&mut h, 2);
+        let mark = h.state().session.notice_mark();
+        click(&mut h, "Save");
+        let app = h.state();
+        assert!(!waiting(app) && app.session.dirty() && app.session.map().name == "Edited");
+        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("No picker")), "the failure is said");
     }
 
     /// A direct Save As writes the submitted state. Any edit after submission is still unsaved.

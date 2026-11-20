@@ -9,21 +9,26 @@ use std::path::PathBuf;
 pub struct SaveSnapshot {
     project: u64,
     state: u64,
+    unsaved_marks: u64,
 }
 
 impl crate::Session {
     /// Captures which project and undo state the native saver was given.
     pub fn save_snapshot(&self) -> SaveSnapshot {
-        SaveSnapshot { project: self.file_identity, state: self.state() }
+        SaveSnapshot { project: self.file_identity, state: self.state(), unsaved_marks: self.unsaved_marks }
     }
 
     /// Records a completed write if it belongs to the open project. Newer edits stay dirty,
-    /// and Undo can return to the snapshot that was written.
+    /// and Undo can return to the snapshot that was written. A change outside undo made while
+    /// the file was written (such as an offline area added) isn't in it: the project stays
+    /// unsaved whatever undo does.
     pub fn mark_snapshot_saved(&mut self, snapshot: SaveSnapshot) -> bool {
         if self.file_identity != snapshot.project {
             return false;
         }
-        self.saved = Some(snapshot.state);
+        if self.unsaved_marks == snapshot.unsaved_marks {
+            self.saved = Some(snapshot.state);
+        }
         true
     }
 }
@@ -177,6 +182,30 @@ pub trait Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A write that finishes after an undoable edit leaves that edit unsaved, and Undo back to
+    /// the written state is clean; one that finishes after a change outside undo leaves the
+    /// project unsaved whatever undo does.
+    #[test]
+    fn a_finished_save_counts_only_what_it_wrote() {
+        use crate::{Project, Session};
+        use serde_json::json;
+
+        let mut s = Session::new(Project::default());
+        s.run("map.rename", &json!({"name": "Written"})).unwrap();
+        let written = s.save_snapshot();
+        s.run("map.rename", &json!({"name": "Later"})).unwrap();
+        assert!(s.mark_snapshot_saved(written));
+        assert!(s.dirty());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(!s.dirty());
+
+        s.run("map.rename", &json!({"name": "Written again"})).unwrap();
+        let written = s.save_snapshot();
+        s.mark_unsaved();
+        assert!(s.mark_snapshot_saved(written));
+        assert!(s.dirty());
+    }
 
     #[test]
     fn events_are_read_from_their_lines() {
