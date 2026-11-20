@@ -589,6 +589,14 @@ fn a_held_layers_offline_edits_sync_alike() {
 fn a_web_scene_leaves_out_what_it_cannot_place() {
     let mut s = session(UTM);
     let dir = Dir::new("unplaced");
+    let left_out = "left out of the scene: a place can't be given in longitude/latitude";
+    // Every place converts: nothing is left out, nor said to be.
+    let mark = s.notice_mark();
+    let clean = dir.path().join("clean.gltf");
+    s.run("share.webScene", &json!({"path": clean.display().to_string()})).unwrap();
+    assert!(clean.exists());
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!said.iter().any(|n| n.contains(left_out)), "{said:?}");
     // Far beyond any place UTM 32N holds.
     s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap().dataset.push(Some(Geometry::Point(Coord::new(1e12, 1e12))), vec![]);
     let mark = s.notice_mark();

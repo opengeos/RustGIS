@@ -843,6 +843,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             // so edits made to the source meanwhile aren't overwritten by stale copies.
             let base: std::collections::HashMap<u64, &rustgis_data::Feature> =
                 baseline.as_ref().map(|b| b.features.iter().map(|f| (f.id, f)).collect()).unwrap_or_default();
+            // The features this sync writes, by their ids in the source: only these are converted
+            // back to a held source's system.
+            let mut written = std::collections::HashSet::new();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.
             let before = sl.dataset.features.len();
             sl.dataset.features.retain(|x| {
@@ -855,21 +858,23 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             });
             deleted += before - sl.dataset.features.len();
             for f in &ol_ds.features {
-                if had.contains(&f.id) {
-                    let changed_offline = base.get(&f.id).is_none_or(|b| *b != f);
-                    match sl.dataset.features.iter_mut().find(|x| x.id == f.id) {
+                let fid = f.id;
+                if had.contains(&fid) {
+                    let changed_offline = base.get(&fid).is_none_or(|b| *b != f);
+                    match sl.dataset.features.iter_mut().find(|x| x.id == fid) {
                         Some(x) if changed_offline && x != f => {
-                            if base.get(&f.id).is_some_and(|b| *b != x) {
-                                conflicts.push(tag(&sl.name, f.id));
+                            if base.get(&fid).is_some_and(|b| *b != x) {
+                                conflicts.push(tag(&sl.name, fid));
                             }
                             *x = f.clone();
+                            written.insert(fid);
                             updated += 1;
                         }
                         // Changed offline but deleted from the source meanwhile: left deleted, and
                         // reported.
                         None if changed_offline => {
                             skipped += 1;
-                            dropped.push(tag(&sl.name, f.id));
+                            dropped.push(tag(&sl.name, fid));
                         }
                         _ => {}
                     }
@@ -884,13 +889,16 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                         f.id
                     };
                     sl.dataset.features.push(rustgis_data::Feature { id, ..f.clone() });
+                    written.insert(id);
                     added += 1;
                 }
             }
             if let Some(own) = held {
-                // Its own coordinates back while the merge is converted (and kept, should that fail).
+                // Its own coordinates back while the merge is converted (and kept, should that fail):
+                // the features it left as they were stay as stored, only those it wrote are converted.
                 let merged = std::mem::replace(&mut sl.dataset, own);
-                sl.dataset = sl.dataset.results_from_lonlat(merged).map_err(|e| format!("cannot sync layer '{}': {e}", ol.name))?;
+                sl.dataset =
+                    sl.dataset.merged_from_lonlat(merged, &written).map_err(|e| format!("cannot sync layer '{}': {e}", ol.name))?;
             }
             sl.selection.clear();
             sl.touch_geometry();

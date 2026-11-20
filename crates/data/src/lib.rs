@@ -1036,6 +1036,52 @@ impl Dataset {
         Ok(results)
     }
 
+    /// `merged`, its features in longitude/latitude as [`Dataset::in_lonlat`] gives them with some
+    /// updated, added or left out (an offline area's sync), in its own coordinates: a feature whose
+    /// id isn't in `changed` is taken as it holds it, not converted back; a changed one is written
+    /// back as [`Dataset::results_from_lonlat`] writes it, holding only its own places near the
+    /// changes, so the search is as large as the changes, not the layer. As it is while its
+    /// coordinates are longitude/latitude, as every dataset's are today.
+    pub fn merged_from_lonlat(
+        &self,
+        mut merged: Dataset,
+        changed: &std::collections::HashSet<u64>,
+    ) -> std::result::Result<Dataset, String> {
+        if self.edits_in_lonlat() {
+            return Ok(merged);
+        }
+        let own: std::collections::HashMap<u64, &Feature> = self.features.iter().map(|f| (f.id, f)).collect();
+        let is_changed = |id: u64| changed.contains(&id) || !own.contains_key(&id);
+        let edits: Vec<&Geometry> = merged.features.iter().filter(|f| is_changed(f.id)).filter_map(|f| f.geometry.as_ref()).collect();
+        let mut held = HeldPlaces::default();
+        if !edits.is_empty() {
+            let mut near = Extent::EMPTY;
+            for g in &edits {
+                g.for_each_coord(|c| near.expand(c));
+            }
+            let mut within = self.extent_from_lonlat(&near);
+            // More than the box: it is converted from samples along its edges, and a projected
+            // edge bulges between them (under a metre for a degree in UTM).
+            let pad = 0.01 * (within.width() + within.height()) + 1.0;
+            within = Extent::new(within.min_x - pad, within.min_y - pad, within.max_x + pad, within.max_y + pad);
+            held.want_only(&edits);
+            for g in self.features.iter().filter_map(|f| f.geometry.as_ref()) {
+                self.hold_places(g, Some(&within), &mut held);
+            }
+        }
+        for f in &mut merged.features {
+            if is_changed(f.id) {
+                if let Some(g) = f.geometry.take() {
+                    f.geometry = Some(self.edit_from_lonlat(g, &held).map_err(|e| format!("{}: feature {}: {e}", self.name, f.id))?);
+                }
+            } else if let Some(o) = own.get(&f.id) {
+                f.geometry = o.geometry.clone();
+            }
+        }
+        merged.held_in = self.held_in;
+        Ok(merged)
+    }
+
     /// Pushes a feature with the next id, padding/truncating attributes to the schema.
     pub fn push(&mut self, geometry: Option<Geometry>, mut attrs: Vec<Value>) {
         attrs.resize(self.fields.len(), Value::Null);
@@ -1232,6 +1278,41 @@ mod tests {
         window.windowed = true;
         assert!(window.hold_in(utm).is_err());
         assert_eq!(window.coord_crs(), raster::Crs::LonLat);
+    }
+
+    /// A merge in longitude/latitude written back to a held dataset: what it left as it was stays
+    /// as stored, a changed feature keeps the places it didn't move, and only a moved or new place
+    /// is converted.
+    #[test]
+    fn a_merge_converts_back_only_what_it_changed() {
+        let utm = raster::Crs::Epsg(32632);
+        let mut ds = Dataset::new("held", GeometryType::Point, vec![Field::new("NAME", FieldType::Text)]);
+        for (i, x) in [11.1, 11.3, 11.5].into_iter().enumerate() {
+            ds.push(Some(Geometry::Point(Coord::new(x, 48.7 + 0.01 * i as f64))), vec![Value::Text(format!("p{i}"))]);
+        }
+        ds.hold_in(utm).unwrap();
+        let mut merged = ds.in_lonlat().unwrap().into_owned();
+        let mut rows: Vec<Feature> = merged.features.iter().cloned().collect();
+        let ids: Vec<u64> = rows.iter().map(|f| f.id).collect();
+        rows[1].attrs[0] = Value::Text("renamed".into());
+        let Some(Geometry::Point(moved)) = &mut rows[2].geometry else { panic!("a point") };
+        moved.y += 0.001;
+        let moved = *moved;
+        let new = Coord::new(11.4, 48.75);
+        rows.push(Feature { id: 99, geometry: Some(Geometry::Point(new)), ..rows[0].clone() });
+        merged.features = rows.into();
+        let changed = std::collections::HashSet::from([ids[1], ids[2], 99]);
+        let back = ds.merged_from_lonlat(merged, &changed).unwrap();
+        assert_eq!(back.coord_crs(), utm);
+        let to = utm.transformer().unwrap();
+        let stored: Vec<_> = ds.features.iter().map(|f| f.geometry.clone()).collect();
+        let got: Vec<_> = back.features.iter().map(|f| f.geometry.clone()).collect();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0], stored[0]);
+        assert_eq!(got[1], stored[1]);
+        assert_eq!(back.features.get(1).unwrap().attrs[0], Value::Text("renamed".into()));
+        assert_eq!(got[2], Some(Geometry::Point(to.from_lonlat(moved).unwrap())));
+        assert_eq!(got[3], Some(Geometry::Point(to.from_lonlat(new).unwrap())));
     }
 
     /// An export in Web Mercator counts the places past where it ends by their latitude, from the
