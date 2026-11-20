@@ -401,7 +401,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         map.layers.retain(|l| {
             if copied.contains(&l.id) {
                 losses.push(format!(
-                    "{}: {} feature(s) in the offline area were left out because the field package would be too large",
+                    "{}: {} feature(s) in the offline area were left out because the field package would be too large: make the offline area smaller, or filter the layer, then package again",
                     l.name,
                     l.dataset.features.len()
                 ));
@@ -471,7 +471,8 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             // Only a rename and directory sync run on the window thread. Cancel still
             // applies until the rename, including when the worker has finished staging.
             {
-                let _probe = rustgis_data::progress::install(control.map(|c| c as std::sync::Arc<dyn rustgis_data::progress::Probe>));
+                // Cancel and the live authority check both apply until the rename.
+                let _probe = rustgis_analysis::control::install_progress(control);
                 not_the_project(s, file.destination())?;
                 file.commit().map_err(|e| format!("{path}: {e}"))?;
             }
@@ -621,17 +622,20 @@ fn copy_stream(
     }
     if !fits {
         losses.push(format!(
-            "{}: {inside} feature(s) in the offline area were left out because the streamed layer exceeded the field package budget",
+            "{}: {inside} feature(s) in the offline area were left out because the streamed layer exceeded the field package budget: make the offline area smaller, or filter the layer, then package again",
             layer.name
         ));
         return Ok(None);
     }
-    // An indexed read can skip the rest of the file outright. Only report a total outside the
-    // area when the source knows its count and the traversal didn't encounter unreadable rows.
-    let outside = info.count.filter(|_| unread == 0).map_or(outside as u64, |total| total.saturating_sub(inside as u64));
+    // An indexed read can skip the rest of the file outright, so the total outside the area comes
+    // from the source's count. With unreadable rows that count may or may not include them, so
+    // what remains is a lower bound, said as one.
+    let outside =
+        info.count.map_or(outside as u64, |total| total.saturating_sub(inside as u64).saturating_sub(unread as u64).max(outside as u64));
     if outside > 0 {
+        let at_least = if unread > 0 { "at least " } else { "" };
         losses.push(format!(
-            "{}: {outside} feature(s) outside the offline area's extent, or without a shape, stayed out of the field package",
+            "{}: {at_least}{outside} feature(s) outside the offline area's extent, or without a shape, stayed out of the field package",
             layer.name
         ));
     }
