@@ -9490,6 +9490,8 @@ mod tests {
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         assert_eq!(scene.clear, mesh::premul(cream));
         assert_eq!(tilt_sky(&m), (cream, cream), "no white mixed in");
+        m.paper = Some(Rgba::new(0xF1, 0xEA, 0xDF, 0));
+        assert_eq!((m.palette().0, tilt_sky(&m).0), (cream, cream), "a file's translucent paper is drawn opaque");
         m.paper = None;
         let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
         assert_eq!(m.palette().0, white, "without a colour, blank stays white");

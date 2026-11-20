@@ -15496,7 +15496,7 @@ fn a_blank_basemap_takes_a_paper_colour() {
     assert_eq!(s.map().palette().0, cream);
     s.run("map.basemap", &json!({"name": "blank"})).unwrap();
     assert_eq!(s.map().paper, Some(cream), "no color keeps it");
-    for bad in [json!("#F1EADF80"), json!("F1EADF"), json!("#F1EA"), json!("cream"), json!(3)] {
+    for bad in [json!("#F1EADF80"), json!("F1EADF"), json!("#F1EA"), json!("#+F0000"), json!("cream"), json!(3)] {
         let e = s.run("map.basemap", &json!({"name": "blank", "color": bad})).unwrap_err();
         assert!(e.contains("#RRGGBB"), "{e}");
         assert_eq!(s.map().paper, Some(cream), "a refused colour changes nothing");

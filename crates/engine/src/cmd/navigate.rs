@@ -929,7 +929,13 @@ fn basemap(s: &mut Session, p: &Value) -> CmdResult {
     let paper = match p.get("color") {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(c)) => match c.trim().strip_prefix('#').filter(|h| h.len() == 6).and_then(rustgis_map::Rgba::from_hex) {
+        // Six hex digits: `from_hex` alone would take a sign in a pair ("#+F0000").
+        Some(Value::String(c)) => match c
+            .trim()
+            .strip_prefix('#')
+            .filter(|h| h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+            .and_then(rustgis_map::Rgba::from_hex)
+        {
             Some(rgba) => Some(Some(rgba)),
             None => return Err(format!("color must be \"#RRGGBB\" (opaque), not '{c}'")),
         },
@@ -946,7 +952,7 @@ fn basemap(s: &mut Session, p: &Value) -> CmdResult {
         m.paper = None;
         if paper.is_some_and(|c| c.is_some()) {
             let warning = format!("color is for the blank basemap only: {} keeps its own colours", basemap.label());
-            s.warn(warning.clone());
+            s.warn(&warning);
             return Ok(json!({"warning": warning}));
         }
     } else if let Some(paper) = paper {

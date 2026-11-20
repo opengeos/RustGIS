@@ -120,7 +120,21 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-element-wrap", command_uses_element_wrap),
     ("layout-chart-data", command_uses_chart_data),
     ("layout-chart-look", command_uses_chart_look),
+    ("blank-paper", command_uses_blank_paper),
 ];
+
+/// A `map.basemap` command that gives the blank basemap a paper colour (#2532): an older reader
+/// ignores `color` and draws white. White, `null` or another basemap leaves no paper to keep.
+fn command_uses_blank_paper(id: &str, params: &Value) -> bool {
+    match id {
+        "map.basemap" => {
+            params.get("name").and_then(Value::as_str).is_some_and(|n| n.trim().eq_ignore_ascii_case("blank"))
+                && params.get("color").and_then(Value::as_str).is_some_and(|c| !c.trim().eq_ignore_ascii_case("#FFFFFF"))
+        }
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_blank_paper)),
+        _ => false,
+    }
+}
 
 /// A layout command that gives an element a background: an older reader warns that it ignores
 /// the key and makes the element without one. `null` only takes a background away, which an
@@ -1095,6 +1109,35 @@ mod tests {
         let clean = serde_json::to_value(&p).unwrap();
         assert!(clean.get("requires").is_none());
         assert!(clean["maps"][0].get("paper").is_none());
+        // A saved command that gives the blank basemap a colour needs it too; white, null or
+        // another basemap doesn't.
+        for (params, required) in [
+            (json!({"name": "blank", "color": "#F1EADF"}), true),
+            (json!({"name": "Blank", "color": "#101820"}), true),
+            (json!({"name": "blank", "color": "#ffffff"}), false),
+            (json!({"name": "blank", "color": null}), false),
+            (json!({"name": "blank"}), false),
+            (json!({"name": "paper", "color": "#F1EADF"}), false),
+        ] {
+            let script = format!("# Paper\nmap.basemap= {params}");
+            for (field, value) in [
+                ("tasks", json!([{"name": "Task", "steps": [{"title": "Paper", "command": "map.basemap", "params": params}]}])),
+                (
+                    "tasks",
+                    json!([{"name": "Script", "steps": [{"title": "Paper", "command": "script.run", "params": {"script": script}}]}]),
+                ),
+                ("notebooks", json!([{"name": "Notebook", "cells": [{"kind": "code", "source": script}]}])),
+            ] {
+                let mut document = clean.clone();
+                document[field] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                if required {
+                    assert_eq!(saved["requires"], json!(["blank-paper"]), "{field} {params}");
+                } else {
+                    assert!(saved.get("requires").is_none(), "{field} {params}");
+                }
+            }
+        }
         let mut unknown = saved;
         unknown["requires"] = json!(["blank-paper", "future-paper"]);
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-paper"));

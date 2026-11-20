@@ -2989,9 +2989,10 @@ impl Map {
         (grey, grey, Rgba::new(0, 0, 0, 0), grat)
     }
 
-    /// The blank basemap's paper colour, when the map is on the blank basemap and has one.
+    /// The blank basemap's paper colour, when the map is on the blank basemap and has one: always
+    /// opaque, a file's translucent one included (the paper is the backdrop: nothing shows through).
     pub fn blank_paper(&self) -> Option<Rgba> {
-        self.paper.filter(|_| self.basemap == Basemap::Blank)
+        self.paper.filter(|_| self.basemap == Basemap::Blank).map(|c| Rgba::rgb(c.r(), c.g(), c.b()))
     }
 
     /// Whether the built-in world outline is drawn: where the palette's land and water differ, so
