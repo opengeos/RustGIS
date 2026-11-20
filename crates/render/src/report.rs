@@ -89,8 +89,8 @@ pub fn wrap_with(s: &str, w: f64, width: impl Fn(&str) -> f64) -> Vec<String> {
 /// [`wrap_with`] that stops once it has `max` lines and one more with text, which tells a caller
 /// the text goes on (a layout text draws 200 and says it is cut past them, #2346): lines with
 /// nothing but spaces (no-break ones too) from `max` on are left out, so the one past it always
-/// has ink. Its work is bounded by the lines it returns, and every word in them is broken to the
-/// width.
+/// has ink. Its measures are bounded by the lines it returns (past `max`, the blank start of a
+/// word is skipped unmeasured), and every word in them is broken to the width.
 pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> Vec<String> {
     let past = |out: &[String]| out.len() > max;
     let keep = |out: &mut Vec<String>, line: String| {
@@ -110,6 +110,10 @@ pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> V
             // costs a few measures of about its own length, not of the rest of the word (a long
             // word in a box narrower than a few letters stays cheap, #2346).
             let mut word = word;
+            // Past the limit only ink is kept, so a blank start is skipped without measuring it.
+            if out.len() >= max {
+                word = word.trim_start();
+            }
             while word.chars().nth(1).is_some() && !past(&out) {
                 let prefix = |k: usize| word.char_indices().nth(k).map_or(word, |(i, _)| &word[..i]);
                 let (mut fits, mut probe) = (1, 2);
@@ -140,6 +144,12 @@ pub fn wrap_lines(s: &str, w: f64, width: impl Fn(&str) -> f64, max: usize) -> V
                 let piece = prefix(fits);
                 keep(&mut out, piece.to_string());
                 word = &word[piece.len()..];
+                if out.len() >= max {
+                    word = word.trim_start();
+                }
+            }
+            if word.is_empty() {
+                continue;
             }
             let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
             if !line.is_empty() && width(&next) > w {
@@ -601,6 +611,28 @@ mod tests {
         for tail in ["\n", "\n\n\n", "\n\u{a0}"] {
             let blank = format!("{}{tail}", vec!["a"; 200].join("\n"));
             assert_eq!(wrap_lines(&blank, 40.0, fit, 200).len(), 200, "nothing with text past it: {tail:?}");
+        }
+    }
+
+    /// A long run of no-break spaces past the limit is skipped, not measured piece by piece,
+    /// whether it starts past the limit or on its last line (#2346).
+    #[test]
+    fn blank_text_past_the_limit_is_not_measured() {
+        let run = "\u{a0}".repeat(1_000_000);
+        for (before, lines) in [(200, 201), (199, 201)] {
+            let measured = std::cell::Cell::new(0usize);
+            let text = format!("{}\n{run}\nZ", vec!["a"; before].join("\n"));
+            let out = wrap_lines(
+                &text,
+                40.0,
+                |t| {
+                    measured.set(measured.get() + t.chars().count());
+                    width_mm(t, 7.0, false)
+                },
+                200,
+            );
+            assert_eq!((out.len(), out.last().map(String::as_str)), (lines, Some("Z")), "{before} lines before the run");
+            assert!(measured.get() < 10_000, "{} letters measured with {before} lines before the run", measured.get());
         }
     }
 
