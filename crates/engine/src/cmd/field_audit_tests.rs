@@ -102,8 +102,8 @@ fn an_imported_offline_titled_map_is_not_taken_for_an_area_copy() {
     package(&mut home, &json!({"name": "Crew", "extent": AREA})).unwrap();
     let maps = home.project.maps.len();
     let mut other = crate::Project::default();
+    // Another project's offline copy, saved before maps carried their area's ID.
     other.maps[0].name = "Crew (offline)".into();
-    other.maps[0].offline_area_id = Some("elsewhere".into());
     home.run("map.import", &json!({"text": serde_json::to_string(&other).unwrap()})).unwrap();
     assert!(home.project.maps.iter().any(|m| m.name == "Crew (imported)" && m.offline_area_id.is_none()));
     assert!(home.notices.iter().any(|n| n.text.contains("renamed")), "{:?}", home.notices);
