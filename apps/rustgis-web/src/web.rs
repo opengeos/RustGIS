@@ -510,6 +510,11 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
             notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
             continue;
         }
+        if mark == rustgis_ui_egui::MARKER_PICK && file.size() > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as f64 {
+            let text = rustgis_ui_egui::tl!("This image is too large for a marker: at most about 1.5 MiB");
+            notes.lock().unwrap_or_else(|e| e.into_inner()).push((text.into(), true));
+            continue;
+        }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
             read.push((name, bytes));
         } else if mark.starts_with(rustgis_ui_egui::DXF_PICK) {

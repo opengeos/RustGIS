@@ -8,7 +8,6 @@
 use std::io::Read;
 
 use egui::Ui;
-use rustgis_engine::map::symbology::MAX_PICTURE_BYTES;
 use serde_json::{Value, json};
 
 use crate::RustGisApp;
@@ -53,7 +52,7 @@ impl MarkerImage {
     pub(crate) fn apply(mut self, app: &mut RustGisApp, bytes: &[u8]) -> Result<Value, String> {
         use base64::Engine;
         // The size first, so a file too large isn't decoded.
-        let b64 = (bytes.len().div_ceil(3) * 4 <= MAX_PICTURE_BYTES).then(|| base64::engine::general_purpose::STANDARD.encode(bytes));
+        let b64 = (bytes.len() <= crate::MARKER_FILE_MAX_BYTES).then(|| base64::engine::general_purpose::STANDARD.encode(bytes));
         let refused = match &b64 {
             None => Some(tl!("This image is too large for a marker: at most about 1.5 MiB")),
             Some(b64) if !rustgis_engine::render::picture_marker_readable(b64) => Some(tl!("A marker's image is a PNG or JPEG file")),
@@ -63,9 +62,13 @@ impl MarkerImage {
             app.session.notify(e, true);
             return Err(e.to_string());
         }
-        if let (Some(slot), Some(b64)) = (self.params.pointer_mut(&self.at), b64) {
-            *slot = json!(b64);
-        }
+        // A mark no longer in the list (it can't be, from the editor) runs nothing.
+        let (Some(slot), Some(b64)) = (self.params.pointer_mut(&self.at), b64) else {
+            let e = tl!("The marker to change is no longer there");
+            app.session.notify(e, true);
+            return Err(e.to_string());
+        };
+        *slot = json!(b64);
         let r = app.run(self.cmd, self.params);
         if r.is_ok() {
             crate::panes::notify_image_replaced(app, self.replaced);
@@ -81,9 +84,9 @@ pub(crate) fn entry(ui: &mut Ui, on: bool) -> bool {
 }
 
 /// Asks for the image of `marker`: the system's dialog on a computer, read at once; the browser's
-/// or the phone's `"marker"` picker elsewhere, whose file comes back marked ([`crate::MARKER_PICK`])
-/// for [`RustGisApp::open_picked`] to give to the marker. A drop or another picker's file never
-/// reaches it.
+/// or the phone's `"marker"` picker elsewhere, whose file comes back marked
+/// ([`crate::MARKER_PICK`]) for [`RustGisApp::open_picked`] to give to the marker. A drop or
+/// another picker's file never reaches it.
 pub(crate) fn pick(app: &mut RustGisApp, marker: MarkerImage) {
     if let Some(open) = &app.services.open_async {
         app.ui.pending_marker_image = Some(marker);
@@ -98,13 +101,13 @@ pub(crate) fn pick(app: &mut RustGisApp, marker: MarkerImage) {
     }
 }
 
-/// The file at `path`, read no further than one byte past [`MAX_PICTURE_BYTES`]: a file that
-/// long is longer still as base64, so [`MarkerImage::apply`] refuses it as too large, and a huge
-/// file isn't read whole to be refused.
+/// The file at `path`, read no further than one byte past [`crate::MARKER_FILE_MAX_BYTES`]:
+/// [`MarkerImage::apply`] refuses a file that long as too large, and a huge file isn't read whole
+/// to be refused.
 fn read_capped(path: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .and_then(|f| f.take(MAX_PICTURE_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .and_then(|f| f.take(crate::MARKER_FILE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes))
         .map_err(|e| crate::i18n::fmt("{path}: {error}", &[("path", path), ("error", &e.to_string())]))?;
     Ok(bytes)
 }
@@ -189,7 +192,7 @@ mod tests {
         let broken = dir.path().join("broken.png");
         std::fs::write(&broken, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
         let mut big = png();
-        big.resize(MAX_PICTURE_BYTES, 0);
+        big.resize(crate::MARKER_FILE_MAX_BYTES + 1, 0);
         let large = dir.path().join("large.png");
         std::fs::write(&large, &big).unwrap();
         let steps = app.session.undo_depth();
@@ -211,8 +214,9 @@ mod tests {
     }
 
     /// In the browser «Image…» asks the `"marker"` picker for a file and the file it gives back,
-    /// marked, becomes the marker. A dropped PNG, or another picker's, leaves the marker waiting; a marked file that isn't a PNG or JPEG is said and changes nothing; a
-    /// cancelled picker ends the wait.
+    /// marked, becomes the marker. A dropped PNG, or another picker's, leaves the marker waiting;
+    /// a marked file that isn't a PNG or JPEG is said and changes nothing; a cancelled picker ends
+    /// the wait.
     #[test]
     fn the_browsers_picture_goes_to_the_marker_that_asked() {
         let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -241,5 +245,19 @@ mod tests {
         pick(&mut app, MarkerImage::symbol(cities));
         app.open_picked(&marked(""), &[]).unwrap();
         assert!(app.ui.pending_marker_image.is_none(), "a cancelled picker ends the wait");
+    }
+
+    /// A mark the list no longer has runs nothing and says so.
+    #[test]
+    fn a_mark_no_longer_in_the_list_changes_nothing() {
+        let mut app = RustGisApp::with_sample();
+        let rivers = id(&app, "Rivers");
+        let before = layer(&app, "Rivers").line_strokes.clone();
+        let steps = app.session.undo_depth();
+        let gone = MarkerImage::in_list("layer.lineStrokes", json!({"strokes": []}), rivers, "strokes", 3, 0);
+        assert!(gone.apply(&mut app, &png()).is_err());
+        assert_eq!(layer(&app, "Rivers").line_strokes, before);
+        assert_eq!(app.session.undo_depth(), steps);
+        assert!(app.session.notices.iter().any(|n| n.error && n.text == "The marker to change is no longer there"));
     }
 }

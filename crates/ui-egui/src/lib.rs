@@ -207,6 +207,11 @@ pub const SCRIPT_PICK: &str = "\u{1}script:";
 /// marker whose «Image…» asked for it, and only a file so marked does.
 pub const MARKER_PICK: &str = "\u{1}marker:";
 
+/// The largest image file a marker takes: one whose base64 fits the engine's limit
+/// ([`rustgis_engine::map::symbology::MAX_PICTURE_BYTES`]). The browser's and the phone's shells
+/// refuse a larger one before reading it.
+pub const MARKER_FILE_MAX_BYTES: usize = rustgis_engine::map::symbology::MAX_PICTURE_BYTES / 4 * 3;
+
 /// The largest script file the Script pane's Load… reads, as the assistant's command file; the
 /// browser's shell refuses a larger one before reading it.
 pub const SCRIPT_FILE_MAX_BYTES: usize = 1024 * 1024;

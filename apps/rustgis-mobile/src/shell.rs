@@ -130,6 +130,8 @@ enum Problem {
     ShortcutTooLarge { name: String },
     /// The script file `name`, picked for the Script pane's Load…, is over `SCRIPT_FILE_MAX_BYTES`.
     ScriptTooLarge { name: String },
+    /// The image picked for a marker's «Image…» is over `MARKER_FILE_MAX_BYTES`.
+    MarkerTooLarge,
     /// The file `name` is over the size a pick reads into memory ([`PICK_MAX_BYTES`]), by
     /// itself or `together` with the files picked with it and already read.
     TooLarge { name: String, together: bool },
@@ -217,6 +219,7 @@ impl<P: Phone> App<P> {
                     i18n::fmt("{name} wasn't opened: a shortcut file is at most {limit} bytes.", &[("name", &name), ("limit", &limit)])
                 }
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
+                Problem::MarkerTooLarge => tl!("This image is too large for a marker: at most about 1.5 MiB").to_string(),
                 Problem::TooLarge { name, together } => {
                     let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {
@@ -366,6 +369,8 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
         } else if mark == rustgis_ui_egui::SCRIPT_PICK && size > rustgis_ui_egui::SCRIPT_FILE_MAX_BYTES as u64 {
             // Refused before it is read, as the pane would refuse it after.
             say(Problem::ScriptTooLarge { name });
+        } else if mark == rustgis_ui_egui::MARKER_PICK && size > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as u64 {
+            say(Problem::MarkerTooLarge);
         } else if held.saturating_add(size) > max {
             // Refused before it is read: no more than the cap is held in memory at once, in
             // one file or in the files picked together.
@@ -799,5 +804,22 @@ mod tests {
         assert_eq!(names, [format!("{}small.txt", rustgis_ui_egui::SCRIPT_PICK)]);
         // The copies are gone, read or not, and their folder with them (`remove_copy`).
         assert!(!dir.exists());
+    }
+    /// An image picked for a marker over the marker's limit is refused before it is read; one
+    /// within it reaches the inbox marked for the marker.
+    #[test]
+    fn a_marker_image_over_the_limit_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("rustgis-mobile-marker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (big, small) = (dir.join("big.png"), dir.join("small.png"));
+        std::fs::write(&big, vec![0; rustgis_ui_egui::MARKER_FILE_MAX_BYTES + 1]).unwrap();
+        std::fs::write(&small, b"png").unwrap();
+        let (inbox, problems) = (Inbox::default(), Problems::default());
+        let files = vec![("big.png".to_string(), big), ("small.png".to_string(), small)];
+        read_batch("marker", files, &inbox, &problems, &mut 0);
+        assert!(matches!(problems.lock().unwrap().as_slice(), [Problem::MarkerTooLarge]));
+        let names: Vec<String> = inbox.lock().unwrap().iter().map(|(n, _)| n.clone()).collect();
+        assert_eq!(names, [format!("{}small.png", rustgis_ui_egui::MARKER_PICK)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
