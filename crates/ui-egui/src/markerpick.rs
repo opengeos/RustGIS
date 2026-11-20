@@ -81,18 +81,13 @@ pub(crate) fn entry(ui: &mut Ui, on: bool) -> bool {
 }
 
 /// Asks for the image of `marker`: the system's dialog on a computer, read at once; the browser's
-/// or the phone's picker elsewhere, whose file [`RustGisApp::open_bytes`] gives to the marker.
+/// or the phone's `"marker"` picker elsewhere, whose file comes back marked ([`crate::MARKER_PICK`])
+/// for [`RustGisApp::open_picked`] to give to the marker. A drop or another picker's file never
+/// reaches it.
 pub(crate) fn pick(app: &mut RustGisApp, marker: MarkerImage) {
     if let Some(open) = &app.services.open_async {
-        // A picker cancelled earlier mustn't claim this file.
-        app.ui.pending_layout_picture = false;
-        app.ui.pending_picture = None;
-        app.ui.pending_open = None;
         app.ui.pending_marker_image = Some(marker);
-        if let Some(snapshot) = &app.services.open_options {
-            snapshot(&app.ui);
-        }
-        open("picture");
+        open("marker");
     } else if let Some(path) = crate::dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
         match read_capped(&path) {
             Ok(bytes) => {
@@ -215,9 +210,9 @@ mod tests {
         assert_eq!(app.session.undo_depth(), steps);
     }
 
-    /// In the browser «Image…» asks the picker for a picture and the file it gives becomes the
-    /// marker; another picker started after it takes its file, and a file that isn't a picture
-    /// leaves the marker waiting.
+    /// In the browser «Image…» asks the `"marker"` picker for a file and the file it gives back,
+    /// marked, becomes the marker. A dropped PNG, or another picker's, leaves the marker waiting; a marked file that isn't a PNG or JPEG is said and changes nothing; a
+    /// cancelled picker ends the wait.
     #[test]
     fn the_browsers_picture_goes_to_the_marker_that_asked() {
         let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -225,18 +220,26 @@ mod tests {
         let ask = asked.clone();
         app.services.open_async = Some(Box::new(move |purpose| ask.lock().unwrap().push(purpose.to_string())));
         let cities = id(&app, "Cities");
+        let marked = |name: &str| format!("{}{name}", crate::MARKER_PICK);
+        app.run("layer.marker", json!({"layer": "Cities", "shape": "square"})).unwrap();
 
         pick(&mut app, MarkerImage::symbol(cities));
-        assert_eq!(*asked.lock().unwrap(), ["picture"]);
+        assert_eq!(*asked.lock().unwrap(), ["marker"]);
+        let _ = app.open_picked("dropped.png", &png());
+        assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square, "a drop isn't the marker's");
         assert!(app.ui.pending_marker_image.is_some());
-        app.open_bytes("icon.png", &png()).unwrap();
+
+        assert!(app.open_picked(&marked("icon.gif"), b"GIF89a\x01\x00\x01\x00").is_err());
+        assert!(app.session.notices.iter().any(|n| n.error && n.text == "A marker's image is a PNG or JPEG file"));
+        assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square);
+
+        pick(&mut app, MarkerImage::symbol(cities));
+        app.open_picked(&marked("icon.png"), &png()).unwrap();
         assert!(drawn(layer(&app, "Cities").renderer.base_symbol().marker));
         assert!(app.ui.pending_marker_image.is_none());
 
-        app.run("layer.marker", json!({"layer": "Cities", "shape": "square"})).unwrap();
         pick(&mut app, MarkerImage::symbol(cities));
-        let _ = app.run("ui.importLayout", Value::Null);
-        assert!(app.ui.pending_marker_image.is_none(), "the layout picker took over");
-        assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square);
+        app.open_picked(&marked(""), &[]).unwrap();
+        assert!(app.ui.pending_marker_image.is_none(), "a cancelled picker ends the wait");
     }
 }

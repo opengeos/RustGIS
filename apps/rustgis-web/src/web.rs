@@ -1304,6 +1304,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 match (purpose, tool_exts) {
                     ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
                     ("script", _) => rustgis_ui_egui::SCRIPT_PICK,
+                    ("marker", _) => rustgis_ui_egui::MARKER_PICK,
                     ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
                     ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
                     (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
@@ -1357,7 +1358,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 )
             } else if dxf.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
-            } else if purpose == "picture" {
+            } else if purpose == "picture" || purpose == "marker" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)

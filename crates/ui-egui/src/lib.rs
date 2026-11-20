@@ -203,6 +203,10 @@ pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
 /// Script pane's Load….
 pub const SCRIPT_PICK: &str = "\u{1}script:";
 
+/// Starts the name of an image the shell's `"marker"` picker put in the inbox: it goes to the
+/// marker whose «Image…» asked for it, and only a file so marked does.
+pub const MARKER_PICK: &str = "\u{1}marker:";
+
 /// The largest script file the Script pane's Load… reads, as the assistant's command file; the
 /// browser's shell refuses a larger one before reading it.
 pub const SCRIPT_FILE_MAX_BYTES: usize = 1024 * 1024;
@@ -995,7 +999,8 @@ pub struct UiState {
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
-    /// A marker whose «Image…» waits for its file (web and phone).
+    /// A marker whose «Image…» waits for its file (web and phone), which comes back marked
+    /// ([`MARKER_PICK`]).
     pub pending_marker_image: Option<MarkerImage>,
     /// The value picked under Edit › Dynamic Text (a token such as `{scale}`): the text tool's
     /// dialog starts with it. Cleared when the tool changes.
@@ -2099,8 +2104,8 @@ impl RustGisApp {
     /// Delimited Text for it, or is read with a script's options; one the tool file picker marked
     /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`];
     /// shortcut picks carry [`SHORTCUT_PICK`] and open the validated merge preview; script picks
-    /// carry [`SCRIPT_PICK`] and open in the Script pane; DXF picks
-    /// carry [`DXF_PICK`] and open Import DXF.
+    /// carry [`SCRIPT_PICK`] and open in the Script pane; marker picks carry [`MARKER_PICK`] and
+    /// become the waiting marker's image; DXF picks carry [`DXF_PICK`] and open Import DXF.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         if name.starts_with(SHORTCUT_PICK) {
             return shortcutfile::picked(self, bytes);
@@ -2108,6 +2113,13 @@ impl RustGisApp {
         if let Some(name) = name.strip_prefix(SCRIPT_PICK) {
             // An answer with no name is a cancelled picker.
             return if name.is_empty() { Ok(Value::Null) } else { analysispane::script_picked(self, name, bytes) };
+        }
+        if let Some(name) = name.strip_prefix(MARKER_PICK) {
+            // An answer with no name is a cancelled picker, which ends the wait too.
+            return match self.ui.pending_marker_image.take() {
+                Some(marker) if !name.is_empty() => marker.apply(self, bytes),
+                _ => Ok(Value::Null),
+            };
         }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);
@@ -2262,11 +2274,6 @@ impl RustGisApp {
         if self.ui.pending_picture.is_some() && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
             use base64::Engine;
             return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
-        }
-        if [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e))
-            && let Some(marker) = self.ui.pending_marker_image.take()
-        {
-            return marker.apply(self, bytes);
         }
         // A drawing asks for its coordinate system and whether its blocks are drawn first. Picker
         // and script options (`crs`, `blocks`) add it straight away, as the branch below does.
@@ -4061,7 +4068,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     // `null`: the dialog, for the file picked.
                     self.ui.pending_csv = Some(opts.unwrap_or(Value::Null));
@@ -4093,7 +4099,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     // `null`: the dialog, for the file picked.
@@ -4260,7 +4265,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     self.ui.pending_shapefile = Some(json!({"crs": text}));
@@ -4283,7 +4287,6 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     self.ui.pending_csv = None;
                     if let Some(snapshot) = &self.services.open_options {
@@ -4359,7 +4362,6 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4503,7 +4505,6 @@ impl RustGisApp {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4518,7 +4519,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = true;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -4825,7 +4825,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
-                    self.ui.pending_marker_image = None;
                     self.ui.pending_open = Some("presentation.imagePage");
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
@@ -5360,7 +5359,6 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_open = None;
-                    self.ui.pending_marker_image = None;
                     if let Some(snapshot) = &self.services.open_options {
                         snapshot(&self.ui);
                     }

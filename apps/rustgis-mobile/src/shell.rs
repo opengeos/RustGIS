@@ -51,9 +51,8 @@ type Refusals = Rc<RefCell<Vec<String>>>;
 type Asked = Rc<RefCell<crate::Requests>>;
 
 /// What the front end keeps for the picker that is up (Add Delimited Text's options, the command
-/// a picked project opens with, a picture's corners, a marker waiting for its image): a request
-/// the phone refuses while it is up resets these before it is refused, so they are put back after
-/// the frame.
+/// a picked project opens with, a picture's corners): a request the phone refuses while it is
+/// up resets these before it is refused, so they are put back after the frame.
 #[derive(Clone)]
 struct Kept {
     csv: Option<serde_json::Value>,
@@ -61,7 +60,6 @@ struct Kept {
     open: Option<&'static str>,
     picture: Option<Vec<rustgis_engine::geom::Coord>>,
     layout_picture: bool,
-    marker_image: Option<rustgis_ui_egui::MarkerImage>,
 }
 
 impl Kept {
@@ -72,7 +70,6 @@ impl Kept {
             open: ui.pending_open,
             picture: ui.pending_picture.clone(),
             layout_picture: ui.pending_layout_picture,
-            marker_image: ui.pending_marker_image.clone(),
         }
     }
 
@@ -83,7 +80,6 @@ impl Kept {
         ui.pending_open = self.open;
         ui.pending_picture = self.picture;
         ui.pending_layout_picture = self.layout_picture;
-        ui.pending_marker_image = self.marker_image;
     }
 }
 
