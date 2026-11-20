@@ -147,8 +147,8 @@ fn editor(
     if apply == Some(Apply::Clear) {
         d.open = false;
     }
-    // Not said while a word is still being chosen from the list (`pop_`, with `pop_est` offered):
-    // Check and Apply still look at it.
+    // Not said while a word is still being chosen from the list (`pop_`, with `pop_est` offered),
+    // nor what Check found for the same text: Check and Apply still look at it.
     let offering = crate::exprcomplete::offering(ui, id);
     match (&reads, &d.check) {
         (Err(_), _) if offering => {}
@@ -164,7 +164,7 @@ fn editor(
             let said = crate::i18n::fmt("Valid: {n} of {of} features match", &[("n", &n.to_string()), ("of", &of.to_string())]);
             ui.label(RichText::new(said).small().color(t.green));
         }
-        (Ok(()), Some((checked, at, Err(e)))) if *checked == text && *at == version => {
+        (Ok(()), Some((checked, at, Err(e)))) if *checked == text && *at == version && !offering => {
             ui.label(RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", e)])).small().color(t.red));
         }
         _ => {}

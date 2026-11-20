@@ -554,7 +554,7 @@ fn query(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     ui.label(RichText::new(tl!("Only the features matching this clause draw. Ctrl+Enter applies it.")).weak());
     let input_label = ui.label(RichText::new(tl!("Where")).font(semibold(12.5)));
     // Suggestions as it's typed: the fields, functions, variables and keywords (#1240). Escape with
-    // the list open closes the list, and the box keeps the focus and the clause.
+    // the list or a call's signature shown closes it, and the box keeps the focus and the clause.
     let id = key.with("box");
     let r = crate::exprcomplete::expr_edit_lines(ui, id, &mut text, Some(&l.dataset), |text| {
         egui::TextEdit::multiline(text)
