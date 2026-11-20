@@ -6132,13 +6132,15 @@ fn checked_update(input: &impl super::InputSource, p: &Value, li: usize, id: u32
                             .ok_or_else(|| format!("no numeric field '{fl}' in {}", target.name))?,
                     ),
                     // A chart moved to another layer keeps its field only if that layer has it as a
-                    // number (any field, counting); otherwise it charts the layer's first numeric field.
+                    // number (any field, counting); otherwise it charts the layer's first numeric field,
+                    // or, counting a layer without one, its first field.
                     None => match &e.kind {
                         ElementKind::Chart { field, .. } if nl.is_some() => {
                             let numeric = |f: &&rustgis_data::Field| count || f.ty.is_numeric();
                             let keep = target.dataset.field_index(field).and_then(|i| target.dataset.fields.get(i)).filter(numeric);
                             let f = keep
-                                .or_else(|| target.dataset.fields.iter().find(numeric))
+                                .or_else(|| target.dataset.fields.iter().find(|f| f.ty.is_numeric()))
+                                .or_else(|| target.dataset.fields.first().filter(|_| count))
                                 .ok_or_else(|| format!("{} has no numeric field to chart", target.name))?;
                             Some(f.name.clone())
                         }
