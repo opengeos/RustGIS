@@ -420,7 +420,7 @@ pub struct Services {
     /// Makes an HTTP request (the AI assistant's calls to its model) and puts the response, of any
     /// status, in the slot (the browser's fetch; the desktop sends it on a thread).
     pub http: Option<Box<dyn Fn(rustgis_assistant::HttpRequest, Slot<Result<rustgis_assistant::HttpResponse, rustgis_assistant::Error>>)>>,
-    /// Where autosave keeps the recovery copy of unsaved work (the desktop's recovery folder).
+    /// Where autosave keeps the recovery copy of unsaved work (the native app's recovery folder).
     /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
     /// running alongside the first, which mustn't touch its copy.
     pub recovery: Option<Box<dyn RecoveryStore>>,
@@ -2741,6 +2741,15 @@ impl RustGisApp {
                 false
             }
         }
+    }
+
+    /// Enables foreground recovery for a phone. The store must be in the app's private storage
+    /// and must be installed before the first frame, so it can offer the last run's copy.
+    pub fn with_edit_recovery(mut self, store: Box<dyn RecoveryStore>) -> Self {
+        self.services.recovery = Some(store);
+        self.autosave.every_edit = true;
+        autosave::next_offer(&mut self);
+        self
     }
 
     /// A clean exit (the desktop app's `on_exit`): the recovery copy of this run's unsaved work
@@ -6514,7 +6523,9 @@ impl RustGisApp {
         // reach.
         self.note_last_project();
         saveprompt::close_requested(self, ctx);
-        autosave::tick(self, ctx);
+        if !self.autosave.every_edit {
+            autosave::tick(self, ctx);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.watch_files {
             diskwatch::tick(self, ctx);
@@ -6850,6 +6861,11 @@ impl RustGisApp {
         pluginstart::frame_drawn(self, &ctx);
         // Cancel, save prompts and any project changes from UI controls take effect first.
         chrome::advance_history_jump(self, &ctx);
+        // Capture, photo attachment and other edits land during UI handling. Submit the copy
+        // now, so leaving for Home immediately after the edit needn't wait for another frame.
+        if self.autosave.every_edit {
+            autosave::tick(self, &ctx);
+        }
         // CJK text this frame drew with no face for it: the next frame's `logic` deals with it
         // (`ensure_data_cjk_font`), so there must be a next frame, though no input comes.
         if rustgis_engine::render::fonts::peek_missing_cjk().iter().any(|s| !self.cjk_scripts_handled.contains(s)) {

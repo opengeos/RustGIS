@@ -915,9 +915,27 @@ fn unpack_into(bytes: &[u8], dir: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-/// Reads a field package's project, its relative paths resolved against `dir`.
+/// Reads a field package with paths to its unpacked basemaps and photos. Absolute paths to
+/// photos stay usable after opening a recovery copy, which has no unpack directory of its own.
 pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
-    Project::from_import_json(text, Some(dir))
+    let mut project = Project::from_import_json(text, Some(dir))?;
+    let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
+    if photos.is_dir() {
+        for map in &mut project.maps {
+            rewrite_photos(map, |path| {
+                if let Some(name) = path.strip_prefix("photos/").filter(|name| plain_file(name)) {
+                    let file = photos.join(name);
+                    if file.is_file()
+                        && let Some(path) = file.to_str()
+                    {
+                        return path.to_string();
+                    }
+                }
+                path.to_string()
+            });
+        }
+    }
+    Ok(project)
 }
 
 /// Removes the offline areas past the first `had` of this project: those a field package just made,
@@ -1249,6 +1267,13 @@ mod tests {
         assert_eq!(area, "Trip");
         let entries = rustgis_data::zip::read(&back).unwrap();
         assert!(entries.iter().any(|(n, b)| n == "photos/photo-1.jpg" && b == b"jpeg bytes"));
+        // Reopening a package on the phone points the feature to its unpacked copy.
+        let unpacked_back = temp.path().join("unpacked-return");
+        let text = unpack_into(&back, &unpacked_back).unwrap();
+        let reopened = Session::new(project_in(&text, &unpacked_back).unwrap());
+        let unpacked_photo = unpacked_back.join("photos/photo-1.jpg");
+        assert_eq!(value(&reopened, "Cities", 0, "photos"), unpacked_photo.display().to_string());
+        assert_eq!(std::fs::read(unpacked_photo).unwrap(), b"jpeg bytes");
         // On the phone it was taken on, not here: brought back, it is copied in.
         std::fs::remove_file(&photo).unwrap();
         // Meanwhile at home, the renamed city was changed too: a conflict, said.

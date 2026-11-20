@@ -3796,8 +3796,8 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     if !cfg!(target_arch = "wasm32") {
         group(ui, "Performance", |ui| threads_menu(app, ui));
     }
-    // Only a shell that keeps recovery copies (the desktop app) has autosave.
-    if app.services.recovery.is_some() {
+    // The interval setting is for desktop recovery. Phones checkpoint completed edits.
+    if app.services.recovery.is_some() && !app.autosave.every_edit {
         group(ui, "Autosave", |ui| autosave_menu(app, ui));
     }
 }

@@ -4,7 +4,7 @@
 
 use eframe::egui;
 use rustgis_engine::platform::{Event, Platform};
-use rustgis_ui_egui::{Inbox, RustGisApp, i18n, tl};
+use rustgis_ui_egui::{FolderStore, Inbox, RustGisApp, i18n, tl};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -633,17 +633,20 @@ pub fn pushed(dir: Option<PathBuf>, app: &mut RustGisApp) -> Vec<PathBuf> {
     files
 }
 
-/// Makes the front end with the sample project, ready for a phone: commands run on the window's
-/// thread don't hold it, and `folders` (whether the system gave the app a folder of its own) is
-/// said when it is false.
-pub fn front_end(folders: bool) -> RustGisApp {
-    // Datum grids: the app's own folder, where downloaded ones are kept (#2032 A4); a phone has no
-    // PROJ install to share.
-    if folders {
+/// Makes the front end with the sample project and recovery in the phone's private storage.
+pub fn front_end(root: Option<&Path>) -> RustGisApp {
+    // Datum grids: the app's own folder, where downloaded ones are kept (#2032 A4);
+    // a phone has no PROJ install to share.
+    if root.is_some() {
         rustgis_engine::data::raster::crs::use_grid_folders();
     }
     let mut app = RustGisApp::with_sample();
-    if !folders {
+    if let Some(root) = root {
+        match FolderStore::open(&root.join("recovery")) {
+            Ok(store) => app = app.with_edit_recovery(Box::new(store)),
+            Err(e) => app.session.notify(i18n::fmt("Autosave couldn't keep a recovery copy: {error}", &[("error", &e)]), true),
+        }
+    } else {
         app.session.warn(tl!("This device gives RustGIS no folder of its own: settings, the tile cache and recovery copies are off."));
     }
     // As on the desktop: commands run on the window's thread must not hold it.

@@ -1,10 +1,10 @@
 //! Autosave and crash recovery (#873). While the project has unsaved changes, a recovery copy of
-//! it is kept through [`Services::recovery`](crate::Services), rewritten at most once per
-//! interval and only when the project changed since the last copy. Saving, starting another
+//! it is kept through [`Services::recovery`](crate::Services). Desktop writes it at intervals;
+//! phones request one after completed edits, while the app is still in the foreground. Saving, starting another
 //! project and a clean exit remove it, so a copy left over at start means the last run ended
 //! without closing (a crash, a kill, a power cut): the app offers it then ([`offer`]).
 //!
-//! The desktop app keeps the copy in a folder ([`FolderStore`]); a shell without a store (the
+//! Native apps keep the copy in a folder ([`FolderStore`]); a shell without a store (the
 //! browser, for now) has no autosave.
 
 use egui::vec2;
@@ -35,6 +35,9 @@ pub struct Recovery {
     /// The file the project was opened from or saved to, if any.
     #[serde(default)]
     pub path: Option<String>,
+    /// The package this project was opened from, independently of the path Save uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     /// When the copy was made, in seconds since 1970 (UTC).
     #[serde(default)]
     pub time: u64,
@@ -54,6 +57,11 @@ pub struct Recovery {
 pub trait RecoveryStore {
     /// Replaces this run's copy with `project` (a copy of the open one) and `about` it.
     fn write(&self, project: Project, about: Recovery);
+    /// Checkpoints a completed edit. An async store can replace a checkpoint still waiting
+    /// for the worker with this newer one, which also contains the earlier edits.
+    fn checkpoint(&self, project: Project, about: Recovery) {
+        self.write(project, about);
+    }
     /// Removes this run's copy (the work was saved, or replaced, or the app closes cleanly).
     fn clear(&self);
     /// Waits, for a bounded time, until what was asked for has been done: before the app exits.
@@ -81,6 +89,8 @@ pub trait RecoveryStore {
 pub struct AutosaveState {
     /// Minutes between copies; `0` is off.
     pub(crate) minutes: u32,
+    /// Checkpoint completed edits in the foreground, even if the app never gets a stop event.
+    pub(crate) every_edit: bool,
     /// The session revision the last copy was made at, while one is kept.
     written: Option<u64>,
     /// The last copy failed in the background: due again at the next interval, unchanged or not.
@@ -109,6 +119,7 @@ impl Default for AutosaveState {
     fn default() -> Self {
         AutosaveState {
             minutes: DEFAULT_MINUTES,
+            every_edit: false,
             written: None,
             failed: false,
             last: None,
@@ -134,7 +145,14 @@ fn now_secs() -> u64 {
 /// a lossy spelling of the name.
 fn about(app: &RustGisApp) -> Recovery {
     let path = app.session.path.as_ref().and_then(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()).to_str().map(str::to_string));
-    Recovery { name: app.session.project.name.clone(), path, time: now_secs(), quit: false, notices: Vec::new() }
+    Recovery {
+        name: app.session.project.name.clone(),
+        path,
+        package: app.session.opened_package().and_then(std::path::Path::to_str).map(str::to_string),
+        time: now_secs(),
+        quit: false,
+        notices: Vec::new(),
+    }
 }
 
 /// Reads the interval preference and the copy an earlier run left (from [`RustGisApp::with_services`]).
@@ -151,7 +169,7 @@ fn waiting(app: &RustGisApp) -> usize {
 }
 
 /// Offers the next copy waiting in the store, if any.
-fn next_offer(app: &mut RustGisApp) {
+pub(crate) fn next_offer(app: &mut RustGisApp) {
     let store = app.services.recovery.as_ref();
     let pending = store.and_then(|s| s.pending());
     app.autosave.more = store.map_or(0, |s| s.waiting()).saturating_sub(1);
@@ -175,9 +193,9 @@ fn changed_since(r: &Recovery) -> bool {
     }
 }
 
-/// Each frame: keeps the recovery copy in step with the project. A copy is made when the project
-/// has unsaved changes it doesn't hold yet and the interval has passed since the last one; it is
-/// removed once the project has none (saved, or another one started).
+/// Keeps the recovery copy in step with the project. Desktop uses the configured interval.
+/// Phones submit each new unsaved state in the frame that made it. Their worker keeps only the
+/// latest of the edits that arrived while it was writing.
 pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(store) = &app.services.recovery else { return };
     if !app.autosave.wake_set {
@@ -194,17 +212,22 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
             app.session.notify(text, true);
         }
     }
-    if app.autosave.minutes == 0 || !app.session.dirty() {
+    let every_edit = app.autosave.every_edit;
+    if (!every_edit && app.autosave.minutes == 0) || !app.session.dirty() {
         if app.autosave.written.take().is_some() {
             store.clear();
         }
         app.autosave.failed = false;
         return;
     }
-    if app.autosave.written == Some(app.session.revision) && !app.autosave.failed {
+    // View commands advance revision too. On the phone only new undoable project states
+    // (including Undo and Redo) need another copy.
+    let state = if every_edit { app.session.state() } else { app.session.revision };
+    let changed = app.autosave.written != Some(state);
+    if !changed && !app.autosave.failed {
         return;
     }
-    let interval = Duration::from_secs(u64::from(app.autosave.minutes) * 60);
+    let interval = Duration::from_secs(if every_edit && changed { 0 } else { u64::from(app.autosave.minutes) * 60 });
     let now = Instant::now();
     if let Some(since) = app.autosave.last.map(|l| now.saturating_duration_since(l))
         && since < interval
@@ -215,8 +238,12 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     // Cheap: layers' features (`Features`), raster pixels and embedded bytes are `Arc`s shared
     // with the copy, as they are with the undo snapshot every edit already takes; only the
     // project's own settings are copied here. Serializing and writing happen on the store's thread.
-    store.write(app.session.project.clone(), about(app));
-    app.autosave.written = Some(app.session.revision);
+    if every_edit {
+        store.checkpoint(app.session.project.clone(), about(app));
+    } else {
+        store.write(app.session.project.clone(), about(app));
+    }
+    app.autosave.written = Some(state);
     app.autosave.failed = false;
     app.autosave.last = Some(now);
 }
@@ -244,6 +271,9 @@ pub(crate) fn end(app: &mut RustGisApp) {
 /// does: the interval, and the copy waiting to be recovered.
 pub(crate) fn command(app: &mut RustGisApp, p: &Value) -> Result<Value, String> {
     if let Some(m) = p.get("minutes") {
+        if app.autosave.every_edit {
+            return Err("the phone keeps a recovery copy after edits".into());
+        }
         if app.services.recovery.is_none() {
             return Err("autosave needs the desktop app".into());
         }
@@ -281,14 +311,13 @@ pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
         return Err("the open project has unsaved changes: save them before recovering other work".into());
     }
     let text = store.read_pending()?;
-    app.run("project.openText", json!({"text": text}))?;
-    app.session.path = offered.path.as_ref().map(std::path::PathBuf::from);
-    app.session.mark_unsaved();
+    app.run("project.openText", json!({"text": text, "package": offered.package.is_some()}))?;
+    app.session.restore_recovery_paths(offered.path.as_ref().map(std::path::PathBuf::from), offered.package.map(std::path::PathBuf::from));
     // The copy becomes this run's as it is: a crash now loses nothing, and nothing is written.
     if let Some(store) = &app.services.recovery {
         store.adopt_pending();
     }
-    app.autosave.written = Some(app.session.revision);
+    app.autosave.written = Some(if app.autosave.every_edit { app.session.state() } else { app.session.revision });
     app.autosave.last = Some(Instant::now());
     next_offer(app);
     let text = crate::i18n::fmt("Recovered unsaved work in {name}. Save to keep it.", &[("name", &app.session.project.name)]);
@@ -333,18 +362,23 @@ pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
     let file = r.path.as_deref().map(|p| std::path::Path::new(p).file_name().map_or(p.to_string(), |n| n.to_string_lossy().into_owned()));
     let mut decision = None;
     egui::Modal::new(egui::Id::unique("autosave_recover")).show(ctx, |ui| {
-        ui.set_width(420.0);
+        ui.set_width(420.0_f32.min((ctx.content_rect().width() - 32.0).max(1.0)));
         ui.label(egui::RichText::new(tl!("Recover unsaved work?")).font(semibold(15.0)));
         ui.add_space(4.0);
-        // Why there is a copy, then what it is.
-        ui.label(if r.quit {
-            tl!("RustGIS was quit last time without saving your changes.")
-        } else {
-            tl!("RustGIS didn't close properly last time.")
-        });
+        // On a phone the OS can stop a backgrounded app as part of normal use.
+        if !app.autosave.every_edit {
+            ui.label(if r.quit {
+                tl!("RustGIS was quit last time without saving your changes.")
+            } else {
+                tl!("RustGIS didn't close properly last time.")
+            });
+        }
         ui.label(kept_line(&name, r.time));
         ui.add_space(4.0);
         match &file {
+            _ if app.autosave.every_edit => {
+                ui.label(tl!("It opens unsaved. Save to keep it."));
+            }
             Some(f) => {
                 ui.label(crate::i18n::fmt("It opens unsaved; saving replaces {file}.", &[("file", f)]));
                 if app.autosave.changed_since {
@@ -435,20 +469,66 @@ mod folder {
     /// How long a clean exit waits for a copy still being written.
     const FLUSH_WAIT: Duration = Duration::from_secs(30);
 
+    type Snapshot = (Box<Project>, Recovery);
+    type Pending = Arc<Mutex<Option<Snapshot>>>;
+
     /// What the background thread is asked to do, in order.
     enum Job {
         Write(Box<Project>, Recovery),
+        Checkpoint(Pending),
         Clear,
         Remove(PathBuf),
         Adopt(PathBuf),
         Flush(Sender<()>),
     }
 
+    /// A phone can update the latest queued checkpoint, until the worker takes it or another
+    /// operation is queued. Save, discard, adoption and flush keep their FIFO order.
+    struct Queue {
+        jobs: Sender<Job>,
+        latest: Option<Pending>,
+    }
+
+    impl Queue {
+        /// Ends coalescing across another operation. A save invalidates a checkpoint the
+        /// worker hasn't started yet.
+        fn send(&mut self, job: Job) {
+            if let Some(slot) = self.latest.take()
+                && matches!(job, Job::Clear)
+            {
+                slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+            }
+            self.enqueue(job);
+        }
+
+        /// Holds just the latest waiting checkpoint. The worker can drain it even when the
+        /// window stops drawing because the app went to the background.
+        fn checkpoint(&mut self, snapshot: Snapshot) {
+            if let Some(slot) = &self.latest {
+                let mut next = slot.lock().unwrap_or_else(|e| e.into_inner());
+                if next.is_some() {
+                    *next = Some(snapshot);
+                    return;
+                }
+            }
+            let slot = Arc::new(Mutex::new(Some(snapshot)));
+            self.latest = Some(slot.clone());
+            self.enqueue(Job::Checkpoint(slot));
+        }
+
+        /// A stopped worker cannot keep the copy.
+        fn enqueue(&self, job: Job) {
+            if self.jobs.send(job).is_err() {
+                log::warn!("autosave stopped: its thread is gone");
+            }
+        }
+    }
+
     /// A recovery folder. A copy is one file: a line of JSON describing it ([`Recovery`]), then the
     /// project's saved text. One file written atomically means the description always belongs to
     /// the project after it, whenever the app stops.
     pub struct FolderStore {
-        jobs: Mutex<Sender<Job>>,
+        jobs: Mutex<Queue>,
         /// The copies earlier runs left, newest first.
         waiting: Mutex<Vec<(PathBuf, Recovery)>>,
         error: Arc<Mutex<Option<String>>>,
@@ -503,16 +583,12 @@ mod folder {
                 .name("autosave".into())
                 .spawn(move || work(&worker_dir, &rx, &worker_error, &worker_wake))
                 .map_err(|e| format!("could not start autosave: {e}"))?;
-            Ok(FolderStore { jobs: Mutex::new(jobs), waiting: Mutex::new(waiting), error, wake })
+            Ok(FolderStore { jobs: Mutex::new(Queue { jobs, latest: None }), waiting: Mutex::new(waiting), error, wake })
         }
 
-        /// Queues `job` for the background thread; one that stopped (it can't, short of a panic)
-        /// is logged, and the copy is then not kept.
+        /// Queues the request on the store's worker.
         fn send(&self, job: Job) {
-            let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
-            if jobs.send(job).is_err() {
-                log::warn!("autosave stopped: its thread is gone");
-            }
+            self.jobs.lock().unwrap_or_else(|e| e.into_inner()).send(job);
         }
 
         /// The copies waiting, locked.
@@ -646,6 +722,15 @@ mod folder {
                         leftover.drain(..).for_each(|p| remove(&p));
                     }
                 }
+                Job::Checkpoint(slot) => {
+                    let snapshot = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    if let Some((project, about)) = snapshot {
+                        match write(*project, &about) {
+                            Ok(()) => leftover.drain(..).for_each(|p| remove(&p)),
+                            Err(e) => fail(e),
+                        }
+                    }
+                }
                 Job::Clear => {
                     remove(&dir.join(LIVE));
                     leftover.drain(..).for_each(|p| remove(&p));
@@ -676,11 +761,12 @@ mod folder {
         let (text, report) = project.recovery_text_with_report()?;
         let about = Recovery { notices: report.notices(), ..about.clone() };
         let header = serde_json::to_string(&about).map_err(|e| e.to_string())?;
-        let mut bytes = Vec::with_capacity(header.len() + 1 + text.len());
-        bytes.extend_from_slice(header.as_bytes());
-        bytes.push(b'\n');
-        bytes.extend_from_slice(text.as_bytes());
-        rustgis_engine::data::io::replace_atomic(&dir.join(LIVE), &bytes).map_err(|e| e.to_string())
+        use std::io::Write as _;
+        rustgis_engine::data::io::replace_atomic_with(&dir.join(LIVE), |out| -> std::io::Result<()> {
+            writeln!(out, "{header}")?;
+            out.write_all(text.as_bytes())
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// Removes a copy; one already gone is no error.
@@ -696,6 +782,12 @@ mod folder {
         /// Serialized and written by the background thread; a newer copy queued behind it wins.
         fn write(&self, project: Project, about: Recovery) {
             self.send(Job::Write(Box::new(project), about));
+        }
+
+        /// Replaces the checkpoint waiting behind any current one, avoiding full rewrites
+        /// of superseded edits and bounding the number of snapshots held.
+        fn checkpoint(&self, project: Project, about: Recovery) {
+            self.jobs.lock().unwrap_or_else(|e| e.into_inner()).checkpoint((Box::new(project), about));
         }
 
         /// Done after any copy queued before it, so a slow write can't bring the copy back.
@@ -772,7 +864,7 @@ mod folder {
 
         use rustgis_engine::Project;
 
-        use super::{Job, LIVE, Recovery, work_with};
+        use super::{Job, LIVE, Queue, Recovery, work_with};
 
         /// Writes copies as the store does, except projects named "newer…", which are refused
         /// as too large.
@@ -858,6 +950,31 @@ mod folder {
             let (held, error) = run(&dir, vec![copy, Job::Clear]);
             assert!(held.is_none() && error.is_none());
             let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn phone_checkpoints_coalesce_while_waiting_and_stop_at_a_clear() {
+            let (jobs, rx) = channel();
+            let mut queue = Queue { jobs, latest: None };
+            let checkpoint = |name| (Box::new(Project::new(name)), Recovery::default());
+            let take = || {
+                let Job::Checkpoint(slot) = rx.try_recv().unwrap() else { panic!("expected a checkpoint") };
+                slot.lock().unwrap().take().map(|(project, _)| project.name)
+            };
+
+            queue.checkpoint(checkpoint("first"));
+            assert_eq!(take().as_deref(), Some("first"));
+            queue.checkpoint(checkpoint("second"));
+            queue.checkpoint(checkpoint("third"));
+            assert_eq!(take().as_deref(), Some("third"));
+            assert!(rx.try_recv().is_err(), "only one write waits");
+
+            queue.checkpoint(checkpoint("before save"));
+            queue.send(Job::Clear);
+            queue.checkpoint(checkpoint("after save"));
+            assert!(take().is_none(), "save invalidated the waiting copy");
+            assert!(matches!(rx.try_recv(), Ok(Job::Clear)));
+            assert_eq!(take().as_deref(), Some("after save"));
         }
 
         /// A skipped copy is written when the newer one that replaced it fails, and
@@ -968,6 +1085,105 @@ mod tests {
         tick(&mut app, &ctx);
         assert_eq!(store.0.borrow().2, 1, "removed once saved");
         let _ = std::fs::remove_file(std::env::temp_dir().join(format!("rustgis-retry-{}.rgis", std::process::id())));
+    }
+
+    #[test]
+    fn phone_checkpoints_edits_in_consecutive_frames_but_skips_view_changes() {
+        let counting = Counting::default();
+        let mut app = RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(counting.clone()));
+        let ctx = egui::Context::default();
+        app.run("layer.template", json!({"template": "points", "name": "Sites"})).unwrap();
+        app.run("edit.enable", json!({"on": true})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(counting.0.borrow().0, 1);
+        app.run("tool.set", json!({"tool": "select"})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(counting.0.borrow().0, 1, "a view change doesn't checkpoint");
+        app.run("edit.addFeature", json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [10, 5]}})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(counting.0.borrow().0, 2, "the latest edit is due immediately");
+        app.session.mark_saved();
+        tick(&mut app, &ctx);
+        assert_eq!(counting.0.borrow().2, 1, "an explicit save clears the copy");
+    }
+
+    /// Capture in a UI frame, give the worker time to finish, then drop the app without running
+    /// its exit hooks. The next run can return the point and its photo to the home project.
+    #[test]
+    fn phone_offers_a_captured_point_and_can_bring_the_recovered_package_back() {
+        use rustgis_engine::data::zip;
+        use rustgis_engine::map::{TileKind, TileLayer};
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        let basemap = dir.join("site.mbtiles");
+        std::fs::write(&basemap, b"basemap bytes").unwrap();
+        let sent = dir.join("Survey.rgisfield");
+        let photo = dir.join("site.jpg");
+        std::fs::write(&photo, b"photo bytes").unwrap();
+
+        let mut home = Session::new(Project::new("Home"));
+        home.path = Some(dir.join("Home.rgis"));
+        home.run("layer.template", &json!({"template": "points", "name": "Sites"})).unwrap();
+        home.map_mut().tiles.push(TileLayer::new("Site", TileKind::MbTiles, basemap.to_str().unwrap()));
+        home.run("offline.package", &json!({"path": sent, "name": "Survey", "extent": [-20, -40, 60, 40]})).unwrap();
+
+        let files = zip::read(&std::fs::read(&sent).unwrap()).unwrap();
+        // Model the shell after opening the archive: the engine resolves unpacked files
+        // to absolute paths. Use the test's own folder in place of the app's data directory.
+        let unpacked = dir.join("field");
+        for (name, bytes) in &files {
+            let path = unpacked.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        let mut project = Project::load(&unpacked.join("Survey.rgis")).unwrap();
+        let origin = project.field_origin.clone().unwrap();
+        let expected_basemap = project.maps[0].tiles[0].url.clone();
+        assert_eq!(std::path::Path::new(&expected_basemap), unpacked.join("basemaps/site.mbtiles"));
+        // Simulate the camera taking a photo in the private folder before the edit.
+        project.maps[0].layers[0].dataset.fields.push(rustgis_engine::data::Field::new("photos", rustgis_engine::data::FieldType::Text));
+        let mut session = Session::new(project);
+        session.restore_recovery_paths(None, Some(sent.clone()));
+        session.mark_saved();
+        let recovery = dir.join("recovery");
+        let mut app = RustGisApp::new(session).with_edit_recovery(Box::new(super::FolderStore::open(&recovery).unwrap()));
+        app.fonts_frames = 2;
+        app.chrome = Some(|app, _| {
+            if !app.session.dirty() {
+                app.run_by_user("edit.enable", json!({"on": true})).unwrap();
+                let photo = app.session.opened_package().unwrap().with_file_name("site.jpg");
+                app.run_by_user(
+                    "edit.addFeature",
+                    json!({"layer": "Sites", "geometry": {"type": "Point", "coordinates": [10, 5]}, "attributes": {"photos": photo}}),
+                )
+                .unwrap();
+            }
+        });
+        let ctx = egui::Context::default();
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui));
+        frame.textures_delta.clear();
+        app.services.recovery.as_ref().unwrap().flush();
+        drop(app);
+
+        let mut restarted =
+            RustGisApp::new(Session::new(Project::default())).with_edit_recovery(Box::new(super::FolderStore::open(&recovery).unwrap()));
+        assert_eq!(restarted.run("ui.autosave", json!(null)).unwrap()["pending"]["name"], "Survey");
+        restarted.run("ui.recover", json!(null)).unwrap();
+        assert!(restarted.session.dirty() && restarted.session.path.is_none());
+        assert_eq!(restarted.session.opened_package(), Some(sent.as_path()));
+        assert_eq!(restarted.session.project.field_origin.as_ref(), Some(&origin));
+        assert_eq!(restarted.session.map().tiles[0].url, expected_basemap);
+
+        let back = dir.join("Return.rgisfield");
+        restarted.session.run("offline.package", &json!({"path": back})).unwrap();
+        // The home device can see only the returned package, so it has to unpack the photo.
+        std::fs::remove_file(photo).unwrap();
+        let result = home.run("offline.bringBack", &json!({"path": back})).unwrap();
+        assert_eq!(result["added"], 1);
+        assert_eq!(result["photos"], 1);
+        assert_eq!(std::fs::read(dir.join("Survey photos/site.jpg")).unwrap(), b"photo bytes");
+        restarted.services.recovery.as_ref().unwrap().flush();
     }
 
     /// The dialog's age reads as a whole sentence in every range: never "1 minutes ago".
