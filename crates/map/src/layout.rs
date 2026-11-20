@@ -1207,6 +1207,9 @@ pub struct ChartData {
     pub labelled: bool,
     /// Bars past its limit, left out (none when gathered in an "Other" bar).
     pub left_out: usize,
+    /// Bars whose statistic is past a number's range (a sum or mean overflowing), left out; an
+    /// Other bar's counts the bars it would gather.
+    pub out_of_range: usize,
     /// Features with no number in its field (not a number, or not finite), left out; a count
     /// counts them.
     pub no_number: usize,
@@ -1353,7 +1356,7 @@ impl ElementKind {
             None => None,
         };
         let number = |row: usize| ds.value(row, fi).as_f64().filter(|v| v.is_finite());
-        let mut no_number = 0;
+        let (mut no_number, mut out_of_range) = (0, 0);
         // Grouped, a tally per value of the group field (none: blank, apart from a value that
         // reads "(blank)"), in the order the values first come.
         let mut groups: Vec<(Option<String>, Tally)> = Vec::new();
@@ -1381,8 +1384,15 @@ impl ElementKind {
                         None => {}
                     }
                 }
-                // A value whose features have no number has no bar: they are counted in `no_number`.
-                drawn = groups.iter().enumerate().filter_map(|(i, (_, t))| t.value(*statistic).map(|v| (v, i))).collect();
+                // A value whose features have no number has no bar: they are counted in `no_number`;
+                // one whose statistic is past a number's range, in `out_of_range`.
+                for (i, (_, t)) in groups.iter().enumerate() {
+                    match t.value(*statistic) {
+                        Some(v) => drawn.push((v, i)),
+                        None if t.numbers > 0 => out_of_range += 1,
+                        None => {}
+                    }
+                }
                 *statistic
             }
             None => {
@@ -1424,9 +1434,9 @@ impl ElementKind {
                     }
                 }
                 gathered = t.value(stat);
-                // A gathered statistic past a number's range has no bar: its bars are left out.
+                // A gathered statistic past a number's range has no bar: its bars are said.
                 if gathered.is_none() {
-                    left_out = rest.len();
+                    out_of_range += rest.len();
                 }
             } else {
                 left_out = drawn.len() - limit;
@@ -1442,7 +1452,7 @@ impl ElementKind {
         };
         // An Other bar is named, so it isn't taken for one feature's.
         let labelled = gi.is_some() || li.is_some() || gathered.is_some();
-        Some(ChartData { bars: out, labelled, left_out, no_number, title })
+        Some(ChartData { bars: out, labelled, left_out, out_of_range, no_number, title })
     }
 }
 
@@ -1480,8 +1490,8 @@ impl Tally {
         self.max = self.max.max(o.max);
     }
 
-    /// Its statistic, as [`StatKind::apply`] gives it; none without a number (a count but one),
-    /// or past a number's range.
+    /// Its statistic, read from the tally as [`StatKind::apply`] reads it from the numbers; none
+    /// without a number (a count but one), or past a number's range.
     fn value(&self, stat: StatKind) -> Option<f64> {
         let v = match stat {
             StatKind::Count => self.records as f64,
@@ -2328,7 +2338,14 @@ mod tests {
             f.attrs[i] = rustgis_data::Value::Float(f64::MAX);
         }
         let d = chart(serde_json::json!({"field": "people", "bars": 2, "other": true})).chart_data(&huge).unwrap();
-        assert_eq!((d.bars.len(), d.left_out), (1, 6));
+        assert_eq!((d.bars.len(), d.left_out, d.out_of_range), (1, 0, 6));
+        // So is a grouped bar's: N sums two of them; a count of the same features is drawn.
+        let grouped =
+            |stat: &str| chart(serde_json::json!({"field": "people", "group": "region", "statistic": stat})).chart_data(&huge).unwrap();
+        let sum = grouped("sum");
+        assert_eq!((sum.bars.len(), sum.out_of_range), (3, 2));
+        assert!(sum.bars.iter().all(|(v, n)| v.is_finite() && n != "N" && n != "S"));
+        assert_eq!((grouped("count").bars.len(), grouped("count").out_of_range), (5, 0));
     }
 
     /// The options are left out at their defaults, so a chart saved before keeps its bytes, and

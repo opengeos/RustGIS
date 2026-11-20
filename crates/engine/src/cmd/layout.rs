@@ -4168,6 +4168,14 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
                 data.left_out
             ));
         }
+        if data.out_of_range > 0 {
+            let n = data.out_of_range;
+            said.push(format!(
+                "{n} bar{} of the chart left out: {} statistic is past a number's range",
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "its" } else { "their" }
+            ));
+        }
         if data.no_number > 0 {
             let n = data.no_number;
             said.push(format!("{n} feature{} of {layer} with no number in {field} left out of the chart", if n == 1 { "" } else { "s" }));
