@@ -63,6 +63,8 @@ impl LayerLook {
             bare
         });
         kept.view_memory = Default::default();
+        // Edit archiving keeps whole features from before and after each edit, which aren't drawn.
+        kept.design.archive = layer.design.archive.as_ref().map(|_| Vec::new());
         kept.geometry_kinds = Default::default();
         Some(LayerLook { layer: kept, rows, raster })
     }
@@ -453,6 +455,15 @@ mod tests {
         let ((), copied) = rustgis_data::before_rows_copy(Box::new(|| {}), || l.dataset.push(None, vec![Value::Int(9)]));
         assert!(copied);
         drop(held);
+    }
+
+    #[test]
+    fn a_look_keeps_no_archived_edits() {
+        let mut l = layer();
+        let edit = l.dataset.features.first().cloned();
+        l.design.archive = Some(vec![crate::design::ArchiveEntry { time: 0.0, id: 1, before: edit.clone(), after: edit }]);
+        let look = LayerLook::of(&l).expect("a look");
+        assert_eq!(look.layer.design.archive, Some(Vec::new()));
     }
 
     #[test]
