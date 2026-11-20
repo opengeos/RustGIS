@@ -62,6 +62,8 @@ pub(crate) const IN_BACKGROUND: &[(&str, &str, Start)] = &[
     ("layout.export", "Export Layout", super::layout::export_work),
     ("report.export", "Export Report", super::report::export_work),
     ("source.publish", "Publish to Source", super::publish::publish_work),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("offline.package", "Package for the Field", super::field::export_work),
 ];
 
 /// `command` and what it is called, when the app writes its file on another thread (see

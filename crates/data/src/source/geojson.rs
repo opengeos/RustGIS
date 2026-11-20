@@ -226,17 +226,22 @@ impl GeoJsonSource {
     /// those whose boxes meet it (features without geometry never do). The extent is in the
     /// file's own coordinates.
     fn matches(&self, extent: Option<Extent>) -> impl Iterator<Item = u32> + '_ {
+        self.candidates(extent).filter_map(|(i, matches)| matches.then_some(i))
+    }
+
+    /// Walks every index entry, exposing rejected entries too so a full visit can count
+    /// progress and check Cancel even across a long stretch outside the requested extent.
+    fn candidates(&self, extent: Option<Extent>) -> impl Iterator<Item = (u32, bool)> + '_ {
         // Rounded to the nearest f32: never past a box rounded outward that meets the extent.
         let e = extent.map(|e| (e.is_empty(), [e.min_x as f32, e.min_y as f32, e.max_x as f32, e.max_y as f32]));
-        self.boxes
-            .iter()
-            .enumerate()
-            .filter_map(move |(i, b)| match e {
-                None => Some(i as u32),
-                Some((true, _)) => None,
-                Some((false, [x0, y0, x1, y1])) => (b[0] <= x1 && b[2] >= x0 && b[1] <= y1 && b[3] >= y0).then_some(i as u32),
-            })
-            .filter(|i| self.failed.binary_search(i).is_err())
+        self.boxes.iter().enumerate().map(move |(i, b)| {
+            let in_box = match e {
+                None => true,
+                Some((true, _)) => false,
+                Some((false, [x0, y0, x1, y1])) => b[0] <= x1 && b[2] >= x0 && b[1] <= y1 && b[3] >= y0,
+            };
+            (i as u32, in_box && self.failed.binary_search(&(i as u32)).is_err())
+        })
     }
 }
 
@@ -254,6 +259,38 @@ impl FeatureSource for GeoJsonSource {
 
     fn skipped_at_open(&self) -> usize {
         self.unreadable + self.failed.len()
+    }
+
+    fn visits_extent_chunks(&self) -> bool {
+        true
+    }
+
+    /// Visits the matching file records in order and retains only one batch of decoded rows.
+    fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        let req = Request { extent, limit: usize::MAX };
+        let native = extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
+        let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
+        let mut f = BufReader::with_capacity(BUFFER, crate::provenance::open(&self.path)?);
+        let mut pos = 0;
+        let mut buf = Vec::new();
+        let mut batch = Batch { complete: true, ..Batch::default() };
+        crate::progress::begin(self.places.len());
+        for (i, matches) in self.candidates(native) {
+            crate::progress::step(1)?;
+            if !matches {
+                continue;
+            }
+            match self.read_feature((&mut f, &mut pos, &mut buf), i, &req, || true) {
+                Ok(Some(feature)) => {
+                    batch.matched += 1;
+                    chunks.push(feature)?;
+                }
+                Err(()) => batch.skipped += 1,
+                Ok(None) => {}
+            }
+        }
+        chunks.flush()?;
+        Ok(batch)
     }
 
     /// Reads a bounded sample; when native bounds are refused, filters geometry before sampling,
@@ -283,36 +320,14 @@ impl FeatureSource for GeoJsonSource {
             if late {
                 crate::progress::step(1)?;
             }
-            let Some(place) = self.places.get(i as usize) else { continue };
-            let Some(json) = read_place(&mut f, &mut pos, &mut buf, place) else {
-                skipped += 1;
-                continue;
+            let feature = match self.read_feature((&mut f, &mut pos, &mut buf), i, req, || !late || sample.wants()) {
+                Ok(Some(feature)) => feature,
+                Err(()) => {
+                    skipped += 1;
+                    continue;
+                }
+                Ok(None) => continue,
             };
-            let Ok(geometry) = geojson_geometry(&json) else {
-                skipped += 1;
-                continue;
-            };
-            // To longitude/latitude; a feature that can't be is skipped, as one that can't be read.
-            let geometry = match (self.reproject.transformer(), geometry) {
-                (Some(t), Some(g)) => match geometry_to_lonlat(&g, t) {
-                    Some(g) => Some(g),
-                    None => {
-                        skipped += 1;
-                        continue;
-                    }
-                },
-                (_, g) => g,
-            };
-            // The boxes are rounded outward to f32, so they can match a feature just outside. A
-            // feature without geometry doesn't match an extent (the boxes leave it out, but there
-            // are none to filter with when the file's system couldn't bound the extent).
-            if geometry.as_ref().map_or(req.extent.is_some(), |g| !in_request(g, req)) {
-                continue;
-            }
-            if late && !sample.wants() {
-                continue;
-            }
-            let feature = Feature { id: u64::from(i) + 1, geometry, attrs: geojson_attrs(&json, &self.info.fields) };
             if late {
                 sample.keep(feature);
             } else {
@@ -335,6 +350,30 @@ impl FeatureSource for GeoJsonSource {
             null_text: Vec::new(),
             notes: Vec::new(),
         })
+    }
+}
+
+impl GeoJsonSource {
+    /// Decodes one indexed record. A missing or malformed record is unreadable, while a
+    /// record past the request's bounds (including rounding in the index) is excluded.
+    fn read_feature(
+        &self,
+        (f, pos, buf): (&mut BufReader<File>, &mut u64, &mut Vec<u8>),
+        i: u32,
+        req: &Request,
+        wanted: impl FnOnce() -> bool,
+    ) -> std::result::Result<Option<Feature>, ()> {
+        let place = self.places.get(i as usize).ok_or(())?;
+        let json = read_place(f, pos, buf, place).ok_or(())?;
+        let geometry = geojson_geometry(&json).map_err(|_| ())?;
+        let geometry = match (self.reproject.transformer(), geometry) {
+            (Some(t), Some(g)) => Some(geometry_to_lonlat(&g, t).ok_or(())?),
+            (_, g) => g,
+        };
+        if geometry.as_ref().map_or(req.extent.is_some(), |g| !in_request(g, req)) || !wanted() {
+            return Ok(None);
+        }
+        Ok(Some(Feature { id: u64::from(i) + 1, geometry, attrs: geojson_attrs(&json, &self.info.fields) }))
     }
 }
 
