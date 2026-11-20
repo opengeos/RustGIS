@@ -39308,6 +39308,13 @@ fn layout_charts_group_order_cut_and_say_what_they_leave_out() {
     let told = said(&s, mark);
     assert!(told.iter().any(|t| t.contains("Countries has no field 'region': the chart no longer groups by it")), "{told:?}");
     assert_eq!(options(&s).2, None);
+    // Moved and ungrouped in one update, nothing is said to be lost.
+    s.run("layout.update", &json!({"element": chart, "layer": "Places", "group": "region"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "layer": "Countries", "group": ""})).unwrap();
+    let told = said(&s, mark);
+    assert!(!told.iter().any(|t| t.contains("no longer")), "{told:?}");
+    assert_eq!(options(&s).2, None);
 }
 
 /// Text elements take a font family (#517): sans by default and not written then, serif when

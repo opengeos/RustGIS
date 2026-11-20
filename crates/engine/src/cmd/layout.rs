@@ -4124,9 +4124,10 @@ fn chart_update(
         }
         kept
     };
+    // A label or group the update itself sets or takes away isn't said to be lost.
     let base = ChartOptions {
-        label: keep(label, "labels its bars with it"),
-        group: keep(group, "groups by it"),
+        label: if gives(p, "label") { None } else { keep(label, "labels its bars with it") },
+        group: if gives(p, "group") { None } else { keep(group, "groups by it") },
         statistic: *statistic,
         order: *order,
         bars: *bars,

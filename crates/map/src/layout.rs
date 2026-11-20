@@ -1346,8 +1346,11 @@ impl ElementKind {
     /// bars past it left out or gathered in a last [`CHART_OTHER`] bar, the statistic over their
     /// features (their sum, ungrouped), whatever the order.
     ///
-    /// It holds a value and an index per feature with a number (16 bytes) ungrouped, and a tally
-    /// per value grouped; labels are read only for the bars drawn (all of them to sort by label).
+    /// It holds a value and an index per feature with a number (16 bytes) ungrouped. Grouped, it
+    /// holds a 40-byte tally and an index per value, with the value's name once: at most the
+    /// group field's own text again when every feature has a value of its own. Labels are read
+    /// only for the bars drawn, or, sorted by label, a label and its lowercase copy per bar for
+    /// the sort.
     pub fn chart_data(&self, ds: &rustgis_data::Dataset) -> Option<ChartData> {
         let ElementKind::Chart { field, label, group, statistic, order, bars, other, .. } = self else { return None };
         let fi = ds.field_index(field)?;
@@ -1357,26 +1360,44 @@ impl ElementKind {
         };
         let number = |row: usize| ds.value(row, fi).as_f64().filter(|v| v.is_finite());
         let (mut no_number, mut out_of_range) = (0, 0);
-        // Grouped, a tally per value of the group field (none: blank, apart from a value that
-        // reads "(blank)"), in the order the values first come.
-        let mut groups: Vec<(Option<String>, Tally)> = Vec::new();
+        // Grouped, a tally per value of the group field, in the order the values first come, and
+        // each one's name (none: blank, apart from a value that reads "(blank)").
+        let mut groups: Vec<Tally> = Vec::new();
+        let mut names: Vec<Option<String>> = Vec::new();
         // Each bar's value and its group, or ungrouped its feature's row.
         let mut drawn: Vec<(f64, usize)> = Vec::new();
         let stat = match gi {
             Some(gi) => {
-                let mut index = std::collections::HashMap::<Option<String>, usize>::new();
+                // Each name is held once, in `index`; a text is looked up as it is, and only a new
+                // value's name is copied.
+                let mut index = std::collections::HashMap::<String, usize>::new();
+                let mut blank = None;
                 for row in 0..ds.features.len() {
-                    let v = ds.value(row, gi);
-                    let key = if v.is_null() { None } else { Some(v.to_string()).filter(|n| !n.trim().is_empty()) };
-                    let at = match index.get(&key) {
-                        Some(at) => *at,
-                        None => {
-                            groups.push((key.clone(), Tally::default()));
-                            index.insert(key, groups.len() - 1);
-                            groups.len() - 1
+                    let owned;
+                    let text = match ds.value(row, gi) {
+                        rustgis_data::Value::Null => None,
+                        rustgis_data::Value::Text(t) => Some(t.as_str()),
+                        v => {
+                            owned = v.to_string();
+                            Some(owned.as_str())
                         }
+                    }
+                    .filter(|t| !t.trim().is_empty());
+                    let at = match text {
+                        None => *blank.get_or_insert_with(|| {
+                            groups.push(Tally::default());
+                            groups.len() - 1
+                        }),
+                        Some(t) => match index.get(t) {
+                            Some(at) => *at,
+                            None => {
+                                groups.push(Tally::default());
+                                index.insert(t.to_string(), groups.len() - 1);
+                                groups.len() - 1
+                            }
+                        },
                     };
-                    let Some((_, t)) = groups.get_mut(at) else { continue };
+                    let Some(t) = groups.get_mut(at) else { continue };
                     t.records += 1;
                     match number(row) {
                         Some(n) => t.add(n),
@@ -1386,7 +1407,13 @@ impl ElementKind {
                 }
                 // A value whose features have no number has no bar: they are counted in `no_number`;
                 // one whose statistic is past a number's range, in `out_of_range`.
-                for (i, (_, t)) in groups.iter().enumerate() {
+                names = vec![None; groups.len()];
+                for (name, i) in index {
+                    if let Some(slot) = names.get_mut(i) {
+                        *slot = Some(name);
+                    }
+                }
+                for (i, t) in groups.iter().enumerate() {
                     match t.value(*statistic) {
                         Some(v) => drawn.push((v, i)),
                         None if t.numbers > 0 => out_of_range += 1,
@@ -1407,7 +1434,7 @@ impl ElementKind {
         };
         let li = label.as_deref().and_then(|l| ds.field_index(l));
         let name = |i: usize| match gi {
-            Some(_) => groups.get(i).map_or(CHART_BLANK, |(n, _)| n.as_deref().unwrap_or(CHART_BLANK)).to_string(),
+            Some(_) => names.get(i).and_then(|n| n.as_deref()).unwrap_or(CHART_BLANK).to_string(),
             None => li.map(|l| ds.value(i, l).to_string()).unwrap_or_default(),
         };
         // Stable sorts: equal values keep the layer's order.
@@ -1426,7 +1453,7 @@ impl ElementKind {
                 let mut t = Tally::default();
                 for (v, i) in &rest {
                     match gi {
-                        Some(_) => t.merge(groups.get(*i).map(|(_, g)| g)),
+                        Some(_) => t.merge(groups.get(*i)),
                         None => {
                             t.records += 1;
                             t.add(*v);
