@@ -538,7 +538,7 @@ fn copy_stream(
     budget: usize,
     losses: &mut Vec<String>,
 ) -> Result<Option<usize>, String> {
-    use rustgis_data::{DataError, Feature, progress, source};
+    use rustgis_data::{Feature, progress, source};
     let eligible = layer.source.as_ref().is_some_and(|s| s.linked_file().is_some() || s.embedded.is_some());
     let Some((src, mut dataset)) = (if eligible { layer.chunk_in_extent()? } else { None }) else {
         let count = layer
@@ -557,21 +557,20 @@ fn copy_stream(
     let batch = src
         .visit_chunks(Some(extent), 1 << 20, &mut |chunk| {
             progress::check()?;
-            for mut row in chunk {
-                if row.geometry.as_ref().is_none_or(|g| !g.extent().intersects(&extent)) {
+            for row in chunk {
+                // Only a row the copy keeps is reshaped; one past the budget is just counted.
+                let Some((row, bytes)) = (if fits {
+                    source::chunk_memory::clip_row(row, &extent, dataset.fields.len())?
+                } else {
+                    source::chunk_memory::clip_row(row, &extent, 0)?
+                }) else {
                     outside += 1;
                     continue;
-                }
+                };
                 inside += 1;
                 if fits {
-                    row.attrs.truncate(dataset.fields.len());
-                    row.attrs
-                        .try_reserve(dataset.fields.len().saturating_sub(row.attrs.len()))
-                        .map_err(|_| DataError::Format("not enough memory for the field package's attributes".into()))?;
-                    row.attrs.resize(dataset.fields.len(), rustgis_data::Value::Null);
                     // Count twice the row slots for the vector's spare capacity, as it grows.
-                    used =
-                        used.saturating_add(source::chunk_memory::feature_bytes(&row).saturating_add(2 * std::mem::size_of::<Feature>()));
+                    used = used.saturating_add(bytes.saturating_add(2 * std::mem::size_of::<Feature>()));
                     fits = used <= budget && rows.try_reserve(1).is_ok();
                     if fits {
                         rows.push(row);
@@ -613,12 +612,12 @@ fn copy_stream(
     ];
     losses.extend(info.notes.iter().chain(&batch.notes).chain(counted.iter().flatten()).map(|note| format!("{}: {note}", layer.name)));
     dataset.crs_incomplete = src.lost_to_crs() || (info.format == "Shapefile" && batch.skipped > 0);
+    dataset.features = rows.into();
     if dataset.geometry_type == rustgis_data::GeometryType::None
-        && let Some(g) = rows.first().and_then(|r| r.geometry.as_ref())
+        && let Some(g) = dataset.features.geometry(0)
     {
         dataset.geometry_type = g.kind();
     }
-    dataset.features = rows.into();
     dataset.source = None;
     layer.source = None;
     layer.dataset = dataset;
