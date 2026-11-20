@@ -536,8 +536,8 @@ fn size_rows_scale(l: &Layer, sized: &[LegendEntry]) -> f32 {
 }
 
 /// [`patch`], its point scaled by `k` for rows whose sizes compare (size legends), else drawn
-/// between 4 and 14 points across. A stack is drawn by the editors' previews, at the row's size
-/// and cut to `r`.
+/// between 4 and 14 points across. A stack is drawn by the editors' previews, shrunk to fit `r`
+/// (a point's marks at the map's size or the size row's `k` when they fit) and cut to it.
 fn patch_sized(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType, k: Option<f32>, stack: Stack) {
     let (size, glyph_px) = match k {
         Some(k) => (s.size * k, s.size * k * 1.4),
@@ -5877,9 +5877,9 @@ pub(crate) fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
 }
 
 /// A stroke's markers along the editor's preview line, from `x.0` to `x.1` at `y`, scaled by `k`:
-/// markers as dots (squares as squares, images as themselves, unturned), hash marks as ticks, `w`
-/// wide. A sketch, not the map's drawing: other shapes and outlines aren't shown, and inner
-/// placements are marked at the middle.
+/// markers as dots (squares as squares, images as themselves, unturned) with their outlines `w`
+/// wide, as on the map, hash marks as ticks (at least half a point). A sketch, not the map's
+/// drawing: other shapes aren't shown, and inner placements are marked at the middle.
 fn marker_preview(p: &egui::Painter, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: egui::Color32, w: f32) {
     let mut xs = Vec::new();
     if m.at.has(Placements::INTERVAL) {
@@ -5902,6 +5902,8 @@ fn marker_preview(p: &egui::Painter, m: &LineMarkers, x: (f32, f32), y: f32, k: 
     let half = (m.size * k).max(1.0) / 2.0;
     // An image, looked up once for all its places.
     let image = if let LineMark::Marker(mark) = m.mark { crate::markerimages::image(p.ctx(), mark) } else { None };
+    // (An outline the map draws: a colour to show and a width.)
+    let outline = m.outline.filter(|o| o.a() > 0 && w > 0.0).map(|o| Stroke::new(w.max(0.5), c32(o)));
     for at in xs {
         if let Some(image) = &image {
             image.paint(p, pos2(at, y), 2.0 * half);
@@ -5911,14 +5913,28 @@ fn marker_preview(p: &egui::Painter, m: &LineMarkers, x: (f32, f32), y: f32, k: 
             LineMark::Hash => {
                 let (sin, cos) = m.angle.to_radians().sin_cos();
                 let (dx, dy) = (half * sin, half * cos);
-                p.line_segment([pos2(at - dx, y + dy), pos2(at + dx, y - dy)], Stroke::new(w, c));
+                p.line_segment([pos2(at - dx, y + dy), pos2(at + dx, y - dy)], Stroke::new(w.max(0.5), c));
             }
             LineMark::Marker(Marker::Square) => {
-                p.rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
+                let r = Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8));
+                p.rect_filled(r, CornerRadius::ZERO, c);
+                if let Some(o) = outline {
+                    p.rect_stroke(r, CornerRadius::ZERO, o, egui::StrokeKind::Middle);
+                }
             }
-            LineMark::Marker(Marker::Char(g)) => glyph(p, pos2(at, y), g, (2.0 * half).max(6.0), c),
+            // An outline-only character shows in its outline's colour, as a plain patch's does.
+            LineMark::Marker(Marker::Char(g)) => {
+                let col = match outline {
+                    Some(o) if c.a() == 0 => o.color,
+                    _ => c,
+                };
+                glyph(p, pos2(at, y), g, (2.0 * half).max(6.0), col);
+            }
             LineMark::Marker(_) => {
                 p.circle_filled(pos2(at, y), half, c);
+                if let Some(o) = outline {
+                    p.circle_stroke(pos2(at, y), half, o);
+                }
             }
         }
     }
@@ -6067,7 +6083,7 @@ fn marks_preview(p: &egui::Painter, centre: egui::Pos2, marks: &[LineStroke], ba
         let (ox, oy) = (m.offset_along * k, st.offset * k);
         let at = centre + vec2(ox * cos - oy * sin, ox * sin + oy * cos);
         let one = LineMarkers { at: Placements::FIRST, ..m };
-        marker_preview(p, &one, (at.x, at.x), at.y, k, c32(c), (w * k).max(0.5));
+        marker_preview(p, &one, (at.x, at.x), at.y, k, c32(c), w * k);
     }
 }
 
@@ -6087,12 +6103,16 @@ fn strokes_preview(p: &egui::Painter, (x0, x1): (f32, f32), y: f32, strokes: &[L
     let cap_pad = |st: &LineStroke, w: f32| if st.cap == LineCap::Butt { 0.0 } else { w / 2.0 };
     for (_, st) in &ordered {
         let (c, w) = st.resolve(base);
-        let w = (w * k).max(0.5);
         let y = y + st.offset * k;
         if let Some(m) = &st.markers {
-            marker_preview(p, m, (x0, x1), y, k, c32(c), w);
+            marker_preview(p, m, (x0, x1), y, k, c32(c), w * k);
             continue;
         }
+        // A line of no width isn't drawn on the map; one under half a point shows at half.
+        if w.is_nan() || w <= 0.0 {
+            continue;
+        }
+        let w = (w * k).max(0.5);
         let pad = cap_pad(st, w);
         // The dashes along the preview, scaled as the strokes are. Solid when the map draws the
         // pattern solid: under a pixel a round on this screen, at the pattern's own size.
@@ -7822,6 +7842,15 @@ mod tests {
         };
         assert_eq!(size_rows_scale(cities, &[row(10.0, 4.0), row(20.0, 7.0)]), 1.0, "marks that fit as drawn");
         assert_eq!(size_rows_scale(cities, &[row(10.0, 14.0), row(20.0, 28.0)]), 0.5, "the largest marks, not the symbol");
+
+        // As the map: an outline-only mark shows its outline, and a line of no width isn't drawn.
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        let hollow = json!([{"color": "#00000000", "width": 2, "markers": {"mark": "square", "size": 10, "outline": "#0000FF"}}]);
+        app.run("layer.lineStrokes", json!({"layer": "Cities", "strokes": hollow})).unwrap();
+        assert!(inks(&patch_shapes(&app, "Cities", true, None)).contains(&blue), "the hollow square's outline");
+        let unseen = json!([{"color": "#000000", "width": 6}, {"color": "#0000FF", "width": 0}]);
+        app.run("layer.lineStrokes", json!({"layer": "Rivers", "strokes": unseen})).unwrap();
+        assert!(!inks(&patch_shapes(&app, "Rivers", true, None)).contains(&blue), "no line of no width");
     }
 
     /// The stroke and fill editors send an image back with every change, so it is kept; one that

@@ -288,8 +288,7 @@ keep their coordinates. A positive offset shifts the stroke to the right of the 
 (the order of its vertices) and a negative one to the left, so two copies of an edge drawn in
 opposite directions land on opposite sides of it. Strokes are saved with the project and drawn in
 exports, in a layout legend's swatch, and in the patches of the Layers and Symbology panes (along
-a straight line). By command, bottom stroke first (`[]` goes back to the
-single stroke):
+a straight line). By command, bottom stroke first (`[]` goes back to the single stroke):
 
 ```text
 layer.lineStrokes={"layer":"Rivers","strokes":[{"color":"#000000","width":11.5,"offset":8.5},{"color":"#FF8C00","width":7,"offset":8.5,"cap":"round","join":"round"}]}
