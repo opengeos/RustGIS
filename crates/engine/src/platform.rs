@@ -5,6 +5,29 @@
 
 use std::path::PathBuf;
 
+/// Identifies the snapshot sent to the native project saver.
+pub struct SaveSnapshot {
+    project: u64,
+    state: u64,
+}
+
+impl crate::Session {
+    /// Captures which project and undo state the native saver was given.
+    pub fn save_snapshot(&self) -> SaveSnapshot {
+        SaveSnapshot { project: self.file_identity, state: self.state() }
+    }
+
+    /// Records a completed write if it belongs to the open project. Newer edits stay dirty,
+    /// and Undo can return to the snapshot that was written.
+    pub fn mark_snapshot_saved(&mut self, snapshot: SaveSnapshot) -> bool {
+        if self.file_identity != snapshot.project {
+            return false;
+        }
+        self.saved = Some(snapshot.state);
+        true
+    }
+}
+
 /// Where the device is, as its system reports it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fix {
@@ -46,6 +69,8 @@ pub enum Event {
         /// The name it was offered under.
         name: String,
     },
+    /// The outcome of a project save, including a picker that closed without saving.
+    ProjectSave(Result<String, String>),
     /// A photo the camera took ([`Platform::take_photo`]), written where it can be opened by path.
     Photo {
         /// The photo's file name.
@@ -64,9 +89,10 @@ pub enum Event {
 
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
-    /// `ended`, `saved`, `photo`, `position`, `stopped`, `failed`). A line that is none of these is a failure that quotes it: nothing a
-    /// shell reports is dropped. A position is `position`, longitude, latitude, accuracy (empty
-    /// when unknown) and, optionally, its time in milliseconds since 1970.
+    /// `ended`, `saved`, `project-saved`, `project-save-failed`, `photo`, `position`, `stopped`,
+    /// `failed`). Unrecognized lines become failures that quote the line. A position is
+    /// `position`, longitude, latitude, accuracy (empty when unknown) and, optionally, its time
+    /// in milliseconds since 1970.
     pub fn parse(line: &str) -> Event {
         let fields: Vec<&str> = line.split('\t').collect();
         match fields.as_slice() {
@@ -79,6 +105,8 @@ impl Event {
             ["stopped"] => Event::Stopped,
             // A name is the user's own text and may hold a tab: the rest of the line is the name.
             ["saved", name @ ..] if !name.is_empty() => Event::Saved { name: name.join("\t") },
+            ["project-saved", name @ ..] if !name.is_empty() => Event::ProjectSave(Ok(name.join("\t"))),
+            ["project-save-failed", text @ ..] if !text.is_empty() => Event::ProjectSave(Err(text.join("\t"))),
             ["position", lon, lat, accuracy, rest @ ..] if rest.len() <= 1 => {
                 let unknown = || Event::Failed(format!("The system reported something RustGIS doesn't know: {line}"));
                 // A time given that isn't one is a line RustGIS doesn't know, as below.
@@ -118,10 +146,10 @@ pub trait Platform {
     /// a closed picker as [`Event::Cancelled`].
     fn pick_files(&self, purpose: &str) -> Result<(), String>;
 
-    /// Asks the user where to write `bytes`, offered under `name`, and writes them there:
-    /// [`Event::Saved`] or [`Event::Failed`] follows. `Ok` means the user was asked, not that the
-    /// file is written.
-    fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String>;
+    /// Asks the user where to write `bytes` under `name`. `Ok` means the request was accepted.
+    /// A `project` request always answers with [`Event::ProjectSave`], including on cancellation.
+    /// Other requests answer with [`Event::Saved`] or [`Event::Failed`].
+    fn save_file(&self, name: &str, bytes: Vec<u8>, project: bool) -> Result<(), String>;
 
     /// Starts (`on`) or stops reporting the device's position: each fix arrives as an
     /// [`Event::Position`]. Starting asks the user for leave where the system wants it. A refusal,
@@ -176,6 +204,8 @@ mod tests {
         );
         assert_eq!(Event::parse("saved\tmap.png"), Event::Saved { name: "map.png".into() });
         assert_eq!(Event::parse("saved\tmy\tmap.png"), Event::Saved { name: "my\tmap.png".into() });
+        assert_eq!(Event::parse("project-saved\tmy\tproject.rgis"), Event::ProjectSave(Ok("my\tproject.rgis".into())));
+        assert_eq!(Event::parse("project-save-failed\tPicker cancelled"), Event::ProjectSave(Err("Picker cancelled".into())));
         // A failure's text is kept whole, tabs and all.
         assert_eq!(Event::parse("failed\ta.gpkg wasn't opened:\tno room"), Event::Failed("a.gpkg wasn't opened:\tno room".into()));
     }
