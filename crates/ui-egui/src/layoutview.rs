@@ -2087,6 +2087,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                         "None" => json!(""),
                                         _ => json!(e.kind.chart_given_title().unwrap_or_default().chars().take(200).collect::<String>()),
                                     };
+                                    // Its own title being typed is dropped, so the field losing its
+                                    // focus, now or with the selection, doesn't bring it back.
+                                    app.layout.typing.remove(&(li, id, "title"));
                                     update(app, json!({"title": value}));
                                 }
                             }
@@ -4013,6 +4016,42 @@ mod tests {
         h.state_mut().layout.selected = ids.get(1).copied();
         h.run_steps(2);
         assert_eq!(h.state().ui.right, Some(Format));
+    }
+
+    /// Picking Automatic or None for a chart's title drops its own title being typed, so the
+    /// field losing its focus doesn't bring it back (#2487).
+    #[test]
+    fn a_charts_title_mode_drops_the_title_being_typed() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::map::layout::ElementKind;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Charts"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let p = json!({"layout": li, "kind": "chart", "layer": "Cities", "title": "Mine"});
+        let id = app.run("layout.addElement", p).unwrap()["element"].as_u64().unwrap() as u32;
+        app.layout.selected = Some(id);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(420.0, 1600.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                let layout = app.session.project.layouts[li].clone();
+                egui::ScrollArea::vertical().show(ui, |ui| super::properties(app, ui, &layout, li));
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Mine")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).unwrap().type_text(" draft");
+        h.run_steps(2);
+        assert!(!h.state().layout.typing.is_empty(), "being typed");
+        h.get_by_role_and_label(Role::Button, "None").click();
+        h.run_steps(3);
+        let title = match &h.state().session.project.layouts[li].element(id).unwrap().kind {
+            ElementKind::Chart { title, .. } => title.clone(),
+            k => panic!("{k:?}"),
+        };
+        assert_eq!(title.as_deref(), Some(""), "no title, not the one typed");
+        assert!(h.state().layout.typing.is_empty());
     }
 
     /// Capture To Clipboard draws the text still being typed into the Format pane.

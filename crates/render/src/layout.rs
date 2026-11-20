@@ -3525,7 +3525,10 @@ impl ChartBars<'_> {
         let mut value_size = size;
         let (mut room_lo, mut room_hi) = (room(true, size), room(false, size));
         if room_lo + room_hi > beside * 0.5 {
-            value_size = (size * beside * 0.5 / (room_lo + room_hi)).max(0.0);
+            // Only the text grows smaller: the gaps beside it stay as they are.
+            let gaps = [room_lo, room_hi].iter().filter(|w| **w > 0.0).count() as f32 * gap;
+            let text = room_lo + room_hi - gaps;
+            value_size = (size * (beside * 0.5 - gaps) / text).max(0.0);
             (room_lo, room_hi) = (room(true, value_size), room(false, value_size));
         }
         let bar_area = beside - room_lo - room_hi;
@@ -3741,7 +3744,7 @@ mod tests {
 
     /// Ink (dark, opaque enough) in the pixels `xs` × `ys`, read unpremultiplied: a bar's
     /// half-covered edge is its own colour, not a dark one.
-    fn inked(c: &Canvas, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>) -> bool {
+    fn chart_inked(c: &Canvas, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>) -> bool {
         xs.flat_map(|x| ys.clone().map(move |y| (x, y)))
             .any(|(x, y)| c.pixmap().pixel(x, y).map(|p| p.demultiply()).is_some_and(|p| p.alpha() > 80 && p.blue() < 90 && p.red() < 90))
     }
@@ -3760,7 +3763,7 @@ mod tests {
         assert!(bar_blue(&c, 150, 105) && !bar_blue(&c, 150, 60), "-1 hangs below it");
         // Labelled, the labels sit under the columns, centred on them.
         let c = chart_drawn(&[(3.0, "a"), (1.0, "b")], serde_json::json!({"orientation": "Vertical", "label": "name", "title": ""}));
-        assert!(inked(&c, 40..60, 108..120) && inked(&c, 140..160, 108..120) && !bar_blue(&c, 50, 112));
+        assert!(chart_inked(&c, 40..60, 108..120) && chart_inked(&c, 140..160, 108..120) && !bar_blue(&c, 50, 112));
     }
 
     /// Values are written past each bar's end, the bars kept short enough to leave them room;
@@ -3770,19 +3773,20 @@ mod tests {
         let plain = chart_drawn(&[(3.0, "a")], serde_json::json!({}));
         let valued = chart_drawn(&[(3.0, "a")], serde_json::json!({"values": true}));
         // One row of 18 px under a 16 px title: the bar from 18.7 to 30.6 px down.
-        assert!(bar_blue(&plain, 194, 25) && !inked(&plain, 150..200, 18..32));
-        assert!(!bar_blue(&valued, 194, 25) && bar_blue(&valued, 150, 25) && inked(&valued, 185..200, 18..32), "3 at the bar's end");
+        assert!(bar_blue(&plain, 194, 25) && !chart_inked(&plain, 150..200, 18..32));
+        assert!(!bar_blue(&valued, 194, 25) && bar_blue(&valued, 150, 25) && chart_inked(&valued, 185..200, 18..32), "3 at the bar's end");
         let negative = chart_drawn(&[(3.0, "a"), (-1.0, "b")], serde_json::json!({"values": true}));
-        assert!(inked(&negative, 0..40, 36..50), "-1 left of its bar");
+        assert!(chart_inked(&negative, 0..40, 36..50), "-1 left of its bar");
     }
 
     /// Values too wide for the chart are written smaller, leaving the bars half its width.
     #[test]
     fn a_charts_wide_values_leave_its_bars_room() {
         let c = chart_drawn(&[(1e12, "a"), (-1e12, "b")], serde_json::json!({"values": true}));
-        let blue = (0..200).filter(|x| bar_blue(&c, *x, 25)).count();
-        assert!(blue > 30, "{blue} px of bar");
-        assert!(inked(&c, 150..200, 18..32), "its value beside it");
+        // The bars of 1e12 and -1e12 take the bar area between them: at least half of the 196 px.
+        let blue = (0..200).filter(|x| bar_blue(&c, *x, 25) || bar_blue(&c, *x, 43)).count();
+        assert!(blue >= 97, "{blue} px of bar");
+        assert!(chart_inked(&c, 150..200, 18..32), "its value beside it");
     }
 
     /// No title gives its room to the bars; a bar colour is drawn as given.
@@ -3791,7 +3795,7 @@ mod tests {
         let titled = chart_drawn(&[(3.0, "a")], serde_json::json!({}));
         let untitled = chart_drawn(&[(3.0, "a")], serde_json::json!({"title": ""}));
         assert!(!bar_blue(&titled, 150, 8) && bar_blue(&untitled, 150, 8));
-        assert!(inked(&titled, 0..20, 0..16) && !inked(&untitled, 0..20, 0..16), "the title, or none");
+        assert!(chart_inked(&titled, 0..20, 0..16) && !chart_inked(&untitled, 0..20, 0..16), "the title, or none");
         let rose = chart_drawn(&[(3.0, "a")], serde_json::json!({"bar_color": [194, 24, 91, 255]}));
         let p = rose.pixmap().pixel(150, 25).unwrap();
         assert!(p.red() > 180 && p.green() < 40 && p.blue() > 80 && p.blue() < 100, "{p:?}");
@@ -3803,8 +3807,8 @@ mod tests {
         let left = chart_drawn(&[(3.0, "Madrid")], serde_json::json!({"label": "name"}));
         let right = chart_drawn(&[(3.0, "Madrid")], serde_json::json!({"label": "name", "label_align": "Right"}));
         // The labels' column is 64 px wide.
-        assert!(inked(&left, 0..6, 18..32) && !inked(&left, 56..63, 18..32));
-        assert!(!inked(&right, 0..6, 18..32) && inked(&right, 50..63, 18..32));
+        assert!(chart_inked(&left, 0..6, 18..32) && !chart_inked(&left, 56..63, 18..32));
+        assert!(!chart_inked(&right, 0..6, 18..32) && chart_inked(&right, 50..63, 18..32));
     }
 
     /// Both map frames share the index feature, even though the locator draws a different map.

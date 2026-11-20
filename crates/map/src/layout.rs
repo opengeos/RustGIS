@@ -1670,10 +1670,15 @@ impl Tally {
         let Some(o) = other else { return };
         self.records += o.records;
         if o.numbers > 0 {
-            // Moved towards the other's mean by the other's share of the numbers, each weighted
-            // before they are taken apart, so neither is summed back and equal means stay as they are.
+            // Moved towards the other's mean by the other's share of the numbers. Of the same sign,
+            // their weighted difference stays in range and equal means stay as they are; of opposite
+            // signs, their weighted sum does.
             let w = o.numbers as f64 / (self.numbers + o.numbers) as f64;
-            self.mean += o.mean * w - self.mean * w;
+            if (self.mean < 0.0) == (o.mean < 0.0) {
+                self.mean += o.mean * w - self.mean * w;
+            } else {
+                self.mean = self.mean * (1.0 - w) + o.mean * w;
+            }
         }
         self.numbers += o.numbers;
         self.sum += o.sum;
@@ -2676,6 +2681,22 @@ mod tests {
             .chart_data(&huge)
             .unwrap();
         assert_eq!((bars(&other).last().copied(), other.out_of_range), (Some((f64::MAX, CHART_OTHER)), 0));
+        // Gathered from groups of opposite signs, too: the largest number and twice its opposite.
+        let mut mixed = places();
+        mixed.features.clear();
+        for (region, n) in [("A", f64::MAX), ("B", -f64::MAX), ("B", -f64::MAX)] {
+            mixed.push(
+                None,
+                vec![rustgis_data::Value::Text("x".into()), rustgis_data::Value::Text(region.into()), rustgis_data::Value::Float(n)],
+            );
+        }
+        let all = chart(
+            serde_json::json!({"field": "people", "group": "region", "statistic": "mean", "order": "layer", "bars": 1, "other": true}),
+        )
+        .chart_data(&mixed)
+        .unwrap();
+        let (v, name) = bars(&all)[0];
+        assert!(name == CHART_OTHER && (v / (-f64::MAX / 3.0) - 1.0).abs() < 1e-9, "{:?}", bars(&all));
     }
 
     /// Under the balanced light (#1977) flat ground is drawn in the ramp's own colour, so a relief's
