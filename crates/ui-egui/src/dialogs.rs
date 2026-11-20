@@ -385,17 +385,23 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let frame = egui::Frame::window(&ctx.global_style());
     let width = crate::widgets::dialog_width(ctx, preferred_width, frame);
-    let compact = app.touch.is_some() || width < preferred_width;
+    let touch = app.touch.is_some();
+    let compact = touch || width < preferred_width;
     let window = egui::Window::new(tl!(title)).id(window_id).frame(frame).open(&mut open).collapsible(is_add_service).resizable(false);
     let window = if compact {
-        // Recenter after a rotation or keyboard resize. Scrolling keeps tall forms and rows
-        // with their own minimum widths reachable inside the viewport.
         let outer_width = width + frame.total_margin().sum().x;
-        window.anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO).min_width(outer_width).max_width(outer_width)
+        window.min_width(outer_width).max_width(outer_width)
+    } else if is_add_service {
+        window.auto_sized()
     } else {
-        // The desktop dialog remembers where it was moved.
-        let window = window.pivot(Align2::CENTER_CENTER).default_pos(ctx.content_rect().center() + vec2(0.0, -40.0));
-        if is_add_service { window.auto_sized() } else { window }
+        window
+    };
+    let window = if touch {
+        // Recenter after a rotation or keyboard resize.
+        window.anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
+    } else {
+        // Even a compact desktop dialog remembers where it was moved.
+        window.pivot(Align2::CENTER_CENTER).default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
     };
     let mut contents = |ui: &mut egui::Ui| {
         ui.set_width(width);
@@ -807,6 +813,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         }
     };
     window.show(ctx, |ui| {
+        // Keep tall forms and rows with minimum widths reachable in compact dialogs.
         if compact {
             egui::ScrollArea::both().auto_shrink([false, true]).show(ui, contents);
         } else {
@@ -2941,6 +2948,43 @@ fn calculation_fields(dataset: &rustgis_engine::data::Dataset) -> impl Iterator<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_desktop_dialog_remembers_its_dragged_position() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = RustGisApp::with_sample();
+        app.dialogs.open("addUrl", &app.session).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(480.0, 720.0))
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        h.run();
+        let title = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            let window = h.get_by_role_and_label(Role::Window, "Add Data From URL").rect();
+            egui::pos2(window.center().x, window.top() + 12.0)
+        };
+        let start = title(&h);
+        let end = start + vec2(0.0, -100.0);
+        h.hover_at(start);
+        h.run();
+        h.drag_at(start);
+        h.run();
+        h.hover_at(end);
+        h.run();
+        h.drop_at(end);
+        h.run();
+        let moved = title(&h);
+        assert!(moved.y < start.y - 80.0, "title moved from {start:?} to {moved:?}");
+
+        h.state_mut().dialogs.open = None;
+        h.run();
+        let app = h.state_mut();
+        app.dialogs.open("addUrl", &app.session).unwrap();
+        h.run();
+        assert_eq!(title(&h), moved);
+    }
 
     /// A clause's buttons add a field as the expression names it (`"Pop Est"` in quotes, a plain
     /// name as it is), and every operator, `>=` and `NOT` among them; at most `MAX_FIELD_CHIPS`
