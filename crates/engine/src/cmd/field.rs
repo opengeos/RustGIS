@@ -401,7 +401,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         map.layers.retain(|l| {
             if copied.contains(&l.id) {
                 losses.push(format!(
-                    "{}: {} feature(s) in the offline area were left out because the field package would be too large: make the offline area smaller, or filter the layer, then package again",
+                    "{}: {} feature(s) in the offline area were left out because the field package would be too large: package a smaller area, or save the rows you need as a separate layer (for example, export the filtered rows) and package that layer",
                     l.name,
                     l.dataset.features.len()
                 ));
@@ -548,7 +548,7 @@ fn copy_streams(
             Ok(None) => omitted.push(layer.id),
             Err(error) => {
                 rustgis_data::progress::check().map_err(|e| e.to_string())?;
-                losses.push(format!("{}: streamed layer couldn't be put in the field package ({error})", layer.name));
+                losses.push(format!("1 streamed layer was left out of the field package: {} ({error})", layer.name));
                 omitted.push(layer.id);
             }
         }
@@ -622,7 +622,7 @@ fn copy_stream(
     }
     if !fits {
         losses.push(format!(
-            "{}: {inside} feature(s) in the offline area were left out because the streamed layer exceeded the field package budget: make the offline area smaller, or filter the layer, then package again",
+            "{}: {inside} feature(s) in the offline area were left out because the streamed layer exceeded the field package budget: package a smaller area, or save the rows you need as a separate layer (for example, export the filtered rows) and package that layer",
             layer.name
         ));
         return Ok(None);
@@ -1610,6 +1610,43 @@ mod tests {
         assert!(home.notices_since(mark).iter().any(|n| n.text.contains("Bring Back skipped 1 photo")));
         assert!(home.notices_since(mark).iter().any(|n| n.text.contains("Bring Back skipped 1 layer")));
         assert!(home.map().layer_by_name("Streamed").unwrap().is_streamed());
+    }
+
+    /// A same-length rewrite can move a point into the area without invalidating its byte offset.
+    #[test]
+    fn field_package_reports_a_streamed_geojson_changed_since_opening() {
+        let temp = Temp::new("changed-geojson");
+        let source = temp.path().join("places.geojson");
+        let write_point = |x| {
+            let data = json!({
+                "type": "FeatureCollection",
+                "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [x, 1]}}],
+            });
+            std::fs::write(&source, data.to_string()).unwrap();
+        };
+        write_point(9);
+        let mut home = Session::new(Project::default());
+        home.run("layer.addData", &json!({"name": "Places", "path": source, "stream": true})).unwrap();
+        assert!(home.map().layer_by_name("Places").unwrap().is_streamed());
+
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        write_point(1);
+        // Give the rewrite a distinct timestamp even on filesystems with coarse timestamps.
+        std::fs::File::options().write(true).open(&source).unwrap().set_modified(modified + std::time::Duration::from_secs(4)).unwrap();
+
+        let mark = home.notice_mark();
+        let (_, bytes) = package(&mut home, &json!({"name": "Site", "extent": [0, 0, 2, 2]})).unwrap();
+        let into = temp.path().join("unpacked");
+        let (text, notices) = unpack_into(&bytes, &into).unwrap();
+        let project = project_in(&text, &into).unwrap();
+        assert!(project.maps[0].layer_by_name("Places").is_none(), "the stale index included an empty reference layer");
+        let notice = |text: &str| {
+            text.contains("Places")
+                && text.contains("1 streamed layer")
+                && text.contains("changed on disk since it was opened. Reopen the layer")
+        };
+        assert!(notices.iter().any(|n| notice(n)), "{notices:?}");
+        assert!(home.notices_since(mark).iter().any(|n| notice(&n.text)));
     }
 
     #[test]

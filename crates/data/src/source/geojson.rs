@@ -7,7 +7,7 @@
 //! way); a larger one is read through a buffer, so it's never held whole. Smaller files are loaded
 //! whole by `io::read_path`.
 
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -34,10 +34,42 @@ struct Place {
     len: u32,
 }
 
+/// Metadata of the opened file, cheap to compare without reading the whole source again.
+#[derive(PartialEq, Eq)]
+struct FileVersion {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    // On Unix, also catch replacements and edits that preserve the modification time.
+    #[cfg(unix)]
+    identity_and_change: (u64, u64, i64, i64),
+}
+
+impl FileVersion {
+    fn of(metadata: &Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(unix)]
+            identity_and_change: (metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec()),
+        }
+    }
+
+    /// Checks the same handle used for the scan or visit, including changes during the read.
+    fn check(&self, file: &File) -> Result<()> {
+        if *self != Self::of(&file.metadata()?) {
+            return Err(bad("the file changed on disk since it was opened. Reopen the layer and try again"));
+        }
+        Ok(())
+    }
+}
+
 /// A GeoJSON FeatureCollection read in place.
 pub struct GeoJsonSource {
     info: SourceInfo,
     path: PathBuf,
+    version: FileVersion,
     places: Vec<Place>,
     /// Each feature's box in the file's own coordinates, rounded outward (NaN for a feature
     /// without geometry).
@@ -145,9 +177,13 @@ impl GeoJsonSource {
     /// scan it, and a larger one through a buffer.
     pub(crate) fn open_with(path: &Path, name: &str, in_memory: u64) -> Result<GeoJsonSource> {
         use serde::de::DeserializeSeed;
+        let mut file = crate::provenance::open(path)?;
+        let version = FileVersion::of(&file.metadata()?);
         let mut scan = Scan::default();
-        let rest = if std::fs::metadata(path)?.len() <= in_memory {
-            let text = crate::provenance::read_to_string(path)?;
+        let rest = if version.len <= in_memory {
+            let mut text = String::new();
+            file.read_to_string(&mut text)?;
+            crate::provenance::buffer(path, &file, text.as_bytes());
             // Its objects and vertices would all become a JSON tree, only to be refused below.
             if crate::cityjson::looks_like_cityjson(&text) {
                 return Err(DataError::Unsupported("only GeoJSON FeatureCollections are read in place".into()));
@@ -155,8 +191,8 @@ impl GeoJsonSource {
             crate::io::stream_features(&text, &mut InText { scan: &mut scan, start: text.as_ptr() as usize }).map_err(bad)?
         } else {
             let read = std::rc::Rc::new(std::cell::Cell::new(0u64));
-            let file = Counting { inner: BufReader::with_capacity(BUFFER, crate::provenance::open(path)?), read: read.clone() };
-            let mut de = serde_json::Deserializer::from_reader(file);
+            let input = Counting { inner: BufReader::with_capacity(BUFFER, &mut file), read: read.clone() };
+            let mut de = serde_json::Deserializer::from_reader(input);
             let rest = Top { scan: &mut scan, read }.deserialize(&mut de).map_err(bad)?;
             // Only whitespace may follow, as when read whole.
             de.end().map_err(bad)?;
@@ -176,7 +212,8 @@ impl GeoJsonSource {
         let mut failed = Vec::new();
         let mut extent = scan.extent;
         if let Some(t) = reproject.transformer() {
-            let pass = convert_pass(path, &scan.places, t)?;
+            file.rewind()?;
+            let pass = convert_pass(&mut file, &scan.places, t);
             extent = pass.extent;
             for (kept, lost) in scan.kinds.iter_mut().zip(pass.dropped) {
                 *kept = kept.saturating_sub(lost);
@@ -219,7 +256,8 @@ impl GeoJsonSource {
             info.drop_zm(Some(zm));
         }
         let unreadable = scan.skipped;
-        Ok(GeoJsonSource { info, path: path.to_path_buf(), places: scan.places, boxes: scan.boxes, reproject, failed, unreadable })
+        version.check(&file)?;
+        Ok(GeoJsonSource { info, path: path.to_path_buf(), version, places: scan.places, boxes: scan.boxes, reproject, failed, unreadable })
     }
 
     /// The features a request matches, in file order: every one without an extent; otherwise
@@ -266,11 +304,14 @@ impl FeatureSource for GeoJsonSource {
     }
 
     /// Visits the matching file records in order and retains only one batch of decoded rows.
+    /// A changed file invalidates the saved bounds and offsets, even for records the bounds
+    /// would skip. A successful visit uses the same file version as the index.
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         let req = Request { extent, limit: usize::MAX };
         let native = extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         let mut f = BufReader::with_capacity(BUFFER, crate::provenance::open(&self.path)?);
+        self.version.check(f.get_ref())?;
         let mut pos = 0;
         let mut buf = Vec::new();
         let mut batch = Batch { complete: true, ..Batch::default() };
@@ -290,6 +331,7 @@ impl FeatureSource for GeoJsonSource {
             }
         }
         chunks.flush()?;
+        self.version.check(f.get_ref())?;
         Ok(batch)
     }
 
@@ -379,7 +421,7 @@ impl GeoJsonSource {
 
 /// The feature at `place`, read through `f` (at `pos`, which is kept up to date): `None` when the
 /// file has changed since it was opened.
-fn read_place(f: &mut BufReader<File>, pos: &mut u64, buf: &mut Vec<u8>, place: &Place) -> Option<Json> {
+fn read_place(f: &mut BufReader<impl Read + Seek>, pos: &mut u64, buf: &mut Vec<u8>, place: &Place) -> Option<Json> {
     // Ahead and near: through the buffer; otherwise a seek.
     let read = (|| -> std::io::Result<()> {
         match i64::try_from(place.offset.wrapping_sub(*pos)) {
@@ -414,8 +456,8 @@ struct Pass {
 }
 
 /// A second pass over the file, made only for a declared coordinate system.
-fn convert_pass(path: &Path, places: &[Place], t: &crate::raster::Transformer) -> Result<Pass> {
-    let mut f = BufReader::with_capacity(BUFFER, crate::provenance::open(path)?);
+fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transformer) -> Pass {
+    let mut f = BufReader::with_capacity(BUFFER, file);
     let (mut pos, mut buf) = (0u64, Vec::new());
     let mut pass = Pass { failed: Vec::new(), dropped: [0; 3], extent: Extent::EMPTY };
     for (i, place) in places.iter().enumerate() {
@@ -434,7 +476,7 @@ fn convert_pass(path: &Path, places: &[Place], t: &crate::raster::Transformer) -
             }
         }
     }
-    Ok(pass)
+    pass
 }
 
 /// A reader counting the bytes read through it, for features' places in the file. The JSON reader
