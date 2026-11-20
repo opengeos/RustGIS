@@ -20,6 +20,12 @@ use rustgis_render::{View, render};
 /// Frames kept so far (`BENCH_PNG`).
 static FRAME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Stops the run: its numbers would be wrong.
+fn fail(why: impl std::fmt::Display) -> ! {
+    eprintln!("{why}");
+    std::process::exit(1)
+}
+
 fn main() {
     let Some(path) = std::env::args().nth(1) else {
         eprintln!("usage: vector_layers_bench map.gpkg");
@@ -37,16 +43,14 @@ fn main() {
     let file = std::path::Path::new(&path);
     let names = match rustgis_data::source::layers(file) {
         Ok(n) => n,
-        Err(e) => {
-            eprintln!("{path}: {e}");
-            return;
-        }
+        Err(e) => fail(format!("{path}: {e}")),
     };
+    // Every table, or no run: "all layers" would time fewer.
     let mut read = Vec::new();
     for name in names {
         match rustgis_data::source::open_path(file, Some(&name)).and_then(|src| rustgis_data::source::materialize(src.as_ref())) {
             Ok((d, _)) => read.push(d),
-            Err(e) => eprintln!("{name}: {e}"),
+            Err(e) => fail(format!("{name}: {e}")),
         }
     }
     println!("read {} layers in {:.1} s", read.len(), t.elapsed().as_secs_f64());
@@ -66,11 +70,19 @@ fn main() {
     }
     let total: (usize, usize) = layers.iter().fold((0, 0), |(r, v), l| (r + l.2, v + l.3));
     println!("{} layers, {} features, {} vertices", layers.len(), total.0, total.1);
+    if !(extent.min_x.is_finite() && extent.max_x.is_finite() && extent.min_y.is_finite() && extent.max_y.is_finite())
+        || (extent.max_x <= extent.min_x && extent.max_y <= extent.min_y)
+    {
+        fail(format!("{path}: no features with an extent to fit the views to"));
+    }
 
     let (lo, hi) = (lonlat_to_merc(Coord::new(extent.min_x, extent.min_y)), lonlat_to_merc(Coord::new(extent.max_x, extent.max_y)));
     let centre = Coord::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
     // Web Mercator units a pixel showing all of it across 1920 points (a 2× screen shows the same).
     let whole = ((hi.x - lo.x) / 1920.0).max((hi.y - lo.y) / 1080.0);
+    if !(whole.is_finite() && whole > 0.0) {
+        fail(format!("{path}: an extent that doesn't project to Web Mercator (not longitude/latitude?)"));
+    }
     println!(
         "extent {:.3},{:.3} to {:.3},{:.3}; whole map at {whole:.1} Mercator m a point",
         extent.min_x, extent.min_y, extent.max_x, extent.max_y
@@ -84,9 +96,10 @@ fn main() {
         let steps = ((b - a) / (480.0 * res)).ceil().max(1.0) as usize;
         (0..=steps).map(|i| camera(Coord::new(a + (b - a) * i as f64 / steps as f64, centre.y), res)).collect()
     };
-    // From the whole map to about a metre a point, 1.5× a step, and back out.
-    let mut zoom: Vec<Camera> = Vec::new();
-    let mut res = whole;
+    // From the whole map to about a metre a point, 1.5× a step, and back out; at least the whole
+    // map, for a map smaller than that.
+    let mut zoom: Vec<Camera> = vec![camera(centre, whole)];
+    let mut res = whole / 1.5;
     while res > 1.0 {
         zoom.push(camera(centre, res));
         res /= 1.5;
@@ -104,17 +117,20 @@ fn main() {
         }
     };
     let view = |camera: Camera, ppp: f64| View { width: 1920.0, height: 1080.0, pixels_per_point: ppp, camera, sky: false };
-    // Each frame's time, ms.
+    // Each frame's time, ms; a frame not drawn stops the run.
     let run = |m: &mut Map, cams: &[Camera], ppp: f64| -> Vec<f64> {
         cams.iter()
             .map(|c| {
                 let t = std::time::Instant::now();
-                let r = render(m, &view(*c, ppp));
+                let Some(r) = render(m, &view(*c, ppp)) else { fail(format!("no frame drawn at {:.1} m a point", c.res)) };
                 let ms = t.elapsed().as_secs_f64() * 1000.0;
                 // `BENCH_PNG=dir` keeps each frame drawn, to look at or compare.
-                if let (Some(dir), Some(r)) = (std::env::var_os("BENCH_PNG"), &r) {
+                if let Some(dir) = std::env::var_os("BENCH_PNG") {
                     let n = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let _ = r.pixmap.save_png(std::path::Path::new(&dir).join(format!("frame{n:03}.png")));
+                    let to = std::path::Path::new(&dir).join(format!("frame{n:03}.png"));
+                    if let Err(e) = r.pixmap.save_png(&to) {
+                        fail(format!("{}: {e}", to.display()));
+                    }
                 }
                 ms
             })

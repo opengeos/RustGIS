@@ -14,8 +14,10 @@
 //! pixel shortcuts are drawn exactly as on the whole frame.
 //!
 //! Only frames of at least [`MIN_PIXELS`] are drawn in bands, never in the browser (one thread).
-//! What waits is at most about [`MAX_KEPT_BYTES`]: past it, it is drawn and the list starts again.
+//! What waits is at most about [`MAX_KEPT_BYTES`]: past it, it is drawn and the list starts again,
+//! and a thing bigger than that alone is drawn straight away.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -29,7 +31,8 @@ pub(crate) const BAND_ROWS: u32 = 128;
 pub(crate) const MIN_PIXELS: u64 = 1 << 20;
 
 /// About the most bytes of drawing kept before it is drawn: each kept thing's own size, its path's
-/// points, a pixmap's pixels, and the outline a wide stroke becomes ([`OUTLINE_GROWTH`]).
+/// points (a dashed stroke's dashes), a pixmap's pixels (a shared one's once), and the outline a
+/// wide stroke becomes ([`OUTLINE_GROWTH`]).
 const MAX_KEPT_BYTES: usize = 32 << 20;
 
 /// How many times a path's size its outline is counted at, for a stroke wider than a hairline:
@@ -41,7 +44,7 @@ const ENTRY_BYTES: usize = std::mem::size_of::<Kept>();
 
 /// Drawing that reaches fewer pixels than this, summed over what is kept, is drawn on the calling
 /// thread alone (still in bands): starting threads would cost more than they save. A kept thing
-/// counts the full width of the rows it reaches, and a [`PER_OP_PIXELS`] more for its own setup.
+/// counts the rows and columns it reaches, and a [`PER_OP_PIXELS`] more for its own setup.
 const THREADS_FROM_PIXELS: u64 = 1 << 20;
 
 /// What a kept thing's setup (its edges, its paint's pipeline) counts in pixels.
@@ -72,19 +75,20 @@ impl PixelOp {
         match self {
             PixelOp::Splat { cx, cy, color, coverage } => crate::splat_color(pm, *cx, cy - top as f32, *color, *coverage),
             PixelOp::SmallPolygon { b, width, fill, stroke, share } => {
-                let t = top as f32;
-                crate::small_polygon_pixels(pm, [b[0], b[1] - t, b[2], b[3] - t], *width, *fill, *stroke, *share);
+                crate::small_polygon_pixels(pm, top, *b, *width, *fill, *stroke, *share)
             }
             PixelOp::Sprite { pixmap, x, y } => crate::blend_over(pm, pixmap, *x, y - i64::from(top)),
         }
     }
 
-    /// The frame rows it can touch, a little wide.
-    fn rows(&self) -> (f32, f32) {
+    /// The frame rows it can touch, a little wide, and how many columns.
+    fn reach(&self) -> ((f32, f32), f32) {
         match self {
-            PixelOp::Splat { cy, .. } => (cy - 2.0, cy + 2.0),
-            PixelOp::SmallPolygon { b, width, .. } => (b[1] - width - 2.0, b[3] + width + 2.0),
-            PixelOp::Sprite { pixmap, y, .. } => (*y as f32 - 1.0, (*y + i64::from(pixmap.height())) as f32 + 1.0),
+            PixelOp::Splat { cy, .. } => ((cy - 2.0, cy + 2.0), 4.0),
+            PixelOp::SmallPolygon { b, width, .. } => ((b[1] - width - 2.0, b[3] + width + 2.0), b[2] - b[0] + 2.0 * width + 4.0),
+            PixelOp::Sprite { pixmap, y, .. } => {
+                ((*y as f32 - 1.0, (*y + i64::from(pixmap.height())) as f32 + 1.0), pixmap.width() as f32 + 2.0)
+            }
         }
     }
 }
@@ -121,11 +125,13 @@ enum Op {
     Nothing,
 }
 
-/// One thing kept, and the frame rows it can reach (a band past them skips it; a reach that isn't
-/// a number reaches every band).
+/// One thing kept, the frame rows it can reach (a band past them skips it; a reach that isn't a
+/// number reaches every band), and how many columns (for the work it is: not a number, the frame's
+/// width).
 struct Kept {
     op: Op,
     rows: (f32, f32),
+    cols: f32,
 }
 
 /// The drawing a canvas keeps for its bands (see the module).
@@ -133,6 +139,9 @@ struct Kept {
 pub(crate) struct Bands {
     kept: Vec<Kept>,
     bytes: usize,
+    /// The shared pixmaps kept (by address, each alive in `kept`), counted once each: a cache may
+    /// let one go while it waits here.
+    shared: HashSet<usize>,
 }
 
 impl Bands {
@@ -147,63 +156,101 @@ impl Bands {
         self.bytes >= MAX_KEPT_BYTES
     }
 
-    /// Keeps `path` filled with `paint`; `false` (nothing kept) for a paint that can't be kept, a
-    /// pattern (it borrows its pixmap).
+    /// Keeps `path` filled with `paint`; `false` (nothing kept: draw it straight away) for a paint
+    /// that can't be kept, a pattern (it borrows its pixmap), or a path bigger than all that may
+    /// wait ([`MAX_KEPT_BYTES`]).
     pub(crate) fn fill(&mut self, path: &Path, paint: &Paint, rule: FillRule, ts: Transform) -> bool {
+        let bytes = ENTRY_BYTES + path_bytes(path);
+        if bytes > MAX_KEPT_BYTES {
+            return false;
+        }
         let Some(paint) = owned(paint) else { return false };
-        let rows = rows_of(path.bounds(), ts, 0.0);
-        self.bytes += ENTRY_BYTES + path_bytes(path);
-        self.kept.push(Kept { op: Op::Fill { path: path.clone(), paint, rule, ts }, rows });
+        let (rows, cols) = rows_of(path.bounds(), ts, 0.0);
+        self.bytes += bytes;
+        self.kept.push(Kept { op: Op::Fill { path: path.clone(), paint, rule, ts }, rows, cols });
         true
     }
 
-    /// Keeps `path` stroked; `false` as for [`Bands::fill`].
+    /// Keeps `path` stroked; `false` as for [`Bands::fill`]. A dashed stroke is kept dashed (as
+    /// tiny-skia dashes it, before stroking), so its dashes count in full.
     pub(crate) fn stroke(&mut self, path: &Path, paint: &Paint, stroke: &Stroke, ts: Transform) -> bool {
+        let growth = if hairline(paint, stroke, ts) { 1 } else { OUTLINE_GROWTH };
+        if ENTRY_BYTES + path_bytes(path) * growth > MAX_KEPT_BYTES {
+            return false;
+        }
         let Some(paint) = owned(paint) else { return false };
-        // Half the width past the path, a mitre further; dashes stay within it.
+        let (path, stroke) = match &stroke.dash {
+            // tiny-skia draws nothing for a negative width, or for a path it can't dash.
+            _ if stroke.width < 0.0 => return true,
+            Some(dash) => {
+                let Some(dashed) = path.dash(dash, PathStroker::compute_resolution_scale(&ts)) else { return true };
+                (dashed, Stroke { dash: None, ..stroke.clone() })
+            }
+            None => (path.clone(), stroke.clone()),
+        };
+        let bytes = ENTRY_BYTES + path_bytes(&path) * growth;
+        if bytes > MAX_KEPT_BYTES {
+            return false;
+        }
+        // Half the width past the path, a mitre further.
         let (sx, sy) = ts.get_scale();
         let reach = stroke.width.max(1.0) * stroke.miter_limit.max(1.0) * sx.max(sy).max(1.0);
-        let rows = rows_of(path.bounds(), ts, reach);
-        let growth = if hairline(&paint, stroke, ts) { 1 } else { OUTLINE_GROWTH };
-        self.bytes += ENTRY_BYTES + path_bytes(path) * growth;
-        self.kept.push(Kept { op: Op::Stroke { path: path.clone(), paint, stroke: stroke.clone(), ts }, rows });
+        let (rows, cols) = rows_of(path.bounds(), ts, reach);
+        self.bytes += bytes;
+        self.kept.push(Kept { op: Op::Stroke { path, paint, stroke, ts }, rows, cols });
         true
     }
 
     /// Keeps `rect` filled; `false` as for [`Bands::fill`].
     pub(crate) fn rect(&mut self, rect: Rect, paint: &Paint, ts: Transform) -> bool {
         let Some(paint) = owned(paint) else { return false };
-        let rows = rows_of(rect, ts, 0.0);
+        let (rows, cols) = rows_of(rect, ts, 0.0);
         self.bytes += ENTRY_BYTES;
-        self.kept.push(Kept { op: Op::Rect { rect, paint, ts }, rows });
+        self.kept.push(Kept { op: Op::Rect { rect, paint, ts }, rows, cols });
         true
     }
 
-    /// Keeps a copy of `pixmap` drawn with its top left at (`x`, `y`) moved by `ts`.
-    pub(crate) fn pixmap(&mut self, x: i32, y: i32, pixmap: tiny_skia::PixmapRef, paint: &PixmapPaint, ts: Transform) {
+    /// Keeps a copy of `pixmap` drawn with its top left at (`x`, `y`) moved by `ts`; `false` (draw
+    /// it straight away) for one bigger than all that may wait.
+    pub(crate) fn pixmap(&mut self, x: i32, y: i32, pixmap: tiny_skia::PixmapRef, paint: &PixmapPaint, ts: Transform) -> bool {
+        if ENTRY_BYTES + pixmap.data().len() > MAX_KEPT_BYTES {
+            return false;
+        }
         self.bytes += pixmap.data().len();
         self.keep_pixmap(x, y, Arc::new(pixmap.to_owned()), paint, ts);
+        true
     }
 
-    /// Keeps `pixmap`, drawn in many places (a picture marker at every point), moved by `ts`: shared,
-    /// not copied.
+    /// Keeps `pixmap`, drawn in many places (a picture at every point), moved by `ts`: shared, not
+    /// copied, its pixels counted once.
     pub(crate) fn shared_pixmap(&mut self, pixmap: &Arc<Pixmap>, paint: &PixmapPaint, ts: Transform) {
+        self.count_shared(pixmap);
         self.keep_pixmap(0, 0, pixmap.clone(), paint, ts);
+    }
+
+    /// Counts a shared pixmap's pixels the first time it is kept.
+    fn count_shared(&mut self, pixmap: &Arc<Pixmap>) {
+        if self.shared.insert(Arc::as_ptr(pixmap) as usize) {
+            self.bytes += pixmap.data().len();
+        }
     }
 
     fn keep_pixmap(&mut self, x: i32, y: i32, pixmap: Arc<Pixmap>, paint: &PixmapPaint, ts: Transform) {
         let at = ts.pre_translate(x as f32, y as f32);
-        let rows =
-            Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32).map_or((f32::NAN, f32::NAN), |r| rows_of(r, at, 0.0));
+        let (rows, cols) = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
+            .map_or(((f32::NAN, f32::NAN), f32::NAN), |r| rows_of(r, at, 0.0));
         self.bytes += ENTRY_BYTES;
-        self.kept.push(Kept { op: Op::Pixmap { x, y, pixmap, paint: *paint, ts }, rows });
+        self.kept.push(Kept { op: Op::Pixmap { x, y, pixmap, paint: *paint, ts }, rows, cols });
     }
 
     /// Keeps a pixel shortcut.
     pub(crate) fn pixels(&mut self, op: PixelOp) {
-        let rows = op.rows();
+        if let PixelOp::Sprite { pixmap, .. } = &op {
+            self.count_shared(pixmap);
+        }
+        let (rows, cols) = op.reach();
         self.bytes += ENTRY_BYTES;
-        self.kept.push(Kept { op: Op::Pixels(op), rows });
+        self.kept.push(Kept { op: Op::Pixels(op), rows, cols });
     }
 
     /// Draws everything kept on `pm`, in bands, on up to the user's thread count
@@ -220,6 +267,7 @@ impl Bands {
         }
         let mut kept = std::mem::take(&mut self.kept);
         self.bytes = 0;
+        self.shared.clear();
         let stop = crate::cancel::current();
         let stopped = || stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed));
         if stopped() {
@@ -227,13 +275,7 @@ impl Bands {
         }
         let (w, h) = (pm.width(), pm.height());
         let bands = h.div_ceil(BAND_ROWS) as usize;
-        let reach = |k: &Kept| -> u64 {
-            let rows = (k.rows.1.min(h as f32) - k.rows.0.max(0.0)).max(0.0);
-            let rows = if rows.is_finite() { rows as u64 } else { u64::from(h) };
-            rows * u64::from(w) + PER_OP_PIXELS
-        };
-        let work: u64 = kept.iter().map(reach).fold(0, u64::saturating_add);
-        let threads = if work < THREADS_FROM_PIXELS { 1 } else { most.clamp(1, bands.max(1)) };
+        let threads = threads_for(&kept, w, h, most);
         stroke_wide(&mut kept, threads, &stopped);
         if stopped() {
             return;
@@ -278,6 +320,19 @@ impl Bands {
     }
 }
 
+/// How many threads draw `kept` on a `w` × `h` frame, at most `most`: one below
+/// [`THREADS_FROM_PIXELS`] of work, counted as the pixels each kept thing reaches.
+fn threads_for(kept: &[Kept], w: u32, h: u32, most: usize) -> usize {
+    let reach = |k: &Kept| -> u64 {
+        let rows = (k.rows.1.min(h as f32) - k.rows.0.max(0.0)).max(0.0);
+        let rows = if rows.is_finite() { rows as u64 } else { u64::from(h) };
+        let cols = if k.cols.is_finite() { k.cols.clamp(0.0, w as f32) as u64 } else { u64::from(w) };
+        rows * cols + PER_OP_PIXELS
+    };
+    let work: u64 = kept.iter().map(reach).fold(0, u64::saturating_add);
+    if work < THREADS_FROM_PIXELS { 1 } else { most.clamp(1, h.div_ceil(BAND_ROWS).max(1) as usize) }
+}
+
 /// Draws `op` on `band`, whose first row is the frame's row `top`.
 fn draw_op(band: &mut PixmapMut, op: &Op, top: u32) {
     let up = -(top as f32);
@@ -302,8 +357,9 @@ fn draw_op(band: &mut PixmapMut, op: &Op, top: u32) {
 }
 
 /// Strokes wider than a hairline turned into the fills tiny-skia would draw for them
-/// (`PixmapMut::stroke_path`: dashed, then `Path::stroke`, then filled nonzero), once for every
-/// band; on `threads` threads, looking at `stopped` every [`LOOK_EVERY`] strokes.
+/// (`PixmapMut::stroke_path`: dashed, as [`Bands::stroke`] keeps them, then `Path::stroke`, then
+/// filled nonzero), once for every band; on `threads` threads, looking at `stopped` every
+/// [`LOOK_EVERY`] strokes.
 fn stroke_wide(kept: &mut [Kept], threads: usize, stopped: &(dyn Fn() -> bool + Sync)) {
     let chunk = kept.len().div_ceil(threads.max(1) * 4).max(1);
     let slots: Vec<std::sync::Mutex<Option<&mut [Kept]>>> = kept.chunks_mut(chunk).map(|c| std::sync::Mutex::new(Some(c))).collect();
@@ -314,23 +370,14 @@ fn stroke_wide(kept: &mut [Kept], threads: usize, stopped: &(dyn Fn() -> bool + 
                 return;
             }
             let Op::Stroke { path, paint, stroke, ts } = &k.op else { continue };
-            if stroke.width < 0.0 {
-                k.op = Op::Nothing;
-                continue;
-            }
             if hairline(paint, stroke, *ts) {
                 continue;
             }
-            let res = PathStroker::compute_resolution_scale(ts);
-            let dashed = match &stroke.dash {
-                Some(d) => path.dash(d, res),
-                None => Some(path.clone()),
-            };
-            let Some(outline) = dashed.and_then(|p| p.stroke(stroke, res)) else {
+            let Some(outline) = path.stroke(stroke, PathStroker::compute_resolution_scale(ts)) else {
                 k.op = Op::Nothing;
                 continue;
             };
-            k.rows = rows_of(outline.bounds(), *ts, 0.0);
+            (k.rows, k.cols) = rows_of(outline.bounds(), *ts, 0.0);
             k.op = Op::Fill { path: outline, paint: paint.clone(), rule: FillRule::Winding, ts: *ts };
         }
     });
@@ -357,8 +404,8 @@ fn hairline(paint: &Paint, stroke: &Stroke, ts: Transform) -> bool {
 }
 
 /// The frame rows `rect` reaches once moved by `ts`, `reach` further each way and a pixel more
-/// for anti-aliasing.
-fn rows_of(rect: Rect, ts: Transform, reach: f32) -> (f32, f32) {
+/// for anti-aliasing, and how many columns, as far.
+fn rows_of(rect: Rect, ts: Transform, reach: f32) -> ((f32, f32), f32) {
     let mut corners = [
         Point::from_xy(rect.left(), rect.top()),
         Point::from_xy(rect.right(), rect.top()),
@@ -366,11 +413,13 @@ fn rows_of(rect: Rect, ts: Transform, reach: f32) -> (f32, f32) {
         Point::from_xy(rect.right(), rect.bottom()),
     ];
     ts.map_points(&mut corners);
-    let (lo, hi) = corners.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    let span =
+        |at: fn(&Point) -> f32| corners.iter().map(at).fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    let ((lo, hi), (left, right)) = (span(|p| p.y), span(|p| p.x));
     if !(lo.is_finite() && hi.is_finite()) {
-        return (f32::NAN, f32::NAN);
+        return ((f32::NAN, f32::NAN), f32::NAN);
     }
-    (lo - reach - 1.0, hi + reach + 1.0)
+    ((lo - reach - 1.0, hi + reach + 1.0), right - left + 2.0 * (reach + 1.0))
 }
 
 fn path_bytes(path: &Path) -> usize {
@@ -516,13 +565,13 @@ mod tests {
                 }
                 7 => {
                     let at = if i % 2 == 0 { Transform::identity() } else { Transform::from_rotate_at(17.0, cx, cy) };
-                    bands.pixmap(
+                    assert!(bands.pixmap(
                         cx as i32,
                         cy as i32,
                         sprite.as_ref().as_ref(),
                         &PixmapPaint { opacity: 0.8, ..PixmapPaint::default() },
                         at,
-                    );
+                    ));
                 }
                 _ => {
                     let color = Rgba::new(10, (r.f() * 255.0) as u8, 90, 230);
@@ -583,7 +632,8 @@ mod tests {
     }
 
     /// Splats, tiny boxes and sprites come out in bands exactly as on the whole frame, also where
-    /// they straddle a band's edge.
+    /// they straddle a band's edge, and a tiny box whose quarter-pixel snapping falls on a tie
+    /// (half a quarter), on a band's edge or with half its outline's width added.
     #[test]
     fn the_pixel_shortcuts_are_the_whole_frames_pixels() {
         let (w, h) = (300, 3 * BAND_ROWS);
@@ -606,6 +656,15 @@ mod tests {
                     share: 1.0,
                 });
                 ops.push(PixelOp::Sprite { pixmap: sprite.clone(), x: i64::from(cx as i32) + 15, y: i64::from(cy as i32) - 3 });
+            }
+            for (k, (top, bottom, width)) in
+                [(127.875, 129.125, 1.0), (126.875, 128.125, 0.0), (129.0, 129.825, 0.1), (255.0, 255.7, 2.35), (254.9, 256.1, 0.7)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let x = 20.0 + k as f32 * 50.0;
+                let fill = Rgba::new(30, 160, 30, 255);
+                ops.push(PixelOp::SmallPolygon { b: [x, top, x + 1.5, bottom], width, fill, stroke: Rgba::new(0, 0, 0, 255), share: 1.0 });
             }
             ops
         };
@@ -719,6 +778,85 @@ mod tests {
         c.end_bands();
         assert_eq!(c.kept_bytes(), 0);
         assert!(c.pixmap().pixels().iter().any(|p| p.alpha() == 255));
+    }
+
+    /// A dashed stroke counts its dashes; one whose dashes alone are more than may wait is drawn
+    /// straight away, as is a path that big.
+    #[test]
+    fn dashes_count_and_what_is_too_big_is_drawn_straight_away() {
+        let line = |len: f32| {
+            let mut pb = PathBuilder::new();
+            pb.move_to(0.0, 0.0);
+            pb.line_to(len, 0.0);
+            pb.finish().unwrap()
+        };
+        let paint = solid(0, 0, 0, 255);
+        let mut bands = Bands::default();
+        let dashed = Stroke { width: 3.0, dash: StrokeDash::new(vec![1.0, 1.0], 0.0), ..Stroke::default() };
+        assert!(bands.stroke(&line(1000.0), &paint, &dashed, Transform::from_translate(0.0, 10.0)));
+        assert!(bands.bytes() > OUTLINE_GROWTH * 500 * 16, "{} bytes for 500 dashes", bands.bytes());
+        // 400,000 dashes, a frame wide: kept, their outlines would be far past the bound. Drawn
+        // straight away over what was kept before it, and under what comes after.
+        let many = Stroke { width: 1000.0, dash: StrokeDash::new(vec![0.5, 0.5], 0.0), ..Stroke::default() };
+        let ts = Transform::from_row(0.0025, 0.0, 0.0, 0.0025, 0.0, 500.0);
+        let draw = |in_bands: bool| {
+            let mut c = Canvas::new(1024, 1024).unwrap();
+            if in_bands {
+                c.begin_bands();
+            }
+            let rect = |x: f32| PathBuilder::from_rect(Rect::from_xywh(x, 400.0, 300.0, 200.0).unwrap());
+            c.fill_path(&rect(100.0), &solid(200, 0, 0, 255), FillRule::Winding, Transform::identity(), None);
+            c.stroke_path(&line(400_000.0), &solid(0, 0, 200, 160), &many, ts, None);
+            if in_bands {
+                assert_eq!(c.kept_bytes(), 0, "drawn straight away, after what was kept");
+            }
+            c.fill_path(&rect(600.0), &solid(0, 160, 0, 255), FillRule::Winding, Transform::identity(), None);
+            c.end_bands();
+            c.into_pixmap()
+        };
+        let banded = draw(true);
+        assert!(banded.pixels().iter().any(|p| p.blue() > 0 && p.red() > 0), "the stroke is over the first fill");
+        assert!(banded.data() == draw(false).data());
+    }
+
+    /// A picture shared by every point (a picture marker, a sprite) counts its pixels once, however
+    /// many times it is kept, and again once drawn and kept anew.
+    #[test]
+    fn a_shared_picture_counts_once() {
+        let picture = Arc::new(Pixmap::new(100, 100).unwrap());
+        let mut bands = Bands::default();
+        for _ in 0..3 {
+            bands.shared_pixmap(&picture, &PixmapPaint::default(), Transform::from_translate(10.0, 10.0));
+            bands.pixels(PixelOp::Sprite { pixmap: picture.clone(), x: 5, y: 5 });
+        }
+        assert_eq!(bands.bytes(), 100 * 100 * 4 + 6 * ENTRY_BYTES);
+        bands.draw_on(&mut Pixmap::new(300, 300).unwrap(), 1);
+        assert_eq!(bands.bytes(), 0);
+        bands.shared_pixmap(&picture, &PixmapPaint::default(), Transform::identity());
+        assert_eq!(bands.bytes(), 100 * 100 * 4 + ENTRY_BYTES);
+    }
+
+    /// Threads start for drawing that covers a megapixel, counted by the rows and columns each kept
+    /// thing reaches: a narrow, tall shape alone starts none.
+    #[test]
+    fn a_narrow_shape_starts_no_threads() {
+        let paint = solid(0, 0, 0, 255);
+        let (w, h) = (2000, 2000);
+        let mut bands = Bands::default();
+        assert!(bands.fill(
+            &PathBuilder::from_rect(Rect::from_xywh(100.0, 0.0, 3.0, 2000.0).unwrap()),
+            &paint,
+            FillRule::Winding,
+            Transform::identity()
+        ));
+        assert_eq!(threads_for(&bands.kept, w, h, 8), 1);
+        assert!(bands.fill(
+            &PathBuilder::from_rect(Rect::from_xywh(0.0, 0.0, 2000.0, 2000.0).unwrap()),
+            &paint,
+            FillRule::Winding,
+            Transform::identity()
+        ));
+        assert_eq!(threads_for(&bands.kept, w, h, 8), 8);
     }
 
     /// Too small a frame, or a recording canvas, keeps nothing: drawn straight away as before.

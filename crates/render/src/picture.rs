@@ -34,7 +34,8 @@ const MARKERS_BYTES: usize = 128 << 20;
 /// cheap keys collide never swap), and their keys oldest first (for eviction).
 #[derive(Default)]
 struct Cache {
-    images: HashMap<u64, (String, Option<Pixmap>)>,
+    /// Shared, so a frame drawn in bands keeps the picture, not a copy ([`Canvas::draw_shared`]).
+    images: HashMap<u64, (String, Option<Arc<Pixmap>>)>,
     order: std::collections::VecDeque<u64>,
 }
 
@@ -129,14 +130,14 @@ pub fn draw(pm: &mut Canvas, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
                 let Some(old) = cache.order.pop_front() else { break };
                 cache.images.remove(&old);
             }
-            if cache.images.insert(key, (b64.clone(), decode(b64))).is_none() {
+            if cache.images.insert(key, (b64.clone(), decode(b64).map(Arc::new))).is_none() {
                 cache.order.push_back(key);
             }
         }
         let Some((_, Some(img))) = cache.images.get(&key) else { return };
         let t = Transform::from_row(w / img.width() as f32, 0.0, 0.0, h / img.height() as f32, x0.min(x1), y0.min(y1));
         let paint = PixmapPaint { opacity, quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
-        pm.draw_pixmap(0, 0, img.as_ref(), &paint, t, None);
+        pm.draw_shared(img, None, &paint, t);
     });
 }
 

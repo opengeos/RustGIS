@@ -1869,9 +1869,12 @@ fn splat_color(pm: &mut tiny_skia::PixmapMut, cx: f32, cy: f32, color: Rgba, cov
     }
 }
 
-/// Coverage of a tiny box and its mitred outline in each touched device pixel.
-fn small_polygon_pixels(pm: &mut tiny_skia::PixmapMut, b: [f32; 4], width: f32, fill: Rgba, stroke: Rgba, share: f32) {
-    if b[2] + width < 0.0 || b[3] + width < 0.0 || b[0] - width >= pm.width() as f32 || b[1] - width >= pm.height() as f32 {
+/// Coverage of a tiny box and its mitred outline in each touched device pixel, on `pm` whose first
+/// row is the frame's row `top` (a band, [`bands`]). Snapped in the frame's own coordinates, then
+/// moved up: a band's pixels are the whole frame's.
+fn small_polygon_pixels(pm: &mut tiny_skia::PixmapMut, top: u32, b: [f32; 4], width: f32, fill: Rgba, stroke: Rgba, share: f32) {
+    let t = top as f32;
+    if b[2] + width < 0.0 || b[3] + width < t || b[0] - width >= pm.width() as f32 || b[1] - width >= t + pm.height() as f32 {
         return;
     }
     // tiny-skia's path rasterizer samples at quarter-pixel intervals.
@@ -1889,10 +1892,12 @@ fn small_polygon_pixels(pm: &mut tiny_skia::PixmapMut, b: [f32; 4], width: f32, 
         }
         d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
     }
+    // Quarter pixels, moved by whole rows: exact.
+    let up = |b: [f32; 4]| [b[0], b[1] - t, b[2], b[3] - t];
     let hw = width / 2.0;
-    let outer = snap([b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw]);
-    let inner = snap([b[0] + hw, b[1] + hw, b[2] - hw, b[3] - hw]);
-    let b = snap(b);
+    let outer = up(snap([b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw]));
+    let inner = up(snap([b[0] + hw, b[1] + hw, b[2] - hw, b[3] - hw]));
+    let b = up(snap(b));
     let (w, h) = (pm.width() as i64, pm.height() as i64);
     let (x0, y0) = ((outer[0].floor() as i64).clamp(0, w), (outer[1].floor() as i64).clamp(0, h));
     let (x1, y1) = ((outer[2].ceil() as i64).clamp(0, w), (outer[3].ceil() as i64).clamp(0, h));

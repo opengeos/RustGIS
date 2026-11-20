@@ -253,10 +253,7 @@ impl Canvas {
     /// Draws `pixmap` with its top left at (`x`, `y`) moved by `transform`, as
     /// `Pixmap::draw_pixmap` does.
     pub fn draw_pixmap(&mut self, x: i32, y: i32, pixmap: PixmapRef, paint: &PixmapPaint, transform: Transform, mask: Option<&Mask>) {
-        if mask.is_none()
-            && let Some(b) = &mut self.bands
-        {
-            b.pixmap(x, y, pixmap, paint, transform);
+        if mask.is_none() && self.bands.as_mut().is_some_and(|b| b.pixmap(x, y, pixmap, paint, transform)) {
             self.draw_kept_if_full();
             return;
         }
