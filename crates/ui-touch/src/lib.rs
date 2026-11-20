@@ -276,7 +276,9 @@ fn can_send_field_package(app: &RustGisApp) -> bool {
     if project.field_origin.is_some() {
         return project.maps.len() == 1;
     }
-    map.offline_area_id.is_some() || map.name.ends_with(" (offline)")
+    // An area ID with no area (a damaged file) is no copy to send.
+    let area = map.offline_area_id.as_deref().map(|id| project.offline_areas.iter().any(|a| a.id == id));
+    area.unwrap_or_else(|| map.name.ends_with(" (offline)"))
 }
 
 /// Draws where the device is: a dot, in a ring as wide as the position is good to.
@@ -1887,6 +1889,13 @@ mod tests {
                 frame(&mut app, &ctx, shown);
             }
         }
+    }
+
+    #[test]
+    fn a_map_naming_a_missing_area_is_not_offered_for_sending() {
+        let mut app = RustGisApp::with_sample();
+        app.session.map_mut().offline_area_id = Some("gone".into());
+        assert!(!can_send_field_package(&app));
     }
 
     #[test]

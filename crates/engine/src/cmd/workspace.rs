@@ -291,8 +291,10 @@ pub fn commands() -> Vec<C> {
             } else if let Some(m) = kept.and_then(|i| s.project.maps.get_mut(i))
                 && m.name.eq_ignore_ascii_case(&offline_map_name(&area.name))
             {
-                m.name = format!("{} (kept)", area.name);
+                let old = std::mem::replace(&mut m.name, format!("{} (kept)", area.name));
                 let kept = m.name.clone();
+                // Layouts, presentations and other areas made from it follow, as on a rename.
+                super::navigate::follow_renamed_map(s, &old, &kept);
                 s.notify(format!("The offline area's map was the only one, so it was kept as '{kept}'"), false);
             }
             Ok(Value::Null)
