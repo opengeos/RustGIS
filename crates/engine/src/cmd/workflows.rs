@@ -1568,10 +1568,20 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
     let (mut no_point, mut no_value) = (0usize, 0usize);
     let mut pts: Vec<(Coord, f64)> = Vec::with_capacity(ds.features.len());
     // Each place in longitude/latitude, whatever system the layer holds its coordinates in; one
-    // that can't be given there has no place.
+    // that can't be given there has no place. A point is converted alone; any other shape is
+    // converted first, so its label point (a polygon's centroid) is the one it has in
+    // longitude/latitude, not the one in the layer's own system. A shape with a place that can't
+    // be converted gives its label point in its own system, converted, as long as that converts.
     let to = ds.lonlat_conversion()?;
+    let place = |g: &Geometry| match g {
+        Geometry::Point(c) => to.point(*c),
+        g => match Dataset::converted_to_lonlat(&to, g) {
+            Some(g) => g.label_point(),
+            None => g.label_point().and_then(|c| to.point(c)),
+        },
+    };
     for (r, ft) in ds.features.iter().enumerate() {
-        let Some(c) = ft.geometry.as_ref().and_then(|g| g.label_point()).and_then(|c| to.point(c)).filter(|c| c.is_finite()) else {
+        let Some(c) = ft.geometry.as_ref().and_then(place).filter(|c| c.is_finite()) else {
             no_point += 1;
             continue;
         };
