@@ -620,6 +620,8 @@ struct MenuState {
     selected: usize,
     pointer_leads: bool,
     scroll: Scroll,
+    /// Whether a row had the focus last pass: it goes back to the button as the list closes.
+    row_focused: bool,
     /// Where it was drawn last, and its whole size (`popup`).
     drawn: Option<(egui::Rect, egui::Vec2)>,
     /// The pass the button was last shown in.
@@ -703,6 +705,9 @@ pub(crate) fn menu(
             s.selected = if up { (selected + n - 1) % n } else { (selected + 1) % n };
             s.pointer_leads = false;
             follow = on_row;
+            // Nor does egui move the focus too: a row given the focus last pass hasn't kept its
+            // arrows from egui yet (a widget's keys are its own from the pass after it took it).
+            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
         // A press neither on the button nor on the list closes it, as a menu's does.
         let drawn = s.drawn.map(|(r, _)| r);
@@ -729,6 +734,7 @@ pub(crate) fn menu(
         let drawn = popup(ui, id, corner, room, |ui| got = rows(ui, &items, selected, pointer_leads, scroll, follow, icon, describe, help));
         s.drawn = Some(drawn);
         accepted = got.clicked;
+        s.row_focused = got.focused.is_some();
         // A row a screen reader focused takes the highlight, and its help: the arrows go on from
         // it.
         if let Some(f) = got.focused.filter(|f| *f != selected) {
@@ -748,9 +754,12 @@ pub(crate) fn menu(
     }
     if accepted.is_some() || !s.open {
         // A row had the focus: it goes back to the button rather than to nothing, as the row goes.
-        if on_row {
+        // Escape in the pass after an arrow gave a row the focus has dropped it already (the row
+        // hadn't kept Escape from egui yet): the row had it last pass, then.
+        if on_row || (s.row_focused && ui.memory(|m| m.focused()).is_none()) {
             button.request_focus();
         }
+        s.row_focused = false;
         s.open = false;
         s.drawn = None;
         s.scroll = Scroll::default();
@@ -998,6 +1007,41 @@ mod tests {
         assert!(focused(&h, "Open"), "the focus back on the button");
     }
 
+    /// Keys in the very next passes after an arrow moved the focus (before the row keeps its keys
+    /// from egui): a second arrow moves it one row, not two, and Escape gives it back to the
+    /// button.
+    #[test]
+    fn keys_right_after_an_arrow_act_once() {
+        use egui_kittest::kittest::Queryable;
+        let items: Vec<String> = (0..6).map(|i| format!("item{i:02}")).collect();
+        let mut h = egui_kittest::Harness::new_ui(move |ui| {
+            let _ = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, |_, _, _| {});
+        });
+        let focused = |h: &egui_kittest::Harness<'_>, label: &str| h.query_by_label(label).is_some_and(|n| n.is_focused());
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        h.get_by_label("item01").focus();
+        h.run();
+        // Presses alone, one pass each (`key_press` adds a pass for the release between them).
+        h.key_down(egui::Key::ArrowDown);
+        h.step();
+        h.key_down(egui::Key::ArrowDown);
+        h.step();
+        h.key_up(egui::Key::ArrowDown);
+        h.run();
+        assert!(focused(&h, "item03"), "one row for each arrow");
+        h.key_down(egui::Key::ArrowDown);
+        h.step();
+        h.key_down(egui::Key::Escape);
+        h.step();
+        h.key_up(egui::Key::ArrowDown);
+        h.key_up(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_label("item00").is_none(), "the list closed");
+        assert!(focused(&h, "Open"), "the focus back on the button");
+    }
+
     /// Without a screen reader only the rows in view are drawn (each asks for its icon), the
     /// highlighted one scrolled into view; with one, every row is, for it to reach.
     #[test]
@@ -1041,9 +1085,11 @@ mod tests {
         let long = "x".repeat(60);
         egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
-                let r = super::item_row(ui, &long, false, None);
-                let w = super::widest(ui, std::slice::from_ref(&long), |_| None);
-                assert!(w > super::MIN_WIDTH && (r.rect.width() - w).abs() < 0.5, "{} drawn, {w} worked out", r.rect.width());
+                for icon in [None, Some("field")] {
+                    let drawn = ui.scope(|ui| super::item_row(ui, &long, false, icon)).response.rect.width();
+                    let w = super::widest(ui, std::slice::from_ref(&long), |_| icon);
+                    assert!(w > super::MIN_WIDTH && (drawn - w).abs() < 0.5, "{icon:?}: {drawn} drawn, {w} worked out");
+                }
             })
             .textures_delta
             .clear();
