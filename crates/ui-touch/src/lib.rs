@@ -273,7 +273,10 @@ fn stop_track(app: &mut RustGisApp, ctx: &egui::Context) -> bool {
 fn can_send_field_package(app: &RustGisApp) -> bool {
     let map = app.session.map();
     let project = &app.session.project;
-    map.offline_area_id.is_some() || map.name.ends_with(" (offline)") || (project.field_origin.is_some() && project.maps.len() == 1)
+    if project.field_origin.is_some() {
+        return project.maps.len() == 1;
+    }
+    map.offline_area_id.is_some() || map.name.ends_with(" (offline)")
 }
 
 /// Draws where the device is: a dot, in a ring as wide as the position is good to.

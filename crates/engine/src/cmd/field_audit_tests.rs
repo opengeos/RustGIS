@@ -112,6 +112,48 @@ fn an_imported_offline_titled_map_is_not_taken_for_an_area_copy() {
     assert_eq!(home.project.maps.len(), maps + 2);
 }
 
+/// A map imported with its area's ID loses it, and says so; an ordinary map imports with neither
+/// notice.
+#[test]
+fn importing_maps_says_when_an_area_association_is_dropped() {
+    let temp = Temp::new("import-detach");
+    let mut home = home(&temp);
+    package(&mut home, &json!({"name": "Crew", "extent": AREA})).unwrap();
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    let path = temp.0.join("with-area.rgis");
+    home.run("project.save", &json!({"path": path})).unwrap();
+
+    let mut other = Session::new(crate::Project::default());
+    let mark = other.notice_mark();
+    other.run("map.import", &json!({"path": path})).unwrap();
+    let texts: Vec<_> = other.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(texts.iter().any(|t| t.starts_with("1 imported map(s) were detached")), "{texts:?}");
+    assert!(other.project.maps.iter().all(|m| m.offline_area_id.is_none()));
+
+    let mark = other.notice_mark();
+    other.run("map.import", &json!({"text": serde_json::to_string(&crate::Project::default()).unwrap()})).unwrap();
+    let texts: Vec<_> = other.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!texts.iter().any(|t| t.contains("detached") || t.contains("renamed")), "{texts:?}");
+}
+
+/// Removing an area whose copy is the only map keeps the map but not its association, so the
+/// project still saves and reopens.
+#[test]
+fn removing_an_area_clears_the_association_of_the_copy_it_keeps() {
+    let temp = Temp::new("remove-only-copy");
+    let mut home = home(&temp);
+    package(&mut home, &json!({"name": "Crew", "extent": AREA})).unwrap();
+    home.run("offline.open", &json!({"name": "Crew"})).unwrap();
+    home.project.maps.retain(|m| m.offline_area_id.is_some());
+    home.project.active_map = 0;
+    home.run("offline.remove", &json!({"name": "Crew"})).unwrap();
+    assert_eq!(home.project.maps.len(), 1);
+    assert!(home.project.maps[0].offline_area_id.is_none());
+    let path = temp.0.join("removed.rgis");
+    home.run("project.save", &json!({"path": path})).unwrap();
+    home.run("project.open", &json!({"path": path})).unwrap();
+}
+
 /// A legacy home tab gains its association on rename, so callers still find it after save and reopen.
 #[test]
 fn bring_back_refreshes_a_renamed_home_offline_map() {
