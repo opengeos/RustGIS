@@ -234,7 +234,7 @@ fn run_with_room(
 
     // The units its coordinates are in, which the overlay's rounding moves them by.
     let crs = ds.coord_crs();
-    let units = if crs.is_geographic() { "degrees of longitude or latitude".to_string() } else { format!("the units of {}", crs.label()) };
+    let units = if crs.is_geographic() { "degrees of longitude or latitude".to_string() } else { format!("units of {}", crs.label()) };
     let mut messages = notices(&tally, &field, rule, &units);
     messages.extend(notes);
     let losses = (tally.extra > 0)
@@ -477,6 +477,10 @@ mod tests {
             ]
         );
         assert_eq!(notices(&Tally::default(), "repairs", Rule::default(), DEGREES), ["Repair Geometry: no features to repair"]);
+        // A layer held in a projected system is told its bound in that system's units.
+        let rebuilt = Tally { overlaid: 1, moved: 0.01, ..Tally::default() };
+        let said = notices(&rebuilt, "repairs", Rule::default(), "units of EPSG:32632").join("\n");
+        assert!(said.contains("may have moved by up to 1.0e-2 units of EPSG:32632, and vertices"), "{said}");
     }
 
     /// A cancel stops the repairs at the next feature, and the copies at the next row.

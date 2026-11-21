@@ -1533,7 +1533,8 @@ fn inputs_in(
         }
     }
     // Every text the parameters hold that names a layer, not only layer parameters: a tool may
-    // name one elsewhere, and a layer it reads must be in the system it works in.
+    // name one elsewhere, and a layer it reads must be in the system it works in. Not the name
+    // its output is given, which it doesn't read.
     fn texts<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
         match v {
             Value::String(s) => out.push(s),
@@ -1543,7 +1544,10 @@ fn inputs_in(
         }
     }
     let mut names = layer_names(spec, params);
-    texts(params, &mut names);
+    match params {
+        Value::Object(o) => o.iter().filter(|(k, _)| k.as_str() != "output").for_each(|(_, v)| texts(v, &mut names)),
+        other => texts(other, &mut names),
+    }
     for n in names {
         let key = n.to_ascii_lowercase();
         if full.contains_key(&key) || converted.contains_key(&key) {

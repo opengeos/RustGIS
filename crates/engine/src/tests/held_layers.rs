@@ -1412,6 +1412,21 @@ fn a_tool_works_in_its_held_inputs_own_system() {
     run_both(&mut ss, "gp.run", &p);
     assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"));
     assert_eq!(selected(&ss[1], "Wells"), vec![4, 5, 6, 7, 8]);
+    // Summary Statistics and Pivot Table make the same table as for the layer in longitude/latitude.
+    let table = |s: &Session| {
+        let t = &s.project.tables.last().expect("a table").dataset;
+        let cells = (0..t.features.len()).flat_map(|r| (0..t.fields.len()).map(move |f| (r, f))).map(|(r, f)| t.value(r, f).to_string());
+        (t.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>(), cells.collect::<Vec<_>>())
+    };
+    for p in [
+        json!({"tool": "summaryStatistics", "params": {"input": "Wells", "field": "n"}}),
+        json!({"tool": "pivotTable", "params": {"input": "Wells", "fields": "n", "pivot": "name", "value": "n"}}),
+    ] {
+        run_both(&mut ss, "gp.run", &p);
+        let (a, b) = (table(&ss[0]), table(&ss[1]));
+        assert!(!a.1.is_empty(), "{p}: an empty table");
+        assert_eq!(a, b, "{p}");
+    }
 }
 
 /// Merge's other inputs are converted into its first input's own system, where its result is
@@ -1462,6 +1477,11 @@ fn an_input_the_first_ones_system_cant_hold_is_worked_on_in_lonlat() {
     assert!(said.iter().any(|t| t.starts_with("Merge worked in longitude/latitude, not EPSG:32632: Far: feature")), "{said:?}");
     let last = held_coords(&s, "Merged").last().and_then(|v| v.first()).copied().unwrap();
     assert_eq!((last.x, last.y), (99.0, 0.0));
+    // A layer the run only names its output after isn't read, so it doesn't decide the system.
+    let p = json!({"tool": "exportFeatures", "params": {"input": "Wells", "output": "Far"}});
+    let answer = s.run("gp.run", &p).unwrap();
+    let id = answer.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.coord_crs(), UTM);
 }
 
 /// A standalone table without geometry (a spreadsheet's rows) joins onto a layer held in UTM as it

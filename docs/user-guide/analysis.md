@@ -1364,8 +1364,8 @@ layer held in a projected system, the grid is laid over its own coordinates: a s
 0.01 mm for a feature 10 km across. Rebuilt coordinates may move by up to five steps from the
 input's rings; in the tests they moved at most two thirds of a step. The overlay also leaves out
 vertices in the middle of straight edges. The tool says how many features were rebuilt and the
-farthest their coordinates may have moved, in the layer's units (degrees for longitude/latitude). Every rebuilt geometry is checked again and
-written only when it is valid.
+farthest their coordinates may have moved, in the layer's units (degrees for longitude/latitude).
+Every rebuilt geometry is checked again and written only when it is valid.
 
 A hole or part narrower than one step of that grid in any direction can be rounded onto a single
 line of it and lose its area, depending on where it lies between the grid's lines. Rounding moves a
