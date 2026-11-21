@@ -1806,7 +1806,7 @@ fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry
                 .iter()
                 .copied()
                 .filter(|c| {
-                    let m = rustgis_geom::lonlat_to_plane(*c);
+                    let m = crate::convert::to_plane(*c);
                     // A point at a pole touches a mask that reaches the pole, whatever its
                     // longitude.
                     let at = reaches_poles(c.y, c.y);
@@ -3088,10 +3088,11 @@ fn convex_hull(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let points = |g: &Geometry| {
         let (mut these, mut gaps, mut poles) = (Vec::new(), 0usize, 0usize);
         g.for_each_vertex(|_, c| {
-            let m = if c.is_finite() { Some(rustgis_geom::lonlat_to_plane(c)) } else { None };
+            let m = if c.is_finite() { Some(crate::convert::to_plane(c)) } else { None };
             match m {
                 Some(m) if m.x.abs() <= HULL_LIMIT_M && m.y.abs() <= HULL_LIMIT_M => {
-                    poles += usize::from(c.y.abs() > 90.0);
+                    // (A projected system's y is no latitude.)
+                    poles += usize::from(crate::convert::plane() == crate::convert::Plane::Analysis && c.y.abs() > 90.0);
                     these.push(geo::Point::new(m.x, m.y));
                 }
                 _ => gaps += 1,
@@ -3128,7 +3129,7 @@ fn convex_hull(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let first = *ring.first()?;
         let (a, _) = farthest(first);
         let (b, span) = farthest(a);
-        let back = |c: geo::Coord<f64>| rustgis_geom::plane_to_lonlat(Coord::new(c.x, c.y));
+        let back = |c: geo::Coord<f64>| crate::convert::from_plane(Coord::new(c.x, c.y));
         Some(if span > 0.0 { Geometry::Line(vec![vec![back(a), back(b)]]) } else { Geometry::Point(back(a)) })
     };
     let (mut flat, mut gaps, mut poles) = (0usize, 0usize, 0usize);
@@ -5338,7 +5339,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
 /// same transform and non-finite-coordinate filtering as [`to_geo`] followed by [`merc_extent`].
 fn projected_extent(g: &Geometry) -> Extent {
     let mut ext = Extent::EMPTY;
-    g.for_each_coord(|c| ext.expand(rustgis_geom::lonlat_to_plane(c)));
+    g.for_each_coord(|c| ext.expand(crate::convert::to_plane(c)));
     ext
 }
 
@@ -6731,6 +6732,17 @@ fn extent_contains(a: &Extent, b: &Extent) -> bool {
     !a.is_empty() && !b.is_empty() && a.min_x <= b.min_x && a.max_x >= b.max_x && a.min_y <= b.min_y && a.max_y >= b.max_y
 }
 
+/// Whether a run of tool `id` with `params` measures a distance on the ground: Select Layer By
+/// Location with a search distance, Spatial Join with a match that measures one. Such a run works
+/// in longitude/latitude, where its distances are geodesic ([`crate::ToolSpec::works_in_own_system`]).
+pub(crate) fn measures_distance(id: &str, params: &Json) -> bool {
+    match id {
+        "selectByLocation" => num(params, "distance").is_some_and(|d| d > 0.0),
+        "spatialJoin" => matches!(JoinMatch::parse(s(params, "match")), JoinMatch::Closest | JoinMatch::WithinDistance),
+        _ => false,
+    }
+}
+
 /// Whether a tool's parameter applies, given the values of the others (`value` gives one's
 /// value as text, empty when unset, which stands for its default). The Tools pane hides and leaves
 /// out one that doesn't. Spatial Join's search distance, units and distance field apply only to the
@@ -7200,7 +7212,7 @@ impl Nearby<'_, '_> {
 /// geometries come with their forms in the analysis plane, where the test and the overlay work.
 fn shared_point(a: &Geometry, a_geo: &geo::Geometry<f64>, b: &Geometry, b_geo: &geo::Geometry<f64>) -> Option<Coord> {
     use geo::LinesIter;
-    let back = |c: geo::Coord<f64>| rustgis_geom::plane_to_lonlat(Coord::new(c.x, c.y));
+    let back = |c: geo::Coord<f64>| crate::convert::from_plane(Coord::new(c.x, c.y));
     // Points answer with their own coordinates, not ones back from the plane.
     let point_on = |pts: &Geometry, other: &geo::Geometry<f64>| -> Option<Option<Coord>> {
         let pts: &[Coord] = match pts {
@@ -7209,7 +7221,7 @@ fn shared_point(a: &Geometry, a_geo: &geo::Geometry<f64>, b: &Geometry, b_geo: &
             _ => return None,
         };
         Some(pts.iter().copied().find(|c| {
-            let m = rustgis_geom::lonlat_to_plane(*c);
+            let m = crate::convert::to_plane(*c);
             other.intersects(&geo::Point::new(m.x, m.y))
         }))
     };
@@ -7430,7 +7442,9 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
 
     let target_rows = rows(inp, p, "target", target);
     let join_rows = rows(inp, p, "join", join);
-    if mode == JoinMatch::LargestOverlap {
+    // A ring through both poles, whose area is ambiguous, is one in longitude/latitude: a projected
+    // system's own plane has none.
+    if mode == JoinMatch::LargestOverlap && crate::convert::plane() == crate::convert::Plane::Analysis {
         for (ds, selected) in [(target, &target_rows), (join, &join_rows)] {
             if let Some(message) =
                 rustgis_data::ambiguous_area_message(selected.iter().filter_map(|&r| ds.features.get(r)?.geometry.as_ref()))

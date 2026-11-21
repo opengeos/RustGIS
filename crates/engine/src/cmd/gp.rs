@@ -1472,7 +1472,7 @@ fn work_system(
     full: &std::collections::HashMap<String, Dataset>,
 ) -> Crs {
     use rustgis_analysis::ParamKind as K;
-    let Some(spec) = spec.filter(|t| t.works_in_own_system()) else { return Crs::LonLat };
+    let Some(spec) = spec.filter(|t| t.works_in_own_system(params)) else { return Crs::LonLat };
     // The tool's first layer parameter, under its name or one of the names it also accepts
     // (Join Field's `input`), taken as the tool takes it: the first that isn't blank. A table
     // given by its number (read unconverted, [`Inputs::table`]) or by name leaves the run in
@@ -1737,6 +1737,9 @@ impl Inputs for MapInputs<'_> {
     }
     fn table(&self, id: u32) -> Option<&Dataset> {
         self.snap.tables.iter().find(|t| t.id == id).map(|t| &t.dataset)
+    }
+    fn work_crs(&self) -> Crs {
+        self.work
     }
     fn selection(&self, layer: &str) -> &[usize] {
         let Some(l) = self.snap.map.layer_by_name(layer) else { return &[] };

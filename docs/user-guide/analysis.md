@@ -179,9 +179,16 @@ geodesic distances and areas, whatever system their layers are in. Some work in 
 input's own coordinate system when it is a projected one, such as a UTM zone or a national grid:
 Summary Statistics, Pivot Table, Join Field, Select Layer By Attribute, Export Features, Merge,
 Polygon To Line, Split Line At Vertices, Feature Envelope To Polygon, Unsplit Line, Feature
-Vertices To Points, Check Geometry and Repair Geometry. Their other inputs are converted into that
-system for the run, and their new layers are kept in it, so the coordinates of what they copy stay
-exactly as they were. If another input has a place that system can't hold, the tool works in
+Vertices To Points, Check Geometry and Repair Geometry; the overlays Clip, Erase, Intersect,
+Identity, Union, Symmetrical Difference, Update, Split and Dissolve; Minimum Bounding Geometry
+(convex hull), Feature To Point and Summarize Within; and Select Layer By Location and
+Spatial Join when they measure no distance (no search distance, a match other than Closest or
+Within a distance). Their other inputs are converted into that system for the run, and their new
+layers are kept in it, so the coordinates of what they copy stay exactly as they were. An overlay
+there takes each edge as straight in that system, not in Web Mercator as it does in
+longitude/latitude: where a long edge crosses another, the place it makes can lie a few
+decimetres from where the same tool puts it in longitude/latitude (about 20 cm for a 3 km edge at
+48°N), nearer the shortest way on the ground. If another input has a place that system can't hold, the tool works in
 longitude/latitude instead, and its message says so. A layer in longitude/latitude, Web Mercator or
 another geographic system is worked on in longitude/latitude, as before.
 

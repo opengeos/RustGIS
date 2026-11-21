@@ -1552,3 +1552,104 @@ fn the_epsg_variants_fixture_opens_as_rustgis_own_systems() {
     let Some(Geometry::Point(l)) = back.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
     assert!((l.x - 11.5).abs() < 1e-9 && (l.y - 48.7).abs() < 1e-9, "{l:?}");
 }
+
+/// How far apart, in degrees, a place an overlay makes may be between a run in UTM and one in
+/// longitude/latitude: an edge straight in UTM and the same edge straight in the analysis plane
+/// (Web Mercator) part by up to about L²·tan φ / 8R at its middle, some 20 cm for the road's 3 km
+/// edge here (21 cm, `Roads` clipped by `Area`, measured), so where it crosses another edge moves
+/// by that much. Half a metre. Straight in UTM is the nearer of the two to the shortest way on the
+/// ground.
+const OVERLAID: f64 = 5e-6;
+
+/// Every place of `a` within `tol` degrees of one of `b`'s and the other way round, feature by
+/// feature, in the same shapes.
+fn assert_near(a: &[Option<Geometry>], b: &[Option<Geometry>], tol: f64, what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: feature count");
+    for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(shape(a), shape(b), "{what}: feature {i}'s shape");
+        let (mut ca, mut cb) = (Vec::new(), Vec::new());
+        a.iter().for_each(|g| g.for_each_coord(|c| ca.push(c)));
+        b.iter().for_each(|g| g.for_each_coord(|c| cb.push(c)));
+        // As places, not in order: the overlay may start a ring at another of its vertices.
+        let near = |p: &Coord, of: &[Coord]| of.iter().any(|q| (p.x - q.x).abs() < tol && (p.y - q.y).abs() < tol);
+        for p in &ca {
+            assert!(near(p, &cb), "{what}: feature {i}: {p:?} not in {cb:?}");
+        }
+        for q in &cb {
+            assert!(near(q, &ca), "{what}: feature {i}: {q:?} not in {ca:?}");
+        }
+    }
+}
+
+/// The overlays and spatial relations (#2032 C2e-2) work in UTM on layers held there, with no
+/// pole or antimeridian check reading UTM's metres as degrees: each gives the features, attributes
+/// and selections it gives for the same layers in longitude/latitude, its new layers are held in
+/// UTM, and where the two planes' straight edges differ, the places they make are within
+/// [`OVERLAID`] of each other.
+#[test]
+fn overlays_work_in_their_held_inputs_own_system() {
+    let mut ss = both();
+    // A box across the parcels' grid, cutting some, covering some and missing others.
+    let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+    let mut area = Dataset::new("Area", GeometryType::Polygon, fields);
+    let ring = [(11.502, 48.702), (11.523, 48.702), (11.523, 48.723), (11.502, 48.723), (11.502, 48.702)];
+    area.push(
+        Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])),
+        vec![Cell::Text("a".into()), Cell::Int(7)],
+    );
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut a = area.clone();
+        a.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(a);
+    }
+    let ids = |s: &Session| s.map().layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    let attrs = |ds: &Dataset| {
+        (0..ds.features.len()).map(|r| (0..ds.fields.len()).map(|f| ds.value(r, f).to_string()).collect::<Vec<_>>()).collect::<Vec<_>>()
+    };
+    for p in [
+        json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Area"}}),
+        json!({"tool": "clip", "params": {"input": "Roads", "clip": "Area"}}),
+        json!({"tool": "clip", "params": {"input": "Wells", "clip": "Area"}}),
+        json!({"tool": "erase", "params": {"input": "Parcels", "erase": "Area"}}),
+        json!({"tool": "intersect", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "identity", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "union", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "symmetricalDifference", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "update", "params": {"input": "Parcels", "update": "Area"}}),
+        json!({"tool": "split", "params": {"input": "Parcels", "split": "Area"}}),
+        json!({"tool": "dissolve", "params": {"input": "Parcels", "field": "name"}}),
+        json!({"tool": "featureToPoint", "params": {"input": "Parcels"}}),
+        json!({"tool": "countPoints", "params": {"polygons": "Area", "points": "Wells"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Area", "match": "Intersects"}}),
+    ] {
+        let before = ids(&ss[0]);
+        run_both(&mut ss, "gp.run", &p);
+        let made: Vec<u32> = ids(&ss[0]).into_iter().filter(|id| !before.contains(id)).collect();
+        assert!(!made.is_empty(), "{p}: no layer");
+        for id in made {
+            let (a, b) = (&ss[0].map().layer(id).unwrap().dataset, &ss[1].map().layer(id).unwrap().dataset);
+            assert_eq!(b.coord_crs(), UTM, "{p}: {} held in", b.name);
+            assert!(!a.features.is_empty(), "{p}: {} is empty", a.name);
+            assert_eq!(attrs(a), attrs(b), "{p}: {}", a.name);
+            let geoms = |d: &Dataset| d.in_lonlat().unwrap().features.iter().map(|f| f.geometry.clone()).collect::<Vec<_>>();
+            assert_near(&geoms(a), &geoms(b), OVERLAID, &format!("{p}: {}", a.name));
+        }
+    }
+    // The wells' hull is made of wells, exactly as held. (Which of them are its corners depends on
+    // the plane: the grid's middle well on two of its edges lies on the edge straight in Web
+    // Mercator, and just outside it in UTM, which turns and shears the grid a little.)
+    run_both(&mut ss, "gp.run", &json!({"tool": "convexHull", "params": {"input": "Wells", "output": "Hull"}}));
+    assert_eq!(ss[1].map().layer_by_name("Hull").unwrap().dataset.coord_crs(), UTM);
+    let wells = bits(&held_coords(&ss[1], "Wells"));
+    let hull = bits(&held_coords(&ss[1], "Hull"));
+    assert!(hull.len() >= 5 && hull.iter().all(|c| wells.contains(c)), "{hull:?}");
+    // Select Layer By Location without a distance, and with one (geodesic, in longitude/latitude).
+    for p in [
+        json!({"tool": "selectByLocation", "params": {"input": "Wells", "select": "Area"}}),
+        json!({"tool": "selectByLocation", "params": {"input": "Wells", "select": "Area", "distance": 0.5, "units": "Kilometers"}}),
+    ] {
+        run_both(&mut ss, "gp.run", &p);
+        assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"), "{p}");
+        assert!(!selected(&ss[1], "Wells").is_empty(), "{p}: nothing selected");
+    }
+}
