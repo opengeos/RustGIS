@@ -186,3 +186,38 @@ fn celestial_body_choices_dismiss_the_basemap_gallery() {
         assert!(!egui::Popup::is_any_open(&h.ctx), "{} must dismiss the gallery", body.name);
     }
 }
+
+/// A click on the suggestion list of Display Filters' box writes the item and keeps the menu open,
+/// on a row past the menu's bottom edge too, where it's no longer over the menu (#1240).
+#[test]
+fn display_filters_keeps_its_menu_open_on_a_click_in_its_list() {
+    use egui::accesskit::Role;
+    let mut app = empty_app();
+    let text = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"pop_est":1},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
+    let (dataset, _) = read_geojson(text, "Areas").unwrap();
+    app.session.map_mut().add_dataset(dataset);
+    app.run("layer.select", json!({"layer": "Areas"})).unwrap();
+    app.ui.tab = "Style".into();
+    let mut h = harness(app);
+    click(&mut h, "Display Filters");
+    h.get_by_role_and_label(Role::TextInput, "Below 1:5,000,000 show everything; beyond it only what matches:").click();
+    h.run();
+    h.event(egui::Event::Text("p".into()));
+    h.run();
+    let menu_bottom = h.get_by_role_and_label(Role::Button, "Clear Filters").rect().max.y;
+    let row = h.get_by_role_and_label(Role::Button, "perimeter()");
+    assert!(row.rect().min.y > menu_bottom + 8.0, "the row is past the menu's edge");
+    // Pressed, and let go two frames later, as a real click is.
+    let at = row.rect().center();
+    let button =
+        |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.event(button(true));
+    h.step();
+    h.step();
+    h.event(button(false));
+    h.run();
+    assert!(egui::Popup::is_any_open(&h.ctx), "a click in the list keeps the menu open");
+    assert_eq!(h.state().forms.expression, "perimeter()");
+}
