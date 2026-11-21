@@ -238,7 +238,7 @@ impl GeoJsonSource {
         let mut extent = scan.extent;
         if let Some(t) = reproject.transformer() {
             file.rewind()?;
-            let pass = convert_pass(&mut file, &scan.places, t);
+            let pass = convert_pass(&mut file, &scan.places, t)?;
             extent = pass.extent;
             for (kept, lost) in scan.kinds.iter_mut().zip(pass.dropped) {
                 *kept = kept.saturating_sub(lost);
@@ -487,7 +487,7 @@ struct Pass {
 }
 
 /// A second pass over the file, made only for a declared coordinate system.
-fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transformer) -> Pass {
+fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transformer) -> Result<Pass> {
     let mut f = BufReader::with_capacity(BUFFER, file);
     let (mut pos, mut buf) = (0u64, Vec::new());
     let mut pass = Pass { failed: Vec::new(), dropped: [0; 3], extent: Extent::EMPTY };
@@ -512,7 +512,7 @@ fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transforme
             }
         }
     }
-    pass
+    Ok(pass)
 }
 
 /// A reader counting the bytes read through it, for features' places in the file. The JSON reader
