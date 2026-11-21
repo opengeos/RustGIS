@@ -4363,7 +4363,7 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
         if data.mixed > 0 {
             let n = data.mixed;
             said.push(format!(
-                "{n} bar{} of the chart keep{} its bar colour: {} features have several colours on the map",
+                "{n} bar{} keep{} the chart's bar colour: {} features have several colours on the map",
                 if n == 1 { "" } else { "s" },
                 if n == 1 { "s" } else { "" },
                 if n == 1 { "its" } else { "their" }

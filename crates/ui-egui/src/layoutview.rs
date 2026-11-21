@@ -4218,6 +4218,38 @@ mod tests {
         assert!(h.state().layout.typing.is_empty());
     }
 
+    /// The Color by class box colours a chart's bars by its layer's classes, and clears it again
+    /// (#2487 part 3).
+    #[test]
+    fn color_by_class_colours_a_charts_bars() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::map::layout::ElementKind;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Charts"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let p = json!({"layout": li, "kind": "chart", "layer": "Countries", "field": "pop_est", "group": "continent"});
+        let id = app.run("layout.addElement", p).unwrap()["element"].as_u64().unwrap() as u32;
+        app.layout.selected = Some(id);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(420.0, 1600.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                let layout = app.session.project.layouts[li].clone();
+                egui::ScrollArea::vertical().show(ui, |ui| super::properties(app, ui, &layout, li));
+            },
+            app,
+        );
+        let classes = |h: &egui_kittest::Harness<RustGisApp>| {
+            matches!(h.state().session.project.layouts[li].element(id).map(|e| &e.kind), Some(ElementKind::Chart { classes: true, .. }))
+        };
+        h.run_steps(2);
+        assert!(!classes(&h));
+        for on in [true, false] {
+            h.get_by_role_and_label(Role::CheckBox, "Color by class").click();
+            h.run_steps(2);
+            assert_eq!(classes(&h), on);
+        }
+    }
+
     /// Capture To Clipboard draws the text still being typed into the Format pane.
     #[test]
     fn a_capture_keeps_the_text_being_typed() {

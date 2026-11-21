@@ -308,9 +308,11 @@ impl Symbol {
 
     /// The one colour a `g` feature shows in, as a chart bar coloured by class takes it: a line's
     /// stroke, an area's or a point's fill, or its outline where the fill is clear; none when it
-    /// draws nothing ([`Symbol::draws`]), as in a hidden class.
+    /// draws nothing ([`Symbol::draws`]), as in a hidden class, or a point drawn as an image,
+    /// which shows no one colour.
     pub fn shown_colour(&self, g: GeometryType) -> Option<Rgba> {
-        if !self.draws(g) {
+        let image = g == GeometryType::Point && matches!(self.marker, Marker::Picture(p) if !p.is_default());
+        if image || !self.draws(g) {
             return None;
         }
         Some(if g == GeometryType::Polyline || self.fill.a() == 0 { self.stroke } else { self.fill })

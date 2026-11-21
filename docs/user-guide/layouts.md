@@ -529,8 +529,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   **Color by class** draws each bar in the colour its features have on the map, by the layer's
   symbology: a bar per feature in its feature's, a grouped bar in the colour its features share,
   so grouping by the field the layer's Unique Values class by gives each bar its class's colour.
-  A bar whose features have several colours, and an Other bar, keep the bar colour, and the
-  chart says how many bars do. The bars follow the symbology when it changes.
+  The colour is a symbol's fill (an outline's where the fill is clear, a line's stroke), not its
+  patterns or stacked strokes; features of a hidden class, or points drawn as an image, show
+  none and leave the bar to the others. A bar whose features have several colours, and an Other
+  bar, keep the bar colour, and the chart says how many bars do when it is added or changed.
+  The bars follow the symbology when it changes; that count is not said again then.
   **Labels** puts the labels of bars running across at the left of their column, or **By the
   bars**, against them. Keep a title out of the chart to style it
   as you like with a text element. From a command:

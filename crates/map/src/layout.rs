@@ -1479,7 +1479,8 @@ impl ElementKind {
     /// [`ElementKind::chart_data`], each bar coloured by `colour` (a feature row's colour, none
     /// for a feature drawn with nothing) when given: a bar per feature its row's, a grouped bar the
     /// colour all the features its statistic reads share (a count's every feature, another's those
-    /// with a number). A bar without one keeps the chart's. Grouped, it holds a colour (5 bytes)
+    /// with a number), those drawn with nothing aside. A bar without one keeps the chart's.
+    /// Grouped, it holds a colour (5 bytes)
     /// per value besides, and reads no more colours of a value once its features have two; each
     /// colour read is the feature's symbol, as drawing the map reads it.
     fn chart_data_with(&self, ds: &rustgis_data::Dataset, colour: Option<&dyn Fn(usize) -> Option<Rgba>>) -> Option<ChartData> {
@@ -1541,10 +1542,8 @@ impl ElementKind {
                     let Some(t) = groups.get_mut(at) else { continue };
                     t.records += 1;
                     // A count reads no number.
-                    let counted = if *statistic == StatKind::Count {
-                        true
-                    } else {
-                        match number(row) {
+                    let counted = *statistic == StatKind::Count
+                        || match number(row) {
                             Some(n) => {
                                 t.add(n, *statistic == StatKind::Mean);
                                 true
@@ -1553,8 +1552,7 @@ impl ElementKind {
                                 no_number += 1;
                                 false
                             }
-                        }
-                    };
+                        };
                     if let Some(colour) = colour.filter(|_| counted) {
                         shades.resize(groups.len(), Shade::Unread);
                         // Once mixed, a value's colour is settled: no more symbols are read for it.
@@ -1630,14 +1628,14 @@ impl ElementKind {
         }
         // Coloured, each bar's colour; an Other bar keeps the chart's.
         let mut mixed = 0;
-        let mut colors: Vec<Option<Rgba>> = match colour {
+        let colors: Vec<Option<Rgba>> = match colour {
             None => Vec::new(),
             Some(colour) => drawn
                 .iter()
                 .map(|(_, i)| match gi {
                     None => colour(*i),
                     Some(_) => match shades.get(*i) {
-                        Some(Shade::One(c)) => *c,
+                        Some(Shade::One(c)) => Some(*c),
                         Some(Shade::Mixed) => {
                             mixed += 1;
                             None
@@ -1645,11 +1643,9 @@ impl ElementKind {
                         _ => None,
                     },
                 })
+                .chain(gathered.map(|_| None))
                 .collect(),
         };
-        if colour.is_some() && gathered.is_some() {
-            colors.push(None);
-        }
         let mut out: Vec<(f64, String)> = drawn.into_iter().map(|(v, i)| (v, name(i))).collect();
         out.extend(gathered.map(|v| (v, CHART_OTHER.to_string())));
         let title = self.chart_title().unwrap_or_default();
@@ -1707,16 +1703,19 @@ impl ElementKind {
 }
 
 /// The colour a grouped bar's features share on the map ([`ElementKind::chart_data_of`]): none
-/// read yet, one (none for features drawn with nothing), or several.
+/// read yet (or only features drawn with nothing), one, or several.
 #[derive(Clone, Copy, Debug)]
 enum Shade {
     Unread,
-    One(Option<Rgba>),
+    One(Rgba),
     Mixed,
 }
 
 impl Shade {
+    /// A feature drawn with nothing (a hidden class) shows no colour, so it leaves the bar the
+    /// colour of the features that do show.
     fn add(&mut self, c: Option<Rgba>) {
+        let Some(c) = c else { return };
         *self = match *self {
             Shade::Unread => Shade::One(c),
             Shade::One(o) if o == c => Shade::One(o),
@@ -2613,6 +2612,11 @@ mod tests {
         assert_eq!(d.mixed, 0);
         let d = one.chart_data_with(&ds, Some(&hidden_n)).unwrap();
         assert_eq!(d.colors.first(), Some(&None), "a, in N");
+        // Only some hidden, the bar takes the colour of those that show: N is a, hidden, and c.
+        let hidden_a = |row: usize| by_name(row).filter(|_| row != 0);
+        let d = grouped.chart_data_with(&ds, Some(&hidden_a)).unwrap();
+        assert_eq!(d.colors.first(), Some(&Some(Rgba::rgb(2, 0, 0))));
+        assert_eq!(d.mixed, 0);
         // The colour a symbol shows: a line's stroke, an area's fill or its outline where the
         // fill is clear, none when it draws nothing.
         use crate::symbology::Symbol;
@@ -2625,6 +2629,11 @@ mod tests {
         assert_eq!(outline.shown_colour(G::Polygon), Some(area.stroke));
         let hidden = Symbol { stroke: Rgba::new(0, 0, 0, 0), ..outline };
         assert_eq!(hidden.shown_colour(G::Polygon), None);
+        // A point drawn as an image shows no one colour; drawn as a shape, its fill.
+        let dot = Symbol { fill: red, ..Symbol::default_for(G::Point, 0) };
+        assert_eq!(dot.shown_colour(G::Point), Some(red));
+        let image = Symbol { marker: crate::symbology::Marker::Picture(crate::symbology::Picture::new("iVBORw0KGgo=")), ..dot };
+        assert_eq!(image.shown_colour(G::Point), None);
         // Not coloured: no colours are read.
         assert!(one.chart_data(&ds).unwrap().colors.is_empty());
         let plain = chart(serde_json::json!({"field": "people"}));

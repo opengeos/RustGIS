@@ -39895,7 +39895,7 @@ fn layout_charts_take_their_layers_classes() {
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": chart, "group": "kind"})).unwrap();
     assert_eq!(data(&s).colors, vec![None, None]);
-    assert!(said(&s, mark).iter().any(|t| t.contains("2 bars of the chart keep its bar colour")), "{:?}", said(&s, mark));
+    assert!(said(&s, mark).iter().any(|t| t.contains("2 bars keep the chart's bar colour")), "{:?}", said(&s, mark));
     // Turned on by an update alone, it says so too; turned off, it holds no colours and isn't written.
     s.run("layout.update", &json!({"element": chart, "classes": false})).unwrap();
     assert!(data(&s).colors.is_empty());
@@ -39903,8 +39903,12 @@ fn layout_charts_take_their_layers_classes() {
     assert!(!saved.contains("\"classes\""), "{saved}");
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": chart, "classes": true})).unwrap();
-    assert!(said(&s, mark).iter().any(|t| t.contains("keep its bar colour")), "{:?}", said(&s, mark));
+    assert!(said(&s, mark).iter().any(|t| t.contains("keep the chart's bar colour")), "{:?}", said(&s, mark));
     assert!(matches!(s.project.layouts[0].element(chart).map(|e| &e.kind), Some(ElementKind::Chart { classes: true, .. })));
+    // Added that way, it says so as it is added.
+    let mark = s.notice_mark();
+    s.run("layout.addElement", &json!({"kind": "chart", "layer": "Places", "field": "people", "group": "kind", "classes": true})).unwrap();
+    assert!(said(&s, mark).iter().any(|t| t.contains("2 bars keep the chart's bar colour")), "{:?}", said(&s, mark));
     // Not a yes or no: refused, naming it; only charts take it.
     let err = s.run("layout.update", &json!({"element": chart, "classes": "maybe"})).unwrap_err();
     assert!(err.contains("classes"), "{err}");
