@@ -76,7 +76,9 @@ impl MarkerImage {
         let b64 = (bytes.len() <= crate::MARKER_FILE_MAX_BYTES).then(|| base64::engine::general_purpose::STANDARD.encode(bytes));
         let refused = match &b64 {
             None => Some(marker_file_too_large()),
-            Some(b64) if !rustgis_engine::render::picture_marker_readable(b64) => Some(tl!("A marker's image is a PNG or JPEG file")),
+            Some(b64) if !rustgis_engine::render::picture_marker_readable(b64) => {
+                Some(tl!("This image can't be a marker: it isn't a readable PNG or JPEG of at most 20,000 px per side"))
+            }
             Some(_) => None,
         };
         if let Some(e) = refused {
@@ -179,6 +181,9 @@ mod tests {
     /// «Image…» makes the file the marker of a point symbol, of one mark in a stack of strokes
     /// (the others as they were) and of a dot fill, on the layer it was clicked for even when
     /// another is active.
+    /// The notice for a file that isn't a readable PNG or JPEG the marker can take.
+    const UNREADABLE: &str = "This image can't be a marker: it isn't a readable PNG or JPEG of at most 20,000 px per side";
+
     #[test]
     fn a_picked_file_becomes_the_marker() {
         let dir = tempfile::tempdir().unwrap();
@@ -228,11 +233,7 @@ mod tests {
         let large = dir.path().join("large.png");
         std::fs::write(&large, &big).unwrap();
         let steps = app.session.undo_depth();
-        let refusals = [
-            (&gif, "A marker's image is a PNG or JPEG file"),
-            (&broken, "A marker's image is a PNG or JPEG file"),
-            (&large, "This image is too large for a marker: at most about 1.5 MiB"),
-        ];
+        let refusals = [(&gif, UNREADABLE), (&broken, UNREADABLE), (&large, "This image is too large for a marker: at most about 1.5 MiB")];
         for (file, said) in refusals {
             pick_file(&mut app, file, MarkerImage::symbol(cities));
             assert_eq!(layer(&app, "Cities").renderer.base_symbol(), before);
@@ -270,7 +271,7 @@ mod tests {
         assert!(app.ui.pending_marker_image.is_some());
 
         assert!(app.open_picked(&marked(first, "icon.gif"), b"GIF89a\x01\x00\x01\x00").is_err());
-        assert!(app.session.notices.iter().any(|n| n.error && n.text == "A marker's image is a PNG or JPEG file"));
+        assert!(app.session.notices.iter().any(|n| n.error && n.text == UNREADABLE));
         assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square);
 
         // Two requests overlapping: the first one's file, arriving late, isn't the second's.
