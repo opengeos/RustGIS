@@ -235,9 +235,10 @@ pub(super) struct Line {
 }
 
 impl Line {
-    /// About how many bytes its paths take, for a budget.
+    /// About how many bytes its paths take, for a budget: what they hold room for, since a candidate
+    /// kept shares the line rather than copying it.
     pub(super) fn bytes(&self) -> usize {
-        let path = |p: &Path| p.pts.len() * size_of::<(f32, f32)>() + p.along.len() * size_of::<f32>();
+        let path = |p: &Path| p.pts.capacity() * size_of::<(f32, f32)>() + p.along.capacity() * size_of::<f32>();
         size_of::<Line>() + path(&self.fwd) + path(&self.rev)
     }
 
