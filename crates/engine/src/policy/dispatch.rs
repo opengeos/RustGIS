@@ -123,7 +123,7 @@ impl Session {
         }
         let CallKind::Command { id, params } = &call.kind else {
             return Err(
-                "only standalone archive, column-statistics, similarity, topology, shape-conversion or size-by-field commands can prepare a scoped read".into()
+                "only standalone archive, column-statistics, similarity, topology, shape-conversion, image-grid or size-by-field commands can prepare a scoped read".into()
             );
         };
         if !matches!(
@@ -134,10 +134,11 @@ impl Session {
                 | "data.similar"
                 | "topology.validate"
                 | "edit.previewShapeConversion"
+                | "raster.imageGrid"
                 | "layer.sizeBy"
         ) {
             return Err(
-                "only standalone archive, column-statistics, similarity, topology, shape-conversion or size-by-field commands can prepare a scoped read".into()
+                "only standalone archive, column-statistics, similarity, topology, shape-conversion, image-grid or size-by-field commands can prepare a scoped read".into()
             );
         }
         let capture = |s: &mut Session| s.capture_read(id, params);
@@ -170,6 +171,7 @@ impl Session {
                 | "source.syncState"
                 | "table.statistics"
                 | "data.similar"
+                | "raster.imageGrid"
                 | "edit.previewShapeConversion"
                 | "layer.sizeBy"
         ) && crate::cmd::edit::table_edit_in_background(command).is_none()
@@ -188,9 +190,10 @@ impl Session {
                 | "source.syncState"
                 | "table.statistics"
                 | "data.similar"
+                | "raster.imageGrid"
                 | "edit.previewShapeConversion"
                 | "layer.sizeBy"
-        ) && (command != "edit.previewShapeConversion" || self.policy_user())
+        ) && (!matches!(command, "edit.previewShapeConversion" | "raster.imageGrid") || self.policy_user())
             || (command == "edit.convertField" && params.get("table").is_none_or(Value::is_null))
         {
             let id = self.layer_id(&Value::Object(params.clone()))?;

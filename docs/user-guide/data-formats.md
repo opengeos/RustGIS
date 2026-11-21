@@ -170,11 +170,14 @@ Symbology pane, as for any raster. GeoTIFF files follow the same rule and have e
 RGB and near-infrared file has four), and so do other rasters without colours of their own (Zarr
 stores, files read through GDAL): four or more bands open as the first in grey, where any three
 or more used to open as red, green and blue. A palette image without its colour table is drawn in
-grey, and says so. Planar files (bands stored
-apart), 8- to 64-bit integer and floating-point data, signed-byte data and bottom-up images work
-too. A dated series of GeoTIFFs (an address with date placeholders), a data cube's files and
-AlphaEarth's embeddings are tile layers that follow the time slider or dequantise their values;
-see [Satellite embeddings](web-data.md#satellite-embeddings).
+grey, and says so. Planar files (bands stored apart), 8- to 64-bit integer and floating-point data,
+signed-byte data and bottom-up images work too. A tile may take up to 32 MiB once read, each value
+as 4 bytes (8 for 64-bit data): a 512-pixel tile holds up to 32 bands stored together (16 of 64-bit
+data), and each tile up to 16 MiB as stored. A file with larger tiles is refused, saying so. Written
+with smaller tiles it opens; storing its bands apart helps only when one band's tile then fits both
+limits. A dated series of GeoTIFFs (an address with date placeholders), a data cube's files and
+AlphaEarth's embeddings are tile layers that follow the time slider or dequantise their values; see
+[Satellite embeddings](web-data.md#satellite-embeddings).
 A GeoTIFF in strips, a rotated image or an unsupported tiled image downloads whole, as does a
 GeoTIFF added with `"whole": true` (for raster tools that need every pixel at full resolution).
 The web app needs the server to allow range requests (CORS with the `Range` header).
@@ -326,7 +329,7 @@ Scripts use `service.import {"url":"…","name":"My OGC Layer"}` and
 | OGC API Features | Collections | Their items downloaded as GeoJSON, following the service's `next` pages up to 100,000 features, or more on a computer with more memory (see Environments in the analysis guide; a command such as `service.add` waits a minute at most) |
 | OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad, from the tile template the tileset advertises (its `item` link; `…/tiles/WebMercatorQuad/{z}/{y}/{x}`, the usual path, when that can't be read), keeping the tiles link's query (a token), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
 | WCS 1.0 / 2.0 (a 1.1 service is asked in 1.0) | Coverages, with their bounds | A raster: GetCoverage of the map's view within the coverage's bounds (or its whole extent: `"bbox": "full"`), as a GeoTIFF in EPSG:4326, at most 2048 pixels on a side |
-| ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON, or in protocol buffers (`f=pbf`, smaller and quicker to read) when the layer's description lists them and names its record limit (the description read first, or given up on after 15 seconds; a first protocol buffer page that can't be fetched or read has the layer read in GeoJSON, with a notice saying why), page by page past the server's record limit (`resultOffset`) up to 100,000 features or more on a computer with more memory (in protocol buffers, also no more than a quarter of the computer's memory once read, from 512 MB, the web app's limit, up to 3 GB; a later page past it ends the read with a notice, and the first page is always kept, within the reader's own limits for a page) (a command such as `service.add` waits a minute at most for the features), where the layer supports paging (ArcGIS Server 10.3 and later; otherwise up to the record limit); a layer comes in drawn as its description's `drawingInfo` says when its renderer is a simple one (fill, line and marker symbols, dashes), by the unique values of one field (as Unique Values, with the service's labels and its default symbol for the rest) or by class breaks (as Graduated Colors with the service's bounds and labels), others keeping RustGIS's symbol with a notice (a picture marker is a circle, grey or, among classes, in a ramp's colours), and with its transparency whatever its renderer (a description that can't be read, or a query asking for its own `resultOffset` or `resultRecordCount`, which skips it, keeps RustGIS's symbol with a notice saying why); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
+| ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON, or in protocol buffers (`f=pbf`, smaller and quicker to read) when the layer's description lists them and names its record limit (the description read first, or given up on after 15 seconds; a first protocol buffer page that can't be fetched or read has the layer read in GeoJSON, with a notice saying why), page by page past the server's record limit (`resultOffset`) up to 100,000 features or more on a computer with more memory (in protocol buffers, also no more than a quarter of the computer's memory once read, from 512 MB, the web app's limit, up to 3 GB; a later page past it ends the read with a notice, and the first page is always kept, within the reader's own limits for a page) (a command such as `service.add` waits a minute at most for the features), where the layer supports paging (ArcGIS Server 10.3 and later; otherwise up to the record limit); a layer comes in drawn as its description's `drawingInfo` says when its renderer is a simple one (fill, line and marker symbols, dashes), by the unique values of one field (as Unique Values, with the service's labels and its default symbol for the rest) or by class breaks (as Graduated Colors with the service's bounds and labels), others keeping RustGIS's symbol with a notice; a picture marker draws its image at its width, its height following the image's own proportion (without a width, its height is taken as its width, with a notice), and one whose image isn't in its description, or isn't a PNG or JPEG of at most 2 MiB of base64 that RustGIS can decode, is a circle, grey or, among classes, in a ramp's colours, with a notice; and with its transparency whatever its renderer (a description that can't be read, or a query asking for its own `resultOffset` or `resultRecordCount`, which skips it, keeps RustGIS's symbol with a notice saying why); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
 
 A long list stops at its first 2,000 layers, and a note says how many the service has. An OGC
 API service stops at its first 2,000 collections instead, and each can make up to three layers
@@ -766,11 +769,12 @@ it by default (see [Writing](#writing)).
 
 This differs from changing the map's coordinate system, which only changes the display, or
 exporting to another CRS, which converts coordinate numbers while preserving locations.
-A layer read from a file keeps the file's own numbers, so Define Projection only relabels them. A
-layer kept in a saved project (by this release or an older one) and opened again holds its
-geometry in longitude/latitude, as projects save it: its native numbers are first reconstructed
-through the previous CRS, where small floating-point rounding differences are possible. A layer
-read from its file again when the project opens keeps the file's numbers.
+A layer read from a file keeps the file's own numbers, so Define Projection only relabels them. So
+does a layer kept in a project saved by this release, which keeps its numbers in its own system.
+A layer kept in a project saved by an older release holds its geometry in longitude/latitude, as
+those releases saved it: its native numbers are first reconstructed through the previous CRS,
+where small floating-point rounding differences are possible. A layer read from its file again
+when the project opens keeps the file's numbers.
 Edits already made to the layer are reinterpreted too. If the wrong CRS already discarded or
 clamped coordinates, import the original file again to recover them accurately.
 
