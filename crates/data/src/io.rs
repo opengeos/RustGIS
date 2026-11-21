@@ -1423,6 +1423,10 @@ pub(crate) trait FeatureSink {
     fn restart(&mut self);
     /// One element of `"features"`, as its text.
     fn feature(&mut self, raw: &str);
+    /// Whether the read is to stop now (Cancel pressed): it then ends with an error.
+    fn stopped(&self) -> bool {
+        false
+    }
 }
 
 /// Reads a GeoJSON document's top level, handing each element of `"features"` to `sink` as it is
@@ -1491,9 +1495,13 @@ impl<'de> serde::de::Visitor<'de> for Features<'_> {
         f.write_str("an array of features")
     }
 
+    /// Hands each element to the sink as its text, ending with an error once the sink is stopped.
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
         while let Some(raw) = seq.next_element::<&'de serde_json::value::RawValue>()? {
             self.sink.feature(raw.get());
+            if self.sink.stopped() {
+                return Err(serde::de::Error::custom("cancelled"));
+            }
         }
         Ok(())
     }
@@ -4367,7 +4375,7 @@ pub fn export_losses_notes(ds: &Dataset, ext: &str, name_field: Option<usize>, t
     Ok(match ext {
         "csv" => {
             // Of the longitude/latitude the file is written in.
-            let ds = ds.in_lonlat().map_err(DataError::Format)?;
+            let ds = ds.in_lonlat().map_err(DataError::of_conversion)?;
             let losses = CsvLosses::of(&ds.features, ds.geometry_type, &ds.fields)?;
             let mut notes = losses.notes(&ds.fields, target);
             notes.extend(losses.coordinates_note(&ds.fields, target));

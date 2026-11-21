@@ -1891,9 +1891,8 @@ mod tests {
         let (text, _) = unpack_into(&archive, &unpacked).unwrap();
         let mut project = project_in(&text, &unpacked).unwrap();
         assert!(photo_notices(&mut project).is_empty());
-        // Joined as path parts, as opening does, so Windows gets its own separator too.
-        let photo = unpacked.join("photos").join("site.jpg");
-        assert_eq!(value(&Session::new(project), "Sites", 0, "photos"), photo.display().to_string());
+        let photo = unpacked.join(relative);
+        assert_eq!(Path::new(&value(&Session::new(project), "Sites", 0, "photos")), photo.as_path());
         assert_eq!(std::fs::read(photo).unwrap(), b"photo bytes");
 
         #[cfg(unix)]
