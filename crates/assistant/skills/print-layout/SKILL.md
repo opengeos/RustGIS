@@ -20,7 +20,10 @@ description: Make a printable page layout — map frame, title, legend, north ar
    `"northArrow"`, `"scaleBar"`, and optionally `"dynamicText"` (the date or a source line). Keep a margin of about
    10 mm. The legend and scale bar usually go along the bottom or the right edge. A north arrow takes a `"style"`
    (`"classic"`, `"compass"`, `"triangle"`, `"star"`); a scale bar `"units"` (`"auto"`, `"kilometers"`, `"meters"`,
-   `"miles"`, `"feet"`), `"divisions"` and a `"style"` (`"alternating"`, `"stepped"`, `"line"`). `"grid"` adds a
+   `"miles"`, `"feet"`), `"divisions"` and a `"style"` (`"alternating"`, `"stepped"`, `"line"`); it can also take
+   `"subdivisions"` (0–10), `"divisionsBeforeZero"` (0–2), `"labelPosition"` (`"above"`, `"below"`), `"unitLabel"`
+   (text; `""` for none), `"unitLabelPosition"` (`"afterLabels"`, `"afterBar"`, `"above"`, `"below"`), `"decimals"`
+   (0–3), `"labelSize"` (4–24 pt) and `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`). `"grid"` adds a
    graticule to the frame (`"style": "ticks"` for neatline ticks, `"format": "dms"`, `"edges"`).
 5. Adjust with `layout.update` (`{"element": id, "x", "y", "w", "h", "text", "size", "bold"}`). The ids come from the
    results of the earlier calls.
