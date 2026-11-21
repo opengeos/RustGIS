@@ -791,7 +791,8 @@ fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<
                             }
                             // Not held in a system it can't be converted from: kept as read, and said.
                             Err(e) => messages.push(format!(
-                                "{layer_name}: its coordinates are in {}, which can't be converted to longitude/latitude ({e}); they are kept as read and may draw out of place",
+                                "{layer_name}: its {} features are in {}, which can't be converted to longitude/latitude ({e}); they are kept as read and draw off the map",
+                                ds.features.len(),
                                 job.crs.label()
                             )),
                         }
