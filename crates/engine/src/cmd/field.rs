@@ -1002,14 +1002,21 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         ));
     }
     let mut reference = Vec::new();
+    // A layer the area has no copy of (one added in the field) isn't the area's: matched by id
+    // alone, it could reach a home layer of the same id. Left out, and said.
+    let mut unowned = Vec::new();
     edited.layers.retain(|l| {
+        if !l.is_raster() && !baseline.layers.iter().any(|b| b.id == l.id) {
+            unowned.push(l.name.clone());
+            return false;
+        }
         let keep = !baseline.layers.iter().any(|b| b.id == l.id && b.is_streamed());
         if !keep {
             reference.push(l.name.clone());
         }
         keep
     });
-    let skipped_photos = if !reference.is_empty() && !photos.is_empty() {
+    let skipped_photos = if (!reference.is_empty() || !unowned.is_empty()) && !photos.is_empty() {
         let before = photos.len();
         // An entry may be shared by a kept feature and a dropped one. Only discard entries
         // left without a reference among the layers passed to Sync.
@@ -1142,6 +1149,16 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
                 "Bring Back skipped {} layer(s) copied from sources read in place at home. Any edits to them stay in the field project: {}",
                 reference.len(),
                 reference.join(", ")
+            ),
+            false,
+        );
+    }
+    if !unowned.is_empty() {
+        s.notify(
+            format!(
+                "Bring Back skipped {} layer(s) that aren't in offline area '{area}' (added in the field). Their features stay in the field project: {}",
+                unowned.len(),
+                unowned.join(", ")
             ),
             false,
         );

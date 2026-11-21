@@ -983,6 +983,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                         })
                 })
             };
+            // The source's fields the area hasn't (added there since): a deletion offline loses their
+            // values too.
+            let source_only: Vec<usize> = (0..sl.dataset.fields.len()).filter(|j| !to_source.contains(&Some(*j))).collect();
             let held = (sl.dataset.coord_crs() != rustgis_data::raster::Crs::LonLat).then(|| sl.dataset.clone());
             if held.is_some() {
                 sl.dataset = sl.dataset.in_lonlat().map_err(|e| sync_error(&ol.name, e))?.into_owned();
@@ -997,8 +1000,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             let before = sl.dataset.features.len();
             sl.dataset.features.retain_rows(|x| {
                 let keep = !had.contains(&x.id()) || now_ids.contains(&x.id());
-                // Deleted offline but changed in the source meanwhile.
-                if !keep && changed_at_home(x) {
+                // Deleted offline but changed in the source meanwhile, a value in a field only the
+                // source has included.
+                if !keep && (changed_at_home(x) || source_only.iter().any(|&j| *x.value(j) != rustgis_data::Value::Null)) {
                     conflicts.push(tag(&lname, x.id()));
                 }
                 keep

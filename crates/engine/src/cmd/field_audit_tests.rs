@@ -407,6 +407,53 @@ fn audit_delete_vs_edit_both_ways() {
     assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{f1}"))), "{said:?}");
 }
 
+/// The crew deletes a feature the office has since given a value in a field it added: the
+/// office's value is lost with the feature, so it is reported as a conflict.
+#[test]
+fn deleted_in_the_field_after_the_office_filled_its_new_field() {
+    let temp = Temp::new("delete-new-field");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let id = a.map().layer(cities).unwrap().dataset.features[0].id;
+    a.run("select.rows", &json!({"layer": cities, "rows": [0]})).unwrap();
+    a.run("edit.delete", &Value::Null).unwrap();
+    let hc = layer(&home, "Cities");
+    home.run("edit.addField", &json!({"layer": hc, "name": "inspected", "type": "text"})).unwrap();
+    let row = home.map().layer(hc).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
+    home.run("edit.setValue", &json!({"layer": hc, "row": row, "field": "inspected", "value": "flagged"})).unwrap();
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!((done["deleted"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1)), "{done}");
+    assert!(said.iter().any(|t| t.contains("replaced the map's changes") && t.contains(&format!("Cities #{id}"))), "{said:?}");
+}
+
+/// A layer added in the field, whose id a layer added at home has taken meanwhile: it isn't the
+/// area's, so none of its fields or features reach the home layer of that id, and it is said.
+#[test]
+fn a_layer_added_in_the_field_stays_out_of_home_layers() {
+    use base64::Engine;
+    let point = |label: &str| {
+        let text = format!(
+            r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","properties":{{"crew_only":"{label}"}},"geometry":{{"type":"Point","coordinates":[10,5]}}}}]}}"#
+        );
+        base64::engine::general_purpose::STANDARD.encode(text)
+    };
+    let temp = Temp::new("field-layer");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    a.run("layer.addDataBytes", &json!({"fileName": "crew.geojson", "data": point("crew"), "name": "Crew layer"})).unwrap();
+    home.run("layer.addDataBytes", &json!({"fileName": "office.geojson", "data": point("office"), "name": "Office layer"})).unwrap();
+    let (crew, office) = (layer(&a, "Crew layer"), layer(&home, "Office layer"));
+    assert_eq!(crew, office, "both sides give their new layer the next id");
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    let ds = &home.map().layer(office).unwrap().dataset;
+    assert_eq!(ds.features.len(), 1, "ids {crew} / {office}: {done}");
+    assert_eq!(ds.fields.len(), 1, "ids {crew} / {office}");
+    assert!(said.iter().any(|t| t.contains("skipped 1 layer(s) that aren't in offline area") && t.contains("Crew layer")), "{said:?}");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn roads_gpkg(dir: &Path) -> PathBuf {
     let path = dir.join("roads.gpkg");
