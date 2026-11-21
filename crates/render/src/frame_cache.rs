@@ -106,6 +106,9 @@ pub(crate) struct Checkpoint {
     pub sprites: Sprites,
     /// The shapeburst budget spent so far (`gradient_fill::FRAME_BURST_PX`).
     pub bursts: f32,
+    /// When it was drawn: one of a map with tile layers is drawn again once a failed tile may be
+    /// asked for again ([`rustgis_tiles::cache::RETRY`]), as the next frame drawn whole would.
+    pub taken: web_time::Instant,
     pub candidates: Vec<Candidate>,
     pub fixed: Vec<PlacedLabel>,
     pub tiles: TileOutput,
@@ -251,7 +254,13 @@ fn plan_with(frame: Frame, looks: Looks, pixels: u64) -> Plan {
     if pixels.saturating_mul(KEPT as u64) > MAX_PIXELS {
         return Plan { start: 0, restored: None, capture_at: None, recombine: None, alone_at: None, frame, looks };
     }
-    let found = with_pictures(|kept| kept.iter().position(|k| k.frame.same(&frame)).map(|i| kept.remove(i)));
+    // A picture over tile layers lasts until a tile that failed in it may be asked for again: a
+    // server that gave no time to come back is asked by the next draw after a minute.
+    let fresh = |k: &Kept| k.frame.tiles.is_none() || k.checkpoint.taken.elapsed() < rustgis_tiles::cache::RETRY;
+    let found = with_pictures(|kept| {
+        kept.retain(fresh);
+        kept.iter().position(|k| k.frame.same(&frame)).map(|i| kept.remove(i))
+    });
     let Some(k) = found else {
         // Nothing to start from: keep what lies under the first layer (the basemap, the tile
         // layers below every layer), or the frame under its first changed layer next time.

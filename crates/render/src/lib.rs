@@ -4590,6 +4590,7 @@ fn render_frame(
                     pixels: pm.pixels().clone(),
                     sprites: ctx.sprites.borrow().clone(),
                     bursts: ctx.bursts.get(),
+                    taken: web_time::Instant::now(),
                     candidates: label_candidates.clone(),
                     fixed: fixed_labels.clone(),
                     tiles: tile_out.clone(),
