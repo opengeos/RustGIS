@@ -88,21 +88,28 @@ const LIFECYCLE_PREFIXES: &[&str] = &[
     "was:",
 ];
 
+/// A key without its lifecycle prefix: `destroyed:building` → `building`.
+fn unprefixed(k: &str) -> &str {
+    LIFECYCLE_PREFIXES.iter().find_map(|p| k.strip_prefix(p)).unwrap_or(k)
+}
+
 /// Whether a closed way is an area by its tags: the one rule for a `.osm.pbf` file and an Overpass
 /// answer, so both give the same layers. `area=yes|no` decides; else a closed road or barrier is
-/// a ring; else a key of `AREA_KEYS`, also behind a lifecycle prefix, makes it an area, except a
-/// line of nature (coastline, cliff, tree row, ridge) and a waterway that isn't a water surface.
+/// a line; else a key of `AREA_KEYS` makes it an area, except a line of nature (coastline, cliff,
+/// tree row, ridge) and a waterway that isn't a water surface. A key is read without its
+/// lifecycle prefix throughout: a destroyed building keeps a building's footprint, and a
+/// destroyed wall a wall's line.
 pub fn closed_way_is_area(tags: &[(String, String)]) -> bool {
     match tag(tags, "area") {
         Some("yes") => return true,
         Some("no") => return false,
         _ => {}
     }
-    if tag(tags, "highway").is_some() || tag(tags, "barrier").is_some() {
+    if tags.iter().any(|(k, _)| matches!(unprefixed(k), "highway" | "barrier")) {
         return false;
     }
     tags.iter().any(|(k, v)| {
-        let k = LIFECYCLE_PREFIXES.iter().find_map(|p| k.strip_prefix(p)).unwrap_or(k);
+        let k = unprefixed(k);
         match k {
             "natural" => !matches!(v.as_str(), "coastline" | "cliff" | "tree_row" | "ridge"),
             "waterway" => matches!(v.as_str(), "riverbank" | "dock" | "boatyard"),
@@ -880,9 +887,10 @@ pub(crate) mod tests {
         ] {
             assert!(closed_way_is_area(&area), "{area:?}");
         }
-        for ring in [
+        for line in [
             t(&[("highway", "residential")]),
             t(&[("barrier", "fence"), ("landuse", "meadow")]),
+            t(&[("destroyed:barrier", "wall"), ("landuse", "meadow")]),
             t(&[("building", "yes"), ("area", "no")]),
             t(&[("natural", "coastline")]),
             t(&[("destroyed:natural", "ridge")]),
@@ -891,7 +899,7 @@ pub(crate) mod tests {
             t(&[("building:levels", "2")]),
             t(&[("name", "x")]),
         ] {
-            assert!(!closed_way_is_area(&ring), "{ring:?}");
+            assert!(!closed_way_is_area(&line), "{line:?}");
         }
     }
 
