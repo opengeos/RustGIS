@@ -111,6 +111,12 @@ impl Report {
         self.note(layer, NoteKind::Skipped, text);
     }
 
+    /// How many times `text` was noted for `layer`.
+    fn noted(&self, layer: &str, kind: NoteKind, text: &str) -> usize {
+        let key = (layer.to_string(), kind, text.to_string());
+        self.index.get(&key).and_then(|&i| self.notes.get(i)).map_or(0, |n| n.count)
+    }
+
     /// Withdraws a provisional note once checking against the destination fields disproves it.
     fn forget(&mut self, layer: &str, kind: NoteKind, text: &str) {
         let key = (layer.to_string(), kind, text.to_string());

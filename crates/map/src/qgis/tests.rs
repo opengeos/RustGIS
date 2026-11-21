@@ -1441,6 +1441,13 @@ fn raster_image_markers_draw_their_image_read_once_from_the_style_folder() {
     let faded = line.replace(r#"name="@0@0" alpha="1""#, r#"name="@0@0" alpha="0.5""#);
     super::read_style(&faded, "Road", "", &mut read, &mut report).unwrap();
     assert_eq!(report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["see-through raster image markers, drawn opaque"]);
+    // The line see-through as well: one symbol, one note.
+    let mut report = Report::default();
+    let both = faded.replace(r#"type="line" name="0" alpha="1""#, r#"type="line" name="0" alpha="0.5""#);
+    assert_ne!(both, faded);
+    super::read_style(&both, "Road", "", &mut read, &mut report).unwrap();
+    let notes: Vec<_> = report.notes.iter().map(|n| (n.text.as_str(), n.count)).collect();
+    assert_eq!(notes, [("see-through raster image markers, drawn opaque", 1)]);
 }
 
 #[test]
@@ -1487,7 +1494,7 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
         notes,
         [
             ("raster image markers of a fixed aspect ratio, drawn in their image's own", 1),
-            ("see-through raster image markers, drawn opaque", 2)
+            ("see-through raster image markers, drawn opaque", 1)
         ]
     );
     // A ratio that is the image's own is no change; a switched-off layer's image isn't read.

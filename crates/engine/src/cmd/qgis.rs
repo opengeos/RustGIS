@@ -99,11 +99,16 @@ fn marker_image(source: &str, read: &mut usize) -> Result<(String, f32), &'stati
         None => match super::graphics::read_picture_file(source, MAX_PICTURE_BYTES / 4 * 3) {
             Ok(bytes) if bytes.is_empty() => return Err(NOT_AN_IMAGE),
             Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(bytes),
-            Err((e, got)) => {
+            Err(e) => {
+                use super::graphics::PictureFileError;
                 // What was read of it is charged, as its base64 would be (none for one that
                 // doesn't open).
-                *read += got.div_ceil(3) * 4;
-                return Err(if e == super::graphics::TOO_LARGE { TOO_LARGE } else { "whose image file doesn't open" });
+                *read += e.read().div_ceil(3) * 4;
+                return Err(match e {
+                    PictureFileError::Unopened(_) => "whose image file doesn't open",
+                    PictureFileError::TooLarge(_) => TOO_LARGE,
+                    PictureFileError::Unread(..) => "whose image file fails as it is read",
+                });
             }
         },
     };

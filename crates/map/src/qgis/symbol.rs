@@ -5,7 +5,7 @@
 
 use roxmltree::Node;
 
-use super::{ReadImage, Report, color, data_defined_on, has_effect, points, prop, props, signed_points};
+use super::{NoteKind, ReadImage, Report, color, data_defined_on, has_effect, points, prop, props, signed_points};
 use crate::Rgba;
 use crate::fills::{FillLayer, FillPattern, GradientPoint, GradientShape, Spread, Stop, Stops};
 use crate::symbol_by::SymbolBy;
@@ -62,6 +62,9 @@ pub(super) fn turns_by_field(sym: Node) -> bool {
 /// they are in map units. `turned`: the layer's markers turn by a field, so a marker symbol that
 /// doesn't is drawn as a mark that keeps still.
 pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str, report: &mut Report) -> Converted {
+    // Noted once for the symbol, whichever of its opacities (its own, an image layer's, a marker
+    // line's) is see-through.
+    let seen = report.noted(layer, NoteKind::Approximated, SEE_THROUGH_IMAGES);
     let alpha = sym.attribute("alpha").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0);
     let fade = |c: Rgba| c.with_alpha((f32::from(c.a()) * alpha).round() as u8);
     let unit = sym.attribute("outputUnit");
@@ -158,11 +161,16 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
     }
     // An image marker is drawn at the layer's opacity alone.
     let picture = |m: Marker| matches!(m, Marker::Picture(_));
-    if alpha < 1.0
+    let faded = alpha < 1.0
         && (picture(out.symbol.marker)
-            || out.strokes.iter().any(|s| s.markers.is_some_and(|m| matches!(m.mark, LineMark::Marker(k) if picture(k)))))
-    {
-        report.approximated(layer, "see-through raster image markers, drawn opaque");
+            || out.strokes.iter().any(|s| s.markers.is_some_and(|m| matches!(m.mark, LineMark::Marker(k) if picture(k)))));
+    let now = report.noted(layer, NoteKind::Approximated, SEE_THROUGH_IMAGES);
+    if now > seen + 1 {
+        for _ in seen + 1..now {
+            report.forget(layer, NoteKind::Approximated, SEE_THROUGH_IMAGES);
+        }
+    } else if now == seen && faded {
+        report.approximated(layer, SEE_THROUGH_IMAGES);
     }
     out.by = by;
     out.symbol.fill = fade(out.symbol.fill);
@@ -660,7 +668,7 @@ fn along(l: Node, p: &[(String, String)], hash: bool, reference: Option<f64>, la
         if let Some(mut st) = stroke {
             // An image mark is drawn at the layer's opacity alone.
             if alpha < 1.0 && st.markers.is_some_and(|m| matches!(m.mark, LineMark::Marker(Marker::Picture(_)))) {
-                report.approximated(layer, "see-through raster image markers, drawn opaque");
+                report.approximated(layer, SEE_THROUGH_IMAGES);
             }
             st.offset += across;
             st.level = pass;
@@ -944,6 +952,10 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
     }
 }
 
+/// The note for image markers drawn opaque where QGIS draws them see-through: once per symbol
+/// ([`read`]).
+const SEE_THROUGH_IMAGES: &str = "see-through raster image markers, drawn opaque";
+
 /// A raster image marker's image (read before the symbols: [`read_images`]) and its height over
 /// its width, or `None` (noted, with why) for it to be drawn as a circle. What QGIS draws
 /// otherwise than RustGIS is noted: a ratio of its own, see-through.
@@ -959,7 +971,7 @@ fn raster_image(p: &[(String, String)], layer: &str, report: &mut Report) -> Opt
                 report.approximated(layer, "raster image markers of a fixed aspect ratio, drawn in their image's own");
             }
             if prop(p, "alpha").and_then(|a| a.trim().parse::<f32>().ok()).is_some_and(|a| a < 1.0) {
-                report.approximated(layer, "see-through raster image markers, drawn opaque");
+                report.approximated(layer, SEE_THROUGH_IMAGES);
             }
             return Some(got);
         }
