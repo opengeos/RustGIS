@@ -813,8 +813,10 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Its features, all of them: a copy of a layer read in place holds those of its whole source.
     let whole = if s.map().layer(id).ok_or("no such layer")?.is_streamed() {
-        let (ds, unread) = super::whole::take_or_read(s, id)?;
+        let (mut ds, unread) = super::whole::take_or_read(s, id)?;
         let mut copy = s.map().layer(id).ok_or("no such layer")?.clone();
+        // Shown on the map as the live layer is, for moved labels' places (Dataset::shown_in).
+        ds.shown_in = copy.dataset.shown_in;
         copy.dataset = ds;
         copy.source = None;
         Some((copy, unread))
