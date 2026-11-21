@@ -807,6 +807,10 @@ impl SourceLayer {
     /// What view reads found of text values that aren't UTF-8
     /// ([`rustgis_data::source::not_utf8_note`]), once for the source.
     pub fn take_not_utf8(&mut self) -> Option<String> {
+        // Checked first: this runs every frame for each layer with a source, and most have nothing pending.
+        if self.not_utf8.is_none() {
+            return None;
+        }
         let fields = self.info().map(|i| i.fields.clone())?;
         let counts = self.not_utf8.take()?;
         self.not_utf8_said = true;

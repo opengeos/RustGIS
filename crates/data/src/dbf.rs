@@ -175,34 +175,41 @@ fn page_name(page: u16) -> Option<&'static str> {
 /// code page RustGIS can't decode.
 pub(crate) const NO_OTHER_ENCODING: &str = "no .cpg file names another encoding RustGIS reads (a .cpg file containing 950 names Big5)";
 
-/// What opening a `.dbf` read as UTF-8 says of its field names that aren't UTF-8 ([`not_utf8`]).
-/// `None` when there are none.
-pub(crate) fn not_utf8_names_note(names: usize) -> Option<String> {
-    let what = match names {
+/// What opening a `.dbf` read as UTF-8 says of its field names that aren't UTF-8 ([`not_utf8`]),
+/// naming the first five by their column (from 1). `None` when there are none.
+pub(crate) fn not_utf8_names_note(columns: &[usize]) -> Option<String> {
+    let (what, label) = match columns.len() {
         0 => return None,
-        1 => "1 field name isn't valid UTF-8 and was".to_string(),
-        n => format!("{n} field names aren't valid UTF-8 and were"),
+        1 => ("1 field name isn't valid UTF-8 and was".to_string(), "field"),
+        n => (format!("{n} field names aren't valid UTF-8 and were"), "fields"),
     };
-    Some(format!("Shapefile: {what} read with U+FFFD in place of the bytes that can't be read; {NO_OTHER_ENCODING}"))
+    let named: Vec<String> = columns.iter().take(5).map(usize::to_string).collect();
+    let more = if columns.len() > 5 { format!(" and {} more", columns.len() - 5) } else { String::new() };
+    Some(format!(
+        "Shapefile: {what} read with U+FFFD in place of the bytes that can't be read, in {label} {}{more}; {NO_OTHER_ENCODING}",
+        named.join(", ")
+    ))
 }
 
-/// What a `.dbf` read as UTF-8 holds that isn't UTF-8: how many of its field names, and for each
-/// column by its position how many of its text values. `dbase` reads them with U+FFFD in place of
-/// those bytes and doesn't say so. They are counted on the bytes, since U+FFFD in the text read can
-/// also be what the file holds. The values are the ones `dbase` decodes as text: a character (`C`)
-/// column's, up to a NUL, in the rows the header counts that aren't marked deleted (a row the read
-/// then leaves out as unreadable is counted too). It doesn't look at Cancel: it is one pass over a
-/// file that is read whole, so of at most [`crate::io::MAX_BYTES`].
-pub(crate) fn not_utf8(dbf: &[u8]) -> (usize, Vec<usize>) {
+/// What a `.dbf` read as UTF-8 holds that isn't UTF-8: which of its field names (by column, from 1),
+/// and for each column by its position how many of its text values. `dbase` reads them with U+FFFD
+/// in place of those bytes and doesn't say so. They are counted on the bytes, since U+FFFD in the
+/// text read can also be what the file holds. The values are the ones `dbase` decodes as text: a
+/// character (`C`) column's, up to a NUL, in the rows the header counts that aren't marked deleted
+/// (a row the read then leaves out as unreadable is counted too). It doesn't look at Cancel: it is
+/// one pass over a file that is read whole, so of at most [`crate::io::MAX_BYTES`].
+pub(crate) fn not_utf8(dbf: &[u8]) -> (Vec<usize>, Vec<usize>) {
     let lossy = |text: &[u8]| std::str::from_utf8(text.split(|b| *b == 0).next().unwrap_or(&[])).is_err();
     let header_len = usize::from(u16::from_le_bytes([dbf.get(8).copied().unwrap_or(0), dbf.get(9).copied().unwrap_or(0)]));
     let rows = dbf.get(4..8).and_then(|b| <[u8; 4]>::try_from(b).ok()).map_or(0, |b| u32::from_le_bytes(b) as usize);
-    let mut names = 0;
+    let mut names = Vec::new();
     // Each column's width, and whether its values are text.
     let mut columns = Vec::new();
     for start in (32..header_len.min(dbf.len())).step_by(32) {
         let Some(d) = dbf.get(start..start + 32).filter(|d| d.first() != Some(&0x0D)) else { break };
-        names += usize::from(d.get(..11).is_some_and(lossy));
+        if d.get(..11).is_some_and(lossy) {
+            names.push(columns.len() + 1);
+        }
         columns.push((usize::from(d.get(16).copied().unwrap_or(0)), d.get(11) == Some(&b'C')));
     }
     let mut values = vec![0; columns.len()];
@@ -587,22 +594,26 @@ mod tests {
         assert_eq!(not_utf8(&dbf), (1, vec![1, 0, 0, 1]));
         // A row past the header's count isn't read.
         dbf.extend_from_slice(b" \xe9t\xe9 20260305 1\xe9bc");
-        assert_eq!(not_utf8(&dbf), (1, vec![1, 0, 0, 1]));
+        assert_eq!(not_utf8(&dbf), (vec![1], vec![1, 0, 0, 1]));
         // A file cut short counts the rows that are whole, and one without a header nothing.
         let cut = dbf.len() - 2 * 18 - 1;
-        assert_eq!(not_utf8(&dbf[..cut]), (1, vec![1, 0, 0, 1]));
-        assert_eq!(not_utf8(&dbf[..cut - 18]), (1, vec![1, 0, 0, 0]));
-        assert_eq!(not_utf8(&dbf[..40]), (0, Vec::new()));
-        assert_eq!(not_utf8(&[]), (0, Vec::new()));
+        assert_eq!(not_utf8(&dbf[..cut]), (vec![1], vec![1, 0, 0, 1]));
+        assert_eq!(not_utf8(&dbf[..cut - 18]), (vec![1], vec![1, 0, 0, 0]));
+        assert_eq!(not_utf8(&dbf[..40]), (Vec::new(), Vec::new()));
+        assert_eq!(not_utf8(&[]), (Vec::new(), Vec::new()));
     }
 
     #[test]
-    fn field_names_that_arent_utf8_are_said_with_their_count() {
-        assert_eq!(not_utf8_names_note(0), None);
-        let one = not_utf8_names_note(1).unwrap();
+    fn field_names_that_arent_utf8_are_said_with_their_columns() {
+        assert_eq!(not_utf8_names_note(&[]), None);
+        let one = not_utf8_names_note(&[3]).unwrap();
         assert!(one.starts_with("Shapefile: 1 field name isn't valid UTF-8 and was read with U+FFFD"), "{one}");
-        let two = not_utf8_names_note(2).unwrap();
+        assert!(one.contains("in field 3;"), "{one}");
+        let two = not_utf8_names_note(&[3, 7]).unwrap();
         assert!(two.starts_with("Shapefile: 2 field names aren't valid UTF-8 and were read with U+FFFD"), "{two}");
+        assert!(two.contains("in fields 3, 7;"), "{two}");
         assert!(two.ends_with(NO_OTHER_ENCODING), "{two}");
+        let many = not_utf8_names_note(&[1, 2, 3, 4, 5, 6, 7]).unwrap();
+        assert!(many.contains("in fields 1, 2, 3, 4, 5 and 2 more;"), "{many}");
     }
 }

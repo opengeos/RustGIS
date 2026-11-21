@@ -3445,8 +3445,8 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
     let mut encoding_notes = Vec::new();
     let encoding = crate::dbf::encoding(cpg, bytes.get(29).copied().unwrap_or(0), &mut encoding_notes);
     // Counted before a date column is marked a character one below: its values aren't text.
-    let (names, not_utf8) = if encoding.is_utf8() { crate::dbf::not_utf8(&bytes) } else { (0, Vec::new()) };
-    encoding_notes.extend(crate::dbf::not_utf8_names_note(names));
+    let (names, not_utf8) = if encoding.is_utf8() { crate::dbf::not_utf8(&bytes) } else { (Vec::new(), Vec::new()) };
+    encoding_notes.extend(crate::dbf::not_utf8_names_note(&names));
     crate::dbf::readable_header_date(&mut bytes);
     let date_columns = crate::dbf::dates_as_text(&mut bytes);
     crate::dbf::floats_as_numeric(&mut bytes);

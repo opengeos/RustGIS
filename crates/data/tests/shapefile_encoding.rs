@@ -77,10 +77,10 @@ fn not_utf8_note(values: usize, field: &str) -> String {
     format!("places: {what} read with U+FFFD in place of the bytes that can't be read, in '{field}'; {NO_OTHER_ENCODING}")
 }
 
-/// What opening a `.dbf` says of its one field name that isn't UTF-8.
+/// What opening a `.dbf` says of its one field name that isn't UTF-8, the first column.
 fn name_not_utf8_note() -> String {
     format!(
-        "Shapefile: 1 field name isn't valid UTF-8 and was read with U+FFFD in place of the bytes that can't be read; {NO_OTHER_ENCODING}"
+        "Shapefile: 1 field name isn't valid UTF-8 and was read with U+FFFD in place of the bytes that can't be read, in field 1; {NO_OTHER_ENCODING}"
     )
 }
 
@@ -709,6 +709,8 @@ fn esri_57_remains_windows_1252_rather_than_iso_8859_1() {
 
 #[test]
 fn malformed_multibyte_fields_replace_bytes_without_dropping_records() {
+    // Known gap, deferred from #2325: these four code pages' malformed bytes are replaced with no
+    // notice yet, so the empty notes below pin that behaviour rather than endorse it.
     for (ldid, text) in [(0x13, b"X\x82".as_slice()), (0x4D, b"X\x81"), (0x4E, b"X\x81"), (0x4F, b"X\xa4")] {
         check_ldid_readers(ldid, text, "X�", None, &[]);
     }

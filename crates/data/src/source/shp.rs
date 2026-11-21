@@ -188,7 +188,7 @@ impl ShpSource {
             notes.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
         }
         let (names, not_utf8) = read_names(&dbf, table.columns.len(), &encoding.decoder(), encoding.is_utf8())?;
-        notes.extend(crate::dbf::not_utf8_names_note(not_utf8));
+        notes.extend(crate::dbf::not_utf8_names_note(&not_utf8));
         let fields = table.columns.iter().zip(names).map(|(c, n)| Field::new(n, c.out)).collect();
         let mut info = SourceInfo {
             name: name.to_string(),
@@ -688,20 +688,22 @@ impl Table {
 }
 
 /// The `.dbf`'s column names, in order (read again: the layout above keeps only offsets), and,
-/// when they are read as UTF-8 (`utf8`), how many of them aren't UTF-8
+/// when they are read as UTF-8 (`utf8`), the columns (from 1) whose names aren't UTF-8
 /// ([`crate::dbf::not_utf8_names_note`]).
-fn read_names(path: &Path, n: usize, encoding: &dyn shapefile::dbase::Encoding, utf8: bool) -> Result<(Vec<String>, usize)> {
+fn read_names(path: &Path, n: usize, encoding: &dyn shapefile::dbase::Encoding, utf8: bool) -> Result<(Vec<String>, Vec<usize>)> {
     let mut f = BufReader::new(crate::provenance::open(path)?);
     f.seek(SeekFrom::Start(32))?;
     let mut out = Vec::with_capacity(n);
-    let mut not_utf8 = 0;
+    let mut not_utf8 = Vec::new();
     let mut d = [0u8; 32];
     for _ in 0..n {
         f.read_exact(&mut d)?;
         let name = d.get(..11).unwrap_or(&[]);
         let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
         let name = name.get(..end).unwrap_or(&[]);
-        not_utf8 += usize::from(utf8 && std::str::from_utf8(name).is_err());
+        if utf8 && std::str::from_utf8(name).is_err() {
+            not_utf8.push(out.len() + 1);
+        }
         out.push(encoding.decode(name).unwrap_or_else(|_| String::from_utf8_lossy(name)).trim().to_string());
     }
     Ok((out, not_utf8))
