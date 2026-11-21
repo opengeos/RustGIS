@@ -347,6 +347,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
             area: home_area.id.clone(),
             generation: home_area.generation.clone(),
             package: crate::project::field_id()?,
+            ids: Default::default(),
         })
     };
     if origin
@@ -372,6 +373,24 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
             .extent;
         let available = project_room(companion_bytes(&entries));
         copied = copy_streams(&mut map, extent, stream_budget(available), &mut losses)?;
+    }
+    // Going out, the highest id each layer has: features added in the field are given ids above it,
+    // and so are those added to the area's map here while the package is out.
+    if !coming_back && let Some(origin) = project.field_origin.as_mut() {
+        origin.ids = map
+            .layers
+            .iter()
+            .filter(|l| !l.is_raster())
+            .map(|l| (l.id, l.dataset.features.highest_id()))
+            .filter(|(_, id)| *id > 0)
+            .collect();
+        if let Some(home) = s.project.offline_areas.iter_mut().find(|a| a.name.eq_ignore_ascii_case(&area)) {
+            for (layer, id) in &origin.ids {
+                let held = home.ids.entry(*layer).or_insert(0);
+                *held = (*held).max(*id);
+            }
+        }
+        s.project.keep_area_ids();
     }
     project.maps = vec![map];
     let home = &s.project;
@@ -518,6 +537,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                 field_edit(s, "Prepare home project for field package", |s| {
                     s.project.origin_id = origin;
                     s.project.offline_areas = areas;
+                    s.project.keep_area_ids();
                     Ok(Value::Null)
                 })
                 .map_err(|e| {
@@ -571,8 +591,8 @@ pub(crate) fn spend(s: &mut Session, spent: Option<String>) {
 /// Offline area identity state which packaging can change. Feature rows are shared with home
 /// until the worker builds a new area's clipped baseline.
 #[cfg(not(target_arch = "wasm32"))]
-fn area_ids(project: &Project) -> Vec<(String, String)> {
-    project.offline_areas.iter().map(|a| (a.id.clone(), a.generation.clone())).collect()
+fn area_ids(project: &Project) -> Vec<(String, String, std::collections::BTreeMap<u32, u64>)> {
+    project.offline_areas.iter().map(|a| (a.id.clone(), a.generation.clone(), a.ids.clone())).collect()
 }
 
 fn companion_bytes(entries: &[(String, Vec<u8>)]) -> u64 {
@@ -957,8 +977,15 @@ fn plain_file(file: &str) -> bool {
 /// made. Each says the conflicts. A package comes back once: its identity is kept with the area,
 /// and a package of that identity is refused after.
 ///
-/// It runs where it is called, on the window's thread, as Sync does: the package is one read, each
-/// photo one write, and the changes one pass over each changed layer, with no Cancel between them.
+/// It runs where it is called, on the window's thread, as it did before packages carried a list of
+/// changes and as Sync does: it changes the area's map, the area and its offline map, and writes
+/// the photos, as one undoable step, which none of the background paths (tools, exports, reads,
+/// rasters) carries yet; moving it to one, with progress and Cancel, belongs with #1562. Its work:
+/// the package is one read, each photo one write, the changes one pass over each changed layer of
+/// the map and of the package's map, and, when the area's offline map is open with rows no longer
+/// shared with its snapshot, one comparison of those rows with the snapshot's
+/// ([`super::workspace::area_unsynced`]); a whole map, one pass over the area's features. No
+/// Cancel between them.
 pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     let legacy_area = if p.get("legacyArea").is_some() {
         legacy_user(s)?;

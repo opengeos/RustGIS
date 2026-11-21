@@ -832,6 +832,7 @@ pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         synced: t,
         generation: String::new(),
         returned: Vec::new(),
+        ids: Default::default(),
         data,
     });
     note_unbound(s, bound, &format!("the offline area '{name}'"));
@@ -1023,7 +1024,14 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             // is taken: one above any the source, the area and the returning copy have, so it never
             // takes the free id of a feature added after it.
             let mut at: std::collections::HashMap<u64, usize> = sl.dataset.features.rows().enumerate().map(|(i, r)| (r.id(), i)).collect();
-            let mut top = at.keys().chain(had.iter()).copied().chain(ol_ds.features.rows().map(|r| r.id())).max().unwrap_or(0);
+            let mut top = at
+                .keys()
+                .chain(had.iter())
+                .copied()
+                .chain(ol_ds.features.rows().map(|r| r.id()))
+                .max()
+                .unwrap_or(0)
+                .max(sl.dataset.features.highest_id());
             for f in ol_ds.features.rows() {
                 let fid = f.id();
                 if had.contains(&fid) {

@@ -193,14 +193,20 @@ Only the photos of features the phone added, or whose photos it changed, come ba
 feature whose photos it left alone is left out, and the summary says how many.
 
 Bring Back refuses a package while the area's offline map is open with edits not synced yet, as
-renewing the area would replace them: **Sync** the area first. It also refuses a package made on
-the computer to go out, which is not a return.
+renewing the area would replace them: **Sync** the area first. Syncing moves the area on, so a
+package that goes back as a whole map and was made before the sync can no longer be brought back:
+make a new package and redo that phone's edits on it. A package that goes back with its list of
+changes isn't affected. Bring Back also refuses a package made on the computer to go out, which is
+not a return.
 
 Give each phone a package of its own: several packages of one area can be out at once, and each
-comes back with only its own changes. Make one from the area's offline map with **Package for the
+whose phone kept its rows comes back with only its own changes. A package that goes back as a whole
+map is refused once another package of the same area has come back, or the area has been synced. Make one from the area's offline map with **Package for the
 Field** again. A package comes back once: the same package returned again, from the same phone or
-from a copy on a second one, is refused and changes nothing. A feature added on the phone keeps its
-id unless the computer uses it already; then it takes the next free one, and the summary says how
+from a copy on a second one, is refused and changes nothing. A feature added on the phone is given an id above every
+id its package gave, and one added on the computer an id above every id the area's packages gave,
+so neither is taken for a feature a package holds. A feature added on the phone keeps its id
+unless the computer uses it already; then it takes the next free one, and the summary says how
 many did. A package made before packages had an identity of their own comes back as a whole map,
 as described above; one made before packages carried a return check comes back as before, with a
 notice. A package for an area the project doesn't have is refused.

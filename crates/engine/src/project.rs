@@ -640,6 +640,38 @@ pub struct FieldOrigin {
     /// the copy of the rows it was given by it. Empty for a package made before packages had one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub package: String,
+    /// The highest feature id each of the package's layers had when it was made, by layer id: a
+    /// feature added in the field is given an id above it, even after the features with the
+    /// highest ids are deleted, so it is never taken for one the package gave.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ids: std::collections::BTreeMap<u32, u64>,
+}
+
+impl Project {
+    /// Keeps the ids new features of each offline area's map are given above those its packages
+    /// gave ([`OfflineArea::ids`]).
+    pub(crate) fn keep_area_ids(&mut self) {
+        for area in &self.offline_areas {
+            let Some(map) = self.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&area.map)) else { continue };
+            for (layer, id) in &area.ids {
+                if let Some(l) = map.layers.iter_mut().find(|l| l.id == *layer && !l.is_raster()) {
+                    l.dataset.features.keep_ids_above(*id);
+                }
+            }
+        }
+    }
+}
+
+impl FieldOrigin {
+    /// Keeps the ids new features of `map`'s layers are given above those the package gave
+    /// ([`FieldOrigin::ids`]).
+    pub(crate) fn keep_ids(&self, map: &mut Map) {
+        for (layer, id) in &self.ids {
+            if let Some(l) = map.layers.iter_mut().find(|l| l.id == *layer && !l.is_raster()) {
+                l.dataset.features.keep_ids_above(*id);
+            }
+        }
+    }
 }
 
 pub(crate) fn field_id() -> Result<String, String> {
@@ -677,6 +709,11 @@ pub struct OfflineArea {
     /// brought back: each comes back once, so its changes can't be applied twice.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub returned: Vec<String>,
+    /// The highest feature id each layer of its map had in any field package made of the area, by
+    /// layer id: a feature added to the map here is given an id above it, so a package still out
+    /// never takes one added since for a feature it was given.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ids: std::collections::BTreeMap<u32, u64>,
     /// The snapshot: the map's feature layers holding the features meeting the extent.
     #[cfg_attr(feature = "schema", schemars(with = "crate::schema::Open"))]
     pub data: Map,
@@ -1768,6 +1805,12 @@ impl Project {
             return Err("not a RustGIS project: an offline field identity is invalid or duplicated".into());
         }
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
+        // A field project's new features stay above the ids its package gave, opened again or not,
+        // and a home map's above those its areas' packages gave.
+        if let (Some(origin), Some(map)) = (p.field_origin.clone(), p.maps.first_mut()) {
+            origin.keep_ids(map);
+        }
+        p.keep_area_ids();
         // (A backstop: `check_format` has refused it already.)
         if p.format > READ_FORMAT {
             return Err(format!("this project was saved by a newer RustGIS (format {}). Update RustGIS to open it.", p.format));
@@ -2511,7 +2554,7 @@ impl Durable for Project {
             p.child(Owner::Map(i), v);
         }
         for (i, v) in offline_areas.iter().enumerate() {
-            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, generation: _, returned: _, data } = v;
+            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, generation: _, returned: _, ids: _, data } = v;
             p.child(Owner::Area(i), data);
         }
         for (i, v) in tables.iter().enumerate() {

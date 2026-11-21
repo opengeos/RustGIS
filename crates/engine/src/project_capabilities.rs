@@ -42,7 +42,7 @@ impl Project {
         // A package's identity and the packages already brought back: an older reader would drop
         // them on saving, and then apply a package's changes twice.
         if self.field_origin.as_ref().is_some_and(|origin| !origin.package.is_empty())
-            || self.offline_areas.iter().any(|area| !area.returned.is_empty())
+            || self.offline_areas.iter().any(|area| !area.returned.is_empty() || !area.ids.is_empty())
         {
             required.push("field-package");
         }
@@ -1308,6 +1308,7 @@ mod tests {
             synced: 0.0,
             generation: String::new(),
             returned: Vec::new(),
+            ids: Default::default(),
             data: with_area.map().clone(),
         });
         assert_eq!(serde_json::to_value(&with_area).unwrap()["requires"], json!(["field-origin"]));
@@ -1328,6 +1329,7 @@ mod tests {
         assert_eq!(saved["requires"], json!(["field-origin", "field-generation", "field-package"]));
         let reopened = Project::from_json(&saved.to_string()).unwrap();
         assert_eq!(reopened.field_origin.as_ref().map(|o| o.package.as_str()), Some("a1b2c3d4e5f60718293a4b5c6d7e8f90"));
+        assert_eq!(reopened.field_origin.as_ref().map(|o| o.ids.clone()), Some([(1, 120)].into()));
         let mut invalid = saved.clone();
         invalid["field_origin"]["package"] = json!("not-an-id");
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
@@ -1341,11 +1343,17 @@ mod tests {
             synced: 0.0,
             generation: String::new(),
             returned: vec!["a1b2c3d4e5f60718293a4b5c6d7e8f90".into()],
+            ids: Default::default(),
             data: with_area.map().clone(),
         });
         let saved = serde_json::to_value(&with_area).unwrap();
         assert_eq!(saved["requires"], json!(["field-origin", "field-package"]));
         assert_eq!(Project::from_json(&saved.to_string()).unwrap().offline_areas[0].returned, with_area.offline_areas[0].returned);
+        // The ids an area's packages gave require it too, on their own.
+        let mut only_ids = with_area.clone();
+        only_ids.offline_areas[0].returned.clear();
+        only_ids.offline_areas[0].ids = [(1, 120)].into();
+        assert_eq!(serde_json::to_value(&only_ids).unwrap()["requires"], json!(["field-origin", "field-package"]));
         let mut invalid = saved;
         invalid["offline_areas"][0]["returned"] = json!(["nope"]);
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
@@ -1369,6 +1377,7 @@ mod tests {
             synced: 0.0,
             generation: String::new(),
             returned: Vec::new(),
+            ids: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].tiles.clear();
@@ -1396,6 +1405,7 @@ mod tests {
             synced: 0.0,
             generation: String::new(),
             returned: Vec::new(),
+            ids: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].view.terrain = None;

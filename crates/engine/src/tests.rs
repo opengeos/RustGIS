@@ -8841,6 +8841,7 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
         synced: 0.0,
         generation: String::new(),
         returned: Vec::new(),
+        ids: Default::default(),
         data: project.maps[0].clone(),
     });
     let clean = serde_json::to_string(&project).unwrap();
@@ -53098,6 +53099,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
         synced: 0.0,
         generation: String::new(),
         returned: Vec::new(),
+        ids: Default::default(),
         data: snapshot,
     });
     let mut reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());

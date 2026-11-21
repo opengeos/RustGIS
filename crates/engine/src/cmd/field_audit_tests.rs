@@ -933,6 +933,99 @@ fn an_edit_to_a_field_the_package_map_lacks_is_refused() {
     assert_eq!(value_of(&home, hc, id, &gone), before);
 }
 
+/// The crew deletes the city with the highest id the package gave, then captures a point. The
+/// new point never takes the deleted city's id, even after the field project is saved and opened
+/// again, so both come home as what they are: with the office unchanged, the city is deleted and
+/// the point added; with the office having deleted it, the point is still added; with the office
+/// having edited it, the city is kept and the point added.
+#[test]
+fn a_feature_added_after_deleting_the_highest_id_never_takes_its_id() {
+    for office in ["unchanged", "deleted", "edited"] {
+        for reopen in [false, true] {
+            added_after_deleting_the_highest(office, reopen);
+        }
+    }
+}
+
+/// [`a_feature_added_after_deleting_the_highest_id_never_takes_its_id`] for one office and reopen.
+fn added_after_deleting_the_highest(office: &str, reopen: bool) {
+    let temp = Temp::new("highest-id");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let (row, top) = {
+        let f = &a.map().layer(cities).unwrap().dataset.features;
+        f.iter().enumerate().max_by_key(|(_, f)| f.id).map(|(i, f)| (i, f.id)).unwrap()
+    };
+    a.run("select.rows", &json!({"layer": cities, "rows": [row]})).unwrap();
+    a.run("edit.delete", &Value::Null).unwrap();
+    if reopen {
+        let saved = temp.0.join("field.rgis");
+        a.run("project.saveAs", &json!({"path": saved})).unwrap();
+        a = Session::new(Project::default());
+        a.run("project.open", &json!({"path": saved})).unwrap();
+    }
+    let new = add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    assert!(new > top, "{office} {reopen}: the new point took id {new}, at or below the package's highest {top}");
+    let hc = layer(&home, "Cities");
+    let at = |home: &Session| home.map().layer(hc).unwrap().dataset.features.iter().position(|f| f.id == top).unwrap();
+    match office {
+        "deleted" => {
+            home.run("select.rows", &json!({"layer": hc, "rows": [at(&home)]})).unwrap();
+            home.run("edit.delete", &Value::Null).unwrap();
+        }
+        "edited" => {
+            let r = at(&home);
+            home.run("edit.setValue", &json!({"layer": hc, "row": r, "field": name, "value": "Office edit"})).unwrap();
+        }
+        _ => {}
+    }
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!(done["added"].as_u64(), Some(1), "{office} {reopen}: {done} {said:?}");
+    assert_eq!(with_label(&home, hc, &name, "Captured"), 1, "{office} {reopen}");
+    let kept = if office == "edited" { Some("Office edit") } else { None };
+    assert_eq!(value_of(&home, hc, top, &name).as_deref(), kept, "{office} {reopen}: {done}");
+}
+
+/// The office deletes the city with the highest id a package still out was given, then adds one.
+/// The new city never takes the deleted city's id, even after home is saved and opened again, so
+/// the phone's edit of the deleted city is dropped, and said, rather than written over the
+/// office's new city.
+#[test]
+fn a_feature_added_at_home_never_takes_an_id_a_package_out_was_given() {
+    for reopen in [false, true] {
+        let temp = Temp::new("home-highest-id");
+        let mut home = home(&temp);
+        let (_, out) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+        let mut a = phone(&temp, &out, "a");
+        let cities = layer(&a, "Cities");
+        let name = text_field(&a, cities);
+        let (row, top) = {
+            let f = &a.map().layer(cities).unwrap().dataset.features;
+            f.iter().enumerate().max_by_key(|(_, f)| f.id).map(|(i, f)| (i, f.id)).unwrap()
+        };
+        a.run("edit.setValue", &json!({"layer": cities, "row": row, "field": name, "value": "Crew edit"})).unwrap();
+        let hc = layer(&home, "Cities");
+        let at = home.map().layer(hc).unwrap().dataset.features.iter().position(|f| f.id == top).unwrap();
+        home.run("select.rows", &json!({"layer": hc, "rows": [at]})).unwrap();
+        home.run("edit.delete", &Value::Null).unwrap();
+        if reopen {
+            let saved = temp.0.join("home.rgis");
+            home.run("project.saveAs", &json!({"path": saved})).unwrap();
+            home.run("project.open", &json!({"path": saved})).unwrap();
+        }
+        let hc = layer(&home, "Cities");
+        let new = add_point(&mut home, hc, &name, "Office's new city", [12.0, 5.0]);
+        assert!(new > top, "{reopen}: the office's city took id {new}, at or below {top}");
+        let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+        assert_eq!(done["skipped"].as_u64(), Some(1), "{reopen}: {done}");
+        assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{top}"))), "{said:?}");
+        assert_eq!(value_of(&home, hc, new, &name).as_deref(), Some("Office's new city"));
+    }
+}
+
 /// A layer removed on the phone is said on sending: its features go back unchanged.
 #[test]
 fn a_layer_removed_in_the_field_is_said_on_sending() {
@@ -1360,6 +1453,7 @@ fn a_field_project_saved_with_a_table_link_opens_without_it() {
         area: crate::project::field_id().unwrap(),
         generation: String::new(),
         package: String::new(),
+        ids: Default::default(),
     });
     let path = temp.0.join("field.rgis");
     s.project.save(&path).unwrap();

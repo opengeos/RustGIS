@@ -163,7 +163,8 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Fields are matched by name; the rest are left empty.
     let map: Vec<Option<usize>> = l.dataset.fields.iter().map(|f| src.field_index(&f.name)).collect();
-    let mut next = l.dataset.features.iter().map(|f| f.id).max().unwrap_or(0);
+    // Above every id the layer has, or keeps new rows above (a field package's rows).
+    let mut next = l.dataset.features.highest_id();
     let first = l.dataset.features.len();
     // Per field, what converting the pasted values cut, and the values that aren't null but that
     // the field can't hold.

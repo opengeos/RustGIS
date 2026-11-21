@@ -281,9 +281,19 @@ impl GivenRows {
 /// brings a package back once, so they are no longer needed. Whether there were any.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forget(package: &str) -> Result<bool, String> {
+    // A keep of its rows still running lets its copy go once it is in place.
+    SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(package.to_string());
     let Some(dir) = base_dir(package).filter(|d| d.exists()) else { return Ok(false) };
     std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(true)
+}
+
+/// The packages whose returns this run of RustGIS has sent ([`forget`]).
+static SPENT: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Whether package `package`'s return has been sent in this run.
+fn is_spent(package: &str) -> bool {
+    SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(package)
 }
 
 /// What a package going out from home holds under [`GIVEN`].
@@ -358,12 +368,17 @@ pub(crate) fn keep_base(given: &GivenRows) -> Result<(), String> {
     if part.exists() {
         let _ = std::fs::remove_dir_all(&part);
     }
+    // Its return sent while it was kept: the copy just put in place is no longer needed.
+    if is_spent(&given.package) {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     written
 }
 
 /// Moves the complete copy `part` into place as `dir`, whole, so a folder there is always complete.
 /// One kept there by another opening of the same package meanwhile wins and is left as it is: it
-/// holds the same rows. Nothing there is ever replaced.
+/// holds the same rows. A complete copy there is never replaced; an empty folder may be, as the
+/// system's rename replaces one.
 fn publish(part: &Path, dir: &Path) -> Result<(), String> {
     match std::fs::rename(part, dir) {
         Ok(()) => Ok(()),
@@ -647,7 +662,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         let mut at: HashMap<u64, usize> = HashMap::new();
         // A feature added in the field keeps its id while home doesn't use it: a replacement for one
         // that home uses is taken above every id the field added, so it never takes a free one.
-        let mut top = lc.added.iter().copied().max().unwrap_or(0);
+        let mut top = lc.added.iter().copied().max().unwrap_or(0).max(sl.dataset.features.highest_id());
         for (i, r) in sl.dataset.features.rows().enumerate() {
             top = top.max(r.id());
             if wanted.contains(&r.id()) {
@@ -703,7 +718,8 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             let same_values = g.values.iter().all(|(field, was)| sl.dataset.field_index(field).is_none_or(|j| row.value(j) == was));
             // A field the package didn't give (added at home since, or by another phone's return)
             // holding a value is a change made at home too.
-            let given = |f: &rustgis_data::Field| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(&f.name));
+            let named: HashSet<String> = g.values.iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
+            let given = |f: &rustgis_data::Field| named.contains(&f.name.to_ascii_lowercase());
             let same_values = same_values && sl.dataset.fields.iter().enumerate().all(|(j, f)| given(f) || row.value(j).is_null());
             if same_place && same_values {
                 gone.insert(g.id);
@@ -925,6 +941,26 @@ mod tests {
         }
         publish(&part, &dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join(LAYERS)).unwrap(), "first");
+    }
+
+    /// A return sent while its package's rows are still being kept: once the keep puts its copy in
+    /// place, it finds the package spent and removes it, so nothing is left behind.
+    #[test]
+    fn a_keep_that_finishes_after_its_return_was_sent_leaves_nothing() {
+        let id = crate::project::field_id().unwrap();
+        let mut project = Project::new("Field");
+        project.field_origin = Some(crate::project::FieldOrigin {
+            project: crate::project::field_id().unwrap(),
+            area: crate::project::field_id().unwrap(),
+            generation: String::new(),
+            package: id.clone(),
+            ids: Default::default(),
+        });
+        let given = GivenRows::of(&project, &id);
+        // Sent before the keep finished: there was nothing to remove yet.
+        assert!(!forget(&id).unwrap());
+        keep_base(&given).unwrap();
+        assert!(!base_dir(&id).unwrap().exists());
     }
 
     /// A list of any version but this one is refused: a newer one asks for a newer RustGIS.

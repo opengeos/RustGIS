@@ -133,6 +133,19 @@ impl Features {
         Ok(old)
     }
 
+    /// From now on, new rows ([`crate::Dataset::push`]) are given ids above `id`, even once the rows
+    /// holding the highest ids are removed: for a layer whose ids up to `id` belong to rows given to
+    /// it from elsewhere (a field package's), which a new row must never be taken for.
+    pub fn keep_ids_above(&mut self, id: u64) {
+        self.id_floor = self.id_floor.max(id);
+    }
+
+    /// The highest id a row has, or that new rows are kept above ([`Features::keep_ids_above`]):
+    /// the next new row's id is one more.
+    pub fn highest_id(&self) -> u64 {
+        self.rows.iter().map(|f| f.id).max().unwrap_or(0).max(self.id_floor)
+    }
+
     /// Appends `feature` as the last row, keeping its id.
     pub fn push_row(&mut self, feature: Feature) {
         let id = feature.id;
