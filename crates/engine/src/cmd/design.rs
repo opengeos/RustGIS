@@ -2394,6 +2394,9 @@ const TOPOLOGY_AHEAD: &str = "topology.validate";
 struct TopologyAhead {
     inputs: Vec<TopologyInput>,
     tol: f64,
+    /// The datum grids there were when it was made ([`rustgis_data::raster::crs::grid_generation`]):
+    /// a grid that arrives meanwhile changes how a layer held in another system converts.
+    grids: u64,
     found: Result<Vec<rustgis_analysis::topology::Checked>, String>,
 }
 
@@ -2405,9 +2408,10 @@ pub(crate) fn topology_ahead(s: &Session, p: &Json) -> Option<super::reads::Read
     if inputs.is_empty() {
         return None;
     }
+    let grids = rustgis_data::raster::crs::grid_generation();
     Some(super::reads::ahead("Error Inspector", TOPOLOGY_AHEAD.to_string(), move || {
         let found = check_topology(&inputs, tol);
-        TopologyAhead { inputs, tol, found }
+        TopologyAhead { inputs, tol, grids, found }
     }))
 }
 
@@ -2422,9 +2426,15 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
     let tol = topology_tolerance(p);
     let inputs = topology_checks(s);
     let found = match super::reads::take::<TopologyAhead>(s, TOPOLOGY_AHEAD) {
-        Some(ahead) if ahead.tol == tol && same_topology(&ahead.inputs, &inputs) => ahead.found?,
+        Some(ahead)
+            if ahead.tol == tol && ahead.grids == rustgis_data::raster::crs::grid_generation() && same_topology(&ahead.inputs, &inputs) =>
+        {
+            ahead.found?
+        }
         // Checking again here would hold the window: the check made on its thread is dropped.
-        Some(_) => return Err("the topology rules or their layers changed while they were checked: validate again".into()),
+        Some(_) => {
+            return Err("the topology rules, their layers or the datum grids changed while they were checked: validate again".into());
+        }
         None => check_topology(&inputs, tol)?,
     };
     // Rules whose layer, or covering layer, isn't on the map are checked for nothing: said.
