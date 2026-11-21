@@ -6970,8 +6970,9 @@ fn save_history_script(app: &mut RustGisApp) {
 pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
     // A layer held in another system shows its extent there, as its coordinates are: no
     // conversion of every place on the interface thread, which this pane is drawn on each frame.
+    // A streamed layer's is its source's whole extent, in longitude/latitude, read once.
     let held = l.dataset.coord_crs();
-    let lonlat = held == rustgis_engine::data::raster::Crs::LonLat;
+    let lonlat = held == rustgis_engine::data::raster::Crs::LonLat || l.source.is_some();
     let e = if lonlat { l.extent() } else { l.dataset.extent() };
     let edge = |v: f64| if lonlat { format!("{v:.4}°") } else { format!("{v:.2}") };
     if let Some(rl) = &l.raster {

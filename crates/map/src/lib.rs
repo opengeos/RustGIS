@@ -3674,8 +3674,6 @@ impl Unplaced {
     }
 }
 
-/// A layer's geometry in longitude/latitude, made from its rows at a geometry revision in a
-/// coordinate system ([`Layer::lonlat_in`]).
 /// Which of a layer's drawings a frame made: its flat projection ([`Layer::projected_in`]) or its
 /// longitude/latitude copy ([`Layer::lonlat_in`], [`Layer::count_unplaced`]).
 #[derive(Clone, Copy, Debug, Default)]
@@ -3684,6 +3682,8 @@ struct Drawn {
     lonlat: bool,
 }
 
+/// A layer's geometry in longitude/latitude, made from its rows at a geometry revision in a
+/// coordinate system ([`Layer::lonlat_in`]).
 #[derive(Clone, Debug, Default)]
 struct LonLatCopy {
     geoms: std::sync::Arc<Vec<Option<Geometry>>>,

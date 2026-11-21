@@ -1820,25 +1820,12 @@ pub(crate) fn dominant_type(ds: &Dataset) -> GeometryType {
     }
 }
 
-/// A dataset as a GeoJSON FeatureCollection value, in longitude/latitude: a dataset held in
-/// another system has each geometry converted through WGS 84 ([`Dataset::lonlat_conversion`]),
-/// a place that can't be given there written as missing (`null`), and every geometry without
-/// one when its system can't be converted. Callers that must refuse such a place convert first
-/// ([`Dataset::in_lonlat`]), which leaves nothing to convert here.
+/// A dataset as a GeoJSON FeatureCollection value, of its coordinates as they are. GeoJSON is in
+/// longitude/latitude, so a dataset held in another system ([`Dataset::coord_crs`]) is converted
+/// first, by [`Dataset::in_lonlat`], which refuses, naming the feature, a place that can't be
+/// given there; a writer that adds a legacy `crs` member passes its own system's coordinates.
 pub fn to_geojson(ds: &Dataset) -> Json {
-    let to = ds.lonlat_conversion().ok();
-    let features: Vec<Json> = ds
-        .features
-        .iter()
-        .map(|f| match &to {
-            Some(t) if t.is_identity() => feature_to_geojson(&ds.fields, f),
-            Some(t) => {
-                let g = f.geometry.as_ref().map(|g| t.geometry(g));
-                feature_to_geojson(&ds.fields, &crate::Feature { id: f.id, geometry: g, attrs: f.attrs.clone() })
-            }
-            None => feature_to_geojson(&ds.fields, &crate::Feature { id: f.id, geometry: None, attrs: f.attrs.clone() }),
-        })
-        .collect();
+    let features: Vec<Json> = ds.features.iter().map(|f| feature_to_geojson(&ds.fields, f)).collect();
     json!({"type": "FeatureCollection", "name": ds.name, "features": features})
 }
 
@@ -7005,7 +6992,7 @@ mod tests {
     }
 
     /// A GeoJSON read in the system its legacy `crs` member names is written back in
-    /// longitude/latitude, through WGS 84, as the format is: UTM 32N, Ingolstadt.
+    /// longitude/latitude, converted through WGS 84 first, as the format is: UTM 32N, Ingolstadt.
     #[test]
     fn a_held_geojson_is_written_in_lonlat() {
         let at = Coord::new(11.5, 48.7);
@@ -7016,7 +7003,7 @@ mod tests {
         );
         let (ds, _) = read_geojson(&text, "held").unwrap();
         assert_eq!(ds.coord_crs(), Crs::Epsg(32632));
-        let out = to_geojson(&ds);
+        let out = to_geojson(&ds.in_lonlat().unwrap());
         let c = &out["features"][0]["geometry"]["coordinates"];
         let (x, y) = (c[0].as_f64().unwrap(), c[1].as_f64().unwrap());
         assert!((x - at.x).abs() < 1e-9 && (y - at.y).abs() < 1e-9, "{c}");
