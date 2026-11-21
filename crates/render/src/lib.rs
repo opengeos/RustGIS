@@ -4293,6 +4293,8 @@ fn render_frame(
     let alone_at = cached.as_ref().and_then(|p| p.alone_at);
     let mut drawn_alone: Option<(usize, Pixmap)> = None;
     let mut captured_alone: Option<(usize, frame_cache::Alone)> = None;
+    // The label candidates each layer drawn gives the frame, kept for the next (see `frame_cache`).
+    let mut layer_labels: frame_cache::LayerLabels = Vec::new();
     // Kept only as drawn in full so far: tiles still to come, to draw, or to ask for again after
     // a failure are drawn again rather than restored as they stood.
     let complete = |t: &tiles::TileOutput| {
@@ -4849,6 +4851,14 @@ fn render_frame(
         // An extruded layer's diagrams, drawn on a sheet of their own until the spool has drawn its
         // polygons.
         let mut extruded_charts: Option<Canvas> = None;
+        // Its label candidates, kept for a frame keeping pictures (a layer read from its source has
+        // no look to tell they still stand): taken from a kept frame of the same view when the layer
+        // looks as it did then, else worked out and kept.
+        let (keeps_labels, lid) = (cached.is_some() && layer.source.is_none(), layer.id);
+        let mut taken = cached.as_mut().filter(|_| keeps_labels).and_then(|p| p.take_labels(lid, li));
+        // Copied only while the frame's copies stay within what a view keeps.
+        let room = frame_cache::MAX_CANDIDATES.saturating_sub(layer_labels.iter().map(|(_, c)| c.len()).sum());
+        let mut gave_labels: Option<Vec<Candidate>> = None;
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // A stopped frame draws no more of a layer or a streamed chunk (see `cancel`).
             if cancel::requested() {
@@ -5296,6 +5306,15 @@ fn render_frame(
                     }
                 }
             }
+            // The candidates it gave a kept frame of the same view, looking as it does now: the same
+            // as working them out again. (Not compacted: only a layer read from its source is, and
+            // that keeps none.)
+            if let Some(c) = taken.take() {
+                gave_labels = Some(c.clone());
+                label_candidates.extend(c);
+                return Ok(());
+            }
+            let first_label = label_candidates.len();
             // Each label class labels every feature its clause takes, as in ArcGIS Pro (#732), when
             // shown, in range and on a field the layer has (#618) or by a text expression. Its
             // expressions are compiled once for the drawing.
@@ -5329,7 +5348,6 @@ fn render_frame(
                 let find = if full_res_rasters { families::find } else { families::find_ready };
                 let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(find)).collect();
                 let classes = rustgis_map::LabelMatcher::with_env(labels, ds_ptr, label_env.clone());
-                let lid = layer.id;
                 // Whether a class labels lines along them: those take the stretch of a line in
                 // view, wherever its label point is.
                 let along_line = |placement: LabelPlacement, g: &Geometry| placement.along_line() && matches!(g, Geometry::Line(_));
@@ -5844,6 +5862,9 @@ fn render_frame(
                     }
                 }
             }
+            if keeps_labels && label_candidates.len().saturating_sub(first_label) <= room {
+                gave_labels = label_candidates.get(first_label..).map(<[Candidate]>::to_vec);
+            }
             if complete_source && matches!(labels_to, Labels::Own | Labels::Turned(_)) {
                 compact_label_candidates(&mut label_candidates);
             }
@@ -5897,6 +5918,9 @@ fn render_frame(
             }
             return None;
         }
+        if let Some(c) = gave_labels {
+            layer_labels.push(((lid, li), c));
+        }
         if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion)
             && let Err(e) = spool.draw(if direct { &mut pm } else { &mut target }, ctx, x)
         {
@@ -5948,7 +5972,7 @@ fn render_frame(
         draw_tiles!(Some(id));
     }
     if let Some(plan) = cached.take() {
-        frame_cache::keep(plan, captured, captured_alone);
+        frame_cache::keep(plan, captured, captured_alone, layer_labels);
     }
     // A band of a tilted view: the sun's glint on the terrain's water, over the water's own fill.
     if matches!(labels_to, Labels::Tilted(..) | Labels::Shared)
