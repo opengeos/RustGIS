@@ -497,7 +497,8 @@ impl<O: Offered> List<O> {
         let row = row_height(ui);
         let size = self.drawn.map_or(egui::vec2(MIN_WIDTH + 16.0, row * offer.items().len().min(MAX_ROWS) as f32 + 12.0), |(_, s)| s);
         let screen = ui.ctx().content_rect();
-        let (corner, room) = place(cursor, size, screen, row * 3.0, Side::Below);
+        let (corner, room) = place(cursor, size, screen, row * 3.0, self.scroll.side(cursor));
+        self.scroll.side = Some((cursor, if corner.y > cursor.center().y { Side::Below } else { Side::Above }));
         let mut clicked = None;
         let scroll = &mut self.scroll;
         let items = offer.items();
@@ -556,6 +557,18 @@ struct Scroll {
     /// the popup (moving it, when it's above the cursor). Kept up to the popup's room: past it, the
     /// popup's own scroll would scroll down to empty space, the help out of view.
     tallest: Option<(f32, f32)>,
+    /// The side of the cursor (or button) the popup went on, and where that was: it stays there
+    /// while it fits, though it would fit on the other now too. A shorter help, after a taller one
+    /// that ran past the room, mustn't move it across (#2618). A cursor gone elsewhere, the same
+    /// list still offered, starts again from under it.
+    side: Option<(egui::Rect, Side)>,
+}
+
+impl Scroll {
+    /// The side a popup by `anchor` goes on first (`side`).
+    fn side(&self, anchor: egui::Rect) -> Side {
+        self.side.filter(|(at, _)| *at == anchor).map_or(Side::Below, |(_, side)| side)
+    }
 }
 
 /// What a list's rows gave this frame.
@@ -834,7 +847,8 @@ pub(crate) fn menu(
         }
         let row = row_height(ui);
         let size = s.drawn.map_or(egui::vec2(MIN_WIDTH + 16.0, row * n.min(MAX_ROWS) as f32 + 12.0), |(_, size)| size);
-        let (corner, room) = around(button.rect, size, ui.ctx().content_rect(), row * 3.0, Side::Below);
+        let (corner, room) = around(button.rect, size, ui.ctx().content_rect(), row * 3.0, s.scroll.side(button.rect));
+        s.scroll.side = Some((button.rect, if corner.y > button.rect.center().y { Side::Below } else { Side::Above }));
         let (selected, pointer_leads) = (s.selected.min(n - 1), s.pointer_leads);
         let scroll = &mut s.scroll;
         let mut got = Rows::default();
@@ -1032,15 +1046,16 @@ mod tests {
         assert_eq!(scrolled, Some(15), "scrolled to the highlight once");
     }
 
-    /// A button's list at the window's right edge, the help of each item `helps` gives drawn
-    /// beside it as a box's is (after a gap): where the popup is drawn as ↓ moves the highlight
-    /// from the first item to the last.
-    fn popups_by_the_right_edge(width: f32, helps: Vec<Option<String>>) -> Vec<egui::Rect> {
+    /// A button's list at the right edge of a window `size` big, `top` down it, the help of each
+    /// item `helps` gives drawn beside it as a box's is (after a gap): where the popup is drawn as
+    /// ↓ moves the highlight from the first item to the last, and where the button is.
+    fn popups_by_the_right_edge(size: egui::Vec2, top: f32, helps: Vec<Option<String>>) -> (Vec<egui::Rect>, egui::Rect) {
         use egui_kittest::kittest::Queryable;
         let items: Vec<String> = (0..helps.len()).map(|i| format!("item{i:02}")).collect();
         let n = items.len();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
             move |ui, id: &mut Option<egui::Id>| {
+                ui.add_space(top);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     let help = |ui: &mut egui::Ui, item: &str, width: f32| {
                         let Some(text) = items.iter().position(|i| i == item).and_then(|i| helps[i].as_ref()) else { return };
@@ -1069,19 +1084,23 @@ mod tests {
             h.run();
             out.push(drawn(&h));
         }
-        out
+        (out, h.get_by_label("Open").rect())
     }
 
     /// By the window's right edge, a list whose items have helps of other widths and heights stays
     /// put as the highlight moves: the help takes its full width, so the popup's left edge doesn't
     /// move, and the popup doesn't shrink back for a shorter help, so no row moves out from under
-    /// the pointer (#2618).
-    /// The same in a window too narrow for the help beside the list, the help under it.
+    /// the pointer (#2618). In a wide window (the help beside the list) and in one too narrow for
+    /// that (the help under it).
     #[test]
     fn a_list_by_the_right_edge_stays_put_as_its_help_changes() {
         let long = "a long help that wraps over several lines ".repeat(8);
         for width in [1000.0, 380.0] {
-            let drawn = popups_by_the_right_edge(width, vec![Some("short".into()), Some(long.clone()), Some("short".into()), None]);
+            let (drawn, _) = popups_by_the_right_edge(
+                egui::vec2(width, 700.0),
+                0.0,
+                vec![Some("short".into()), Some(long.clone()), Some("short".into()), None],
+            );
             let left = drawn[0].left();
             for d in &drawn {
                 assert!((d.left() - left).abs() < 0.5, "{width}: the same left edge: {drawn:?}");
@@ -1093,10 +1112,38 @@ mod tests {
         }
     }
 
+    /// A list whose first item has no help widens once, as ↓ reaches the first item with one, and
+    /// then stays put: the help's width isn't known before a help is drawn (working out every
+    /// item's would cost a lookup each, for some 600 on an empty Ctrl+Space).
+    #[test]
+    fn a_list_widens_once_for_its_first_help() {
+        let long = "a long help that wraps over several lines ".repeat(8);
+        let (drawn, _) = popups_by_the_right_edge(egui::vec2(1000.0, 700.0), 0.0, vec![None, Some(long), Some("short".into()), None]);
+        assert!(drawn[1].left() < drawn[0].left() - 100.0, "wider for the first help: {drawn:?}");
+        for d in &drawn[1..] {
+            assert!((d.left() - drawn[1].left()).abs() < 0.5 && (d.height() - drawn[1].height()).abs() < 0.5, "then put: {drawn:?}");
+        }
+    }
+
+    /// A popup that went above its button, a help too tall for the room there, stays above for
+    /// the shorter helps after it, though it would fit under the button now (a little less room
+    /// there): it doesn't jump across while the list is the same (#2618).
+    #[test]
+    fn a_popup_keeps_its_side_while_its_list_is_open() {
+        let long = "a long help that wraps over several lines ".repeat(40);
+        let (drawn, button) =
+            popups_by_the_right_edge(egui::vec2(1000.0, 400.0), 184.0, vec![Some(long), Some("short".into()), Some("short".into())]);
+        let (above, below) = (button.top(), 400.0 - button.bottom());
+        assert!(above > below && above - below < 10.0, "a little more room above: {above} {below}");
+        for d in &drawn {
+            assert!(d.bottom() <= button.top() + 0.5, "above the button: {drawn:?} {button:?}");
+        }
+    }
+
     /// A list none of whose items has a help keeps no room for one: it stays as narrow as its rows.
     #[test]
     fn a_list_without_help_stays_narrow() {
-        let drawn = popups_by_the_right_edge(1000.0, vec![None, None]);
+        let (drawn, _) = popups_by_the_right_edge(egui::vec2(1000.0, 700.0), 0.0, vec![None, None]);
         let width = drawn[0].width();
         assert!(width < super::MIN_WIDTH + super::GAP + super::HELP_MIN_WIDTH, "no room for a help: {width}");
     }
