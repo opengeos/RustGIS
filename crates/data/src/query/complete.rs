@@ -180,7 +180,7 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
     for f in ds.features.iter().step_by(step) {
         read += 1;
         let Some(v) = f.attrs.get(field) else { continue };
-        if matches!(v, Value::Text(t) if t.chars().count() > VALUE_CHARS || t.chars().any(char::is_control)) {
+        if matches!(v, Value::Text(t) if t.chars().nth(VALUE_CHARS).is_some() || t.chars().any(char::is_control)) {
             continue;
         }
         if let Some(written) = literal(v)
@@ -199,14 +199,15 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
 /// `v` as an expression writes it, to compare a field with: a number as it is (in full, `3.25`,
 /// not rounded as a table shows it), a text, date or date-time in single quotes (a `'` in it
 /// doubled, as the lexer reads it). None for what is no literal: null, true or false (keywords),
-/// a number that isn't finite.
+/// a number that isn't finite, and a whole number of 9e15 or more, which the lexer reads as a
+/// float (`query::num`), so that it would pick no feature, or its neighbour's.
 pub fn literal(v: &Value) -> Option<String> {
     match v {
-        Value::Int(i) => Some(i.to_string()),
+        Value::Int(i) if i.unsigned_abs() < 9_000_000_000_000_000 => Some(i.to_string()),
         Value::Float(x) if x.is_finite() => Some(x.to_string()),
         Value::Text(t) => Some(format!("'{}'", t.replace('\'', "''"))),
         Value::Date(_) | Value::DateTime(_) => Some(format!("'{v}'")),
-        Value::Float(_) | Value::Null | Value::Bool(_) => None,
+        Value::Int(_) | Value::Float(_) | Value::Null | Value::Bool(_) => None,
     }
 }
 
@@ -225,7 +226,8 @@ mod tests {
     }
 
     /// Each value is written as the language reads it back: the expression comparing the field
-    /// with what [`literal`] wrote picks the feature that holds it, and no other.
+    /// with what [`literal`] wrote picks the feature that holds it, and no other (a text compares
+    /// letter case aside, so these differ in more than case).
     #[test]
     fn a_value_written_picks_its_feature() {
         use crate::{Date, DateTime};
@@ -241,6 +243,8 @@ mod tests {
             ("O'Brien", -5, 3.25, "2026-03-05", "2026-03-05T08:00:00Z"),
             ("Pop Est", 7, 0.1 + 0.2, "1999-12-31", "2026-03-05T08:00:00+02:00"),
             ("", 0, 1e-7, "2000-02-29", "2026-03-05T08:00:00.250"),
+            ("x", 8_999_999_999_999_999, 2.5, "2000-03-01", "2026-03-05T09:00:00Z"),
+            ("y", 8_999_999_999_999_998, 3.5, "2000-03-02", "2026-03-05T10:00:00Z"),
         ];
         for (t, i, r, day, at) in rows {
             let attrs = vec![
@@ -261,7 +265,17 @@ mod tests {
         }
         assert_eq!(literal(&Value::Text("O'Brien".into())).as_deref(), Some("'O''Brien'"));
         assert_eq!(literal(&Value::Float(3.0)).as_deref(), Some("3"));
-        for v in [Value::Null, Value::Bool(true), Value::Float(f64::NAN), Value::Float(f64::INFINITY)] {
+        assert_eq!(literal(&Value::Int(8_999_999_999_999_999)).as_deref(), Some("8999999999999999"));
+        assert_eq!(literal(&Value::Int(-8_999_999_999_999_999)).as_deref(), Some("-8999999999999999"));
+        for v in [
+            Value::Null,
+            Value::Bool(true),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::Int(9_000_000_000_000_000),
+            Value::Int(9_007_199_254_740_993),
+            Value::Int(i64::MIN),
+        ] {
             assert_eq!(literal(&v), None, "{v:?}");
         }
     }

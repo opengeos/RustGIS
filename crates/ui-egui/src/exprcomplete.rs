@@ -207,9 +207,11 @@ fn shown(item: &Item) -> String {
 struct State {
     list: List<Offer>,
     /// What was worked out to offer, and the call the cursor is in, for which cursor, text (its
-    /// hash) and source (its fields' names' and its rows' hash: another layer's offer others, and
-    /// so do the rows edited, for their values), whether it was asked
-    /// for and whether an item was just accepted there.
+    /// hash) and source (its fields' names' hash: another layer's offer others), whether it was
+    /// asked for and whether an item was just accepted there. Worked out again when [`rows`]
+    /// changes.
+    ///
+    /// [`rows`]: Self::rows
     worked: Option<Worked<(u64, bool, bool), (Option<Offer>, Option<Call>)>>,
     /// The signature of the call the cursor is in, floating by it while the list is closed, for
     /// the call's `(` (where it starts).
@@ -220,6 +222,10 @@ struct State {
     /// (`pop` taken mustn't offer `"Pop Est"`, for Enter to take next), until the text or the
     /// cursor moves on, or Ctrl+Space asks.
     accepted: Option<(u64, usize)>,
+    /// The rows [`worked`](Self::worked) read the values from, held: an edit then moves them
+    /// (`Arc::make_mut` doesn't change rows in place while one is held), as do a streamed
+    /// layer's view read and another layer, and the values offered are read again.
+    rows: Option<std::sync::Weak<Vec<rustgis_engine::data::Feature>>>,
 }
 
 fn load(ui: &Ui, id: Id) -> State {
@@ -289,12 +295,16 @@ pub(crate) fn expr_edit_lines(
     let out: TextEditOutput = build(text).id(id).event_filter(filter).show(ui);
     let visible = out.text_clip_rect;
     let hash = egui::util::hash(text.as_str());
-    // The rows by where they are held: any edit, a streamed layer's view read or another layer of
-    // the same fields holds them elsewhere, and the values offered are worked out again.
-    let source = ds.map_or(0, |d| {
-        let rows = std::sync::Weak::as_ptr(&d.features.allocation_key()) as usize;
-        egui::util::hash((d.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), rows))
-    });
+    let rows = ds.map(|d| d.features.allocation_key());
+    let same = match (&state.rows, &rows) {
+        (Some(was), Some(is)) => was.ptr_eq(is),
+        (was, is) => was.is_none() && is.is_none(),
+    };
+    if !same {
+        state.worked = None;
+    }
+    state.rows = rows;
+    let source = ds.map_or(0, |d| egui::util::hash(d.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()));
     let worked = &mut state.worked;
     let asked = &mut state.asked;
     let accepted = &mut state.accepted;
@@ -794,6 +804,10 @@ mod tests {
         h.run();
         assert_eq!(h.state().0, "name = 'Pi");
         assert!(h.query_by_role_and_label(Role::Button, "'Pisa'").is_some(), "the new rows' values");
+        // Edited where they are, nothing else holding them.
+        h.state_mut().1.push(None, vec![Value::Text("Pistoia".into())]);
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "'Pistoia'").is_some(), "the edited rows' values");
     }
 
     /// Accepting a value writes it in its quotes over the text begun and the quote that closed
