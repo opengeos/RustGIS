@@ -360,6 +360,10 @@ pub struct Layer {
     /// longitude/latitude, found as it was last converted for drawing ([`Layer::unplaced`]).
     #[serde(skip)]
     unplaced: Unplaced,
+    /// Its extent in longitude/latitude as last worked out ([`Layer::extent`]): converting every
+    /// place of a layer held in another system takes long enough not to do it each frame.
+    #[serde(skip)]
+    extent_cache: ExtentCache,
     /// Whether its projected or longitude/latitude copy was used since the map was detached for a
     /// drawing ([`Map::detach_reads`]): what an export drew, and so can say of itself.
     /// Hit-testing and snapping use them too, but on the live map, which no export reads this
@@ -573,6 +577,7 @@ impl Layer {
             projected_crs: None,
             lonlat: LonLatCopy::default(),
             unplaced: Unplaced::default(),
+            extent_cache: ExtentCache::default(),
             drawn: false,
             geometry_rev: 0,
             view_memory: Default::default(),
@@ -731,6 +736,10 @@ impl Layer {
             }
         }
         self.dataset.windowed = true;
+        // Held as the source gives them, in its own system.
+        if let Some(src) = &self.source {
+            self.dataset.held_in = src.coord_crs();
+        }
         if let Some(src) = &mut self.source {
             src.reads = src.reads.wrapping_add(1);
         }
@@ -745,8 +754,8 @@ impl Layer {
             self.projected_extents = cache.extents;
             self.projected_vertices = cache.vertices;
             self.projected_for = cache.key;
-            // A source reads its window in longitude/latitude, and its read projects from there.
-            self.projected_crs = Some(Crs::LonLat);
+            // Projected from the system the source gives its window in.
+            self.projected_crs = Some(cache.crs);
             self.projected_rev = self.geometry_rev;
             let feature_bytes =
                 if padded { rustgis_data::source::memory::features_bytes(&self.dataset.features) } else { cache.feature_bytes };
@@ -940,6 +949,8 @@ impl Layer {
             };
         let mut ds = Dataset::new(self.dataset.name.clone(), geometry_type, info.fields.clone());
         ds.crs = info.coordinate_system();
+        // Rows copied into it come in the source's own system.
+        ds.held_in = src.coord_crs();
         // What reading the source drops, the export lacks (see `Dataset::zm_dropped`).
         ds.zm_dropped = info.zm_dropped || self.dataset.zm_dropped;
         if !self.dataset.fields.is_empty() {
@@ -1120,7 +1131,7 @@ impl Layer {
             if !matches!(flat, projection::Flat::Mercator) {
                 self.display_levels.clear();
             }
-            self.fill_projected(key, |g| flat.project(g));
+            self.fill_projected(key, flat);
         }
         self.drawn = true;
         &self.projected
@@ -1218,18 +1229,45 @@ impl Layer {
         if self.drawn { self.unplaced() } else { None }
     }
 
-    /// Fills the projected geometry cache for `key` with `project` of each geometry in
-    /// longitude/latitude: a layer's own, or a held layer's converted ([`Layer::convert_counting_unplaced`],
-    /// which counts what can't be). A system that can't be converted draws nothing.
-    fn fill_projected(&mut self, key: &str, project: impl Fn(&Geometry) -> Geometry) {
+    /// Fills the projected geometry cache for `key` with each geometry on `flat`: a layer's own
+    /// in longitude/latitude projected ([`projection::Flat::project`]); a held layer's as the map
+    /// draws its system ([`projection::Flat::held`]: as it is on a map in that system, by the
+    /// direct operation on one in another, else through longitude/latitude), counting the
+    /// features with a place that can't be given in longitude/latitude ([`Layer::unplaced`]). A
+    /// system that can't be converted draws nothing.
+    fn fill_projected(&mut self, key: &str, flat: &projection::Flat) {
         self.display = None;
         let crs = self.dataset.coord_crs();
         let projected: Vec<Option<Geometry>> = if crs == Crs::LonLat {
-            self.dataset.features.rows().map(|r| r.geometry().map(&project)).collect()
+            self.dataset.features.rows().map(|r| r.geometry().map(|g| flat.project(g))).collect()
         } else {
-            // Each converted geometry projected as it comes, so no whole copy in
-            // longitude/latitude is made.
-            self.convert_counting_unplaced(|g| project(&g))
+            match flat.held(crs) {
+                // Every place is drawn as it is, those longitude/latitude can't give too: the
+                // conversion leaves none out (a place a reader kept missing is said by the reader).
+                Ok(held) if held.is_identity() => {
+                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(0) };
+                    self.dataset.features.rows().map(|r| r.geometry().cloned()).collect()
+                }
+                Ok(held) => {
+                    let mut lost = 0usize;
+                    let geoms = self
+                        .dataset
+                        .features
+                        .rows()
+                        .map(|r| {
+                            let (g, lost_here) = held.geometry(r.geometry()?);
+                            lost += usize::from(lost_here);
+                            Some(g)
+                        })
+                        .collect();
+                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(lost) };
+                    geoms
+                }
+                Err(e) => {
+                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Err(e) };
+                    (0..self.dataset.features.len()).map(|_| None).collect()
+                }
+            }
         };
         self.projected_extents =
             std::sync::Arc::new(projected.iter().map(|g| g.as_ref().map_or(Extent::EMPTY, Geometry::extent)).collect());
@@ -1587,7 +1625,7 @@ impl Layer {
             (Some(r), _) => r.data.as_ref().map(|d| d.extent()).unwrap_or(Extent::EMPTY),
             // A streamed layer's whole extent, not just the part read.
             (None, Some(s)) => s.info().map(|i| i.extent).filter(|e| !e.is_empty()).unwrap_or_else(|| self.dataset.lonlat_extent()),
-            (None, None) => self.dataset.lonlat_extent(),
+            (None, None) => self.extent_cache.get(&self.dataset, self.geometry_rev),
         }
     }
 
@@ -1611,12 +1649,7 @@ impl Layer {
     /// without geometry left out): the box around them in the dataset's own coordinates, converted
     /// ([`Dataset::extent_to_lonlat`]).
     pub fn rows_extent(&self, rows: impl IntoIterator<Item = usize>) -> Extent {
-        let own = rows
-            .into_iter()
-            .filter_map(|r| self.dataset.features.get(r))
-            .filter_map(|f| f.geometry.as_ref())
-            .fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
-        self.dataset.extent_to_lonlat(&own)
+        self.dataset.lonlat_extent_of(rows.into_iter().filter_map(|r| self.dataset.features.get(r)).filter_map(|f| f.geometry.as_ref()))
     }
 
     pub fn opacity(&self) -> f32 {
@@ -3050,6 +3083,20 @@ impl Map {
         projection::Flat::of(&self.projection)
     }
 
+    /// Tells each of its layers the system it draws them straight into
+    /// ([`projection::Flat::direct_system`], `None` for most maps), so a layer held in another
+    /// gives its places for edits and drawing as this map shows them
+    /// ([`rustgis_data::Dataset::shown_in`]): a vertex handle or a new vertex lands on the line the
+    /// map draws, not half a metre off it where the two systems' datums differ.
+    pub fn note_shown_system(&mut self) {
+        let system = self.flat().direct_system();
+        for l in &mut self.layers {
+            if l.dataset.shown_in != system {
+                l.dataset.shown_in = system;
+            }
+        }
+    }
+
     /// Longitude/latitude to the camera's coordinates; `None` outside the projection's area of
     /// use or where it folds.
     pub fn to_map(&self, c: Coord) -> Option<Coord> {
@@ -3474,6 +3521,7 @@ impl Layer {
             projected_crs: _,
             lonlat: _,
             unplaced: _,
+            extent_cache: _,
             drawn: _,
             view_memory: _,
             geometry_kinds: _,
@@ -3493,6 +3541,7 @@ impl Layer {
             zm_dropped: _,
             windowed: _,
             held_in: _,
+            shown_in: _,
         } = dataset;
         if let Some(v) = provenance {
             out.push((LayerRole::Dataset, v.as_str(), true, paths::is_local(v)));
@@ -3527,6 +3576,47 @@ impl Layer {
             LayerRole::GpkgPath => Some(&mut self.gpkg.as_mut()?.path),
             LayerRole::PostgisEditDatabase => Some(&mut self.postgis.as_mut()?.origin.database),
         }
+    }
+}
+
+/// A layer's extent in longitude/latitude for its rows at a geometry revision in a coordinate
+/// system ([`Layer::extent`]), behind a lock, as it is worked out through `&self`.
+#[derive(Debug, Default)]
+struct ExtentCache(std::sync::Mutex<Option<ExtentKept>>);
+
+#[derive(Clone, Copy, Debug)]
+struct ExtentKept {
+    rev: u64,
+    rows: usize,
+    len: usize,
+    crs: Crs,
+    extent: Extent,
+}
+
+impl Clone for ExtentCache {
+    fn clone(&self) -> Self {
+        ExtentCache(std::sync::Mutex::new(*self.0.lock().unwrap_or_else(|e| e.into_inner())))
+    }
+}
+
+impl ExtentCache {
+    /// [`Dataset::lonlat_extent`] of `ds` at revision `rev`, kept until its rows, revision or
+    /// system change. Longitude/latitude rows are boxed as they are, which needs no keeping.
+    fn get(&self, ds: &Dataset, rev: u64) -> Extent {
+        let crs = ds.coord_crs();
+        if crs == Crs::LonLat {
+            return ds.extent();
+        }
+        let (rows, len) = (ds.features.allocation_key().as_ptr() as usize, ds.features.len());
+        let mut kept = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(k) = *kept
+            && (k.rev, k.rows, k.len, k.crs) == (rev, rows, len, crs)
+        {
+            return k.extent;
+        }
+        let extent = ds.lonlat_extent();
+        *kept = Some(ExtentKept { rev, rows, len, crs, extent });
+        extent
     }
 }
 
@@ -4435,6 +4525,92 @@ mod tests {
         assert!(plain.lonlat_in().is_empty());
     }
 
+    /// A held layer is drawn straight into a map whose projection is a coordinate system: as it
+    /// is on a map in its own system, by the direct operation between the two on a map in another
+    /// (DHDN 3-degree Gauss-Krüger zone 3 on ETRS89 UTM 32N, whose datums differ: the way through
+    /// WGS 84 is 0.44 m off it, see `reproject.rs`), and through longitude/latitude on Web Mercator
+    /// and a world projection. A place outside the map's area isn't drawn on it, as before, and
+    /// isn't counted as one that can't be given in longitude/latitude.
+    #[test]
+    fn a_held_layer_is_drawn_straight_into_a_map_in_a_coordinate_system() {
+        let line = Geometry::Line(vec![vec![Coord::new(9.18, 48.78), Coord::new(9.2, 48.8)]]);
+        let held = |crs: Crs| {
+            let mut d = Dataset::new("held", GeometryType::Polyline, vec![]);
+            d.push(Some(line.clone()), vec![]);
+            d.hold_in(crs).unwrap();
+            Layer::new(1, d)
+        };
+        let flat = |code: &str| projection::Flat::of(&Projection::Custom(code.into()));
+        let coords = |g: &Geometry| {
+            let mut v = Vec::new();
+            g.for_each_coord(|c| v.push(c));
+            v
+        };
+        // On a map in its own system, its coordinates exactly.
+        let mut gk = held(Crs::Epsg(31467));
+        let stored = gk.dataset.features[0].geometry.clone().unwrap();
+        // PROJ 9.9.0 (northing first in EPSG:31467's own axis order):
+        //   echo "48.78 9.18" | cs2cs -f %.6f EPSG:4326 EPSG:31467  ->  5404737.597295 3513304.512454
+        //   echo "48.8 9.2"   | cs2cs -f %.6f EPSG:4326 EPSG:31467  ->  5406965.390660 3514768.524742
+        //   echo "5404737.597295 3513304.512454" | cs2cs -f %.6f EPSG:31467 EPSG:25832  ->  513223.740371 5403015.206314
+        //   echo "5406965.390660 3514768.524742" | cs2cs -f %.6f EPSG:31467 EPSG:25832  ->  514687.172659 5405242.103035
+        // ("DHDN to ETRS89 (2)"; through EPSG:4326 the first is 513223.539572 5403015.518478,
+        // 0.37 m away). Within a millimetre.
+        let near = |got: &[Coord], want: &[(f64, f64)]| {
+            assert_eq!(got.len(), want.len());
+            for (g, w) in got.iter().zip(want) {
+                assert!((g.x - w.0).abs() < 1e-3 && (g.y - w.1).abs() < 1e-3, "{g:?} vs PROJ {w:?}");
+            }
+        };
+        near(&coords(&stored), &[(3513304.512454, 5404737.597295), (3514768.524742, 5406965.390660)]);
+        let on_own = gk.projected_in(&flat("EPSG:31467"), "gk")[0].clone().unwrap();
+        assert_eq!(coords(&on_own), coords(&stored));
+        assert_eq!(gk.unplaced(), Some(&Ok(0)), "drawn as it is: none left out");
+        // On ETRS89 UTM 32N, the direct operation's result, not the way through WGS 84.
+        let utm = flat("EPSG:25832");
+        assert_eq!(utm.direct_system(), Some(Crs::Epsg(25832)));
+        let direct = Crs::Epsg(31467).to(Crs::Epsg(25832)).unwrap();
+        let to_lonlat = Crs::Epsg(31467).to(Crs::LonLat).unwrap();
+        let drawn = gk.projected_in(&utm, "utm")[0].clone().unwrap();
+        for (d, s) in coords(&drawn).into_iter().zip(coords(&stored)) {
+            let want = direct.point(s).unwrap();
+            assert!((d.x - want.x).abs() < 1e-6 && (d.y - want.y).abs() < 1e-6, "{d:?} vs {want:?}");
+            let via = utm.forward_checked(to_lonlat.point(s).unwrap()).unwrap();
+            assert!((d.x - via.x).hypot(d.y - via.y) > 0.1, "drawn through WGS 84: {d:?} vs {via:?}");
+        }
+        near(&coords(&drawn), &[(513223.740371, 5403015.206314), (514687.172659, 5405242.103035)]);
+        assert_eq!(gk.unplaced(), Some(&Ok(0)));
+        // Web Mercator and a world projection draw it from longitude/latitude, as before.
+        for (map, key) in [(projection::Flat::Mercator, "mercator"), (flat("ESRI:54030"), "robinson")] {
+            assert_eq!(map.direct_system(), None, "{key}");
+            let want = map.project(&to_lonlat.geometry(&stored));
+            assert_eq!(gk.projected_in(&map, key)[0].as_ref(), Some(&want), "{key}");
+        }
+        // A place longitude/latitude can't give is counted where drawing goes through it (Web
+        // Mercator), and not on a map in the layer's own system, which draws it as it is.
+        let mut d = Dataset::new("wild", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(1e15, 5_400_000.0))), vec![]);
+        d.held_in = Crs::Epsg(31467);
+        let mut wild = Layer::new(3, d);
+        wild.projected_in(&projection::Flat::Mercator, "mercator");
+        assert_eq!(wild.unplaced(), Some(&Ok(1)));
+        wild.projected_in(&flat("EPSG:31467"), "gk");
+        assert_eq!(wild.unplaced(), Some(&Ok(0)), "drawn as it is");
+        // A layer held in Web Mercator is drawn on the Web Mercator map as it is.
+        let mut merc = held(Crs::WebMercator);
+        let stored_merc = merc.dataset.features[0].geometry.clone().unwrap();
+        let on_merc = merc.projected_in(&projection::Flat::Mercator, "mercator")[0].clone().unwrap();
+        assert_eq!(coords(&on_merc), coords(&stored_merc));
+        // A place far outside UTM 32N isn't drawn there, and isn't one longitude/latitude lacks.
+        let mut d = Dataset::new("far", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(50.0, 48.8))), vec![]);
+        d.hold_in(Crs::Epsg(31467)).unwrap();
+        let mut far = Layer::new(2, d);
+        let drawn = far.projected_in(&utm, "utm")[0].clone().unwrap();
+        assert!(coords(&drawn).iter().all(|c| !c.is_finite()), "{drawn:?}");
+        assert_eq!(far.unplaced(), Some(&Ok(0)));
+    }
+
     #[test]
     fn rejected_display_levels_are_not_rebuilt_on_unchanged_frames() {
         let flat = projection::Flat::Mercator;
@@ -4606,9 +4782,9 @@ mod tests {
     }
 
     /// A layer's extents are in longitude/latitude, converted from its dataset's own coordinates
-    /// (`Dataset::coord_crs`). That is longitude/latitude for every dataset today, whatever system
-    /// it records, so this covers the identity: the boxes are its geometry's. Rows past the last
-    /// are left out.
+    /// (`Dataset::coord_crs`). A dataset made in code is in longitude/latitude, whatever system it
+    /// records, so this covers the identity: the boxes are its geometry's. Rows past the last are
+    /// left out.
     #[test]
     fn a_layers_extents_are_identity_converted_to_lonlat() {
         let mut m = Map::new("Map");

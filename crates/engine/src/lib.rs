@@ -1705,7 +1705,14 @@ impl Session {
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
         self.command_epilogue(id, params, |s| {
             let native_maintenance = s.depth == 0 && s.policy_ingress_idle();
+            // Before every command, a script's or task's too: one before it in the same script may
+            // have changed a map's projection.
+            s.note_shown_systems();
             let result = s.run_command(id, params);
+            // A command may change a map's projection, or add layers to it.
+            if s.depth == 0 {
+                s.note_shown_systems();
+            }
             // Native sessions without a drawing loop recover their own failed overviews.
             // Named callers and sealed completions do not initiate unrelated maintenance.
             if native_maintenance && s.read_in_place_again() {
@@ -3067,6 +3074,15 @@ impl Session {
             self.grid_notes_checked = Some(web_time::Instant::now());
             self.say_grid_notes();
             self.say_unplaced();
+        }
+    }
+
+    /// Tells every map's layers the system their map draws them straight into
+    /// ([`rustgis_map::Map::note_shown_system`]): before and after each command, and each frame
+    /// of the app, which also covers layers landing from a background read.
+    pub fn note_shown_systems(&mut self) {
+        for m in &mut self.project.maps {
+            m.note_shown_system();
         }
     }
 
