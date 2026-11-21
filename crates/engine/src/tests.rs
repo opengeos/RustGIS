@@ -5299,12 +5299,18 @@ fn command_ids_are_unique() {
 
 /// A 3-band 8×6 UTM 17N GeoTIFF near 81°W, 42°N, as base64.
 fn utm_tiff_b64() -> String {
-    use base64::Engine;
-    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
-    let gt = GeoTransform { origin_x: 497_000.0, origin_y: 4_651_000.0, pixel_width: 500.0, pixel_height: -500.0 };
-    let bands = (0..3).map(|b| (0..48).map(|i| ((i * 5 + b * 40) % 256) as f32).collect()).collect();
-    let r = Raster::new("utm", 8, 6, bands, gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Rgb { alpha: false }, "UInt8").unwrap();
-    base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+    static ENCODED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ENCODED
+        .get_or_init(|| {
+            use base64::Engine;
+            use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+            let gt = GeoTransform { origin_x: 497_000.0, origin_y: 4_651_000.0, pixel_width: 500.0, pixel_height: -500.0 };
+            let bands = (0..3).map(|b| (0..48).map(|i| ((i * 5 + b * 40) % 256) as f32).collect()).collect();
+            let r = Raster::new("utm", 8, 6, bands, gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Rgb { alpha: false }, "UInt8")
+                .unwrap();
+            base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+        })
+        .clone()
 }
 
 /// The sample world with a streamed layer active.
@@ -6667,6 +6673,17 @@ fn hostile_params_never_panic(shard: usize) {
         .collect();
     // Shards share the process under `cargo test`: each streams its own file.
     let streamed = grid_fgb(&format!("hostile-{shard}"), 20);
+    // Build each base fixture once per shard and clone from it instead of re-parsing GeoJSON,
+    // decoding a GeoTIFF and opening the FlatGeobuf on every command × junk pair.
+    let snapshot = |s: Session| (s.project.clone(), s.active_layer);
+    let fresh = |(project, active): &(Project, Option<u32>)| {
+        let mut s = Session::new(project.clone());
+        s.active_layer = *active;
+        s
+    };
+    let base_world = snapshot(world());
+    let base_raster = snapshot(with_raster());
+    let base_streamed = snapshot(with_streamed(&streamed));
     for id in ids {
         if matches!(
             id,
@@ -6704,6 +6721,9 @@ fn hostile_params_never_panic(shard: usize) {
         ) {
             continue;
         }
+        let mut s_world = fresh(&base_world);
+        let mut s_raster = fresh(&base_raster);
+        let mut s_streamed = fresh(&base_streamed);
         for p in &junk {
             // Places given by name go to the public geocoder: with an answer given, the junk
             // goes through reading it and the options, and nothing is fetched.
@@ -6718,17 +6738,15 @@ fn hostile_params_never_panic(shard: usize) {
                 _ if id == "map.route" => continue,
                 p => p,
             };
-            let mut s = world();
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
-            // Again with a raster layer active.
-            let mut s = with_raster();
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
-            // And with a streamed layer active.
-            let mut s = with_streamed(&streamed);
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
+            // Most hostile payloads return Err without modifying the session; only rebuild a fresh
+            // session when the command succeeded or dirtied/changed state.
+            for (s, base) in [(&mut s_world, &base_world), (&mut s_raster, &base_raster), (&mut s_streamed, &base_streamed)] {
+                let ok = s.run(id, p).is_ok();
+                let _ = s.run("info.project", &Value::Null);
+                if ok || s.dirty() || s.can_undo() {
+                    *s = fresh(base);
+                }
+            }
         }
     }
 }

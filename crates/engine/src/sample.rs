@@ -234,6 +234,17 @@ const COUNTRY_BORDER: Rgba = Rgba::rgb(0x7D, 0x8C, 0x96);
 
 /// "World Atlas": countries by population, cities sized by population, rivers and lakes.
 pub fn world_project() -> Project {
+    // The default built-in worldview never changes, and `Features` is copy-on-write, so caching
+    // the built project avoids re-parsing the four Natural Earth GeoJSON files and recomputing
+    // Jenks breaks on every sample open and test.
+    if view() == View::DEFAULT && std::ptr::eq(countries(), COUNTRIES) {
+        static DEFAULT_WORLD: std::sync::OnceLock<Project> = std::sync::OnceLock::new();
+        return DEFAULT_WORLD.get_or_init(build_world_project).clone();
+    }
+    build_world_project()
+}
+
+fn build_world_project() -> Project {
     let mut p = Project::new("World Atlas");
     let map = p.map_mut();
     map.name = "World".into();
