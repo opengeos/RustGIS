@@ -3578,15 +3578,18 @@ impl RustGisApp {
                 if let Some(why) = section.and_then(|s| analysispane::section_blocked(&self.session, s)) {
                     return Err(why);
                 }
-                // A pending ranking belongs to the section/request that started it.
-                analysispane::forget_similar(&mut self.workflow);
                 // A map pick started in another section (or before the pane closes) ends here.
                 self.workflow.pick = None;
                 match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
                     Some((id, _)) => {
+                        // Opening the same Similar section preserves its pending/completed result,
+                        // including when the pane was hidden while the worker finished.
+                        if *id != "similar" || self.workflow.section != *id {
+                            analysispane::forget_similar(&mut self.workflow);
+                            self.workflow.result = None;
+                            self.workflow.error = None;
+                        }
                         self.workflow.section = id;
-                        self.workflow.result = None;
-                        self.workflow.error = None;
                         self.ui.open_right(RightPane::Workflows);
                     }
                     None => toggle_right(&mut self.ui, RightPane::Workflows),

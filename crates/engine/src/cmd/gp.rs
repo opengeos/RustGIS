@@ -893,6 +893,8 @@ pub(crate) struct RanAheads {
     zones: Vec<super::imagery::ZoneMeans>,
     // The copy's initial project can outlive history while queued or waiting to replay.
     pub(crate) retained: Option<crate::undo_memory::ReadRows>,
+    /// Selection effects and inner reads keep the parent admission through live replay.
+    pub(crate) selection_admission: Option<(u64, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -902,6 +904,10 @@ pub(crate) struct RanAheads {
 /// later run takes them.
 pub(crate) fn taking<T>(s: &mut Session, ran: RanAheads, run: impl FnOnce(&mut Session) -> T) -> T {
     let _retained = ran.retained;
+    let previous_admission = s.selection_admission.clone();
+    if ran.selection_admission.is_some() {
+        s.selection_admission = ran.selection_admission;
+    }
     s.tools_ahead = Some(Ahead::Taking(ran.tools.into()));
     s.files_ahead = Some(FilesAhead::Taking(ran.files.into()));
     s.zones_ahead = Some(super::imagery::ZonesAhead::Taking(ran.zones.into()));
@@ -909,6 +915,7 @@ pub(crate) fn taking<T>(s: &mut Session, ran: RanAheads, run: impl FnOnce(&mut S
     s.tools_ahead = None;
     s.files_ahead = None;
     s.zones_ahead = None;
+    s.selection_admission = previous_admission;
     r.unwrap_or_else(|p| std::panic::resume_unwind(p))
 }
 
@@ -927,7 +934,7 @@ pub(crate) fn ran_ahead(s: &mut Session) -> RanAheads {
         Some(super::imagery::ZonesAhead::Recording(read)) => read,
         _ => Vec::new(),
     };
-    RanAheads { tools, files, zones, retained: None }
+    RanAheads { tools, files, zones, retained: None, selection_admission: s.selection_admission.clone() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

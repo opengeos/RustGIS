@@ -1822,7 +1822,7 @@ mod tests {
     fn similar_pane_receives_success_failure_and_cancellation() {
         use egui_kittest::kittest::Queryable;
         use rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
-        for outcome in ["success", "error", "cancel", "spawn", "newer", "layer", "workflow"] {
+        for outcome in ["success", "error", "cancel", "spawn", "newer", "layer", "workflow", "reopen", "closed"] {
             let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
             let mut ds = Dataset::new("numbers", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
             for n in [0, 2, 10] {
@@ -1884,6 +1884,12 @@ mod tests {
             }
             assert_eq!(showing(h.state()), outcome != "spawn", "{outcome}: worker admission");
             assert!(h.state().workflow.result.is_none(), "a receipt is not a ranking");
+            if outcome == "reopen" {
+                h.state_mut().run("ui.pane.workflows", json!({"section":"similar"})).unwrap();
+            } else if outcome == "closed" {
+                h.state_mut().run("ui.pane.workflows", json!({})).unwrap();
+                assert_ne!(h.state().ui.right, Some(crate::RightPane::Workflows));
+            }
             match outcome {
                 "workflow" => {
                     let end = std::time::Instant::now() + Duration::from_secs(60);
@@ -1925,13 +1931,18 @@ mod tests {
                 h.step();
                 std::thread::sleep(Duration::from_millis(5)); // test-wait: worker completion delivered by the real app frame
             }
+            if outcome == "closed" {
+                assert!(h.state().workflow.result.is_some(), "closing the pane keeps its completed ranking for reopening");
+                h.state_mut().run("ui.pane.workflows", json!({"section":"similar"})).unwrap();
+                h.step();
+            }
             // Completion used the full app frame above. Inspect the actual pane alone so its
             // diagnostic cannot be confused with the same text in another app surface.
             allow_landing.set(false);
             h.step();
             h.run();
             match outcome {
-                "success" | "workflow" => {
+                "success" | "workflow" | "reopen" | "closed" => {
                     let answer = h.state().workflow.result.as_ref().expect("the pane shows the completed ranking");
                     assert_eq!(answer["similar"].as_array().unwrap().len(), 2);
                     assert!(answer["similar"][0]["distance"].is_number());

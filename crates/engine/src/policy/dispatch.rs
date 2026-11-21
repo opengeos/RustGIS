@@ -953,6 +953,13 @@ impl Session {
                 if let Some(error) = self.url_completion_refusal(spec.id, &params)? {
                     return Err(error);
                 }
+                // The outer replay's mutation is part of its original admission, just like
+                // the inner commands. Read this metadata before the handler consumes it.
+                #[cfg(not(target_arch = "wasm32"))]
+                let selection_epoch = crate::cmd::reads::peek::<crate::cmd::gp::RanAheads>(self, spec.id)
+                    .and_then(|ran| ran.selection_admission.as_ref().map(|a| a.0));
+                #[cfg(target_arch = "wasm32")]
+                let selection_epoch = None;
                 let run = |s: &mut Session| {
                     s.with_node(node, |s| {
                         let editor = s.trust_editor(spec.id, &params);
@@ -989,7 +996,8 @@ impl Session {
                     // Some edits replace selections without going through select::set. A pending
                     // read must preserve the later intent, even when this edit touched another layer.
                     // Similar's own result is derived output, not a new external selection intent.
-                    self.selection_generation = self.selection_generation.wrapping_add(1);
+                    let epoch = selection_epoch.unwrap_or_else(|| self.selection_epoch());
+                    self.selection_intent = self.selection_intent.max(epoch);
                 }
                 result
             }

@@ -133,8 +133,7 @@ pub(crate) fn similar_ran(app: &mut RustGisApp, request: u64, landed: crate::Lan
         return;
     }
     let Some(asked) = app.workflow.similar_request.take() else { return };
-    if app.ui.right != Some(crate::RightPane::Workflows)
-        || app.workflow.section != "similar"
+    if app.workflow.section != "similar"
         || app.workflow.layer != asked.layer
         || app.session.opened != asked.opened
         || app.session.map().instance_id() != asked.map

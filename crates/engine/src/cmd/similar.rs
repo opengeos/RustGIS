@@ -35,7 +35,6 @@ struct Input {
     name: String,
     data: Dataset,
     visibility: Option<Visibility>,
-    selection_generation: u64,
     _retained: crate::undo_memory::ReadRows,
 }
 
@@ -71,7 +70,6 @@ impl Input {
             name: l.name.clone(),
             data: l.dataset.clone(),
             visibility,
-            selection_generation: s.selection_generation,
             _retained: s.undo_memory.readers().retain(vec![l.dataset.features.allocation_key()]),
         })
     }
@@ -102,12 +100,16 @@ struct Done {
 struct Ahead {
     input: Input,
     done: Result<Done, String>,
-    request: u64,
+    request: (u64, u64),
 }
 
 /// Orders admissions, not completions. Script workers share this sequence with their session.
-fn request(s: &Session) -> u64 {
-    s.similar_sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1)
+fn request(s: &Session) -> (u64, u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((epoch, inner)) = &s.selection_admission {
+        return (*epoch, inner.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1));
+    }
+    (s.selection_epoch(), 0)
 }
 
 /// Filters the bounded result/reference rows with cancellation, without a layer-wide mask.
@@ -214,14 +216,14 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
     };
     #[cfg(not(target_arch = "wasm32"))]
     if ahead.is_none() && s.statistics_window_thread == Some(std::thread::current().id()) {
-        return Err("Similarity needs the desktop background read queue; run Find Similar or a direct MCP data.similar request".into());
+        return Err("Similarity needs the desktop background read queue; use Find Similar or a direct MCP data.similar request. In desktop scripts, run file or network setup separately before the analysis script.".into());
     }
-    let (done, selection_generation, request) = match ahead {
-        Some(a) if a.input.same(&input) => (a.done, a.input.selection_generation, a.request),
+    let (done, request) = match ahead {
+        Some(a) if a.input.same(&input) => (a.done, a.request),
         Some(_) => return Err("the layer, reference or map filters changed while similarity was computed: ask again".into()),
         None => {
             let request = request(s);
-            (gather(&input), input.selection_generation, request)
+            (gather(&input), request)
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -230,12 +232,12 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
     }
     let done = done?;
     if let Some(rows) = done.selection {
-        if selection_generation == s.selection_generation && request >= s.similar_selected {
+        if request.0 >= s.selection_intent && request >= s.similar_selected {
             super::select::set_similar_result(s, input.target.id, rows);
             s.similar_selected = request;
         } else {
             s.notify_text(
-                NoticeText::term(if selection_generation != s.selection_generation {
+                NoticeText::term(if request.0 < s.selection_intent {
                     "Selection changed while similarity was computed; its ranking is returned without replacing the current selection"
                 } else {
                     "A newer Similar result has already changed selection; this ranking is returned without replacing it"

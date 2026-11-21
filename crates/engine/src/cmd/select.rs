@@ -126,12 +126,12 @@ fn area_mode(p: &Value) -> Result<Mode, String> {
 /// Records an external clear without a command/Undo step, as pop-up browsing requires.
 pub fn clear(s: &mut Session) {
     s.map_mut().clear_selection();
-    s.selection_generation = s.selection_generation.wrapping_add(1);
+    s.selection_intent = s.selection_intent.max(s.selection_epoch());
 }
 
 /// Applies a selection to one layer (New clears the others too, like desktop GIS).
 pub fn set(s: &mut Session, id: u32, rows: Vec<usize>, m: Mode) {
-    s.selection_generation = s.selection_generation.wrapping_add(1);
+    s.selection_intent = s.selection_intent.max(s.selection_epoch());
     apply(s, id, rows, m);
 }
 

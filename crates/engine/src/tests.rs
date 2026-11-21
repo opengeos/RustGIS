@@ -54838,6 +54838,70 @@ fn older_similar_completion_preserves_a_newer_similar_selection() {
     }
 }
 
+/// Script admission precedes its worker's execution. A later Similar request owns selection
+/// whether the script or that request completes first.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn script_admission_preserves_later_similar_and_user_selection() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use rustgis_analysis::control::Control;
+    for script_lands_first in [false, true] {
+        for user_selects in [false, true] {
+            let (mut s, id) = similar_lifecycle_session();
+            let script = json!({"script":"data.similar {\"layer\":\"values\",\"row\":0,\"fields\":[\"n\"],\"count\":1}"});
+            let script = read_ahead(&mut s, "script.run", &script).unwrap();
+            assert!(script.reads());
+            let newer = read_ahead(&mut s, "data.similar", &json!({"layer":id,"row":2,"fields":["n"],"count":1})).unwrap();
+            if user_selects {
+                s.run("select.rows", &json!({"layer":id,"rows":[2]})).unwrap();
+            }
+            // The script's worker reaches its inner command only after the newer admission.
+            let script = script.run(&Control::stoppable()).unwrap();
+            let newer = newer.run(&Control::stoppable()).unwrap();
+            if script_lands_first {
+                read_land(&mut s, script).unwrap();
+                let mark = s.notice_mark();
+                assert_eq!(read_land(&mut s, newer).unwrap()["similar"][0]["row"], 1);
+                if user_selects {
+                    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("without replacing the current selection")));
+                } else {
+                    assert!(s.notices_since(mark).is_empty(), "an earlier script cannot invalidate later selection intent");
+                }
+            } else {
+                read_land(&mut s, newer).unwrap();
+                read_land(&mut s, script).unwrap();
+            }
+            assert_eq!(
+                s.map().layer(id).unwrap().selection,
+                if user_selects { vec![2] } else { vec![1, 2] },
+                "the later intent owns selection"
+            );
+        }
+    }
+}
+
+/// An unprepared desktop script refuses heavy inline work with a usable setup split;
+/// the same script remains synchronous for a headless caller.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn unprepared_desktop_script_refuses_similar_with_setup_guidance() {
+    for window in [false, true] {
+        let (mut s, _) = similar_lifecycle_session();
+        s.statistics_need_read_ahead(window);
+        let p = json!({"script": concat!(
+            "map.setScale {\"scale\":100000}\n",
+            "data.similar {\"layer\":\"values\",\"row\":0,\"fields\":[\"n\"],\"count\":1}"
+        )});
+        let result = s.run("script.run", &p);
+        if window {
+            let error = result.unwrap_err();
+            assert!(error.contains("background read queue") && error.contains("setup separately"), "{error}");
+        } else {
+            assert_eq!(result.unwrap()["ran"][1]["result"]["similar"][0]["row"], 1);
+        }
+    }
+}
+
 /// A script worker and its live session share request order: a fresh command after replay
 /// must be newer than both Similar commands that the worker computed.
 #[cfg(not(target_arch = "wasm32"))]

@@ -1499,6 +1499,12 @@ If you change selection while an explicit-reference request runs, its ranking st
 does not replace the newer selection.
 An older result also preserves selection applied by a newer Similar request. Earlier completions
 do not prevent later queued requests from selecting their own results.
+Script/model ordering starts when the whole run is queued, so its later-computed steps do not
+overtake a newer Find Similar request. Closing the Workflows pane keeps the current ranking
+and any pending request for reopening the same section; changing its section or layer replaces it.
+Desktop scripts prepare only a replayable prefix. Run file or network setup separately before
+the analysis script: a Similar step after setup that cannot be prepared is refused rather than
+run on the window thread. Command-line and Python scripts still run synchronously.
 The reference must have a finite numeric value in every compared field; otherwise the command
 refuses without changing selection. Other incomplete candidate rows are skipped with one count,
 including when `select: false`. Standardization still uses each field's finite resident values.

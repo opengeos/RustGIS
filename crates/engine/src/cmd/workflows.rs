@@ -825,8 +825,11 @@ pub(crate) fn ahead_on_copy(s: &Session, command: &'static str, p: &Value) -> su
     // The copy follows the extensions turned on or off here (#1752).
     let extensions = s.extensions().clone();
     let (view_size, active_layer, opened, p) = (s.view_size, s.active_layer, s.opened, p.clone());
-    let selection_generation = s.selection_generation;
-    let (similar_sequence, similar_selected) = (s.similar_sequence.clone(), s.similar_selected);
+    let selection_intent = s.selection_intent;
+    let (selection_sequence, similar_selected) = (s.selection_sequence.clone(), s.similar_selected);
+    // Reserve before the worker starts: its inner reads belong to this admission, even when
+    // a newer UI request arrives while this script waits in the queue.
+    let selection_admission = s.selection_admission.clone().unwrap_or_else(|| (s.selection_epoch(), Default::default()));
     // What its tools ask of servers and files goes in this session's Diagnostics, as when they
     // run here: the run here takes their results and asks nothing.
     let requests = s.diagnostics.capture();
@@ -838,8 +841,9 @@ pub(crate) fn ahead_on_copy(s: &Session, command: &'static str, p: &Value) -> su
         copy.view_size = view_size;
         copy.active_layer = active_layer;
         copy.opened = opened;
-        copy.selection_generation = selection_generation;
-        copy.similar_sequence = similar_sequence;
+        copy.selection_intent = selection_intent;
+        copy.selection_sequence = selection_sequence;
+        copy.selection_admission = Some(selection_admission);
         copy.similar_selected = similar_selected;
         // The copy shares this session's rows, which this session already counts in what the
         // process holds (#2431): it neither measures nor adds them again.

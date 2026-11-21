@@ -339,6 +339,12 @@ pub(crate) fn take<T: 'static>(s: &mut Session, key: &str) -> Option<T> {
     read.value.downcast::<T>().ok().map(|v| *v)
 }
 
+/// Borrows prepared metadata during its admitted command, without consuming the value.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn peek<'a, T: 'static>(s: &'a Session, key: &str) -> Option<&'a T> {
+    s.read_ahead.as_ref().filter(|r| r.key == key)?.value.downcast_ref()
+}
+
 /// Whether a read is placed for `key`, without taking it.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn placed_for(s: &Session, key: &str) -> bool {
