@@ -57,6 +57,9 @@ pub(crate) struct Frame {
     pub font_generation: u32,
     /// How many layers the map has, which labels take their priority from.
     pub layers: usize,
+    /// The minute graphics text shows for `{date}` and `{time}`
+    /// ([`rustgis_map::graphics::TokenValues`]), on a map with graphics.
+    pub clock: Option<u64>,
 }
 
 impl Frame {
@@ -76,6 +79,7 @@ impl Frame {
             && self.fonts == other.fonts
             && self.font_generation == other.font_generation
             && self.layers == other.layers
+            && self.clock == other.clock
             && self.map.same(&other.map)
     }
 }

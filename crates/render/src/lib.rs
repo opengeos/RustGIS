@@ -4262,6 +4262,7 @@ fn render_frame(
                 fonts: families::installed_now().is_some(),
                 font_generation: fonts::font_generation(),
                 layers: map.layers.len(),
+                clock: map.layers.iter().any(|l| l.graphics).then(|| rustgis_map::graphics::TokenValues::of(map, scale).now / 60),
             };
             // By id and place in the list, which labels take their priority from.
             let looks = order
