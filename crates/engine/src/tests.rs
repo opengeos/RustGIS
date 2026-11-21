@@ -7367,6 +7367,11 @@ fn hostile_params_never_panic(shard: usize) {
         json!({"type": "albers", "lon_0": f64::MAX, "lat_1": "x", "lat_2": -1e308}),
         json!({"kind": "legend", "element": 1, "exclude": [null, 7, "", {"x": 1}]}),
         json!({"kind": "text", "element": 1, "font": {"family": "serif"}, "italic": [], "align": 7}),
+        json!({"kind": "scaleBar", "element": 1, "subdivisions": [null], "divisionsBeforeZero": {}, "labelPosition": 7, "unitLabel": 7}),
+        json!({"kind": "scaleBar", "element": 1, "unitLabelPosition": "", "decimals": "x", "labelSize": "NaN", "fit": {"x": 1}}),
+        json!({"kind": "scaleBar", "element": 1, "subdivisions": 1e308, "divisionsBeforeZero": -1e308, "decimals": f64::MAX, "labelSize": -1e308, "unitLabel": null}),
+        json!({"kind": "scaleBar", "element": 1, "unitLabel": "x".repeat(5000), "fit": "adjustWidth", "labelPosition": "below", "unitLabelPosition": "afterBar"}),
+        json!({"kind": "legend", "element": 1, "decimals": 2, "labelSize": 9, "fit": "adjustDivision", "unitLabel": "m"}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
@@ -11331,6 +11336,175 @@ fn layout_surrounds_take_cartographic_options() {
     let text = serde_json::to_string(&s.project.layouts[0]).unwrap();
     let back: rustgis_map::layout::Layout = serde_json::from_str(&text).unwrap();
     assert_eq!(back, s.project.layouts[0]);
+}
+
+/// A scale bar's details through layout.addElement and layout.update: names and numbers checked
+/// before anything changes, refused for other elements, one undo step, saved with the layout.
+#[test]
+fn layout_scale_bars_take_their_details() {
+    use rustgis_map::layout::{ElementKind, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let find = |s: &Session, code: &str| s.project.layouts[0].elements.iter().find(|e| e.kind.code() == code).unwrap().clone();
+    let bar = find(&s, "scaleBar").id;
+    let details = |s: &Session, id: u32| match &s.project.layouts[0].element(id).unwrap().kind {
+        ElementKind::ScaleBar {
+            subdivisions,
+            divisions_before_zero,
+            label_position,
+            unit_label,
+            unit_label_position,
+            decimals,
+            label_size,
+            fit,
+            ..
+        } => {
+            (*subdivisions, *divisions_before_zero, *label_position, unit_label.clone(), *unit_label_position, *decimals, *label_size, *fit)
+        }
+        k => panic!("{k:?}"),
+    };
+    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, 0, 8.0, ScaleBarFit::AdjustDivisionValue);
+    assert_eq!(details(&s, bar), plain);
+    s.run(
+        "layout.update",
+        &json!({"element": bar, "subdivisions": 3, "divisionsBeforeZero": 1, "labelPosition": "below", "unitLabel": "Feet",
+            "unitLabelPosition": "afterBar", "decimals": 2, "labelSize": 10.5, "fit": "adjustDivision"}),
+    )
+    .unwrap();
+    let all =
+        (3, 1, ScaleLabelPosition::Below, Some("Feet".to_string()), UnitLabelPosition::AfterBar, 2, 10.5, ScaleBarFit::AdjustDivision);
+    assert_eq!(details(&s, bar), all);
+    // One undo step brings the whole bar back.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(details(&s, bar), plain);
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(details(&s, bar), all);
+    // One changed keeps the others; names ignore case and spaces; a count may come as text.
+    s.run("layout.update", &json!({"element": bar, "units": "feet", "labelSize": "12", "fit": " AdjustWidth "})).unwrap();
+    assert_eq!((details(&s, bar).6, details(&s, bar).7), (12.0, ScaleBarFit::AdjustWidth));
+    // Null keeps a value, except a unit label's: the abbreviation again. "" prints none. 1 subdivision is none.
+    s.run("layout.update", &json!({"element": bar, "decimals": null, "fit": null, "unitLabel": "", "subdivisions": 1})).unwrap();
+    assert_eq!((details(&s, bar).0, details(&s, bar).3.clone(), details(&s, bar).5), (0, Some(String::new()), 2));
+    s.run("layout.update", &json!({"element": bar, "unitLabel": null})).unwrap();
+    assert_eq!(details(&s, bar).3, None);
+    // The limits themselves are taken.
+    s.run(
+        "layout.update",
+        &json!({"element": bar, "subdivisions": 10, "divisionsBeforeZero": 2, "decimals": 3, "labelSize": 4, "unitLabel": "x".repeat(100)}),
+    )
+    .unwrap();
+    s.run("layout.update", &json!({"element": bar, "labelSize": 24})).unwrap();
+    // A bad value changes nothing, not even the good values given with it.
+    let before = details(&s, bar);
+    for bad in [
+        json!({"subdivisions": 11}),
+        json!({"subdivisions": -1}),
+        json!({"subdivisions": 2.5}),
+        json!({"subdivisions": "many"}),
+        json!({"divisionsBeforeZero": 3}),
+        json!({"divisionsBeforeZero": []}),
+        json!({"decimals": 4}),
+        json!({"decimals": {}}),
+        json!({"labelSize": 3.9}),
+        json!({"labelSize": 24.1}),
+        json!({"labelSize": "big"}),
+        json!({"labelSize": "1e309"}),
+        json!({"labelPosition": "left"}),
+        json!({"labelPosition": 7}),
+        json!({"unitLabelPosition": "beside"}),
+        json!({"unitLabel": 7}),
+        json!({"unitLabel": ["ft"]}),
+        json!({"unitLabel": "a\nb"}),
+        json!({"unitLabel": "x".repeat(101)}),
+        json!({"fit": "manual"}),
+        json!({"fit": 3}),
+    ] {
+        let mut p = bad.clone();
+        p["element"] = json!(bar);
+        p["divisions"] = json!(3);
+        p["style"] = json!("line");
+        assert!(s.run("layout.update", &p).is_err(), "{bad}");
+        assert_eq!(details(&s, bar), before, "{bad}");
+        assert!(
+            matches!(
+                find(&s, "scaleBar").kind,
+                ElementKind::ScaleBar { divisions: 4, style: rustgis_map::layout::ScaleBarStyle::Alternating, .. }
+            ),
+            "{bad}"
+        );
+    }
+    // Added with them; refused on adding when bad, or for another kind.
+    let added = s
+        .run(
+            "layout.addElement",
+            &json!({"kind": "scaleBar", "subdivisions": 2, "divisionsBeforeZero": 2, "labelPosition": "below",
+                "unitLabel": "Kilometres", "unitLabelPosition": "above", "decimals": 1, "labelSize": 9, "fit": "adjustWidth"}),
+        )
+        .unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_eq!(
+        details(&s, added),
+        (2, 2, ScaleLabelPosition::Below, Some("Kilometres".into()), UnitLabelPosition::Above, 1, 9.0, ScaleBarFit::AdjustWidth)
+    );
+    let count = s.project.layouts[0].elements.len();
+    for bad in [
+        json!({"kind": "scaleBar", "labelPosition": "middle"}),
+        json!({"kind": "scaleBar", "decimals": 9}),
+        json!({"kind": "northArrow", "decimals": 2}),
+        json!({"kind": "legend", "unitLabel": "m"}),
+        json!({"kind": "text", "text": "T", "subdivisions": 2}),
+        json!({"kind": "colorbar", "fit": "adjustWidth"}),
+    ] {
+        assert!(s.run("layout.addElement", &bad).is_err(), "{bad}");
+        assert_eq!(s.project.layouts[0].elements.len(), count, "{bad}");
+    }
+    let arrow = find(&s, "northArrow").id;
+    for bad in [json!({"decimals": 2}), json!({"unitLabel": null}), json!({"fit": "adjustWidth"})] {
+        let mut p = bad.clone();
+        p["element"] = json!(arrow);
+        let err = s.run("layout.update", &p).unwrap_err();
+        assert!(err.contains("only scale bars"), "{err}");
+    }
+    // A locked bar takes no change, a null unit label included.
+    s.run("layout.update", &json!({"element": bar, "locked": true})).unwrap();
+    for p in [json!({"decimals": 1}), json!({"unitLabel": null})] {
+        let mut p = p.clone();
+        p["element"] = json!(bar);
+        assert!(s.run("layout.update", &p).is_err(), "{p}");
+    }
+    s.run("layout.update", &json!({"element": bar, "locked": false})).unwrap();
+    // The page draws with them, and they survive a save.
+    let out = std::env::temp_dir().join(format!("rustgis-bar-details-{}.png", std::process::id()));
+    s.run("layout.export", &json!({"path": out.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&out);
+    let back: rustgis_map::layout::Layout = serde_json::from_str(&serde_json::to_string(&s.project.layouts[0]).unwrap()).unwrap();
+    assert_eq!(back, s.project.layouts[0]);
+}
+
+/// A publication's scale bar box isn't measured again for a bar with details: it would be sized
+/// for a plain bar and cut this one (#1379).
+#[test]
+fn a_publication_scale_box_keeps_a_detailed_bar() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    // The profile and extent publication_layouts_fit_their_pages uses.
+    s.run("layout.publication", &json!({"profile": "thesis-half", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+    let li = s.project.layouts.len() - 1;
+    let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
+    let (bar, frame) = (named(&s, "Scale Bar").id, s.project.layouts[li].first_frame().unwrap());
+    assert!(crate::cmd::layout::scale_box_auto(&s, li).is_some());
+    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 14, "unitLabelPosition": "afterBar"})).unwrap();
+    assert_eq!(crate::cmd::layout::scale_box_auto(&s, li), None, "a detailed bar has no automatic box");
+    let w = named(&s, "Scale Box").w;
+    let scale = match &s.project.layouts[li].element(frame).unwrap().kind {
+        ElementKind::MapFrame { scale, .. } => *scale,
+        k => panic!("{k:?}"),
+    };
+    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
+    assert!((named(&s, "Scale Box").w - w).abs() < 1e-9, "kept, not measured for a plain bar");
+    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 8, "unitLabelPosition": "afterLabels"})).unwrap();
+    assert!(crate::cmd::layout::scale_box_auto(&s, li).is_some(), "plain again, measured again");
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything

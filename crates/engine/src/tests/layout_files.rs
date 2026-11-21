@@ -73,3 +73,10 @@ fn a_layout_file_read_from_its_path_is_checked_too() {
     opened.unwrap();
     assert_eq!(s.project.layouts.len(), 2);
 }
+
+#[test]
+fn a_layout_file_requiring_scale_bar_details_opens() {
+    let (mut s, bare) = with_layout();
+    s.run("layout.import", &json!({"text": headed(&bare, 2, json!(["layout-scale-bar-details"]))})).unwrap();
+    assert_eq!(s.project.layouts.len(), 2);
+}

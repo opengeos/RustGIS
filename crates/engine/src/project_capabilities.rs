@@ -101,6 +101,9 @@ impl Project {
         {
             required.push("layout-legend-text");
         }
+        if !required.contains(&"layout-scale-bar-details") && self.layouts.iter().any(|l| l.elements.iter().any(bar_details)) {
+            required.push("layout-scale-bar-details");
+        }
         // A coordinate system whose PROJ definition, which an older reader reads, doesn't place
         // points as its WKT does (angles in grads, a datum transformation the definition can't
         // hold).
@@ -150,6 +153,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
     ("layout-legend-text", command_uses_legend_text),
+    ("layout-scale-bar-details", command_uses_scale_bar_details),
 ];
 
 /// A saved `map.graticule` that switches to the MGRS grid, its type read as the command reads it:
@@ -373,6 +377,46 @@ fn command_uses_chart_stack(id: &str, params: &Value) -> bool {
         "layout.update" => stack(),
         "layout.import" => imported_layout_uses(params, "\"stack\"", charts_stack),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_stack)),
+        _ => false,
+    }
+}
+
+/// Whether a layout element is a scale bar with details an older reader's can't draw: it would
+/// draw a plain bar and save it again without them.
+fn bar_details(e: &rustgis_map::layout::Element) -> bool {
+    e.kind.scale_bar_uses_details()
+}
+
+/// A layout command that gives a scale bar a detail off its default: an older reader ignores the
+/// keys and draws a plain bar. Giving the defaults, or `"unitLabel": null` (the abbreviation an
+/// older reader's bar prints), keeps a bar as an older reader draws it.
+fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
+    use rustgis_map::layout::{DEFAULT_SCALE_LABEL_SIZE, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
+    match id {
+        "layout.addElement" | "layout.update" => {
+            let num = |k: &str| crate::cmd::f(params, k);
+            let name = |k: &str| params.get(k).and_then(Value::as_str);
+            num("subdivisions").is_some_and(|n| n >= 2.0)
+                || num("divisionsBeforeZero").is_some_and(|n| n >= 1.0)
+                || name("labelPosition").and_then(ScaleLabelPosition::from_name).is_some_and(|v| v != ScaleLabelPosition::default())
+                || params.get("unitLabel").is_some_and(Value::is_string)
+                || name("unitLabelPosition").and_then(UnitLabelPosition::from_name).is_some_and(|v| v != UnitLabelPosition::default())
+                || num("decimals").is_some_and(|n| n >= 1.0)
+                || num("labelSize").is_some_and(|n| n != DEFAULT_SCALE_LABEL_SIZE)
+                || name("fit").and_then(ScaleBarFit::from_name).is_some_and(|v| v != ScaleBarFit::default())
+        }
+        "layout.import" => [
+            "\"subdivisions\"",
+            "\"divisions_before_zero\"",
+            "\"label_position\"",
+            "\"unit_label\"",
+            "\"decimals\"",
+            "\"label_size\"",
+            "\"fit\"",
+        ]
+        .iter()
+        .any(|key| imported_layout_uses(params, key, bar_details)),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_scale_bar_details)),
         _ => false,
     }
 }
@@ -1258,6 +1302,74 @@ mod tests {
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
                 let expected = if required { json!(["layout-chart-stack"]) } else { Value::Null };
+                assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
+            }
+        }
+    }
+
+    /// A scale bar with details is required where it is saved, so an older reader refuses the project
+    /// instead of drawing a plain bar and saving it again without them; so is a saved command that
+    /// sets one. The defaults, or a unit label taken back to its abbreviation, need nothing.
+    #[test]
+    fn scale_bar_details_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::ElementKind;
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_scale_bar_details.rgis")).unwrap();
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["layout-scale-bar-details"]));
+        let reread = Project::from_json(&saved.to_string()).unwrap();
+        assert!(reread.layouts[0].elements[1].kind.scale_bar_uses_details());
+        assert!(!reread.layouts[0].elements[2].kind.scale_bar_uses_details());
+        let mut clean = fixture;
+        for e in &mut clean.layouts[0].elements {
+            if let ElementKind::ScaleBar { frame, units, divisions, style, color, fill, .. } = &e.kind {
+                let mut plain = ElementKind::scale_bar(*frame);
+                if let ElementKind::ScaleBar { units: u, divisions: d, style: st, color: c, fill: f, .. } = &mut plain {
+                    (*u, *d, *st, *c, *f) = (*units, *divisions, *style, *color, *fill);
+                }
+                e.kind = plain;
+            }
+        }
+        let base = serde_json::to_value(&clean).unwrap();
+        assert!(base.get("requires").is_none(), "a plain bar needs nothing");
+        for key in [
+            "subdivisions",
+            "divisions_before_zero",
+            "label_position",
+            "unit_label",
+            "unit_label_position",
+            "decimals",
+            "label_size",
+            "\"fit\"",
+        ] {
+            assert!(!base["layouts"].to_string().contains(key), "nor writes {key}");
+        }
+        let layout = &saved["layouts"][0];
+        for (id, params, required) in [
+            ("layout.addElement", json!({"kind": "scaleBar", "subdivisions": 4}), true),
+            ("layout.update", json!({"element": 2, "labelPosition": "below"}), true),
+            ("layout.update", json!({"element": 2, "unitLabel": ""}), true),
+            ("layout.update", json!({"element": 2, "fit": "adjustWidth"}), true),
+            ("layout.update", json!({"element": 2, "labelSize": 9}), true),
+            ("layout.update", json!({"element": 2, "unitLabel": null}), false),
+            (
+                "layout.update",
+                json!({"element": 2, "subdivisions": 1, "divisionsBeforeZero": 0, "labelPosition": "above", "unitLabelPosition": "afterLabels", "decimals": 0, "labelSize": 8, "fit": "adjustDivisionValue"}),
+                false,
+            ),
+            ("layout.update", json!({"element": 2, "divisions": 3}), false),
+            ("layout.import", json!({"text": layout.to_string()}), true),
+            ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
+            ("layout.import", json!({"path": "bars.rgislayout"}), false),
+        ] {
+            let script = format!("{id}= {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Bar", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Bar", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let expected = if required { json!(["layout-scale-bar-details"]) } else { Value::Null };
                 assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
             }
         }
