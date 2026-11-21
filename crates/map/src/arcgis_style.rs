@@ -54,8 +54,17 @@ impl Pictures<'_> {
     /// A picture marker's image as a picture, or the note saying why it is drawn as a circle.
     fn of(&mut self, s: &Value) -> Result<Picture, &'static str> {
         let Some(b64) = s.get("imageData").and_then(Value::as_str).map(str::trim).filter(|b| !b.is_empty()) else {
-            return Err("picture markers with no image, drawn as circles");
+            // RustGIS doesn't fetch a marker's image from its `url`.
+            return Err(if s.get("url").and_then(Value::as_str).is_some_and(|u| !u.trim().is_empty()) {
+                "picture markers whose image is only at a URL, drawn as circles"
+            } else {
+                "picture markers with no image, drawn as circles"
+            });
         };
+        // Looked up first, so that classes sharing an image don't each copy it.
+        if let Some(met) = self.met.get(b64) {
+            return *met;
+        }
         *self.met.entry(b64.to_owned()).or_insert_with(|| {
             // Too long to keep is said before decoding it. What is decoded is bounded by the
             // description's own cap (`DESCRIPTION_MAX`, 4 MiB), as `layer.marker` decodes one.
@@ -475,9 +484,13 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
             match pictures.of(s) {
                 // Sized by its width, as a picture marker is: its height follows the image's own
                 // proportion, which a service draws its symbol at. Without a width above 0, its
-                // height stands in.
+                // height stands in, said: RustGIS doesn't know the image's proportion here, so
+                // one not square is drawn that wide, not that tall.
                 Ok(p) => {
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
+                    if !wide {
+                        notes.add("picture markers with no width, drawn as wide as their height");
+                    }
                     let size = size(s.get(if wide { "width" } else { "height" }), base.size, notes);
                     return Some((Symbol { fill, size, marker: Marker::Picture(p), ..base }, None));
                 }
@@ -740,8 +753,10 @@ mod tests {
         for width in [json!(null), json!(0)] {
             let info =
                 json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": image, "width": width, "height": 18}}});
-            let Renderer::Single(s) = styled(GeometryType::Point, info).0.renderer else { panic!("a single symbol") };
+            let (l, notes) = styled(GeometryType::Point, info);
+            let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
             assert_eq!(s.size, 18.0, "width {width}");
+            assert_eq!(notes.text(), "picture markers with no width, drawn as wide as their height");
         }
         // Turned or shifted, it is drawn upright on its point, said.
         let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": image, "width": 15, "angle": 30}}});
@@ -769,6 +784,9 @@ mod tests {
         ] {
             assert_eq!(circle(json!({"type": "esriPMS", "imageData": image, "width": 15, "height": 18})), why);
         }
+        // Its image only at its `url`, which RustGIS doesn't fetch.
+        let url = json!({"type": "esriPMS", "url": "4d1f6b3c", "width": 15, "height": 18});
+        assert_eq!(circle(url), "picture markers whose image is only at a URL, drawn as circles");
         assert_eq!(Picture::kept(gif), None, "an image that isn't drawn isn't kept");
     }
 
@@ -1032,7 +1050,7 @@ mod tests {
         assert_eq!(fills, [Ramp::default().pick(0, 2), Ramp::default().pick(1, 2)]);
         assert_ne!(fills.first(), fills.get(1), "the classes tell apart");
         assert!(symbols.iter().all(|s| s.marker == Marker::Circle && s.size == 12.0));
-        assert_eq!(notes.text(), "picture markers with no image, drawn as circles (2 symbols)");
+        assert_eq!(notes.text(), "picture markers whose image is only at a URL, drawn as circles (2 symbols)");
     }
 
     #[test]
