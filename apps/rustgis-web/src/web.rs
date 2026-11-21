@@ -516,10 +516,12 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
         }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
             read.push((name, bytes));
-        } else if mark.starts_with(rustgis_ui_egui::DXF_PICK) {
-            // A failed read completes this request just like cancelling its picker.
-            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.to_string(), Vec::new()));
         }
+    }
+    // A request something waits on (Import DXF, a marker's «Image…») with nothing read, its
+    // picker cancelled or its file refused or unread, is answered empty: it stops waiting.
+    if (mark.starts_with(rustgis_ui_egui::DXF_PICK) || mark.starts_with(rustgis_ui_egui::MARKER_PICK)) && read.is_empty() {
+        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.to_string(), Vec::new()));
     }
     let (read, problems) = rustgis_ui_egui::rustgis_engine::data::io::gather_shapefiles(read);
     notes.lock().unwrap_or_else(|e| e.into_inner()).extend(problems.into_iter().map(|p| (p, true)));
@@ -1371,13 +1373,9 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             };
             // Data may come several files at once (photos gather in one layer).
             let many = matches!(purpose, "data" | "shapefile");
-            let dxf = dxf.is_some();
             wasm_bindgen_futures::spawn_local(async move {
                 let files: Vec<rfd::FileHandle> =
                     if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
-                if dxf && files.is_empty() {
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.clone(), Vec::new()));
-                }
                 read_together(files.iter().map(|f| f.inner().clone()).collect(), &mark, &inbox, notes).await;
                 ctx.request_repaint();
             });
