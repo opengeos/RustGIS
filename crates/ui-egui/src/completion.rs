@@ -510,6 +510,7 @@ impl<O: Offered> List<O> {
                 pointer_leads,
                 scroll,
                 false,
+                room,
                 |item| icon(&offer, item),
                 |_| None,
                 |ui, item, width| {
@@ -544,6 +545,17 @@ struct Scroll {
     /// The widest row, worked out once: with only the rows in view drawn, theirs alone would
     /// widen and narrow the list as it scrolls.
     widest: Option<f32>,
+    /// Whether an item's help was drawn: from then on the help takes its full width, whatever its
+    /// text, also for an item with none. Sized to each help, the popup would move sideways by its
+    /// width at the screen's right edge (`around`), a row out from under the pointer (#2618). Not
+    /// before: a list none of whose items has a help stays as narrow as its rows. A fixed width,
+    /// not the widest drawn so far: the rows fill the popup's last width, so that would only grow.
+    helped: bool,
+    /// The tallest the list and its help have been, for the help's width (the layout they were
+    /// in, which a resized window changes): an item with a shorter help, or none, doesn't shorten
+    /// the popup (moving it, when it's above the cursor). Kept up to the popup's room: past it, the
+    /// popup's own scroll would scroll down to empty space, the help out of view.
+    tallest: Option<(f32, f32)>,
 }
 
 /// What a list's rows gave this frame.
@@ -575,7 +587,8 @@ fn widest(ui: &Ui, items: &[String], icon: impl Fn(&str) -> Option<&'static str>
 /// and beside them, in the room the screen leaves (under them when that's too narrow to read: a
 /// narrow window), the `help` on the item under the pointer when `pointer_leads`, else on the
 /// highlighted one. Scrolls to the highlighted one when it changes (`scroll`); with `focus`, the
-/// highlighted row takes the focus too.
+/// highlighted row takes the focus too. While the list is the same, the popup doesn't move as the
+/// help changes (`Scroll::helped`, `Scroll::tallest`); its content scrolls past `room` high.
 fn rows(
     ui: &mut Ui,
     items: &[String],
@@ -583,13 +596,15 @@ fn rows(
     pointer_leads: bool,
     scroll: &mut Scroll,
     focus: bool,
+    room: f32,
     icon: impl Fn(&str) -> Option<&'static str>,
     describe: impl Fn(usize) -> Option<String>,
     help: impl FnOnce(&mut Ui, &str, f32),
 ) -> Rows {
     let (layout, help_width) = help_layout(ui.ctx().content_rect().width());
+    let beside = layout.main_dir() == egui::Direction::LeftToRight;
     let mut out = Rows::default();
-    ui.with_layout(layout, |ui| {
+    let laid = ui.with_layout(layout, |ui| {
         let mut hovered = None;
         let row = row_height(ui);
         let spacing = ui.spacing().item_spacing.y;
@@ -658,9 +673,30 @@ fn rows(
         // The help follows the item under the pointer, else the highlighted one.
         let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
         if let Some(item) = items.get(shown) {
-            help(ui, item, help_width);
+            // Its full width, whatever its text (`Scroll::helped`), padded after it: beside the
+            // list, `set_min_width` in a left-to-right layout counts from the cursor, not from the
+            // help's left edge. The gap the help leaves before it counts there too.
+            let drawn = ui.scope(|ui| help(ui, item, help_width)).response.rect.width();
+            scroll.helped |= drawn > 0.0;
+            if scroll.helped {
+                if beside {
+                    ui.add_space((GAP + help_width - drawn).max(0.0));
+                } else {
+                    ui.set_min_width(help_width);
+                }
+            }
         }
     });
+    // The tallest it has been, up to its `room` (`Scroll::tallest`), padded below in the popup's
+    // own column: `set_min_height` in a top-down layout (the help under the list) counts from the
+    // cursor, not from the top.
+    let now = laid.response.rect.height();
+    let tallest = match scroll.tallest {
+        Some((width, tallest)) if width == help_width => tallest.max(now),
+        _ => now,
+    };
+    scroll.tallest = Some((help_width, tallest));
+    ui.add_space((tallest.min(room) - now).max(0.0));
     out
 }
 
@@ -802,7 +838,8 @@ pub(crate) fn menu(
         let (selected, pointer_leads) = (s.selected.min(n - 1), s.pointer_leads);
         let scroll = &mut s.scroll;
         let mut got = Rows::default();
-        let drawn = popup(ui, id, corner, room, |ui| got = rows(ui, &items, selected, pointer_leads, scroll, follow, icon, describe, help));
+        let drawn =
+            popup(ui, id, corner, room, |ui| got = rows(ui, &items, selected, pointer_leads, scroll, follow, room, icon, describe, help));
         s.drawn = Some(drawn);
         accepted = got.clicked;
         s.row_focused = got.focused.is_some();
@@ -993,6 +1030,75 @@ mod tests {
         assert!(list.contains(egui::pos2(list.center().x, top(&h, "item15") + row / 2.0)), "scrolled to the highlight");
         let scrolled = h.ctx.data(|d| d.get_temp::<super::MenuState>(id)).and_then(|s| s.scroll.to);
         assert_eq!(scrolled, Some(15), "scrolled to the highlight once");
+    }
+
+    /// A button's list at the window's right edge, the help of each item `helps` gives drawn
+    /// beside it as a box's is (after a gap): where the popup is drawn as ↓ moves the highlight
+    /// from the first item to the last.
+    fn popups_by_the_right_edge(width: f32, helps: Vec<Option<String>>) -> Vec<egui::Rect> {
+        use egui_kittest::kittest::Queryable;
+        let items: Vec<String> = (0..helps.len()).map(|i| format!("item{i:02}")).collect();
+        let n = items.len();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+            move |ui, id: &mut Option<egui::Id>| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    let help = |ui: &mut egui::Ui, item: &str, width: f32| {
+                        let Some(text) = items.iter().position(|i| i == item).and_then(|i| helps[i].as_ref()) else { return };
+                        ui.add_space(super::GAP);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(width);
+                            ui.label(text);
+                        });
+                    };
+                    let (button, _) = super::menu(ui, "Open", || items.clone(), |_| None, |_| None, help);
+                    *id = Some(button.id.with("menu"));
+                });
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        let id = h.state().unwrap();
+        let drawn = |h: &egui_kittest::Harness<'_, Option<egui::Id>>| {
+            h.ctx.data(|d| d.get_temp::<super::MenuState>(id)).and_then(|s| s.drawn).map(|(r, _)| r).unwrap()
+        };
+        let mut out = vec![drawn(&h)];
+        for _ in 1..n {
+            h.key_press(egui::Key::ArrowDown);
+            h.run();
+            out.push(drawn(&h));
+        }
+        out
+    }
+
+    /// By the window's right edge, a list whose items have helps of other widths and heights stays
+    /// put as the highlight moves: the help takes its full width, so the popup's left edge doesn't
+    /// move, and the popup doesn't shrink back for a shorter help, so no row moves out from under
+    /// the pointer (#2618).
+    /// The same in a window too narrow for the help beside the list, the help under it.
+    #[test]
+    fn a_list_by_the_right_edge_stays_put_as_its_help_changes() {
+        let long = "a long help that wraps over several lines ".repeat(8);
+        for width in [1000.0, 380.0] {
+            let drawn = popups_by_the_right_edge(width, vec![Some("short".into()), Some(long.clone()), Some("short".into()), None]);
+            let left = drawn[0].left();
+            for d in &drawn {
+                assert!((d.left() - left).abs() < 0.5, "{width}: the same left edge: {drawn:?}");
+            }
+            assert!(drawn[1].height() > drawn[0].height(), "{width}: taller for the longer help: {drawn:?}");
+            assert!((drawn[2].height() - drawn[1].height()).abs() < 0.5, "{width}: not shrunk back: {drawn:?}");
+            assert!((drawn[3].height() - drawn[1].height()).abs() < 0.5, "{width}: not shrunk for no help: {drawn:?}");
+            assert!(drawn[0].right() <= width + 0.5, "{width}: on screen: {drawn:?}");
+        }
+    }
+
+    /// A list none of whose items has a help keeps no room for one: it stays as narrow as its rows.
+    #[test]
+    fn a_list_without_help_stays_narrow() {
+        let drawn = popups_by_the_right_edge(1000.0, vec![None, None]);
+        let width = drawn[0].width();
+        assert!(width < super::MIN_WIDTH + super::GAP + super::HELP_MIN_WIDTH, "no room for a help: {width}");
     }
 
     /// A screen reader focuses a row and then, in a later frame, activates it: the list stays open
@@ -1193,7 +1299,7 @@ mod tests {
                         drawn.borrow_mut().push(item.to_string());
                         None
                     };
-                    super::rows(ui, &items, selected, false, &mut scroll, false, icon, |_| None, |_, _, _| {});
+                    super::rows(ui, &items, selected, false, &mut scroll, false, f32::INFINITY, icon, |_| None, |_, _, _| {});
                 })
                 .textures_delta
                 .clear();
