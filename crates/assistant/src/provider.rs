@@ -7,6 +7,7 @@
 //! thread and the browser sends with its `fetch`.
 
 use crate::Error;
+use crate::attach::Picture;
 use rustgis_engine::data::secrets::{Secret, SecretError, SecretStore};
 use serde_json::{Map, Value, json};
 
@@ -619,10 +620,25 @@ fn images_message(rs: &[ToolResult], text: &str, image: impl Fn(&ToolImage) -> V
     (!parts.is_empty()).then(|| json!({"role": "user", "content": parts}))
 }
 
+/// A user turn's content in a provider's parts: each picture after a line naming it, then the
+/// text (left out when empty and there are pictures: providers refuse an empty text part).
+fn user_parts(text: &str, pictures: &[Picture], text_part: impl Fn(&str) -> Value, image_part: impl Fn(&Picture) -> Value) -> Vec<Value> {
+    let mut parts = Vec::new();
+    for (i, p) in pictures.iter().enumerate() {
+        parts.push(text_part(&format!("Picture {} the user attached: {} ({} × {})", i + 1, p.name, p.width, p.height)));
+        parts.push(image_part(p));
+    }
+    if !text.is_empty() || parts.is_empty() {
+        parts.push(text_part(text));
+    }
+    parts
+}
+
 /// One turn of the conversation, in no provider's format.
 #[derive(Clone, Debug)]
 pub enum Turn {
-    User(String),
+    /// The user's message, and the pictures they attached to it ([`crate::attach`]).
+    User(String, Vec<Picture>),
     Assistant {
         text: String,
         calls: Vec<ToolCall>,
@@ -674,6 +690,10 @@ pub const NOTE_TEMPLATES: &[&str] = &[
     "The connection failed; trying again in {seconds} s.",
     "The model sent an empty reply; ask again, or try another model.",
     "The model doesn't read images: the map's pictures go to it as their captions, and view_map is off for it.",
+    "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.",
+    "A message takes at most {most} pictures: {names} left out.",
+    "Attached {name}, sent at {size} (from {from}).",
+    "Attached {name} ({size}).",
     "Stopped after {steps} steps; say \"continue\" to go on.",
     "Stopped.",
 ];
@@ -1073,7 +1093,13 @@ fn openai_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
     let mut messages = vec![json!({"role": "system", "content": system})];
     for t in turns {
         match t {
-            Turn::User(text) => messages.push(json!({"role": "user", "content": text})),
+            Turn::User(text, pictures) if pictures.is_empty() => messages.push(json!({"role": "user", "content": text})),
+            Turn::User(text, pictures) => messages.push(json!({"role": "user", "content": user_parts(
+                text,
+                pictures,
+                |t| json!({"type": "text", "text": t}),
+                |p| json!({"type": "image_url", "image_url": {"url": p.data_url()}}),
+            )})),
             Turn::Assistant { native: Some((Api::OpenAi, m)), .. } => messages.push(m.clone()),
             Turn::Assistant { text, calls, .. } => {
                 let mut m = json!({"role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text) }});
@@ -1207,7 +1233,12 @@ fn responses_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDe
     let mut input = Vec::new();
     for t in turns {
         match t {
-            Turn::User(text) => input.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})),
+            Turn::User(text, pictures) => input.push(json!({"type": "message", "role": "user", "content": user_parts(
+                text,
+                pictures,
+                |t| json!({"type": "input_text", "text": t}),
+                |p| json!({"type": "input_image", "image_url": p.data_url()}),
+            )})),
             Turn::Assistant { native: Some((Api::Responses, items)), .. } => {
                 input.extend(items.as_array().cloned().unwrap_or_default());
             }
@@ -1435,7 +1466,15 @@ fn anthropic_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDe
     };
     for t in turns {
         match t {
-            Turn::User(text) => push("user", vec![json!({"type": "text", "text": text})]),
+            Turn::User(text, pictures) => push(
+                "user",
+                user_parts(
+                    text,
+                    pictures,
+                    |t| json!({"type": "text", "text": t}),
+                    |p| json!({"type": "image", "source": {"type": "base64", "media_type": p.mime, "data": p.base64()}}),
+                ),
+            ),
             Turn::Assistant { native: Some((Api::Anthropic, content)), .. } => {
                 push("assistant", content.as_array().cloned().unwrap_or_default());
             }
@@ -1569,7 +1608,12 @@ fn gemini_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
     let mut contents = Vec::new();
     for t in turns {
         match t {
-            Turn::User(text) => contents.push(json!({"role": "user", "parts": [{"text": text}]})),
+            Turn::User(text, pictures) => contents.push(json!({"role": "user", "parts": user_parts(
+                text,
+                pictures,
+                |t| json!({"text": t}),
+                |p| json!({"inlineData": {"mimeType": p.mime, "data": p.base64()}}),
+            )})),
             Turn::Assistant { native: Some((Api::Gemini, c)), .. } => contents.push(c.clone()),
             Turn::Assistant { text, calls, .. } => {
                 let mut parts = Vec::new();

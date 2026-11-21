@@ -132,6 +132,8 @@ enum Problem {
     ScriptTooLarge { name: String },
     /// The image picked for a marker's «Image…» is over `MARKER_FILE_MAX_BYTES`.
     MarkerTooLarge,
+    /// The picture `name`, picked for the AI Assistant's message, is over `ASSISTANT_FILE_MAX_BYTES`.
+    PictureTooLarge { name: String },
     /// The file `name` is over the size a pick reads into memory ([`PICK_MAX_BYTES`]), by
     /// itself or `together` with the files picked with it and already read.
     TooLarge { name: String, together: bool },
@@ -220,6 +222,7 @@ impl<P: Phone> App<P> {
                 }
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
                 Problem::MarkerTooLarge => rustgis_ui_egui::marker_file_too_large().to_string(),
+                Problem::PictureTooLarge { name } => i18n::fmt("{file}: a picture can be at most 20 MiB", &[("file", &name)]),
                 Problem::TooLarge { name, together } => {
                     let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {
@@ -368,6 +371,8 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
             say(Problem::ScriptTooLarge { name });
         } else if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && size > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as u64 {
             say(Problem::MarkerTooLarge);
+        } else if mark == rustgis_ui_egui::ASSISTANT_PICK && size > rustgis_ui_egui::ASSISTANT_FILE_MAX_BYTES as u64 {
+            say(Problem::PictureTooLarge { name });
         } else if held.saturating_add(size) > max {
             // Refused before it is read: no more than the cap is held in memory at once, in
             // one file or in the files picked together.

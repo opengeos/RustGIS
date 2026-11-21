@@ -510,6 +510,11 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
             notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
             continue;
         }
+        if mark == rustgis_ui_egui::ASSISTANT_PICK && file.size() > rustgis_ui_egui::ASSISTANT_FILE_MAX_BYTES as f64 {
+            let text = rustgis_ui_egui::i18n::fmt("{file}: a picture can be at most 20 MiB", &[("file", &name)]);
+            notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
+            continue;
+        }
         if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && file.size() > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as f64 {
             notes.lock().unwrap_or_else(|e| e.into_inner()).push((rustgis_ui_egui::marker_file_too_large().into(), true));
             continue;
@@ -1315,6 +1320,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                     ("script", _) => rustgis_ui_egui::SCRIPT_PICK,
                     ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
                     ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
+                    ("assistantPicture", _) => rustgis_ui_egui::ASSISTANT_PICK,
                     (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
                     _ => "",
                 }
@@ -1366,13 +1372,17 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 )
             } else if dxf.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
+            } else if purpose == "assistantPicture" {
+                rfd::AsyncFileDialog::new()
+                    .add_filter(rustgis_ui_egui::tl!("Pictures"), rustgis_ui_egui::rustgis_assistant::attach::EXTENSIONS)
             } else if purpose == "picture" || marker.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Pictures"), &["png", "jpg", "jpeg"])
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };
-            // Data may come several files at once (photos gather in one layer).
-            let many = matches!(purpose, "data" | "shapefile");
+            // Data may come several files at once (photos gather in one layer), as may the
+            // assistant's pictures.
+            let many = matches!(purpose, "data" | "shapefile" | "assistantPicture");
             wasm_bindgen_futures::spawn_local(async move {
                 let files: Vec<rfd::FileHandle> =
                     if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
