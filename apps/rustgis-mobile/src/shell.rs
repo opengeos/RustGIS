@@ -298,8 +298,7 @@ impl<P: Phone> App<P> {
         }
         let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
         let unread: Vec<(String, PathBuf)> = reads.iter().flat_map(|(_, files)| files.clone()).collect();
-        let retire: Vec<_> =
-            reads.iter().filter(|(purpose, _)| purpose.starts_with("dxf:")).map(|(purpose, _)| crate::mark(purpose)).collect();
+        let retire: Vec<_> = reads.iter().filter(|(purpose, _)| waits(purpose)).map(|(purpose, _)| crate::mark(purpose)).collect();
         let started = start_reader(&self.inbox, &self.reading, retire, || {
             std::thread::Builder::new().name("picked files".into()).spawn(move || {
                 let mut held = 0u64;
@@ -339,7 +338,8 @@ fn start_reader<T>(
     }
 }
 
-/// A worker that cannot start answers its DXF requests just as a cancelled picker does.
+/// A worker that cannot start answers its waiting requests ([`waits`]) just as a cancelled
+/// picker does.
 fn retire_unread(inbox: &Inbox, marks: Vec<String>) {
     inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(marks.into_iter().map(|mark| (mark, Vec::new())));
 }
@@ -387,8 +387,9 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
     for text in found {
         say(Problem::Shapefile(text));
     }
-    // A DXF request with nothing read is ended, as a cancelled one is: Import DXF stops waiting.
-    if mark.starts_with(rustgis_ui_egui::DXF_PICK) && read.is_empty() {
+    // A waiting request with nothing read is ended, as a cancelled one is: Import DXF, or a
+    // marker's «Image…», stops waiting.
+    if waits(purpose) && read.is_empty() {
         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.clone(), Vec::new()));
     }
     inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
@@ -404,10 +405,16 @@ fn remove_copy(path: &Path) {
     }
 }
 
+/// Whether a request for files (`purpose`) has something waiting on its answer, which an empty
+/// one ends: Import DXF (`dxf:<id>`) or a marker's «Image…» (`marker:<id>`).
+fn waits(purpose: &str) -> bool {
+    purpose.starts_with("dxf:") || purpose.starts_with("marker:")
+}
+
 /// Ends a request for files that got none (`purpose`): a dialog or marker waiting for its answer
 /// (Import DXF, a marker's «Image…») is answered empty in `inbox`, and stops waiting.
 fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
-    if let Some(purpose) = purpose.filter(|p| p.starts_with("dxf:") || p.starts_with("marker:")) {
+    if let Some(purpose) = purpose.filter(|p| waits(p)) {
         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
     }
 }
@@ -814,7 +821,8 @@ mod tests {
     }
 
     /// An image picked for a marker over the marker's limit is refused before it is read; one
-    /// within it reaches the inbox marked for the marker.
+    /// within it reaches the inbox marked for the marker, and a pick with nothing read ends the
+    /// marker's wait.
     #[test]
     fn a_marker_image_over_the_limit_is_refused_before_it_is_read() {
         let dir = std::env::temp_dir().join(format!("rustgis-mobile-marker-{}", std::process::id()));
@@ -828,6 +836,13 @@ mod tests {
         assert!(matches!(problems.lock().unwrap().as_slice(), [Problem::MarkerTooLarge]));
         let names: Vec<String> = inbox.lock().unwrap().iter().map(|(n, _)| n.clone()).collect();
         assert_eq!(names, [format!("{}1:small.png", rustgis_ui_egui::MARKER_PICK)]);
+        // Only the large one: nothing read, so the request is answered empty and stops waiting.
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big2.png");
+        std::fs::write(&big, vec![0u8; rustgis_ui_egui::MARKER_FILE_MAX_BYTES + 1]).unwrap();
+        let inbox = Inbox::default();
+        read_batch("marker:2", vec![("big2.png".to_string(), big)], &inbox, &problems, &mut 0);
+        assert_eq!(*inbox.lock().unwrap(), vec![(format!("{}2:", rustgis_ui_egui::MARKER_PICK), Vec::<u8>::new())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
