@@ -1459,15 +1459,19 @@ fn work_system(
 ) -> Crs {
     use rustgis_analysis::ParamKind as K;
     let Some(spec) = spec.filter(|t| t.works_in_own_system()) else { return Crs::LonLat };
-    // The tool's first layer parameter, as it names it: a table given by its number (read
-    // unconverted, [`Inputs::table`]) or a layer named under another key (Join Field's `input`)
-    // leaves the run in longitude/latitude, as before.
+    // The tool's first layer parameter, under its name or one of the names it also accepts
+    // (Join Field's `input`), taken as the tool takes it: the first that isn't blank. A table
+    // given by its number (read unconverted, [`Inputs::table`]) leaves the run in
+    // longitude/latitude, as before.
     let Some(kind) =
         spec.params.iter().find(|p| matches!(p.kind, K::Layer | K::PolygonLayer | K::PointLayer | K::VectorLayer | K::VectorLayers))
     else {
         return Crs::LonLat;
     };
-    let value = params.get(kind.name).unwrap_or(&Value::Null);
+    let aliases = rustgis_analysis::param_aliases(spec, kind.name);
+    let keys: &[&str] = if aliases.is_empty() { std::slice::from_ref(&kind.name) } else { aliases };
+    let blank = |v: &&Value| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty());
+    let value = keys.iter().filter_map(|k| params.get(*k)).find(|v| !blank(v)).unwrap_or(&Value::Null);
     let first = if kind.kind == K::VectorLayers {
         rustgis_analysis::layer_list(value).ok().and_then(|v| v.first().copied())
     } else {

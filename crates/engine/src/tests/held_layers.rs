@@ -1508,4 +1508,9 @@ fn a_table_joins_onto_a_held_layer() {
     assert_eq!(owner(&ss[1]).first().map(String::as_str), Some("owner 0"));
     assert_eq!(ss[1].map().layer_by_name("Owned").unwrap().dataset.coord_crs(), UTM);
     assert_eq!(bits(&held_coords(&ss[1], "Owned")), bits(&held_coords(&ss[1], "Parcels")));
+    // Named under a name Join Field also accepts for its target, the layer decides the system too.
+    let p = json!({"tool": "joinField", "params": {"input": "Parcels", "targetField": "n", "join": "Owners", "joinField": "n", "output": "Owned_2"}});
+    ss[1].run("gp.run", &p).unwrap();
+    assert_eq!(ss[1].map().layer_by_name("Owned_2").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&ss[1], "Owned_2")), bits(&held_coords(&ss[1], "Parcels")));
 }
