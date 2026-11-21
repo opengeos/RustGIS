@@ -484,12 +484,16 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
             match pictures.of(s) {
                 // Sized by its width, as a picture marker is: its height follows the image's own
                 // proportion, which a service draws its symbol at. Without a width above 0, its
-                // height stands in, said: RustGIS doesn't know the image's proportion here, so
-                // one not square is drawn that wide, not that tall.
+                // height stands in as its width, said, since an image that isn't square is then
+                // drawn that wide, not that tall; with neither, RustGIS's size does.
                 Ok(p) => {
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     if !wide {
-                        notes.add("picture markers with no width, drawn as wide as their height");
+                        notes.add(if s.get("height").is_some_and(|h| !h.is_null()) {
+                            "picture markers with no width, drawn with their height as their width"
+                        } else {
+                            "picture markers with no size, drawn at RustGIS's"
+                        });
                     }
                     let size = size(s.get(if wide { "width" } else { "height" }), base.size, notes);
                     return Some((Symbol { fill, size, marker: Marker::Picture(p), ..base }, None));
@@ -756,8 +760,15 @@ mod tests {
             let (l, notes) = styled(GeometryType::Point, info);
             let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
             assert_eq!(s.size, 18.0, "width {width}");
-            assert_eq!(notes.text(), "picture markers with no width, drawn as wide as their height");
+            assert_eq!(notes.text(), "picture markers with no width, drawn with their height as their width");
         }
+        // With neither, RustGIS's size.
+        let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": image}}});
+        let (l, notes) = styled(GeometryType::Point, info);
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        let Renderer::Single(base) = layer(GeometryType::Point).renderer else { panic!("a single symbol") };
+        assert_eq!(s.size, base.size);
+        assert_eq!(notes.text(), "picture markers with no size, drawn at RustGIS's");
         // Turned or shifted, it is drawn upright on its point, said.
         let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": image, "width": 15, "angle": 30}}});
         let (l, notes) = styled(GeometryType::Point, info);
