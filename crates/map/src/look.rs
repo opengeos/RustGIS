@@ -251,6 +251,8 @@ impl MapLook {
             graticule,
             graticule_type,
             graticule_crs,
+            graticule_on_top,
+            graticule_color,
             projection,
             popup_mode,
             label_display,
@@ -281,6 +283,8 @@ impl MapLook {
                 graticule: *graticule,
                 graticule_type: *graticule_type,
                 graticule_crs: graticule_crs.clone(),
+                graticule_on_top: *graticule_on_top,
+                graticule_color: *graticule_color,
                 projection: projection.clone(),
                 popup_mode: *popup_mode,
                 label_display: *label_display,
@@ -319,6 +323,8 @@ impl MapLook {
             graticule,
             graticule_type,
             graticule_crs,
+            graticule_on_top,
+            graticule_color,
             projection,
             popup_mode: _,
             label_display,
@@ -345,6 +351,8 @@ impl MapLook {
             && *graticule == map.graticule
             && *graticule_type == map.graticule_type
             && *graticule_crs == map.graticule_crs
+            && *graticule_on_top == map.graticule_on_top
+            && *graticule_color == map.graticule_color
             && *projection == map.projection
             && *label_display == map.label_display
             && *label_lock == map.label_lock
@@ -509,6 +517,13 @@ mod tests {
         assert!(!grouped.same(&MapLook::of(&map)));
         map.graticule = !map.graticule;
         assert!(!before.same(&MapLook::of(&map)));
+        // The grid drawn over the layers, or in a color of its own, draws differently too.
+        let gridded = MapLook::of(&map);
+        map.graticule_on_top = !map.graticule_on_top;
+        assert!(!gridded.same(&MapLook::of(&map)), "the grid over the layers");
+        let on_top = MapLook::of(&map);
+        map.graticule_color = Some(crate::Rgba::rgb(51, 102, 153));
+        assert!(!on_top.same(&MapLook::of(&map)), "the grid's own color");
         // The blank basemap's paper colour (#2532) is the map's background.
         let white = MapLook::of(&map);
         map.paper = Some(Rgba([241, 234, 223, 255]));
