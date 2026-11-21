@@ -4469,7 +4469,7 @@ fn removing_a_perpendicular_label_line_says_so() {
     s.run("layer.remove", &json!({"layer": "Rivers"})).unwrap();
     let notes = said(&s, mark);
     assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!(notes[0].contains("'Rivers' was removed"), "{notes:?}");
+    assert!(notes[0].contains("1 perpendicular labels' line layer(s) 'Rivers' removed"), "{notes:?}");
     let c = s.map().layer_by_name("Cities").unwrap().labels.default.clone();
     assert_eq!((c.placement, c.square_to.unwrap().layer.as_str()), (crate::map::LabelPlacement::Perpendicular, "Rivers"));
 }
@@ -4496,6 +4496,62 @@ fn opening_a_project_says_when_a_perpendicular_line_is_dropped() {
     let notes = said(&damaged);
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].contains("2 perpendicular label line setting(s)"), "{notes:?}");
+}
+
+/// `labels.placement`'s guide (#2262): a line layer by name and a field both layers have, for
+/// point and polygon labels; followed through a rename, said when removed, cleared by null; a
+/// project's guide that doesn't read dropped and said once.
+#[test]
+fn labels_are_guided_along_a_line_layer() {
+    let mut s = world();
+    let guide = |s: &Session| s.map().layer_by_name("Lakes").unwrap().labels.default.guide.clone();
+    let place = |s: &mut Session, layer: &str, g: Value| s.run("labels.placement", &json!({"layer": layer, "guide": g}));
+    assert!(place(&mut s, "Rivers", json!({"layer": "Rivers"})).is_err(), "a line's label follows its own line");
+    assert!(place(&mut s, "Lakes", json!({"layer": "Countries"})).is_err(), "no lines");
+    assert!(place(&mut s, "Lakes", json!({"layer": "Nowhere"})).is_err());
+    assert!(place(&mut s, "Lakes", json!({"layer": "Rivers", "field": "nowhere"})).is_err());
+    assert!(place(&mut s, "Lakes", json!({"field": "name"})).is_err());
+    place(&mut s, "Lakes", json!({"layer": "rivers", "field": "name"})).unwrap();
+    assert_eq!(guide(&s), Some(crate::map::LabelGuide { layer: "Rivers".into(), field: Some("name".into()) }));
+    place(&mut s, "Cities", json!({"layer": "Rivers", "field": ""})).unwrap();
+    let square = json!({"layer": "Cities", "position": "perpendicular", "to": {"layer": "Rivers"}});
+    assert!(s.run("labels.placement", &square).is_err(), "square to a line or along a guide, not both");
+    let back: crate::map::LabelClass =
+        serde_json::from_value(serde_json::to_value(&s.map().layer_by_name("Lakes").unwrap().labels.default).unwrap()).unwrap();
+    assert_eq!(back.guide, guide(&s));
+    s.run("layer.rename", &json!({"layer": "Rivers", "name": "Waters"})).unwrap();
+    assert_eq!(guide(&s).map(|g| g.layer), Some("Waters".into()));
+    let mark = s.notices_given();
+    s.run("layer.remove", &json!({"layer": "Waters"})).unwrap();
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("guide layer")).map(|n| n.text.clone()).collect();
+    assert!(said.len() == 1 && said[0].contains("1 guide layer(s) 'Waters' removed"), "{said:?}");
+    place(&mut s, "Lakes", Value::Null).unwrap();
+    assert_eq!(guide(&s), None);
+    let said = |v: &Value| {
+        let s = Session::new(Project::from_json(&v.to_string()).unwrap());
+        s.notices.iter().filter(|n| n.text.contains("label guide")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let clean: Value = serde_json::to_value(&world().project).unwrap();
+    let mut fine = clean.clone();
+    // (Spaces round its layer's name trimmed, as the command keeps it.)
+    fine["maps"][0]["layers"][0]["labels"]["guide"] = json!({"layer": " Rivers ", "field": "name"});
+    assert!(said(&clean).is_empty() && said(&fine).is_empty());
+    let read = Project::from_json(&fine.to_string()).unwrap();
+    assert_eq!(read.maps[0].layers[0].labels.default.guide.as_ref().map(|g| g.layer.as_str()), Some("Rivers"));
+    let mut damaged = clean.clone();
+    damaged["maps"][0]["layers"][0]["labels"]["guide"] = json!({"layer": ""});
+    damaged["maps"][0]["layers"][1]["labels"]["guide"] = json!({"layer": "Rivers", "field": 3});
+    assert_eq!(Project::from_json(&damaged.to_string()).unwrap().maps[0].layers[1].labels.default.guide, None);
+    let notes = said(&damaged);
+    assert!(notes.len() == 1 && notes[0].contains("2 label guide setting(s)"), "{notes:?}");
+    // A saved guided label (`label_guide.rgis`) reads back as saved, saying nothing.
+    let mut saved = Project::from_json(include_str!("../../../schema/fixtures/label_guide.rgis")).unwrap();
+    let class = &saved.maps[0].layers[0].labels.default;
+    assert_eq!(class.guide, Some(crate::map::LabelGuide { layer: "rios".into(), field: Some("nome".into()) }));
+    assert!(saved.take_read_notices(&crate::project::ALL_PARTS).is_empty());
+    // Saved, it requires `label-guide`, which an older reader refuses rather than drop.
+    assert_eq!(serde_json::to_value(&saved).unwrap()["requires"], json!(["label-guide"]));
+    assert!(clean.get("requires").is_none());
 }
 
 #[test]

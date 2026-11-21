@@ -18,6 +18,7 @@ pub mod fonts;
 mod glyphs;
 pub mod gpu_scene;
 mod gradient_fill;
+mod guide_labels;
 mod label_places;
 pub mod layout;
 mod line_labels;
@@ -4457,6 +4458,8 @@ fn render_frame(
     // Of those held in another system, the ids, noted read once a label is squared to them.
     let mut square_held = std::collections::HashMap::new();
     let square_lines = square_lines(map, &ctx, &flat, &mut square_held);
+    // And the lines labels are curved along (#2262).
+    let guide_lines = guide_lines(map, &ctx, &flat, &key, scale, distance);
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..n_layers).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -5312,11 +5315,12 @@ fn render_frame(
                             && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
                         // A polygon's label curved along its centre line (#2262): its text unwrapped,
                         // kept for that; where it doesn't fit, placed and wrapped as `Auto`.
-                        let mut unwrapped = (class.placement == LabelPlacement::Curved
-                            && matches!(g, Geometry::Polygon(_))
-                            && point.is_some()
-                            && moved.is_none()
-                            && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none())
+                        // So is a point's or a polygon's curved along its guide line (#2262).
+                        let curvable =
+                            point.is_some() && moved.is_none() && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
+                        let guided = class.guide.as_ref().filter(|_| curvable && (is_point || matches!(g, Geometry::Polygon(_))));
+                        let mut unwrapped = (curvable
+                            && (guided.is_some() || (class.placement == LabelPlacement::Curved && matches!(g, Geometry::Polygon(_)))))
                         .then(|| raw.clone());
                         let mut text =
                             if curving || (class.wrap_char.is_none() && class.wrap_length == 0) { raw } else { class.wrap(&raw) };
@@ -5593,7 +5597,47 @@ fn render_frame(
                         {
                             squared = true;
                             places.push((0, lx, ly, Some(angle), Vec::new()));
+                        } else if let (Some(line_text), Some(guide)) = (unwrapped.as_deref(), guided)
+                            && let Some(lines) = guide_lines.get(&(guide.layer.to_ascii_lowercase(), guide.field.clone()))
+                            && let Some(((cx, cy), glyphs)) = {
+                                // Its feature's value in the guide's field, matching its line.
+                                let value = guide.field.as_deref().and_then(|f| ds_ptr.field_index(f)).map(|fi| ds_ptr.value(row, fi));
+                                let value = value.filter(|v| !v.is_null()).map(|v| v.to_string());
+                                let near = match g {
+                                    Geometry::Polygon(polys) => {
+                                        // Its projected extent on the screen, cheaper than its
+                                        // outline, to look for a guide line near (on the flat map).
+                                        let within = globe.is_none().then(|| {
+                                            let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                                            [(e.min_x, e.min_y), (e.max_x, e.min_y), (e.min_x, e.max_y), (e.max_x, e.max_y)]
+                                                .into_iter()
+                                                .map(|(cx, cy)| ctx.view.to_screen(Coord::new(cx, cy)))
+                                                .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, (sx, sy)| {
+                                                    let (sx, sy) = (sx as f32, sy as f32);
+                                                    [b[0].min(sx), b[1].min(sy), b[2].max(sx), b[3].max(sy)]
+                                                })
+                                        });
+                                        guide_labels::Near::Polygon(within, Box::new(|| area_labels::screen_rings(ctx, polys)))
+                                    }
+                                    _ => guide_labels::Near::Point((x as f32, y as f32)),
+                                };
+                                guide_labels::glyphs(
+                                    lines,
+                                    value.as_deref(),
+                                    near,
+                                    line_text,
+                                    |c| text::measure_in(c, size, face),
+                                    spacing * 1.33,
+                                    size,
+                                )
+                            }
+                        {
+                            // On its line: no other places round its point.
+                            squared = true;
+                            places.push((0, cx, cy, None, glyphs));
+                            text = unwrapped.take().unwrap_or_default();
                         } else if let (Some(line_text), Geometry::Polygon(polys)) = (unwrapped.as_deref(), g)
+                            && class.placement == LabelPlacement::Curved
                             && let Some(((cx, cy), glyphs)) =
                                 area_labels::glyphs(ctx, polys, line_text, |c| text::measure_in(c, size, face), spacing * 1.33, size)
                         {
@@ -6486,6 +6530,129 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
         .max_by(|a, b| length(a).total_cmp(&length(b)))
 }
 
+/// A line in longitude and latitude on the screen: its runs, broken where a place doesn't project
+/// (on the globe, cut at the horizon as its stroke is).
+fn screen_pieces(ctx: &Ctx<'_>, flat: &rustgis_map::projection::Flat, part: &[Coord]) -> Vec<Vec<(f32, f32)>> {
+    match &ctx.globe {
+        Some(g) => globe_runs(g, part),
+        None => {
+            let points: Vec<Option<(f32, f32)>> =
+                part.iter().map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32))).collect();
+            points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
+        }
+    }
+}
+
+/// The lines of the guide layers ([`rustgis_map::LabelClass::guide`], #2262) of the label classes
+/// shown at `scale` and `distance`, keyed by layer name in ASCII lower case (as
+/// [`Map::layer_by_name`] matches names) and field, on the screen ([`guides_of`]). Worked out once
+/// a frame, before the layers are drawn (each layer is then borrowed to draw it). On the flat map
+/// a guide layer is read from its copy there as it is drawn (`key` names the projection): the
+/// projected one its drawing keeps, else a display copy of it at this scale, which the layer's
+/// budget for those bounds ([`rustgis_map::Layer::prepare_display`]). No full copy is made for a
+/// guide: a hidden layer has none, and one with neither is read point by point.
+fn guide_lines(
+    map: &mut Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+    key: &str,
+    scale: f64,
+    distance: f64,
+) -> std::collections::HashMap<(String, Option<String>), guide_labels::Guides> {
+    let shown = map.layers.iter().filter(|l| l.visible && l.labels.enabled).flat_map(|l| l.labels.in_order());
+    let mut wanted: Vec<(String, Option<String>)> = shown
+        .filter(|c| c.visible && c.in_range(scale, distance))
+        .filter_map(|c| c.guide.as_ref().map(|g| (g.layer.to_ascii_lowercase(), g.field.clone())))
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if ctx.globe.is_none() {
+        for (name, _) in &wanted {
+            if let Some(l) = map.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name))
+                && !l.is_cached(key)
+            {
+                // As its drawing asks for it, so that the two share it.
+                let complete = l.source.is_some();
+                l.prepare_display(flat, ctx.view.lod_tolerance(), complete);
+            }
+        }
+    }
+    let map = &*map;
+    wanted
+        .into_iter()
+        .map(|k| {
+            let guides = guides_of(map, ctx, flat, key, &k);
+            (k, guides)
+        })
+        .collect()
+}
+
+/// The lines of the guide layer `name` (shown or not) on the screen, their stretches in view
+/// ([`screen_pieces`], thinned as [`guide_labels::Guides`] keeps them), each with its value in
+/// `field`, read only for a line with a stretch in view. On the flat map, read from its copy there
+/// as drawn ([`guide_lines`]), a line whose extent is out of view is passed over by it: a frame
+/// costs a look at each line's extent and a pass over the vertices of those in view. Without such
+/// a copy (on the globe; a small layer, or one held in another system, not drawn), each vertex is
+/// projected, as for [`square_lines`]. What is kept is at most about 24 bytes a point of the
+/// stretches in view, which thinning bounds by their length on the screen, and dropped with the
+/// frame. A layer read in chunks from its source has none to hand.
+fn guides_of(
+    map: &Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+    key: &str,
+    (name, field): &(String, Option<String>),
+) -> guide_labels::Guides {
+    let mut guides = guide_labels::Guides::default();
+    let Some(layer) = map.layer_by_name(name) else { return guides };
+    // Read, even when it gives no lines (its system can't be converted).
+    note_held_read(layer);
+    let features = &layer.dataset.features;
+    let field = field.as_deref().and_then(|f| layer.dataset.field_index(f));
+    let (w, h) = (ctx.view.width as f32, ctx.view.height as f32);
+    let mut add = |row: usize, pieces: Vec<Vec<(f32, f32)>>| {
+        let mut value: Option<Option<String>> = None;
+        for piece in pieces {
+            for stretch in line_labels::in_view(piece.into_iter().map(Some), w, h) {
+                let v =
+                    value.get_or_insert_with(|| field.map(|fi| features.value(row, fi)).filter(|v| !v.is_null()).map(|v| v.to_string()));
+                guides.push(&stretch, v.as_deref());
+            }
+        }
+    };
+    let drawn = || match layer.is_cached(key) {
+        true => Some((layer.thinned_cache(ctx.view.lod_tolerance()), layer.projected_extents())),
+        false => layer.display_cache(),
+    };
+    if let Some((geoms, extents)) = ctx.globe.is_none().then(drawn).flatten() {
+        // A point the projection can't show is NaN in the copy, and breaks the line there.
+        let screen = |c: &Coord| c.is_finite().then(|| ctx.view.to_screen(*c)).map(|(x, y)| (x as f32, y as f32));
+        for (row, g) in geoms.iter().enumerate() {
+            if !extents.get(row).is_some_and(|e| e.intersects(&ctx.cull)) {
+                continue;
+            }
+            let Some(Geometry::Line(parts)) = g else { continue };
+            let pieces = parts
+                .iter()
+                .flat_map(|part| {
+                    let points: Vec<Option<(f32, f32)>> = part.iter().map(screen).collect();
+                    points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect::<Vec<_>>()
+                })
+                .collect();
+            add(row, pieces);
+        }
+        return guides;
+    }
+    // Read in longitude/latitude, as the lines labels are square to.
+    let Ok(to) = layer.dataset.lonlat_conversion() else { return guides };
+    for (row, r) in features.rows().enumerate() {
+        let Some(g) = r.geometry().and_then(|g| rustgis_data::Dataset::converted_to_lonlat(&to, g)) else { continue };
+        let Geometry::Line(parts) = &*g else { continue };
+        add(row, parts.iter().flat_map(|part| screen_pieces(ctx, flat, part)).collect());
+    }
+    guides
+}
+
 thread_local! {
     /// The layers held in another system that the drawing on this thread read beside drawing
     /// them (terrain water, block walls, the lines labels square to), which may be hidden; `None`
@@ -6587,17 +6754,7 @@ fn square_lines(
                     }
                     _ => part,
                 };
-                let pieces = match &ctx.globe {
-                    Some(g) => globe_runs(g, part),
-                    None => {
-                        let points: Vec<Option<(f32, f32)>> = part
-                            .iter()
-                            .map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32)))
-                            .collect();
-                        points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
-                    }
-                };
-                runs.extend(pieces.into_iter().filter_map(square_labels::Run::new));
+                runs.extend(screen_pieces(ctx, flat, part).into_iter().filter_map(square_labels::Run::new));
             }
         }
         out.insert(name, runs);
