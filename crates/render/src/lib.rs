@@ -762,11 +762,6 @@ fn outline_level_for(map_per_px: f64) -> usize {
     }
 }
 
-/// The built-in world outline in longitude/latitude, for the globe.
-fn world_lonlat() -> &'static Vec<Geometry> {
-    world_lonlat_of(sample_data::view())
-}
-
 /// The world outline in view `wv`, in longitude/latitude.
 fn world_lonlat_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     static W: [OnceLock<Vec<Geometry>>; sample_data::VIEW_COUNT] = [const { OnceLock::new() }; sample_data::VIEW_COUNT];
@@ -786,15 +781,15 @@ thread_local! {
 }
 
 /// The built-in world outline in a custom projection's coordinates (kept per projection).
-fn world_in(flat: &rustgis_map::projection::Flat, key: &str) -> std::rc::Rc<Vec<Geometry>> {
+fn world_in(wv: sample_data::View, flat: &rustgis_map::projection::Flat, key: &str) -> std::rc::Rc<Vec<Geometry>> {
     WORLD_IN.with(|cell| {
-        let lonlat = world_lonlat();
+        let lonlat = world_lonlat_of(wv);
         // An outline not at hand yet is drawn empty, not kept.
         if lonlat.is_empty() {
             return std::rc::Rc::new(Vec::new());
         }
         cell.borrow_mut()
-            .entry(format!("{}:{key}", sample_data::view().index()))
+            .entry(format!("{}:{key}", wv.index()))
             .or_insert_with(|| std::rc::Rc::new(lonlat.iter().map(|g| flat.project(g)).collect()))
             .clone()
     })
@@ -883,7 +878,7 @@ struct Ctx<'a> {
     /// Set when drawing the globe; coordinates are then longitude/latitude, not Web Mercator.
     globe: Option<Globe>,
     /// Point marker sprites drawn so far, by symbol and quarter-pixel offset.
-    sprites: std::cell::RefCell<std::collections::HashMap<SpriteKey, Option<std::sync::Arc<Pixmap>>>>,
+    sprites: std::cell::RefCell<Sprites>,
     /// The pixels the frame's shapeburst fills have worked on (`gradient_fill::FRAME_BURST_PX`),
     /// shared by a layer's scaled context (a reference scale's) with the frame's.
     bursts: std::rc::Rc<std::cell::Cell<f32>>,
@@ -891,6 +886,9 @@ struct Ctx<'a> {
 
 /// A marker sprite's symbol and quarter-pixel offset.
 type SpriteKey = (Rgba, Rgba, u32, u32, Marker, u8, u8);
+
+/// The marker sprites a frame has drawn ([`Ctx::sprites`]).
+type Sprites = std::collections::HashMap<SpriteKey, Option<std::sync::Arc<Pixmap>>>;
 
 impl Ctx<'_> {
     /// Logical screen position of a coordinate, `None` when it is behind the globe.
@@ -4244,6 +4242,9 @@ fn render_frame(
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
+    // The worldview read once: the frame's key, the outline and its level must be of the same
+    // one, though another thread may switch it mid-frame.
+    let worldview = sample_data::view();
     // A screen frame starts from the picture kept of the last one, under its first changed layer
     // (see `frame_cache`), and keeps its own.
     let mut cached = (!pm.is_recording() && !gpu && !full_res_rasters && matches!(labels_to, Labels::Own) && keeps_pictures(map, view))
@@ -4255,10 +4256,16 @@ fn render_frame(
                 label_env: label_env.clone(),
                 tiles: rustgis_tiles::cache::generation(),
                 sources: rustgis_map::source::generation(),
-                worldview: (sample_data::view(), world_of(sample_data::view()).len()),
-                fonts: families::available().is_some(),
+                // Only when drawn: asking for an outline not at hand says so in the log.
+                worldview: map.draws_world_outline().then(|| (worldview, world_of(worldview).len())),
+                // Whether they were indexed so far, without indexing them for a map with no text.
+                fonts: families::installed_now().is_some(),
             };
-            let looks = order.iter().filter_map(|i| map.layers.get(*i)).map(|l| (l.id, rustgis_map::look::LayerLook::of(l))).collect();
+            // By id and place in the list, which labels take their priority from.
+            let looks = order
+                .iter()
+                .filter_map(|i| Some(((map.layers.get(*i)?.id, *i), rustgis_map::look::LayerLook::of(map.layers.get(*i)?))))
+                .collect();
             frame_cache::plan(frame, looks, u64::from(w) * u64::from(h))
         });
     let start = cached.as_ref().map_or(0, |p| p.start);
@@ -4291,12 +4298,9 @@ fn render_frame(
     if start == 0 && map.draws_world_outline() {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
-        // The worldview read once: the outline and its level must be of the same one, though
-        // another thread may switch it mid-frame.
-        let worldview = sample_data::view();
-        let custom_world = custom.then(|| world_in(&flat, &key));
+        let custom_world = custom.then(|| world_in(worldview, &flat, &key));
         let outlines: &Vec<Geometry> = match (&globe, &custom_world) {
-            (Some(_), _) => world_lonlat(),
+            (Some(_), _) => world_lonlat_of(worldview),
             (None, Some(w)) => w,
             (None, None) => world_of(worldview),
         };
@@ -4494,6 +4498,9 @@ fn render_frame(
     let mut fixed_labels: Vec<PlacedLabel> = Vec::new();
     if let Some(c) = cached.as_ref().and_then(|p| p.restored.as_ref()) {
         pm = Canvas::from_pixmap(c.pixels.clone());
+        // What the layers below left for those above: the sprites drawn, the shapeburst budget.
+        ctx.sprites.borrow_mut().clone_from(&c.sprites);
+        ctx.bursts.set(c.bursts);
         label_candidates.clone_from(&c.candidates);
         fixed_labels.clone_from(&c.fixed);
         tile_out = c.tiles.clone();
@@ -4540,7 +4547,8 @@ fn render_frame(
         }
         if let Some((a, pixels)) = drawn_alone.take() {
             let (candidates, fixed, tiles) = (label_candidates.clone(), fixed_labels.clone(), tile_out.clone());
-            captured_alone = Some((a, frame_cache::Alone { pixels, candidates, fixed, tiles }));
+            let (sprites, bursts) = (ctx.sprites.borrow().clone(), ctx.bursts.get());
+            captured_alone = Some((a, frame_cache::Alone { pixels, sprites, bursts, candidates, fixed, tiles }));
         }
         // What is drawn so far already leaves a picture, waiting or in the scene (see
         // `pictureless`).
@@ -4559,6 +4567,8 @@ fn render_frame(
                 at,
                 frame_cache::Checkpoint {
                     pixels: pm.pixels().clone(),
+                    sprites: ctx.sprites.borrow().clone(),
+                    bursts: ctx.bursts.get(),
                     candidates: label_candidates.clone(),
                     fixed: fixed_labels.clone(),
                     tiles: tile_out.clone(),
@@ -4613,6 +4623,8 @@ fn render_frame(
             && let Some(a) = cached.as_ref().and_then(|p| p.recombine.as_ref())
         {
             composite(&mut pm, &a.pixels);
+            ctx.sprites.borrow_mut().clone_from(&a.sprites);
+            ctx.bursts.set(a.bursts);
             label_candidates.clone_from(&a.candidates);
             fixed_labels.clone_from(&a.fixed);
             tile_out = a.tiles.clone();
@@ -5882,7 +5894,8 @@ fn render_frame(
     }
     if let Some((a, pixels)) = drawn_alone.take() {
         let (candidates, fixed, tiles) = (label_candidates.clone(), fixed_labels.clone(), tile_out.clone());
-        captured_alone = Some((a, frame_cache::Alone { pixels, candidates, fixed, tiles }));
+        let (sprites, bursts) = (ctx.sprites.borrow().clone(), ctx.bursts.get());
+        captured_alone = Some((a, frame_cache::Alone { pixels, sprites, bursts, candidates, fixed, tiles }));
     }
     if let Some(id) = below {
         draw_tiles!(Some(id));

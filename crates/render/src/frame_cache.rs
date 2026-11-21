@@ -29,7 +29,7 @@ use rustgis_map::look::{Change, LayerLook, MapLook};
 use tiny_skia::Pixmap;
 
 use crate::tiles::TileOutput;
-use crate::{Candidate, PlacedLabel, View};
+use crate::{Candidate, PlacedLabel, Sprites, View};
 
 /// The most pixels the kept pictures hold together, checkpoints and layers alone: two views of
 /// 3840 × 2160, about 66 MB; four pictures (two views with their layers alone) at 1920 × 1080.
@@ -49,9 +49,9 @@ pub(crate) struct Frame {
     pub tiles: u64,
     /// [`rustgis_map::source::generation`]: a streamed read finished.
     pub sources: u64,
-    /// The world outline's worldview, and how many shapes it had at hand.
-    pub worldview: (crate::sample_data::View, usize),
-    /// Whether the installed font families were indexed ([`crate::families::available`]).
+    /// The world outline's worldview, and how many shapes it had at hand, when it is drawn.
+    pub worldview: Option<(crate::sample_data::View, usize)>,
+    /// Whether the installed font families were indexed ([`crate::families::installed_now`]).
     pub fonts: bool,
 }
 
@@ -78,6 +78,11 @@ impl Frame {
 #[derive(Clone)]
 pub(crate) struct Checkpoint {
     pub pixels: Pixmap,
+    /// The marker sprites drawn so far: a layer above draws a marker from one, or straight once
+    /// there are as many as a frame keeps, as it would in a frame drawn whole.
+    pub sprites: Sprites,
+    /// The shapeburst budget spent so far (`gradient_fill::FRAME_BURST_PX`).
+    pub bursts: f32,
     pub candidates: Vec<Candidate>,
     pub fixed: Vec<PlacedLabel>,
     pub tiles: TileOutput,
@@ -88,14 +93,16 @@ pub(crate) struct Checkpoint {
 #[derive(Clone)]
 pub(crate) struct Alone {
     pub pixels: Pixmap,
+    pub sprites: Sprites,
+    pub bursts: f32,
     pub candidates: Vec<Candidate>,
     pub fixed: Vec<PlacedLabel>,
     pub tiles: TileOutput,
 }
 
-/// The looks of a frame's layers, bottom first in drawing order, by id; `None` for one with no
-/// look.
-pub(crate) type Looks = Vec<(u32, Option<LayerLook>)>;
+/// The looks of a frame's layers, bottom first in drawing order, by id and place in the map's list
+/// (which labels take their priority from); `None` for one with no look.
+pub(crate) type Looks = Vec<((u32, usize), Option<LayerLook>)>;
 
 /// A kept picture and what it was drawn from.
 struct Kept {
@@ -263,6 +270,9 @@ mod tests {
 
     /// A map of a grid of labelled squares under a layer of points, and a view of it.
     fn map() -> (Map, View, u32, u32) {
+        // The installed fonts indexed now: another test indexing them partway would change every
+        // frame's key (`Frame::fonts`), and the next frame would draw whole.
+        crate::families::installed();
         let mut squares = Dataset::new("squares", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
         for i in 0..40 {
             let (x, y) = (f64::from(i % 8) * 0.01, f64::from(i / 8) * 0.01);
@@ -276,10 +286,10 @@ mod tests {
             let pos = rustgis_geom::lonlat_to_merc;
             squares.push(Some(Geometry::Polygon(vec![vec![ring.into_iter().map(pos).collect()]])), vec![Value::Text(format!("S{i}"))]);
         }
-        let mut points = Dataset::new("points", GeometryType::Point, Vec::new());
+        let mut points = Dataset::new("points", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
         for i in 0..30 {
             let c = rustgis_geom::lonlat_to_merc(Coord::new(f64::from(i % 6) * 0.013, f64::from(i / 6) * 0.009));
-            points.push(Some(Geometry::Point(c)), Vec::new());
+            points.push(Some(Geometry::Point(c)), vec![Value::Text(format!("P{i}"))]);
         }
         let mut map = Map::new("Map");
         map.basemap = Basemap::Blank;
@@ -383,6 +393,31 @@ mod tests {
         set(&mut map, 70.0);
         draw(&mut map, &view);
         assert!(!RECOMBINED.get(), "a layer showing a selection is drawn");
+    }
+
+    #[test]
+    fn a_layer_moved_in_the_list_draws_whole_though_its_drawing_order_holds() {
+        let (mut map, view, below, above) = map();
+        // Labels on both, which take their priority from the layers' places in the list; the
+        // drawing order is held by the layers' depth priorities whatever the list says.
+        for (id, priority) in [(below, 0), (above, 1)] {
+            if let Some(l) = map.layer_mut(id) {
+                l.labels.enabled = true;
+                l.labels.default.field = "name".into();
+                l.priority = priority;
+            }
+        }
+        draw(&mut map, &view);
+        // Changes to the layer on top keep the picture under it.
+        for size in [9.0, 11.0] {
+            if let Some(l) = map.layer_mut(above) {
+                l.renderer = Renderer::Single(rustgis_map::Symbol { size, ..l.symbol(0) });
+            }
+            draw(&mut map, &view);
+        }
+        assert_eq!(draw(&mut map, &view), Some(1));
+        map.layers.reverse();
+        assert_eq!(draw(&mut map, &view), Some(0), "the labels below place differently");
     }
 
     #[test]
