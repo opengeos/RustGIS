@@ -1226,8 +1226,9 @@ mod tests {
         run_with_stand_in(&exe, dir.path(), &script).unwrap();
         let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
         let input = std::fs::read_to_string(dir.path().join("input.txt")).unwrap();
-        assert!(!args.contains(secret) && !args.contains("read_parquet"), "{args}");
-        assert!(args.lines().any(|a| a == "-bail") && !args.lines().any(|a| a == "-c"), "{args}");
+        // A path may contain the dummy value too. Only these arguments are allowed; all SQL,
+        // including its test credential, must arrive on standard input instead.
+        assert_eq!(args.lines().collect::<Vec<_>>(), ["-init", dir.path().join("init.sql").to_str().unwrap(), "-bail"]);
         assert_eq!(input, script, "the whole script, as it was");
     }
 

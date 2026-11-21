@@ -55931,6 +55931,31 @@ fn unprepared_desktop_script_refuses_similar_with_setup_guidance() {
     }
 }
 
+/// A tool output is a new Layer in each session, but its verified recorded rows are the same.
+/// Only replay-owned creations may bridge that identity difference.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn similar_accepts_replayed_tool_output_but_not_unrelated_replacement() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use rustgis_analysis::control::Control;
+    let (mut s, _) = similar_lifecycle_session();
+    s.statistics_need_read_ahead(true);
+    let p = json!({"script": concat!(
+        "gp.run {\"tool\":\"buffer\",\"params\":{\"input\":\"values\",\"distance\":10,\"output\":\"buffered\"}}\n",
+        "data.similar {\"layer\":\"buffered\",\"row\":0,\"fields\":[\"n\"],\"count\":1}"
+    )});
+    let read = read_ahead(&mut s, "script.run", &p).unwrap().run(&Control::stoppable()).unwrap();
+    let answer = read_land(&mut s, read).unwrap();
+    assert_eq!(answer["ran"][1]["result"]["similar"][0]["row"], 1);
+    let id = s.map().layer_by_name("buffered").unwrap().id;
+    let p = json!({"layer":id,"row":0,"fields":["n"],"count":1});
+    let read = read_ahead(&mut s, "data.similar", &p).unwrap().run(&Control::stoppable()).unwrap();
+    s.map_mut().layer_mut(id).unwrap().renew_instance_id();
+    assert!(read_land(&mut s, read).unwrap_err().contains("changed while"), "an unrelated identity replacement stays stale");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.map().layer_by_name("buffered").is_none());
+}
+
 /// A script worker and its live session share request order: a fresh command after replay
 /// must be newer than both Similar commands that the worker computed.
 #[cfg(not(target_arch = "wasm32"))]

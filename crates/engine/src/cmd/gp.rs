@@ -834,7 +834,7 @@ pub(crate) fn record_read<T: Send + 'static>(s: &mut Session, command: &'static 
 /// A replayed read must consume its recorded result, never recompute after a mismatch.
 /// Past the recorded prefix, return no result so the caller's normal execution guard applies.
 pub(crate) fn take_read<T: 'static>(s: &mut Session, command: &str, params: &Value) -> Result<Option<T>, String> {
-    let Some(Ahead::Taking(ran)) = &mut s.tools_ahead else { return Ok(None) };
+    let Some(Ahead::Taking(ran, _)) = &mut s.tools_ahead else { return Ok(None) };
     let mismatch = || "the script's prepared read changed: run the script again".to_string();
     let Some(next) = ran.pop_front() else { return Ok(None) };
     let RanAhead::Read(next) = next else { return Err(mismatch()) };
@@ -845,11 +845,18 @@ pub(crate) fn take_read<T: 'static>(s: &mut Session, command: &str, params: &Val
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Whether this typed replay created the worker's layer identity. Callers must still compare
+/// map, row storage and metadata with the live output; this never authorizes an existing layer.
+pub(super) fn replay_created_layer(s: &Session, map: u64, layer: u32, instance: u64) -> bool {
+    matches!(&s.tools_ahead, Some(Ahead::Taking(_, created)) if created.contains(&(map, layer, instance)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// The tools of a model or script run ahead: recorded on the copy, then taken in order by the run
 /// here.
 pub(crate) enum Ahead {
     Recording(Vec<RanAhead>),
-    Taking(std::collections::VecDeque<RanAhead>),
+    Taking(std::collections::VecDeque<RanAhead>, std::collections::HashSet<(u64, u32, u64)>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -893,6 +900,9 @@ pub(crate) enum FilesAhead {
 /// its batches read, in order.
 pub(crate) struct RanAheads {
     tools: Vec<RanAhead>,
+    /// Worker-created (map, layer id, instance) identities; live replay creates fresh Layers
+    /// over their verified recorded rows. Existing layers never receive this exception.
+    pub(super) created_layers: std::collections::HashSet<(u64, u32, u64)>,
     files: Vec<FileAhead>,
     zones: Vec<super::imagery::ZoneMeans>,
     // The copy's initial project can outlive history while queued or waiting to replay.
@@ -912,7 +922,7 @@ pub(crate) fn taking<T>(s: &mut Session, ran: RanAheads, run: impl FnOnce(&mut S
     if ran.selection_admission.is_some() {
         s.selection_admission = ran.selection_admission;
     }
-    s.tools_ahead = Some(Ahead::Taking(ran.tools.into()));
+    s.tools_ahead = Some(Ahead::Taking(ran.tools.into(), ran.created_layers));
     s.files_ahead = Some(FilesAhead::Taking(ran.files.into()));
     s.zones_ahead = Some(super::imagery::ZonesAhead::Taking(ran.zones.into()));
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(s)));
@@ -938,7 +948,14 @@ pub(crate) fn ran_ahead(s: &mut Session) -> RanAheads {
         Some(super::imagery::ZonesAhead::Recording(read)) => read,
         _ => Vec::new(),
     };
-    RanAheads { tools, files, zones, retained: None, selection_admission: s.selection_admission.clone() }
+    RanAheads {
+        tools,
+        created_layers: Default::default(),
+        files,
+        zones,
+        retained: None,
+        selection_admission: s.selection_admission.clone(),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -970,7 +987,7 @@ fn take_ahead(
     pin: &crate::policy::ToolPin,
     params: &Value,
 ) -> Option<(Result<rustgis_analysis::ToolResult, String>, FullIds, u64)> {
-    let Some(Ahead::Taking(ran)) = &mut s.tools_ahead else { return None };
+    let Some(Ahead::Taking(ran, _)) = &mut s.tools_ahead else { return None };
     let next = ran.pop_front()?;
     let RanAhead::Tool(next) = next else {
         s.tools_ahead = None;

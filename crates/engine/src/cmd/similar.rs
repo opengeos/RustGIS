@@ -75,12 +75,18 @@ impl Input {
     }
 
     /// Refuses data/reference/filter changes while work ran. Comparing row allocations avoids
-    /// copying or visiting features on the window thread.
-    fn same(&self, now: &Self) -> bool {
+    /// copying or visiting features on the window thread. Only replay-created output layers
+    /// may bridge worker/live instance ids; all captured rows and metadata still have to match.
+    fn same(&self, now: &Self, s: &Session) -> bool {
+        let instance = self.instance == now.instance;
+        #[cfg(not(target_arch = "wasm32"))]
+        let instance = instance || super::gp::replay_created_layer(s, self.map, self.target.id, self.instance);
+        #[cfg(target_arch = "wasm32")]
+        let _ = s;
         self.target == now.target
             && self.opened == now.opened
             && self.map == now.map
-            && self.instance == now.instance
+            && instance
             && self.name == now.name
             && self.data.features.shares(&now.data.features)
             && self.data.fields == now.data.fields
@@ -219,7 +225,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
         return Err("Similarity needs the desktop background read queue; use Find Similar or a direct MCP data.similar request. In desktop scripts, run file or network setup separately before the analysis script.".into());
     }
     let (done, request) = match ahead {
-        Some(a) if a.input.same(&input) => (a.done, a.request),
+        Some(a) if a.input.same(&input, s) => (a.done, a.request),
         Some(_) => return Err("the layer, reference or map filters changed while similarity was computed: ask again".into()),
         None => {
             let request = request(s);

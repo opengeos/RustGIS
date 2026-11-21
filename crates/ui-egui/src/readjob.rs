@@ -1822,13 +1822,13 @@ mod tests {
     fn similar_pane_receives_success_failure_and_cancellation() {
         use egui_kittest::kittest::Queryable;
         use rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
-        for outcome in ["success", "error", "cancel", "spawn", "newer", "layer", "workflow", "reopen", "closed"] {
+        for outcome in ["success", "error", "cancel", "spawn", "newer", "layer", "workflow", "reopen", "closed", "error_layer"] {
             let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
             let mut ds = Dataset::new("numbers", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
             for n in [0, 2, 10] {
                 ds.push(
                     Some(Geometry::Point(rustgis_engine::geom::Coord::new(n as f64, n as f64))),
-                    vec![if n == 0 && outcome == "error" { V::Null } else { V::Int(n) }],
+                    vec![if n == 0 && matches!(outcome, "error" | "error_layer") { V::Null } else { V::Int(n) }],
                 );
             }
             let id = rustgis_engine::cmd::layer::add_dataset(&mut app.session, ds.clone());
@@ -1901,7 +1901,7 @@ mod tests {
                     assert!(h.state().workflow.result.is_none(), "another section cannot show its result in the Similar pane");
                 }
                 "cancel" => h.state().reads.cancel_for_tests(),
-                "layer" => {
+                "layer" | "error_layer" => {
                     h.state_mut().workflow.layer = "other".into();
                     h.state_mut().workflow.result = Some(json!({"kept":"other layer"}));
                 }
@@ -1970,7 +1970,10 @@ mod tests {
                         h.query_by_role_and_label(egui::accesskit::Role::Label, h.state().workflow.error.as_deref().unwrap()).is_some()
                     );
                 }
-                "layer" => {
+                "layer" | "error_layer" => {
+                    if outcome == "error_layer" {
+                        assert_eq!(h.state().session.notices.iter().filter(|n| n.error && n.text.contains("reference row")).count(), 1);
+                    }
                     assert_eq!(h.state().workflow.result, Some(json!({"kept":"other layer"})));
                     assert!(h.state().workflow.error.is_none());
                 }

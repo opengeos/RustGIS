@@ -642,7 +642,9 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .width(ui.available_width() - 8.0)
         .show_ui(ui, |ui| {
             for (id, title) in SECTIONS.iter().filter(|s| section_shown(&app.session, s.0)) {
-                if ui.selectable_label(app.workflow.section == *id, tl!(*title)).clicked() {
+                if ui.selectable_label(app.workflow.section == *id, tl!(*title)).clicked()
+                    && (*id != "similar" || app.workflow.section != *id)
+                {
                     forget_similar(&mut app.workflow);
                     app.workflow.section = id;
                     app.workflow.result = None;
