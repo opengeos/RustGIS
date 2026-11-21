@@ -3179,13 +3179,15 @@ fn swatch(
         point_swatch(pm, (x, y, w, h), (s, strokes), opacity, ppp * k);
         return;
     }
-    // A layer with no stack keeps the swatch it always had; any stack is drawn as the map draws
-    // it, cut to the box.
+    // A layer with no stack keeps the swatch it always had, cut to its row when its line reaches
+    // past it; any stack is drawn as the map draws it, cut to the box.
     let plain = if gt == GeometryType::Polyline { strokes.is_empty() } else { fills.is_empty() };
-    if plain && opacity >= 0.999 && k == 1.0 && swatch_stroke_fits((x, y, w, h), gt, s, (across, ppp)) {
+    let overflow = if plain { swatch_overflow((x, y, w, h), gt, s, (across, ppp * k)) } else { None };
+    if plain && opacity >= 0.999 && k == 1.0 && overflow.is_none() {
         flat_swatch(pm, (x, y, w, h), gt, s, (across, ppp));
     } else if plain {
-        composited(pm, (x, y, w, h), opacity, |c, (left, top)| flat_swatch(c, (x - left, y - top, w, h), gt, s, (across, ppp * k)));
+        let cut = overflow.unwrap_or((x, y, w, h));
+        composited(pm, cut, opacity, |c, (left, top)| flat_swatch(c, (x - left, y - top, w, h), gt, s, (across, ppp * k)));
     } else {
         composited(pm, (x, y, w, h), opacity, |c, (left, top)| {
             stacked_swatch(c, (x - left, y - top, w, h), l, (s, strokes, fills), (ppp, across), k)
@@ -3193,15 +3195,26 @@ fn swatch(
     }
 }
 
-/// Whether a plain line or polygon swatch's line, as [`flat_swatch`] strokes it (its joins too),
-/// stays within its row: the box's top and bottom. One that doesn't is drawn cut to its box, as a
-/// stacked one is, so a wide line in a legend of small text doesn't paint over the rows above and
-/// below it (#2581). Its sides aren't asked: a polygon's swatch is as wide as its column, so its
-/// outline has always reached past them, into the gap before the text.
-fn swatch_stroke_fits(cell: (f32, f32, f32, f32), gt: GeometryType, s: &rustgis_map::Symbol, (across, ppp): (f32, f32)) -> bool {
-    let (_, y, _, h) = cell;
-    let Some((path, stroke)) = flat_swatch_outline(cell, gt, s, (across, ppp)) else { return true };
-    path.stroke(&stroke, 1.0).map(|o| o.bounds()).is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01)
+/// Where a plain line or polygon swatch is cut when its line, as [`flat_swatch`] strokes it (its
+/// joins too), reaches past its row's top or bottom: the row, as wide as the stroked line, so a
+/// wide line in a legend of small text doesn't paint over the rows above and below it while its
+/// sides keep the width the map draws it at (#2581). `None` when it stays within its row. The
+/// sides aren't a reason to cut: a polygon's swatch is as wide as its column, so its outline has
+/// always reached past them, into the gap before the text.
+fn swatch_overflow(
+    cell: (f32, f32, f32, f32),
+    gt: GeometryType,
+    s: &rustgis_map::Symbol,
+    (across, ppp): (f32, f32),
+) -> Option<(f32, f32, f32, f32)> {
+    let (x, y, w, h) = cell;
+    let (path, stroke) = flat_swatch_outline(cell, gt, s, (across, ppp))?;
+    let b = path.stroke(&stroke, 1.0)?.bounds();
+    if b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01 {
+        return None;
+    }
+    let (left, right) = (x.min(b.left()), (x + w).max(b.right()));
+    Some((left, y, right - left, h))
 }
 
 /// A plain line or polygon swatch's line, `across` pixels wide in the box: a line's zigzag or a
@@ -8445,7 +8458,25 @@ Elaboração: RustGIS",
         assert!(!(0..50).any(red_at), "nothing above the legend's box");
         // A thin one keeps the plain swatch it always had.
         let thin = rustgis_map::Symbol { stroke_width: 1.0, ..wide };
-        assert!(swatch_stroke_fits((0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW), GeometryType::Polyline, &thin, (LEGEND_SWATCH, 1.0)));
+        assert_eq!(swatch_overflow((0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW), GeometryType::Polyline, &thin, (LEGEND_SWATCH, 1.0)), None);
+        // A polygon's wide outline is cut to its row only: its sides keep their whole width, past
+        // the swatch's column on the left as the plain swatch's outline always reached.
+        let blue = Rgba::rgb(0, 0, 255);
+        let outlined = rustgis_map::Symbol {
+            fill: red,
+            stroke: blue,
+            stroke_width: 12.0,
+            ..rustgis_map::Symbol::default_for(GeometryType::Polygon, 0)
+        };
+        let map = shape_legend_map(GeometryType::Polygon, |l| l.renderer = rustgis_map::Renderer::Single(outlined));
+        let mut pm = Pixmap::new(200, 200).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        crate::canvas::with_canvas(&mut pm, |c| {
+            legend(c, Rect::from_xywh(50.0, 50.0, 150.0, 150.0).unwrap(), &map, ("", 1), None, opts, 1.0)
+        });
+        let blue_at = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (0, 0, 255));
+        assert!((44..50).any(|x| (50..60).any(|y| blue_at(x, y))), "the outline's outer half on the left is kept");
+        assert!(!(0..200).any(|x| (0..50).any(|y| blue_at(x, y))), "nothing above the legend's box");
         // The title's room follows; a size past the range, or none at all, is brought into it.
         assert!((legend_title_mm(18.0) - 2.0 * legend_title_mm(9.0)).abs() < 1e-12);
         assert_eq!(legend_size(1e9), 100.0 / 9.0);
