@@ -4247,30 +4247,35 @@ fn render_frame(
     let worldview = sample_data::view();
     // A screen frame starts from the picture kept of the last one, under its first changed layer
     // (see `frame_cache`), and keeps its own.
-    let mut cached = (!pm.is_recording() && !gpu && !full_res_rasters && matches!(labels_to, Labels::Own) && keeps_pictures(map, view))
-        .then(|| {
-            let frame = frame_cache::Frame {
-                map: rustgis_map::look::MapLook::of(map),
-                view: *view,
-                style_env: style_env.clone(),
-                label_env: label_env.clone(),
-                tiles: rustgis_tiles::cache::generation(),
-                sources: rustgis_map::source::generation(),
-                // Only when drawn: asking for an outline not at hand says so in the log.
-                worldview: map.draws_world_outline().then(|| (worldview, world_of(worldview).len())),
-                // Whether they were indexed so far, without indexing them for a map with no text.
-                fonts: families::installed_now().is_some(),
-                font_generation: fonts::font_generation(),
-                layers: map.layers.len(),
-                clock: map.layers.iter().any(|l| l.graphics).then(|| rustgis_map::graphics::TokenValues::of(map, scale).now / 60),
-            };
-            // By id and place in the list, which labels take their priority from.
-            let looks = order
-                .iter()
-                .filter_map(|i| Some(((map.layers.get(*i)?.id, *i), rustgis_map::look::LayerLook::of(map.layers.get(*i)?))))
-                .collect();
-            frame_cache::plan(frame, looks, u64::from(w) * u64::from(h))
-        });
+    let mut cached = (!pm.is_recording()
+        && !gpu
+        && !full_res_rasters
+        && matches!(labels_to, Labels::Own)
+        && frame_cache::fits(w, h)
+        && keeps_pictures(map, view))
+    .then(|| {
+        let frame = frame_cache::Frame {
+            map: rustgis_map::look::MapLook::of(map),
+            view: *view,
+            style_env: style_env.clone(),
+            label_env: label_env.clone(),
+            tiles: rustgis_tiles::cache::generation(),
+            sources: rustgis_map::source::generation(),
+            // Only when drawn: asking for an outline not at hand says so in the log.
+            worldview: map.draws_world_outline().then(|| (worldview, world_of(worldview).len())),
+            // Whether they were indexed so far, without indexing them for a map with no text.
+            fonts: families::installed_now().is_some(),
+            font_generation: fonts::font_generation(),
+            layers: map.layers.len(),
+            clock: map.layers.iter().any(|l| l.graphics).then(|| rustgis_map::graphics::TokenValues::of(map, scale).now / 60),
+        };
+        // By id and place in the list, which labels take their priority from.
+        let looks = order
+            .iter()
+            .filter_map(|i| Some(((map.layers.get(*i)?.id, *i), rustgis_map::look::LayerLook::of(map.layers.get(*i)?))))
+            .collect();
+        frame_cache::plan(frame, looks, u64::from(w) * u64::from(h))
+    });
     let start = cached.as_ref().map_or(0, |p| p.start);
     let mut captured: Option<(usize, frame_cache::Checkpoint)> = None;
     // The layer kept alone (`frame_cache::Alone`): its picture once composited, and the rest once

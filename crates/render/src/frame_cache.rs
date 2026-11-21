@@ -201,6 +201,12 @@ fn first_change(then: &Looks, now: &Looks) -> usize {
         .unwrap_or(then.len().min(now.len()))
 }
 
+/// Whether a frame of `w` × `h` pixels can keep pictures: [`plan`] refuses one past the budget,
+/// so a frame checks first rather than take the looks of its layers for nothing.
+pub(crate) fn fits(w: u32, h: u32) -> bool {
+    (u64::from(w) * u64::from(h)).saturating_mul(KEPT as u64) <= MAX_PIXELS
+}
+
 /// How the layer at place `at` in the drawing order differs between `then` and `now`.
 fn change_at(then: &Looks, now: &Looks, at: usize) -> Change {
     match (then.get(at), now.get(at)) {
