@@ -2099,6 +2099,24 @@ fn scale_number(v: f64, step: f64) -> String {
     if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
 }
 
+/// A scale bar's number for `v`, a multiple of `step`, with a decimal comma when `comma`. With no
+/// `decimals`, as [`scale_number`] prints it and no thousands separators, as bars always printed;
+/// with 1 to [`MAX_SCALE_DECIMALS`](rustgis_map::layout::MAX_SCALE_DECIMALS), that many places and
+/// the thousands apart. A minus only in front of a digit other than zero; NaN and infinity print 0.
+fn bar_number(v: f64, step: f64, decimals: usize, comma: bool) -> String {
+    let v = if v.is_finite() { v } else { 0.0 };
+    let places = decimals.min(rustgis_map::layout::MAX_SCALE_DECIMALS);
+    let body = if places == 0 {
+        decimal(scale_number(v.abs(), step), comma)
+    } else {
+        let s = format!("{:.*}", places, v.abs());
+        let (whole, part) = s.split_once('.').unwrap_or((s.as_str(), ""));
+        let whole = rustgis_map::graphics::thousands(whole.parse().unwrap_or(0.0));
+        decimal(format!("{whole}.{part}"), comma)
+    };
+    if v < 0.0 && body.chars().any(|c| matches!(c, '1'..='9')) { format!("-{body}") } else { body }
+}
+
 /// The share of its element's width a scale bar's length may take.
 const BAR_SHARE: f64 = 0.85;
 /// A scale bar's labels' size, in points, and how far its bar starts in from the element's left
@@ -2152,7 +2170,7 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
 }
 
 /// A scale bar's look: the fields of [`ElementKind::ScaleBar`] but its frame and colours.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 struct BarOptions<'a> {
     units: ScaleUnits,
     divisions: usize,
@@ -2245,7 +2263,9 @@ fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usi
 /// ground metres per logical point of paper; `colors` are its lines, dark divisions and labels,
 /// then the alternating bar's light divisions.
 fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, colors: (Rgba, Rgba), ppp: f64, comma: bool) {
-    use rustgis_map::layout::{MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS};
+    use rustgis_map::layout::{
+        MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS, SCALE_LABEL_SIZE,
+    };
     if !(ground_per_pt.is_finite() && ground_per_pt > 0.0 && ppp.is_finite() && ppp > 0.0) {
         return;
     }
@@ -2256,26 +2276,61 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let parts = bar.subdivisions.clamp(1, MAX_SCALE_SUBDIVISIONS);
     let width_pt = f64::from(r.width()) / ppp;
     let Some(BarPlan { unit_m, abbr, .. }) = bar_plan(ground_per_pt, width_pt, bar.units) else { return };
-    // The points of the box its labels take from the bar: none yet.
-    let taken_pt = 0.0;
-    let room_m = ground_per_pt * width_pt * BAR_SHARE - ground_per_pt * taken_pt;
-    let Some(BarFit { total, after }) = bar_fit(room_m, unit_m, bar.fit, before, after) else { return };
-    let divs = before + after;
-    let len = (total * unit_m / ground_per_pt * ppp) as f32;
-    let px = BAR_LABEL_PT * 1.33 * ppp as f32;
-    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
-    // Division `j` counts `j - before` from zero. Its label, the last with the unit.
-    let label = |j: usize| {
-        let k = j as isize - before as isize;
-        let v = decimal(scale_number((total * k as f64 / divs as f64).abs(), total / divs as f64), comma);
-        let v = if k < 0 { format!("-{v}") } else { v };
-        if j == divs { format!("{v} {abbr}") } else { v }
+    let decimals = bar.decimals.min(MAX_SCALE_DECIMALS);
+    let label_pt = if bar.label_size.is_finite() {
+        bar.label_size.clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end())
+    } else {
+        DEFAULT_SCALE_LABEL_SIZE
     };
+    let px = label_pt as f32 * 1.33 * ppp as f32;
+    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
+    let gap = 3.0 * ppp as f32;
+    // The unit's words: its abbreviation unless the bar names it, on one line.
+    let unit: String = match bar.unit_label {
+        None => abbr.to_string(),
+        Some(t) => t.chars().take(MAX_UNIT_LABEL_CHARS).map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect(),
+    };
+    let has_unit = !unit.trim().is_empty();
+    let unit_at = bar.unit_label_position;
+    // The pixels a unit after the bar takes from it, at most half the bar's room.
+    let beside = if has_unit && unit_at == UnitLabelPosition::AfterBar {
+        (text::measure(&unit, px / 1.33, false) + gap + ppp as f32).min(r.width() * BAR_SHARE as f32 * 0.5)
+    } else {
+        0.0
+    };
+    // Division `k` from zero of a bar `total` long in `divs` divisions.
+    let number = |total: f64, divs: usize, k: isize| bar_number(total * k as f64 / divs as f64, total / divs as f64, decimals, comma);
     // Left of zero the first label is a negative one, centred on the bar's end: the bar starts far
     // enough in for it.
-    let pad = if before > 0 { (half(&label(0)) - 2.0).max(0.0) } else { 0.0 };
+    let pad_of = |f: &BarFit| if before > 0 { (half(&number(f.total, before + f.after, -(before as isize))) - 2.0).max(0.0) } else { 0.0 };
+    // The bar in what's left of its room once `taken` pixels of the box are its labels'.
+    let fitted = |taken: f32| {
+        let taken_pt = f64::from(taken) / ppp;
+        let room_m = ground_per_pt * width_pt * BAR_SHARE - ground_per_pt * taken_pt;
+        bar_fit(room_m, unit_m, bar.fit, before, after)
+    };
+    let Some(first) = fitted(beside) else { return };
+    // The room left of zero follows the bar's length: fitted again with the first label's.
+    let fit = if before > 0 { fitted(beside + pad_of(&first)) } else { Some(first) };
+    let Some(fit) = fit else { return };
+    let BarFit { total, after } = fit;
+    let pad = pad_of(&fit);
+    let divs = before + after;
+    let len = (total * unit_m / ground_per_pt * ppp) as f32;
+    // Division `j` counts `j - before` from zero. Its label, the last with the unit when it follows
+    // the labels.
+    let label = |j: usize| {
+        let v = number(total, divs, j as isize - before as isize);
+        if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels { format!("{v} {unit}") } else { v }
+    };
+    let rows = bar_rows(bar.label_position, unit_at, has_unit);
+    // Each line above the bar moves it down, each below up; labels over it alone leave it where it
+    // always was.
+    let centre = 0.62 + 0.12 * (rows.up as f32 - 1.0 - rows.down as f32);
     let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    let (x0, y0) = (r.x() + BAR_INSET + pad, r.y() + r.height() * 0.62 - bar_h / 2.0);
+    let (x0, y0) = (r.x() + BAR_INSET + pad, r.y() + r.height() * centre - bar_h / 2.0);
+    // The middle of text line `n` out from the bar.
+    let row = |n: usize| (0.7 + 1.25 * n as f32) * px;
     let seg = len / divs as f32;
     let zero_x = x0 + seg * before as f32;
     // Where the first division after zero is cut into its subdivisions.
@@ -2341,10 +2396,9 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
             }
         }
     }
-    // Labels at the divisions, the last with the unit; one that would touch its neighbour is left
+    // Labels at the divisions, over or under the bar; one that would touch its neighbour is left
     // out (never the ends).
-    let ty = y0 - px * 0.7;
-    let gap = 3.0 * ppp as f32;
+    let ty = if bar.label_position == ScaleLabelPosition::Below { y0 + bar_h + row(0) } else { y0 - row(0) };
     let labels: Vec<(f32, String)> = (0..=divs).map(|j| (x0 + seg * j as f32, label(j))).collect();
     let last = labels.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
     let mut right = f32::MIN;
@@ -2355,6 +2409,42 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         }
         text::text_at(pm, s, *x, ty, px, dark, false, text::Align::Center, false);
         right = x + half(s);
+    }
+    // The unit after the bar, level with its middle, or centred over or under it on a line of its own.
+    if has_unit {
+        let mid = x0 + len / 2.0;
+        let (x, y, align) = match unit_at {
+            UnitLabelPosition::AfterLabels => return,
+            UnitLabelPosition::AfterBar => (x0 + len + gap + ppp as f32, y0 + bar_h / 2.0, text::Align::Left),
+            UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
+            UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
+        };
+        text::text_at(pm, &unit, x, y, px, dark, false, align, false);
+    }
+}
+
+/// The text lines a scale bar has above and below it, and the line its unit takes on its side
+/// (0 next to the bar, 1 past its labels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarRows {
+    up: usize,
+    down: usize,
+    unit_row: usize,
+}
+
+/// The lines of a scale bar with its labels at `labels` and its unit (if `has_unit`) at `unit`.
+fn bar_rows(labels: ScaleLabelPosition, unit: UnitLabelPosition, has_unit: bool) -> BarRows {
+    let labels_up = labels == ScaleLabelPosition::Above;
+    // The side the unit has a line of its own on: true above.
+    let unit_up = match unit {
+        UnitLabelPosition::Above if has_unit => Some(true),
+        UnitLabelPosition::Below if has_unit => Some(false),
+        _ => None,
+    };
+    BarRows {
+        up: usize::from(labels_up) + usize::from(unit_up == Some(true)),
+        down: usize::from(!labels_up) + usize::from(unit_up == Some(false)),
+        unit_row: usize::from(unit_up == Some(labels_up)),
     }
 }
 
@@ -8425,7 +8515,7 @@ Elaboração: RustGIS",
                     let r = Rect::from_xywh(10.0, 0.0, 100.0, 60.0).unwrap();
                     crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, &bar, DEFAULT_COLORS, 1.0, false));
                     let (a, b) = marked_span(&pm, 37).unwrap_or((0, 0));
-                    assert!(b > a && b < 120, "{ground} {fit:?} {before}: {a}..{b}");
+                    assert!(b > a && b < 110, "{ground} {fit:?} {before}: {a}..{b}");
                 }
             }
         }
@@ -8502,10 +8592,10 @@ Elaboração: RustGIS",
         assert_eq!((0..y.saturating_sub(8)).map(|row| count(ink, row)).sum::<usize>(), 0, "no ink labels");
     }
 
-    /// A page draws a scale bar in its own colour and fill: the element's, through `draw_page`.
-    #[test]
-    fn a_page_draws_its_scale_bar_in_its_colours() {
-        let mut maps = vec![Map::new("m")];
+    /// A 100 x 60 mm page with a 90 x 20 mm frame at its foot showing a map at 1:10,000,000: the
+    /// map, the page and the frame's id.
+    fn colour_test_page() -> (Vec<Map>, Layout, u32) {
+        let maps = vec![Map::new("m")];
         let mut l = Layout::new("Layout", 100.0, 60.0);
         let frame = l.add(
             "Map",
@@ -8525,6 +8615,13 @@ Elaboração: RustGIS",
                 pitch: 0.0,
             },
         );
+        (maps, l, frame)
+    }
+
+    /// A page draws a scale bar in its own colour and fill: the element's, through `draw_page`.
+    #[test]
+    fn a_page_draws_its_scale_bar_in_its_colours() {
+        let (mut maps, mut l, frame) = colour_test_page();
         let (crimson, navy) = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
         let mut bar = ElementKind::scale_bar(frame);
         if let ElementKind::ScaleBar { color, fill, .. } = &mut bar {
@@ -8541,6 +8638,134 @@ Elaboração: RustGIS",
         assert!(count(red) > 100, "red divisions and labels");
         assert!(count(|p| p.blue() > 180 && p.red() < 90 && p.green() < 90) > 100, "blue divisions");
         assert_eq!(count(ink), 0, "no default ink");
+    }
+
+    #[test]
+    fn scale_numbers_have_decimals_and_thousands() {
+        // 0 decimals: as each label needs, with no separators, exactly as before.
+        assert_eq!(bar_number(5000.0, 1000.0, 0, false), "5000");
+        assert_eq!(bar_number(0.0125, 0.0125, 0, false), "0.0125");
+        assert_eq!(bar_number(-500.0, 500.0, 0, false), "-500");
+        assert_eq!(bar_number(2.5, 1.25, 0, true), "2,5");
+        // Fixed decimals with their thousands apart, the marks swapped under a decimal comma.
+        assert_eq!(bar_number(1250.0, 250.0, 2, false), "1,250.00");
+        assert_eq!(bar_number(1250.0, 250.0, 2, true), "1.250,00");
+        assert_eq!(bar_number(12500.0, 2500.0, 3, true), "12.500,000");
+        assert_eq!(bar_number(-1500.0, 500.0, 1, true), "-1.500,0");
+        assert_eq!(bar_number(0.0, 5.0, 2, false), "0.00");
+        assert_eq!(bar_number(-0.001, 5.0, 1, false), "0.0", "no sign on a zero");
+        assert_eq!(bar_number(f64::NAN, 1.0, 2, false), "0.00", "never a panic");
+    }
+
+    #[test]
+    fn scale_bars_draw_subdivisions_and_place_labels_above_or_below() {
+        let with = |f: &dyn Fn(&mut BarOptions<'static>)| {
+            let mut b = BarOptions::default();
+            f(&mut b);
+            draw_bar(&b, 300)
+        };
+        let above = with(&|_| {});
+        let rows = bar_ink_rows(&above);
+        assert!(rows.iter().any(|&y| y < 32) && rows.iter().all(|&y| y < 42), "labels over the bar: {rows:?}");
+        let below = with(&|b| b.label_position = ScaleLabelPosition::Below);
+        let rows = bar_ink_rows(&below);
+        assert!(rows.iter().all(|&y| y >= 18) && rows.iter().any(|&y| y > 28), "labels under it: {rows:?}");
+        // Subdivisions aren't labelled: the first ink row stays where the labels put it.
+        let cut = with(&|b| b.subdivisions = 3);
+        assert_eq!(bar_ink_rows(&cut).first(), bar_ink_rows(&above).first());
+        // A bigger label is taller; decimals change the labels.
+        assert!(bar_ink_rows(&with(&|b| b.label_size = 16.0)).len() > rows.len() + 4);
+        assert_ne!(with(&|b| b.decimals = 2).data(), above.data());
+        assert_ne!(with(&|b| b.divisions_before_zero = 1).data(), above.data());
+    }
+
+    #[test]
+    fn unit_labels_sit_after_the_bar_when_asked() {
+        let draw = |text: Option<&'static str>, at| {
+            draw_bar(&BarOptions { unit_label: text, unit_label_position: at, units: ScaleUnits::Kilometers, ..BarOptions::default() }, 300)
+        };
+        let right_of =
+            |pm: &Pixmap| (0..pm.height()).filter_map(|y| (0..pm.width()).rev().find(|&x| pm.pixel(x, y).is_some_and(ink))).max();
+        let none = draw(Some(""), UnitLabelPosition::AfterBar);
+        let feet = draw(Some("Feet"), UnitLabelPosition::AfterBar);
+        let (_, bare_end) = marked_span(&none, 37).unwrap();
+        let (_, word_end) = marked_span(&feet, 37).unwrap();
+        assert!(word_end > bare_end + 15, "level with the bar, after it: {word_end} against {bare_end}");
+        // Left out, the abbreviation follows the last label; "" prints none.
+        let default = draw(None, UnitLabelPosition::AfterLabels);
+        let blank = draw(Some(""), UnitLabelPosition::AfterLabels);
+        assert!(right_of(&default) > right_of(&blank));
+        // Above or below, on a line of its own.
+        let top = |pm: &Pixmap| bar_ink_rows(pm).first().copied().unwrap_or(0);
+        let bottom = |pm: &Pixmap| bar_ink_rows(pm).last().copied().unwrap_or(0);
+        assert!(top(&draw(Some("Feet"), UnitLabelPosition::Above)) < top(&blank));
+        assert!(bottom(&draw(Some("Feet"), UnitLabelPosition::Below)) > bottom(&blank));
+        assert_ne!(draw(Some("FEET"), UnitLabelPosition::AfterBar).data(), feet.data(), "verbatim");
+        // Other scripts and emoji draw without a panic.
+        for text in ["距離 km", "مسافة", "🚶"] {
+            for at in UnitLabelPosition::ALL {
+                let _ = draw(Some(text), at);
+            }
+        }
+        // A whitespace label adds no ink (on its own line it still takes its row, so compare after the bar).
+        assert_eq!(draw(Some("   "), UnitLabelPosition::AfterBar).data(), none.data());
+    }
+
+    #[test]
+    fn a_wide_unit_label_after_the_bar_keeps_the_bar() {
+        let long = "Kilometres of ground distance, as measured on the map ".repeat(2);
+        for width in [12u32, 40, 93, 300] {
+            for height in [8u32, 60] {
+                let bar = BarOptions {
+                    unit_label: Some(long.as_str()),
+                    unit_label_position: UnitLabelPosition::AfterBar,
+                    units: ScaleUnits::Kilometers,
+                    ..BarOptions::default()
+                };
+                let mut pm = Pixmap::new(width, height).unwrap();
+                pm.fill(tiny_skia::Color::WHITE);
+                let r = Rect::from_xywh(0.0, 0.0, width as f32, height as f32).unwrap();
+                crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+                if width >= 40 && height == 60 {
+                    let (a, b) = marked_span(&pm, 37).unwrap_or((0, 0));
+                    assert!(b > a + width / 4, "width {width}: the bar keeps half its room, {a}..{b}");
+                }
+            }
+        }
+    }
+
+    /// A page draws its scale bar's details through `draw_page`: the unit label in the bar's colour.
+    #[test]
+    fn a_page_draws_a_scale_bar_with_its_details() {
+        let (mut maps, mut l, frame) = colour_test_page();
+        let mut bar = ElementKind::scale_bar(frame);
+        if let ElementKind::ScaleBar {
+            color, label_position, unit_label, unit_label_position, subdivisions, divisions_before_zero, ..
+        } = &mut bar
+        {
+            *color = Rgba::rgb(0xD0, 0x10, 0x10);
+            (*label_position, *unit_label, *unit_label_position) =
+                (ScaleLabelPosition::Below, Some("Kilometres".into()), UnitLabelPosition::Above);
+            (*subdivisions, *divisions_before_zero) = (4, 1);
+        }
+        l.add("Scale Bar", (5.0, 5.0, 90.0, 20.0), bar.clone());
+        let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
+        let rows = |from: u32, to: u32, hit: fn(tiny_skia::PremultipliedColorU8) -> bool| {
+            (from..to).flat_map(|y| (0..pm.width()).map(move |x| (x, y))).filter(|&(x, y)| pm.pixel(x, y).is_some_and(hit)).count()
+        };
+        // The strip of the bar's 20 mm box over the bar (its middle at 15 mm, its top 4 px above)
+        // holds the unit label, in the bar's colour.
+        let mm = pm.height() as f32 / 60.0;
+        assert!(rows((5.0 * mm) as u32, (13.5 * mm) as u32, red) > 30, "the unit label over the bar, crimson");
+        assert_eq!(rows(0, pm.height() / 2, ink), 0, "no default ink");
+        // The same bar without its details draws differently on the same page.
+        let (mut maps2, mut plain, frame2) = colour_test_page();
+        let mut same = ElementKind::scale_bar(frame2);
+        if let ElementKind::ScaleBar { color, .. } = &mut same {
+            *color = Rgba::rgb(0xD0, 0x10, 0x10);
+        }
+        plain.add("Scale Bar", (5.0, 5.0, 90.0, 20.0), same);
+        assert_ne!(pm.data(), render(&plain, &mut maps2, 96.0, &PageInfo::default()).unwrap().data());
     }
 
     #[test]
