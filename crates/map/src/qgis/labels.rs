@@ -36,6 +36,8 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                     format!("{left} of its label rules, past the {} RustGIS reads or nested more than 32 deep", MAX_LABEL_CLASSES * 4),
                 );
             }
+            // The filters of the rules that became classes: only those are noted.
+            let mut kept: Vec<&[String]> = Vec::new();
             for (i, r) in rules.iter().enumerate() {
                 let Some(settings) = child(r.node, "settings") else { continue };
                 // Switched off: never drawn, so nothing about it is noted.
@@ -77,8 +79,14 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                     );
                     continue;
                 };
-                classes.extend(class(settings, &name, where_, r.scales, geometry, layer, report));
+                if let Some(c) = class(settings, &name, where_, r.scales, geometry, layer, report) {
+                    classes.push(c);
+                    kept.push(&r.filters);
+                }
             }
+            kept.truncate(MAX_LABEL_CLASSES);
+            let f: Vec<(&str, expr::Dialect)> = kept.iter().flat_map(|fs| fs.iter()).map(|f| (f.as_str(), expr::Dialect::Qgis)).collect();
+            super::note_matching(layer, "its label rules", &f, report);
         }
         Some(other) => {
             report.skipped(layer, format!("its {other} labels"));

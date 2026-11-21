@@ -415,7 +415,11 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
         return;
     }
     // Any other rules: Unique Values classed by the first rule a feature meets, each a class.
-    if by_expression(&drawn, style, report, &sym) {
+    let mut kept: Vec<&[String]> = Vec::new();
+    if by_expression(&drawn, style, report, &sym, &mut kept) {
+        // (Only the rules it kept: one whose symbol can't be read draws nothing.)
+        let f: Vec<(&str, expr::Dialect)> = kept.iter().flat_map(|fs| fs.iter()).map(|f| (f.as_str(), expr::Dialect::Qgis)).collect();
+        super::note_matching(layer, "its rules", &f, report);
         return;
     }
     report.approximated(
@@ -488,14 +492,14 @@ const MAX_RULE_CLASSES: usize = crate::symbology::MAX_EXPRESSION_CLASSES;
 /// (QGIS draws it with every rule it meets: the engine counts such features, from
 /// `style.rules`). A top-level else rule draws the rest. False when the rules don't fit in one
 /// expression.
-fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &SymbolOf) -> bool {
+fn by_expression<'r>(drawn: &[&'r Rule], style: &mut Style, report: &mut Report, sym: &SymbolOf, kept: &mut Vec<&'r [String]>) -> bool {
     let mut rules: Vec<super::RuleFilter> = Vec::new();
     let mut classes: Vec<(String, Converted, Option<String>)> = Vec::new();
     let mut other: Option<Converted> = None;
     let mut other_label: Option<String> = None;
     let mut keys = std::collections::HashSet::new();
     let quoted = |f: &String| expr::to_sql(f).map(|e| format!("({e})"));
-    for (i, rule) in drawn.iter().enumerate() {
+    for (i, &rule) in drawn.iter().enumerate() {
         // A top-level else rule at every scale: the rest. (A later one draws nothing more, a
         // feature being drawn with the first rule it meets: its symbol isn't read.)
         let rest = rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled();
@@ -525,6 +529,7 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
         }
         rules.push(super::RuleFilter { key: key.clone(), when, condition: filter, out: rule.scales.0, inside: rule.scales.1 });
         classes.push((key, c, None));
+        kept.push(&rule.filters);
         if rules.len() > MAX_RULE_CLASSES || super::rules_expression(&rules).chars().count() > rustgis_data::query::MAX_LEN {
             return false;
         }
