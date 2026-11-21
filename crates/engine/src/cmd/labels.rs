@@ -978,10 +978,11 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         labels.classes.get_mut(class).unwrap_or(&mut labels.default).move_label(id, Some(at));
     }
     let (min_scale, max_scale) = (l.min_scale, l.max_scale);
+    // Before the labelled layer changes, so a cancel leaves it as it was.
+    super::workflows::hold_as(s, &mut ds, system)?;
     if let Some(src) = s.map_mut().layer_mut(id) {
         src.labels.enabled = false;
     }
-    super::workflows::hold_as(s, &mut ds, system)?;
     let new_id = super::layer::add_dataset(s, ds);
     if let Some(a) = s.map_mut().layer_mut(new_id) {
         // The annotation is all text: the points themselves are invisible.

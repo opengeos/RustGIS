@@ -375,7 +375,7 @@ pub struct Layer {
     /// Hit-testing and snapping use them too, but on the live map, which no export reads this
     /// from.
     #[serde(skip)]
-    drawn: bool,
+    drawn: Drawn,
     /// Allocation identities and byte totals, shared with render snapshots without retaining rows.
     #[serde(skip)]
     view_memory: view_memory::Cache,
@@ -585,7 +585,7 @@ impl Layer {
             unplaced: Unplaced::default(),
             flat_unplaced: Unplaced::default(),
             extent_cache: ExtentCache::default(),
-            drawn: false,
+            drawn: Drawn::default(),
             geometry_rev: 0,
             view_memory: Default::default(),
             geometry_kinds: Default::default(),
@@ -1140,7 +1140,7 @@ impl Layer {
             }
             self.fill_projected(key, flat);
         }
-        self.drawn = true;
+        self.drawn.flat = true;
         &self.projected
     }
 
@@ -1159,7 +1159,7 @@ impl Layer {
             let bytes = lod::cache_bytes(&geoms);
             self.lonlat = LonLatCopy { geoms: std::sync::Arc::new(geoms), bytes, rev: self.geometry_rev, crs: Some(crs) };
         }
-        self.drawn = true;
+        self.drawn.lonlat = true;
         &self.lonlat.geoms
     }
 
@@ -1212,10 +1212,17 @@ impl Layer {
     /// layer in longitude/latitude, which has none. An error when its system can't be converted,
     /// when none of it is drawn.
     pub fn unplaced(&self) -> Option<&Result<usize, String>> {
-        // The larger of the counts of drawings made from its geometry as it is: what one drawing
-        // left out is said, though another drew it.
-        let fit = |u: &Unplaced| u.fits(self);
-        match (fit(&self.unplaced).then_some(&self.unplaced.count), fit(&self.flat_unplaced).then_some(&self.flat_unplaced.count)) {
+        self.unplaced_of(Drawn { flat: true, lonlat: true })
+    }
+
+    /// [`Layer::unplaced`] of the drawings `of` names: the larger of their counts made from its
+    /// geometry as it is, so what one drawing left out is said, though another drew it.
+    fn unplaced_of(&self, of: Drawn) -> Option<&Result<usize, String>> {
+        let fit = |u: &Unplaced, used: bool| used && u.fits(self);
+        match (
+            fit(&self.unplaced, of.lonlat).then_some(&self.unplaced.count),
+            fit(&self.flat_unplaced, of.flat).then_some(&self.flat_unplaced.count),
+        ) {
             (Some(a @ Err(_)), _) | (_, Some(a @ Err(_))) => Some(a),
             (Some(a @ Ok(x)), Some(b @ Ok(y))) => Some(if x >= y { a } else { b }),
             (a, b) => a.or(b),
@@ -1233,14 +1240,16 @@ impl Layer {
         if self.dataset.coord_crs() != Crs::LonLat && !self.unplaced.fits(self) {
             self.convert_counting_unplaced(|_| ());
         }
-        self.drawn = true;
+        self.drawn.lonlat = true;
     }
 
     /// [`Layer::unplaced`] of a layer a drawing used since its map was detached for it
     /// ([`Map::detach_reads`]): what an export drawn on a copy can say of itself. `None` for a
     /// layer it didn't draw (hidden, out of its scale range, on a map the layout doesn't show).
+    /// Only the drawings it made count: one in the layer's own system, which leaves none out,
+    /// doesn't say what a globe drawn on the live map left out.
     pub fn unplaced_drawn(&self) -> Option<&Result<usize, String>> {
-        if self.drawn { self.unplaced() } else { None }
+        self.unplaced_of(self.drawn)
     }
 
     /// Fills the projected geometry cache for `key` with each geometry on `flat`: a layer's own
@@ -1481,7 +1490,8 @@ impl Layer {
             if other.flat_unplaced.fits(other) {
                 self.flat_unplaced = other.flat_unplaced.clone();
             }
-            self.drawn |= other.drawn;
+            self.drawn.flat |= other.drawn.flat;
+            self.drawn.lonlat |= other.drawn.lonlat;
         }
         let fits = other.dataset.features.shares(&self.dataset.features)
             && other.geometry_rev == self.geometry_rev
@@ -2008,7 +2018,7 @@ impl Map {
         }
         // What the copy draws is marked anew ([`Layer::unplaced_drawn`]).
         for l in &mut self.layers {
-            l.drawn = false;
+            l.drawn = Drawn::default();
         }
     }
 
@@ -3666,6 +3676,14 @@ impl Unplaced {
 
 /// A layer's geometry in longitude/latitude, made from its rows at a geometry revision in a
 /// coordinate system ([`Layer::lonlat_in`]).
+/// Which of a layer's drawings a frame made: its flat projection ([`Layer::projected_in`]) or its
+/// longitude/latitude copy ([`Layer::lonlat_in`], [`Layer::count_unplaced`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Drawn {
+    flat: bool,
+    lonlat: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 struct LonLatCopy {
     geoms: std::sync::Arc<Vec<Option<Geometry>>>,
@@ -4624,6 +4642,14 @@ mod tests {
         assert_eq!(wild.unplaced(), Some(&Ok(1)), "the globe's");
         wild.projected_in(&flat("EPSG:31467"), "gk");
         assert_eq!(wild.unplaced(), Some(&Ok(1)), "still the globe's");
+        // A drawing made since its map was detached (an export) says only what it left out: one
+        // in the layer's own system, none, though the live map's globe left one out.
+        wild.drawn = Drawn::default();
+        assert!(wild.unplaced_drawn().is_none(), "not drawn");
+        wild.projected_in(&flat("EPSG:31467"), "gk");
+        assert_eq!(wild.unplaced_drawn(), Some(&Ok(0)));
+        wild.lonlat_in();
+        assert_eq!(wild.unplaced_drawn(), Some(&Ok(1)), "and the globe's when it draws it too");
         // A layer held in Web Mercator is drawn on the Web Mercator map as it is.
         let mut merc = held(Crs::WebMercator);
         let stored_merc = merc.dataset.features[0].geometry.clone().unwrap();

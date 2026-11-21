@@ -176,7 +176,7 @@ fn bare(layer: &Layer) -> Layer {
         unplaced: Default::default(),
         flat_unplaced: Default::default(),
         extent_cache: Default::default(),
-        drawn: false,
+        drawn: Default::default(),
         view_memory: Default::default(),
         geometry_kinds: Default::default(),
         geometry_rev: *geometry_rev,

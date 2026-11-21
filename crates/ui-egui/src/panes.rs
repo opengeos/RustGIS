@@ -6968,7 +6968,12 @@ fn save_history_script(app: &mut RustGisApp) {
 /// What the Layer Properties pane's Source tab (#1803) shows of a layer: its geometry, counts,
 /// source, coordinate system, extent and fields, or a raster's own details.
 pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
-    let e = l.extent();
+    // A layer held in another system shows its extent there, as its coordinates are: no
+    // conversion of every place on the interface thread, which this pane is drawn on each frame.
+    let held = l.dataset.coord_crs();
+    let lonlat = held == rustgis_engine::data::raster::Crs::LonLat;
+    let e = if lonlat { l.extent() } else { l.dataset.extent() };
+    let edge = |v: f64| if lonlat { format!("{v:.4}°") } else { format!("{v:.2}") };
     if let Some(rl) = &l.raster {
         raster_details(ui, rl, t);
         return;
@@ -6983,10 +6988,11 @@ pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
             // A web or database address without its keys, tokens or password.
             ("Source", l.dataset.source.as_deref().map_or_else(|| tl!("In project").into(), rustgis_engine::sources::redact)),
             ("Source coordinate system", l.dataset.crs.map(|c| c.label()).unwrap_or_else(|| "EPSG:4326".into())),
-            ("West", format!("{:.4}°", e.min_x)),
-            ("East", format!("{:.4}°", e.max_x)),
-            ("South", format!("{:.4}°", e.min_y)),
-            ("North", format!("{:.4}°", e.max_y)),
+            ("Held in", held.label()),
+            (if lonlat { "West" } else { "Min X" }, edge(e.min_x)),
+            (if lonlat { "East" } else { "Max X" }, edge(e.max_x)),
+            (if lonlat { "South" } else { "Min Y" }, edge(e.min_y)),
+            (if lonlat { "North" } else { "Max Y" }, edge(e.max_y)),
             ("Definition query", l.definition_query.clone().unwrap_or_else(|| "—".into())),
         ];
         for (k, v) in rows {
