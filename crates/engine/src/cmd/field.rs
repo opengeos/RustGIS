@@ -2371,6 +2371,8 @@ mod tests {
         std::fs::write(&path, &back).unwrap();
         assert!(home.run("offline.bringBack", &json!({"path": path.display().to_string()})).is_err());
         assert!(!temp.path().join("Back photos").exists());
+        // Nor the photos field it would have added.
+        assert!(home.map().layer(home_cities).unwrap().dataset.field_index("photos").is_none());
         // A file holds bytes only as a file of their size: a folder, or another size, doesn't.
         let file = temp.path().join("same.jpg");
         std::fs::write(&file, b"abc").unwrap();

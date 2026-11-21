@@ -918,22 +918,31 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                 _ => false,
             };
             // An area field the source hasn't (removed there, or added offline), or has with another
-            // type, has no place for the area's values: refused unless nothing changed offline, its
-            // fields included.
-            let misfits: Vec<&str> = ol_ds
+            // type, has no place for the area's values; a field removed offline that the source
+            // still has would come back with the refresh. Either is refused unless nothing changed
+            // offline, its fields included.
+            let mut misfits: Vec<&str> = ol_ds
                 .fields
                 .iter()
                 .zip(&to_source)
                 .filter(|(f, j)| j.and_then(|j| sl.dataset.fields.get(j)).is_none_or(|s| s.ty != f.ty))
                 .map(|(f, _)| f.name.as_str())
                 .collect();
+            if let Some(b) = &baseline {
+                misfits.extend(
+                    b.fields
+                        .iter()
+                        .filter(|f| ol_ds.field_index(&f.name).is_none() && sl.dataset.field_index(&f.name).is_some())
+                        .map(|f| f.name.as_str()),
+                );
+            }
             let fields_as_last = baseline.as_ref().is_some_and(|b| {
                 b.fields.len() == ol_ds.fields.len()
                     && b.fields.iter().zip(&ol_ds.fields).all(|(x, y)| x.name.eq_ignore_ascii_case(&y.name) && x.ty == y.ty)
             });
             if !misfits.is_empty() && !(same_as_last && fields_as_last) {
                 return Err(format!(
-                    "cannot sync layer '{}': source and offline fields differ ({} missing from the map '{}' or of another type there); align the fields before syncing",
+                    "cannot sync layer '{}': source and offline fields differ ({} not in both the area and the map '{}', or of another type in one); align the fields before syncing",
                     ol.name,
                     misfits.join(", "),
                     area.map
@@ -955,15 +964,25 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             // copies.
             let base: ById<'_> = baseline.as_deref().map(by_id).unwrap_or_default();
             let to_base = baseline.as_ref().map(|b| by_name(&ol_ds.fields, &b.fields)).unwrap_or_default();
-            let base_to_source = baseline.as_ref().map(|b| by_name(&b.fields, &sl.dataset.fields)).unwrap_or_default();
+
             let unchanged_offline = |fid: u64, now: rustgis_data::RowRef<'_>| match &raw {
                 Some((raw_base, raw_now, map)) => {
                     raw_base.get(&fid).is_some_and(|b| raw_now.get(&fid).is_some_and(|n| same_on(*n, *b, map, true)))
                 }
                 None => base.get(&fid).is_some_and(|b| same_on(now, *b, &to_base, true)),
             };
-            // Changed in the source since the last sync, in the fields the area had.
-            let changed_at_home = |x: rustgis_data::RowRef<'_>| base.get(&x.id()).is_some_and(|b| !same_on(*b, x, &base_to_source, false));
+            // Changed in the source since the last sync, in the fields it shares with the area: a
+            // field the last synced copy lacks (added on both sides since) counts as Null there.
+            let changed_at_home = |x: rustgis_data::RowRef<'_>| {
+                base.get(&x.id()).is_some_and(|b| {
+                    b.geometry() != x.geometry()
+                        || to_source.iter().enumerate().any(|(i, j)| {
+                            j.is_some_and(|j| {
+                                to_base.get(i).copied().flatten().map_or(&rustgis_data::Value::Null, |k| b.value(k)) != x.value(j)
+                            })
+                        })
+                })
+            };
             let held = (sl.dataset.coord_crs() != rustgis_data::raster::Crs::LonLat).then(|| sl.dataset.clone());
             if held.is_some() {
                 sl.dataset = sl.dataset.in_lonlat().map_err(|e| sync_error(&ol.name, e))?.into_owned();

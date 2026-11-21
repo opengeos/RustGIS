@@ -15780,7 +15780,7 @@ fn offline_sync_rejects_incompatible_fields_and_preserves_safe_refreshes() {
         );
     }
 
-    for mode in ["source_deleted", "geometry_only", "offline_added", "source_type_changed", "empty_offline_schema"] {
+    for mode in ["source_deleted", "geometry_only", "offline_added", "offline_removed", "source_type_changed", "empty_offline_schema"] {
         let mut s = offline_field_session(&["Assets"], mode == "empty_offline_schema");
         if mode == "geometry_only" {
             s.map_mut().layers[0].dataset.features[0].geometry = Some(Geometry::Point(Coord::new(1.1, 1.0)));
@@ -15789,6 +15789,10 @@ fn offline_sync_rejects_incompatible_fields_and_preserves_safe_refreshes() {
         }
         if mode == "offline_added" || mode == "empty_offline_schema" {
             s.run("edit.addField", &json!({"layer": "Assets", "name": "survey", "type": "long"})).unwrap();
+        }
+        if mode == "offline_removed" {
+            // Removed offline while the source keeps it: the refresh would bring it back.
+            s.run("edit.deleteField", &json!({"layer": "Assets", "field": "region"})).unwrap();
         }
         s.run("map.activate", &json!({"name": "Map"})).unwrap();
         match mode {
@@ -15813,6 +15817,23 @@ fn offline_sync_rejects_incompatible_fields_and_preserves_safe_refreshes() {
             assert!(!s.dirty(), "{mode}");
         }
     }
+}
+
+/// A field added under the same name both offline and in the source: the source's value in it is
+/// compared too, so an edit there on both sides is a conflict, not a silent overwrite.
+#[test]
+fn offline_sync_field_added_on_both_sides_is_compared() {
+    let mut s = offline_field_session(&["Assets"], false);
+    s.run("edit.addField", &json!({"layer": "Assets", "name": "notes", "type": "text"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Assets", "row": 0, "field": "notes", "value": "crew"})).unwrap();
+    s.run("map.activate", &json!({"name": "Map"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Assets", "name": "notes", "type": "text"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Assets", "row": 0, "field": "notes", "value": "office"})).unwrap();
+    let mark = s.notice_mark();
+    let done = s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(done["conflicts"].as_u64(), Some(1), "{done}");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("replaced the map's changes") && t.contains("Assets #")), "{said:?}");
 }
 
 #[test]
