@@ -57,9 +57,12 @@ pub(crate) struct Frame {
     pub font_generation: u32,
     /// How many layers the map has, which labels take their priority from.
     pub layers: usize,
-    /// The minute graphics text shows for `{date}` and `{time}`
-    /// ([`rustgis_map::graphics::TokenValues`]), on a map with graphics.
-    pub clock: Option<u64>,
+    /// What graphics text shows for `{date}` and `{time}` (the minute) and for `{layers}` (the
+    /// layers not of graphics), on a map with graphics ([`rustgis_map::graphics::TokenValues`]).
+    pub tokens: Option<(u64, usize)>,
+    /// The layer each tile layer is drawn over ([`rustgis_map::Map::tile_slots`]), which follows
+    /// the layers present as well as the tile layers' settings.
+    pub tile_slots: Vec<Option<u32>>,
 }
 
 impl Frame {
@@ -79,7 +82,8 @@ impl Frame {
             && self.fonts == other.fonts
             && self.font_generation == other.font_generation
             && self.layers == other.layers
-            && self.clock == other.clock
+            && self.tokens == other.tokens
+            && self.tile_slots == other.tile_slots
             && self.map.same(&other.map)
     }
 }

@@ -4267,7 +4267,11 @@ fn render_frame(
             fonts: families::installed_now().is_some(),
             font_generation: fonts::font_generation(),
             layers: map.layers.len(),
-            clock: map.layers.iter().any(|l| l.graphics).then(|| rustgis_map::graphics::TokenValues::of(map, scale).now / 60),
+            tokens: map.layers.iter().any(|l| l.graphics).then(|| {
+                let t = rustgis_map::graphics::TokenValues::of(map, scale);
+                (t.now / 60, t.layers)
+            }),
+            tile_slots: map.tile_slots(),
         };
         // By id and place in the list, which labels take their priority from.
         let looks = order
@@ -4277,6 +4281,8 @@ fn render_frame(
         frame_cache::plan(frame, looks, u64::from(w) * u64::from(h))
     });
     let start = cached.as_ref().map_or(0, |p| p.start);
+    // A frame with no kept picture to start from draws what lies under its layers.
+    let cold = cached.as_ref().is_none_or(|p| p.restored.is_none());
     let mut captured: Option<(usize, frame_cache::Checkpoint)> = None;
     // The layer kept alone (`frame_cache::Alone`): its picture once composited, and the rest once
     // it is done.
@@ -4303,7 +4309,7 @@ fn render_frame(
     // Set when such a frame stops that way.
     let mut declined = false;
     // A frame started from a kept picture has its basemap and the tile layers under its layers.
-    if start == 0 && map.draws_world_outline() {
+    if cold && map.draws_world_outline() {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
         let custom_world = custom.then(|| world_in(worldview, &flat, &key));
@@ -4367,7 +4373,7 @@ fn render_frame(
             }
         }
     }
-    if start == 0 && map.graticule && grat.a() > 0 {
+    if cold && map.graticule && grat.a() > 0 {
         let p = paint(grat, 1.0);
         // A measured or UTM graticule's lines (#1042), else latitudes and longitudes.
         let grid = mapgrid::lines(map, view);
@@ -4485,7 +4491,7 @@ fn render_frame(
             }
         }};
     }
-    if start == 0 {
+    if cold {
         draw_tiles!(None);
     }
 
