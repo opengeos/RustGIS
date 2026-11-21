@@ -112,7 +112,7 @@ fn starts_with(name: &str, prefix: &str) -> bool {
 /// Only once a character of the word is typed (a quote begun counts), unless `asked`
 /// (Ctrl+Space).
 pub(crate) fn offer_from(c: &Completion, text: &str, ds: &Dataset, asked: bool) -> Option<Offer> {
-    let mut of = values(c, ds, asked);
+    let mut of = values(c, text, ds, asked);
     if (c.place == Place::Text && of.is_empty()) || (c.word.is_empty() && !asked) {
         return None;
     }
@@ -161,13 +161,18 @@ pub(crate) fn offer_from(c: &Completion, text: &str, ds: &Dataset, asked: bool) 
 /// as it is). None in a field's name, nor of a value compared with no field (`upper(name) = '`).
 /// Read again whenever the text, the cursor or the rows change, from a bounded sample
 /// (`query::VALUES_READ`).
-fn values(c: &Completion, ds: &Dataset, asked: bool) -> Vec<Item> {
+fn values(c: &Completion, text: &str, ds: &Dataset, asked: bool) -> Vec<Item> {
     use rustgis_engine::data::FieldType;
     let Some((i, field)) = c.field.and_then(|i| Some((i, ds.fields.get(i)?))) else { return Vec::new() };
     let quoted = matches!(field.ty, FieldType::Text | FieldType::Date | FieldType::DateTime);
     let wanted = match c.place {
         Place::Text => quoted,
-        Place::Code => c.operand && c.word.is_empty() && asked,
+        // Not just before a value already written (`pop = ▮1.5`, `name = ▮'Lima'`): only its
+        // start would be replaced (`3.5`, `'Paris''Lima'`).
+        Place::Code => {
+            let next = text.chars().nth(c.word.end);
+            c.operand && c.word.is_empty() && asked && next.is_none_or(|n| n.is_whitespace() || matches!(n, ')' | ','))
+        }
         Place::Field => false,
     };
     if !wanted {
@@ -781,6 +786,11 @@ mod tests {
         assert!(asked.contains(&"pop".to_string()) && asked.contains(&"round()".to_string()), "then the rest");
         assert_eq!(offered("name IN ('Lima', ", true).first().map(String::as_str), Some("'Lima'"));
         assert!(!offered("pop = p", true).contains(&"3".to_string()), "a word typed is no value");
+        for (text, at) in [("pop = 1.5", 6), ("name = 'Lima'", 7), ("pop IN (3, 10)", 8)] {
+            let items = offer_at(text, at, &places(), true).map(|o| o.items).unwrap_or_default();
+            assert!(!items.iter().any(|i| i == "3" || i == "'Paris'"), "not before a value written: {text}");
+        }
+        assert_eq!(offer_at("pop IN (3, )", 11, &places(), true).unwrap().items.first().map(String::as_str), Some("3"));
         // Of a layer of no rows, none.
         assert_eq!(items("name = '", false), Vec::<String>::new());
         // A number in a text field (a hostile file) isn't written bare over the quote begun.

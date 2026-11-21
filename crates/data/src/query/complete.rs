@@ -209,7 +209,8 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
 pub fn literal(v: &Value) -> Option<String> {
     match v {
         Value::Int(i) if i.unsigned_abs() < 9_000_000_000_000_000 => Some(i.to_string()),
-        Value::Float(x) if x.is_finite() => Some(x.to_string()),
+        // `-0` is `0`, the one value.
+        Value::Float(x) if x.is_finite() => Some(if *x == 0.0 { 0.0 } else { *x }.to_string()),
         Value::Text(t) => Some(format!("'{}'", t.replace('\'', "''"))),
         Value::Date(_) | Value::DateTime(_) => Some(format!("'{v}'")),
         Value::Int(_) | Value::Float(_) | Value::Null | Value::Bool(_) => None,
@@ -270,6 +271,7 @@ mod tests {
         }
         assert_eq!(literal(&Value::Text("O'Brien".into())).as_deref(), Some("'O''Brien'"));
         assert_eq!(literal(&Value::Float(3.0)).as_deref(), Some("3"));
+        assert_eq!(literal(&Value::Float(-0.0)).as_deref(), Some("0"));
         assert_eq!(literal(&Value::Int(8_999_999_999_999_999)).as_deref(), Some("8999999999999999"));
         assert_eq!(literal(&Value::Int(-8_999_999_999_999_999)).as_deref(), Some("-8999999999999999"));
         for v in [
