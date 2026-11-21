@@ -64,8 +64,9 @@ const MARKER_READ_BYTES: usize = if cfg!(test) { 1 << 10 } else { rustgis_map::s
 
 /// The importer's reader of raster image markers' images ([`qgis::ReadImage`]): [`marker_image`]
 /// within [`MARKER_READ_BYTES`] for the import. On the import's thread, as the rest of it is
-/// (`import_project` says why): each read is one file of at most 1.5 MiB, only a regular file is
-/// opened (a pipe or a device would wait for a writer), and the bound caps them all.
+/// (`import_project` and `import_style` say why): each read is one file of at most 1.5 MiB, only
+/// a regular file is opened (a pipe or a device would wait for a writer), and the bound caps them
+/// all.
 fn marker_images() -> impl FnMut(&str) -> Result<(String, f32), &'static str> {
     let mut read = 0;
     move |source| {
@@ -88,6 +89,11 @@ fn marker_image(source: &str, read: &mut usize) -> Result<(String, f32), &'stati
     const TOO_LARGE: &str = "whose image is past 2 MiB of base64";
     const NOT_AN_IMAGE: &str = "whose image isn't a PNG or JPEG RustGIS reads";
     let b64 = match source.strip_prefix("base64:") {
+        // Past the limit, refused before it is copied, and charged as a file past it is.
+        Some(b64) if b64.trim().len() > MAX_PICTURE_BYTES => {
+            *read += MAX_PICTURE_BYTES;
+            return Err(TOO_LARGE);
+        }
         Some(b64) => b64.trim().to_string(),
         // Base64 is 4 characters for 3 bytes.
         None => match super::graphics::read_picture_file(source, MAX_PICTURE_BYTES / 4 * 3) {
@@ -1999,6 +2005,13 @@ fn notify_report(s: &mut Session, report: &Report) {
     }
 }
 
+/// Imports a QGIS style onto a layer. On the thread that runs it, as the project import is: it
+/// changes the layer it styles, and RustGIS has no background path yet for a command that reads
+/// files and then changes the session (one would take the reads and the checks of the images off
+/// the window, with Cancel). Its work is bounded by the style: one file of at most [`MAX_FILE`]
+/// bytes, its XML parsed within [`MAX_XML`], and its raster image markers' images within
+/// [`MARKER_READ_BYTES`], each file read once and decoded once to check it (see
+/// [`marker_images`] and [`marker_image`]).
 fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     let id = s.layer_id(p)?;
