@@ -1948,6 +1948,16 @@ mod tests {
                     assert!(answer["similar"][0]["distance"].is_number());
                     assert!(h.query_by_label_contains("distance").is_some(), "the ranking is drawn in the pane");
                     assert!(h.state().workflow.error.is_none());
+                    if outcome == "success" {
+                        let answer = h.state().workflow.result.clone();
+                        h.step();
+                        assert_eq!(h.state().workflow.result, answer, "an unchanged layer keeps its ranking");
+                        h.state_mut().run("layer.remove", json!({"layer":id})).unwrap();
+                        h.step();
+                        assert_eq!(h.state().workflow.layer, "other");
+                        assert!(h.state().workflow.result.is_none() && h.state().workflow.error.is_none());
+                        assert!(h.query_by_label_contains("distance").is_none(), "a fallback layer cannot show the removed layer's rows");
+                    }
                 }
                 "error" => {
                     assert!(h.state().workflow.result.is_none());

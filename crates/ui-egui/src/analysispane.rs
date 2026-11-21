@@ -685,7 +685,12 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         _ => &features,
     };
     if !inputs.contains(&w.layer) {
-        w.layer = inputs.first().cloned().unwrap_or_default();
+        let layer = inputs.first().cloned().unwrap_or_default();
+        if w.section == "similar" && w.layer != layer {
+            forget_similar(w);
+            (w.result, w.error) = (None, None);
+        }
+        w.layer = layer;
     }
     if (w.section == "zonalStats" || w.section == "process") && !polygons.contains(&w.layer2) {
         w.layer2 = polygons.first().cloned().unwrap_or_default();
