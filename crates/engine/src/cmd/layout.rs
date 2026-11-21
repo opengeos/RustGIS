@@ -4338,13 +4338,9 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
         let Some(l) = s.project.layouts.get(li) else { return };
         let Some(e) = l.element(id) else { return };
         let ElementKind::Chart { frame, layer, field, .. } = &e.kind else { return };
-        // At the frame's scale, as the page draws it (a series page aside).
-        let scale = match l.element(*frame).map(|f| &f.kind) {
-            Some(ElementKind::MapFrame { scale, .. }) => Some(*scale),
-            _ => None,
-        };
-        let env = rustgis_data::query::Env::default().at_scale(scale);
-        let Some(data) = frame_layer(s, l, *frame, layer).and_then(|fl| e.kind.chart_data_of(fl, &env)) else { return };
+        // Read as the page draws it: at the frame's scale and on the series page shown.
+        let Some((m, env)) = rustgis_render::layout::frame_page_env(l, &s.project.maps, *frame) else { return };
+        let Some(data) = m.layer_by_name(layer).and_then(|fl| e.kind.chart_data_of(fl, &env)) else { return };
         let mut said = Vec::new();
         if data.left_out > 0 {
             let drawn = data.bars.len();

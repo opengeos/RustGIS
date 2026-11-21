@@ -39909,6 +39909,28 @@ fn layout_charts_take_their_layers_classes() {
     let mark = s.notice_mark();
     s.run("layout.addElement", &json!({"kind": "chart", "layer": "Places", "field": "people", "group": "kind", "classes": true})).unwrap();
     assert!(said(&s, mark).iter().any(|t| t.contains("2 bars keep the chart's bar colour")), "{:?}", said(&s, mark));
+    // A colour that changes at the frame's own scale: the notice reads it at the scale the page
+    // draws at (a little under the stored one), so East's city and town differ, as drawn.
+    let Some(ElementKind::Chart { frame, .. }) = s.project.layouts[0].element(chart).map(|e| &e.kind) else { panic!("no chart") };
+    let frame = *frame;
+    let Some(ElementKind::MapFrame { scale: stored, .. }) = s.project.layouts[0].element(frame).map(|e| &e.kind) else {
+        panic!("no frame")
+    };
+    let stored = *stored;
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Places").unwrap().symbol_by.fill =
+        Some(format!("CASE WHEN @map_scale < {stored} AND kind = 'city' THEN '#ff0000' ELSE '#0000ff' END"));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "group": "region"})).unwrap();
+    let (m, env) = rustgis_render::layout::frame_page_env(&s.project.layouts[0], &s.project.maps, frame).unwrap();
+    assert!(env.map_scale.is_some_and(|drawn| drawn < stored), "{env:?} {stored}");
+    let places = m.layers.iter().find(|l| l.name == "Places").unwrap();
+    assert_eq!(s.project.layouts[0].element(chart).unwrap().kind.chart_data_of(places, &env).unwrap().mixed, 1);
+    assert!(
+        said(&s, mark).iter().any(|t| t.contains("1 bar keeps the chart's bar colour: its features have several colours")),
+        "{:?}",
+        said(&s, mark)
+    );
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Places").unwrap().symbol_by.fill = None;
     // Points drawn with nothing show no colour: every bar keeps the bar colour, and it says so.
     let l = s.map_mut().layers.iter_mut().find(|l| l.name == "Places").unwrap();
     let mut sym = l.renderer.base_symbol();

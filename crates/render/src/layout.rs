@@ -42,6 +42,22 @@ pub fn series_env(layout: &Layout, maps: &[Map]) -> Env {
     Env { page: page(), ..Env::default() }
 }
 
+/// The environment a map frame's features are styled in on the page: `env` (the series page) at
+/// the scale the frame draws at, its map's ground resolution in screen pixels.
+pub fn frame_style_env(map: &Map, camera: &rustgis_map::Camera, env: &Env) -> Env {
+    env.at_scale(Some(map.ground_res_at(camera) / rustgis_geom::PIXEL_M))
+}
+
+/// Map frame `frame`'s map and the environment its features are styled in on `layout`'s current
+/// page ([`series_env`] at [`frame_style_env`]'s scale): what a chart coloured by classes reads its
+/// bars' colours in, so what is said of them matches what is drawn.
+pub fn frame_page_env<'a>(layout: &Layout, maps: &'a [Map], frame: u32) -> Option<(&'a Map, Env)> {
+    let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(frame)?.kind else { return None };
+    let m = maps.get(map_index(maps, map)?)?;
+    let camera = frame_camera(m, *center, *scale, *bearing, *pitch);
+    Some((m, frame_style_env(m, &camera, &series_env(layout, maps))))
+}
+
 /// Largest page drawn, in pixels per side and in all (less in the browser, where memory is
 /// tighter): a larger page is drawn at a lower resolution.
 pub const MAX_SIDE: f64 = 12_000.0;
@@ -685,8 +701,7 @@ fn draw_page(
                 // and on this page, as the frame draws them.
                 let data = frame(*f).and_then(|&(_, mi, cam, _, _)| {
                     let m = maps.get(mi)?;
-                    let at = env.at_scale(Some(m.ground_res_at(&cam) / rustgis_geom::PIXEL_M));
-                    e.kind.chart_data_of(m.layer_by_name(layer)?, &at)
+                    e.kind.chart_data_of(m.layer_by_name(layer)?, &frame_style_env(m, &cam, env))
                 });
                 match data {
                     Some(data) => {
