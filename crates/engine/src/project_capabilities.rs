@@ -431,14 +431,17 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         mut zarr,
     ) = (false, false, false, false, false, false, false, false, false, false, false);
     let (mut offline_area_id, mut paper) = (false, false);
+    let mut polygon = false;
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
         // A blank basemap's paper colour (#2532), which an older reader would draw and save white.
         paper |= map.paper.is_some();
         if let Some(t) = &map.view.terrain {
             block |= t.block.is_some();
-            // A round block (#2318), which an older reader would draw and save as a box.
+            // A round block (#2318), which an older reader would draw and save as a box; one cut
+            // to polygons, which a reader of round blocks only couldn't read.
             shape |= t.block.as_ref().is_some_and(|b| !b.shape.is_box());
+            polygon |= t.block.as_ref().is_some_and(|b| matches!(b.shape, rustgis_map::view::BlockShape::Polygon { .. }));
             water |= t.water.is_some();
             // A shore band other than the default, which an older reader would save away.
             shore |= t.water.as_ref().is_some_and(|w| w.shore != rustgis_map::view::WATER_SHORE);
@@ -457,6 +460,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
     [
         (block, "terrain-block"),
         (shape, "terrain-block-shape"),
+        (polygon, "terrain-block-polygon"),
         (water, "terrain-water"),
         (shore, "terrain-water-shore"),
         (block_water, "terrain-block-water"),
