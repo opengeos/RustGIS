@@ -625,7 +625,8 @@ fn images_message(rs: &[ToolResult], text: &str, image: impl Fn(&ToolImage) -> V
 fn user_parts(text: &str, pictures: &[Picture], text_part: impl Fn(&str) -> Value, image_part: impl Fn(&Picture) -> Value) -> Vec<Value> {
     let mut parts = Vec::new();
     for (i, p) in pictures.iter().enumerate() {
-        parts.push(text_part(&format!("Picture {} the user attached: {} ({} × {})", i + 1, p.name, p.width, p.height)));
+        let name = crate::compact::escape_user(&p.name);
+        parts.push(text_part(&format!("Picture {} the user attached: {name} ({} × {})", i + 1, p.width, p.height)));
         parts.push(image_part(p));
     }
     if !text.is_empty() || parts.is_empty() {
@@ -694,6 +695,14 @@ pub const NOTE_TEMPLATES: &[&str] = &[
     "A message takes at most {most} pictures: {names} left out.",
     "Attached {name}, sent at {size} (from {from}).",
     "Attached {name} ({size}).",
+    "{name}: a picture can be at most {limit} MiB",
+    "{name}: a picture must be a PNG, JPEG or WebP file",
+    "{name}: a picture can be at most {limit} pixels a side",
+    "{name}: the picture can't be read ({why})",
+    "{name}: the picture's pixels don't match its size",
+    "{name}: the picture is empty",
+    "{name}: the picture can't be encoded ({why})",
+    "{name}: the picture is too heavy to send, even drawn small",
     "Stopped after {steps} steps; say \"continue\" to go on.",
     "Stopped.",
 ];

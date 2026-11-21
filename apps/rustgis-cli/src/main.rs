@@ -283,19 +283,14 @@ fn ask_request(args: &[String]) -> Option<String> {
 /// ([`rustgis_assistant::attach::prepare`]). One that can't be is an error, so the request isn't
 /// sent without it.
 fn ask_pictures(args: &[String]) -> Result<Vec<rustgis_assistant::attach::Picture>, String> {
-    use rustgis_assistant::attach::{MAX_FILE_BYTES, prepare};
+    use rustgis_assistant::attach::{prepare, read};
     let mut pictures = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a != "--image" {
             continue;
         }
         let path = args.get(i + 1).filter(|p| !p.starts_with("--")).ok_or("--image needs a picture file")?;
-        let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-        // Read no further than one byte past the limit, which `prepare` then refuses.
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_FILE_BYTES as u64 + 1), &mut bytes)
-            .map_err(|e| format!("{path}: {e}"))?;
-        pictures.push(prepare(path, &bytes)?);
+        pictures.push(prepare(path, &read(path)?).map_err(|e| e.to_string())?);
     }
     Ok(pictures)
 }

@@ -88,6 +88,11 @@ enum State {
 /// What the transcript says when RustGIS itself fails while handling a reply.
 pub const INTERNAL_ERROR: &str = "RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.";
 
+/// What the transcript says when pictures the user attached go to a model that doesn't read
+/// images (listed in [`provider::NOTE_TEMPLATES`]).
+const PICTURES_AS_NAMES: &str =
+    "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.";
+
 pub struct Agent {
     pub config: Config,
     turns: Vec<Turn>,
@@ -450,6 +455,8 @@ impl Agent {
         self.guard(|a| a.ask_unguarded(text, pictures, s))
     }
 
+    /// [`Agent::ask_with`] inside the panic guard: records the message and its pictures, joins a
+    /// user turn still waiting, and sends.
     fn ask_unguarded(&mut self, text: &str, mut pictures: Vec<Picture>, s: &Session) -> Step {
         self.always.retain(|r| r.belongs_to_generation(s.project_generation()));
         let text = text.trim();
@@ -481,9 +488,7 @@ impl Agent {
             }));
         }
         if !pictures.is_empty() && self.refused_images() {
-            self.transcript.push(Entry::Note(Note::new(
-                "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.",
-            )));
+            self.transcript.push(Entry::Note(Note::new(PICTURES_AS_NAMES)));
         }
         let text = compact::escape_user(text);
         let ctx = compact::escape_user(&tools::context(s));
@@ -791,9 +796,7 @@ impl Agent {
                     "The model doesn't read images: the map's pictures go to it as their captions, and view_map is off for it.",
                 )));
                 if compact::has_pictures(&self.turns) {
-                    self.transcript.push(Entry::Note(Note::new(
-                        "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.",
-                    )));
+                    self.transcript.push(Entry::Note(Note::new(PICTURES_AS_NAMES)));
                 }
                 return self.send();
             }
@@ -1158,10 +1161,14 @@ impl Agent {
             // providers. The map context goes again with the next one. (Idle: `ask` failed
             // before the request went out.)
             State::Idle | State::Waiting | State::Retrying | State::Compacting { .. } => {
-                // A summary at its start stays: only the message after it goes.
-                if let Some(Turn::User(last, _)) = self.turns.last_mut() {
+                // A summary at its start stays: only the message after it goes, with its
+                // pictures (a summary has none).
+                if let Some(Turn::User(last, pictures)) = self.turns.last_mut() {
                     match compact::summary_len(last) {
-                        Some(n) => last.truncate(n),
+                        Some(n) => {
+                            last.truncate(n);
+                            pictures.clear();
+                        }
                         None => {
                             self.turns.pop();
                         }

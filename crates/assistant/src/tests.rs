@@ -2954,7 +2954,7 @@ fn a_retried_summary_is_still_a_summary() {
 fn every_note_template_is_listed_for_translation() {
     // Each template written in the source is in NOTE_TEMPLATES (which the interface's catalogs
     // are checked against); "{text}" carries text RustGIS doesn't write itself.
-    for source in [include_str!("agent.rs"), include_str!("provider.rs"), include_str!("compact.rs")] {
+    for source in [include_str!("agent.rs"), include_str!("provider.rs"), include_str!("compact.rs"), include_str!("attach.rs")] {
         for start in ["Note::new(", "Note::with("] {
             for piece in source.split(start).skip(1) {
                 let Some(piece) = piece.trim_start().strip_prefix('"') else { continue };
@@ -5111,16 +5111,17 @@ fn a_large_picture_is_sent_smaller_and_a_small_one_as_it_is() {
 #[test]
 fn a_picture_that_cant_be_sent_is_refused_saying_why() {
     use crate::attach::{MAX_FILE_BYTES, from_rgba, prepare};
-    let e = prepare("notes.txt", b"not a picture").unwrap_err();
+    let e = prepare("notes.txt", b"not a picture").unwrap_err().to_string();
     assert!(e.contains("PNG, JPEG or WebP"), "{e}");
-    let e = prepare("big.png", &vec![0; MAX_FILE_BYTES + 1]).unwrap_err();
+    let e = prepare("big.png", &vec![0; MAX_FILE_BYTES + 1]).unwrap_err().to_string();
     assert!(e.contains("at most 20 MiB"), "{e}");
-    let e = prepare("tall.png", &png_file(1, 9000, false)).unwrap_err();
+    let e = prepare("tall.png", &png_file(1, 9000, false)).unwrap_err().to_string();
     assert!(e.contains("8192 pixels a side"), "{e}");
     let mut broken = png_file(64, 64, false);
     broken.truncate(60);
-    assert!(prepare("broken.png", &broken).unwrap_err().contains("can't be read"));
+    assert!(prepare("broken.png", &broken).unwrap_err().to_string().contains("can't be read"));
     assert!(from_rgba("short", 4, 4, vec![0; 3]).is_err());
+    assert!(from_rgba("huge", 9000, 1, Vec::new()).unwrap_err().to_string().contains("8192 pixels a side"));
 }
 
 #[test]
@@ -5144,6 +5145,9 @@ fn pictures_go_with_the_message_and_the_transcript_says_each() {
     assert!(
         a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == "A message takes at most 4 pictures: p5.jpg left out."))
     );
+    // Stopped before the reply, the message goes with its pictures: none is sent later.
+    a.stop();
+    assert!(!crate::compact::has_pictures(a.turns()));
     // A message of pictures only is sent; one of neither isn't.
     let mut a = Agent::new(cfg("anthropic"), &s);
     assert!(matches!(a.ask_with("", vec![picture("a.jpg")], &s), Step::Send(_)));

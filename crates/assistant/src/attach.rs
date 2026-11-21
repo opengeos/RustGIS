@@ -8,7 +8,10 @@
 
 use std::io::Cursor;
 
+use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+
+use crate::provider::Note;
 
 /// The largest file a picture is read from; a front end refuses a larger one before reading it.
 pub const MAX_FILE_BYTES: usize = 20 * 1024 * 1024;
@@ -70,20 +73,23 @@ impl Picture {
     }
 }
 
-/// A picture from the bytes of a PNG, JPEG or WebP file named `name`. Refused, saying why: a file
-/// over [`MAX_FILE_BYTES`], another format, one that doesn't decode, or one over
-/// [`MAX_DECODED_SIDE`] pixels a side.
+/// A picture from the bytes of a PNG, JPEG or WebP file named `name`. Refused, saying why in a
+/// [`Note`] the interface translates: a file over [`MAX_FILE_BYTES`], another format, one that
+/// doesn't decode, or one over [`MAX_DECODED_SIDE`] pixels a side.
 ///
-/// Decoding is the long step (up to about a second for the largest photo): the desktop runs it off
-/// the window's thread.
-pub fn prepare(name: &str, bytes: &[u8]) -> Result<Picture, String> {
+/// Decoding is the long step, one with no check for Cancel (up to about a second for the largest
+/// photo): the desktop runs it off the window's thread. It holds the file, the decoded picture
+/// (at most [`MAX_DECODE_BYTES`]) and the picture drawn small, never another full copy.
+pub fn prepare(name: &str, bytes: &[u8]) -> Result<Picture, Note> {
     let name = clean_name(name);
     if bytes.len() > MAX_FILE_BYTES {
-        return Err(format!("{name}: a picture can be at most {} MiB", MAX_FILE_BYTES / 1024 / 1024));
+        return Err(too_large(name));
     }
-    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| format!("{name}: {e}"))?;
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| Note::with("{name}: the picture can't be read ({why})", [("name", name.clone()), ("why", e.to_string())]))?;
     if !matches!(reader.format(), Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP)) {
-        return Err(format!("{name}: a picture must be a PNG, JPEG or WebP file"));
+        return Err(Note::with("{name}: a picture must be a PNG, JPEG or WebP file", [("name", name)]));
     }
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_DECODED_SIDE);
@@ -91,37 +97,60 @@ pub fn prepare(name: &str, bytes: &[u8]) -> Result<Picture, String> {
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     let unreadable = |e: image::ImageError| match e {
-        image::ImageError::Limits(_) => format!("{name}: a picture can be at most {MAX_DECODED_SIDE} pixels a side"),
-        e => format!("{name}: the picture can't be read ({e})"),
+        image::ImageError::Limits(_) => too_many_pixels(name.clone()),
+        e => Note::with("{name}: the picture can't be read ({why})", [("name", name.clone()), ("why", e.to_string())]),
     };
     let mut decoder = reader.into_decoder().map_err(unreadable)?;
-    // A photo taken with the phone on its side says so; an unreadable note is no turn.
-    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut img = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
-    img.apply_orientation(orientation);
-    finish(name, img)
+    // A photo taken with the phone on its side says so. A note that can't be read leaves the
+    // picture as it was stored, which is how it is shown without the note.
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let img = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
+    finish(name, img, orientation)
 }
 
-/// A picture from `width` × `height` pixels of RGBA, row by row (a pasted screenshot).
-pub fn from_rgba(name: &str, width: u32, height: u32, rgba: Vec<u8>) -> Result<Picture, String> {
+/// A picture from `width` × `height` pixels of RGBA, row by row (a pasted screenshot). The size
+/// is checked first: [`fits`] says whether pixels of that size are taken, before they are copied.
+pub fn from_rgba(name: &str, width: u32, height: u32, rgba: Vec<u8>) -> Result<Picture, Note> {
     let name = clean_name(name);
-    if width > MAX_DECODED_SIDE || height > MAX_DECODED_SIDE {
-        return Err(format!("{name}: a picture can be at most {MAX_DECODED_SIDE} pixels a side"));
+    if !fits(width, height) {
+        return Err(too_many_pixels(name));
     }
-    let img =
-        image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| format!("{name}: the picture's pixels don't match its size"))?;
-    finish(name, DynamicImage::ImageRgba8(img))
+    let img = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| Note::with("{name}: the picture's pixels don't match its size", [("name", name.clone())]))?;
+    finish(name, DynamicImage::ImageRgba8(img), Orientation::NoTransforms)
 }
 
-/// Draws `img` no larger than [`LONGEST_SIDE`] and encodes it, smaller again while it weighs more
-/// than [`MAX_SENT_BYTES`].
-fn finish(name: String, img: DynamicImage) -> Result<Picture, String> {
-    let original = (img.width(), img.height());
-    if original.0 == 0 || original.1 == 0 {
-        return Err(format!("{name}: the picture is empty"));
+/// Whether a picture of `width` × `height` pixels is taken.
+pub fn fits(width: u32, height: u32) -> bool {
+    width <= MAX_DECODED_SIDE && height <= MAX_DECODED_SIDE
+}
+
+/// The refusal of a file over [`MAX_FILE_BYTES`], as every front end says it.
+pub fn too_large(name: String) -> Note {
+    Note::with("{name}: a picture can be at most {limit} MiB", [("name", name), ("limit", (MAX_FILE_BYTES >> 20).to_string())])
+}
+
+/// The refusal of a picture over [`MAX_DECODED_SIDE`] pixels a side.
+pub fn too_many_pixels(name: String) -> Note {
+    Note::with("{name}: a picture can be at most {limit} pixels a side", [("name", name), ("limit", MAX_DECODED_SIDE.to_string())])
+}
+
+/// Draws `img` no larger than [`LONGEST_SIDE`], turns it as `orientation` says (once small, so a
+/// large picture isn't copied whole to turn it) and encodes it, smaller again while it weighs
+/// more than [`MAX_SENT_BYTES`].
+fn finish(name: String, img: DynamicImage, orientation: Orientation) -> Result<Picture, Note> {
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return Err(Note::with("{name}: the picture is empty", [("name", name)]));
     }
+    // Its size as it is seen, upright.
+    let turned =
+        matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
+    let original = if turned { (h, w) } else { (w, h) };
     let fit = |side: u32| {
-        if original.0.max(original.1) > side { img.resize(side, side, image::imageops::FilterType::Triangle) } else { img.clone() }
+        let mut fitted = if w.max(h) > side { img.resize(side, side, image::imageops::FilterType::Triangle) } else { img.clone() };
+        fitted.apply_orientation(orientation);
+        fitted
     };
     let mut side = LONGEST_SIDE;
     let mut fitted = fit(side);
@@ -129,10 +158,11 @@ fn finish(name: String, img: DynamicImage) -> Result<Picture, String> {
     // once drawn small, so a large picture isn't copied whole to look.
     let alpha = fitted.color().has_alpha() && fitted.to_rgba8().pixels().any(|p| p.0[3] < 255);
     loop {
-        let (data, mime) = encode(&fitted, alpha).map_err(|e| format!("{name}: {e}"))?;
+        let (data, mime) = encode(&fitted, alpha)
+            .map_err(|why| Note::with("{name}: the picture can't be encoded ({why})", [("name", name.clone()), ("why", why)]))?;
         if data.len() <= MAX_SENT_BYTES || side <= 256 {
             if data.len() > MAX_SENT_BYTES {
-                return Err(format!("{name}: the picture is too heavy to send, even drawn small"));
+                return Err(Note::with("{name}: the picture is too heavy to send, even drawn small", [("name", name)]));
             }
             return Ok(Picture { name, data, mime, width: fitted.width(), height: fitted.height(), original });
         }
@@ -141,6 +171,19 @@ fn finish(name: String, img: DynamicImage) -> Result<Picture, String> {
     }
 }
 
+/// The file at `path`, read no further than one byte past [`MAX_FILE_BYTES`]: [`prepare`] then
+/// refuses it, and a huge file isn't read whole to be refused.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read(path: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    Ok(bytes)
+}
+
+/// `img` as a PNG when `alpha` (it has transparent pixels), else as a JPEG at quality 85, with
+/// its media type.
 fn encode(img: &DynamicImage, alpha: bool) -> Result<(Vec<u8>, &'static str), String> {
     let mut out = Vec::new();
     if alpha {

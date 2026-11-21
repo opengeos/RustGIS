@@ -1671,6 +1671,8 @@ fn transcript(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context
     }
     for e in &agent.transcript {
         match e {
+            // A message of pictures alone: its notes say them.
+            Entry::User(text) if text.is_empty() => {}
             Entry::User(text) => {
                 ui.add_space(6.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -1705,8 +1707,7 @@ fn transcript(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context
                 show_error(ui, e, t);
             }
             Entry::Note(n) => {
-                let args: Vec<(&str, &str)> = n.args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                ui.label(RichText::new(crate::i18n::fmt(n.template, &args)).small().italics().color(t.text_dim));
+                ui.label(RichText::new(crate::i18n::note(n)).small().italics().color(t.text_dim));
             }
         }
     }

@@ -511,8 +511,8 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
             continue;
         }
         if mark == rustgis_ui_egui::ASSISTANT_PICK && file.size() > rustgis_ui_egui::ASSISTANT_FILE_MAX_BYTES as f64 {
-            let text = rustgis_ui_egui::i18n::fmt("{file}: a picture can be at most 20 MiB", &[("file", &name)]);
-            notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
+            let why = rustgis_ui_egui::rustgis_assistant::attach::too_large(name.clone());
+            notes.lock().unwrap_or_else(|e| e.into_inner()).push((rustgis_ui_egui::i18n::note(&why), true));
             continue;
         }
         if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && file.size() > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as f64 {

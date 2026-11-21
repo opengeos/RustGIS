@@ -48,12 +48,17 @@ pub fn size(turns: &[Turn]) -> usize {
 /// What an image costs, in the bytes of text of as many tokens: about width × height / 750
 /// tokens on Claude, four bytes each.
 fn image_size(i: &ToolImage) -> usize {
-    (i.width as usize).saturating_mul(i.height as usize) / 750 * 4
+    pixels_size(i.width, i.height)
+}
+
+/// What `width` × `height` pixels cost, in the bytes of text of as many tokens.
+fn pixels_size(width: u32, height: u32) -> usize {
+    (width as usize).saturating_mul(height as usize) / 750 * 4
 }
 
 /// What a picture the user attached costs, as [`image_size`].
 fn picture_size(p: &Picture) -> usize {
-    (p.width as usize).saturating_mul(p.height as usize) / 750 * 4
+    pixels_size(p.width, p.height)
 }
 
 /// The images the conversation keeps sending ([`keep_images`]).
@@ -239,21 +244,22 @@ fn render_turns(turns: &[Turn], upto: usize) -> String {
     for t in turns.iter().take(upto) {
         match t {
             // An earlier summary is kept whole.
-            Turn::User(text, _) if summary_len(text).is_some() => {
+            Turn::User(text, pictures) => {
+                // An earlier summary is kept whole; the user's message after it is marked as
+                // theirs like every other user turn.
                 let end = summary_len(text).unwrap_or(0);
                 out.push_str(text.get(..end).unwrap_or_default());
-                // The user's message after it, marked as theirs like every other user turn.
                 let rest = text.get(end..).unwrap_or_default();
-                if !rest.is_empty() {
-                    out.push_str(&format!("User: {}\n\n", clip(rest, 4_000)));
+                if !rest.is_empty() || !pictures.is_empty() {
+                    out.push_str(&format!("User: {}\n", clip(rest, 4_000)));
                 }
-            }
-            Turn::User(text, pictures) => {
-                out.push_str(&format!("User: {}\n", clip(text, 4_000)));
                 for p in pictures {
-                    out.push_str(&format!("User attached a picture: {} ({} × {})\n", p.name, p.width, p.height));
+                    let name = escape_user(&p.name);
+                    out.push_str(&format!("User attached a picture: {name} ({} × {})\n", p.width, p.height));
                 }
-                out.push('\n');
+                if !rest.is_empty() || !pictures.is_empty() {
+                    out.push('\n');
+                }
             }
             Turn::Assistant { text, calls, .. } => {
                 if !text.trim().is_empty() {

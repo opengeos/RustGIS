@@ -222,7 +222,7 @@ impl<P: Phone> App<P> {
                 }
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
                 Problem::MarkerTooLarge => rustgis_ui_egui::marker_file_too_large().to_string(),
-                Problem::PictureTooLarge { name } => i18n::fmt("{file}: a picture can be at most 20 MiB", &[("file", &name)]),
+                Problem::PictureTooLarge { name } => i18n::note(&rustgis_ui_egui::rustgis_assistant::attach::too_large(name)),
                 Problem::TooLarge { name, together } => {
                     let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {

@@ -5,6 +5,7 @@
 
 use egui::{RichText, Ui};
 use rustgis_assistant::attach::{self, Picture};
+use rustgis_assistant::provider::Note;
 
 use crate::RustGisApp;
 use crate::theme::Tokens;
@@ -16,7 +17,7 @@ pub struct Pictures {
     ready: Vec<Picture>,
     /// Being read, with their names.
     #[cfg(not(target_arch = "wasm32"))]
-    reading: Vec<(String, crate::Slot<Result<Picture, String>>)>,
+    reading: Vec<(String, crate::Slot<Result<Picture, Note>>)>,
 }
 
 impl Pictures {
@@ -74,9 +75,9 @@ pub fn button(app: &mut RustGisApp, ui: &mut Ui) {
         open(PURPOSE);
         return;
     }
-    let Some(paths) = pick_files() else { return };
-    for path in paths {
-        match read_capped(&path) {
+    #[cfg(not(target_arch = "wasm32"))]
+    for path in pick_files().unwrap_or_default() {
+        match attach::read(&path) {
             Ok(bytes) => received(app, &path, bytes),
             Err(e) => app.session.notify(e, true),
         }
@@ -92,63 +93,64 @@ fn pick_files() -> Option<Vec<String>> {
         .map(|ps| ps.iter().map(|p| p.display().to_string()).collect())
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 fn pick_files() -> Option<Vec<String>> {
     None
 }
 
-/// The file at `path`, read no further than one byte past [`attach::MAX_FILE_BYTES`], which
-/// [`attach::prepare`] then refuses: a huge file isn't read whole to be refused.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_capped(path: &str) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-    let mut bytes = Vec::new();
-    file.take(attach::MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-    Ok(bytes)
+/// A notice for a picture that can't be attached, in the interface's language.
+fn refused(app: &mut RustGisApp, why: &Note) {
+    app.session.notify(crate::i18n::note(why), true);
 }
 
-#[cfg(target_arch = "wasm32")]
-fn read_capped(path: &str) -> Result<Vec<u8>, String> {
-    Err(format!("{path}: files are picked through the browser"))
+/// Whether the message has room for another picture; says so when it hasn't.
+fn room(app: &mut RustGisApp, name: &str) -> bool {
+    if app.assistant.pictures.count() < attach::MAX_PER_MESSAGE {
+        return true;
+    }
+    let text = crate::i18n::fmt(
+        "{name} wasn't attached: a message takes at most {n} pictures",
+        &[("name", name), ("n", &attach::MAX_PER_MESSAGE.to_string())],
+    );
+    app.session.notify(text, true);
+    false
 }
 
 /// A picture file for the message (from the dialog, or the browser's or phone's picker), read
 /// and made ready to send. One past [`attach::MAX_PER_MESSAGE`], or one that can't be sent, is
 /// said in a notice.
 pub fn received(app: &mut RustGisApp, name: &str, bytes: Vec<u8>) {
-    if app.assistant.pictures.count() >= attach::MAX_PER_MESSAGE {
-        let text = crate::i18n::fmt(
-            "{name} wasn't attached: a message takes at most {n} pictures",
-            &[("name", name), ("n", &attach::MAX_PER_MESSAGE.to_string())],
-        );
-        app.session.notify(text, true);
+    if !room(app, name) {
         return;
     }
     let name = name.to_string();
     start(app, name.clone(), move || attach::prepare(&name, &bytes));
 }
 
-/// A pasted picture's pixels for the message.
+/// A pasted picture's pixels for the message. Its size is checked before its pixels are copied.
 fn pasted(app: &mut RustGisApp, image: &egui::ColorImage) {
-    if app.assistant.pictures.count() >= attach::MAX_PER_MESSAGE {
-        let text = crate::i18n::fmt("A message takes at most {n} pictures", &[("n", &attach::MAX_PER_MESSAGE.to_string())]);
-        app.session.notify(text, true);
+    let name = tl!("pasted picture").to_string();
+    if !room(app, &name) {
         return;
     }
     let [w, h] = image.size;
-    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-    let name = tl!("pasted picture").to_string();
     let (w, h) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+    if !attach::fits(w, h) {
+        refused(app, &attach::too_many_pixels(name));
+        return;
+    }
+    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
     start(app, name.clone(), move || attach::from_rgba(&name, w, h, rgba));
 }
 
 /// Reads a picture: on a worker on the desktop (decoding a large photo takes a moment), at once
-/// in the browser, which has one thread. A worker the system refuses reads it here.
-fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Picture, String> + Send + 'static) {
+/// in the browser, which has one thread. A worker the system refuses reads it here. Decoding is
+/// one step with no check for Cancel; taking the picture off while it is read drops it when the
+/// worker is done.
+fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Picture, Note> + Send + 'static) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let slot: crate::Slot<Result<Picture, String>> = Default::default();
+        let slot: crate::Slot<Result<Picture, Note>> = Default::default();
         let out = slot.clone();
         let read = std::sync::Arc::new(std::sync::Mutex::new(Some(read)));
         let work = read.clone();
@@ -174,10 +176,11 @@ fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Pictu
     }
 }
 
-fn finished(app: &mut RustGisApp, picture: Result<Picture, String>) {
+/// A picture read: ready for the message, or said in a notice when it can't be sent.
+fn finished(app: &mut RustGisApp, picture: Result<Picture, Note>) {
     match picture {
         Ok(p) => app.assistant.pictures.ready.push(p),
-        Err(e) => app.session.notify(e, true),
+        Err(why) => refused(app, &why),
     }
 }
 
@@ -216,32 +219,46 @@ fn take_read(app: &mut RustGisApp) -> bool {
     app.assistant.pictures.reading()
 }
 
-/// The message's pictures above the box: each with its size and a button that takes it off, and
-/// those still being read.
+/// The message's pictures above the box: each with its size, those still being read with a
+/// spinner, and a button on each that takes it off.
 pub fn chips(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if app.assistant.pictures.count() == 0 {
         return;
     }
+    let off = |ui: &mut Ui| ui.small_button("×").on_hover_text(tl!("Take this picture off the message")).clicked();
     let mut removed = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut dropped = None;
     ui.horizontal_wrapped(|ui| {
         for (i, p) in app.assistant.pictures.ready.iter().enumerate() {
             let label = format!("{} · {} × {}", p.name, p.width, p.height);
             ui.label(RichText::new(label).small().color(t.text));
-            if ui.small_button("×").on_hover_text(tl!("Take this picture off the message")).clicked() {
+            if off(ui) {
                 removed = Some(i);
             }
             ui.add_space(6.0);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        for (name, _) in &app.assistant.pictures.reading {
+        for (i, (name, _)) in app.assistant.pictures.reading.iter().enumerate() {
             ui.spinner();
             ui.label(RichText::new(name).small().color(t.text_dim));
+            if off(ui) {
+                dropped = Some(i);
+            }
+            ui.add_space(6.0);
         }
     });
     if let Some(i) = removed
         && i < app.assistant.pictures.ready.len()
     {
         app.assistant.pictures.ready.remove(i);
+    }
+    // Its worker finishes, and what it read goes nowhere.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(i) = dropped
+        && i < app.assistant.pictures.reading.len()
+    {
+        app.assistant.pictures.reading.remove(i);
     }
 }
 
