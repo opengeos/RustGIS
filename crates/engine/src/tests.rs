@@ -56501,7 +56501,7 @@ fn unprepared_desktop_script_refuses_similar_with_setup_guidance() {
 }
 
 /// A tool output is a new Layer in each session, but its verified recorded rows are the same.
-/// Only replay-owned creations may bridge that identity difference.
+/// Only replay-owned creations may bridge that identity difference, even if a later step removes them.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn similar_accepts_replayed_tool_output_but_not_unrelated_replacement() {
@@ -56516,6 +56516,14 @@ fn similar_accepts_replayed_tool_output_but_not_unrelated_replacement() {
     let read = read_ahead(&mut s, "script.run", &p).unwrap().run(&Control::stoppable()).unwrap();
     let answer = read_land(&mut s, read).unwrap();
     assert_eq!(answer["ran"][1]["result"]["similar"][0]["row"], 1);
+    let (mut removed, _) = similar_lifecycle_session();
+    removed.statistics_need_read_ahead(true);
+    let mut removal = p.clone();
+    removal["script"] = json!(format!("{}\nlayer.remove {{\"layer\":\"buffered\"}}", p["script"].as_str().unwrap()));
+    let read = read_ahead(&mut removed, "script.run", &removal).unwrap().run(&Control::stoppable()).unwrap();
+    let answer = read_land(&mut removed, read).unwrap();
+    assert_eq!(answer["ran"][1]["result"]["similar"][0]["row"], 1);
+    assert!(removed.map().layer_by_name("buffered").is_none());
     let id = s.map().layer_by_name("buffered").unwrap().id;
     let p = json!({"layer":id,"row":0,"fields":["n"],"count":1});
     let read = read_ahead(&mut s, "data.similar", &p).unwrap().run(&Control::stoppable()).unwrap();

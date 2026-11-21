@@ -850,23 +850,12 @@ pub(crate) fn ahead_on_copy(s: &Session, command: &'static str, p: &Value) -> su
         copy.undo_memory.memory = None;
         copy.undo_memory.use_readers(readers);
         copy.sync_policy_generation();
-        // Capture only runtime identities on the worker, not feature copies. New tool outputs
-        // become fresh Layer instances again when their recorded datasets land in the live map.
-        let initial: std::collections::HashSet<u64> =
-            copy.project.maps.iter().flat_map(|map| map.layers.iter().map(|layer| layer.instance_id())).collect();
         copy.tools_ahead = Some(super::gp::Ahead::Recording(Vec::new()));
         copy.files_ahead = Some(super::gp::FilesAhead::Recording(Vec::new()));
         copy.grids_ahead = Some(crate::image_grid::Ahead::Recording(Vec::new()));
         copy.zones_ahead = Some(super::imagery::ZonesAhead::Recording(Vec::new()));
         let _ = copy.run(command, &p);
         let mut ran = super::gp::ran_ahead(&mut copy);
-        for map in &copy.project.maps {
-            for layer in &map.layers {
-                if !initial.contains(&layer.instance_id()) {
-                    ran.created_layers.insert((map.instance_id(), layer.id, layer.instance_id()));
-                }
-            }
-        }
         ran.retained = Some(retained);
         ran
     })

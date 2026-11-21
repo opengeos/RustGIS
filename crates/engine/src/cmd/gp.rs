@@ -904,7 +904,7 @@ pub(crate) struct RanAheads {
     tools: Vec<RanAhead>,
     /// Worker-created (map, layer id, instance) identities; live replay creates fresh Layers
     /// over their verified recorded rows. Existing layers never receive this exception.
-    pub(super) created_layers: std::collections::HashSet<(u64, u32, u64)>,
+    created_layers: std::collections::HashSet<(u64, u32, u64)>,
     files: Vec<FileAhead>,
     zones: Vec<super::imagery::ZoneMeans>,
     // The copy's initial project can outlive history while queued or waiting to replay.
@@ -945,6 +945,13 @@ pub(crate) fn ran_ahead(s: &mut Session) -> RanAheads {
         Some(Ahead::Recording(ran)) => ran,
         _ => Vec::new(),
     };
+    // Outputs were captured when installed, before a following step could remove them.
+    // Their worker identities must survive until live replay reaches those steps too.
+    let created_layers = tools
+        .iter()
+        .filter_map(|ran| if let RanAhead::Tool(tool) = ran { Some(tool) } else { None })
+        .flat_map(|tool| tool.grid_outputs.iter().map(|layer| (tool.read.map.instance_id(), layer.id, layer.instance_id())))
+        .collect();
     let files = match s.files_ahead.take() {
         Some(FilesAhead::Recording(read)) => read,
         _ => Vec::new(),
@@ -957,15 +964,7 @@ pub(crate) fn ran_ahead(s: &mut Session) -> RanAheads {
         Some(crate::image_grid::Ahead::Recording(read)) => read,
         _ => Vec::new(),
     };
-    RanAheads {
-        tools,
-        created_layers: Default::default(),
-        files,
-        zones,
-        grids,
-        retained: None,
-        selection_admission: s.selection_admission.clone(),
-    }
+    RanAheads { tools, created_layers, files, zones, grids, retained: None, selection_admission: s.selection_admission.clone() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
