@@ -1242,8 +1242,8 @@ impl Layer {
             self.dataset.features.rows().map(|r| r.geometry().map(|g| flat.project(g))).collect()
         } else {
             match flat.held(crs) {
-                // Every place is drawn as it is, those longitude/latitude can't give too, so none
-                // is left out of this drawing.
+                // Every place is drawn as it is, those longitude/latitude can't give too: the
+                // conversion leaves none out (a place a reader kept missing is said by the reader).
                 Ok(held) if held.is_identity() => {
                     self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(0) };
                     self.dataset.features.rows().map(|r| r.geometry().cloned()).collect()
@@ -4565,7 +4565,7 @@ mod tests {
         near(&coords(&stored), &[(3513304.512454, 5404737.597295), (3514768.524742, 5406965.390660)]);
         let on_own = gk.projected_in(&flat("EPSG:31467"), "gk")[0].clone().unwrap();
         assert_eq!(coords(&on_own), coords(&stored));
-        assert!(gk.unplaced().is_none(), "nothing is converted, so nothing is counted");
+        assert_eq!(gk.unplaced(), Some(&Ok(0)), "drawn as it is: none left out");
         // On ETRS89 UTM 32N, the direct operation's result, not the way through WGS 84.
         let utm = flat("EPSG:25832");
         assert_eq!(utm.direct_system(), Some(Crs::Epsg(25832)));

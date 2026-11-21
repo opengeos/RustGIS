@@ -1414,7 +1414,7 @@ fn is_epsg_or_crs84_name(name: &str) -> bool {
 /// A geometry in longitude/latitude from the coordinates `t` converts: `None` when a coordinate
 /// can't be converted or comes out beyond longitude/latitude (a declared system that doesn't match
 /// the coordinates).
-// Used by the in-place readers and databases, which the web app hasn't.
+// Used by the in-place GeoJSON reader, which the web app hasn't.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn geometry_to_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> Option<Geometry> {
     let mut ok = true;
