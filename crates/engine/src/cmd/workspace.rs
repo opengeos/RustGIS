@@ -769,9 +769,9 @@ pub(crate) fn note_unbound(s: &mut Session, n: usize, copy: &str) {
 const MAX_AREAS: usize = 20;
 
 /// Makes an offline area of the active map: a snapshot of its feature layers' features in `extent`
-/// (the view's, unless one is given), which a later sync or a field package's return is compared
-/// against. It gets its identities and its home project's here; its return check waits until a
-/// field package is first made of it.
+/// (the view's, unless one is given), which a later sync, or a field package's return without a
+/// list of its changes, is compared against. It gets its identities and its home project's here;
+/// its return check waits until a field package is first made of it.
 pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
     crate::project::ensure_map_imports_complete(s.map())?;
     let e = match p.get("extent").and_then(Value::as_array) {
@@ -821,6 +821,7 @@ pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         created: t,
         synced: t,
         generation: String::new(),
+        returned: Vec::new(),
         data,
     });
     note_unbound(s, bound, &format!("the offline area '{name}'"));
@@ -860,7 +861,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
 
 /// A layer's conversion error in a sync, named by the layer; a cancel stays a cancel, as the
 /// command's other cancels read.
-fn sync_error(layer: &str, e: String) -> String {
+pub(crate) fn sync_error(layer: &str, e: String) -> String {
     if e == rustgis_data::DataError::Cancelled.to_string() { e } else { format!("cannot sync layer '{layer}': {e}") }
 }
 
@@ -1072,25 +1073,7 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             sl.touch_geometry();
         }
     }
-    let fresh = s.project.maps.get_mut(si).map(|m| snapshot(m, &area.extent)).ok_or("the source map is gone")?;
-    if let Some(m) = offline_map.and_then(|i| s.project.maps.get_mut(i)) {
-        let name = m.name.clone();
-        *m = fresh.clone();
-        m.name = name;
-        m.offline_area_id = (!area.id.is_empty()).then(|| area.id.clone());
-        // A copy of the source map: a map, and layers, of its own.
-        m.renew_instance_id();
-        for l in &mut m.layers {
-            l.renew_instance_id();
-        }
-    }
-    if let Some(a) = s.project.offline_areas.get_mut(ai) {
-        a.data = fresh;
-        a.synced = now();
-        if let Some(id) = next_generation {
-            a.generation = id;
-        }
-    }
+    renew_area(s, ai, si, offline_map, next_generation)?;
     // Never silent: say which features lost an edit, so they can be checked (Undo puts the
     // source's versions back).
     let listed = |ids: &[String]| {
@@ -1127,6 +1110,45 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
     Ok(
         json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped, "conflicts": conflicts.len(), "renumbered": renumbered}),
     )
+}
+
+/// Renews offline area `ai` from its source map `si` once edits have come back to it: its snapshot,
+/// its offline map `offline_map` (when open) and its sync time, so a package made of it next holds
+/// what came home. `next_generation` is its new return check, for an area a package was made of: a
+/// package made before, with no list of its changes, was compared with the snapshot replaced here.
+pub(crate) fn renew_area(
+    s: &mut Session,
+    ai: usize,
+    si: usize,
+    offline_map: Option<usize>,
+    next_generation: Option<String>,
+) -> Result<(), String> {
+    let (extent, id) = s.project.offline_areas.get(ai).map(|a| (a.extent, a.id.clone())).ok_or("no such area")?;
+    let fresh = s.project.maps.get_mut(si).map(|m| snapshot(m, &extent)).ok_or("the source map is gone")?;
+    if let Some(m) = offline_map.and_then(|i| s.project.maps.get_mut(i)) {
+        let name = m.name.clone();
+        *m = fresh.clone();
+        m.name = name;
+        m.offline_area_id = (!id.is_empty()).then(|| id.clone());
+        // A copy of the source map: a map, and layers, of its own.
+        m.renew_instance_id();
+        for l in &mut m.layers {
+            l.renew_instance_id();
+        }
+    }
+    if let Some(a) = s.project.offline_areas.get_mut(ai) {
+        a.data = fresh;
+        a.synced = now();
+        if let Some(id) = next_generation {
+            a.generation = id;
+        }
+    }
+    Ok(())
+}
+
+/// Where offline area `ai`'s open offline map is, if it is open.
+pub(crate) fn area_map_index(project: &Project, ai: usize) -> Option<usize> {
+    project.offline_areas.get(ai).and_then(|area| offline_map_index(project, area))
 }
 
 /// Binds the elevation raster and literal selected-line source.

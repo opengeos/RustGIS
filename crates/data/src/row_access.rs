@@ -140,6 +140,12 @@ impl Features {
         self.max_id = self.max_id.map(|m| m.max(id));
     }
 
+    /// Appends a row of id `id`, `geometry` and the values `attrs`, in field order: a row made from
+    /// its parts, such as one copied in from another layer's fields.
+    pub fn push_parts(&mut self, id: u64, geometry: Option<Geometry>, attrs: Vec<Value>) {
+        self.push_row(Feature { id, geometry, attrs });
+    }
+
     /// The rows for a change, copied first when another owner (an Undo snapshot) shares them.
     /// Every change goes through it, so the hook [`crate::before_rows_copy`] sets runs before a
     /// copy, as it does through `DerefMut`.

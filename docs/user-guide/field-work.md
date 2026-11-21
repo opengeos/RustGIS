@@ -157,17 +157,38 @@ A field package (`.rgisfield`) carries a map to the phone and its edits back.
    package again, with the photos its features name, wherever you choose (a cloud drive, email,
    a USB connection to the computer).
 5. **On the computer**, in the project the package was made from, **Data › Offline › Bring Back**
-   reads it. New and changed features update the map, deleted ones are removed, and the photos go
-   in a folder beside the project. A feature also changed on the computer takes the field's
-   version, and the summary names it; **Undo** brings the computer's versions back.
+   reads it and applies what changed on the phone: features added there are added, features
+   deleted there are removed, and the attributes and shapes changed there are changed. The photos
+   go in a folder beside the project. Nothing else is compared, so a field added on the computer
+   meanwhile, or another phone's edits, are left as they are.
 
-Give one package to one phone, and make a new package after each Bring Back or Sync of its area:
-from the area's offline map, **Package for the Field** again. A package comes back once, and only
-while its area is as it was when the package was made. A second phone's copy of the same package, or
-the same phone's second return, would undo or repeat what the first brought home, so Bring Back
-refuses it and changes nothing; redo that phone's edits on a new package. A package made before
-packages carried this check comes back as before, with a notice. A package for an area the project
-doesn't have is refused.
+When a phone opens a package, it keeps a copy of the rows the package gave it in the app's own
+folder (`field bases`), found by the package's identity, so it is still found after the field
+project is saved and opened again, or recovered. **Send Field Package** compares the map with that
+copy and sends the list of changes with the map. A package opened on a device that doesn't keep
+its rows (the browser, or a field project copied to another device) goes back as a whole map,
+and the phone says so: Bring Back then compares the map with the area as it was last synced,
+and refuses it if the area has been brought back or synced since the package was made.
+
+Where a change meets one made on the computer since the package was made:
+
+- An attribute or shape changed in both places takes the phone's value. The summary names the
+  features; **Undo** brings the computer's versions back.
+- A feature deleted on the phone but changed on the computer is kept, and named.
+- A feature changed on the phone but deleted on the computer stays deleted, and is named.
+- A change to an attribute the computer's layer no longer has, or has with another type, refuses
+  the whole return and changes nothing: add the field back, then Bring Back again. So does a field
+  removed on the phone that the computer's layer still has, as its values in the field aren't
+  known.
+
+Give each phone a package of its own: several packages of one area can be out at once, and each
+comes back with only its own changes. Make one from the area's offline map with **Package for the
+Field** again. A package comes back once: the same package returned again, from the same phone or
+from a copy on a second one, is refused and changes nothing. A feature added on the phone keeps its
+id unless the computer uses it already; then it takes the next free one, and the summary says how
+many did. A package made before packages had an identity of their own comes back as a whole map,
+as described above; one made before packages carried a return check comes back as before, with a
+notice. A package for an area the project doesn't have is refused.
 
 ### Origin identities and older field copies
 
@@ -181,7 +202,10 @@ Saving a project with these identities declares the `field-origin` capability, e
 offline area has never been sent as a field package. Earlier RustGIS releases that do not
 support this capability refuse the saved project rather than discard its return association.
 A project whose area has been packaged also declares `field-generation`, for the return check
-described above, so a release without it can't save the project and then accept any copy.
+of a whole-map return, so a release without it can't save the project and then accept any copy.
+A field package's identity, and the packages an area has brought back, declare `field-package`:
+an older release refuses such a package or project rather than lose them and then apply a
+package's changes twice.
 
 A field copy made before these identities were introduced still opens, and Send Field Package
 preserves its edits and photos as an unverified legacy return. Ordinary Bring Back refuses to

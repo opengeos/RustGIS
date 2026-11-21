@@ -149,8 +149,9 @@ pub(super) fn long_commands(boundaries: bool) {
     s.run("layer.addDataText", &json!({"fileName": "ranks.csv", "text": "name,score\na,1\nb,3\n"})).unwrap();
     let registered = crate::cmd::exports::IN_BACKGROUND.iter().map(|(c, ..)| *c).collect::<std::collections::BTreeSet<_>>();
     assert_eq!(listed(&exports), registered, "add a new background export here");
-    // Reuse the same origin and generation on every retry. The open area includes a real
-    // streamed layer to exercise cancellation during its source traversal as well as the write.
+    // Reuse the same origin and generation on every retry (each package's own identity is new, and
+    // `comparable` blanks it). The open area includes a real streamed layer to exercise
+    // cancellation during its source traversal as well as the write.
     let mut field = session(&s);
     field.run("layer.addData", &json!({"path": out("towns.shp"), "name": "Streamed towns", "stream": true})).unwrap();
     field.run("offline.package", &json!({"path": out("seed.rgisfield"), "name": "Crew", "extent": [9, 44, 11, 46]})).unwrap();
@@ -523,6 +524,33 @@ fn files(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf
     out
 }
 
+/// `files` with each field package's own identity blanked: every package is given a new one, so
+/// two complete runs write the same package but for it.
+fn comparable(
+    mut files: std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
+) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    for (path, bytes) in &mut files {
+        let Some(zip) = bytes.as_ref().filter(|_| path.extension().is_some_and(|e| e == "rgisfield")) else { continue };
+        let Ok(entries) = rustgis_data::zip::read(zip) else { continue };
+        let mut out = Vec::new();
+        for (name, data) in entries {
+            let data = match serde_json::from_slice::<Value>(&data) {
+                Ok(mut project) if name.ends_with(".rgis") => {
+                    if let Some(origin) = project.get_mut("field_origin").and_then(Value::as_object_mut) {
+                        origin.remove("package");
+                    }
+                    project.to_string().into_bytes()
+                }
+                _ => data,
+            };
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&data);
+        }
+        *bytes = Some(out);
+    }
+    files
+}
+
 /// Restores only this test's private directory between independent runs; never before a retry.
 fn restore(dir: &std::path::Path, before: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>) {
     std::fs::remove_dir_all(dir).unwrap();
@@ -561,7 +589,7 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
         kind.run(&mut normal, command, p, &count).unwrap_or_else(|e| panic!("{command} {p}: normal run: {e}"));
         assert!(count.looked() > 0, "{command} {p}: never looks at Cancel");
         assert!(count.looked() < MAX_CHECKS, "{command} {p}: {} checks; shrink the fixture to fit the cap", count.looked());
-        let result = (contents(&normal.project), files());
+        let result = (contents(&normal.project), comparable(files()));
         restore(dir, &before_files);
         Some(result)
     } else {
@@ -590,12 +618,12 @@ fn exercise(fixture: &Session, command: &str, p: &Value, kind: Kind, dir: &std::
         }
         let (expected, complete_files) = expected.as_ref().unwrap();
         assert!(&contents(&s.project) == expected, "{what}: completion differs from normal run");
-        assert!(&files() == complete_files, "{what}: completion left incomplete files");
+        assert!(&comparable(files()) == complete_files, "{what}: completion left incomplete files");
         if result.is_ok() && control.is_cancelled() {
             // A committed export is already complete, and a subsequent invocation still works.
             kind.run(&mut s, command, p, &Control::new()).unwrap_or_else(|e| panic!("{what}: retry after commit: {e}"));
             assert!(&contents(&s.project) == expected, "{what}: retry after commit changed completion");
-            assert!(&files() == complete_files, "{what}: retry after commit left incomplete files");
+            assert!(&comparable(files()) == complete_files, "{what}: retry after commit left incomplete files");
         }
         // Retry directly on the cancelled session before doing anything that could reset it.
         // Then exercise Undo/Redo: an added step restores the pre-command map. A publication's

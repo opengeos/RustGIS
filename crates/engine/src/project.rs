@@ -99,6 +99,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-chart-classes",
     "layout-chart-stack",
     "field-generation",
+    "field-package",
     "offline-map-area-id",
     "crs-wkt",
     "zarr-window",
@@ -624,11 +625,16 @@ pub struct Job {
 pub struct FieldOrigin {
     pub project: String,
     pub area: String,
-    /// The area's [`OfflineArea::generation`] when the package was made. Bring Back accepts the
-    /// package only while the area still has it. Empty for a package made before packages carried
-    /// one.
+    /// The area's [`OfflineArea::generation`] when the package was made. Bring Back accepts a
+    /// package without a list of its changes only while the area still has it. Empty for a package
+    /// made before packages carried one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub generation: String,
+    /// This package's own identity, new for each package made: Bring Back refuses a package whose
+    /// identity its area has brought back already ([`OfflineArea::returned`]), and the phone finds
+    /// the copy of the rows it was given by it. Empty for a package made before packages had one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub package: String,
 }
 
 pub(crate) fn field_id() -> Result<String, String> {
@@ -656,11 +662,16 @@ pub struct OfflineArea {
     #[serde(default)]
     pub synced: f64,
     /// Which state of the area its field packages were made from: given when a package is first
-    /// made of the area, and replaced at every sync or Bring Back. A package comes back only while
-    /// the area still has the one it was made with, so a second copy of a package, or a second
-    /// return, can't undo or repeat what the first brought home. Empty until a package is made.
+    /// made of the area, and replaced at every sync or Bring Back. A package without a list of its
+    /// changes, compared with the area as last synced, comes back only while the area still has the
+    /// one it was made with, so it can't undo or repeat what came home since. Empty until a package
+    /// is made.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub generation: String,
+    /// The identities ([`FieldOrigin::package`]) of the field packages of this area already
+    /// brought back: each comes back once, so its changes can't be applied twice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returned: Vec<String>,
     /// The snapshot: the map's feature layers holding the features meeting the extent.
     #[cfg_attr(feature = "schema", schemars(with = "crate::schema::Open"))]
     pub data: Map,
@@ -1739,10 +1750,12 @@ impl Project {
                 !valid_field_id(&origin.project)
                     || !valid_field_id(&origin.area)
                     || (!origin.generation.is_empty() && !valid_field_id(&origin.generation))
+                    || (!origin.package.is_empty() && !valid_field_id(&origin.package))
             })
             || p.offline_areas.iter().any(|area| {
                 (!area.id.is_empty() && (!valid_field_id(&area.id) || !area_ids.insert(area.id.as_str())))
                     || (!area.generation.is_empty() && !valid_field_id(&area.generation))
+                    || area.returned.iter().any(|id| !valid_field_id(id))
             })
             || p.maps.iter().any(|map| map.offline_area_id.as_deref().is_some_and(|id| !valid_field_id(id) || !offline_map_ids.insert(id)))
         {
@@ -2491,7 +2504,7 @@ impl Durable for Project {
             p.child(Owner::Map(i), v);
         }
         for (i, v) in offline_areas.iter().enumerate() {
-            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, generation: _, data } = v;
+            let OfflineArea { id: _, name: _, map: _, extent: _, created: _, synced: _, generation: _, returned: _, data } = v;
             p.child(Owner::Area(i), data);
         }
         for (i, v) in tables.iter().enumerate() {

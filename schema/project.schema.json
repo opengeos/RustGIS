@@ -175,7 +175,11 @@
           "type": "string"
         },
         "generation": {
-          "description": "The area's [`OfflineArea::generation`] when the package was made. Bring Back accepts the\npackage only while the area still has it. Empty for a package made before packages carried\none.",
+          "description": "The area's [`OfflineArea::generation`] when the package was made. Bring Back accepts a\npackage without a list of its changes only while the area still has it. Empty for a package\nmade before packages carried one.",
+          "type": "string"
+        },
+        "package": {
+          "description": "This package's own identity, new for each package made: Bring Back refuses a package whose\nidentity its area has brought back already ([`OfflineArea::returned`]), and the phone finds\nthe copy of the rows it was given by it. Empty for a package made before packages had one.",
           "type": "string"
         },
         "project": {
@@ -629,7 +633,7 @@
           "$ref": "#/$defs/Extent"
         },
         "generation": {
-          "description": "Which state of the area its field packages were made from: given when a package is first\nmade of the area, and replaced at every sync or Bring Back. A package comes back only while\nthe area still has the one it was made with, so a second copy of a package, or a second\nreturn, can't undo or repeat what the first brought home. Empty until a package is made.",
+          "description": "Which state of the area its field packages were made from: given when a package is first\nmade of the area, and replaced at every sync or Bring Back. A package without a list of its\nchanges, compared with the area as last synced, comes back only while the area still has the\none it was made with, so it can't undo or repeat what came home since. Empty until a package\nis made.",
           "type": "string"
         },
         "id": {
@@ -642,6 +646,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "returned": {
+          "description": "The identities ([`FieldOrigin::package`]) of the field packages of this area already\nbrought back: each comes back once, so its changes can't be applied twice.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "synced": {
           "default": 0.0,
@@ -1107,6 +1118,7 @@
           "layout-chart-classes",
           "layout-chart-stack",
           "field-generation",
+          "field-package",
           "offline-map-area-id",
           "crs-wkt",
           "zarr-window",
@@ -1207,6 +1219,7 @@
     "layout-chart-classes",
     "layout-chart-stack",
     "field-generation",
+    "field-package",
     "offline-map-area-id",
     "crs-wkt",
     "zarr-window",
