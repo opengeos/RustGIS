@@ -4,7 +4,6 @@ mod check_geometry;
 mod geometry_conversions;
 mod join_field;
 mod merge;
-mod parallel_serial;
 mod polar;
 mod repair_geometry;
 mod spatial_join_merge;

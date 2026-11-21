@@ -6686,9 +6686,36 @@ fn hostile_params_never_panic(shard: usize) {
     // Shards share the process under `cargo test`: each streams its own file.
     let streamed = grid_fgb(&format!("hostile-{shard}"), 20);
     // Compare against each fixture's own initial state (`with_raster` and `with_streamed` start
-    // dirty with an undo entry from adding their layer). Do not include `revision`, which
-    // `Session::run` bumps even on read-only `info.project` and failed commands.
-    let state_of = |s: &Session| (s.opened, s.active_layer, s.tool, s.dirty(), s.can_undo(), s.project.maps.len(), s.map().layers.len());
+    // dirty with an undo entry from adding their layer). Captures session mutation counters,
+    // camera, and per-layer geometry/style/visibility/label state in O(layers) time so any
+    // failing payload that mutates state still triggers a full fixture rebuild.
+    let state_of = |s: &Session| {
+        let m = s.map();
+        let cam = (
+            m.camera.center.x.to_bits(),
+            m.camera.center.y.to_bits(),
+            m.camera.res.to_bits(),
+            m.camera.bearing.to_bits(),
+            m.camera.pitch.to_bits(),
+        );
+        let layers: Vec<_> = m
+            .layers
+            .iter()
+            .map(|l| {
+                (
+                    l.id,
+                    l.visible,
+                    l.transparency.to_bits(),
+                    l.dataset.features.len(),
+                    l.selection.len(),
+                    l.labels.enabled,
+                    l.labels.default.field.len(),
+                    l.definition_query.as_deref().map(str::len),
+                )
+            })
+            .collect();
+        (s.states, s.unsaved_marks, s.opened, s.active_layer, s.tool, s.project.maps.len(), cam, layers)
+    };
     for id in ids {
         if matches!(
             id,
@@ -6747,20 +6774,22 @@ fn hostile_params_never_panic(shard: usize) {
                 p => p,
             };
             // Most hostile payloads return Err without modifying the session; rebuild through the
-            // full fixture constructor whenever the command succeeded or changed session state.
-            let ok = s_world.run(id, p).is_ok();
+            // full fixture constructor whenever the command succeeded or changed session/project
+            // state (`Session::run` bumps `revision` on every call, including errors, so compare
+            // `state_of` instead).
+            let changed = s_world.run(id, p).is_ok() || state_of(&s_world) != base_world;
             let _ = s_world.run("info.project", &Value::Null);
-            if ok || state_of(&s_world) != base_world {
+            if changed {
                 s_world = world();
             }
-            let ok = s_raster.run(id, p).is_ok();
+            let changed = s_raster.run(id, p).is_ok() || state_of(&s_raster) != base_raster;
             let _ = s_raster.run("info.project", &Value::Null);
-            if ok || state_of(&s_raster) != base_raster {
+            if changed {
                 s_raster = with_raster();
             }
-            let ok = s_streamed.run(id, p).is_ok();
+            let changed = s_streamed.run(id, p).is_ok() || state_of(&s_streamed) != base_streamed;
             let _ = s_streamed.run("info.project", &Value::Null);
-            if ok || state_of(&s_streamed) != base_streamed {
+            if changed {
                 s_streamed = with_streamed(&streamed);
             }
         }
