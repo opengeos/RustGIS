@@ -771,16 +771,11 @@ fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<
             match read {
                 Ok((mut ds, _)) => {
                     ds.name = layer_name.to_string();
-                    if job.crs != Crs::LonLat
-                        && looks_projected(&ds)
-                        && let Ok(tf) = job.crs.transformer()
-                    {
-                        let lost = convert_features(&mut ds, |c| tf.to_lonlat(c));
-                        if lost > 0 {
-                            messages.push(format!(
-                                "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
-                            ));
-                        }
+                    // An output that says its system (a .prj, a GeoJSON `crs`) is held in it as
+                    // read; one in the working system that doesn't is relabelled to it.
+                    if job.crs != Crs::LonLat && ds.coord_crs() == Crs::LonLat && looks_projected(&ds) {
+                        ds.held_in = job.crs;
+                        ds.crs = Some(job.crs);
                     }
                     Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
                 }

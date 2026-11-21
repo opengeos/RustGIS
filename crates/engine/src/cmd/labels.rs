@@ -866,6 +866,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         GeometryType::Point,
         out_fields,
     );
+    // Made in longitude/latitude, then held as the labelled layer is (Dataset::hold_as).
+    let system = (l.dataset.coord_crs(), l.dataset.crs);
     let mut moved = Vec::new();
     let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
     for (row, ft) in l.dataset.features.rows().enumerate() {
@@ -978,6 +980,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let (min_scale, max_scale) = (l.min_scale, l.max_scale);
     if let Some(src) = s.map_mut().layer_mut(id) {
         src.labels.enabled = false;
+    }
+    if let Err(e) = ds.hold_as(system.0, system.1) {
+        s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {}: {e}", ds.name, system.0.label()), false);
     }
     let new_id = super::layer::add_dataset(s, ds);
     if let Some(a) = s.map_mut().layer_mut(new_id) {

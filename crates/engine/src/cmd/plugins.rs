@@ -594,8 +594,11 @@ impl Bridge<'_> {
             let n = features.len();
             features.push_row(r.to_feature());
             if let Some(g) = r.geometry()
-                && let std::borrow::Cow::Owned(g) =
-                    l.dataset.geometry_to_lonlat(g).map_err(|e| format!("{}: feature {}: {e}", l.name, r.id()))?
+                && let std::borrow::Cow::Owned(g) = l
+                    .dataset
+                    .lonlat_conversion()
+                    .and_then(|to| rustgis_data::Dataset::geometry_to_lonlat_by(&to, g))
+                    .map_err(|e| format!("{}: feature {}: {e}", l.name, r.id()))?
             {
                 features.set_geometry(n, Some(g));
             }
@@ -613,6 +616,7 @@ impl Bridge<'_> {
             zm_dropped: false,
             windowed: false,
             held_in: rustgis_data::raster::Crs::LonLat,
+            shown_in: None,
         };
         let mut ds = ds;
         let mut member = None;

@@ -650,19 +650,33 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let (zm, unread, parts) = (kind.zm, kind.unread, kind.parts_lost);
         let unread_names = kind.unread_names.said();
         let (mut outside, mut null_text) = (false, Vec::new());
+        // Held as the file holds its coordinates, in its own system (in the axis order RustGIS
+        // gives every system's), when RustGIS converts it.
+        if let Some((Some(_), _)) = &transform
+            && let Some((c, _)) = file_srs
+        {
+            ds.held_in = c;
+        }
         for (g, attrs) in kind.rows {
             let g = g.map(|g| match &transform {
-                Some((t, swap)) => g.map_coords(&|c| {
-                    let c = if *swap { Coord::new(c.y, c.x) } else { c };
-                    match t {
-                        Some(t) => t.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)),
-                        None => c,
-                    }
-                }),
-                None => g,
+                Some((_, true)) => g.map_coords(&|c| Coord::new(c.y, c.x)),
+                _ => g,
             });
             if let Some(g) = &g {
-                let e = g.extent();
+                // Its box in longitude/latitude: a place that can't be given there isn't drawn
+                // (the map counts it), as one converted to NaN wasn't.
+                let e = match &transform {
+                    Some((Some(t), _)) => {
+                        let mut e = rustgis_geom::Extent::EMPTY;
+                        g.for_each_coord(|c| {
+                            if let Some(l) = t.to_lonlat(c) {
+                                e.expand(l);
+                            }
+                        });
+                        e
+                    }
+                    _ => g.extent(),
+                };
                 outside |= e.min_x < -180.0 || e.max_x > 180.0 || e.min_y < -90.0 || e.max_y > 90.0;
             }
             let row = ds
@@ -848,6 +862,8 @@ mod tests {
         assert_eq!(layers.len(), 1);
         let (ds, rep) = &layers[0];
         assert_eq!(ds.name, "s");
+        // Held in its own system; placed in longitude/latitude.
+        let ds = ds.in_lonlat().unwrap().into_owned();
         let Some(Geometry::Point(c)) = &ds.features[0].geometry else { panic!() };
         assert!((c.x - 15.0).abs() < 1e-6 && (c.y - 42.0).abs() < 0.01, "{c:?}");
         assert_eq!(rep.skipped, 1);
