@@ -481,6 +481,9 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                     s.project.origin_id = origin;
                     s.project.offline_areas = areas;
                     Ok(Value::Null)
+                })
+                .map_err(|e| {
+                    format!("{path} was written, but the home project couldn't record its offline area ({e}): make a new package before sending this one")
                 })?;
             }
             let mark = s.notice_mark();
