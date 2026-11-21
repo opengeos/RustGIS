@@ -1278,12 +1278,15 @@ mod tests {
         {
             use std::os::unix::ffi::OsStrExt as _;
             let unpacked = temp.path().join(std::ffi::OsStr::from_bytes(b"non-utf8-\xff"));
-            let text = unpack_into(&archive, &unpacked).unwrap();
-            let mut project = project_in(&text, &unpacked).unwrap();
-            let notices = photo_notices(&mut project);
-            assert_eq!(notices.len(), 1);
-            assert!(notices[0].starts_with("1 unpacked field photo reference"));
-            assert_eq!(value(&Session::new(project), "Sites", 0, "photos"), relative);
+            // Where the file system allows such a name: macOS's refuses one that isn't UTF-8.
+            if std::fs::create_dir(&unpacked).and_then(|()| std::fs::remove_dir(&unpacked)).is_ok() {
+                let text = unpack_into(&archive, &unpacked).unwrap();
+                let mut project = project_in(&text, &unpacked).unwrap();
+                let notices = photo_notices(&mut project);
+                assert_eq!(notices.len(), 1);
+                assert!(notices[0].starts_with("1 unpacked field photo reference"));
+                assert_eq!(value(&Session::new(project), "Sites", 0, "photos"), relative);
+            }
         }
     }
 
