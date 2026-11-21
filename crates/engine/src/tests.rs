@@ -48452,6 +48452,10 @@ fn a_large_file_of_few_features_is_loaded_ahead() {
     let ahead = crate::cmd::reads::read_ahead(&mut s, "layer.addData", &json!({"path": path.display().to_string()})).unwrap();
     assert!(ahead.reads(), "opened ahead");
     let read = ahead.run(&Control::new()).unwrap();
+    // Read whole on the read thread, before the command lands it.
+    let opened = crate::cmd::reads::prepared::<crate::cmd::layer::Opened>(&read).expect("an opening made ahead");
+    let whole = opened.whole.as_ref().expect("read whole ahead").as_ref().unwrap();
+    assert_eq!(whole.0.features.len(), 1000);
     let id = crate::cmd::reads::read_land(&mut s, read).unwrap()["layer"].as_u64().unwrap() as u32;
     assert!(s.read_ahead.is_none(), "the read was taken");
     let layer = s.map().layer(id).unwrap();

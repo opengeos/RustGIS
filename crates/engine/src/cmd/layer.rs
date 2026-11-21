@@ -2493,7 +2493,7 @@ fn streams_geojson(p: &Value, path: &str) -> bool {
 
 /// A large Shapefile or GeoJSON file, read in place, as Add Data opens it ahead (#2446).
 #[cfg(not(target_arch = "wasm32"))]
-struct Opened {
+pub(crate) struct Opened {
     /// The size and modification time of the file and those beside it of its name (a
     /// Shapefile's `.dbf`, `.prj` and `.cpg`) as it was opened: an opening of files changed since
     /// isn't taken, as its features' places, boxes and fields are those of what they held then.
@@ -2501,7 +2501,7 @@ struct Opened {
     source: Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>,
     /// Its features read whole, when Add Data loads the file instead of keeping it in place (it
     /// holds few enough, and `"stream"` isn't given), so the window doesn't wait for that read.
-    whole: Option<rustgis_data::Result<(rustgis_data::Dataset, rustgis_data::ReadReport)>>,
+    pub(crate) whole: Option<rustgis_data::Result<(rustgis_data::Dataset, rustgis_data::ReadReport)>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2545,7 +2545,8 @@ fn file_stamp(path: &str) -> Option<Vec<(std::ffi::OsString, u64, std::time::Sys
         if !Path::new(&name).file_stem().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(stem)) {
             continue;
         }
-        let m = entry.metadata().ok()?;
+        // The file a link names: its own size and time are what change.
+        let m = std::fs::metadata(entry.path()).ok()?;
         if m.is_file() {
             stamp.push((name, m.len(), m.modified().ok()?));
         }

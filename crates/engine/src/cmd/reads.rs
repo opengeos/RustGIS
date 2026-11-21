@@ -338,6 +338,12 @@ pub(crate) fn take<T: 'static>(s: &mut Session, key: &str) -> Option<T> {
     read.value.downcast::<T>().ok().map(|v| *v)
 }
 
+/// What `read` prepared, when it is a `T`, for a test to look at before it lands.
+#[cfg(test)]
+pub(crate) fn prepared<T: 'static>(read: &Read) -> Option<&T> {
+    read.ready.as_ref()?.value.downcast_ref::<T>()
+}
+
 /// Whether a read is placed for `key`, without taking it.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn placed_for(s: &Session, key: &str) -> bool {
