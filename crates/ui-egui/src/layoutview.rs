@@ -1383,12 +1383,28 @@ fn text_field(
     multiline: bool,
     label_id: egui::Id,
 ) -> Option<String> {
+    hinted_text_field(app, ui, key, current, multiline, None, label_id)
+}
+
+/// [`text_field`] showing `hint` while it's empty.
+fn hinted_text_field(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    key: (usize, u32, &'static str),
+    current: &str,
+    multiline: bool,
+    hint: Option<&str>,
+    label_id: egui::Id,
+) -> Option<String> {
     let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| current.to_string());
-    let edit = if multiline {
+    let mut edit = if multiline {
         egui::TextEdit::multiline(&mut buf).desired_rows(3).desired_width(240.0)
     } else {
         egui::TextEdit::singleline(&mut buf)
     };
+    if let Some(hint) = hint {
+        edit = edit.hint_text(hint);
+    }
     let r = ui.add(edit).labelled_by(label_id);
     if r.lost_focus() {
         return (buf != current).then_some(buf);
@@ -2075,7 +2091,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             let r = ui
                                 .add(egui::DragValue::new(&mut n).update_while_editing(false).range(0..=max as u64))
                                 .labelled_by(input_label.id);
-                            if drag.settled(ui, &r, &mut n) && n as usize != current {
+                            let settled = drag.settled(ui, &r, &mut n);
+                            // One subdivision is none: the bar keeps 0, so 1 changes nothing.
+                            if key == "subdivisions" && n == 1 {
+                                n = 0;
+                            }
+                            if settled && n as usize != current {
                                 update(app, json!({key: n}));
                             }
                             ui.end_row();
@@ -2134,7 +2155,15 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         if shows_unit {
                             let input_label = ui.label(tl!("Unit label"));
                             let current = unit_label.as_deref().unwrap_or("");
-                            if let Some(text) = text_field(app, ui, (li, id, "unitLabel"), current, false, input_label.id) {
+                            // Left empty, the bar prints the unit's abbreviation; an automatic
+                            // unit's depends on the frame's scale.
+                            let hint = match *units {
+                                ScaleUnits::Auto => tl!("Unit's abbreviation"),
+                                fixed => fixed.resolve(0.0).1,
+                            };
+                            if let Some(text) =
+                                hinted_text_field(app, ui, (li, id, "unitLabel"), current, false, Some(hint), input_label.id)
+                            {
                                 // Emptied, the field gives the unit's abbreviation back.
                                 update(app, json!({"unitLabel": if text.is_empty() { Value::Null } else { json!(text) }}));
                             }
@@ -3812,7 +3841,7 @@ mod tests {
     #[test]
     fn a_scale_bar_takes_its_details_in_the_format_pane() {
         use egui::accesskit::Role;
-        use egui_kittest::kittest::Queryable;
+        use egui_kittest::kittest::{NodeT, Queryable};
         use rustgis_engine::map::layout::{ElementKind, ScaleBarFit, ScaleLabelPosition};
         let mut app = RustGisApp::with_sample();
         app.run("layout.new", json!({"name": "Bar", "template": "map"})).unwrap();
@@ -3849,6 +3878,14 @@ mod tests {
         ] {
             assert!(h.query_by_label(label).is_some(), "{label}");
         }
+        // Left empty, the field shows what the bar prints: an automatic unit's abbreviation
+        // depends on the frame's scale, a fixed unit's is its own.
+        let hint =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| h.get_by_label("Unit label").accesskit_node().placeholder().map(str::to_owned);
+        assert_eq!(hint(&h).as_deref(), Some("Unit's abbreviation"));
+        h.state_mut().run("layout.update", json!({"element": bar, "units": "kilometers"})).unwrap();
+        h.run_steps(2);
+        assert_eq!(hint(&h).as_deref(), Some("km"));
         h.get_by_label("Label position").click();
         h.run_steps(2);
         h.get_by_label("Below the bar").click();
@@ -3875,6 +3912,22 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.run_steps(3);
         assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        // One subdivision is none, as the bar already has: no change, no undo step.
+        let subdivisions =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| match &h.state().session.project.layouts[li].element(bar).unwrap().kind {
+                ElementKind::ScaleBar { subdivisions, .. } => *subdivisions,
+                _ => panic!("a scale bar"),
+            };
+        let depth = h.state().session.undo_depth();
+        for (typed, expected, steps) in [("1", 0, 0), ("3", 3, 1)] {
+            h.get_by_label("Subdivisions").focus();
+            h.run_steps(2);
+            h.get_by_label("Subdivisions").type_text(typed);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+            assert_eq!(subdivisions(&h), expected, "{typed}");
+            assert_eq!(h.state().session.undo_depth(), depth + steps, "{typed}");
+        }
     }
 
     /// A number dragged in the Format pane and let go is applied (#607): X moves the element by

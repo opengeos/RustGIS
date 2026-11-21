@@ -11415,6 +11415,7 @@ fn layout_scale_bars_take_their_details() {
         json!({"unitLabel": 7}),
         json!({"unitLabel": ["ft"]}),
         json!({"unitLabel": "a\nb"}),
+        json!({"unitLabel": "a\rb"}),
         json!({"unitLabel": "x".repeat(101)}),
         json!({"fit": "manual"}),
         json!({"fit": 3}),

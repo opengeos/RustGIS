@@ -410,6 +410,7 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
             "\"divisions_before_zero\"",
             "\"label_position\"",
             "\"unit_label\"",
+            "\"unit_label_position\"",
             "\"decimals\"",
             "\"label_size\"",
             "\"fit\"",
@@ -1344,6 +1345,8 @@ mod tests {
             assert!(!base["layouts"].to_string().contains(key), "nor writes {key}");
         }
         let layout = &saved["layouts"][0];
+        let mut position_only = base["layouts"][0].clone();
+        position_only["elements"][1]["kind"]["ScaleBar"]["unit_label_position"] = json!("afterBar");
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "scaleBar", "subdivisions": 4}), true),
             ("layout.update", json!({"element": 2, "labelPosition": "below"}), true),
@@ -1359,6 +1362,7 @@ mod tests {
             ("layout.update", json!({"element": 2, "divisions": 3}), false),
             ("layout.import", json!({"text": layout.to_string()}), true),
             ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
+            ("layout.import", json!({"text": position_only.to_string()}), true),
             ("layout.import", json!({"path": "bars.rgislayout"}), false),
         ] {
             let script = format!("{id}= {params}");
