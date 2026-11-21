@@ -98,6 +98,7 @@ fn bare(layer: &Layer) -> Layer {
         projected_crs,
         lonlat,
         unplaced: _,
+        flat_unplaced: _,
         extent_cache: _,
         drawn: _,
         view_memory: _,
@@ -173,6 +174,7 @@ fn bare(layer: &Layer) -> Layer {
         projected_crs: *projected_crs,
         lonlat: lonlat.clone(),
         unplaced: Default::default(),
+        flat_unplaced: Default::default(),
         extent_cache: Default::default(),
         drawn: false,
         view_memory: Default::default(),
@@ -270,6 +272,7 @@ impl LayerLook {
             lonlat: _,
             // What the last drawing counted and whether it drew the layer; neither is the look.
             unplaced: _,
+            flat_unplaced: _,
             extent_cache: _,
             drawn: _,
             view_memory: _,

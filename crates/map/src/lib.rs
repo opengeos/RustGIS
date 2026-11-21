@@ -357,9 +357,15 @@ pub struct Layer {
     #[serde(skip)]
     lonlat: LonLatCopy,
     /// How many of a held layer's features have a place that can't be given in
-    /// longitude/latitude, found as it was last converted for drawing ([`Layer::unplaced`]).
+    /// longitude/latitude, found as it was last converted there (the globe's copy, frames that
+    /// read it there: [`Layer::unplaced`]).
     #[serde(skip)]
     unplaced: Unplaced,
+    /// How many its flat projection's drawing left out ([`Layer::projected_in`]): none on a map
+    /// in its own system, which draws every place as it is. Kept apart from `unplaced`, so the
+    /// globe and the flat map each say what they leave out, whichever drew last.
+    #[serde(skip)]
+    flat_unplaced: Unplaced,
     /// Its extent in longitude/latitude as last worked out ([`Layer::extent`]): converting every
     /// place of a layer held in another system takes long enough not to do it each frame.
     #[serde(skip)]
@@ -577,6 +583,7 @@ impl Layer {
             projected_crs: None,
             lonlat: LonLatCopy::default(),
             unplaced: Unplaced::default(),
+            flat_unplaced: Unplaced::default(),
             extent_cache: ExtentCache::default(),
             drawn: false,
             geometry_rev: 0,
@@ -1205,7 +1212,14 @@ impl Layer {
     /// layer in longitude/latitude, which has none. An error when its system can't be converted,
     /// when none of it is drawn.
     pub fn unplaced(&self) -> Option<&Result<usize, String>> {
-        self.unplaced.fits(self).then_some(&self.unplaced.count)
+        // The larger of the counts of drawings made from its geometry as it is: what one drawing
+        // left out is said, though another drew it.
+        let fit = |u: &Unplaced| u.fits(self);
+        match (fit(&self.unplaced).then_some(&self.unplaced.count), fit(&self.flat_unplaced).then_some(&self.flat_unplaced.count)) {
+            (Some(a @ Err(_)), _) | (_, Some(a @ Err(_))) => Some(a),
+            (Some(a @ Ok(x)), Some(b @ Ok(y))) => Some(if x >= y { a } else { b }),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Counts its places that can't be given in longitude/latitude ([`Layer::unplaced`]) without
@@ -1245,7 +1259,7 @@ impl Layer {
                 // Every place is drawn as it is, those longitude/latitude can't give too: the
                 // conversion leaves none out (a place a reader kept missing is said by the reader).
                 Ok(held) if held.is_identity() => {
-                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(0) };
+                    self.flat_unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(0) };
                     self.dataset.features.rows().map(|r| r.geometry().cloned()).collect()
                 }
                 Ok(held) => {
@@ -1260,11 +1274,11 @@ impl Layer {
                             Some(g)
                         })
                         .collect();
-                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(lost) };
+                    self.flat_unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(lost) };
                     geoms
                 }
                 Err(e) => {
-                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Err(e) };
+                    self.flat_unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Err(e) };
                     (0..self.dataset.features.len()).map(|_| None).collect()
                 }
             }
@@ -1463,6 +1477,9 @@ impl Layer {
             // What a frame drawn on the copy found it can't draw, and that it drew it.
             if other.unplaced.fits(other) {
                 self.unplaced = other.unplaced.clone();
+            }
+            if other.flat_unplaced.fits(other) {
+                self.flat_unplaced = other.flat_unplaced.clone();
             }
             self.drawn |= other.drawn;
         }
@@ -3521,6 +3538,7 @@ impl Layer {
             projected_crs: _,
             lonlat: _,
             unplaced: _,
+            flat_unplaced: _,
             extent_cache: _,
             drawn: _,
             view_memory: _,
@@ -3584,10 +3602,13 @@ impl Layer {
 #[derive(Debug, Default)]
 struct ExtentCache(std::sync::Mutex<Option<ExtentKept>>);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ExtentKept {
     rev: u64,
-    rows: usize,
+    /// The rows it was worked out from, without keeping them: a change through a copy, or in
+    /// place (which moves the rows out from under a weak reference), makes them other rows, and
+    /// an allocation freed and reused is never taken for them.
+    rows: std::sync::Weak<Vec<rustgis_data::Feature>>,
     len: usize,
     crs: Crs,
     extent: Extent,
@@ -3595,7 +3616,7 @@ struct ExtentKept {
 
 impl Clone for ExtentCache {
     fn clone(&self) -> Self {
-        ExtentCache(std::sync::Mutex::new(*self.0.lock().unwrap_or_else(|e| e.into_inner())))
+        ExtentCache(std::sync::Mutex::new(self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()))
     }
 }
 
@@ -3607,10 +3628,11 @@ impl ExtentCache {
         if crs == Crs::LonLat {
             return ds.extent();
         }
-        let (rows, len) = (ds.features.allocation_key().as_ptr() as usize, ds.features.len());
+        let (rows, len) = (ds.features.allocation_key(), ds.features.len());
         let mut kept = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(k) = *kept
-            && (k.rev, k.rows, k.len, k.crs) == (rev, rows, len, crs)
+        if let Some(k) = kept.as_ref()
+            && k.rows.ptr_eq(&rows)
+            && (k.rev, k.len, k.crs) == (rev, len, crs)
         {
             return k.extent;
         }
@@ -4596,6 +4618,12 @@ mod tests {
         assert_eq!(wild.unplaced(), Some(&Ok(1)));
         wild.projected_in(&flat("EPSG:31467"), "gk");
         assert_eq!(wild.unplaced(), Some(&Ok(0)), "drawn as it is");
+        // The globe, drawn from its longitude/latitude copy, leaves it out, and says so whatever
+        // the flat map drew since; a flat drawing of its own system adds nothing to it.
+        wild.lonlat_in();
+        assert_eq!(wild.unplaced(), Some(&Ok(1)), "the globe's");
+        wild.projected_in(&flat("EPSG:31467"), "gk");
+        assert_eq!(wild.unplaced(), Some(&Ok(1)), "still the globe's");
         // A layer held in Web Mercator is drawn on the Web Mercator map as it is.
         let mut merc = held(Crs::WebMercator);
         let stored_merc = merc.dataset.features[0].geometry.clone().unwrap();

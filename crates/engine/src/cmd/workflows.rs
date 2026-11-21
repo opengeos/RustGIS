@@ -1894,7 +1894,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
 /// ([`Dataset::hold_as`]; `system` is its [`Dataset::coord_crs`] and [`Dataset::crs`]), and says
 /// so when it can't be: it stays in longitude/latitude then, as it was made. A cancel stops the
 /// command, which adds nothing.
-fn hold_as(
+pub(crate) fn hold_as(
     s: &mut Session,
     ds: &mut Dataset,
     (held, crs): (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>),

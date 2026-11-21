@@ -981,12 +981,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(src) = s.map_mut().layer_mut(id) {
         src.labels.enabled = false;
     }
-    match ds.hold_as(system.0, system.1) {
-        // A cancel stops the command, which adds nothing.
-        Err(e) if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) => return Err(e),
-        Err(e) => s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {}: {e}", ds.name, system.0.label()), false),
-        Ok(()) => {}
-    }
+    super::workflows::hold_as(s, &mut ds, system)?;
     let new_id = super::layer::add_dataset(s, ds);
     if let Some(a) = s.map_mut().layer_mut(new_id) {
         // The annotation is all text: the points themselves are invisible.

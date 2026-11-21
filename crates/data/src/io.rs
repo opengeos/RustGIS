@@ -1414,7 +1414,6 @@ fn is_epsg_or_crs84_name(name: &str) -> bool {
 /// A geometry in longitude/latitude from the coordinates `t` converts: `None` when a coordinate
 /// can't be converted or comes out beyond longitude/latitude (a declared system that doesn't match
 /// the coordinates).
-// Used by the in-place GeoJSON reader, which the web app hasn't.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn geometry_to_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> Option<Geometry> {
     let mut ok = true;
@@ -1428,9 +1427,20 @@ pub(crate) fn geometry_to_lonlat(g: &Geometry, t: &crate::raster::Transformer) -
 /// ([`Dataset::held_in`]), when it does, and leaves the feature's geometry out when it doesn't,
 /// as one it couldn't convert. Each coordinate is converted to be checked, none is kept.
 pub(crate) fn places_in_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> bool {
+    places_lonlat_extent(g, t).is_some()
+}
+
+/// [`places_in_lonlat`] with the box of the places in longitude/latitude, for a reader that says
+/// when they come out beyond it (a `.prj` that doesn't match the coordinates): `None` when one of
+/// them has no place there.
+pub(crate) fn places_lonlat_extent(g: &Geometry, t: &crate::raster::Transformer) -> Option<rustgis_geom::Extent> {
     let mut ok = true;
-    g.for_each_coord(|c: Coord| ok &= t.to_lonlat(c).is_some_and(|l| l.is_finite()));
-    ok
+    let mut e = rustgis_geom::Extent::EMPTY;
+    g.for_each_coord(|c: Coord| match t.to_lonlat(c).filter(|l| l.is_finite()) {
+        Some(l) => e.expand(l),
+        None => ok = false,
+    });
+    ok.then_some(e)
 }
 
 /// The box in longitude/latitude of a geometry in the coordinates `t` converts, for a reader that
@@ -3619,6 +3629,9 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         }),
     };
     let (mut converted, mut unconverted, mut zm_shapes, mut not_numbers) = (0usize, 0usize, 0usize, 0usize);
+    // The box of the converted places in longitude/latitude, for the notice of a `.prj` that
+    // doesn't match the coordinates.
+    let mut lonlat_extent = rustgis_geom::Extent::EMPTY;
     let mut counts = DbfCounts::new(ds.fields.len());
     let mut source_kind = GeometryType::None;
     let pt = |x: f64, y: f64| Coord::new(x, y);
@@ -3674,10 +3687,13 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         // Kept as the file holds it, in its own system, when it has a place in longitude/latitude.
         let geom = match (&to_lonlat, geom) {
             (Some(t), Some(g)) => {
-                let ok = places_in_lonlat(&g, t);
-                converted += usize::from(ok);
-                unconverted += usize::from(!ok);
-                ok.then_some(g)
+                let placed = places_lonlat_extent(&g, t);
+                if let Some(e) = &placed {
+                    lonlat_extent = lonlat_extent.union(e);
+                }
+                converted += usize::from(placed.is_some());
+                unconverted += usize::from(placed.is_none());
+                placed.map(|_| g)
             }
             (_, g) => g,
         };
@@ -3698,8 +3714,10 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     if let Some(c) = ds.crs.filter(|_| to_lonlat.is_some()) {
         ds.held_in = c;
     }
-    let e = ds.extent();
-    if to_lonlat.is_none() && !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
+    // In longitude/latitude, as the file's places come out there (beyond it: a `.prj` that
+    // doesn't match the coordinates), or as they are without a system to convert from.
+    let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
+    if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
         report.messages.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
     }
     if report.skipped > 0 {

@@ -776,6 +776,18 @@ fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<
                     if job.crs != Crs::LonLat && ds.coord_crs() == Crs::LonLat && looks_projected(&ds) {
                         ds.held_in = job.crs;
                         ds.crs = Some(job.crs);
+                        // Every place the layer keeps has one in longitude/latitude, as when it was
+                        // converted there: a feature with one that hasn't is kept without geometry.
+                        // Each place is converted to be checked; the layer keeps its own.
+                        let lost = match ds.lonlat_conversion() {
+                            Ok(to) => convert_features(&mut ds, |c| to.point(c).filter(|l| l.is_finite()).map(|_| c)),
+                            Err(_) => convert_features(&mut ds, |_| None),
+                        };
+                        if lost > 0 {
+                            messages.push(format!(
+                                "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
+                            ));
+                        }
                     }
                     Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
                 }
