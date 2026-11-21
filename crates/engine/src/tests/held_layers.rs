@@ -1109,6 +1109,41 @@ fn edits_on_a_map_in_another_datums_system_land_on_what_it_draws() {
     assert_eq!(*l.dataset.geometry_to_lonlat(&stored).unwrap(), *g, "on Web Mercator, edits go through WGS 84");
 }
 
+/// A label moved on a map in another datum's system becomes an annotation where it was drawn:
+/// at the layer's coordinates the map's direct operation puts there, not those WGS 84 gives
+/// (some decimetres off between DHDN and ETRS89).
+#[test]
+fn a_moved_label_becomes_an_annotation_where_it_was_drawn() {
+    let gk = Crs::Epsg(31467);
+    let mut s = session(gk);
+    s.run("map.projection", &json!({"type": "EPSG:25832"})).unwrap();
+    let flat = s.map().flat();
+    assert_eq!(flat.direct_system(), Some(Crs::Epsg(25832)));
+    let id = s.map().layer_by_name("Wells").unwrap().id;
+    let drawn = s.map_mut().layer_mut(id).unwrap().projected_in(&flat, "test")[2].clone().unwrap();
+    let Geometry::Point(drawn) = drawn else { panic!("a point") };
+    let l = s.map().layer(id).unwrap();
+    let (moved, target) = (l.dataset.features[1].id, l.dataset.features[2].geometry.clone().unwrap());
+    let Geometry::Point(target) = target else { panic!("a point") };
+    // Put on the map where well 2 is drawn, as a drag there gives it.
+    let put = flat.inverse(drawn).unwrap();
+    s.run("labels.enable", &json!({"layer": "Wells", "on": true})).unwrap();
+    s.run("labels.move", &json!({"layer": "Wells", "feature": moved, "to": [put.x, put.y]})).unwrap();
+    let made = s.run("labels.convert", &json!({"layer": "Wells"})).unwrap();
+    let a = s.map().layer(made["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(a.dataset.coord_crs(), gk, "held as the labelled layer is");
+    let Some(Geometry::Point(at)) = a.dataset.features[1].geometry else { panic!("a point") };
+    // Within the millimetre two inverses of the datum shift take: the direct one, then through
+    // WGS 84 as `hold_as` reads the annotation back. PROJ's own round trip moves it 0.85 mm:
+    // `echo 5401067.822206589 3684021.1657746523 | cs2cs -d 10 EPSG:31467 EPSG:25832` gives
+    // 683871.9767392263 5399346.3693805207, which `cs2cs -d 10 EPSG:25832 EPSG:31467` turns into
+    // 5401067.8229720965 3684021.1661309246 (PROJ 9.9.0, PROJ_NETWORK=OFF).
+    assert!((at.x - target.x).hypot(at.y - target.y) < 5e-3, "annotation at {at:?}, label drawn at {target:?}");
+    // Through WGS 84 it would be off the drawn label.
+    let plain = Crs::LonLat.to(gk).unwrap().point(put).unwrap();
+    assert!((plain.x - target.x).hypot(plain.y - target.y) > 0.1, "{plain:?} vs {target:?}");
+}
+
 /// A project saved by an older release opens as it did (#2032 C2): a layer it kept in the
 /// project holds its features in longitude/latitude, as they were saved, and a layer read in
 /// place from a UTM 32N Shapefile is read again in the file's own system, at the same places.

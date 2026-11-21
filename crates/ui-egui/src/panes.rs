@@ -6968,14 +6968,16 @@ fn save_history_script(app: &mut RustGisApp) {
 /// What the Layer Properties pane's Source tab (#1803) shows of a layer: its geometry, counts,
 /// source, coordinate system, extent and fields, or a raster's own details.
 pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
-    // A layer held in another system shows its extent there, as its coordinates are: no
+    // A layer held in a projected system shows its extent there, as its coordinates are: no
     // conversion of every place on the interface thread, which this pane is drawn on each frame.
-    // A streamed layer's is its source's whole extent, in longitude/latitude, read once.
+    // One held in a geographic system (NAD83, ETRS89, or one in grads or latitude first) shows
+    // its longitude/latitude extent, converted once per edit (Layer::extent), in degrees. A
+    // streamed layer's is its source's whole extent, in longitude/latitude, read once.
+    use rustgis_engine::data::raster::Crs;
     let held = l.dataset.coord_crs();
-    let lonlat = held == rustgis_engine::data::raster::Crs::LonLat || l.source.is_some();
-    let e = if lonlat { l.extent() } else { l.dataset.extent() };
-    // Degrees in any geographic system (NAD83, ETRS89), units of the system otherwise.
-    let degrees = lonlat || held.is_geographic();
+    let degrees = held.is_geographic() || l.source.is_some();
+    let e = if degrees { l.extent() } else { l.dataset.extent() };
+    let extent_in = if degrees { Crs::LonLat } else { held };
     let edge = |v: f64| if degrees { format!("{v:.4}°") } else { format!("{v:.2}") };
     if let Some(rl) = &l.raster {
         raster_details(ui, rl, t);
@@ -6992,6 +6994,7 @@ pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
             ("Source", l.dataset.source.as_deref().map_or_else(|| tl!("In project").into(), rustgis_engine::sources::redact)),
             ("Source coordinate system", l.dataset.crs.map(|c| c.label()).unwrap_or_else(|| "EPSG:4326".into())),
             ("Held in", held.label()),
+            ("Extent in", extent_in.label()),
             (if degrees { "West" } else { "Min X" }, edge(e.min_x)),
             (if degrees { "East" } else { "Max X" }, edge(e.max_x)),
             (if degrees { "South" } else { "Min Y" }, edge(e.min_y)),

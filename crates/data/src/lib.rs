@@ -597,7 +597,7 @@ impl Dataset {
     /// there by a direct operation: `None` when it is shown on no such map, is in that system
     /// itself or in longitude/latitude, or there is no direct operation between the two (the way
     /// through WGS 84 then gives what the map draws).
-    fn shown_through(&self) -> Option<raster::Crs> {
+    pub fn shown_through(&self) -> Option<raster::Crs> {
         let (own, map) = (self.coord_crs(), self.shown_in?);
         let plain = |c: raster::Crs| matches!(c, raster::Crs::LonLat | raster::Crs::WebMercator);
         (own != map && !plain(own) && !plain(map) && own.to(map).is_ok_and(|t| t.is_direct())).then_some(map)

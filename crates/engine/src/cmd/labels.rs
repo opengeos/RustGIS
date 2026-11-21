@@ -870,6 +870,18 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let system = (l.dataset.coord_crs(), l.dataset.crs);
     let mut moved = Vec::new();
     let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
+    // A moved label is drawn where the map puts its place, by the direct operation into the
+    // map's system when there is one (Dataset::shown_through): its annotation is put at the
+    // layer's coordinates the map draws there, given in longitude/latitude through WGS 84 as
+    // hold_as reads them back.
+    let shown = match l.dataset.shown_through() {
+        Some(_) => Some(l.dataset.shown_from_lonlat().map_err(|e| format!("{}: {e}", l.name))?),
+        None => None,
+    };
+    let put_at = |[x, y]: [f64; 2]| {
+        let c = Coord::new(x, y);
+        shown.as_ref().and_then(|back| back.point(c)).and_then(|own| to.point(own)).unwrap_or(c)
+    };
     for (row, ft) in l.dataset.features.rows().enumerate() {
         if rows.get(row) != Some(&true) {
             continue;
@@ -901,7 +913,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
             // A label moved by hand becomes an annotation where it was put, and stays moved there
             // (its class's offset leaves it).
             let put = class.moved_to(ft.id());
-            let at = put.map_or(at, |[x, y]| Coord::new(x, y));
+            let at = put.map_or(at, put_at);
             let e = exprs.get(i).and_then(Option::as_ref);
             let number = |v: Option<f32>| v.map_or(Attr::Null, |v| Attr::Float(f64::from(v)));
             if by_size {
