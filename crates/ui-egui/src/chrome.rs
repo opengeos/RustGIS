@@ -1273,12 +1273,39 @@ fn command_matches(id: &str, label: &str, location: &str, ql: &str) -> bool {
         || crate::i18n::location_raw(location).to_lowercase().contains(ql)
 }
 
-/// The command palette: type to filter every command, Enter runs the first.
+/// The row the arrow keys have picked in Command Search, kept between frames while the palette
+/// stays open on the same query.
+#[derive(Clone, Default)]
+struct SearchCursor {
+    /// The query the row was picked for: a new query starts again from the first row.
+    query: String,
+    /// Position among the rows that can run now (greyed-out rows are skipped).
+    row: usize,
+    /// The pass the palette was last shown in: a palette opened again starts from the first row.
+    pass: u64,
+}
+
+/// Moves the picked row down or up among `count` rows, stopping at the first and the last.
+fn step_row(row: usize, count: usize, down: bool, up: bool) -> usize {
+    let last = count.saturating_sub(1);
+    match (down, up) {
+        (true, false) => (row + 1).min(last),
+        (false, true) => row.saturating_sub(1).min(last),
+        _ => row.min(last),
+    }
+}
+
+/// The command palette: type to filter every command, Up and Down pick a row, Enter runs it.
 pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(mut q) = app.ui.command_search.take() else { return };
     let t = Tokens::get(ctx);
     let mut keep = true;
     let mut chosen: Option<String> = None;
+    let cursor_id = egui::Id::unique("command_search_cursor");
+    let pass = ctx.cumulative_pass_nr();
+    let cursor: Option<SearchCursor> = ctx.data(|d| d.get_temp(cursor_id));
+    // The arrows are the list's, taken before the text box sees them (it would move its caret).
+    let (down, up) = ctx.input_mut(|i| (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp)));
     // Fits small screens: never wider or taller than the window allows.
     let screen = ctx.content_rect();
     let width = (screen.width() - 48.0).clamp(220.0, 520.0);
@@ -1407,14 +1434,24 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         // The modal's area starts from its last size, so after a short result list the scroll
         // area would get only that room back (egui's 64 px floor): ask for the full height
         // whenever the list scrolls. A few hits still shrink the palette to fit.
+        // Unavailable commands stay listed, greyed out, with the reason on hover; the arrows and
+        // Enter pass over them.
+        let shown: Vec<_> = hits.iter().take(40).map(|h| (h, search_disabled(app, &h.0))).collect();
+        let runnable = shown.iter().filter(|(_, why)| why.is_none()).count();
+        let row = match &cursor {
+            Some(c) if c.query == q && c.pass + 1 >= pass => c.row,
+            _ => 0,
+        };
+        let row = step_row(row, runnable, down, up);
+        ui.ctx().data_mut(|d| d.insert_temp(cursor_id, SearchCursor { query: q.clone(), row, pass }));
         egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).show(ui, |ui| {
             let row_w = ui.available_width();
-            // Enter runs the first command that is available now.
-            let mut first = true;
-            for (id, label, loc) in hits.iter().take(40) {
-                // Unavailable commands stay listed, greyed out, with the reason on hover.
-                let why = search_disabled(app, id);
+            // Enter runs the picked row: the first that is available now until an arrow moves it.
+            let mut position = 0;
+            for ((id, label, loc), why) in shown {
                 let on = why.is_none();
+                let picked = on && position == row;
+                position += usize::from(on);
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 // The command's shortcut after its location.
                 let keys = if id.contains(':') && !id.starts_with("plugin:") {
@@ -1431,7 +1468,17 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                     b = b.right_text(egui::RichText::new(right).size(11.0).weak());
                 }
                 // The scroll area would clip a fill wider than the row.
+                let under = ui.painter().add(egui::Shape::Noop);
                 let mut resp = row_button(ui, on, b, 0.0);
+                if picked {
+                    // Under the pointer's own fill, so a hovered row still shows it is hovered.
+                    if !resp.hovered() {
+                        ui.painter().set(under, egui::Shape::rect_filled(resp.rect, CornerRadius::same(5), t.selection));
+                    }
+                    if down || up {
+                        resp.scroll_to_me(None);
+                    }
+                }
                 if let Some(why) = why {
                     resp = resp.on_disabled_hover_text(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl_raw!(why))]));
                 }
@@ -1449,8 +1496,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                     app.ui.shortcut_editor.filter = id.clone();
                     keep = false;
                 }
-                let enter = on && first && ui.input(|i| i.key_pressed(Key::Enter));
-                first &= !on;
+                let enter = picked && ui.input(|i| i.key_pressed(Key::Enter));
                 if resp.clicked() || enter {
                     chosen = Some(id.clone());
                 }
@@ -1736,6 +1782,47 @@ mod tests {
             h.state_mut().ui.command_search = Some(query.into());
             h.run_steps(3);
             h.get_by_label_contains("开关基准转换格网下载");
+        }
+    }
+
+    #[test]
+    fn step_row_stops_at_the_ends() {
+        assert_eq!(step_row(0, 3, true, false), 1);
+        assert_eq!(step_row(2, 3, true, false), 2, "Down stops at the last row");
+        assert_eq!(step_row(0, 3, false, true), 0, "Up stops at the first row");
+        assert_eq!(step_row(5, 3, false, false), 2, "a shorter list keeps the row in it");
+        assert_eq!(step_row(0, 0, true, false), 0, "no rows");
+        assert_eq!(step_row(1, 3, true, true), 1, "both arrows at once cancel out");
+    }
+
+    /// Up and Down pick a row in Command Search and Enter runs the picked row, not always the first.
+    #[test]
+    fn command_search_arrows_pick_the_row_enter_runs() {
+        use crate::RightPane;
+        // The query matches two UI commands by id, in this order: Labeling, then Layer Properties.
+        let cases: [(&[Key], RightPane); 4] = [
+            (&[], RightPane::Labeling),
+            (&[Key::ArrowDown], RightPane::LayerProperties),
+            (&[Key::ArrowDown, Key::ArrowDown, Key::ArrowDown], RightPane::LayerProperties),
+            (&[Key::ArrowDown, Key::ArrowUp], RightPane::Labeling),
+        ];
+        for (keys, pane) in cases {
+            let mut app = RustGisApp::with_sample();
+            app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
+            app.ui.command_search = Some("ui.pane.la".into());
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(800.0, 600.0))
+                .build_ui_state(|ui, app: &mut RustGisApp| command_search(app, ui.ctx()), app);
+            h.run();
+            for &key in keys {
+                h.key_press(key);
+                h.run();
+                assert!(h.state().ui.command_search.is_some(), "{keys:?}: an arrow keeps the palette open");
+            }
+            h.key_press(Key::Enter);
+            h.run();
+            assert!(h.state().ui.command_search.is_none(), "{keys:?}: Enter closes the palette");
+            assert_eq!(h.state().ui.right, Some(pane), "{keys:?}");
         }
     }
 
