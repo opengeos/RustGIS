@@ -4590,7 +4590,8 @@ fn render_frame(
                     pixels: pm.pixels().clone(),
                     sprites: ctx.sprites.borrow().clone(),
                     bursts: ctx.bursts.get(),
-                    taken: web_time::Instant::now(),
+                    // Over a restored picture, its tiles are as old as that picture.
+                    taken: cached.as_ref().and_then(|p| p.restored.as_ref()).map_or_else(web_time::Instant::now, |c| c.taken),
                     candidates: label_candidates.clone(),
                     fixed: fixed_labels.clone(),
                     tiles: tile_out.clone(),
