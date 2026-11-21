@@ -1829,7 +1829,11 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
                 return Err("a distance needs two or more points".into());
             }
             let flat = if earth { rustgis_geom::wgs84_length_m(&pts) } else { body.length(rustgis_geom::geodesic_length_m(&pts)) };
-            // Along the surface when there's an elevation raster.
+            // Along the surface when there's an elevation raster. The profile spaces its samples
+            // along the path on the sphere; on the Earth each step is stretched by the path's
+            // ellipsoid-to-sphere ratio, so level ground gives the flat length exactly.
+            let stretch = if earth { rustgis_geom::wgs84_length_m(&pts) / rustgis_geom::geodesic_length_m(&pts) } else { 1.0 };
+            let stretch = if stretch.is_finite() { stretch } else { 1.0 };
             let surface = dem.as_ref().map(|d| {
                 let prof = rasterops::profile(d, 0, &pts, 500);
                 prof.windows(2)
@@ -1839,7 +1843,7 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
                                 (Some(x), Some(y)) => y - x,
                                 _ => 0.0,
                             };
-                            let run = if earth { rustgis_geom::wgs84_distance_m(a.1, c.1) } else { body.length(c.0 - a.0) };
+                            let run = if earth { (c.0 - a.0) * stretch } else { body.length(c.0 - a.0) };
                             (run * run + dh * dh).sqrt()
                         }
                         _ => 0.0,

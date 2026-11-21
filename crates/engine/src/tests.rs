@@ -15315,6 +15315,29 @@ fn mensuration_measures_the_earth_on_the_ellipsoid() {
     assert!((expected / sphere - 1.0).abs() > 0.003, "{expected} {sphere}");
     let distance = s.run("raster.measure", &json!({"kind": "distance", "points": &pts[..]})).unwrap();
     assert_eq!(distance["metres"].as_f64(), Some(rustgis_geom::wgs84_length_m(&line)), "{distance}");
+    // Over level ground the surface distance is the flat one; over a slope it is longer.
+    {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 70.0, pixel_width: 0.5, pixel_height: -0.5 };
+        for (name, z) in [("Level", vec![100.0f32; 1600]), ("Slope", (0..1600).map(|i| (i % 40) as f32 * 5000.0).collect())] {
+            let dem = Raster::new(name, 40, 40, vec![z], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+            let bytes = rustgis_data::raster::geotiff::write(&dem, 0).unwrap();
+            crate::cmd::raster::add_raster(&mut s, name, rustgis_map::RasterLayer::from_bytes(dem, format!("{name}.tif"), bytes)).unwrap();
+        }
+        let path = json!([[2.0, 60.0], [12.0, 60.0], [12.0, 55.0]]);
+        let level = s.run("raster.measure", &json!({"layer": "Level", "kind": "distance", "points": path})).unwrap();
+        let flat = level["metres"].as_f64().unwrap();
+        assert!((level["surfaceMetres"].as_f64().unwrap() / flat - 1.0).abs() < 1e-9, "{level}");
+        let slope = s.run("raster.measure", &json!({"layer": "Slope", "kind": "distance", "points": path})).unwrap();
+        assert!(slope["surfaceMetres"].as_f64().unwrap() > flat * 1.001, "{slope}");
+        // Every leg counts, even where the samples skip vertices (a zigzag of 998 short legs), and a
+        // path across the antimeridian is its short way, as the flat length takes it.
+        let zigzag: Vec<[f64; 2]> = (0..999).map(|i| [10.0 + 0.001 * (i % 2) as f64, 60.0]).collect();
+        for path in [json!(zigzag), json!([[179.0, 0.0], [-179.0, 0.0]])] {
+            let m = s.run("raster.measure", &json!({"layer": "Level", "kind": "distance", "points": path})).unwrap();
+            assert!((m["surfaceMetres"].as_f64().unwrap() / m["metres"].as_f64().unwrap() - 1.0).abs() < 1e-9, "{m}");
+        }
+    }
     s.run("map.body", &json!({"name": "mars", "basemap": false})).unwrap();
     let k = rustgis_geom::Body::get("mars").ratio();
     let on_mars = s.run("raster.measure", &json!({"kind": "area", "points": pts})).unwrap();

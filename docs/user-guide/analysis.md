@@ -565,9 +565,10 @@ polygon split there), measured as the meridian it runs along. A ring winding aro
 measured as the region it traces by the attribute table
 and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
 while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
-that body's sphere. **Mensuration Tools** (`raster.measure`) measure the same way, on the ellipsoid
-on the Earth and on the body's sphere elsewhere. The Radius tools still measure a local Mercator
-distance, so those can differ from the numbers above.
+that body's sphere. **Mensuration Tools** (`raster.measure`) measure distances (along the surface
+too), areas and perimeters the same way, on the ellipsoid on the Earth and on the body's sphere
+elsewhere; a volume still takes one cell size for the whole raster, at its centre's latitude. The Radius tools still
+measure a local Mercator distance, so those can differ from the numbers above.
 
 For an ambiguous area, the `raster.measure` command with `kind: "area"` returns an error without a measurement object. To request its finite closed-ring perimeter, use `kind: "distance"` and repeat the first point at the end. The on-map Measure overlay continues to show perimeter alongside the area refusal.
 
