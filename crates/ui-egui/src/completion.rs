@@ -113,8 +113,15 @@ fn over_menu_id() -> Id {
 /// drawn the last pass counts, as the menu checks its clicks before its box draws it again.
 pub(crate) fn pressed_over_menu(ctx: &egui::Context) -> bool {
     let id = over_menu_id().with("pressed");
-    let (pressed, held) = ctx
-        .input(|i| (i.pointer.any_pressed().then(|| i.pointer.press_origin()).flatten(), i.pointer.any_down() || i.pointer.any_released()));
+    // Where the button went down this pass, read from the pass's events: a press let go in the
+    // same pass (a quick tap, a slow frame) has no `press_origin` left by then.
+    let (pressed, held) = ctx.input(|i| {
+        let pressed = i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+            _ => None,
+        });
+        (pressed, i.pointer.any_down() || i.pointer.any_released())
+    });
     if let Some(pos) = pressed {
         let pass = ctx.cumulative_pass_nr();
         let on = ctx
