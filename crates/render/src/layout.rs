@@ -3182,7 +3182,7 @@ fn swatch(
     // A layer with no stack keeps the swatch it always had; any stack is drawn as the map draws
     // it, cut to the box.
     let plain = if gt == GeometryType::Polyline { strokes.is_empty() } else { fills.is_empty() };
-    if plain && opacity >= 0.999 && k == 1.0 {
+    if plain && opacity >= 0.999 && k == 1.0 && swatch_stroke_fits((x, y, w, h), gt, s, (across, ppp)) {
         flat_swatch(pm, (x, y, w, h), gt, s, (across, ppp));
     } else if plain {
         composited(pm, (x, y, w, h), opacity, |c, (left, top)| flat_swatch(c, (x - left, y - top, w, h), gt, s, (across, ppp * k)));
@@ -3190,6 +3190,37 @@ fn swatch(
         composited(pm, (x, y, w, h), opacity, |c, (left, top)| {
             stacked_swatch(c, (x - left, y - top, w, h), l, (s, strokes, fills), (ppp, across), k)
         });
+    }
+}
+
+/// Whether a plain line or polygon swatch's line, as [`flat_swatch`] strokes it (its joins too),
+/// stays within its row: the box's top and bottom. One that doesn't is drawn cut to its box, as a
+/// stacked one is, so a wide line in a legend of small text doesn't paint over the rows above and
+/// below it (#2581). Its sides aren't asked: a polygon's swatch is as wide as its column, so its
+/// outline has always reached past them, into the gap before the text.
+fn swatch_stroke_fits(cell: (f32, f32, f32, f32), gt: GeometryType, s: &rustgis_map::Symbol, (across, ppp): (f32, f32)) -> bool {
+    let (_, y, _, h) = cell;
+    let Some((path, stroke)) = flat_swatch_outline(cell, gt, s, (across, ppp)) else { return true };
+    path.stroke(&stroke, 1.0).map(|o| o.bounds()).is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01)
+}
+
+/// A plain line or polygon swatch's line, `across` pixels wide in the box: a line's zigzag or a
+/// polygon's box, and the stroke it is drawn with, its width at `wppp`.
+fn flat_swatch_outline(
+    cell: (f32, f32, f32, f32),
+    gt: GeometryType,
+    s: &rustgis_map::Symbol,
+    (across, wppp): (f32, f32),
+) -> Option<(tiny_skia::Path, Stroke)> {
+    if gt == GeometryType::Polyline {
+        let [a, b, c] = swatch_line(cell, across);
+        let mut pb = PathBuilder::new();
+        pb.move_to(a.0, a.1);
+        pb.line_to(b.0, b.1);
+        pb.line_to(c.0, c.1);
+        Some((pb.finish()?, Stroke { width: s.stroke_width.max(1.0) * wppp, ..Stroke::default() }))
+    } else {
+        Some((PathBuilder::from_rect(swatch_box(cell, across)?), Stroke { width: s.stroke_width.max(0.5) * wppp, ..Stroke::default() }))
     }
 }
 
@@ -3213,33 +3244,12 @@ fn swatch_box((x, y, w, h): (f32, f32, f32, f32), across: f32) -> Option<Rect> {
 }
 
 /// A line or polygon swatch of the symbol `s` alone, `across` pixels wide, its widths at `wppp`.
-fn flat_swatch(pm: &mut Canvas, cell: (f32, f32, f32, f32), gt: GeometryType, s: &rustgis_map::Symbol, (across, wppp): (f32, f32)) {
-    if gt == GeometryType::Polyline {
-        let [a, b, c] = swatch_line(cell, across);
-        let mut pb = PathBuilder::new();
-        pb.move_to(a.0, a.1);
-        pb.line_to(b.0, b.1);
-        pb.line_to(c.0, c.1);
-        if let Some(p) = pb.finish() {
-            pm.stroke_path(
-                &p,
-                &paint(s.stroke, 1.0),
-                &Stroke { width: s.stroke_width.max(1.0) * wppp, ..Stroke::default() },
-                Transform::identity(),
-                None,
-            );
-        }
-    } else if let Some(b) = swatch_box(cell, across) {
-        pm.fill_rect(b, &paint(s.fill, 1.0), Transform::identity(), None);
-        let p = PathBuilder::from_rect(b);
-        pm.stroke_path(
-            &p,
-            &paint(s.stroke, 1.0),
-            &Stroke { width: s.stroke_width.max(0.5) * wppp, ..Stroke::default() },
-            Transform::identity(),
-            None,
-        );
+fn flat_swatch(pm: &mut Canvas, cell: (f32, f32, f32, f32), gt: GeometryType, s: &rustgis_map::Symbol, at: (f32, f32)) {
+    let Some((p, stroke)) = flat_swatch_outline(cell, gt, s, at) else { return };
+    if gt != GeometryType::Polyline {
+        pm.fill_rect(p.bounds(), &paint(s.fill, 1.0), Transform::identity(), None);
     }
+    pm.stroke_path(&p, &paint(s.stroke, 1.0), &stroke, Transform::identity(), None);
 }
 
 /// A line or polygon swatch with its stacked `strokes` or `fills`, drawn by the map's own paths
@@ -8421,6 +8431,21 @@ Elaboração: RustGIS",
         // Its fill inside its outline's edge pixels: 16 points more across, at twice the size.
         let (one, two) = (across(1.0), across(2.0));
         assert_eq!(two - one, 16, "{one} and {two} px");
+        // A line wider than its row, at a small size, is cut to its row: nothing above the box.
+        let wide = rustgis_map::Symbol { stroke: red, stroke_width: 20.0, ..rustgis_map::Symbol::default_for(GeometryType::Polyline, 0) };
+        let map = shape_legend_map(GeometryType::Polyline, |l| l.renderer = rustgis_map::Renderer::Single(wide));
+        let mut pm = Pixmap::new(200, 200).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let opts = LegendOptions { size: 4.0 / 9.0, ..opts };
+        crate::canvas::with_canvas(&mut pm, |c| {
+            legend(c, Rect::from_xywh(0.0, 50.0, 200.0, 150.0).unwrap(), &map, ("", 1), None, opts, 1.0)
+        });
+        let red_at = |y: u32| (0..pm.width()).any(|x| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 0, 0)));
+        assert!((50..60).any(red_at), "the line is drawn");
+        assert!(!(0..50).any(red_at), "nothing above the legend's box");
+        // A thin one keeps the plain swatch it always had.
+        let thin = rustgis_map::Symbol { stroke_width: 1.0, ..wide };
+        assert!(swatch_stroke_fits((0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW), GeometryType::Polyline, &thin, (LEGEND_SWATCH, 1.0)));
         // The title's room follows; a size past the range, or none at all, is brought into it.
         assert!((legend_title_mm(18.0) - 2.0 * legend_title_mm(9.0)).abs() < 1e-12);
         assert_eq!(legend_size(1e9), 100.0 / 9.0);

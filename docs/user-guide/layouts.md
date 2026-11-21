@@ -311,12 +311,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     Giving `"columns"`, or changing the box or what a legend in columns lists, says when its box
     loses rows or closes the columns up. A legend in one column is told so only when given
     `"columns"`.
-  - **Text size** (`"textSize"`, 4 to 100 points, 9 by default): the size of its layers' names
-    and classes' labels. Its title, rows, line and polygon swatches, indents and the gap between
-    columns follow in proportion, and so do a web layer's legend pictures; a point symbol keeps the
-    size the map draws it at, its row growing only when the symbol needs it, so a legend of
-    proportional symbols still matches the map. `"textSize": null` gives the default back. A size
-    its box no longer holds says what the legend loses, as `"columns"` does.
+  - **Text size** (`"textSize"`, 4 to 100 points, 9 by default; a size outside that range is
+    refused): the size of its layers' names and classes' labels. Its title, rows, indents and the
+    gap between columns follow in proportion, and so do a web layer's legend pictures and the length
+    and height of line and polygon swatches, whose lines keep the width the map draws them at. A
+    point symbol keeps the size the map draws it at, its row growing only when the symbol needs it,
+    so a legend of proportional symbols still matches the map. `"textSize": null` gives the default
+    back. A size its box no longer holds says what the legend loses, as `"columns"` does, and so
+    does a box made too small for a legend with a size of its own.
   - **Point symbols**: a point layer's symbol is drawn as the map draws it: its marker or the
     stacked marks of its class or layer, its size and outline, the transparency of the layer and
     its groups, and its reference scale at the frame's scale, unturned. A row has one symbol, so

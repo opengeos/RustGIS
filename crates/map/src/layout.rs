@@ -849,7 +849,7 @@ pub const LEGEND_TEXT_PT: f64 = 9.0;
 pub const LEGEND_TEXT_SIZE: std::ops::RangeInclusive<f64> = 4.0..=100.0;
 
 /// A legend's text size kept within [`LEGEND_TEXT_SIZE`], [`LEGEND_TEXT_PT`] when it is no number:
-/// what a layout opened, a command given, and the drawing all take, so they agree.
+/// what a layout opened and the drawing take, so they agree (a command refuses one out of range).
 pub fn legend_text_in_range(pt: f64) -> f64 {
     finite_or(pt, LEGEND_TEXT_PT).clamp(*LEGEND_TEXT_SIZE.start(), *LEGEND_TEXT_SIZE.end())
 }
