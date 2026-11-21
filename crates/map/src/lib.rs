@@ -18,6 +18,7 @@ pub mod graticule;
 pub mod label_by;
 pub mod layout;
 pub mod lod;
+pub mod look;
 pub mod palette;
 pub mod paths;
 pub mod planets;
@@ -899,8 +900,23 @@ impl Layer {
     /// features naming them as [`Layer::load_all`] would. `None` for a layer not
     /// read in place, or whose source can't be read so (one by its web address).
     pub fn chunk_export(&self) -> Result<Option<(std::sync::Arc<dyn rustgis_data::source::FeatureSource>, Dataset)>, String> {
+        self.chunk_copy(source::SourceLayer::visit_source)
+    }
+
+    /// A streamed layer's complete reader for a geographic extent, and a dataset describing
+    /// its rows. A reader that can visit an extent may still only sample its interactive views.
+    pub fn chunk_in_extent(&self) -> Result<Option<(std::sync::Arc<dyn rustgis_data::source::FeatureSource>, Dataset)>, String> {
+        self.chunk_copy(source::SourceLayer::visit_extent_source)
+    }
+
+    /// Opens the source and prepares an empty dataset with the layer's fields. The caller
+    /// selects the traversal contract it needs and decides which rows to retain.
+    fn chunk_copy(
+        &self,
+        visit: impl FnOnce(&source::SourceLayer) -> Option<std::sync::Arc<dyn rustgis_data::source::FeatureSource>>,
+    ) -> Result<Option<(std::sync::Arc<dyn rustgis_data::source::FeatureSource>, Dataset)>, String> {
         let Some(copy) = self.open_source()? else { return Ok(None) };
-        let Some(src) = copy.visit_source() else { return Ok(None) };
+        let Some(src) = visit(&copy) else { return Ok(None) };
         let info = src.info();
         // (A reload that read no rows leaves the reader without a type: the layer's declared one
         // stands, as in `load_all_counted`.)
@@ -1658,6 +1674,11 @@ pub struct Map {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LayerGroup>,
     pub basemap: Basemap,
+    /// The blank basemap's paper (#2532): its colour where a blank map would draw white, so a
+    /// map frame can sit on a coloured page. Drawn opaque ([`Map::blank_paper`]); only kept with
+    /// [`Basemap::Blank`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper: Option<Rgba>,
     /// Web tile basemaps and overlays (index 0 on top), each drawn over the map layer it names
     /// (`TileLayer::over`), or under all of them; see [`Map::stack`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1808,6 +1829,7 @@ impl Map {
             service_groups: Vec::new(),
             groups: Vec::new(),
             basemap: Basemap::Paper,
+            paper: None,
             tiles: Vec::new(),
             camera: Camera::world(),
             bookmarks: Vec::new(),
@@ -2968,15 +2990,25 @@ impl Map {
 
     /// The built-in basemap's (background, land, land outline, graticule) colours. The world
     /// outline is the Earth's, so on another body the background is plain: the land's grey, with
-    /// no land drawn on it (#223).
+    /// no land drawn on it (#223). A blank basemap's paper colour (#2532) is its background and its
+    /// land, on any body.
     pub fn palette(&self) -> (Rgba, Rgba, Rgba, Rgba) {
         let (water, land, outline, grat) = self.basemap.palette();
+        if let Some(paper) = self.blank_paper() {
+            return (paper, paper, outline, grat);
+        }
         if self.body().is_earth() {
             return (water, land, outline, grat);
         }
         let l = ((u16::from(land.r()) * 3 + u16::from(land.g()) * 6 + u16::from(land.b())) / 10) as u8;
         let grey = Rgba::rgb(l, l, l);
         (grey, grey, Rgba::new(0, 0, 0, 0), grat)
+    }
+
+    /// The blank basemap's paper colour, when the map is on the blank basemap and has one: always
+    /// opaque, a file's translucent one included (the paper is the backdrop: nothing shows through).
+    pub fn blank_paper(&self) -> Option<Rgba> {
+        self.paper.filter(|_| self.basemap == Basemap::Blank).map(|c| Rgba::rgb(c.r(), c.g(), c.b()))
     }
 
     /// Whether the built-in world outline is drawn: where the palette's land and water differ, so
@@ -3206,6 +3238,7 @@ impl Map {
             service_groups,
             groups: _,
             basemap: _,
+            paper: _,
             tiles,
             camera: _,
             bookmarks: _,
