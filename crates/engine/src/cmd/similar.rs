@@ -238,7 +238,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
         } else {
             s.notify_text(
                 NoticeText::term(if request.0 < s.selection_intent {
-                    "Selection changed while similarity was computed; its ranking is returned without replacing the current selection"
+                    "Selection or data changed while similarity was computed; its ranking is returned without replacing the current selection"
                 } else {
                     "A newer Similar result has already changed selection; this ranking is returned without replacing it"
                 }),

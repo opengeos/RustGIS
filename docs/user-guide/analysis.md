@@ -565,8 +565,12 @@ polygon split there), measured as the meridian it runs along. A ring winding aro
 measured as the region it traces by the attribute table
 and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
 while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
-that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
-Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
+that body's sphere. **Mensuration Tools** (`raster.measure`) measure distances, areas and perimeters
+the same way, on the ellipsoid on the Earth and on the body's sphere elsewhere. A distance along the
+surface spaces its height samples along the path on the sphere and takes each step's ground run
+from the leg it lies on at that leg's length on the ellipsoid, so over level ground it equals the
+distance. A volume still takes one cell size for the whole raster, at its centre's latitude. The
+Radius tools still measure a local Mercator distance, so those can differ from the numbers above.
 
 For an ambiguous area, the `raster.measure` command with `kind: "area"` returns an error without a measurement object. To request its finite closed-ring perimeter, use `kind: "distance"` and repeat the first point at the end. The on-map Measure overlay continues to show perimeter alongside the area refusal.
 
@@ -1577,9 +1581,9 @@ cores; `gp.env` returns the threads and cores as `limits.threads` and `limits.co
 runs on one thread.
 
 `gp.env` also returns the memory limits on this computer (`limits`). On the desktop they follow the
-computer's memory, or a container's limit when it is lower: each plans for a quarter of it, never
+computer's memory, or a memory limit set on RustGIS (a container's, or a service's such as systemd's `MemoryMax`) when it is lower: each plans for a quarter of it, never
 below the web app's fixed limits and never above a ceiling. `limits.memorySource` says what they
-follow: `computer`, `container` (a container's limit, lower than the computer's memory),
+follow: `computer`, `container` (such a limit, lower than the computer's memory),
 `override` or `unknown`. For tests, or to reproduce a smaller computer, set the environment
 variable `RUSTGIS_MEMORY_BYTES` to the memory in bytes (such as `8589934592` for 8 GiB) before
 starting RustGIS: it replaces the memory read from the computer and any container limit, and the
