@@ -1009,7 +1009,8 @@ pub struct Session {
     /// The view's box a window request being queued keeps ([`UrlRequest::view_asked`]).
     pub(crate) window_view: Option<[f64; 4]>,
     /// Set by [`Session::request_url`] for [`Session::guarded`]: the command running changed
-    /// nothing, it only left a request (a plugin's own answer can't claim that).
+    /// nothing, it only left a request (a plugin's own answer can't claim that). Also set by a move
+    /// that left everything where it was (`layout.arrange`, `layer.move`): no step to undo.
     request_only: bool,
     /// Set by [`Session::run_leaving_downloads`]: `layer.addUrl` leaves what it would wait for
     /// to the front end ([`Session::request_url`]), as in the browser.

@@ -1095,7 +1095,7 @@ fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts
 /// typed in the Script pane or passed on the command line are the user's own, so they may use
 /// any command, files included; notebooks vet cells that came from files before running them.
-/// The whole script is one undo step.
+/// The whole script is one undo step, none when no line changed the project.
 pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(ran) = super::reads::take::<super::gp::RanAheads>(s, SCRIPT_AHEAD) {
@@ -1115,6 +1115,9 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
         check_prepared_prefix(s, &lines)?;
     }
     let mut out = Vec::new();
+    // As a task's steps ([`super::items`]): a line that changed nothing or only left a request
+    // must not erase an earlier line's undo step.
+    let (mut requested, mut edited) = (false, false);
     for (n, id, params) in lines {
         let spec = *s.registry.get(&id).ok_or_else(|| format!("line {n}: unknown command '{id}'"))?;
         let (mutates, label) = (spec.mutates, spec.label);
@@ -1141,6 +1144,7 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
             return Err(format!("line {n}: {e}"));
         }
         let op = s.authorize(&id, &params).map_err(|e| format!("line {n} ({id}): {e}"))?;
+        s.request_only = false;
         let invoke = |s: &mut Session| steps_of(s, |s| s.invoke(op, crate::policy::Txn::Shared));
         #[cfg(not(target_arch = "wasm32"))]
         let r = if super::edit::table_edit_in_background(&id).is_some() && params.get("table").is_some_and(|t| !t.is_null()) {
@@ -1151,8 +1155,11 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
         #[cfg(target_arch = "wasm32")]
         let r = invoke(s);
         let r = r.map_err(|e| format!("line {n}: {id}: {e}"))?;
+        requested |= s.request_only;
+        edited |= mutates && !s.request_only;
         out.push(json!({"line": n, "command": id, "result": r}));
     }
+    s.request_only = requested && !edited;
     Ok(json!({"ran": out}))
 }
 
