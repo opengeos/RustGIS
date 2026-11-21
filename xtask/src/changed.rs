@@ -14,8 +14,7 @@
 //!   a changed package gets the features every workspace package turns on in it; a feature that a
 //!   package left out turns on in an outside crate isn't, which can make a result differ from CI's.
 //!
-//! `--list` prints the packages it would check, one a line, or `all`, and checks nothing. CI still
-//! runs the whole workspace: a pass here says nothing about the packages left out.
+//! `--list` prints the packages it would check, one a line, or `all`, or `none`, and checks nothing.
 
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

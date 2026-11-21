@@ -108,6 +108,18 @@ pub(crate) fn isolate_process_test(name: &str) -> bool {
 }
 
 #[test]
+fn cached_sample_projects_have_distinct_instance_ids() {
+    let a = world();
+    let b = world();
+    assert_ne!(a.map().instance_id(), b.map().instance_id(), "each sample session needs a fresh map instance id");
+    assert_eq!(a.map().layers.len(), b.map().layers.len());
+    for (la, lb) in a.map().layers.iter().zip(&b.map().layers) {
+        assert_eq!(la.id, lb.id);
+        assert_ne!(la.instance_id(), lb.instance_id(), "layer {} must get a fresh instance id", la.name);
+    }
+}
+
+#[test]
 fn worldview_swaps_only_untouched_sample_countries() {
     use sample::{Detail, View, Worldview, swap_countries};
     let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
@@ -6673,17 +6685,10 @@ fn hostile_params_never_panic(shard: usize) {
         .collect();
     // Shards share the process under `cargo test`: each streams its own file.
     let streamed = grid_fgb(&format!("hostile-{shard}"), 20);
-    // Build each base fixture once per shard and clone from it instead of re-parsing GeoJSON,
-    // decoding a GeoTIFF and opening the FlatGeobuf on every command × junk pair.
-    let snapshot = |s: Session| (s.project.clone(), s.active_layer);
-    let fresh = |(project, active): &(Project, Option<u32>)| {
-        let mut s = Session::new(project.clone());
-        s.active_layer = *active;
-        s
-    };
-    let base_world = snapshot(world());
-    let base_raster = snapshot(with_raster());
-    let base_streamed = snapshot(with_streamed(&streamed));
+    // Compare against each fixture's own initial state (`with_raster` and `with_streamed` start
+    // dirty with an undo entry from adding their layer). Do not include `revision`, which
+    // `Session::run` bumps even on read-only `info.project` and failed commands.
+    let state_of = |s: &Session| (s.opened, s.active_layer, s.tool, s.dirty(), s.can_undo(), s.project.maps.len(), s.map().layers.len());
     for id in ids {
         if matches!(
             id,
@@ -6721,9 +6726,12 @@ fn hostile_params_never_panic(shard: usize) {
         ) {
             continue;
         }
-        let mut s_world = fresh(&base_world);
-        let mut s_raster = fresh(&base_raster);
-        let mut s_streamed = fresh(&base_streamed);
+        let mut s_world = world();
+        let mut s_raster = with_raster();
+        let mut s_streamed = with_streamed(&streamed);
+        let base_world = state_of(&s_world);
+        let base_raster = state_of(&s_raster);
+        let base_streamed = state_of(&s_streamed);
         for p in &junk {
             // Places given by name go to the public geocoder: with an answer given, the junk
             // goes through reading it and the options, and nothing is fetched.
@@ -6738,14 +6746,22 @@ fn hostile_params_never_panic(shard: usize) {
                 _ if id == "map.route" => continue,
                 p => p,
             };
-            // Most hostile payloads return Err without modifying the session; only rebuild a fresh
-            // session when the command succeeded or dirtied/changed state.
-            for (s, base) in [(&mut s_world, &base_world), (&mut s_raster, &base_raster), (&mut s_streamed, &base_streamed)] {
-                let ok = s.run(id, p).is_ok();
-                let _ = s.run("info.project", &Value::Null);
-                if ok || s.dirty() || s.can_undo() {
-                    *s = fresh(base);
-                }
+            // Most hostile payloads return Err without modifying the session; rebuild through the
+            // full fixture constructor whenever the command succeeded or changed session state.
+            let ok = s_world.run(id, p).is_ok();
+            let _ = s_world.run("info.project", &Value::Null);
+            if ok || state_of(&s_world) != base_world {
+                s_world = world();
+            }
+            let ok = s_raster.run(id, p).is_ok();
+            let _ = s_raster.run("info.project", &Value::Null);
+            if ok || state_of(&s_raster) != base_raster {
+                s_raster = with_raster();
+            }
+            let ok = s_streamed.run(id, p).is_ok();
+            let _ = s_streamed.run("info.project", &Value::Null);
+            if ok || state_of(&s_streamed) != base_streamed {
+                s_streamed = with_streamed(&streamed);
             }
         }
     }

@@ -173,7 +173,11 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --name-only "$fork_point" HEAD | grep -qE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|third-party/|xtask/src/notices\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/(check-cargo-sources|test_cargo_sources)\.py|\.cargo/|\.github/workflows/ci\.yml)$'; then
+          if ! changed="$(git diff --name-only "$fork_point" HEAD 2>/dev/null)"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|xtask/src/notices\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/(check-cargo-sources|test_cargo_sources)\.py|\.github/workflows/ci\.yml)$|^(third-party/|\.cargo/)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No dependency, licence or notice files changed; skipping."
@@ -238,7 +242,11 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --name-only "$fork_point" HEAD | grep -qE '^(crates/(geom|data|map|analysis|tiles|render|plugins|geolibre|engine)/|schema/|Cargo\.(toml|lock)$|rust-toolchain|xtask/src/main\.rs$|\.github/workflows/ci\.yml$)'; then
+          if ! changed="$(git diff --name-only "$fork_point" HEAD 2>/dev/null)"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qE '^(crates/(geom|data|map|analysis|tiles|render|plugins|geolibre|engine)/|schema/|Cargo\.(toml|lock)$|rust-toolchain|xtask/src/main\.rs$|\.github/workflows/ci\.yml$)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No schema-related files changed; skipping."
