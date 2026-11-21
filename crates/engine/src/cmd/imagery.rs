@@ -1832,9 +1832,9 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             // Along the surface when there's an elevation raster. The profile spaces its samples
             // along the path on the sphere; on the Earth each step is stretched by the path's
             // ellipsoid-to-sphere ratio, so level ground gives the flat length exactly.
-            let stretch = if earth { rustgis_geom::wgs84_length_m(&pts) / rustgis_geom::geodesic_length_m(&pts) } else { 1.0 };
-            let stretch = if stretch.is_finite() { stretch } else { 1.0 };
             let surface = dem.as_ref().map(|d| {
+                let stretch = if earth { flat / rustgis_geom::geodesic_length_m(&pts) } else { 1.0 };
+                let stretch = if stretch.is_finite() { stretch } else { 1.0 };
                 let prof = rasterops::profile(d, 0, &pts, 500);
                 prof.windows(2)
                     .map(|w| match w {
