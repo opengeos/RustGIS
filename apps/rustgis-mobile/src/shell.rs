@@ -456,10 +456,9 @@ fn use_picker<P: Phone + 'static>(
         if refused_here && up {
             refused_while_up.set(true);
         }
-        // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
-        if let Some(purpose) = ended.filter(|p| p.starts_with("dxf:")) {
-            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
-        }
+        // A request whose picker didn't show is ended now: Import DXF, or a marker's «Image…»,
+        // stops waiting.
+        answer_ended(&answers, ended);
     }));
     let saver = phone.clone();
     app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes, false)));
@@ -779,6 +778,9 @@ mod tests {
         app.run("ui.addDxf", Value::Null).unwrap();
         assert_eq!(inbox.lock().unwrap().len(), 1);
         assert!(inbox.lock().unwrap()[0].0.starts_with(rustgis_ui_egui::DXF_PICK));
+        // So does a marker's «Image…» refused the same way: the marker stops waiting.
+        (app.services.open_async.as_ref().unwrap())("marker:9");
+        assert_eq!(inbox.lock().unwrap().last().unwrap().0, format!("{}9:", rustgis_ui_egui::MARKER_PICK));
     }
     #[test]
     fn a_worker_refused_before_reading_retires_its_dxf_answer() {
