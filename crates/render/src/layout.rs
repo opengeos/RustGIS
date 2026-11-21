@@ -2310,8 +2310,17 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         bar_fit(room_m, unit_m, bar.fit, before, after)
     };
     let Some(first) = fitted(beside) else { return };
-    // The room left of zero follows the bar's length: fitted again with the first label's.
-    let fit = if before > 0 { fitted(beside + pad_of(&first)) } else { Some(first) };
+    // The room left of zero follows the bar's length: fitted again with the first label's, and once
+    // more if the shorter bar's first label is wider ("-1.25" for "-1").
+    let fit = if before > 0 {
+        let reserved = pad_of(&first);
+        match fitted(beside + reserved) {
+            Some(f) if pad_of(&f) > reserved => fitted(beside + pad_of(&f)),
+            f => f,
+        }
+    } else {
+        Some(first)
+    };
     let Some(fit) = fit else { return };
     let BarFit { total, after } = fit;
     let pad = pad_of(&fit);
@@ -2354,7 +2363,7 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
                     // Alternating parts, the last dark against the light division after it.
                     let part = seg / parts as f32;
                     for p in 0..parts {
-                        let c = if (parts - 1 - p) % 2 == 0 { dark } else { light };
+                        let c = if (parts - 1 - p).is_multiple_of(2) { dark } else { light };
                         if let Some(b) = Rect::from_xywh(x + part * p as f32, y0, part, bar_h) {
                             pm.fill_rect(b, &paint(c, 1.0), Transform::identity(), None);
                         }
@@ -8707,8 +8716,9 @@ Elaboração: RustGIS",
                 let _ = draw(Some(text), at);
             }
         }
-        // A whitespace label adds no ink (on its own line it still takes its row, so compare after the bar).
+        // A label of spaces prints nothing and takes no room: after the bar or on a line of its own.
         assert_eq!(draw(Some("   "), UnitLabelPosition::AfterBar).data(), none.data());
+        assert_eq!(draw(Some("   "), UnitLabelPosition::Above).data(), draw(Some(""), UnitLabelPosition::Above).data());
     }
 
     #[test]
@@ -8725,10 +8735,21 @@ Elaboração: RustGIS",
                 let mut pm = Pixmap::new(width, height).unwrap();
                 pm.fill(tiny_skia::Color::WHITE);
                 let r = Rect::from_xywh(0.0, 0.0, width as f32, height as f32).unwrap();
-                crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+                // Filled in its colour throughout, so along its middle the bar is one solid run.
+                let solid = (DEFAULT_COLORS.0, DEFAULT_COLORS.0);
+                crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, solid, 1.0, false));
                 if width >= 40 && height == 60 {
-                    let (a, b) = marked_span(&pm, 37).unwrap_or((0, 0));
-                    assert!(b > a + width / 4, "width {width}: the bar keeps half its room, {a}..{b}");
+                    let marked = |x: u32| pm.pixel(x, 37).is_some_and(|p| p.red() < 200 || p.green() < 200 || p.blue() < 200);
+                    let a = (0..width).find(|&x| marked(x)).unwrap_or(width);
+                    // The bar ends where the 3 px gap before its unit begins; the unit follows.
+                    let gap = (a..width).find(|&x| (x..x + 3).all(|x| !marked(x))).unwrap_or(width);
+                    let end = gap.saturating_sub(1);
+                    let unit = (gap..width).find(|&x| marked(x));
+                    // Half the 85 % room is the bar's; its round length is at least 40 % of that.
+                    let room = width as f32 * 0.85 * 0.5;
+                    let (least, most) = ((room * 0.4) as u32 - 2, (room + 2.0) as u32);
+                    assert!(end >= a + least && end <= a + most, "width {width}: the bar keeps half its room, {a}..{end}");
+                    assert!(unit.is_some_and(|x| x >= end + 3), "width {width}: the unit after the bar, from {unit:?}");
                 }
             }
         }
