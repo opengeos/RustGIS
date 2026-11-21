@@ -6974,7 +6974,9 @@ pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
     let held = l.dataset.coord_crs();
     let lonlat = held == rustgis_engine::data::raster::Crs::LonLat || l.source.is_some();
     let e = if lonlat { l.extent() } else { l.dataset.extent() };
-    let edge = |v: f64| if lonlat { format!("{v:.4}°") } else { format!("{v:.2}") };
+    // Degrees in any geographic system (NAD83, ETRS89), units of the system otherwise.
+    let degrees = lonlat || held.is_geographic();
+    let edge = |v: f64| if degrees { format!("{v:.4}°") } else { format!("{v:.2}") };
     if let Some(rl) = &l.raster {
         raster_details(ui, rl, t);
         return;
@@ -6990,10 +6992,10 @@ pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
             ("Source", l.dataset.source.as_deref().map_or_else(|| tl!("In project").into(), rustgis_engine::sources::redact)),
             ("Source coordinate system", l.dataset.crs.map(|c| c.label()).unwrap_or_else(|| "EPSG:4326".into())),
             ("Held in", held.label()),
-            (if lonlat { "West" } else { "Min X" }, edge(e.min_x)),
-            (if lonlat { "East" } else { "Max X" }, edge(e.max_x)),
-            (if lonlat { "South" } else { "Min Y" }, edge(e.min_y)),
-            (if lonlat { "North" } else { "Max Y" }, edge(e.max_y)),
+            (if degrees { "West" } else { "Min X" }, edge(e.min_x)),
+            (if degrees { "East" } else { "Max X" }, edge(e.max_x)),
+            (if degrees { "South" } else { "Min Y" }, edge(e.min_y)),
+            (if degrees { "North" } else { "Max Y" }, edge(e.max_y)),
             ("Definition query", l.definition_query.clone().unwrap_or_else(|| "—".into())),
         ];
         for (k, v) in rows {
