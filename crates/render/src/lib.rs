@@ -4260,6 +4260,8 @@ fn render_frame(
                 worldview: map.draws_world_outline().then(|| (worldview, world_of(worldview).len())),
                 // Whether they were indexed so far, without indexing them for a map with no text.
                 fonts: families::installed_now().is_some(),
+                font_generation: fonts::font_generation(),
+                layers: map.layers.len(),
             };
             // By id and place in the list, which labels take their priority from.
             let looks = order

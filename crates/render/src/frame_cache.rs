@@ -53,6 +53,10 @@ pub(crate) struct Frame {
     pub worldview: Option<(crate::sample_data::View, usize)>,
     /// Whether the installed font families were indexed ([`crate::families::installed_now`]).
     pub fonts: bool,
+    /// [`crate::fonts::font_generation`]: a downloaded font now draws some text.
+    pub font_generation: u32,
+    /// How many layers the map has, which labels take their priority from.
+    pub layers: usize,
 }
 
 impl Frame {
@@ -70,6 +74,8 @@ impl Frame {
             && self.sources == other.sources
             && self.worldview == other.worldview
             && self.fonts == other.fonts
+            && self.font_generation == other.font_generation
+            && self.layers == other.layers
             && self.map.same(&other.map)
     }
 }
@@ -116,9 +122,19 @@ struct Kept {
 }
 
 impl Kept {
+    /// The pixels it holds: its pictures and their marker sprites, each sprite counted once
+    /// though the checkpoint and the layer alone share it.
     fn pixels(&self) -> u64 {
         let size = |p: &Pixmap| u64::from(p.width()) * u64::from(p.height());
-        size(&self.checkpoint.pixels) + self.alone.as_ref().map_or(0, |a| size(&a.pixels))
+        let mut seen = std::collections::HashSet::new();
+        let alone = self.alone.as_ref();
+        let sprites = std::iter::once(&self.checkpoint.sprites)
+            .chain(alone.map(|a| &a.sprites))
+            .flat_map(|s| s.values().flatten())
+            .filter(|p| seen.insert(std::sync::Arc::as_ptr(p)))
+            .map(|p| size(p))
+            .sum::<u64>();
+        size(&self.checkpoint.pixels) + alone.map_or(0, |a| size(&a.pixels)) + sprites
     }
 }
 
@@ -247,14 +263,19 @@ pub(crate) fn keep(plan: Plan, captured: Option<(usize, Checkpoint)>, alone: Opt
             kept.remove(0);
         }
         kept.push(Kept { frame, looks, at, checkpoint, alone });
-        // Within the budget: the older views' layers alone go first, then the older views.
+        // Within the budget: the older views' layers alone go first, then the older views, then
+        // this view's layer alone.
         while kept.iter().map(Kept::pixels).sum::<u64>() > MAX_PIXELS {
-            if let Some(k) = kept.iter_mut().find(|k| k.alone.is_some()) {
+            let older = kept.len().saturating_sub(1);
+            if let Some(k) = kept.iter_mut().take(older).find(|k| k.alone.is_some()) {
                 k.alone = None;
             } else if kept.len() > 1 {
                 kept.remove(0);
+            } else if let Some(k) = kept.first_mut().filter(|k| k.alone.is_some()) {
+                k.alone = None;
             } else {
-                break;
+                // A view whose picture and sprites alone are past the budget keeps nothing.
+                kept.clear();
             }
         }
     });
@@ -418,6 +439,20 @@ mod tests {
         assert_eq!(draw(&mut map, &view), Some(1));
         map.layers.reverse();
         assert_eq!(draw(&mut map, &view), Some(0), "the labels below place differently");
+        // A layer added to the end of the list, drawn on top by its depth priority, leaves the
+        // others at their places, but the label priorities of all of them count the layers.
+        for size in [9.0, 11.0] {
+            if let Some(l) = map.layer_mut(above) {
+                l.renderer = Renderer::Single(rustgis_map::Symbol { size, ..l.symbol(0) });
+            }
+            draw(&mut map, &view);
+        }
+        assert_eq!(draw(&mut map, &view), Some(1));
+        let Some(mut added) = map.layer(above).cloned() else { panic!("the layer above") };
+        added.id = 99;
+        added.priority = 2;
+        map.layers.push(added);
+        assert_eq!(draw(&mut map, &view), Some(0), "the labels below rank differently");
     }
 
     #[test]
