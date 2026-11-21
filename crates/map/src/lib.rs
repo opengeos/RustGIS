@@ -375,7 +375,7 @@ pub struct Layer {
     /// Hit-testing and snapping use them too, but on the live map, which no export reads this
     /// from.
     #[serde(skip)]
-    drawn: Drawn,
+    drawn: DrawnBy,
     /// Allocation identities and byte totals, shared with render snapshots without retaining rows.
     #[serde(skip)]
     view_memory: view_memory::Cache,
@@ -585,7 +585,7 @@ impl Layer {
             unplaced: Unplaced::default(),
             flat_unplaced: Unplaced::default(),
             extent_cache: ExtentCache::default(),
-            drawn: Drawn::default(),
+            drawn: DrawnBy::default(),
             geometry_rev: 0,
             view_memory: Default::default(),
             geometry_kinds: Default::default(),
@@ -1212,12 +1212,12 @@ impl Layer {
     /// layer in longitude/latitude, which has none. An error when its system can't be converted,
     /// when none of it is drawn.
     pub fn unplaced(&self) -> Option<&Result<usize, String>> {
-        self.unplaced_of(Drawn { flat: true, lonlat: true })
+        self.unplaced_of(DrawnBy { flat: true, lonlat: true })
     }
 
     /// [`Layer::unplaced`] of the drawings `of` names: the larger of their counts made from its
     /// geometry as it is, so what one drawing left out is said, though another drew it.
-    fn unplaced_of(&self, of: Drawn) -> Option<&Result<usize, String>> {
+    fn unplaced_of(&self, of: DrawnBy) -> Option<&Result<usize, String>> {
         let fit = |u: &Unplaced, used: bool| used && u.fits(self);
         match (
             fit(&self.unplaced, of.lonlat).then_some(&self.unplaced.count),
@@ -2018,7 +2018,7 @@ impl Map {
         }
         // What the copy draws is marked anew ([`Layer::unplaced_drawn`]).
         for l in &mut self.layers {
-            l.drawn = Drawn::default();
+            l.drawn = DrawnBy::default();
         }
     }
 
@@ -3677,7 +3677,7 @@ impl Unplaced {
 /// Which of a layer's drawings a frame made: its flat projection ([`Layer::projected_in`]) or its
 /// longitude/latitude copy ([`Layer::lonlat_in`], [`Layer::count_unplaced`]).
 #[derive(Clone, Copy, Debug, Default)]
-struct Drawn {
+struct DrawnBy {
     flat: bool,
     lonlat: bool,
 }
@@ -4644,7 +4644,7 @@ mod tests {
         assert_eq!(wild.unplaced(), Some(&Ok(1)), "still the globe's");
         // A drawing made since its map was detached (an export) says only what it left out: one
         // in the layer's own system, none, though the live map's globe left one out.
-        wild.drawn = Drawn::default();
+        wild.drawn = DrawnBy::default();
         assert!(wild.unplaced_drawn().is_none(), "not drawn");
         wild.projected_in(&flat("EPSG:31467"), "gk");
         assert_eq!(wild.unplaced_drawn(), Some(&Ok(0)));
