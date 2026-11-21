@@ -680,6 +680,13 @@ pub(crate) fn field_id() -> Result<String, String> {
     Ok(bits.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// Whether the highest ids a field package's layers had ([`FieldOrigin::ids`], [`OfflineArea::ids`])
+/// can be: no more than the largest id a GeoPackage or PostGIS feature can have (`i64::MAX`), so
+/// new features always have ids free above them. A larger one is hostile, and refused.
+pub(crate) fn valid_id_floors(ids: &std::collections::BTreeMap<u32, u64>) -> bool {
+    ids.values().all(|id| *id <= i64::MAX.unsigned_abs())
+}
+
 pub(crate) fn valid_field_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -1794,11 +1801,13 @@ impl Project {
                     || !valid_field_id(&origin.area)
                     || (!origin.generation.is_empty() && !valid_field_id(&origin.generation))
                     || (!origin.package.is_empty() && !valid_field_id(&origin.package))
+                    || !valid_id_floors(&origin.ids)
             })
             || p.offline_areas.iter().any(|area| {
                 (!area.id.is_empty() && (!valid_field_id(&area.id) || !area_ids.insert(area.id.as_str())))
                     || (!area.generation.is_empty() && !valid_field_id(&area.generation))
                     || area.returned.iter().any(|id| !valid_field_id(id))
+                    || !valid_id_floors(&area.ids)
             })
             || p.maps.iter().any(|map| map.offline_area_id.as_deref().is_some_and(|id| !valid_field_id(id) || !offline_map_ids.insert(id)))
         {

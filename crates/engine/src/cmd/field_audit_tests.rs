@@ -1026,6 +1026,67 @@ fn a_feature_added_at_home_never_takes_an_id_a_package_out_was_given() {
     }
 }
 
+/// A field project whose package gave the largest id a feature can have still gives each new
+/// feature an id of its own, saved and opened again: the floor leaves room above it.
+#[test]
+fn new_features_are_given_ids_of_their_own_above_the_largest_floor() {
+    let temp = Temp::new("largest-floor");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let floor = i64::MAX.unsigned_abs();
+    a.project.field_origin.as_mut().unwrap().ids.insert(cities, floor);
+    let saved = temp.0.join("field.rgis");
+    a.run("project.saveAs", &json!({"path": saved})).unwrap();
+    let mut a = Session::new(Project::default());
+    a.run("project.open", &json!({"path": saved})).unwrap();
+    let first = add_point(&mut a, cities, &name, "First", [10.0, 5.0]);
+    let second = add_point(&mut a, cities, &name, "Second", [11.0, 5.0]);
+    assert_eq!((first, second), (floor + 1, floor + 2));
+}
+
+/// Package A is out holding the city with the highest id; the office deletes it and syncs, which
+/// renews the area's offline map without it. Package B, made from that map, still records the
+/// id A holds, so a feature B's phone adds never takes it.
+#[test]
+fn a_package_made_after_a_renewal_keeps_the_ids_one_still_out_holds() {
+    let temp = Temp::new("renewed-floor");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    let (_, out_a) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let a = phone(&temp, &out_a, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let top = a.map().layer(cities).unwrap().dataset.features.iter().map(|f| f.id).max().unwrap();
+    let at = home.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == top).unwrap();
+    home.run("select.rows", &json!({"layer": cities, "rows": [at]})).unwrap();
+    home.run("edit.delete", &Value::Null).unwrap();
+    home.run("offline.open", &json!({"name": "All"})).unwrap();
+    home.run("offline.sync", &json!({"name": "All"})).unwrap();
+    let (_, out_b) = package(&mut home, &Value::Null).unwrap();
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    let mut b = phone(&temp, &out_b, "b");
+    assert!(b.project.field_origin.as_ref().unwrap().ids.get(&cities).is_some_and(|id| *id >= top));
+    let new = add_point(&mut b, cities, &name, "From B", [10.0, 5.0]);
+    assert!(new > top, "B's point took id {new}, at or below {top}, which A still holds");
+}
+
+/// A layer holding a feature whose id leaves no room above it isn't packaged: features added in
+/// the field couldn't be given ids of their own.
+#[test]
+fn a_layer_with_no_ids_left_above_is_not_packaged() {
+    let temp = Temp::new("no-room");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    let fields = home.map().layer(hc).unwrap().dataset.fields.len();
+    let inside = || Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(10.0, 5.0)));
+    home.map_mut().layer_mut(hc).unwrap().dataset.features.push_parts(u64::MAX, inside(), vec![rustgis_data::Value::Null; fields]);
+    let refused = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap_err();
+    assert!(refused.contains("Cities") && refused.contains("ids of their own"), "{refused}");
+}
+
 /// A layer removed on the phone is said on sending: its features go back unchanged.
 #[test]
 fn a_layer_removed_in_the_field_is_said_on_sending() {

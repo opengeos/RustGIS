@@ -146,6 +146,14 @@ impl Features {
         self.rows.iter().map(|f| f.id).max().unwrap_or(0).max(self.id_floor)
     }
 
+    /// The id the first of `n` new rows takes, one above [`Features::highest_id`], when all `n`
+    /// have one free above it below `u64::MAX`; `None` when they haven't, for a caller to refuse
+    /// rather than give two rows one id.
+    pub fn free_ids(&self, n: usize) -> Option<u64> {
+        let first = self.highest_id().checked_add(1)?;
+        first.checked_add(u64::try_from(n).ok()?.saturating_sub(1)).map(|_| first)
+    }
+
     /// Appends `feature` as the last row, keeping its id.
     pub fn push_row(&mut self, feature: Feature) {
         let id = feature.id;

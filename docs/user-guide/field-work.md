@@ -163,17 +163,17 @@ A field package (`.rgisfield`) carries a map to the phone and its edits back.
    meanwhile, or another phone's edits, are left as they are.
 
 When a phone opens a package made on the computer, it keeps a copy of the rows the package gave it
-in the app's own folder (`field bases`), found by the package's identity, so it is still found
-after the field project is saved and opened again, or recovered. It writes the copy in the
-background once the map is open, with progress and **Cancel** in the status bar; cancelled, no copy
-is kept, and opening the package again starts a fresh one. A returned package opened on another
-device keeps no copy. Once **Send Field Package** has written the return, the copy is removed: a
-package comes back once, so make a new one for more edits. The copy of a package opened but never
-sent stays in that folder until it is removed by hand. **Send Field Package** compares the map with that
-copy and sends the list of changes with the map. A package opened on a device that doesn't keep
-its rows (the browser, or a field project copied to another device) goes back as a whole map,
-and the phone says so: Bring Back then compares the map with the area as it was last synced,
-and refuses it if the area has been brought back or synced since the package was made.
+in the app's own folder (`field bases`), found by the package's identity, so it is still found after
+the field project is saved and opened again, or recovered. It writes the copy in the background once
+the map is open, with progress and **Cancel** in the status bar; cancelled, no copy is kept, and
+opening the package again starts a fresh one. A returned package opened on another device keeps no
+copy. Once **Send Field Package** has written the return, the copy is removed: a package comes back
+once, so make a new one for more edits. The copy of a package opened but never sent stays in that
+folder until it is removed by hand. **Send Field Package** compares the map with that copy and sends
+the list of changes with the map. A package opened on a device that doesn't keep its rows (the
+browser, or a field project copied to another device) goes back as a whole map, and the phone says
+so: Bring Back then compares the map with the area as it was last synced, and refuses it if the area
+has been brought back or synced since the package was made.
 
 Where a change meets one made on the computer since the package was made:
 
@@ -201,15 +201,16 @@ not a return.
 
 Give each phone a package of its own: several packages of one area can be out at once, and each
 whose phone kept its rows comes back with only its own changes. A package that goes back as a whole
-map is refused once another package of the same area has come back, or the area has been synced. Make one from the area's offline map with **Package for the
-Field** again. A package comes back once: the same package returned again, from the same phone or
-from a copy on a second one, is refused and changes nothing. A feature added on the phone is given an id above every
-id its package gave, and one added on the computer an id above every id the area's packages gave,
-so neither is taken for a feature a package holds. A feature added on the phone keeps its id
-unless the computer uses it already; then it takes the next free one, and the summary says how
-many did. A package made before packages had an identity of their own comes back as a whole map,
-as described above; one made before packages carried a return check comes back as before, with a
-notice. A package for an area the project doesn't have is refused.
+map is refused once another package of the same area has come back, or the area has been synced.
+Make one from the area's offline map with **Package for the Field** again. A package comes back
+once: the same package returned again, from the same phone or from a copy on a second one, is
+refused and changes nothing. A feature added on the phone is given an id above every id its package
+gave, and one added on the computer an id above every id the area's packages gave, so neither is
+taken for a feature a package holds. A feature added on the phone keeps its id unless the computer
+uses it already; then it takes the next free one, and the summary says how many did. A package made
+before packages had an identity of their own comes back as a whole map, as described above; one made
+before packages carried a return check comes back as before, with a notice. A package for an area
+the project doesn't have is refused.
 
 ### Origin identities and older field copies
 

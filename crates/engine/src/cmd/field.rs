@@ -377,11 +377,24 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     // Going out, the highest id each layer has: features added in the field are given ids above it,
     // and so are those added to the area's map here while the package is out.
     if !coming_back && let Some(origin) = project.field_origin.as_mut() {
+        // At least what earlier packages of the area recorded: the area's map, renewed from the
+        // snapshot, holds no floor of its own, and a package still out may hold a higher id.
+        let recorded =
+            s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(&area)).map(|a| a.ids.clone()).unwrap_or_default();
+        // New features are given ids above the highest: one past `i64::MAX`, the largest a GeoPackage
+        // or PostGIS feature can have, would leave too few, and isn't a floor a project can keep.
+        if let Some(l) = map.layers.iter().find(|l| !l.is_raster() && l.dataset.features.highest_id() > i64::MAX.unsigned_abs()) {
+            return Err(format!(
+                "{}: a feature's id is above {}, the largest the field package can keep ids free above, so features added in the field couldn't be given ids of their own. Give the layer's features smaller ids (copy them to a new layer), then package it",
+                l.name,
+                i64::MAX
+            ));
+        }
         origin.ids = map
             .layers
             .iter()
             .filter(|l| !l.is_raster())
-            .map(|l| (l.id, l.dataset.features.highest_id()))
+            .map(|l| (l.id, l.dataset.features.highest_id().max(recorded.get(&l.id).copied().unwrap_or(0))))
             .filter(|(_, id)| *id > 0)
             .collect();
         if let Some(home) = s.project.offline_areas.iter_mut().find(|a| a.name.eq_ignore_ascii_case(&area)) {

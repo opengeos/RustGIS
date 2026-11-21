@@ -41,7 +41,7 @@ impl Project {
         }
         // A package's identity and the packages already brought back: an older reader would drop
         // them on saving, and then apply a package's changes twice.
-        if self.field_origin.as_ref().is_some_and(|origin| !origin.package.is_empty())
+        if self.field_origin.as_ref().is_some_and(|origin| !origin.package.is_empty() || !origin.ids.is_empty())
             || self.offline_areas.iter().any(|area| !area.returned.is_empty() || !area.ids.is_empty())
         {
             required.push("field-package");
@@ -1333,6 +1333,22 @@ mod tests {
         let mut invalid = saved.clone();
         invalid["field_origin"]["package"] = json!("not-an-id");
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
+        // Hostile highest ids, which would leave no id free above them, are refused too; the largest a
+        // feature can have is kept, and leaves room.
+        for bad in [json!(u64::MAX), json!(u64::MAX - 1), json!(i64::MAX.unsigned_abs() + 1)] {
+            let mut invalid = saved.clone();
+            invalid["field_origin"]["ids"] = json!({"1": bad});
+            assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"), "{bad}");
+        }
+        // Floors on their own, with no package identity, require the capability too, and are kept.
+        let mut floors = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
+        floors.field_origin.as_mut().unwrap().ids = [(1, 7)].into();
+        let kept = serde_json::to_value(&floors).unwrap();
+        assert!(kept["requires"].as_array().unwrap().contains(&json!("field-package")), "{}", kept["requires"]);
+        assert_eq!(Project::from_json(&kept.to_string()).unwrap().field_origin.unwrap().ids, floors.field_origin.as_ref().unwrap().ids);
+        let mut largest = saved.clone();
+        largest["field_origin"]["ids"] = json!({"1": i64::MAX.unsigned_abs()});
+        assert!(Project::from_json(&largest.to_string()).is_ok());
         let mut with_area = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
         with_area.offline_areas.push(super::super::OfflineArea {
             id: "0123456789abcdef0123456789abcdef".into(),
@@ -1354,6 +1370,9 @@ mod tests {
         only_ids.offline_areas[0].returned.clear();
         only_ids.offline_areas[0].ids = [(1, 120)].into();
         assert_eq!(serde_json::to_value(&only_ids).unwrap()["requires"], json!(["field-origin", "field-package"]));
+        let mut hostile = saved.clone();
+        hostile["offline_areas"][0]["ids"] = json!({"1": u64::MAX});
+        assert!(Project::from_json(&hostile.to_string()).unwrap_err().contains("identity"));
         let mut invalid = saved;
         invalid["offline_areas"][0]["returned"] = json!(["nope"]);
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));

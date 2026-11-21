@@ -140,6 +140,14 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     if l.is_raster() {
         return Err("features can't be pasted into a raster layer".into());
     }
+    // Ids for every pasted feature, above every id the layer has or keeps new rows above, refused
+    // before anything changes when they would run past the largest id.
+    let mut next = l
+        .dataset
+        .features
+        .free_ids(src.features.len())
+        .ok_or_else(|| format!("{}: no ids are left above the layer's highest for the pasted features", l.name))?
+        .saturating_sub(1);
     let want = l.geometry_type();
     if want != GeometryType::None && src.geometry_type != GeometryType::None && want != src.geometry_type {
         return Err(format!(
@@ -163,8 +171,6 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Fields are matched by name; the rest are left empty.
     let map: Vec<Option<usize>> = l.dataset.fields.iter().map(|f| src.field_index(&f.name)).collect();
-    // Above every id the layer has, or keeps new rows above (a field package's rows).
-    let mut next = l.dataset.features.highest_id();
     let first = l.dataset.features.len();
     // Per field, what converting the pasted values cut, and the values that aren't null but that
     // the field can't hold.
@@ -266,6 +272,26 @@ fn copy_path(s: &mut Session, p: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paste that would need ids past the largest there is is refused, with nothing pasted,
+    /// rather than giving pasted features one id between them.
+    #[test]
+    fn a_paste_with_no_ids_left_is_refused() {
+        let mut s = Session::new(crate::sample::world_project());
+        let id = s.map().layer_by_name("Cities").unwrap().id;
+        s.run("select.rows", &json!({"layer": id, "rows": [0, 1]})).unwrap();
+        s.run("edit.copy", &Value::Null).unwrap();
+        let ds = &mut s.map_mut().layer_mut(id).unwrap().dataset;
+        let fields = ds.fields.len();
+        ds.features.push_parts(u64::MAX - 1, None, vec![Attr::Null; fields]);
+        let before = s.map().layer(id).unwrap().dataset.features.len();
+        let refused = s.run("edit.paste", &json!({"layer": id})).unwrap_err();
+        assert!(refused.contains("no ids are left"), "{refused}");
+        assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), before);
+        // With room for them, they paste.
+        s.map_mut().layer_mut(id).unwrap().dataset.features.retain_rows(|r| r.id() != u64::MAX - 1);
+        s.run("edit.paste", &json!({"layer": id})).unwrap();
+    }
 
     #[test]
     fn a_moment_pasted_into_a_date_field_keeps_its_day() {

@@ -301,8 +301,9 @@ pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&json!({"package": package})).map_err(|e| e.to_string())
 }
 
-/// What [`keep_ahead`] made, for `offline.keepRows` to take.
-type Kept = Result<(), String>;
+/// What [`keep_ahead`] made, for `offline.keepRows` to take: the notices of what was let go (text,
+/// and whether it is an error), or why the rows couldn't be kept.
+type Kept = Result<Vec<(String, bool)>, String>;
 
 /// The key `offline.keepRows`'s read is taken under.
 const KEEP_KEY: &str = "offline.keepRows";
@@ -316,7 +317,7 @@ pub(crate) fn keep_ahead(s: &mut Session) -> Option<super::reads::ReadWork> {
     Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> Kept {
         match given {
             Some(given) => keep_base(&given),
-            None => rustgis_data::progress::check().map_err(|e| e.to_string()),
+            None => rustgis_data::progress::check().map(|()| Vec::new()).map_err(|e| e.to_string()),
         }
     }))
 }
@@ -338,7 +339,7 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
         (None, Some(given)) => keep_base(&given),
         (None, None) => return Ok(json!({"kept": false})),
     };
-    done.map_err(|e| {
+    let notes = done.map_err(|e| {
         if e == rustgis_data::DataError::Cancelled.to_string() {
             e
         } else {
@@ -347,6 +348,9 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
             )
         }
     })?;
+    for (text, error) in notes {
+        s.notify(text, error);
+    }
     Ok(json!({"kept": true}))
 }
 
@@ -355,24 +359,38 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
 /// cut short (cancelled, or failed) is never read and the next open of the package writes it anew.
 /// Reads each row once and writes it once, in longitude/latitude as a returning map is compared;
 /// Cancel is looked at between rows, and progress counts them.
-pub(crate) fn keep_base(given: &GivenRows) -> Result<(), String> {
+pub(crate) fn keep_base(given: &GivenRows) -> Kept {
     rustgis_data::progress::check().map_err(|e| e.to_string())?;
     let dir = base_dir(&given.package).ok_or("this device gives RustGIS no folder of its own to keep the field package's rows in")?;
     if dir.join(LAYERS).is_file() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let parent = dir.parent().ok_or("no folder for the field package's rows")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     let part = parent.join(format!("{}.{}.part", given.package, crate::project::field_id()?));
     let written = write_base(given, &part).and_then(|()| publish(&part, &dir));
+    let mut notes = Vec::new();
     if part.exists() {
-        let _ = std::fs::remove_dir_all(&part);
+        notes.extend(let_go(&part, "a copy of the field package's rows cut short"));
     }
     // Its return sent while it was kept: the copy just put in place is no longer needed.
-    if is_spent(&given.package) {
-        let _ = std::fs::remove_dir_all(&dir);
+    if written.is_ok() && is_spent(&given.package) {
+        notes.extend(let_go(&dir, "the rows of a field package already sent back"));
+        if notes.iter().all(|(_, error)| !error) {
+            notes.push((
+                "The field package had already gone back, so the rows it gave weren't kept on this device: make a new field package for more edits".into(),
+                false,
+            ));
+        }
     }
-    written
+    written.map(|()| notes)
+}
+
+/// Removes `dir`, `what`: nothing to say when it goes, the folder and why when it can't.
+fn let_go(dir: &Path, what: &str) -> Option<(String, bool)> {
+    std::fs::remove_dir_all(dir)
+        .err()
+        .map(|e| (format!("{}: {what} couldn't be removed from this device ({e}); remove the folder by hand", dir.display()), true))
 }
 
 /// Moves the complete copy `part` into place as `dir`, whole, so a folder there is always complete.
@@ -712,10 +730,16 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         }
         // A deletion goes in while the feature is as it was given; one changed at home stays.
         let mut gone = HashSet::new();
+        // Home's fields by name, once for the layer: the first of a name, whatever its case.
+        let mut home_fields: HashMap<String, usize> = HashMap::new();
+        for (j, f) in sl.dataset.fields.iter().enumerate() {
+            home_fields.entry(f.name.to_ascii_lowercase()).or_insert(j);
+        }
         for g in &lc.deleted {
             let Some(row) = at.get(&g.id).and_then(|r| sl.dataset.features.row(*r)) else { continue };
             let same_place = g.geometry.as_ref().is_none_or(|was| row.geometry() == was.as_ref());
-            let same_values = g.values.iter().all(|(field, was)| sl.dataset.field_index(field).is_none_or(|j| row.value(j) == was));
+            let same_values =
+                g.values.iter().all(|(field, was)| home_fields.get(&field.to_ascii_lowercase()).is_none_or(|j| row.value(*j) == was));
             // A field the package didn't give (added at home since, or by another phone's return)
             // holding a value is a change made at home too.
             let named: HashSet<String> = g.values.iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
@@ -959,8 +983,25 @@ mod tests {
         let given = GivenRows::of(&project, &id);
         // Sent before the keep finished: there was nothing to remove yet.
         assert!(!forget(&id).unwrap());
-        keep_base(&given).unwrap();
+        let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
+        assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A folder that can't be removed is said, by name, as an error.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cant_be_removed_is_said() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_bases::root().unwrap().join("stuck");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(LAYERS), "rows").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let said = let_go(&dir, "the rows of a field package already sent back");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (text, error) = said.unwrap();
+        assert!(error && text.contains(&dir.display().to_string()) && text.contains("remove the folder by hand"), "{text}");
+        assert!(let_go(&dir, "the rows").is_none());
     }
 
     /// A list of any version but this one is refused: a newer one asks for a newer RustGIS.
