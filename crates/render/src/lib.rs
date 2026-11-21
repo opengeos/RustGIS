@@ -2478,6 +2478,26 @@ struct Candidate {
     row: usize,
 }
 
+impl Candidate {
+    /// About how many bytes `candidates` take, with what they hold beside them (their text, glyphs,
+    /// places and positions to try), for a budget (`frame_cache::MAX_LABEL_BYTES`).
+    fn bytes(candidates: &[Candidate]) -> usize {
+        let glyphs = |g: &[LabelGlyph]| g.iter().map(|g| size_of::<LabelGlyph>() + g.text.len()).sum::<usize>();
+        candidates
+            .iter()
+            .map(|c| {
+                let line = c.line.as_ref().map_or(0, |l| l.anchors.len() * size_of::<Option<Coord>>() + Candidate::bytes(&l.fallbacks));
+                size_of::<Candidate>()
+                    + c.label.text.len()
+                    + glyphs(&c.label.glyphs)
+                    + c.alternatives.iter().map(|a| size_of::<LabelPlace>() + glyphs(&a.glyphs)).sum::<usize>()
+                    + c.curves.as_ref().map_or(0, label_places::Curves::bytes)
+                    + line
+            })
+            .sum()
+    }
+}
+
 /// Alternatives from one line stretch; band siblings retain one top-level candidate slot.
 #[derive(Clone, Debug, Default)]
 struct LinePlaces {
@@ -4854,10 +4874,10 @@ fn render_frame(
         // Its label candidates, kept for a frame keeping pictures (a layer read from its source has
         // no look to tell they still stand): taken from a kept frame of the same view when the layer
         // looks as it did then, else worked out and kept.
-        let (keeps_labels, lid) = (cached.is_some() && layer.source.is_none(), layer.id);
+        let (keeps_labels, lid) = (cached.as_ref().is_some_and(|p| p.same_view) && layer.source.is_none(), layer.id);
         let mut taken = cached.as_mut().filter(|_| keeps_labels).and_then(|p| p.take_labels(lid, li));
         // Copied only while the frame's copies stay within what a view keeps.
-        let room = frame_cache::MAX_CANDIDATES.saturating_sub(layer_labels.iter().map(|(_, c)| c.len()).sum());
+        let room = frame_cache::MAX_LABEL_BYTES.saturating_sub(layer_labels.iter().map(|(_, c)| Candidate::bytes(c)).sum());
         let mut gave_labels: Option<Vec<Candidate>> = None;
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // A stopped frame draws no more of a layer or a streamed chunk (see `cancel`).
@@ -5310,7 +5330,7 @@ fn render_frame(
             // as working them out again. (Not compacted: only a layer read from its source is, and
             // that keeps none.)
             if let Some(c) = taken.take() {
-                gave_labels = (c.len() <= room).then(|| c.clone());
+                gave_labels = (Candidate::bytes(&c) <= room).then(|| c.clone());
                 label_candidates.extend(c);
                 return Ok(());
             }
@@ -5862,8 +5882,8 @@ fn render_frame(
                     }
                 }
             }
-            if keeps_labels && label_candidates.len().saturating_sub(first_label) <= room {
-                gave_labels = label_candidates.get(first_label..).map(<[Candidate]>::to_vec);
+            if keeps_labels && let Some(gave) = label_candidates.get(first_label..).filter(|c| Candidate::bytes(c) <= room) {
+                gave_labels = Some(gave.to_vec());
             }
             if complete_source && matches!(labels_to, Labels::Own | Labels::Turned(_)) {
                 compact_label_candidates(&mut label_candidates);

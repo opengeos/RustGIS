@@ -39,6 +39,11 @@ impl std::fmt::Debug for Curves {
 }
 
 impl Curves {
+    /// About how many bytes its positions and changes take (its spec is shared), for a budget.
+    pub fn bytes(&self) -> usize {
+        self.positions.len() * size_of::<f32>() + self.changes.len() * size_of::<Change>()
+    }
+
     pub fn new(spec: Arc<CurveSpec>, positions: Vec<f32>, locked: Option<usize>) -> Self {
         Self { spec, positions, locked, changes: Vec::new() }
     }

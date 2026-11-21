@@ -47,12 +47,12 @@ const MAX_PIXELS: u64 = 2 * 3840 * 2160;
 /// the kept pictures stay within about 86 MB.
 const SPRITE_PIXELS: u64 = crate::MAX_SPRITES as u64 * (2 * crate::MAX_SPRITE_REACH as u64 + 1).pow(2);
 
-/// The most label candidates a view keeps for its layers together, as many as a frame's labels are
-/// placed from once it compacts them (`compact_label_candidates`): about 9.3 MB a view
-/// (`size_of::<Candidate>()` is 464 bytes), plus what they hold beside (text, glyphs curved along a
-/// line, places to try). A layer whose candidates would go past it works them out in every frame.
-/// A frame copies no more than this either, its layers bottom first.
-pub(crate) const MAX_CANDIDATES: usize = 20_000;
+/// The most bytes of label candidates a view keeps for its layers together, by
+/// [`Candidate::bytes`], what they hold beside them included (text, glyphs curved along a line,
+/// places to try): about 20,000 point labels, each of 464 bytes and the places around it. A
+/// layer whose candidates would go past it works them out in every frame. A frame copies no more
+/// than this either, its layers bottom first.
+pub(crate) const MAX_LABEL_BYTES: usize = 16 << 20;
 
 /// Pictures kept, one per view drawn (a map and its draft, two maps on screen).
 const KEPT: usize = 2;
@@ -219,6 +219,9 @@ pub(crate) struct Plan {
     pub recombine: Option<Alone>,
     /// The place in the drawing order of the layer to keep alone, when it is drawn so.
     pub alone_at: Option<usize>,
+    /// Whether a frame of the same view was kept: only then does it keep its label candidates,
+    /// which a frame of another view, as while panning, has no use for.
+    pub same_view: bool,
     /// The candidates of the layers that look the same or differ only in transparency, which
     /// labels don't take: each is the same as working them out again in this frame.
     labels: LayerLabels,
@@ -303,7 +306,17 @@ pub(crate) fn plan(frame: Frame, looks: Looks, pixels: u64) -> Plan {
 /// [`plan`].
 fn plan_with(frame: Frame, looks: Looks, pixels: u64) -> Plan {
     if pixels.saturating_mul(KEPT as u64) > MAX_PIXELS {
-        return Plan { start: 0, restored: None, capture_at: None, recombine: None, alone_at: None, labels: Vec::new(), frame, looks };
+        return Plan {
+            start: 0,
+            restored: None,
+            capture_at: None,
+            recombine: None,
+            alone_at: None,
+            same_view: false,
+            labels: Vec::new(),
+            frame,
+            looks,
+        };
     }
     // A picture over tile layers lasts until a tile that failed in it may be asked for again: a
     // server that gave no time to come back is asked by the next draw after a minute.
@@ -316,7 +329,17 @@ fn plan_with(frame: Frame, looks: Looks, pixels: u64) -> Plan {
         // Nothing to start from: keep what lies under the first layer (the basemap, the tile
         // layers below every layer), or the frame under its first changed layer next time.
         let alone_at = alone_at(&looks, 0, pixels);
-        return Plan { start: 0, restored: None, capture_at: Some(0), recombine: None, alone_at, labels: Vec::new(), frame, looks };
+        return Plan {
+            start: 0,
+            restored: None,
+            capture_at: Some(0),
+            recombine: None,
+            alone_at,
+            same_view: false,
+            labels: Vec::new(),
+            frame,
+            looks,
+        };
     };
     let changed = first_change(&k.looks, &looks);
     let labels = standing_labels(k.labels, &k.looks, &looks);
@@ -324,10 +347,10 @@ fn plan_with(frame: Frame, looks: Looks, pixels: u64) -> Plan {
         let capture_at = (changed > k.at && changed < looks.len()).then_some(changed);
         let recombine = k.alone.filter(|_| matches!(change_at(&k.looks, &looks, k.at), Change::Same | Change::Transparency));
         let alone_at = alone_at(&looks, capture_at.unwrap_or(k.at), pixels);
-        Plan { start: k.at, restored: Some(k.checkpoint), capture_at, recombine, alone_at, labels, frame, looks }
+        Plan { start: k.at, restored: Some(k.checkpoint), capture_at, recombine, alone_at, same_view: true, labels, frame, looks }
     } else {
         let alone_at = alone_at(&looks, changed, pixels);
-        Plan { start: 0, restored: None, capture_at: Some(changed), recombine: None, alone_at, labels, frame, looks }
+        Plan { start: 0, restored: None, capture_at: Some(changed), recombine: None, alone_at, same_view: true, labels, frame, looks }
     }
 }
 
@@ -346,12 +369,14 @@ pub(crate) fn keep(plan: Plan, captured: Option<(usize, Checkpoint)>, alone: Opt
     // Bottom first in drawing order, as many as fit.
     let mut given: LayerLabels = drawn.into_iter().chain(standing).collect();
     let mut labels: LayerLabels = Vec::new();
-    let mut count = 0;
+    let mut bytes = 0;
     for (key, _) in &looks {
-        if let Some(i) = given.iter().position(|(k, c)| k == key && count + c.len() <= MAX_CANDIDATES) {
-            let entry = given.swap_remove(i);
-            count += entry.1.len();
-            labels.push(entry);
+        if let Some((i, b)) = given.iter().enumerate().find_map(|(i, (k, c))| {
+            let b = Candidate::bytes(c);
+            (k == key && bytes + b <= MAX_LABEL_BYTES).then_some((i, b))
+        }) {
+            bytes += b;
+            labels.push(given.swap_remove(i));
         }
     }
     with_pictures(|kept| {
@@ -488,6 +513,11 @@ mod tests {
             REUSED.take()
         };
         assert_eq!(reused(&mut map), Vec::<u32>::new(), "the first frame works them all out");
+        // A view's first frame keeps none (another view's, as while panning, would have no use for
+        // them); its second keeps them.
+        assert!(PICTURES.with_borrow(|k| k.iter().all(|k| k.labels.is_empty())));
+        assert_eq!(reused(&mut map), Vec::<u32>::new());
+        assert!(PICTURES.with_borrow(|k| k.iter().any(|k| !k.labels.is_empty())));
         // The layer below restyled: the one above is drawn again over it, with its candidates.
         restyle(&mut map, below, (10, 10, 120));
         assert_eq!(reused(&mut map), vec![above]);
