@@ -631,12 +631,14 @@ fn copy_stream(
         return Ok(None);
     }
     // An indexed read can skip the rest of the file outright, so the total outside the area comes
-    // from the source's count. With unreadable rows that count may or may not include them, so
-    // what remains is a lower bound, said as one.
+    // from the source's count. Rows a source refused when it opened are left out of that count
+    // (GeoJSON's reprojection failures, for one) and said above; rows skipped while reading may
+    // not be, so with any of those the rest is a lower bound, said as one.
+    let skipped = batch.skipped as u64;
     let outside =
-        info.count.map_or(outside as u64, |total| total.saturating_sub(inside as u64).saturating_sub(unread as u64).max(outside as u64));
+        info.count.map_or(outside as u64, |total| total.saturating_sub(inside as u64).saturating_sub(skipped).max(outside as u64));
     if outside > 0 {
-        let at_least = if unread > 0 { "at least " } else { "" };
+        let at_least = if skipped > 0 { "at least " } else { "" };
         losses.push(format!(
             "{}: {at_least}{outside} feature(s) outside the offline area's extent, or without a shape, stayed out of the field package",
             layer.name
