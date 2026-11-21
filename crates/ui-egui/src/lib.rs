@@ -2122,10 +2122,13 @@ impl RustGisApp {
         }
         if let Some(picked) = name.strip_prefix(MARKER_PICK) {
             // Only the request still waiting takes its answer: an earlier one's file, still on its
-            // way when another «Image…» was clicked, is dropped. An answer with no name is a
-            // cancelled picker, which ends the wait.
+            // way when another «Image…» was clicked, is dropped, and said. An answer with no name
+            // is a cancelled picker, which ends the wait.
             let (id, name) = picked.split_once(':').unwrap_or_default();
             if self.ui.pending_marker_image.as_ref().is_none_or(|m| m.request.to_string() != id) {
+                if !name.is_empty() {
+                    self.session.notify(tl!("An image picked for an earlier Image… was dropped: pick it again for that marker"), true);
+                }
                 return Ok(Value::Null);
             }
             return match self.ui.pending_marker_image.take() {

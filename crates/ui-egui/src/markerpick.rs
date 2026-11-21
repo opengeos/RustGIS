@@ -178,12 +178,12 @@ mod tests {
         pick(app, marker);
     }
 
-    /// «Image…» makes the file the marker of a point symbol, of one mark in a stack of strokes
-    /// (the others as they were) and of a dot fill, on the layer it was clicked for even when
-    /// another is active.
     /// The notice for a file that isn't a readable PNG or JPEG the marker can take.
     const UNREADABLE: &str = "This image can't be a marker: it isn't a readable PNG or JPEG of at most 20,000 px per side";
 
+    /// «Image…» makes the file the marker of a point symbol, of one mark in a stack of strokes
+    /// (the others as they were) and of a dot fill, on the layer it was clicked for even when
+    /// another is active.
     #[test]
     fn a_picked_file_becomes_the_marker() {
         let dir = tempfile::tempdir().unwrap();
@@ -282,6 +282,12 @@ mod tests {
         assert_ne!(a, b);
         app.open_picked(&marked(a, "late.png"), &png()).unwrap();
         assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square, "an earlier request's file");
+        assert!(
+            app.session
+                .notices
+                .iter()
+                .any(|n| n.text == "An image picked for an earlier Image… was dropped: pick it again for that marker")
+        );
         assert_eq!(request(&app), b);
         app.open_picked(&marked(b, "icon.png"), &png()).unwrap();
         assert!(drawn(layer(&app, "Cities").renderer.base_symbol().marker));

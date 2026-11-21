@@ -1367,7 +1367,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else if dxf.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
             } else if purpose == "picture" || marker.is_some() {
-                rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
+                rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Pictures"), &["png", "jpg", "jpeg"])
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };
