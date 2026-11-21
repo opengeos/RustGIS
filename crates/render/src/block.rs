@@ -481,9 +481,9 @@ fn grown(pattern: FillPattern, k: f32) -> FillPattern {
     }
 }
 
-/// How close (metres along a side) two places where polygons cross a block's side are taken as
-/// one: far below anything drawn, far above the rounding of a coordinate's conversion.
-const SEAM: f64 = 1e-6;
+/// How close (metres along a side, a millimetre) two places where polygons cross a block's side are
+/// taken as one: far below anything drawn, far above the rounding of any conversion.
+const SEAM: f64 = 1e-3;
 
 /// Each side of block `b`'s outline cut where `layer`'s polygons cross it, with the row of the
 /// topmost polygon over each piece, found at its middle: the contacts go straight down. For the
