@@ -404,9 +404,6 @@ fn remove_copy(path: &Path) {
     }
 }
 
-/// Gives the front end the phone's file picker, the way the browser's shell gives its own:
-/// Open and Add Data ask through `open_async`, and what is saved or exported is offered
-/// through `download`.
 /// Ends a request for files that got none (`purpose`): a dialog or marker waiting for its answer
 /// (Import DXF, a marker's «Image…») is answered empty in `inbox`, and stops waiting.
 fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
@@ -415,6 +412,9 @@ fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
     }
 }
 
+/// Gives the front end the phone's file picker, the way the browser's shell gives its own:
+/// Open and Add Data ask through `open_async`, and what is saved or exported is offered
+/// through `download`.
 fn use_picker<P: Phone + 'static>(
     app: &mut RustGisApp,
     phone: &Rc<P>,

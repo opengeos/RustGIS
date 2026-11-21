@@ -98,9 +98,7 @@ impl MarkerImage {
         }
         r
     }
-}
 
-impl MarkerImage {
     /// The live layer now on the map with the marker's layer id, if any.
     fn live_layer(&self, app: &RustGisApp) -> Option<u64> {
         let id = self.params["layer"].as_u64().and_then(|id| u32::try_from(id).ok())?;
