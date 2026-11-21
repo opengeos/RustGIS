@@ -1473,6 +1473,8 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
             "attachment:///abc_a.png",
             "raster image markers whose image is kept inside the .qgz project, which RustGIS doesn't read it from, drawn as circles",
         ),
+        ("\\\\host\\share\\a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
+        ("//host/share/a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
         ("/data/gone.png", "raster image markers whose image file doesn't open, drawn as circles"),
     ];
     for (file, note) in cases {
@@ -1482,7 +1484,7 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
         assert_eq!(sym.marker, Marker::Circle, "{file}");
         assert_eq!(report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [note], "{file}");
     }
-    assert_eq!(asked, ["/data/gone.png"], "neither a web address nor a relative path without a folder is looked for");
+    assert_eq!(asked, ["/data/gone.png"], "neither a web address, a network share nor a relative path without a folder is looked for");
 
     // Drawn, but not as QGIS draws it: a ratio of its own, see-through (the layer's or the symbol's).
     let mut read = |_: &str| Ok(("QUJD".to_string(), 0.5));

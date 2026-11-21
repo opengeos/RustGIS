@@ -893,7 +893,8 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: 
 /// `imageFile` once (a file once for each spelling of its path from the folder: a leading `./` is
 /// dropped, so `./a.png` and `a.png` are one), into the report for [`raster_image`]: a `base64:`
 /// one as it is, a file's through `read` (relative to `dir`). One at a web address isn't fetched,
-/// nor one kept inside a `.qgz` (`attachment:`); one relative to no folder (or to a drive's working folder) isn't looked
+/// nor one on a network share (`\\host\share`, `//host/share`), nor one kept inside a `.qgz`
+/// (`attachment:`); one relative to no folder (or to a drive's working folder) isn't looked
 /// for, and those past the pictures a run keeps ([`MAX_PICTURES`],
 /// [`MAX_PICTURES_BYTES`]) aren't read. An image is kept when read, before its symbol is: one
 /// in a part of the project the import then leaves out stays kept for the run, within those
@@ -915,6 +916,10 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             Err("whose image is kept inside the .qgz project, which RustGIS doesn't read it from")
         } else if file.contains("://") {
             Err("whose image is at a web address, which RustGIS doesn't fetch")
+        } else if file.len() > 1 && file.chars().take(2).all(|c| c == '\\' || c == '/') {
+            // Looking a share up can sign in to the host the file names, which a style or
+            // project chose (as an archive on one isn't opened either).
+            Err("whose image is on a network share, which RustGIS doesn't open")
         } else if super::is_drive_relative(file) {
             Err("whose image file is relative to a drive's working folder, which no project folder tells")
         } else if super::is_relative(file) && dir.is_empty() {
