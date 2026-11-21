@@ -267,7 +267,7 @@ fn color(p: &Value, k: &str) -> Result<Option<String>, String> {
 pub(crate) fn picture(p: &Value) -> Result<String, String> {
     let b64 = match (ps(p, "image"), ps(p, "path")) {
         (Some(b), _) => b.trim().to_string(),
-        (None, Some(path)) => base64::engine::general_purpose::STANDARD.encode(read_picture_file(path, MAX_PICTURE)?),
+        (None, Some(path)) => base64::engine::general_purpose::STANDARD.encode(read_picture_file(path, MAX_PICTURE).map_err(|(e, _)| e)?),
         (None, None) => return Err("a picture needs an image or a path".into()),
     };
     if b64.len() > MAX_PICTURE / 3 * 4 + 4 {
@@ -283,20 +283,31 @@ pub(crate) fn picture(p: &Value) -> Result<String, String> {
 pub(crate) const TOO_LARGE: &str = "the picture is too large";
 
 /// A picture file's bytes, at most `max` (refused past it: read at most one byte more, so a huge
-/// or endless file is too), its provenance kept. Only a regular file is opened: opening a named
-/// pipe or a device (`/dev/stdin`) waits for a writer, and this runs on the command's thread.
-pub(crate) fn read_picture_file(path: &str, max: usize) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    if !std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.is_file() {
-        return Err(format!("{path}: not a regular file"));
+/// or endless file is too), its provenance kept; or why not, with how many bytes were read (none
+/// when it doesn't open). Only a regular file is opened: opening a named pipe or a device
+/// (`/dev/stdin`) waits for a writer, and this runs on the command's thread.
+pub(crate) fn read_picture_file(path: &str, max: usize) -> Result<Vec<u8>, (String, usize)> {
+    let unread = |e: std::io::Error| (format!("{path}: {e}"), 0);
+    if !std::fs::metadata(path).map_err(unread)?.is_file() {
+        return Err((format!("{path}: not a regular file"), 0));
     }
-    let mut bytes = Vec::new();
-    let file = rustgis_data::provenance::open(path).map_err(|e| format!("{path}: {e}"))?;
-    (&file).take(max as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-    if bytes.len() > max {
-        return Err(TOO_LARGE.into());
-    }
+    let file = rustgis_data::provenance::open(path).map_err(unread)?;
+    let bytes = read_within(&file, max).map_err(|(e, n)| (e.map_or_else(|| TOO_LARGE.into(), |e| format!("{path}: {e}")), n))?;
     rustgis_data::provenance::buffer(std::path::Path::new(path), &file, &bytes);
+    Ok(bytes)
+}
+
+/// At most `max` bytes of `from`; past them (`None`) or on a read error, with how many were read.
+fn read_within(from: impl std::io::Read, max: usize) -> Result<Vec<u8>, (Option<std::io::Error>, usize)> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    // Bytes read before an error are kept in `bytes`.
+    if let Err(e) = from.take(max as u64 + 1).read_to_end(&mut bytes) {
+        return Err((Some(e), bytes.len()));
+    }
+    if bytes.len() > max {
+        return Err((None, bytes.len()));
+    }
     Ok(bytes)
 }
 
@@ -467,4 +478,32 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
         return Err("select graphics first".into());
     }
     Ok(json!({"styled": n}))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Gives `good` bytes, then fails.
+    struct Failing(usize);
+
+    impl std::io::Read for Failing {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 == 0 {
+                return Err(std::io::Error::other("the disk failed"));
+            }
+            let n = self.0.min(buf.len());
+            buf[..n].fill(7);
+            self.0 -= n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn a_picture_read_that_fails_says_how_much_it_read() {
+        let (e, n) = super::read_within(Failing(10), 100).unwrap_err();
+        assert_eq!((e.map(|e| e.to_string()), n), (Some("the disk failed".to_string()), 10));
+        // Past the most it takes: one byte more read, no error.
+        let (e, n) = super::read_within(&[7u8; 20][..], 10).unwrap_err();
+        assert_eq!((e.is_none(), n), (true, 11));
+        assert_eq!(super::read_within(&[7u8; 10][..], 10).unwrap().len(), 10);
+    }
 }

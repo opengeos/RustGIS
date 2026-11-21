@@ -79,8 +79,8 @@ fn marker_images() -> impl FnMut(&str) -> Result<(String, f32), &'static str> {
 /// Reads a raster image marker's image for the importer: its `base64:` text, or its file's,
 /// within what a picture marker keeps (`symbology::MAX_PICTURE_BYTES` of base64, 2 MiB), checked
 /// as `layer.marker` checks an image; with its height over its width. Its base64's length is added
-/// to `read`, or for a file that doesn't read (past the limit, or failing part way) its size's,
-/// so the import's bound overshoots by one file at most. Checking it decodes it, at most
+/// to `read`, or for a file that doesn't read (past the limit, or failing part way) what was read
+/// of it, so the import's bound overshoots by one file at most. Checking it decodes it, at most
 /// 20,000 pixels a side within 512 MiB, as `layer.marker` does.
 fn marker_image(source: &str, read: &mut usize) -> Result<(String, f32), &'static str> {
     use base64::Engine;
@@ -93,11 +93,10 @@ fn marker_image(source: &str, read: &mut usize) -> Result<(String, f32), &'stati
         None => match super::graphics::read_picture_file(source, MAX_PICTURE_BYTES / 4 * 3) {
             Ok(bytes) if bytes.is_empty() => return Err(NOT_AN_IMAGE),
             Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(bytes),
-            Err(e) => {
-                // What may have been read of it is charged, as its base64 would be: its size, to
-                // the limit (none for one that doesn't open).
-                let size = std::fs::metadata(source).map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
-                *read += size.min(MAX_PICTURE_BYTES / 4 * 3).div_ceil(3) * 4;
+            Err((e, got)) => {
+                // What was read of it is charged, as its base64 would be (none for one that
+                // doesn't open).
+                *read += got.div_ceil(3) * 4;
                 return Err(if e == super::graphics::TOO_LARGE { TOO_LARGE } else { "whose image file doesn't open" });
             }
         },
