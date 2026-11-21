@@ -6706,7 +6706,9 @@ fn hostile_params_never_panic(shard: usize) {
                     l.id,
                     l.visible,
                     l.transparency.to_bits(),
-                    l.dataset.features.len(),
+                    // CoW `Features`: `PartialEq` short-circuits on `Arc::ptr_eq` in O(1) when
+                    // unchanged and catches any row, attribute or geometry mutation.
+                    l.dataset.features.clone(),
                     l.selection.len(),
                     l.labels.enabled,
                     l.labels.default.field.len(),

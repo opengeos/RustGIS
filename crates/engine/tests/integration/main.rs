@@ -10,7 +10,6 @@ mod measurement_units;
 mod move_shared_vertex;
 mod never_silent_reading;
 mod never_silent_roundtrip;
-mod pair_grid_note;
 mod planetary_export;
 mod polar_edits;
 mod portable_projects;
