@@ -1340,3 +1340,152 @@ fn the_held_layer_fixture_opens_held() {
         assert!((c.x - x).abs() < 1e-6 && (c.y - y).abs() < 1e-6, "{c:?}");
     }
 }
+
+/// Every coordinate of a layer as it holds it ([`Dataset::coord_crs`]), feature by feature.
+fn held_coords(s: &Session, layer: &str) -> Vec<Vec<Coord>> {
+    let l = s.map().layer_by_name(layer).unwrap_or_else(|| panic!("no layer {layer}"));
+    l.dataset
+        .features
+        .iter()
+        .map(|f| {
+            let mut v = Vec::new();
+            if let Some(g) = &f.geometry {
+                g.for_each_coord(|c| v.push(c));
+            }
+            v
+        })
+        .collect()
+}
+
+/// The coordinates as bits, for comparing them exactly.
+fn bits(v: &[Vec<Coord>]) -> Vec<(u64, u64)> {
+    v.iter().flatten().map(|c| (c.x.to_bits(), c.y.to_bits())).collect()
+}
+
+/// A tool that works in its first input's own system (#2032 C2e) is given a layer held in UTM in
+/// UTM, not a longitude/latitude copy, and its new layer is held in UTM too: what it copies keeps
+/// its stored coordinates bit for bit, and what it makes from them (an envelope) is made along
+/// UTM's axes.
+#[test]
+fn a_tool_works_in_its_held_inputs_own_system() {
+    let mut s = session(UTM);
+    s.map_mut().layers.iter_mut().for_each(|l| l.dataset.crs = Some(UTM));
+    let run = |s: &mut Session, tool: &str, input: &str, out: &str| {
+        s.run("gp.run", &json!({"tool": tool, "params": {"input": input, "output": out}})).unwrap_or_else(|e| panic!("{tool}: {e}"));
+        let l = s.map().layer_by_name(out).unwrap_or_else(|| panic!("{tool}: no output"));
+        assert_eq!(l.dataset.coord_crs(), UTM, "{tool}: held in");
+    };
+    for (tool, input, out) in [
+        ("exportFeatures", "Wells", "Exported"),
+        ("polygonToLine", "Parcels", "Outlines"),
+        ("repairGeometry", "Parcels", "Repaired"),
+        ("featureVerticesToPoints", "Roads", "Vertices"),
+        ("splitLineAtVertices", "Roads", "Segments"),
+        ("unsplitLine", "Roads", "Unsplit"),
+    ] {
+        run(&mut s, tool, input, out);
+        let (copied, from) = (bits(&held_coords(&s, out)), bits(&held_coords(&s, input)));
+        let kept = |c: &(u64, u64)| from.contains(c);
+        assert!(!copied.is_empty() && copied.iter().all(kept), "{tool}: its coordinates are the input's, as held");
+    }
+    // Export Features keeps the input's system as the one exports use (#2032 C2e).
+    assert_eq!(s.map().layer_by_name("Exported").unwrap().dataset.crs, Some(UTM));
+    // Each envelope is the box of the parcel's stored UTM coordinates, which in longitude/latitude
+    // is a turned rectangle, not the box of the parcel's longitudes and latitudes.
+    run(&mut s, "featureEnvelopeToPolygon", "Parcels", "Envelopes");
+    let parcels = held_coords(&s, "Parcels");
+    for (i, envelope) in held_coords(&s, "Envelopes").iter().enumerate() {
+        let parcel = parcels.get(i).unwrap();
+        let (min_x, max_x) = parcel.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
+        let (min_y, max_y) = parcel.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.y), b.max(c.y)));
+        for c in envelope {
+            assert!(c.x == min_x || c.x == max_x, "envelope {i}: x {} of {min_x}..{max_x}", c.x);
+            assert!(c.y == min_y || c.y == max_y, "envelope {i}: y {} of {min_y}..{max_y}", c.y);
+        }
+    }
+    // Check Geometry finds nothing wrong with valid squares, in any system.
+    s.run("gp.run", &json!({"tool": "checkGeometry", "params": {"input": "Parcels", "output": "Problems"}})).unwrap();
+    assert!(held_coords(&s, "Problems").is_empty());
+    // A tool working on attributes alone answers as it does for the layer in longitude/latitude.
+    let mut ss = both();
+    let p = json!({"tool": "selectByAttributes", "params": {"input": "Wells", "where": "n >= 4"}});
+    run_both(&mut ss, "gp.run", &p);
+    assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"));
+    assert_eq!(selected(&ss[1], "Wells"), vec![4, 5, 6, 7, 8]);
+}
+
+/// Merge's other inputs are converted into its first input's own system, where its result is
+/// held: the first's coordinates kept bit for bit, the others' where PROJ puts them; with a
+/// first input in longitude/latitude, everything stays there as before.
+#[test]
+fn merge_converts_its_other_inputs_into_the_firsts_system() {
+    let mut s = session(UTM);
+    let mut plain = Dataset::new("Plain", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    plain.push(Some(Geometry::Point(Coord::new(11.6, 48.75))), vec![Cell::Text("p".into())]);
+    s.map_mut().add_dataset(plain);
+    let merge = |s: &mut Session, inputs: [&str; 2], out: &str| {
+        let p = json!({"tool": "merge", "params": {"inputs": inputs, "attributes": true, "output": out}});
+        s.run("gp.run", &p).unwrap_or_else(|e| panic!("merge: {e}"))
+    };
+    merge(&mut s, ["Wells", "Plain"], "Merged");
+    let merged = s.map().layer_by_name("Merged").unwrap();
+    assert_eq!(merged.dataset.coord_crs(), UTM);
+    let (out, wells) = (held_coords(&s, "Merged"), held_coords(&s, "Wells"));
+    assert_eq!(bits(out.get(..9).unwrap()), bits(&wells), "the wells as held");
+    // echo 48.75 11.6 | cs2cs -f %.6f EPSG:4326 EPSG:32632 (PROJ 9.9.0): 691112.022414 5402926.247736
+    let c = out.get(9).and_then(|v| v.first()).copied().unwrap();
+    assert!((c.x - 691_112.022_414).abs() < 1e-3 && (c.y - 5_402_926.247_736).abs() < 1e-3, "{c:?}");
+    // The other way round, the run works in longitude/latitude, as every run did before.
+    merge(&mut s, ["Plain", "Wells"], "Merged_LonLat");
+    let lonlat_merge = s.map().layer_by_name("Merged_LonLat").unwrap();
+    assert_eq!(lonlat_merge.dataset.coord_crs(), Crs::LonLat);
+    let first = held_coords(&s, "Merged_LonLat").first().and_then(|v| v.first()).copied().unwrap();
+    assert_eq!((first.x, first.y), (11.6, 48.75));
+}
+
+/// An input with a place the first input's system can't hold (a point a quarter of the way round
+/// the Earth from UTM zone 32N's meridian, which PROJ can't convert either) has the run work in
+/// longitude/latitude, as every run did before, and its message says why.
+#[test]
+fn an_input_the_first_ones_system_cant_hold_is_worked_on_in_lonlat() {
+    let mut s = session(UTM);
+    let mut far = Dataset::new("Far", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    // echo 0 99 | cs2cs EPSG:4326 EPSG:32632 (PROJ 9.9.0): * * inf
+    far.push(Some(Geometry::Point(Coord::new(99.0, 0.0))), vec![Cell::Text("far".into())]);
+    s.map_mut().add_dataset(far);
+    let p = json!({"tool": "merge", "params": {"inputs": ["Wells", "Far"], "attributes": true, "output": "Merged"}});
+    let mark = s.notice_mark();
+    s.run("gp.run", &p).unwrap();
+    let merged = s.map().layer_by_name("Merged").unwrap();
+    assert_eq!(merged.dataset.coord_crs(), Crs::LonLat);
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.starts_with("Merge worked in longitude/latitude, not EPSG:32632: Far: feature")), "{said:?}");
+    let last = held_coords(&s, "Merged").last().and_then(|v| v.first()).copied().unwrap();
+    assert_eq!((last.x, last.y), (99.0, 0.0));
+}
+
+/// A standalone table without geometry (a spreadsheet's rows) joins onto a layer held in UTM as it
+/// does onto one in longitude/latitude, and the joined layer keeps the parcels' places as held.
+#[test]
+fn a_table_joins_onto_a_held_layer() {
+    let mut owners =
+        Dataset::new("Owners", GeometryType::None, vec![Field::new("n", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+    for n in 0..9 {
+        owners.push(None, vec![Cell::Int(n), Cell::Text(format!("owner {n}"))]);
+    }
+    let mut ss = both();
+    for s in &mut ss {
+        s.project.add_table(owners.clone());
+    }
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": "Owners", "joinField": "n", "output": "Owned"}});
+    run_both(&mut ss, "gp.run", &p);
+    let owner = |s: &Session| {
+        let ds = &s.map().layer_by_name("Owned").unwrap().dataset;
+        let f = ds.field_index("owner").unwrap();
+        (0..ds.features.len()).map(|r| ds.value(r, f).to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(owner(&ss[0]), owner(&ss[1]));
+    assert_eq!(owner(&ss[1]).first().map(String::as_str), Some("owner 0"));
+    assert_eq!(ss[1].map().layer_by_name("Owned").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&ss[1], "Owned")), bits(&held_coords(&ss[1], "Parcels")));
+}
