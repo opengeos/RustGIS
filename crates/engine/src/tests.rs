@@ -298,8 +298,11 @@ fn script_keeps_its_undo_step_when_a_line_changes_nothing() {
     let (depth, order) = (s.undo_depth(), names(&s));
     let top = &order[0];
     let stay = format!("layer.move {}", json!({"layer": top, "to": 0}));
-    s.run("script.run", &json!({"script": format!("{stay}\n{stay}")})).unwrap();
-    assert_eq!((names(&s), s.undo_depth(), s.dirty()), (order.clone(), depth, false));
+    // Nor does a script of comments alone.
+    for script in [format!("{stay}\n{stay}"), "# nothing\n\n".into()] {
+        s.run("script.run", &json!({"script": script})).unwrap();
+        assert_eq!((names(&s), s.undo_depth(), s.dirty()), (order.clone(), depth, false), "{script}");
+    }
     // Down, then down again where it already is; and the other way round.
     let down = format!("layer.move {}", json!({"layer": top, "to": 99}));
     for script in [format!("{down}\n{down}"), format!("{stay}\n{down}")] {
@@ -310,6 +313,13 @@ fn script_keeps_its_undo_step_when_a_line_changes_nothing() {
         s.run("edit.undo", &Value::Null).unwrap();
         assert_eq!(names(&s), order, "{script}");
     }
+    // An undo in the script is its edit, though the move after it changes nothing: the script
+    // undoes as one step, bringing back what the undo took.
+    s.run("layer.move", &json!({"layer": top, "to": 99})).unwrap();
+    s.run("script.run", &json!({"script": format!("edit.undo {{}}\n{stay}")})).unwrap();
+    assert_eq!((names(&s), s.undo_depth()), (order.clone(), depth + 1));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(names(&s).last(), Some(top));
 }
 
 #[test]

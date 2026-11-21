@@ -1095,7 +1095,8 @@ fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts
 /// typed in the Script pane or passed on the command line are the user's own, so they may use
 /// any command, files included; notebooks vet cells that came from files before running them.
-/// The whole script is one undo step, none when no line changed the project.
+/// The whole script is one undo step, none when it has no command or its commands only left a
+/// request or moved layers to where they already were.
 pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(ran) = super::reads::take::<super::gp::RanAheads>(s, SCRIPT_AHEAD) {
@@ -1116,11 +1117,13 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
     }
     let mut out = Vec::new();
     // As a task's steps ([`super::items`]): a line that changed nothing or only left a request
-    // must not erase an earlier line's undo step.
+    // must not erase an earlier line's undo step. An edit is any line that changes the project,
+    // `edit.undo` and Publish to Source included, which have no undo step of their own.
     let (mut requested, mut edited) = (false, false);
     for (n, id, params) in lines {
         let spec = *s.registry.get(&id).ok_or_else(|| format!("line {n}: unknown command '{id}'"))?;
         let (mutates, label) = (spec.mutates, spec.label);
+        let changes = spec.changes_project() || spec.effects.contains(crate::policy::Effect::History);
         // On a copy of the session ([`ahead_on_copy`]): from a line that may reach outside it,
         // the run here runs the rest.
         #[cfg(not(target_arch = "wasm32"))]
@@ -1156,10 +1159,10 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
         let r = invoke(s);
         let r = r.map_err(|e| format!("line {n}: {id}: {e}"))?;
         requested |= s.request_only;
-        edited |= mutates && !s.request_only;
+        edited |= changes && !s.request_only;
         out.push(json!({"line": n, "command": id, "result": r}));
     }
-    s.request_only = requested && !edited;
+    s.request_only = (requested && !edited) || out.is_empty();
     Ok(json!({"ran": out}))
 }
 
