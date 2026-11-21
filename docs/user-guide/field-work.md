@@ -167,7 +167,9 @@ in the app's own folder (`field bases`), found by the package's identity, so it 
 after the field project is saved and opened again, or recovered. It writes the copy in the
 background once the map is open, with progress and **Cancel** in the status bar; cancelled, no copy
 is kept, and opening the package again starts a fresh one. A returned package opened on another
-device keeps no copy. **Send Field Package** compares the map with that
+device keeps no copy. Once **Send Field Package** has written the return, the copy is removed: a
+package comes back once, so make a new one for more edits. The copy of a package opened but never
+sent stays in that folder until it is removed by hand. **Send Field Package** compares the map with that
 copy and sends the list of changes with the map. A package opened on a device that doesn't keep
 its rows (the browser, or a field project copied to another device) goes back as a whole map,
 and the phone says so: Bring Back then compares the map with the area as it was last synced,
@@ -180,6 +182,8 @@ Where a change meets one made on the computer since the package was made:
 - A feature deleted on the phone but changed on the computer is kept, and named. So is one given a
   value on the computer in a field added there since the package was made.
 - A feature changed on the phone but deleted on the computer stays deleted, and is named.
+- These protections need the list of changes. A package that goes back as a whole map applies the
+  phone's deletions even where the computer changed the feature, and names those features.
 - A change to an attribute the computer's layer no longer has, or has with another type, refuses
   the whole return and changes nothing: add the field back, then Bring Back again. So does a field
   removed on the phone that the computer's layer still has, as its values in the field aren't
@@ -187,6 +191,10 @@ Where a change meets one made on the computer since the package was made:
 
 Only the photos of features the phone added, or whose photos it changed, come back: a photo of a
 feature whose photos it left alone is left out, and the summary says how many.
+
+Bring Back refuses a package while the area's offline map is open with edits not synced yet, as
+renewing the area would replace them: **Sync** the area first. It also refuses a package made on
+the computer to go out, which is not a return.
 
 Give each phone a package of its own: several packages of one area can be out at once, and each
 comes back with only its own changes. Make one from the area's offline map with **Package for the

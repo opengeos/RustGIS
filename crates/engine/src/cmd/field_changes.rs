@@ -277,6 +277,15 @@ impl GivenRows {
     }
 }
 
+/// Removes the rows package `package` gave this device, once its return has been written: home
+/// brings a package back once, so they are no longer needed. Whether there were any.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn forget(package: &str) -> Result<bool, String> {
+    let Some(dir) = base_dir(package).filter(|d| d.exists()) else { return Ok(false) };
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok(true)
+}
+
 /// What a package going out from home holds under [`GIVEN`].
 pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&json!({"package": package})).map_err(|e| e.to_string())
@@ -288,10 +297,18 @@ type Kept = Result<(), String>;
 /// The key `offline.keepRows`'s read is taken under.
 const KEEP_KEY: &str = "offline.keepRows";
 
-/// Keeping the rows the open field package gave, on a thread of its own: see [`keep_base`].
-pub(crate) fn keep_ahead(s: &Session) -> Option<super::reads::ReadWork> {
-    let given = s.project.given.clone()?;
-    Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> Kept { keep_base(&given) }))
+/// Keeping the rows the open field package gave, on a thread of its own: see [`keep_base`]. The
+/// read takes them out of the project, so whatever ends it (done, failed, cancelled, or the read
+/// left), they are let go with it, and an edit made meanwhile copies its layer only while the
+/// read runs. With none waiting (kept already) it does nothing.
+pub(crate) fn keep_ahead(s: &mut Session) -> Option<super::reads::ReadWork> {
+    let given = s.project.given.take();
+    Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> Kept {
+        match given {
+            Some(given) => keep_base(&given),
+            None => rustgis_data::progress::check().map_err(|e| e.to_string()),
+        }
+    }))
 }
 
 /// `offline.keepRows`: keeps on this device the rows the open field package gave
@@ -305,14 +322,12 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
     if ahead.is_none() && s.project.given.is_some() && s.statistics_window_thread == Some(std::thread::current().id()) {
         return Err("keeping a field package's rows needs the background read queue".into());
     }
-    let done = match ahead {
-        Some(done) => done,
-        None => match s.project.given.clone() {
-            Some(given) => keep_base(&given),
-            None => return Ok(json!({"kept": false})),
-        },
+    // Taken out of the project, so they are let go once kept, however that ends.
+    let done = match (ahead, s.project.given.take()) {
+        (Some(done), _) => done,
+        (None, Some(given)) => keep_base(&given),
+        (None, None) => return Ok(json!({"kept": false})),
     };
-    s.project.given = None;
     done.map_err(|e| {
         if e == rustgis_data::DataError::Cancelled.to_string() {
             e
@@ -339,17 +354,22 @@ pub(crate) fn keep_base(given: &GivenRows) -> Result<(), String> {
     let parent = dir.parent().ok_or("no folder for the field package's rows")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     let part = parent.join(format!("{}.{}.part", given.package, crate::project::field_id()?));
-    let written = write_base(given, &part).and_then(|()| {
-        // A copy left by an earlier try, cut short before its list of layers.
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        std::fs::rename(&part, &dir).map_err(|e| format!("{}: {e}", dir.display()))
-    });
-    if written.is_err() {
+    let written = write_base(given, &part).and_then(|()| publish(&part, &dir));
+    if part.exists() {
         let _ = std::fs::remove_dir_all(&part);
     }
     written
+}
+
+/// Moves the complete copy `part` into place as `dir`, whole, so a folder there is always complete.
+/// One kept there by another opening of the same package meanwhile wins and is left as it is: it
+/// holds the same rows. Nothing there is ever replaced.
+fn publish(part: &Path, dir: &Path) -> Result<(), String> {
+    match std::fs::rename(part, dir) {
+        Ok(()) => Ok(()),
+        Err(_) if dir.join(LAYERS).is_file() => Ok(()),
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    }
 }
 
 /// Writes the rows `given` holds into `dir`: see [`keep_base`].
@@ -514,7 +534,7 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
             deleted.push(Given { id: e.id, values, geometry: Some(base.geometry) });
         }
         let removed: Vec<String> = g.fields.iter().zip(&fields).filter(|(_, j)| j.is_none()).map(|(n, _)| n.clone()).collect();
-        if !(added.is_empty() && deleted.is_empty() && edited.is_empty() && removed.is_empty()) {
+        if !(added.is_empty() && deleted.is_empty() && edited.is_empty() && removed.is_empty() && added_fields.is_empty()) {
             let fields = added_fields.iter().filter_map(|j| ds.fields.get(*j)).cloned().collect();
             changes.layers.push(LayerChanges { layer: g.layer, added, deleted, edited, removed, fields });
         }
@@ -572,7 +592,8 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             .filter(|n| {
                 let theirs = ol.dataset.field_index(n).and_then(|i| ol.dataset.fields.get(i)).map(|f| f.ty);
                 let ours = sl.dataset.field_index(n).and_then(|j| sl.dataset.fields.get(j)).map(|f| f.ty);
-                ours.is_none() || theirs.is_some_and(|t| Some(t) != ours)
+                // A field the package's map hasn't has no new value to give.
+                ours.is_none() || theirs.is_none_or(|t| Some(t) != ours)
             })
             .collect();
         cut.sort();
@@ -587,14 +608,14 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
     }
     if !misfits.is_empty() {
         return Err(format!(
-            "cannot bring back the field's changes: the map '{source}' hasn't the field(s) they change, or has them with another type, in layer(s) {}. Nothing was changed; add the fields, then Bring Back again",
+            "cannot bring back the field's changes: the map '{source}', or the field package's map, hasn't the field(s) they change, or has them with another type, in layer(s) {}. Nothing was changed; add the fields, then Bring Back again",
             misfits.join("; ")
         ));
     }
     // The field's values in a field it removed aren't known, so none can be brought back.
     if !removed.is_empty() {
         return Err(format!(
-            "cannot bring back the field's changes: the field package removed field(s) the map '{source}' still has, in layer(s) {}, so their values in the field aren't known. Nothing was changed; add the fields back in the field project and send it again",
+            "cannot bring back the field's changes: the field package removed field(s) the map '{source}' still has, in layer(s) {}, so their values in the field aren't known. Nothing was changed; remove those fields from the map here too, then Bring Back again",
             removed.join("; ")
         ));
     }
@@ -702,7 +723,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             };
             let own = if at.contains_key(id) {
                 done.renumbered += 1;
-                top.saturating_add(1)
+                top.checked_add(1).ok_or_else(|| exhausted(&name))?
             } else {
                 *id
             };
@@ -765,9 +786,11 @@ pub(crate) fn add_fields(s: &mut Session, ai: usize, changes: &Changes) -> Vec<S
 
 /// The photo entries (names under `photos/`) that the cells `changes` applies name in `edited`,
 /// the package's map: the photos field (`field`) of the features it adds, and of those whose
-/// photos it changes. `entries` gives the entries a cell's text names.
+/// photos it changes that `home`, the area's map, still has. `entries` gives the entries a cell's
+/// text names.
 pub(crate) fn photos_named(
     edited: &rustgis_map::Map,
+    home: Option<&rustgis_map::Map>,
     changes: &Changes,
     field: impl Fn(&rustgis_map::Layer) -> Option<usize>,
     entries: impl Fn(&str) -> Vec<String>,
@@ -777,12 +800,15 @@ pub(crate) fn photos_named(
         let Some(l) = edited.layers.iter().find(|l| l.id == lc.layer && !l.is_raster()) else { continue };
         let Some(fi) = field(l) else { continue };
         let Some(name) = l.dataset.fields.get(fi).map(|f| f.name.as_str()) else { continue };
-        let ids: HashSet<u64> = lc
-            .added
-            .iter()
-            .copied()
-            .chain(lc.edited.iter().filter(|g| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))).map(|g| g.id))
-            .collect();
+        // An edit to a feature home no longer has is dropped, its photo with it.
+        let mut photo_edits: HashSet<u64> =
+            lc.edited.iter().filter(|g| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))).map(|g| g.id).collect();
+        let at_home: HashSet<u64> = home
+            .and_then(|m| m.layers.iter().find(|h| h.id == lc.layer && !h.is_raster()))
+            .map(|h| h.dataset.features.rows().map(|r| r.id()).filter(|id| photo_edits.contains(id)).collect())
+            .unwrap_or_default();
+        photo_edits.retain(|id| at_home.contains(id));
+        let ids: HashSet<u64> = lc.added.iter().copied().chain(photo_edits).collect();
         for row in l.dataset.features.rows().filter(|r| ids.contains(&r.id())) {
             if let Value::Text(text) = row.value(fi) {
                 named.extend(entries(text));
@@ -790,6 +816,14 @@ pub(crate) fn photos_named(
         }
     }
     named
+}
+
+/// The refusal when a feature added in the field needs a new id and none is left above the
+/// layer's highest (`u64::MAX`): the command fails, and the project is put back as it was.
+pub(crate) fn exhausted(layer: &str) -> String {
+    format!(
+        "cannot bring back layer '{layer}': a feature added in the field needs a new id, and none is left above the layer's highest. Nothing was changed"
+    )
 }
 
 /// What [`apply`] did, and what it says.
@@ -872,6 +906,35 @@ impl Applied {
                 true,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two openings of one package keeping its rows at once: the second to finish finds the first's
+    /// complete copy in place, leaves it as it is, and succeeds.
+    #[test]
+    fn a_copy_kept_meanwhile_is_never_replaced() {
+        let root = test_bases::root().unwrap();
+        let (dir, part) = (root.join("winner"), root.join("loser.part"));
+        for (d, text) in [(&dir, "first"), (&part, "second")] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join(LAYERS), text).unwrap();
+        }
+        publish(&part, &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(LAYERS)).unwrap(), "first");
+    }
+
+    /// A list of any version but this one is refused: a newer one asks for a newer RustGIS.
+    #[test]
+    fn a_list_of_another_version_is_refused() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let list = |v: u32| format!(r#"{{"version":{v},"package":"{id}","layers":[]}}"#);
+        assert!(Changes::read(list(1).as_bytes(), id).is_ok());
+        assert!(Changes::read(list(2).as_bytes(), id).unwrap_err().contains("newer RustGIS"));
+        assert!(Changes::read(list(0).as_bytes(), id).unwrap_err().contains("damaged"));
     }
 }
 

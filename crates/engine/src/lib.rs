@@ -1363,6 +1363,12 @@ impl Session {
         self.project.given.is_some()
     }
 
+    /// Lets go of the open field package's rows waiting to be kept, when they can't be: the rows
+    /// they share with the project are then no longer held for them.
+    pub fn forget_field_rows(&mut self) {
+        self.project.given = None;
+    }
+
     /// Starts an independent session with fresh runtime selection intent and request order.
     /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {

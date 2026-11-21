@@ -270,8 +270,12 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         entries.extend(photos.entries);
         // What the phone changed in the rows it was given, which Bring Back applies.
         let package = s.project.field_origin.as_ref().map(|o| o.package.clone()).unwrap_or_default();
-        if package.is_empty() && s.project.field_origin.is_some() {
-            losses.push(WHOLE_MAP.replace("{why}", "the package was made before packages had an identity of their own"));
+        match s.project.field_origin.as_ref().filter(|_| package.is_empty()) {
+            Some(origin) if origin.generation.is_empty() => losses.push(
+                "The field package goes back as a whole map with no return check: it was made before packages had one, so Bring Back can't tell it from a copy already brought back, and bringing it back may undo or repeat what came home since".into(),
+            ),
+            Some(_) => losses.push(WHOLE_MAP.replace("{why}", "the package was made before packages had an identity of their own")),
+            None => {}
         }
         if !package.is_empty() {
             match super::field_changes::list(s.map(), &package) {
@@ -489,6 +493,8 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             let outbound = copy.project.offline_areas.iter().any(|saved| saved.name.eq_ignore_ascii_case(&area));
             Ok((answer, file, notes, outbound))
         });
+        // A return spends its package: the rows it gave are let go once the return is written.
+        let spent = spent_package(&copy);
         rustgis_data::progress::check().map_err(|e| e.to_string())?;
         let (errors, other): (Vec<_>, Vec<_>) = copy.notices.into_iter().partition(|n| n.error);
         let diagnostics = errors.into_iter().map(|n| (n.severity, n.text)).collect();
@@ -497,6 +503,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         let control = rustgis_analysis::control::current();
         let then: super::exports::Then = Box::new(move |s, answer| {
             let (result, file, notes, outbound) = staged?;
+            let spent = spent.filter(|_| !outbound);
             if outbound && (s.opened != opened || s.state() != state) {
                 return Err("the home project changed during packaging; make a new package before sending it to the field".into());
             }
@@ -522,6 +529,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             for note in notes.into_iter().chain(construction_notes) {
                 s.notify(note, false);
             }
+            spend(s, spent);
             s.retain_written_notices(mark);
             *answer = result;
             Ok(())
@@ -537,6 +545,27 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             crs_used: Vec::new(),
         })
     }))
+}
+
+/// The package a field project's return spends: its own identity, when it has one.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn spent_package(s: &Session) -> Option<String> {
+    s.project.field_origin.as_ref().map(|o| o.package.clone()).filter(|p| !p.is_empty())
+}
+
+/// Once a return of package `spent` has been written: home brings a package back once, so the rows
+/// it gave this device are no longer needed, and are removed. Said either way.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn spend(s: &mut Session, spent: Option<String>) {
+    let Some(package) = spent else { return };
+    match super::field_changes::forget(&package) {
+        Ok(true) => s.notify(
+            "The field package went back: this device no longer keeps the rows it gave. A package comes back once, so make a new field package for more edits",
+            false,
+        ),
+        Ok(false) => {}
+        Err(e) => s.notify(format!("The field package went back, but the rows it gave couldn't be removed from this device: {e}"), true),
+    }
 }
 
 /// Offline area identity state which packaging can change. Feature rows are shared with home
@@ -952,11 +981,14 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     let mut strange = 0usize;
     let mut index = String::new();
     let mut changes = None;
+    let mut outbound = false;
     for (name, data) in entries {
         if name == INDEX {
             index = String::from_utf8_lossy(&data).into_owned();
         } else if name == super::field_changes::ENTRY {
             changes = Some(data);
+        } else if name == super::field_changes::GIVEN {
+            outbound = true;
         } else if !name.contains('/') && crate::project::is_project_file(&name) {
             text = Some(String::from_utf8(data).map_err(|_| "the field package's project is damaged".to_string())?);
         } else if let Some(file) = name.strip_prefix(&format!("{PHOTOS}/")) {
@@ -969,6 +1001,11 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         }
     }
     let text = text.ok_or("the file holds no field package's project")?;
+    // A package made here to go out, not one coming back: bringing it back would record it as
+    // returned, and refuse the phone's real return after.
+    if outbound {
+        return Err("this field package was made here to go to the field, not sent back from it: Bring Back reads the package the phone sends with Send Field Package. Nothing was changed".into());
+    }
     let project = Project::from_import_json(&text, None)?;
     let ai = if let Some(area) = legacy_area {
         let raw: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -1038,6 +1075,13 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
             ));
         }
     }
+    // An offline map of the area open here with edits not synced yet would be replaced as the area
+    // is renewed from its map: refused first, with nothing changed.
+    if super::workspace::area_unsynced(&s.project, ai) {
+        return Err(format!(
+            "offline area '{area}' has edits in its offline map that aren't synced yet, and bringing the field package back would replace them. Nothing was changed. Sync the area first (Data › Offline › Sync), then Bring Back again"
+        ));
+    }
     if project.maps.len() != 1 {
         return Err("a field package must hold exactly its original field map".into());
     }
@@ -1103,7 +1147,8 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     // with nothing naming it.
     let unchanged_photos = match &changes {
         Some(changes) if !photos.is_empty() => {
-            let named = super::field_changes::photos_named(&edited, changes, photos_field, |text| {
+            let home = s.project.offline_areas.get(ai).and_then(|a| s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(&a.map)));
+            let named = super::field_changes::photos_named(&edited, home, changes, photos_field, |text| {
                 photo_paths(text)
                     .into_iter()
                     .filter_map(|r| text.get(r).and_then(|p| p.strip_prefix(&format!("{PHOTOS}/"))).map(str::to_string))
@@ -1248,7 +1293,7 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     if unchanged_photos > 0 {
         s.notify(
             format!(
-                "Bring Back left out {unchanged_photos} photo(s) of features whose photos weren't changed in the field: home's are kept"
+                "Bring Back left out {unchanged_photos} photo(s) that no change it brings back names (photos the field didn't change, or of features deleted here): home's are kept"
             ),
             false,
         );

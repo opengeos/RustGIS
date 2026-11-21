@@ -255,6 +255,12 @@ pub fn commands() -> Vec<C> {
                 return Err(format!("{path}: {e}"));
             }
             for note in notes { s.notify(note, false); }
+            // A return written spends its package (only a field project's own identity).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let spent = super::field::spent_package(s);
+                super::field::spend(s, spent);
+            }
             s.retain_written_notices(written);
             Ok(super::field::packaged(&path, &area, bytes.len()))
         })
@@ -267,7 +273,8 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"path"?: "*.rgisfield", "data"?: base64 of one, "legacyArea"?: "native User only: explicitly verified home offline area for an entirely ID-less legacy return; cannot override any present or incomplete identity"}"#),
         C::new("offline.keepRows", "Keep Field Package Rows", "Data › Offline", super::field_changes::keep_rows)
             .roles(&[])
-            .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)),
+            .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+            .view(),
         C::new("offline.sync", "Sync", "Data › Offline", offline_sync).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": offline area}"#),
         C::new("offline.remove", "Remove", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
@@ -1050,7 +1057,7 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                     // a fresh one above any they have (its id clashed with one outside the area).
                     let id = if at.contains_key(&fid) || had.contains(&fid) {
                         renumbered += 1;
-                        top.saturating_add(1)
+                        top.checked_add(1).ok_or_else(|| super::field_changes::exhausted(&lname))?
                     } else {
                         fid
                     };
@@ -1148,6 +1155,23 @@ pub(crate) fn renew_area(
         }
     }
     Ok(())
+}
+
+/// Whether offline area `ai`'s offline map is open with edits not synced to its map yet: a feature
+/// layer whose rows or fields differ from the area's snapshot, or one added or removed. Rows still
+/// shared with the snapshot are the same without being compared.
+pub(crate) fn area_unsynced(project: &Project, ai: usize) -> bool {
+    let (Some(area), Some(open)) = (project.offline_areas.get(ai), area_map_index(project, ai).and_then(|i| project.maps.get(i))) else {
+        return false;
+    };
+    let layers = |m: &rustgis_map::Map| m.layers.iter().filter(|l| !l.is_raster()).map(|l| l.id).collect::<std::collections::BTreeSet<_>>();
+    layers(open) != layers(&area.data)
+        || open.layers.iter().filter(|l| !l.is_raster()).any(|l| {
+            area.data.layers.iter().find(|b| b.id == l.id).is_none_or(|b| {
+                l.dataset.fields != b.dataset.fields
+                    || (!l.dataset.features.shares(&b.dataset.features) && l.dataset.features != b.dataset.features)
+            })
+        })
 }
 
 /// Where offline area `ai`'s open offline map is, if it is open.

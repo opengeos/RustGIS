@@ -43,6 +43,7 @@ fn phone(temp: &Temp, bytes: &[u8], name: &str) -> Session {
     let mut s = Session::new(project_in(&text, &dir).unwrap());
     s.opened_package = Some(temp.0.join(format!("{name}.rgisfield")));
     s.run("offline.keepRows", &Value::Null).unwrap();
+    assert!(!s.field_rows_waiting(), "kept, the rows are no longer held for keeping");
     s
 }
 
@@ -319,7 +320,7 @@ fn a_package_without_a_return_check_comes_back_with_a_notice() {
     a.project.field_origin.as_mut().unwrap().package.clear();
     let mark = a.notice_mark();
     package(&mut a, &Value::Null).unwrap();
-    assert!(a.notices_since(mark).iter().any(|n| n.text.contains("whole map") && n.text.contains("identity of their own")));
+    assert!(a.notices_since(mark).iter().any(|n| n.text.contains("whole map") && n.text.contains("no return check")));
     let cities = layer(&a, "Cities");
     let name = text_field(&a, cities);
     add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
@@ -483,7 +484,9 @@ fn a_field_removed_on_the_phone_but_still_at_home_is_refused_not_dropped() {
 }
 
 /// A city that has a photo at home, deleted on the phone: its photo value as given is home's, so
-/// the deletion goes in, with nothing said to be in conflict.
+/// the deletion goes in, with nothing said to be in conflict. The rows are taken as given after
+/// `project_in` rewrites `photos/` paths, but a package from home carries no `photos/` (only a
+/// return does), so nothing is rewritten and the kept value is home's own path.
 #[test]
 fn a_feature_with_a_photo_deleted_in_the_field_is_deleted_at_home() {
     let temp = Temp::new("photo-delete");
@@ -501,7 +504,9 @@ fn a_feature_with_a_photo_deleted_in_the_field_is_deleted_at_home() {
     home.run("offline.sync", &json!({"name": "Day"})).unwrap();
     let (_, out) = package(&mut home, &Value::Null).unwrap();
     home.run("map.activate", &json!({"name": home.project.offline_areas[0].map.clone()})).unwrap();
+    assert!(rustgis_data::zip::read(&out).unwrap().iter().all(|(n, _)| !n.starts_with("photos/")));
     let mut a = phone(&temp, &out, "a");
+    assert!(!temp.0.join("a").join("photos").exists(), "no photos folder, so project_in rewrote nothing");
     let cities = layer(&a, "Cities");
     let r = a.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
     assert_eq!(
@@ -570,6 +575,46 @@ fn rows_held_in_another_system_are_kept_and_compared_alike() {
     let (_, back) = package(&mut a, &Value::Null).unwrap();
     let changes = changes_in(&back).unwrap();
     assert_eq!(changes["layers"], json!([]), "{changes}");
+}
+
+/// A layer home holds in its own system (Web Mercator) goes out held there and is kept as given in
+/// longitude/latitude. Unedited rows aren't listed; one edit and one deletion come back, and home's
+/// places stay as stored.
+#[test]
+fn a_layer_held_in_its_own_system_comes_back_with_only_its_changes() {
+    let temp = Temp::new("held-round-trip");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(rustgis_data::raster::Crs::WebMercator).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    assert_eq!(a.map().layer(cities).unwrap().dataset.coord_crs(), rustgis_data::raster::Crs::WebMercator);
+    let name = text_field(&a, cities);
+    let (edited, gone) = {
+        let f = &a.map().layer(cities).unwrap().dataset.features;
+        (f[0].id, f[1].id)
+    };
+    let (_, unedited) = package(&mut a, &Value::Null).unwrap();
+    assert_eq!(changes_in(&unedited).unwrap()["layers"], json!([]));
+    a.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": name, "value": "Held edit"})).unwrap();
+    a.run("select.rows", &json!({"layer": cities, "rows": [1]})).unwrap();
+    a.run("edit.delete", &Value::Null).unwrap();
+    let place = |s: &Session, id: u64| {
+        let l = s.map().layer(layer(s, "Cities")).unwrap();
+        l.dataset.features.iter().find(|f| f.id == id).and_then(|f| f.geometry.clone())
+    };
+    let before = place(&home, edited);
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!(
+        (done["updated"].as_u64(), done["deleted"].as_u64(), done["conflicts"].as_u64()),
+        (Some(1), Some(1), Some(0)),
+        "{done} {said:?}"
+    );
+    assert_eq!(value_of(&home, hc, edited, &name).as_deref(), Some("Held edit"));
+    assert_eq!(value_of(&home, hc, gone, &name), None);
+    assert_eq!(place(&home, edited), before, "an attribute edit leaves home's stored place as it was");
+    assert_eq!(home.map().layer(hc).unwrap().dataset.coord_crs(), rustgis_data::raster::Crs::WebMercator);
 }
 
 /// Two packages of one area. A adds a field and fills it in for a city; B, given the city before
@@ -684,7 +729,208 @@ fn a_photo_the_field_didnt_change_is_not_stored_unnamed() {
     let done = home.run("offline.bringBack", &json!({"path": path})).unwrap();
     assert_eq!(done["photos"].as_u64(), Some(0), "{done}");
     assert!(!temp.0.join("All photos").join("shared.jpg").exists());
-    assert!(home.notices_since(mark).iter().any(|n| n.text.contains("photos weren't changed in the field")));
+    assert!(home.notices_since(mark).iter().any(|n| n.text.contains("no change it brings back names")));
+}
+
+/// Sending a return spends its package: once the file is written, the rows it gave are removed
+/// from the phone, and said. A send that fails writes nothing and keeps them.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_sent_return_removes_the_rows_its_package_gave_and_a_failed_one_keeps_them() {
+    let temp = Temp::new("spent");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let package_id = a.project.field_origin.as_ref().unwrap().package.clone();
+    let kept = crate::cmd::field_changes::test_bases::root().unwrap().join(&package_id);
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    let nowhere = temp.0.join("no such folder").join("back.rgisfield");
+    assert!(a.run("offline.package", &json!({"path": nowhere})).is_err());
+    assert!(kept.join("layers.json").is_file(), "a failed send keeps the rows");
+    let path = temp.0.join("back.rgisfield");
+    let mark = a.notice_mark();
+    a.run("offline.package", &json!({"path": path})).unwrap();
+    assert!(path.is_file());
+    assert!(!kept.exists(), "a sent return lets the rows go");
+    assert!(a.notices_since(mark).iter().any(|n| n.text.contains("no longer keeps the rows")), "{:?}", a.notices);
+    let back = std::fs::read(&path).unwrap();
+    assert!(changes_in(&back).is_some());
+    // It comes back home with its changes.
+    let done = home.run("offline.bringBack", &json!({"path": path})).unwrap();
+    assert_eq!(done["added"].as_u64(), Some(1), "{done}");
+}
+
+/// The package made at home to go out is no return: Bring Back refuses it, records nothing, and
+/// the phone's real return comes back after.
+#[test]
+fn a_package_made_to_go_out_is_refused_by_bring_back() {
+    let temp = Temp::new("outbound");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let path = temp.0.join("out.rgisfield");
+    std::fs::write(&path, &out).unwrap();
+    let refused = home.run("offline.bringBack", &json!({"path": path})).unwrap_err();
+    assert!(refused.contains("made here to go to the field"), "{refused}");
+    assert!(home.project.offline_areas[0].returned.is_empty());
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!(done["added"].as_u64(), Some(1), "{done}");
+}
+
+/// The office edits the area's open offline map and doesn't sync it. Bringing a package back
+/// would renew that map from the source and lose the edit, so it is refused with nothing changed,
+/// on either path. Synced first, a list of changes comes home beside the edit; a whole map is
+/// refused then by its return check.
+#[test]
+fn bring_back_refuses_while_the_offline_map_has_unsynced_edits() {
+    for whole in [false, true] {
+        unsynced_offline_map_refuses(whole);
+    }
+}
+
+/// [`bring_back_refuses_while_the_offline_map_has_unsynced_edits`], `whole` with no rows kept.
+fn unsynced_offline_map_refuses(whole: bool) {
+    let temp = Temp::new("unsynced");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    if whole {
+        let package_id = a.project.field_origin.as_ref().unwrap().package.clone();
+        std::fs::remove_dir_all(crate::cmd::field_changes::test_bases::root().unwrap().join(package_id)).unwrap();
+    }
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    home.run("offline.open", &json!({"name": "Day"})).unwrap();
+    let id = home.map().layer(cities).unwrap().dataset.features[0].id;
+    home.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": name, "value": "Office, unsynced"})).unwrap();
+    let (refused, _) = try_bring_back(&temp, &mut a, &mut home, "a");
+    assert!(refused.unwrap_err().contains("aren't synced yet"));
+    assert_eq!(value_of(&home, cities, id, &name).as_deref(), Some("Office, unsynced"));
+    home.run("offline.sync", &json!({"name": "Day"})).unwrap();
+    if whole {
+        // A whole map is compared with the area as it was: after the sync, its return check refuses it.
+        assert!(try_bring_back(&temp, &mut a, &mut home, "a").0.unwrap_err().contains("out of date"));
+        return;
+    }
+    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!(done["added"].as_u64(), Some(1), "{done}");
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    let hc = layer(&home, "Cities");
+    assert_eq!(value_of(&home, hc, id, &name).as_deref(), Some("Office, unsynced"));
+    assert_eq!(with_label(&home, hc, &name, "Captured"), 1);
+}
+
+/// A photo the phone gave a city the office has since deleted: the edit is dropped, and so is the
+/// photo, which no feature would name.
+#[test]
+fn a_photo_of_an_edit_dropped_at_home_is_not_stored() {
+    let temp = Temp::new("dropped-photo");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let id = a.map().layer(cities).unwrap().dataset.features[0].id;
+    let photo = temp.0.join("taken.jpg");
+    std::fs::write(&photo, b"photo bytes").unwrap();
+    a.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+    a.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    std::fs::remove_file(&photo).unwrap();
+    let hc = layer(&home, "Cities");
+    let row = home.map().layer(hc).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
+    home.run("select.rows", &json!({"layer": hc, "rows": [row]})).unwrap();
+    home.run("edit.delete", &Value::Null).unwrap();
+    let path = temp.0.join("back.rgisfield");
+    std::fs::write(&path, &back).unwrap();
+    let done = home.run("offline.bringBack", &json!({"path": path})).unwrap();
+    assert_eq!((done["skipped"].as_u64(), done["photos"].as_u64()), (Some(1), Some(0)), "{done}");
+    assert!(!temp.0.join("Day photos").join("taken.jpg").exists());
+}
+
+/// Home's layer holds the highest id there is: a feature added in the field whose id home uses
+/// has none left to take, so Bring Back refuses, with nothing changed, on either path.
+#[test]
+fn a_new_feature_with_no_id_left_is_refused_not_duplicated() {
+    for whole in [false, true] {
+        no_id_left(whole);
+    }
+}
+
+/// [`a_new_feature_with_no_id_left_is_refused_not_duplicated`], `whole` with no rows kept.
+fn no_id_left(whole: bool) {
+    let temp = Temp::new("no-id-left");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    if whole {
+        let package_id = a.project.field_origin.as_ref().unwrap().package.clone();
+        std::fs::remove_dir_all(crate::cmd::field_changes::test_bases::root().unwrap().join(package_id)).unwrap();
+    }
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let new = add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    // Home uses the new feature's id, and the highest there is, both outside the area.
+    let hc = layer(&home, "Cities");
+    let fields = home.map().layer(hc).unwrap().dataset.fields.len();
+    let outside = || Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(150.0, 70.0)));
+    let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
+    ds.features.push_parts(new, outside(), vec![rustgis_data::Value::Null; fields]);
+    ds.features.push_parts(u64::MAX, outside(), vec![rustgis_data::Value::Null; fields]);
+    let before = count(&home, hc);
+    let (refused, _) = try_bring_back(&temp, &mut a, &mut home, "a");
+    assert!(refused.unwrap_err().contains("none is left"));
+    assert_eq!(count(&home, hc), before);
+}
+
+/// The crew adds a field and fills nothing in: the field still comes home.
+#[test]
+fn a_field_added_in_the_field_comes_home_with_no_values() {
+    let temp = Temp::new("empty-field");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    a.run("edit.addField", &json!({"layer": cities, "name": "inspection", "type": "text"})).unwrap();
+    bring_back(&temp, &mut a, &mut home, "a");
+    let hc = layer(&home, "Cities");
+    assert!(home.map().layer(hc).unwrap().dataset.field_index("inspection").is_some());
+}
+
+/// A list naming an edit to a field the package's map hasn't has no new value for it: refused,
+/// rather than taken as Null over home's value.
+#[test]
+fn an_edit_to_a_field_the_package_map_lacks_is_refused() {
+    let temp = Temp::new("edit-missing-field");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let id = a.map().layer(cities).unwrap().dataset.features[0].id;
+    let gone = a.map().layer(cities).unwrap().dataset.fields.iter().find(|f| f.name != name).unwrap().name.clone();
+    a.run("edit.deleteField", &json!({"layer": cities, "field": gone})).unwrap();
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    // The list says the field's value changed, and not that the field was removed.
+    let mut entries = rustgis_data::zip::read(&back).unwrap();
+    let list = entries.iter_mut().find(|(n, _)| n == crate::cmd::field_changes::ENTRY).unwrap();
+    let mut changes: Value = serde_json::from_slice(&list.1).unwrap();
+    changes["layers"][0]["removed"] = json!([]);
+    changes["layers"][0]["edited"] = json!([{"id": id, "values": [[gone, "Null"]]}]);
+    list.1 = serde_json::to_vec(&changes).unwrap();
+    let path = temp.0.join("back.rgisfield");
+    std::fs::write(&path, rustgis_data::zip::write(&entries).unwrap()).unwrap();
+    let hc = layer(&home, "Cities");
+    let before = value_of(&home, hc, id, &gone);
+    let refused = home.run("offline.bringBack", &json!({"path": path})).unwrap_err();
+    assert!(refused.contains("hasn't the field(s)") && refused.contains(&gone), "{refused}");
+    assert_eq!(value_of(&home, hc, id, &gone), before);
 }
 
 /// A layer removed on the phone is said on sending: its features go back unchanged.
@@ -702,7 +948,8 @@ fn a_layer_removed_in_the_field_is_said_on_sending() {
 }
 
 /// Keeping a package's rows, cancelled at each of its checks in turn: no folder is left behind,
-/// half written or complete, and the next try keeps them whole.
+/// half written or complete, and the next try keeps them whole. Whatever ends it, the project no
+/// longer holds the rows for it, so an edit afterwards leaves no second copy held.
 #[test]
 fn keeping_the_rows_cancelled_at_each_check_leaves_no_folder() {
     let temp = Temp::new("keep-cancel");
@@ -715,11 +962,17 @@ fn keeping_the_rows_cancelled_at_each_check_leaves_no_folder() {
     let root = crate::cmd::field_changes::test_bases::root().unwrap();
     let left = || std::fs::read_dir(&root).map(|d| d.count()).unwrap_or(0);
     for n in 1..=256 {
-        let mut s = Session::new(project.clone());
+        let mut fresh = project.clone();
+        let given = std::sync::Arc::new(crate::cmd::field_changes::GivenRows::of(&fresh, &package_id));
+        let held = std::sync::Arc::downgrade(&given);
+        fresh.given = Some(given);
+        let mut s = Session::new(fresh);
         let read = crate::cmd::reads::read_ahead(&mut s, "offline.keepRows", &json!({})).unwrap();
         assert!(read.reads());
         let control = rustgis_analysis::control::Control::cancelled_at_look(n);
-        match read.run(&control).and_then(|done| crate::cmd::reads::read_land(&mut s, done)) {
+        let result = read.run(&control).and_then(|done| crate::cmd::reads::read_land(&mut s, done));
+        assert!(held.upgrade().is_none() && !s.field_rows_waiting(), "{n}: the rows are still held for keeping");
+        match result {
             Err(e) => {
                 assert!(e.contains("cancelled"), "{n}: {e}");
                 assert_eq!(left(), 0, "{n}: a folder was left behind");
@@ -796,7 +1049,9 @@ fn a_phone_without_the_rows_it_was_given_sends_the_whole_map_and_says_so() {
     assert!(said.iter().any(|t| t.contains("whole map") && t.contains("doesn't keep the rows")), "{said:?}");
     assert!(changes_in(&whole).is_none());
     // At home it comes back as a whole map, while its area is as it was.
-    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    let path = temp.0.join("whole.rgisfield");
+    std::fs::write(&path, &whole).unwrap();
+    let done = home.run("offline.bringBack", &json!({"path": path})).unwrap();
     assert_eq!(done["added"].as_u64(), Some(1), "{done}");
 }
 
