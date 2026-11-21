@@ -5310,7 +5310,7 @@ fn render_frame(
             // as working them out again. (Not compacted: only a layer read from its source is, and
             // that keeps none.)
             if let Some(c) = taken.take() {
-                gave_labels = Some(c.clone());
+                gave_labels = (c.len() <= room).then(|| c.clone());
                 label_candidates.extend(c);
                 return Ok(());
             }
