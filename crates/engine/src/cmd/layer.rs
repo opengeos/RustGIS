@@ -2473,7 +2473,7 @@ fn read_synced(path: &str, read: impl FnOnce() -> WholeRead) -> WholeRead {
     Ok((ds, report))
 }
 
-/// Whether Add Data reads the Shapefile at `path` in place: as `p` says (with
+/// Whether Add Data reads the Shapefile at `path` in place: as `p` says (the callers pass it with
 /// [`past_cap_shapefile`] applied), else when it holds more records than
 /// [`STREAM_ABOVE`](rustgis_map::source::STREAM_ABOVE).
 #[cfg(not(target_arch = "wasm32"))]
@@ -2497,7 +2497,7 @@ pub(crate) struct Opened {
     /// The size and modification time of the file and those beside it of its name (a
     /// Shapefile's `.dbf`, `.prj` and `.cpg`) as it was opened: an opening of files changed since
     /// isn't taken, as its features' places, boxes and fields are those of what they held then.
-    stamp: Option<Vec<(std::ffi::OsString, u64, std::time::SystemTime)>>,
+    stamp: Option<Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>>,
     source: Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>,
     /// Its features read whole, when Add Data loads the file instead of keeping it in place (it
     /// holds few enough, and `"stream"` isn't given), so the window doesn't wait for that read.
@@ -2531,10 +2531,12 @@ impl Opened {
     }
 }
 
-/// The size and modification time of `path` and of the files beside it with the same name before
-/// the extension, in any case (a Shapefile's parts), by name; `None` when any can't be read.
+/// The size and modification time (where the file system keeps one) of `path` and of the files
+/// beside it with the same name before the extension, in any case (a Shapefile's parts), by name.
+/// One that names no file (a dangling link) is left out, as the opening can't read it either;
+/// `None` when the folder can't be listed or another can't be looked at.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_stamp(path: &str) -> Option<Vec<(std::ffi::OsString, u64, std::time::SystemTime)>> {
+fn file_stamp(path: &str) -> Option<Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>> {
     let path = Path::new(path);
     let stem = path.file_stem()?.to_str()?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -2546,9 +2548,11 @@ fn file_stamp(path: &str) -> Option<Vec<(std::ffi::OsString, u64, std::time::Sys
             continue;
         }
         // The file a link names: its own size and time are what change.
-        let m = std::fs::metadata(entry.path()).ok()?;
-        if m.is_file() {
-            stamp.push((name, m.len(), m.modified().ok()?));
+        match std::fs::metadata(entry.path()) {
+            Ok(m) if m.is_file() => stamp.push((name, m.len(), m.modified().ok())),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
         }
     }
     stamp.sort();
@@ -2577,8 +2581,8 @@ fn in_place_key(path: &str, crs: Option<&str>) -> String {
 /// decides ([`streams_geojson`], [`streams_shapefile`]), but a `.json` of at most 256 MiB given a
 /// coordinate system or a layer, which may be a city model told as it is added, so it is opened
 /// there as before.
-/// Cancel is looked at every few thousand features or records; a file read into memory to be
-/// scanned (a GeoJSON file of at most 256 MiB) is read in one step without a look.
+/// Cancel is looked at every few thousand features or records; reading a GeoJSON file of at most
+/// 256 MiB into memory, before its text is scanned, is one step without a look.
 #[cfg(not(target_arch = "wasm32"))]
 fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
     const NAME: &str = "Add Data";

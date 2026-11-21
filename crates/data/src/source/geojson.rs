@@ -283,8 +283,9 @@ impl FeatureSource for GeoJsonSource {
     }
 
     /// Reads a bounded sample; when native bounds are refused, filters geometry before sampling,
-    /// counting records and checking Cancel between them. Otherwise Cancel is looked at every
-    /// [`PACE`] features read, so a whole read (Add Data loading the file) stops between them.
+    /// counting records and checking Cancel between them. A whole read (no extent, every match:
+    /// Add Data loading the file) counts and looks at Cancel likewise; other reads look at Cancel
+    /// every [`PACE`] features.
     fn read(&self, req: &Request) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
         // Counted first, then sampled, unless the native box is refused: no list of every match.
@@ -303,11 +304,13 @@ impl FeatureSource for GeoJsonSource {
         let mut buf = Vec::new();
         let mut features = Vec::with_capacity(matched.div_ceil(step).min(limit));
         let mut skipped = 0;
-        if late {
-            crate::progress::begin(matched);
+        // A whole read counts its features as a refused box does; a view's sample only looks.
+        let counted = late || (req.extent.is_none() && step == 1);
+        if counted {
+            crate::progress::begin(if late { matched } else { matched.min(limit) });
         }
         for (n, i) in self.matches(extent).step_by(step).take(if late { usize::MAX } else { limit }).enumerate() {
-            if late {
+            if counted {
                 crate::progress::step(1)?;
             } else if n.is_multiple_of(PACE) {
                 crate::progress::check()?;
@@ -408,9 +411,11 @@ fn convert_pass(path: &Path, places: &[Place], t: &crate::raster::Transformer) -
     let mut f = BufReader::with_capacity(BUFFER, crate::provenance::open(path)?);
     let (mut pos, mut buf) = (0u64, Vec::new());
     let mut pass = Pass { failed: Vec::new(), dropped: [0; 3], extent: Extent::EMPTY };
+    // Counted as a step of its own, a feature at a time every so many.
+    crate::progress::begin(places.len());
     for (i, place) in places.iter().enumerate() {
         if i.is_multiple_of(PACE) {
-            crate::progress::check()?;
+            crate::progress::step(if i == 0 { 0 } else { PACE })?;
         }
         // A feature that can't be read now is left to the reads, which skip it.
         if let Some(json) = read_place(&mut f, &mut pos, &mut buf, place)
