@@ -3172,6 +3172,12 @@ impl RustGisApp {
         if let Err(e) = &r {
             self.command_failed(id, e, notice_mark);
         }
+        // A field package from home opened: the rows it gave are kept on a thread of their own,
+        // with progress and Cancel, rather than as it opens.
+        #[cfg(not(target_arch = "wasm32"))]
+        if r.is_ok() && id == "project.open" && self.reads_off_frame && self.session.field_rows_waiting() {
+            let _ = readjob::run(self, "offline.keepRows", json!({}));
+        }
         // Commands can replace the project, switch maps or change the renderer while the pane
         // is closed. A field picked for the old context must not overwrite the new renderer.
         if self.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&self.session)) {

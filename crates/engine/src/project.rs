@@ -400,6 +400,11 @@ pub struct Project {
     /// The home and area this field copy belongs to, retained through ordinary saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_origin: Option<FieldOrigin>,
+    /// The rows a field package from home gave, taken as it opened and not yet kept on this device
+    /// (`offline.keepRows`). Never saved.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub(crate) given: Option<std::sync::Arc<crate::cmd::field_changes::GivenRows>>,
     #[cfg_attr(feature = "schema", schemars(with = "Vec<crate::schema::Open>"))]
     pub maps: Vec<Map>,
     pub active_map: usize,
@@ -1142,6 +1147,7 @@ impl Project {
             name: name.into(),
             origin_id: String::new(),
             field_origin: None,
+            given: None,
             maps: vec![Map::new("Map")],
             active_map: 0,
             tables: Vec::new(),
@@ -2476,6 +2482,7 @@ impl Durable for Project {
             name: _,
             origin_id: _,
             field_origin: _,
+            given: _,
             maps,
             active_map: _,
             tables,

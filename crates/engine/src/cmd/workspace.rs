@@ -265,6 +265,9 @@ pub fn commands() -> Vec<C> {
             .roles(&[])
             .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .params(r#"{"path"?: "*.rgisfield", "data"?: base64 of one, "legacyArea"?: "native User only: explicitly verified home offline area for an entirely ID-less legacy return; cannot override any present or incomplete identity"}"#),
+        C::new("offline.keepRows", "Keep Field Package Rows", "Data › Offline", super::field_changes::keep_rows)
+            .roles(&[])
+            .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)),
         C::new("offline.sync", "Sync", "Data › Offline", offline_sync).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": offline area}"#),
         C::new("offline.remove", "Remove", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
@@ -1010,9 +1013,10 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             });
             deleted += before - sl.dataset.features.len();
             // Where each id is in the source, and the id a feature added offline takes when its own
-            // is taken: one above any the source and the area have.
+            // is taken: one above any the source, the area and the returning copy have, so it never
+            // takes the free id of a feature added after it.
             let mut at: std::collections::HashMap<u64, usize> = sl.dataset.features.rows().enumerate().map(|(i, r)| (r.id(), i)).collect();
-            let mut top = at.keys().chain(had.iter()).copied().max().unwrap_or(0);
+            let mut top = at.keys().chain(had.iter()).copied().chain(ol_ds.features.rows().map(|r| r.id())).max().unwrap_or(0);
             for f in ol_ds.features.rows() {
                 let fid = f.id();
                 if had.contains(&fid) {

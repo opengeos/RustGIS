@@ -162,9 +162,12 @@ A field package (`.rgisfield`) carries a map to the phone and its edits back.
    go in a folder beside the project. Nothing else is compared, so a field added on the computer
    meanwhile, or another phone's edits, are left as they are.
 
-When a phone opens a package, it keeps a copy of the rows the package gave it in the app's own
-folder (`field bases`), found by the package's identity, so it is still found after the field
-project is saved and opened again, or recovered. **Send Field Package** compares the map with that
+When a phone opens a package made on the computer, it keeps a copy of the rows the package gave it
+in the app's own folder (`field bases`), found by the package's identity, so it is still found
+after the field project is saved and opened again, or recovered. It writes the copy in the
+background once the map is open, with progress and **Cancel** in the status bar; cancelled, no copy
+is kept, and opening the package again starts a fresh one. A returned package opened on another
+device keeps no copy. **Send Field Package** compares the map with that
 copy and sends the list of changes with the map. A package opened on a device that doesn't keep
 its rows (the browser, or a field project copied to another device) goes back as a whole map,
 and the phone says so: Bring Back then compares the map with the area as it was last synced,
@@ -174,12 +177,16 @@ Where a change meets one made on the computer since the package was made:
 
 - An attribute or shape changed in both places takes the phone's value. The summary names the
   features; **Undo** brings the computer's versions back.
-- A feature deleted on the phone but changed on the computer is kept, and named.
+- A feature deleted on the phone but changed on the computer is kept, and named. So is one given a
+  value on the computer in a field added there since the package was made.
 - A feature changed on the phone but deleted on the computer stays deleted, and is named.
 - A change to an attribute the computer's layer no longer has, or has with another type, refuses
   the whole return and changes nothing: add the field back, then Bring Back again. So does a field
   removed on the phone that the computer's layer still has, as its values in the field aren't
   known.
+
+Only the photos of features the phone added, or whose photos it changed, come back: a photo of a
+feature whose photos it left alone is left out, and the summary says how many.
 
 Give each phone a package of its own: several packages of one area can be out at once, and each
 comes back with only its own changes. Make one from the area's offline map with **Package for the

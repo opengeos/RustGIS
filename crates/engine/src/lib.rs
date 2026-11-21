@@ -1357,6 +1357,12 @@ impl Session {
         self.statistics_window_thread = enabled.then(|| std::thread::current().id());
     }
 
+    /// Whether the open field package's rows are waiting to be kept on this device
+    /// (`offline.keepRows`), as opening a package from home asks.
+    pub fn field_rows_waiting(&self) -> bool {
+        self.project.given.is_some()
+    }
+
     /// Starts an independent session with fresh runtime selection intent and request order.
     /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {

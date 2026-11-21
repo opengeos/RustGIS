@@ -270,10 +270,20 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         entries.extend(photos.entries);
         // What the phone changed in the rows it was given, which Bring Back applies.
         let package = s.project.field_origin.as_ref().map(|o| o.package.clone()).unwrap_or_default();
+        if package.is_empty() && s.project.field_origin.is_some() {
+            losses.push(WHOLE_MAP.replace("{why}", "the package was made before packages had an identity of their own"));
+        }
         if !package.is_empty() {
             match super::field_changes::list(s.map(), &package) {
                 Ok(Some(changes)) => {
-                    entries.push((super::field_changes::ENTRY.into(), serde_json::to_vec(&changes).map_err(|e| e.to_string())?))
+                    if !changes.gone.is_empty() {
+                        losses.push(format!(
+                            "{} layer(s) the field package gave were removed from its map, so none of their features change at home: {}",
+                            changes.gone.len(),
+                            changes.gone.join(", ")
+                        ));
+                    }
+                    entries.push((super::field_changes::ENTRY.into(), serde_json::to_vec(&changes).map_err(|e| e.to_string())?));
                 }
                 Ok(None) => losses.push(WHOLE_MAP.replace("{why}", "this device doesn't keep the rows the package was given")),
                 Err(e) if e == rustgis_data::DataError::Cancelled.to_string() => return Err(e),
@@ -436,6 +446,10 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     entries.insert(0, (format!("{}.{}", super::items::safe(&area), crate::project::EXTENSION), text.into_bytes()));
     if !manifest.is_empty() {
         entries.push((LEFT_BEHIND.into(), manifest));
+    }
+    // Going out, the package says so, with its identity: only its rows are kept as given.
+    if let Some(package) = project.field_origin.as_ref().map(|o| o.package.as_str()).filter(|p| !coming_back && !p.is_empty()) {
+        entries.push((super::field_changes::GIVEN.into(), super::field_changes::given_entry(package)?));
     }
     let bytes = rustgis_data::zip::write(&entries)?;
     progress::check().map_err(|e| e.to_string())?;
@@ -1084,6 +1098,23 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     } else {
         0
     };
+    // With a list of changes, only the photos of the cells it changes and the features it adds
+    // come home: a cell the field didn't change stays as home has it, so its photo would be kept
+    // with nothing naming it.
+    let unchanged_photos = match &changes {
+        Some(changes) if !photos.is_empty() => {
+            let named = super::field_changes::photos_named(&edited, changes, photos_field, |text| {
+                photo_paths(text)
+                    .into_iter()
+                    .filter_map(|r| text.get(r).and_then(|p| p.strip_prefix(&format!("{PHOTOS}/"))).map(str::to_string))
+                    .collect()
+            });
+            let before = photos.len();
+            photos.retain(|(name, _)| named.contains(name));
+            before - photos.len()
+        }
+        _ => 0,
+    };
     // The photos, beside the project, and the features naming them there.
     let mut put = 0usize;
     let mut renamed = 0usize;
@@ -1141,7 +1172,11 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         folder = Some((dir, photos, placed));
     }
     // Fields the field added (a layer's photos field, made with its first photo) come too.
-    let added = take_new_fields(s, ai, &edited);
+    // A list of changes names the fields the field added; a whole map is compared with the area.
+    let added = match &changes {
+        Some(changes) => super::field_changes::add_fields(s, ai, changes),
+        None => take_new_fields(s, ai, &edited),
+    };
     if !added.is_empty() {
         s.notify(format!("Added the field(s) the field package's layers added: {}", added.join(", ")), false);
     }
@@ -1206,6 +1241,14 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
                 "Bring Back skipped {} layer(s) that aren't in offline area '{area}' (added in the field). Their features stay in the field project: {}",
                 unowned.len(),
                 unowned.join(", ")
+            ),
+            false,
+        );
+    }
+    if unchanged_photos > 0 {
+        s.notify(
+            format!(
+                "Bring Back left out {unchanged_photos} photo(s) of features whose photos weren't changed in the field: home's are kept"
             ),
             false,
         );
@@ -1301,7 +1344,7 @@ pub(crate) fn unpack(bytes: &[u8], stem: &str) -> Result<(PathBuf, String, Vec<S
 
 /// Unpacks a field package's `bytes` into `dir`, a folder not there yet (see [`unpack`]), and
 /// returns the project text and its optional notices. A write that fails removes what was written.
-fn unpack_into(bytes: &[u8], dir: &Path) -> Result<(String, Vec<String>), String> {
+pub(crate) fn unpack_into(bytes: &[u8], dir: &Path) -> Result<(String, Vec<String>), String> {
     let entries = rustgis_data::zip::read(bytes)?;
     let mut project = None;
     let mut manifest = None;
@@ -1364,9 +1407,9 @@ fn read_manifest(bytes: &[u8]) -> Vec<String> {
 
 /// Reads a field package with paths to its unpacked basemaps and photos. Absolute paths to
 /// photos stay usable after opening a recovery copy, which has no unpack directory of its own.
-/// References that cannot store an absolute path are left relative and reported on open. The rows
-/// it gives are kept on this device under the package's identity
-/// ([`super::field_changes::keep_base`]), once: said when they can't be.
+/// References that cannot store an absolute path are left relative and reported on open. A package
+/// that went out from home has the rows it gives taken (`Project::given`), for
+/// `offline.keepRows` to keep on this device.
 pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     let mut project = Project::from_import_json(text, Some(dir))?;
     let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
@@ -1387,16 +1430,9 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
             });
         }
     }
-    // The rows as given, kept for Send Field Package to tell what changed.
-    if let Err(e) = super::field_changes::keep_base(&project) {
-        project.read_notices.push((
-            crate::project::ReadPart::Maps,
-            crate::notice_text::NoticeText::format(
-                "The rows this field package gave couldn't be kept on this device ({error}): Send Field Package sends the whole map, which Bring Back refuses if its offline area has been brought back or synced since the package was made.",
-                [("error", e.into())],
-            ),
-        ));
-    }
+    // The rows as given, taken (sharing them) for `offline.keepRows` to keep, when this package
+    // went out from home: a return opened here keeps none.
+    project.given = super::field_changes::GivenRows::in_package(dir, &project).map(std::sync::Arc::new);
     if relative > 0 {
         project.read_notices.push((
             crate::project::ReadPart::Maps,
@@ -1618,7 +1654,7 @@ mod tests {
         // The package: the project, the archive under basemaps/, a README.
         let entries = rustgis_data::zip::read(&bytes).unwrap();
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["Survey.rgis", "basemaps/site.mbtiles", "README.txt", LEFT_BEHIND]);
+        assert_eq!(names, ["Survey.rgis", "basemaps/site.mbtiles", "README.txt", LEFT_BEHIND, crate::cmd::field_changes::GIVEN]);
         assert_eq!(entries[1].1, b"stand-in archive bytes");
         // Unpacked and read: one map, the area's, its features in it, its basemap read from beside it.
         let into = temp.path().join("unpacked");
@@ -1931,6 +1967,14 @@ mod tests {
         origin.package = crate::project::field_id().unwrap();
     }
 
+    /// A session of a field project just read from its package, its given rows kept as the app
+    /// keeps them once it opens.
+    fn opened(project: Project) -> Session {
+        let mut s = Session::new(project);
+        s.run("offline.keepRows", &Value::Null).unwrap();
+        s
+    }
+
     /// Layer `name`'s id in the active map.
     fn layer(s: &Session, name: &str) -> u32 {
         s.map().layers.iter().find(|l| l.name == name).map(|l| l.id).unwrap()
@@ -2004,7 +2048,7 @@ mod tests {
         // In the field: the package opened, a city renamed, one added, one deleted, a photo taken.
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         // As `project.open` marks a project opened from a field package.
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         assert_eq!(field.map().name, "Trip (offline)");
@@ -2082,9 +2126,12 @@ mod tests {
         // Coming back: the picture only, under a plain name; the text file stays named as it was.
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         // As `project.open` marks a project opened from a field package.
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        // The field names the photos again, in another order: a change it brings back.
+        let reordered = format!("{};{}", picture.display(), secret.display());
+        field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": reordered})).unwrap();
         let back = |field: &mut Session| package(field, &Value::Null).unwrap().1;
         let entries = rustgis_data::zip::read(&back(&mut field)).unwrap();
         let photos: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).filter(|n| n.starts_with("photos/") && *n != INDEX).collect();
@@ -2125,7 +2172,7 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Here", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         // Sent back with no edit: the picture goes in, listed with its path; the gif is said.
         let mark = field.notice_mark();
@@ -2153,7 +2200,7 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Semi", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let cities = layer(&field, "Cities");
         // A picture in a folder with a `;` in its name, and a gif named by two features.
@@ -2201,7 +2248,7 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Odd", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let (_, back) = package(&mut field, &Value::Null).unwrap();
         let path = temp.path().join("back.rgisfield");
@@ -2235,8 +2282,12 @@ mod tests {
         let (_, bytes) = package(&mut home, &json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&bytes, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        // A feature naming the photo the package carries.
+        let cities = layer(&field, "Cities");
+        field.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": "photos/new.jpg"})).unwrap();
         let (_, back) = package(&mut field, &Value::Null).unwrap();
         let mut entries = rustgis_data::zip::read(&back).unwrap();
         entries.push(("photos/new.jpg".into(), b"photo".to_vec()));
@@ -2266,7 +2317,7 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let cities = layer(&field, "Cities");
         field.run("edit.addFeature", &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10.0, 5.0]}})).unwrap();
@@ -2413,7 +2464,7 @@ mod tests {
         let (_, out) = package(&mut other, &json!({"name": "Site", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let (_, back) = package(&mut field, &Value::Null).unwrap();
         // Here, an area of that name made from this project's map.
@@ -2435,7 +2486,7 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Back", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        let mut field = Session::new(project_in(&text, &unpacked).unwrap());
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
         field.opened_package = Some(temp.path().join("sent.rgisfield"));
         let cities = layer(&field, "Cities");
         let photo = temp.path().join("site.jpg");

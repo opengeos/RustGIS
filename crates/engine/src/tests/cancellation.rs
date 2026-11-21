@@ -169,6 +169,14 @@ pub(super) fn long_commands(boundaries: bool) {
         }
     }
 
+    // Opening a field package from home keeps the rows it gave on a read of its own
+    // (`offline.keepRows`), which has no registry. Once kept, a run looks at Cancel only once.
+    let seed = std::fs::read(out("seed.rgisfield")).unwrap();
+    let unpacked = dir.0.join("field package");
+    let (text, _) = crate::cmd::field::unpack_into(&seed, &unpacked).unwrap();
+    let phone = Session::new(crate::cmd::field::project_in(&text, &unpacked).unwrap());
+    exercise(&phone, "offline.keepRows", &json!({}), Kind::Read, &dir.0, boundaries);
+
     // The Add Service dialog replays supplied metadata off the desktop frame too.
     let params = json!({"url":"https://maps.example.org/dataset","type":"ogcapi","text":"{\"collections\":[]}"});
     for command in ["service.layers", "service.add"] {
@@ -535,6 +543,8 @@ fn comparable(
         let mut out = Vec::new();
         for (name, data) in entries {
             let data = match serde_json::from_slice::<Value>(&data) {
+                // The entry naming the identity of a package going out.
+                Ok(_) if name == crate::cmd::field_changes::GIVEN => Vec::new(),
                 Ok(mut project) if name.ends_with(".rgis") => {
                     if let Some(origin) = project.get_mut("field_origin").and_then(Value::as_object_mut) {
                         origin.remove("package");

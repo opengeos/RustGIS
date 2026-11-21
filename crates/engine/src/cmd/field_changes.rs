@@ -32,6 +32,10 @@ use crate::project::Project;
 
 /// The package entry holding the list of changes.
 pub(crate) const ENTRY: &str = "changes.v1.json";
+/// The entry of a package going out from home, naming its identity: only its rows are kept as
+/// given. A returned package keeps the identity but never has it, so a device opening a return
+/// never takes its edited rows for those home gave.
+pub(crate) const GIVEN: &str = "given.v1.json";
 /// The version of the list this RustGIS writes and reads.
 const VERSION: u32 = 1;
 /// The bytes of one index record: id, place in the rows file, length, fingerprint.
@@ -48,6 +52,10 @@ pub(crate) struct Changes {
     /// The package's identity ([`crate::project::FieldOrigin::package`]).
     pub package: String,
     pub layers: Vec<LayerChanges>,
+    /// The layers the package gave that the field removed, by name: said on sending, as their
+    /// features go back unchanged.
+    #[serde(skip)]
+    pub gone: Vec<String>,
 }
 
 /// The changes to one layer, named by its id.
@@ -68,6 +76,10 @@ pub(crate) struct LayerChanges {
     /// Bring Back refuses the list while the home layer still has them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<String>,
+    /// The fields the field added that the package didn't give: the only fields Bring Back adds
+    /// to the home layer, so a field removed at home meanwhile isn't added back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<rustgis_data::Field>,
 }
 
 /// A feature's values as the package gave them.
@@ -99,6 +111,12 @@ impl Changes {
         let header: Header = serde_json::from_slice(bytes).map_err(damaged)?;
         if header.version > VERSION {
             return Err("the field package's list of changes was made by a newer RustGIS: update RustGIS to bring it back".into());
+        }
+        if header.version != VERSION {
+            return Err(format!(
+                "the field package's list of changes is of version {}, which no RustGIS writes: it is damaged",
+                header.version
+            ));
         }
         let changes: Changes = serde_json::from_slice(bytes).map_err(damaged)?;
         if changes.package != package {
@@ -139,6 +157,9 @@ fn base_dir(package: &str) -> Option<PathBuf> {
 #[derive(Serialize, Deserialize)]
 struct BaseLayer {
     layer: u32,
+    /// Its name, to say so should the field remove it.
+    #[serde(default)]
+    name: String,
     /// Its fields' names, in the order the rows hold their values.
     fields: Vec<String>,
     rows: usize,
@@ -191,41 +212,134 @@ impl Write for Fnv {
     }
 }
 
-/// The fingerprint of a row as [`Print`] writes it. Rows are fingerprinted as they are held once
-/// read, given and sent alike, so a value that reads back as it was saved (as every one does)
-/// can't make an unedited row look edited.
-fn fingerprint(print: &Print<'_>) -> Result<u128, String> {
-    let mut hash = Fnv(0x6c62_272e_07bb_0142_62b8_2175_6295_c58d);
+/// FNV-1a's 128-bit offset basis.
+const FNV_BASIS: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+
+/// The fingerprint of a row as [`Print`] writes it, in longitude/latitude. Rows are fingerprinted
+/// as they are held once read, given and sent alike, so a value that reads back as it was saved
+/// (as every one does) can't make an unedited row look edited.
+fn fingerprint(print: &Print<'_>) -> Result<[u8; 16], String> {
+    let mut hash = Fnv(FNV_BASIS);
     serde_json::to_writer(&mut hash, print).map_err(|e| e.to_string())?;
-    Ok(hash.0)
+    Ok(hash.0.to_le_bytes())
 }
 
-/// One row of a layer's index: its id, where it is in the rows file, and its fingerprint.
+/// One row of a layer's index: its id, where it is in the rows file, and its fingerprint (40
+/// bytes held).
 #[derive(Clone, Copy)]
 struct Entry {
     id: u64,
     offset: u64,
     len: u32,
-    print: u128,
+    print: [u8; 16],
 }
 
-/// Keeps the rows of the feature layers of field project `project` as it was given, under its
-/// package's identity, unless this device keeps them already. Nothing is kept for a package without
-/// one. The files are written beside the folder and moved into place once complete, so a copy cut
-/// short is never read. Reads every row once and writes it once, as unpacking writes the package's
-/// files: no Cancel between them.
-pub(crate) fn keep_base(project: &Project) -> Result<(), String> {
-    let Some(package) = project.field_origin.as_ref().map(|o| o.package.as_str()).filter(|p| !p.is_empty()) else {
-        return Ok(());
+/// The rows a package from home gave, taken when it opens: its feature layers, sharing their rows
+/// with the open project, so taking them copies none.
+#[derive(Debug)]
+pub(crate) struct GivenRows {
+    package: String,
+    layers: Vec<(u32, String, rustgis_data::Dataset)>,
+}
+
+impl GivenRows {
+    /// The rows `project`'s map holds, to keep as package `package` gave them.
+    pub(crate) fn of(project: &Project, package: &str) -> GivenRows {
+        let layers = project
+            .maps
+            .first()
+            .into_iter()
+            .flat_map(|m| &m.layers)
+            .filter(|l| !l.is_raster() && !l.is_streamed())
+            .map(|l| (l.id, l.name.clone(), l.dataset.clone()))
+            .collect();
+        GivenRows { package: package.to_string(), layers }
+    }
+
+    /// The rows `project`, just read from a package unpacked into `dir`, was given by home: when the
+    /// package says it went out from home ([`GIVEN`]) under the identity `project` carries, and this
+    /// device doesn't keep them already.
+    pub(crate) fn in_package(dir: &Path, project: &Project) -> Option<GivenRows> {
+        #[derive(Deserialize)]
+        struct Marker {
+            package: String,
+        }
+        let package = project.field_origin.as_ref().map(|o| o.package.as_str()).filter(|p| !p.is_empty())?;
+        let marker = std::fs::read(dir.join(GIVEN)).ok().filter(|b| b.len() <= 4096)?;
+        let marker: Marker = serde_json::from_slice(&marker).ok()?;
+        let given = (marker.package == package).then(|| GivenRows::of(project, package))?;
+        (!given.kept()).then_some(given)
+    }
+
+    /// Whether this device keeps them already.
+    pub(crate) fn kept(&self) -> bool {
+        base_dir(&self.package).is_some_and(|d| d.join(LAYERS).is_file())
+    }
+}
+
+/// What a package going out from home holds under [`GIVEN`].
+pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&json!({"package": package})).map_err(|e| e.to_string())
+}
+
+/// What [`keep_ahead`] made, for `offline.keepRows` to take.
+type Kept = Result<(), String>;
+
+/// The key `offline.keepRows`'s read is taken under.
+const KEEP_KEY: &str = "offline.keepRows";
+
+/// Keeping the rows the open field package gave, on a thread of its own: see [`keep_base`].
+pub(crate) fn keep_ahead(s: &Session) -> Option<super::reads::ReadWork> {
+    let given = s.project.given.clone()?;
+    Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> Kept { keep_base(&given) }))
+}
+
+/// `offline.keepRows`: keeps on this device the rows the open field package gave
+/// ([`keep_base`]), so Send Field Package can tell what changed. Opening the package asks for it;
+/// in the app it runs on a thread of its own, with progress and Cancel. Cancelled or failed, the
+/// rows aren't kept, the next opening of the package keeps them, and meanwhile Send Field Package
+/// sends the whole map and says so. `kept` says whether there were rows to keep.
+pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdResult {
+    let ahead = super::reads::take::<Kept>(s, KEEP_KEY);
+    #[cfg(not(target_arch = "wasm32"))]
+    if ahead.is_none() && s.project.given.is_some() && s.statistics_window_thread == Some(std::thread::current().id()) {
+        return Err("keeping a field package's rows needs the background read queue".into());
+    }
+    let done = match ahead {
+        Some(done) => done,
+        None => match s.project.given.clone() {
+            Some(given) => keep_base(&given),
+            None => return Ok(json!({"kept": false})),
+        },
     };
-    let dir = base_dir(package).ok_or("this device gives RustGIS no folder of its own to keep the field package's rows in")?;
+    s.project.given = None;
+    done.map_err(|e| {
+        if e == rustgis_data::DataError::Cancelled.to_string() {
+            e
+        } else {
+            format!(
+                "The rows this field package gave couldn't be kept on this device ({e}): Send Field Package sends the whole map, which Bring Back refuses if its offline area has been brought back or synced since the package was made"
+            )
+        }
+    })?;
+    Ok(json!({"kept": true}))
+}
+
+/// Keeps the rows `given` holds on this device under its package's identity, unless it keeps them
+/// already. The files are written beside the folder and moved into place once complete, so a copy
+/// cut short (cancelled, or failed) is never read and the next open of the package writes it anew.
+/// Reads each row once and writes it once, in longitude/latitude as a returning map is compared;
+/// Cancel is looked at between rows, and progress counts them.
+pub(crate) fn keep_base(given: &GivenRows) -> Result<(), String> {
+    rustgis_data::progress::check().map_err(|e| e.to_string())?;
+    let dir = base_dir(&given.package).ok_or("this device gives RustGIS no folder of its own to keep the field package's rows in")?;
     if dir.join(LAYERS).is_file() {
         return Ok(());
     }
     let parent = dir.parent().ok_or("no folder for the field package's rows")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    let part = parent.join(format!("{package}.{}.part", crate::project::field_id()?));
-    let written = write_base(project, &part).and_then(|()| {
+    let part = parent.join(format!("{}.{}.part", given.package, crate::project::field_id()?));
+    let written = write_base(given, &part).and_then(|()| {
         // A copy left by an earlier try, cut short before its list of layers.
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -238,44 +352,56 @@ pub(crate) fn keep_base(project: &Project) -> Result<(), String> {
     written
 }
 
-/// Writes the given copy of `project`'s map into `dir`: see [`keep_base`].
-fn write_base(project: &Project, dir: &Path) -> Result<(), String> {
+/// Writes the rows `given` holds into `dir`: see [`keep_base`].
+fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
+    use rustgis_data::progress;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    progress::begin(given.layers.iter().map(|(_, _, d)| d.features.len()).sum());
     let mut layers = Vec::new();
-    for l in project.maps.first().into_iter().flat_map(|m| &m.layers).filter(|l| !l.is_raster() && !l.is_streamed()) {
-        let fields: Vec<Option<usize>> = (0..l.dataset.fields.len()).map(Some).collect();
-        let rows_path = dir.join(format!("{}.rows", l.id));
+    for (id, name, dataset) in &given.layers {
+        let ds = dataset.in_lonlat().map_err(|e| format!("{name}: {e}"))?;
+        let fields: Vec<Option<usize>> = (0..ds.fields.len()).map(Some).collect();
+        let rows_path = dir.join(format!("{id}.rows"));
         let mut rows = std::io::BufWriter::new(std::fs::File::create(&rows_path).map_err(io(&rows_path))?);
-        let mut index = Vec::with_capacity(l.dataset.features.len());
+        let mut index = Vec::with_capacity(ds.features.len());
         let (mut offset, mut line) = (0u64, Vec::new());
-        for row in l.dataset.features.rows() {
-            let print = Print { row, fields: &fields };
+        for row in ds.features.rows() {
+            progress::step(1).map_err(|e| e.to_string())?;
             line.clear();
-            serde_json::to_writer(&mut line, &print).map_err(|e| e.to_string())?;
+            serde_json::to_writer(&mut line, &Print { row, fields: &fields }).map_err(|e| e.to_string())?;
             let len = u32::try_from(line.len())
                 .ok()
                 .filter(|n| *n <= MAX_ROW)
-                .ok_or_else(|| format!("{}: feature {} is too large to keep a copy of", l.name, row.id()))?;
+                .ok_or_else(|| format!("{name}: feature {} is too large to keep a copy of", row.id()))?;
             rows.write_all(&line).map_err(io(&rows_path))?;
-            index.push(Entry { id: row.id(), offset, len, print: fingerprint(&print)? });
+            // The fingerprint of the bytes just written, as [`fingerprint`] makes it.
+            let mut hash = Fnv(FNV_BASIS);
+            hash.write_all(&line).map_err(|e| e.to_string())?;
+            index.push(Entry { id: row.id(), offset, len, print: hash.0.to_le_bytes() });
             offset += u64::from(len);
         }
         rows.flush().map_err(io(&rows_path))?;
         index.sort_unstable_by_key(|e| e.id);
         if index.windows(2).any(|w| w.first().map(|e| e.id) == w.get(1).map(|e| e.id)) {
-            return Err(format!("{}: two features have the same id", l.name));
+            return Err(format!("{name}: two features have the same id"));
         }
         let mut bytes = Vec::with_capacity(index.len() * RECORD);
         for e in &index {
             bytes.extend_from_slice(&e.id.to_le_bytes());
             bytes.extend_from_slice(&e.offset.to_le_bytes());
             bytes.extend_from_slice(&e.len.to_le_bytes());
-            bytes.extend_from_slice(&e.print.to_le_bytes());
+            bytes.extend_from_slice(&e.print);
         }
-        let index_path = dir.join(format!("{}.index", l.id));
+        let index_path = dir.join(format!("{id}.index"));
         std::fs::write(&index_path, bytes).map_err(io(&index_path))?;
-        layers.push(BaseLayer { layer: l.id, fields: l.dataset.fields.iter().map(|f| f.name.clone()).collect(), rows: index.len() });
+        layers.push(BaseLayer {
+            layer: *id,
+            name: name.clone(),
+            fields: ds.fields.iter().map(|f| f.name.clone()).collect(),
+            rows: index.len(),
+        });
     }
+    progress::check().map_err(|e| e.to_string())?;
     let list = dir.join(LAYERS);
     std::fs::write(&list, serde_json::to_vec(&layers).map_err(|e| e.to_string())?).map_err(io(&list))
 }
@@ -299,12 +425,7 @@ fn read_index(path: &Path, rows: usize) -> Result<Vec<Entry>, String> {
         let (Ok(id), Ok(offset), Ok(len), Ok(print)) = (id.try_into(), offset.try_into(), len.try_into(), print.try_into()) else {
             return Err(format!("{}: damaged", path.display()));
         };
-        let e = Entry {
-            id: u64::from_le_bytes(id),
-            offset: u64::from_le_bytes(offset),
-            len: u32::from_le_bytes(len),
-            print: u128::from_le_bytes(print),
-        };
+        let e = Entry { id: u64::from_le_bytes(id), offset: u64::from_le_bytes(offset), len: u32::from_le_bytes(len), print };
         if out.last().is_some_and(|last: &Entry| last.id >= e.id) || e.len > MAX_ROW {
             return Err(format!("{}: damaged", path.display()));
         }
@@ -325,17 +446,20 @@ fn read_row(file: &mut std::fs::File, e: &Entry) -> Result<BaseRow, String> {
 /// The changes `map` holds to the rows package `package` gave it, layer by layer; `None` when
 /// this device doesn't keep the package's rows (opened elsewhere, or before it kept them). Only
 /// rows whose fingerprint changed are read back and compared. A layer removed from the map is
-/// left out, as a sync leaves it. Cancel is looked at between rows.
+/// left out, as a sync leaves it, and named in [`Changes::gone`]. Cancel is looked at between rows.
 pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Changes>, String> {
     use rustgis_data::progress;
     let Some(dir) = base_dir(package).filter(|d| d.join(LAYERS).is_file()) else { return Ok(None) };
     let list_path = dir.join(LAYERS);
     let text = std::fs::read(&list_path).map_err(|e| format!("{}: {e}", list_path.display()))?;
     let given: Vec<BaseLayer> = serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", list_path.display()))?;
-    let mut changes = Changes { version: VERSION, package: package.to_string(), layers: Vec::new() };
+    let mut changes = Changes { version: VERSION, package: package.to_string(), layers: Vec::new(), gone: Vec::new() };
     progress::begin(given.iter().map(|g| g.rows).sum());
     for g in given {
-        let Some(layer) = map.layers.iter().find(|l| l.id == g.layer && !l.is_raster()) else { continue };
+        let Some(layer) = map.layers.iter().find(|l| l.id == g.layer && !l.is_raster()) else {
+            changes.gone.push(if g.name.is_empty() { format!("#{}", g.layer) } else { g.name.clone() });
+            continue;
+        };
         let ds = layer.dataset.in_lonlat()?;
         // Where the map holds each of the copy's fields, by name, and the fields added since.
         let fields: Vec<Option<usize>> = g.fields.iter().map(|n| ds.field_index(n)).collect();
@@ -391,7 +515,8 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
         }
         let removed: Vec<String> = g.fields.iter().zip(&fields).filter(|(_, j)| j.is_none()).map(|(n, _)| n.clone()).collect();
         if !(added.is_empty() && deleted.is_empty() && edited.is_empty() && removed.is_empty()) {
-            changes.layers.push(LayerChanges { layer: g.layer, added, deleted, edited, removed });
+            let fields = added_fields.iter().filter_map(|j| ds.fields.get(*j)).cloned().collect();
+            changes.layers.push(LayerChanges { layer: g.layer, added, deleted, edited, removed, fields });
         }
     }
     Ok(Some(changes))
@@ -499,7 +624,9 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         let at_field: HashMap<u64, usize> =
             theirs.features.rows().enumerate().filter(|(_, r)| wanted.contains(&r.id())).map(|(i, r)| (r.id(), i)).collect();
         let mut at: HashMap<u64, usize> = HashMap::new();
-        let mut top = 0;
+        // A feature added in the field keeps its id while home doesn't use it: a replacement for one
+        // that home uses is taken above every id the field added, so it never takes a free one.
+        let mut top = lc.added.iter().copied().max().unwrap_or(0);
         for (i, r) in sl.dataset.features.rows().enumerate() {
             top = top.max(r.id());
             if wanted.contains(&r.id()) {
@@ -553,6 +680,10 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             let Some(row) = at.get(&g.id).and_then(|r| sl.dataset.features.row(*r)) else { continue };
             let same_place = g.geometry.as_ref().is_none_or(|was| row.geometry() == was.as_ref());
             let same_values = g.values.iter().all(|(field, was)| sl.dataset.field_index(field).is_none_or(|j| row.value(j) == was));
+            // A field the package didn't give (added at home since, or by another phone's return)
+            // holding a value is a change made at home too.
+            let given = |f: &rustgis_data::Field| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(&f.name));
+            let same_values = same_values && sl.dataset.fields.iter().enumerate().all(|(j, f)| given(f) || row.value(j).is_null());
             if same_place && same_values {
                 gone.insert(g.id);
             } else {
@@ -605,6 +736,60 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         "conflicts": done.conflicts.len() + done.kept.len(),
         "renumbered": done.renumbered,
     }))
+}
+
+/// Adds to offline area `ai`'s source layers, and to the area's own copy of them, the fields
+/// `changes` says the field added that they haven't. Returns them as `layer: field`.
+pub(crate) fn add_fields(s: &mut Session, ai: usize, changes: &Changes) -> Vec<String> {
+    let Some(source) = s.project.offline_areas.get(ai).map(|a| a.map.clone()) else { return Vec::new() };
+    let Some(si) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&source)) else { return Vec::new() };
+    let mut added = Vec::new();
+    for lc in changes.layers.iter().filter(|lc| !lc.fields.is_empty()) {
+        let Some(sl) = s.project.maps.get_mut(si).and_then(|m| m.layers.iter_mut().find(|l| l.id == lc.layer && !l.is_raster())) else {
+            continue;
+        };
+        let new: Vec<&rustgis_data::Field> = lc.fields.iter().filter(|f| sl.dataset.field_index(&f.name).is_none()).collect();
+        for f in &new {
+            sl.dataset.ensure_field(&f.name, f.ty);
+        }
+        let name = sl.name.clone();
+        if let Some(b) = s.project.offline_areas.get_mut(ai).and_then(|a| a.data.layers.iter_mut().find(|l| l.id == lc.layer)) {
+            for f in &new {
+                b.dataset.ensure_field(&f.name, f.ty);
+            }
+        }
+        added.extend(new.iter().map(|f| format!("{name}: {}", f.name)));
+    }
+    added
+}
+
+/// The photo entries (names under `photos/`) that the cells `changes` applies name in `edited`,
+/// the package's map: the photos field (`field`) of the features it adds, and of those whose
+/// photos it changes. `entries` gives the entries a cell's text names.
+pub(crate) fn photos_named(
+    edited: &rustgis_map::Map,
+    changes: &Changes,
+    field: impl Fn(&rustgis_map::Layer) -> Option<usize>,
+    entries: impl Fn(&str) -> Vec<String>,
+) -> HashSet<String> {
+    let mut named = HashSet::new();
+    for lc in &changes.layers {
+        let Some(l) = edited.layers.iter().find(|l| l.id == lc.layer && !l.is_raster()) else { continue };
+        let Some(fi) = field(l) else { continue };
+        let Some(name) = l.dataset.fields.get(fi).map(|f| f.name.as_str()) else { continue };
+        let ids: HashSet<u64> = lc
+            .added
+            .iter()
+            .copied()
+            .chain(lc.edited.iter().filter(|g| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))).map(|g| g.id))
+            .collect();
+        for row in l.dataset.features.rows().filter(|r| ids.contains(&r.id())) {
+            if let Value::Text(text) = row.value(fi) {
+                named.extend(entries(text));
+            }
+        }
+    }
+    named
 }
 
 /// What [`apply`] did, and what it says.
