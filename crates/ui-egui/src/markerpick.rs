@@ -22,12 +22,33 @@ pub struct MarkerImage {
     at: String,
     /// Images that can't be drawn the other marks of the call send back as circles.
     replaced: usize,
+    /// The browser's or phone's picker request this marker waits on (`marker:<id>`): only its
+    /// answer is the marker's.
+    pub(crate) request: u64,
+    /// The live layer it was asked on ([`rustgis_engine::map::Layer::instance_id`]): a file
+    /// arriving after its layer left the map (another map, a removed layer) changes nothing.
+    layer: Option<u64>,
+}
+
+/// The next picker request's number.
+static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The notice for an image file over [`crate::MARKER_FILE_MAX_BYTES`], as every shell says it.
+pub fn marker_file_too_large() -> &'static str {
+    tl!("This image is too large for a marker: at most about 1.5 MiB")
 }
 
 impl MarkerImage {
     /// A point symbol's marker on layer `layer`, through `layer.marker`.
     pub(crate) fn symbol(layer: u32) -> Self {
-        Self { cmd: "layer.marker", params: json!({"layer": layer, "image": ""}), at: "/image".into(), replaced: 0 }
+        Self {
+            cmd: "layer.marker",
+            params: json!({"layer": layer, "image": ""}),
+            at: "/image".into(),
+            replaced: 0,
+            request: 0,
+            layer: None,
+        }
     }
 
     /// Mark `i` of `params`' `list` (`"strokes"` with `"markers"`, or `"fills"`), as the editor
@@ -43,7 +64,7 @@ impl MarkerImage {
             m["font"] = Value::Null;
             m["image"] = json!("");
         }
-        Self { cmd, params, at: format!("{place}/image"), replaced }
+        Self { cmd, params, at: format!("{place}/image"), replaced, request: 0, layer: None }
     }
 
     /// Runs the command with `bytes` as the image, as base64. A file that is too large, or that
@@ -54,7 +75,7 @@ impl MarkerImage {
         // The size first, so a file too large isn't decoded.
         let b64 = (bytes.len() <= crate::MARKER_FILE_MAX_BYTES).then(|| base64::engine::general_purpose::STANDARD.encode(bytes));
         let refused = match &b64 {
-            None => Some(tl!("This image is too large for a marker: at most about 1.5 MiB")),
+            None => Some(marker_file_too_large()),
             Some(b64) if !rustgis_engine::render::picture_marker_readable(b64) => Some(tl!("A marker's image is a PNG or JPEG file")),
             Some(_) => None,
         };
@@ -62,8 +83,10 @@ impl MarkerImage {
             app.session.notify(e, true);
             return Err(e.to_string());
         }
-        // A mark no longer in the list (it can't be, from the editor) runs nothing.
-        let (Some(slot), Some(b64)) = (self.params.pointer_mut(&self.at), b64) else {
+        // A layer that left the map while the file came, or a mark no longer in the list (it
+        // can't be, from the editor), runs nothing.
+        let gone = self.layer.is_some_and(|i| self.live_layer(app) != Some(i));
+        let (false, Some(slot), Some(b64)) = (gone, self.params.pointer_mut(&self.at), b64) else {
             let e = tl!("The marker to change is no longer there");
             app.session.notify(e, true);
             return Err(e.to_string());
@@ -77,6 +100,14 @@ impl MarkerImage {
     }
 }
 
+impl MarkerImage {
+    /// The live layer now on the map with the marker's layer id, if any.
+    fn live_layer(&self, app: &RustGisApp) -> Option<u64> {
+        let id = self.params["layer"].as_u64().and_then(|id| u32::try_from(id).ok())?;
+        app.session.map().layer(id).map(|l| l.instance_id())
+    }
+}
+
 /// The marker menus' last entry, after the shapes (and Character): picks an image file as the
 /// marker, or another for the one it has (`on`).
 pub(crate) fn entry(ui: &mut Ui, on: bool) -> bool {
@@ -84,13 +115,16 @@ pub(crate) fn entry(ui: &mut Ui, on: bool) -> bool {
 }
 
 /// Asks for the image of `marker`: the system's dialog on a computer, read at once; the browser's
-/// or the phone's `"marker"` picker elsewhere, whose file comes back marked
-/// ([`crate::MARKER_PICK`]) for [`RustGisApp::open_picked`] to give to the marker. A drop or
-/// another picker's file never reaches it.
-pub(crate) fn pick(app: &mut RustGisApp, marker: MarkerImage) {
+/// or the phone's `"marker:<id>"` picker elsewhere, whose file comes back marked with its request
+/// ([`crate::MARKER_PICK`]) for [`RustGisApp::open_picked`] to give to the marker. A drop, another
+/// picker's file or an earlier request's never reaches it.
+pub(crate) fn pick(app: &mut RustGisApp, mut marker: MarkerImage) {
     if let Some(open) = &app.services.open_async {
+        marker.request = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        marker.layer = marker.live_layer(app);
+        let purpose = format!("marker:{}", marker.request);
         app.ui.pending_marker_image = Some(marker);
-        open("marker");
+        open(&purpose);
     } else if let Some(path) = crate::dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
         match read_capped(&path) {
             Ok(bytes) => {
@@ -213,10 +247,12 @@ mod tests {
         assert_eq!(app.session.undo_depth(), steps);
     }
 
-    /// In the browser «Image…» asks the `"marker"` picker for a file and the file it gives back,
-    /// marked, becomes the marker. A dropped PNG, or another picker's, leaves the marker waiting;
-    /// a marked file that isn't a PNG or JPEG is said and changes nothing; a cancelled picker ends
-    /// the wait.
+    /// In the browser «Image…» asks the `"marker:<id>"` picker for a file and the file it gives
+    /// back, marked with its request, becomes the marker. A dropped PNG, or another picker's,
+    /// leaves the marker waiting; a marked file that isn't a PNG or JPEG is said and changes
+    /// nothing; an earlier request's file, arriving after another «Image…», is dropped; a file
+    /// arriving after the map changed is said and changes nothing; a cancelled picker ends the
+    /// wait.
     #[test]
     fn the_browsers_picture_goes_to_the_marker_that_asked() {
         let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -224,27 +260,48 @@ mod tests {
         let ask = asked.clone();
         app.services.open_async = Some(Box::new(move |purpose| ask.lock().unwrap().push(purpose.to_string())));
         let cities = id(&app, "Cities");
-        let marked = |name: &str| format!("{}{name}", crate::MARKER_PICK);
+        let request = |app: &RustGisApp| app.ui.pending_marker_image.as_ref().map(|m| m.request);
+        let marked = |request: Option<u64>, name: &str| format!("{}{}:{name}", crate::MARKER_PICK, request.unwrap_or(0));
         app.run("layer.marker", json!({"layer": "Cities", "shape": "square"})).unwrap();
 
         pick(&mut app, MarkerImage::symbol(cities));
-        assert_eq!(*asked.lock().unwrap(), ["marker"]);
+        let first = request(&app);
+        assert_eq!(*asked.lock().unwrap(), [format!("marker:{}", first.unwrap())]);
         let _ = app.open_picked("dropped.png", &png());
         assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square, "a drop isn't the marker's");
         assert!(app.ui.pending_marker_image.is_some());
 
-        assert!(app.open_picked(&marked("icon.gif"), b"GIF89a\x01\x00\x01\x00").is_err());
+        assert!(app.open_picked(&marked(first, "icon.gif"), b"GIF89a\x01\x00\x01\x00").is_err());
         assert!(app.session.notices.iter().any(|n| n.error && n.text == "A marker's image is a PNG or JPEG file"));
         assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square);
 
+        // Two requests overlapping: the first one's file, arriving late, isn't the second's.
         pick(&mut app, MarkerImage::symbol(cities));
-        app.open_picked(&marked("icon.png"), &png()).unwrap();
+        let a = request(&app);
+        pick(&mut app, MarkerImage::symbol(cities));
+        let b = request(&app);
+        assert_ne!(a, b);
+        app.open_picked(&marked(a, "late.png"), &png()).unwrap();
+        assert_eq!(layer(&app, "Cities").renderer.base_symbol().marker, Marker::Square, "an earlier request's file");
+        assert_eq!(request(&app), b);
+        app.open_picked(&marked(b, "icon.png"), &png()).unwrap();
         assert!(drawn(layer(&app, "Cities").renderer.base_symbol().marker));
         assert!(app.ui.pending_marker_image.is_none());
 
         pick(&mut app, MarkerImage::symbol(cities));
-        app.open_picked(&marked(""), &[]).unwrap();
+        let cancelled = request(&app);
+        app.open_picked(&marked(cancelled, ""), &[]).unwrap();
         assert!(app.ui.pending_marker_image.is_none(), "a cancelled picker ends the wait");
+
+        // The map changed while the file came: the other map's layer of that id isn't touched.
+        app.run("layer.marker", json!({"layer": "Cities", "shape": "square"})).unwrap();
+        pick(&mut app, MarkerImage::symbol(cities));
+        let waiting = request(&app);
+        app.run("map.new", Value::Null).unwrap();
+        let steps = app.session.undo_depth();
+        assert!(app.open_picked(&marked(waiting, "icon.png"), &png()).is_err());
+        assert!(app.session.notices.iter().any(|n| n.error && n.text == "The marker to change is no longer there"));
+        assert_eq!(app.session.undo_depth(), steps);
     }
 
     /// A mark the list no longer has runs nothing and says so.

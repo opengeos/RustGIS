@@ -69,7 +69,7 @@ mod mapmenu;
 mod mapview;
 mod markerimages;
 mod markerpick;
-pub use markerpick::MarkerImage;
+pub use markerpick::{MarkerImage, marker_file_too_large};
 mod measure_units;
 mod modelbuilder;
 mod navui;
@@ -203,8 +203,9 @@ pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
 /// Script pane's Load….
 pub const SCRIPT_PICK: &str = "\u{1}script:";
 
-/// Starts the name of an image the shell's `"marker"` picker put in the inbox: it goes to the
-/// marker whose «Image…» asked for it, and only a file so marked does.
+/// Starts the name of an image the shell's `"marker:<id>"` picker put in the inbox, followed by
+/// `<id>:`: it goes to the marker whose «Image…» asked for it, and only a file so marked, for the
+/// request still waiting, does.
 pub const MARKER_PICK: &str = "\u{1}marker:";
 
 /// The largest image file a marker takes: one whose base64 fits the engine's limit
@@ -2119,8 +2120,14 @@ impl RustGisApp {
             // An answer with no name is a cancelled picker.
             return if name.is_empty() { Ok(Value::Null) } else { analysispane::script_picked(self, name, bytes) };
         }
-        if let Some(name) = name.strip_prefix(MARKER_PICK) {
-            // An answer with no name is a cancelled picker, which ends the wait too.
+        if let Some(picked) = name.strip_prefix(MARKER_PICK) {
+            // Only the request still waiting takes its answer: an earlier one's file, still on its
+            // way when another «Image…» was clicked, is dropped. An answer with no name is a
+            // cancelled picker, which ends the wait.
+            let (id, name) = picked.split_once(':').unwrap_or_default();
+            if self.ui.pending_marker_image.as_ref().is_none_or(|m| m.request.to_string() != id) {
+                return Ok(Value::Null);
+            }
             return match self.ui.pending_marker_image.take() {
                 Some(marker) if !name.is_empty() => marker.apply(self, bytes),
                 _ => Ok(Value::Null),

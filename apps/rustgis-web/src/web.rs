@@ -510,9 +510,8 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
             notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, true));
             continue;
         }
-        if mark == rustgis_ui_egui::MARKER_PICK && file.size() > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as f64 {
-            let text = rustgis_ui_egui::tl!("This image is too large for a marker: at most about 1.5 MiB");
-            notes.lock().unwrap_or_else(|e| e.into_inner()).push((text.into(), true));
+        if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && file.size() > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as f64 {
+            notes.lock().unwrap_or_else(|e| e.into_inner()).push((rustgis_ui_egui::marker_file_too_large().into(), true));
             continue;
         }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
@@ -1303,13 +1302,15 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             // So does a file picked for a tool's file parameter, which goes to the Tools pane.
             let tool_exts = purpose.strip_prefix(rustgis_ui_egui::TOOL_FILE_PURPOSE);
             let dxf = purpose.strip_prefix("dxf:");
+            let marker = purpose.strip_prefix("marker:");
             let mark = if let Some(id) = dxf {
                 format!("{}{id}:", rustgis_ui_egui::DXF_PICK)
+            } else if let Some(id) = marker {
+                format!("{}{id}:", rustgis_ui_egui::MARKER_PICK)
             } else {
                 match (purpose, tool_exts) {
                     ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
                     ("script", _) => rustgis_ui_egui::SCRIPT_PICK,
-                    ("marker", _) => rustgis_ui_egui::MARKER_PICK,
                     ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
                     ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
                     (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
@@ -1363,7 +1364,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 )
             } else if dxf.is_some() {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
-            } else if purpose == "picture" || purpose == "marker" {
+            } else if purpose == "picture" || marker.is_some() {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)

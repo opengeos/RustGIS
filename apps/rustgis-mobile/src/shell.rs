@@ -219,7 +219,7 @@ impl<P: Phone> App<P> {
                     i18n::fmt("{name} wasn't opened: a shortcut file is at most {limit} bytes.", &[("name", &name), ("limit", &limit)])
                 }
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
-                Problem::MarkerTooLarge => tl!("This image is too large for a marker: at most about 1.5 MiB").to_string(),
+                Problem::MarkerTooLarge => rustgis_ui_egui::marker_file_too_large().to_string(),
                 Problem::TooLarge { name, together } => {
                     let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {
@@ -257,12 +257,9 @@ impl<P: Phone> App<P> {
         };
     }
 
-    /// Ends a request for files that got none (`purpose`): a dialog waiting for its answer
-    /// (Import DXF) is answered empty, and stops waiting.
+    /// Ends a request for files that got none (`purpose`), as [`answer_ended`] does.
     fn end(&self, purpose: Option<String>) {
-        if let Some(purpose) = purpose.filter(|p| p.starts_with("dxf:")) {
-            self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
-        }
+        answer_ended(&self.inbox, purpose);
     }
 
     /// Opens the picked files, now that every picker has answered in full, what was picked
@@ -369,7 +366,7 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
         } else if mark == rustgis_ui_egui::SCRIPT_PICK && size > rustgis_ui_egui::SCRIPT_FILE_MAX_BYTES as u64 {
             // Refused before it is read, as the pane would refuse it after.
             say(Problem::ScriptTooLarge { name });
-        } else if mark == rustgis_ui_egui::MARKER_PICK && size > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as u64 {
+        } else if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && size > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as u64 {
             say(Problem::MarkerTooLarge);
         } else if held.saturating_add(size) > max {
             // Refused before it is read: no more than the cap is held in memory at once, in
@@ -410,6 +407,14 @@ fn remove_copy(path: &Path) {
 /// Gives the front end the phone's file picker, the way the browser's shell gives its own:
 /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
 /// through `download`.
+/// Ends a request for files that got none (`purpose`): a dialog or marker waiting for its answer
+/// (Import DXF, a marker's «Image…») is answered empty in `inbox`, and stops waiting.
+fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
+    if let Some(purpose) = purpose.filter(|p| p.starts_with("dxf:") || p.starts_with("marker:")) {
+        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
+    }
+}
+
 fn use_picker<P: Phone + 'static>(
     app: &mut RustGisApp,
     phone: &Rc<P>,
@@ -805,6 +810,7 @@ mod tests {
         // The copies are gone, read or not, and their folder with them (`remove_copy`).
         assert!(!dir.exists());
     }
+
     /// An image picked for a marker over the marker's limit is refused before it is read; one
     /// within it reaches the inbox marked for the marker.
     #[test]
@@ -816,10 +822,20 @@ mod tests {
         std::fs::write(&small, b"png").unwrap();
         let (inbox, problems) = (Inbox::default(), Problems::default());
         let files = vec![("big.png".to_string(), big), ("small.png".to_string(), small)];
-        read_batch("marker", files, &inbox, &problems, &mut 0);
+        read_batch("marker:1", files, &inbox, &problems, &mut 0);
         assert!(matches!(problems.lock().unwrap().as_slice(), [Problem::MarkerTooLarge]));
         let names: Vec<String> = inbox.lock().unwrap().iter().map(|(n, _)| n.clone()).collect();
-        assert_eq!(names, [format!("{}small.png", rustgis_ui_egui::MARKER_PICK)]);
+        assert_eq!(names, [format!("{}1:small.png", rustgis_ui_egui::MARKER_PICK)]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A marker's request ended with no file (a cancelled picker) is answered empty with its
+    /// mark, so the marker stops waiting; a request nothing waits on gets no answer.
+    #[test]
+    fn an_ended_marker_request_is_answered_empty() {
+        let inbox = Inbox::default();
+        answer_ended(&inbox, Some("marker:3".into()));
+        answer_ended(&inbox, Some("data".into()));
+        assert_eq!(*inbox.lock().unwrap(), vec![(format!("{}3:", rustgis_ui_egui::MARKER_PICK), Vec::<u8>::new())]);
     }
 }
