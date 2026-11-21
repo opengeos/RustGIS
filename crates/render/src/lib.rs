@@ -4315,6 +4315,8 @@ fn render_frame(
     let mut captured_alone: Option<(usize, frame_cache::Alone)> = None;
     // The label candidates each layer drawn gives the frame, kept for the next (see `frame_cache`).
     let mut layer_labels: frame_cache::LayerLabels = Vec::new();
+    // What they take ([`Candidate::bytes`]).
+    let mut layer_label_bytes = 0;
     // Kept only as drawn in full so far: tiles still to come, to draw, or to ask for again after
     // a failure are drawn again rather than restored as they stood.
     let complete = |t: &tiles::TileOutput| {
@@ -4877,7 +4879,7 @@ fn render_frame(
         let (keeps_labels, lid) = (cached.as_ref().is_some_and(|p| p.same_view) && layer.source.is_none(), layer.id);
         let mut taken = cached.as_mut().filter(|_| keeps_labels).and_then(|p| p.take_labels(lid, li));
         // Copied only while the frame's copies stay within what a view keeps.
-        let room = frame_cache::MAX_LABEL_BYTES.saturating_sub(layer_labels.iter().map(|(_, c)| Candidate::bytes(c)).sum());
+        let room = frame_cache::MAX_LABEL_BYTES.saturating_sub(layer_label_bytes);
         let mut gave_labels: Option<Vec<Candidate>> = None;
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // A stopped frame draws no more of a layer or a streamed chunk (see `cancel`).
@@ -5939,6 +5941,7 @@ fn render_frame(
             return None;
         }
         if let Some(c) = gave_labels {
+            layer_label_bytes += Candidate::bytes(&c);
             layer_labels.push(((lid, li), c));
         }
         if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion)

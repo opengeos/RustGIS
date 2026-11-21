@@ -371,9 +371,9 @@ pub(crate) fn keep(plan: Plan, captured: Option<(usize, Checkpoint)>, alone: Opt
     let mut labels: LayerLabels = Vec::new();
     let mut bytes = 0;
     for (key, _) in &looks {
-        if let Some((i, b)) = given.iter().enumerate().find_map(|(i, (k, c))| {
-            let b = Candidate::bytes(c);
-            (k == key && bytes + b <= MAX_LABEL_BYTES).then_some((i, b))
+        if let Some((i, b)) = given.iter().position(|(k, _)| k == key).and_then(|i| {
+            let b = Candidate::bytes(&given.get(i)?.1);
+            (bytes + b <= MAX_LABEL_BYTES).then_some((i, b))
         }) {
             bytes += b;
             labels.push(given.swap_remove(i));
