@@ -2494,9 +2494,10 @@ fn streams_geojson(p: &Value, path: &str) -> bool {
 /// A large Shapefile or GeoJSON file, read in place, as Add Data opens it ahead (#2446).
 #[cfg(not(target_arch = "wasm32"))]
 struct Opened {
-    /// The file's size and modification time as it was opened: an opening of a file changed
-    /// since isn't taken, as its features' places and boxes are those of what it held then.
-    stamp: Option<(u64, std::time::SystemTime)>,
+    /// The size and modification time of the file and those beside it of its name (a
+    /// Shapefile's `.dbf`, `.prj` and `.cpg`) as it was opened: an opening of files changed since
+    /// isn't taken, as its features' places, boxes and fields are those of what they held then.
+    stamp: Option<Vec<(std::ffi::OsString, u64, std::time::SystemTime)>>,
     source: Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>,
     /// Its features read whole, when Add Data loads the file instead of keeping it in place (it
     /// holds few enough, and `"stream"` isn't given), so the window doesn't wait for that read.
@@ -2530,11 +2531,27 @@ impl Opened {
     }
 }
 
-/// A file's size and modification time, when both can be read.
+/// The size and modification time of `path` and of the files beside it with the same name before
+/// the extension, in any case (a Shapefile's parts), by name; `None` when any can't be read.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_stamp(path: &str) -> Option<(u64, std::time::SystemTime)> {
-    let m = std::fs::metadata(path).ok()?;
-    Some((m.len(), m.modified().ok()?))
+fn file_stamp(path: &str) -> Option<Vec<(std::ffi::OsString, u64, std::time::SystemTime)>> {
+    let path = Path::new(path);
+    let stem = path.file_stem()?.to_str()?;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let mut stamp = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        if !Path::new(&name).file_stem().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(stem)) {
+            continue;
+        }
+        let m = entry.metadata().ok()?;
+        if m.is_file() {
+            stamp.push((name, m.len(), m.modified().ok()?));
+        }
+    }
+    stamp.sort();
+    Some(stamp)
 }
 
 /// Add Data's opening of `path` in the system `crs` names, made ahead in the desktop app

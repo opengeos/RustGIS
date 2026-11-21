@@ -283,7 +283,8 @@ impl FeatureSource for GeoJsonSource {
     }
 
     /// Reads a bounded sample; when native bounds are refused, filters geometry before sampling,
-    /// counting records and checking Cancel between them.
+    /// counting records and checking Cancel between them. Otherwise Cancel is looked at every
+    /// [`PACE`] features read, so a whole read (Add Data loading the file) stops between them.
     fn read(&self, req: &Request) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
         // Counted first, then sampled, unless the native box is refused: no list of every match.
@@ -305,9 +306,11 @@ impl FeatureSource for GeoJsonSource {
         if late {
             crate::progress::begin(matched);
         }
-        for i in self.matches(extent).step_by(step).take(if late { usize::MAX } else { limit }) {
+        for (n, i) in self.matches(extent).step_by(step).take(if late { usize::MAX } else { limit }).enumerate() {
             if late {
                 crate::progress::step(1)?;
+            } else if n.is_multiple_of(PACE) {
+                crate::progress::check()?;
             }
             let Some(place) = self.places.get(i as usize) else { continue };
             let Some(json) = read_place(&mut f, &mut pos, &mut buf, place) else {
