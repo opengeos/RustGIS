@@ -878,9 +878,15 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => Some(l.dataset.shown_from_lonlat().map_err(|e| format!("{}: {e}", l.name))?),
         None => None,
     };
+    // Those the map's way doesn't reach are put through WGS 84, and said.
+    let astray = std::cell::Cell::new(0usize);
     let put_at = |[x, y]: [f64; 2]| {
         let c = Coord::new(x, y);
-        shown.as_ref().and_then(|back| back.point(c)).and_then(|own| to.point(own)).unwrap_or(c)
+        let Some(back) = &shown else { return c };
+        back.point(c).and_then(|own| to.point(own)).filter(|l| l.is_finite()).unwrap_or_else(|| {
+            astray.set(astray.get() + 1);
+            c
+        })
     };
     for (row, ft) in l.dataset.features.rows().enumerate() {
         if rows.get(row) != Some(&true) {
@@ -952,6 +958,12 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
             [("name", ds.name.clone().into()), ("n", repeated.to_string().into())],
         )
     });
+    let astray_note = (astray.get() > 0).then(|| {
+        NoticeText::format(
+            "{name}: {n} moved label(s) the map's own conversion doesn't reach put through WGS 84, which may be some decimetres from where they were drawn",
+            [("name", ds.name.clone().into()), ("n", astray.get().to_string().into())],
+        )
+    });
     let cut_note = (cut > 0).then(|| {
         format!(
             "{}: {cut} label text{} cut to {} characters",
@@ -1007,7 +1019,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(note) = cut_note {
         s.notify(note, false);
     }
-    for note in [flattened_note, repeated_note].into_iter().flatten() {
+    for note in [flattened_note, repeated_note, astray_note].into_iter().flatten() {
         s.notify_text(note, false);
     }
     if let Some((_, unread)) = &whole {

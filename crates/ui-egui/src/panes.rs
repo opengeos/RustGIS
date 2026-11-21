@@ -6971,14 +6971,25 @@ pub(crate) fn source_details(ui: &mut Ui, l: &Layer, t: &Tokens) {
     // A layer held in a projected system shows its extent there, as its coordinates are: no
     // conversion of every place on the interface thread, which this pane is drawn on each frame.
     // One held in a geographic system (NAD83, ETRS89, or one in grads or latitude first) shows
-    // its longitude/latitude extent, converted once per edit (Layer::extent), in degrees. A
-    // streamed layer's is its source's whole extent, in longitude/latitude, read once.
+    // its own box converted to longitude/latitude (its edges' places, not every place), in
+    // degrees. A streamed layer's is its source's whole extent, in longitude/latitude, read once.
+    // A box with no place that converts shows none.
     use rustgis_engine::data::raster::Crs;
     let held = l.dataset.coord_crs();
     let degrees = held.is_geographic() || l.source.is_some();
-    let e = if degrees { l.extent() } else { l.dataset.extent() };
+    let e = if l.source.is_some() || held == Crs::LonLat {
+        l.extent()
+    } else if degrees {
+        l.dataset.lonlat_conversion().map_or(rustgis_engine::geom::Extent::EMPTY, |to| to.extent(&l.dataset.extent()))
+    } else {
+        l.dataset.extent()
+    };
     let extent_in = if degrees { Crs::LonLat } else { held };
-    let edge = |v: f64| if degrees { format!("{v:.4}°") } else { format!("{v:.2}") };
+    let edge = |v: f64| match (v.is_finite(), degrees) {
+        (false, _) => "—".to_string(),
+        (true, true) => format!("{v:.4}°"),
+        (true, false) => format!("{v:.2}"),
+    };
     if let Some(rl) = &l.raster {
         raster_details(ui, rl, t);
         return;
