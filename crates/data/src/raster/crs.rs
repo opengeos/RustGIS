@@ -2464,8 +2464,6 @@ impl Transformer {
 mod tests {
     use super::*;
 
-    /// An ESRI code reads as the system the picker offers for it (`ESRI:102033`, as a `.prj` and
-    /// the coordinate system boxes name it); one the catalog lacks is refused with its name.
     /// A saved code another variant stands for reads as that variant, so Web Mercator saved as
     /// `{"Epsg": 3857}` isn't taken for a projected system of its own.
     #[test]
@@ -2475,6 +2473,8 @@ mod tests {
         }
     }
 
+    /// An ESRI code reads as the system the picker offers for it (`ESRI:102033`, as a `.prj` and
+    /// the coordinate system boxes name it); one the catalog lacks is refused with its name.
     #[test]
     fn an_esri_code_is_read() {
         for text in ["ESRI:102033", "esri:102033", " ESRI : 102033 "] {

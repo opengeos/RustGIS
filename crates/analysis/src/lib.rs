@@ -258,6 +258,13 @@ impl ToolSpec {
     pub fn works_in_own_system(&self) -> bool {
         OWN_SYSTEM_TOOLS.contains(&self.id) && TOOLS.iter().any(|t| std::ptr::eq(t, self))
     }
+
+    /// Whether the tool reads the geometry of the layer its parameter `param` names, rather than
+    /// only its attributes (Join Field's join table): one whose geometry it doesn't read needn't
+    /// be converted into the system it works in.
+    pub fn reads_geometry_of(&self, param: &str) -> bool {
+        !(self.id == "joinField" && param == "joinTable")
+    }
 }
 
 /// Runs an external tool (the spec says which).

@@ -1514,3 +1514,41 @@ fn a_table_joins_onto_a_held_layer() {
     assert_eq!(ss[1].map().layer_by_name("Owned_2").unwrap().dataset.coord_crs(), UTM);
     assert_eq!(bits(&held_coords(&ss[1], "Owned_2")), bits(&held_coords(&ss[1], "Parcels")));
 }
+
+/// Join Field reads only the attributes of its join table, so a place there that UTM can't hold
+/// (99°E on the equator, see [`an_input_the_first_ones_system_cant_hold_is_worked_on_in_lonlat`])
+/// doesn't send the run to longitude/latitude: the parcels keep their stored coordinates.
+#[test]
+fn a_join_tables_places_dont_decide_the_system() {
+    let mut s = session(UTM);
+    let mut far = Dataset::new("Far", GeometryType::Point, vec![Field::new("n", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+    far.push(Some(Geometry::Point(Coord::new(99.0, 0.0))), vec![Cell::Int(0), Cell::Text("far owner".into())]);
+    s.map_mut().add_dataset(far);
+    let mark = s.notice_mark();
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": "Far", "joinField": "n", "output": "Owned"}});
+    s.run("gp.run", &p).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!said.iter().any(|t| t.contains("worked in longitude/latitude")), "{said:?}");
+    assert_eq!(s.map().layer_by_name("Owned").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&s, "Owned")), bits(&held_coords(&s, "Parcels")));
+    let ds = &s.map().layer_by_name("Owned").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("owner").unwrap()).to_string(), "far owner");
+}
+
+/// A project giving Web Mercator and longitude/latitude as their EPSG codes (`{"Epsg": 3857}`,
+/// `{"Epsg": 4326}`), as one written by hand or by another program may, opens with them as
+/// RustGIS's own Web Mercator and longitude/latitude: the layer held in Web Mercator stays off the
+/// projected path tools take, and the other is in longitude/latitude.
+#[test]
+fn the_epsg_variants_fixture_opens_as_rustgis_own_systems() {
+    let p = Project::from_json(include_str!("../../../../schema/fixtures/held_epsg_variants.rgis")).unwrap();
+    let (mercator, plain) = (&p.maps[0].layers[0].dataset, &p.maps[0].layers[1].dataset);
+    assert_eq!((mercator.coord_crs(), mercator.crs), (Crs::WebMercator, Some(Crs::LonLat)));
+    assert_eq!((plain.coord_crs(), plain.crs), (Crs::LonLat, Some(Crs::WebMercator)));
+    // echo 48.7 11.5 | cs2cs -f %.6f EPSG:4326 EPSG:3857 (PROJ 9.9.0): 1280174.144123 6224110.131660
+    let Some(Geometry::Point(c)) = mercator.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
+    assert!((c.x - 1_280_174.144_123).abs() < 1e-6 && (c.y - 6_224_110.131_660).abs() < 1e-6, "{c:?}");
+    let back = mercator.in_lonlat().unwrap();
+    let Some(Geometry::Point(l)) = back.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
+    assert!((l.x - 11.5).abs() < 1e-9 && (l.y - 48.7).abs() < 1e-9, "{l:?}");
+}
