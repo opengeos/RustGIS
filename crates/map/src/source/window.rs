@@ -81,7 +81,7 @@ pub(super) fn read_mode(
     // Half the budget holds them; their projection and display levels take the rest.
     let first = read(source)?;
     if full {
-        check_areas(&expr, &first.0.features, &source.info().name, first.0.complete)?;
+        check_areas(&expr, &scratch, &first.0.features, &source.info().name, first.0.complete)?;
     }
     if first.0.complete || !source.visits_chunks() || numbers_rows(&expr) {
         return Ok(first);
@@ -208,9 +208,11 @@ fn read_filtered(
 }
 
 /// An expression parsed against source metadata still needs validation against decoded geometry.
-fn check_areas(expr: &Expr, features: &[rustgis_data::Feature], name: &str, complete: bool) -> Result<()> {
+/// `held`, the query's scratch dataset, holds its coordinates as the source gives them, so the
+/// features' places are read in longitude/latitude from that system.
+fn check_areas(expr: &Expr, held: &Dataset, features: &[rustgis_data::Feature], name: &str, complete: bool) -> Result<()> {
     if rustgis_data::query::uses_area(expr)
-        && let Some(message) = rustgis_data::ambiguous_area_message(features.iter().filter_map(|f| f.geometry.as_ref()))
+        && let Some(message) = held.ambiguous_area_message(features.iter().filter_map(|f| f.geometry.as_ref()))
     {
         let scope = if complete { String::new() } else { format!("; count covers the {} feature(s) read for this view", features.len()) };
         return Err(DataError::Format(format!("Definition query: {name}: {message}{scope}")));

@@ -93,7 +93,20 @@ pub fn clip_row(
     width: usize,
     to_lonlat: &crate::raster::Reprojection,
 ) -> Result<Option<(Feature, usize)>, DataError> {
-    let lonlat = |g: &crate::Geometry| if to_lonlat.is_identity() { g.extent() } else { to_lonlat.geometry(g).extent() };
+    // A place at a time, without a converted copy of the shape; one that can't be converted is
+    // left out of the extent, as a converted copy's missing place is.
+    let lonlat = |g: &crate::Geometry| {
+        if to_lonlat.is_identity() {
+            return g.extent();
+        }
+        let mut e = Extent::EMPTY;
+        g.for_each_coord(|c| {
+            if let Some(m) = to_lonlat.point(c) {
+                e.expand(m);
+            }
+        });
+        e
+    };
     if row.geometry.as_ref().is_none_or(|g| !lonlat(g).intersects(extent)) {
         return Ok(None);
     }

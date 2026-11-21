@@ -1705,9 +1705,9 @@ impl Session {
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
         self.command_epilogue(id, params, |s| {
             let native_maintenance = s.depth == 0 && s.policy_ingress_idle();
-            if s.depth == 0 {
-                s.note_shown_systems();
-            }
+            // Before every command, a script's or task's too: one before it in the same script may
+            // have changed a map's projection.
+            s.note_shown_systems();
             let result = s.run_command(id, params);
             // A command may change a map's projection, or add layers to it.
             if s.depth == 0 {

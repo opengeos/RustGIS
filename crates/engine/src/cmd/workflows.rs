@@ -1734,7 +1734,7 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
     let mut ds =
         Dataset::new(name, GeometryType::Polyline, vec![Field::new("length_km", FieldType::Double), Field::new("cost", FieldType::Double)]);
     ds.push(Some(Geometry::Line(vec![r.path.clone()])), vec![Attr::Float(r.length_m / 1000.0), Attr::Float(r.cost)]);
-    hold_as(s, &mut ds, system);
+    hold_as(s, &mut ds, system)?;
     let nid = super::layer::add_dataset(s, ds);
     if let Some(notice) = query_notice {
         s.notify_text(notice, false);
@@ -1882,7 +1882,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         ds.push(Some(Geometry::Point(*c)), vec![Attr::Int(*r as i64)]);
     }
     let n = ds.features.len();
-    hold_as(s, &mut ds, system);
+    hold_as(s, &mut ds, system)?;
     if let Some(notice) = query_notice {
         s.notify_text(notice, false);
     }
@@ -1892,10 +1892,20 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Holds `ds`, a layer made in longitude/latitude from another, as that layer is
 /// ([`Dataset::hold_as`]; `system` is its [`Dataset::coord_crs`] and [`Dataset::crs`]), and says
-/// so when it can't be: it stays in longitude/latitude then, as it was made.
-fn hold_as(s: &mut Session, ds: &mut Dataset, (held, crs): (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>)) {
-    if let Err(e) = ds.hold_as(held, crs) {
-        s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {}: {e}", ds.name, held.label()), false);
+/// so when it can't be: it stays in longitude/latitude then, as it was made. A cancel stops the
+/// command, which adds nothing.
+fn hold_as(
+    s: &mut Session,
+    ds: &mut Dataset,
+    (held, crs): (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>),
+) -> Result<(), String> {
+    match ds.hold_as(held, crs) {
+        Err(e) if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) => Err(e),
+        Err(e) => {
+            s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {}: {e}", ds.name, held.label()), false);
+            Ok(())
+        }
+        Ok(()) => Ok(()),
     }
 }
 

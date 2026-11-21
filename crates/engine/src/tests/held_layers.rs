@@ -318,7 +318,9 @@ fn the_clipboard_holds_features_in_their_own_system() {
         })
         .collect();
     // Within 0.1 mm of WGS 84's, where the map's way is some decimetres off.
-    for (p, q) in places(&text).iter().zip(&exact) {
+    let copied = places(&text);
+    assert_eq!(copied.len(), exact.len(), "every copied feature in the text");
+    for (p, q) in copied.iter().zip(&exact) {
         assert!((p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9, "{p:?} vs {q:?}");
     }
     s.run("map.projection", &json!({"type": "mercator"})).unwrap();
@@ -346,6 +348,14 @@ fn the_clipboard_holds_features_in_their_own_system() {
     let want = UTM.to(gk).unwrap().point(in_utm).unwrap();
     let Some(Geometry::Point(got)) = native(&s, "Wells")[11] else { panic!("a point") };
     assert!((got.x - want.x).abs() < 1e-6 && (got.y - want.y).abs() < 1e-6, "UTM text into DHDN: {got:?} vs {want:?}");
+    // A layer pasted from a copy keeps what its import lost, so Define Projection still refuses it.
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap().dataset.crs_incomplete = true;
+    s.run("select.rows", &json!({"layer": "Wells", "rows": [1]})).unwrap();
+    s.run("edit.copy", &Value::Null).unwrap();
+    let made = s.run("edit.pasteSpecial", &json!({"name": "Copied"})).unwrap();
+    let l = s.map().layer(made["layer"].as_u64().unwrap() as u32).unwrap();
+    assert!(l.dataset.crs_incomplete);
+    assert_eq!(l.dataset.coord_crs(), gk);
 }
 
 /// A route over a held network after Define Projection runs on the network as it now reads, not

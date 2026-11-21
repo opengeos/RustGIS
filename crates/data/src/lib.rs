@@ -461,10 +461,9 @@ fn held_in_lonlat() -> raster::Crs {
 impl Dataset {
     /// The coordinate system its geometry is in ([`Dataset::held_in`]): the system a file was read
     /// in, else longitude/latitude (WGS 84). Drawing converts geometry from it
-    /// ([`raster::Crs::to`]). Longitude/latitude
-    /// never fails to convert, and [`Dataset::hold_in`] only holds a dataset where every place
-    /// converts. A place that can't be converted isn't drawn, and the session says so (the map
-    /// counts them as it draws, `Layer::unplaced`).
+    /// ([`raster::Crs::to`]). Longitude/latitude never fails to convert, and [`Dataset::hold_in`]
+    /// only holds a dataset where every place converts. A place that can't be converted isn't
+    /// drawn, and the session says so (the map counts them as it draws, `Layer::unplaced`).
     pub fn coord_crs(&self) -> raster::Crs {
         self.held_in
     }

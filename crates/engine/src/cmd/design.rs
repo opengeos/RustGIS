@@ -2320,10 +2320,10 @@ fn topology_checks(s: &Session) -> Vec<TopologyInput> {
     inputs
 }
 
-/// Whether two layers' data are the same: the same rows (shared, not compared one by one), fields
-/// and geometry type.
+/// Whether two layers' data are the same: the same system they hold coordinates in (a relabel
+/// keeps the rows), the same rows (shared, not compared one by one), fields and geometry type.
 fn same_data(a: &rustgis_data::Dataset, b: &rustgis_data::Dataset) -> bool {
-    a.features.shares(&b.features) && a.fields == b.fields && a.geometry_type == b.geometry_type
+    a.coord_crs() == b.coord_crs() && a.features.shares(&b.features) && a.fields == b.fields && a.geometry_type == b.geometry_type
 }
 
 /// Whether `was` (what a check read on another thread) is what the rules read now.

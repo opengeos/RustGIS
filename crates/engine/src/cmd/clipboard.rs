@@ -71,6 +71,8 @@ fn copy(s: &mut Session) -> CmdResult {
     // longitude/latitude, converted exactly through WGS 84, whatever map they were copied from.
     data.held_in = l.dataset.coord_crs();
     data.crs = l.dataset.crs;
+    // What the import lost, Define Projection can't recover in a layer pasted from it either.
+    data.crs_incomplete = l.dataset.crs_incomplete;
     data.features = l.selection.iter().filter_map(|r| l.dataset.features.get(*r).cloned()).collect::<Vec<_>>().into();
     let n = data.features.len();
     let text = rustgis_data::io::to_geojson(&*data.in_lonlat()?).to_string();

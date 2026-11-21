@@ -662,21 +662,34 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                 Some((_, true)) => g.map_coords(&|c| Coord::new(c.y, c.x)),
                 _ => g,
             });
-            if let Some(g) = &g {
-                // Its box in longitude/latitude: a place that can't be given there isn't drawn
-                // (the map counts it), as one converted to NaN wasn't.
-                let e = match &transform {
-                    Some((Some(t), _)) => {
-                        let mut e = rustgis_geom::Extent::EMPTY;
-                        g.for_each_coord(|c| {
-                            if let Some(l) = t.to_lonlat(c) {
-                                e.expand(l);
-                            }
-                        });
-                        e
+            // A place that can't be given in longitude/latitude is kept as a missing coordinate
+            // (NaN), as it was when the reader converted the file: the layer is drawn, saved and
+            // measured without it, as before. Its box in longitude/latitude from the rest.
+            let mut e = rustgis_geom::Extent::EMPTY;
+            let g = match (&transform, g) {
+                (Some((Some(t), _)), Some(g)) => {
+                    let lonlat = std::cell::Cell::new(rustgis_geom::Extent::EMPTY);
+                    let kept = g.map_coords(&|c| match t.to_lonlat(c) {
+                        Some(l) if l.is_finite() => {
+                            let mut b = lonlat.get();
+                            b.expand(l);
+                            lonlat.set(b);
+                            c
+                        }
+                        _ if !c.is_finite() => c,
+                        _ => Coord::new(f64::NAN, f64::NAN),
+                    });
+                    e = lonlat.get();
+                    Some(kept)
+                }
+                (_, g) => {
+                    if let Some(g) = &g {
+                        e = g.extent();
                     }
-                    _ => g.extent(),
-                };
+                    g
+                }
+            };
+            if !e.is_empty() {
                 outside |= e.min_x < -180.0 || e.max_x > 180.0 || e.min_y < -90.0 || e.max_y > 90.0;
             }
             let row = ds
@@ -848,6 +861,24 @@ mod tests {
         let clean = gml.replace("&lt;Null&gt;", "B-2");
         let layers = read("s.gml", clean.as_bytes()).unwrap();
         assert!(layers[0].1.messages.iter().all(|m| !m.contains("written as Null")), "no marker, no notice: {:?}", layers[0].1.messages);
+    }
+
+    /// A place a file's system can't give in longitude/latitude is kept missing (NaN), as when the
+    /// reader converted the file, so the layer still saves and is read in longitude/latitude; its
+    /// other places keep the file's numbers.
+    #[test]
+    fn a_place_with_no_longitude_latitude_is_kept_missing() {
+        let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
+<gml:featureMember><ogr:roads fid="roads.0"><ogr:geometryProperty><gml:LineString srsName="EPSG:32633"><gml:coordinates>500000,4649776 1e15,4649776</gml:coordinates></gml:LineString></ogr:geometryProperty></ogr:roads></gml:featureMember>
+</ogr:FeatureCollection>"#;
+        let layers = read("r.gml", gml.as_bytes()).unwrap();
+        let (ds, _) = &layers[0];
+        assert_eq!(ds.coord_crs(), Crs::Epsg(32633));
+        let Some(Geometry::Line(parts)) = &ds.features[0].geometry else { panic!("a line") };
+        assert_eq!(parts[0][0], Coord::new(500000.0, 4649776.0), "the file's numbers");
+        assert!(parts[0][1].x.is_nan() && parts[0][1].y.is_nan(), "{:?}", parts[0][1]);
+        assert!(serde_json::to_string(ds).is_ok(), "saves");
+        assert!(ds.in_lonlat().is_ok());
     }
 
     #[test]

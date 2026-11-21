@@ -901,6 +901,8 @@ impl Reproject {
     /// The geometry converted to longitude/latitude; `None` when a coordinate can't be converted:
     /// for a source that gives its features there (a database, a GeoPackage table loaded for
     /// editing), unlike [`Reproject::read`].
+    // Databases and GeoPackage editing, which the web app hasn't.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn to_lonlat_geometry(&self, g: Geometry) -> Option<Geometry> {
         let Some(t) = &self.t else { return Some(g) };
         let mut ok = true;
@@ -1258,6 +1260,8 @@ pub(crate) fn clamp_limit(limit: usize) -> usize {
 }
 
 /// Whether a feature's geometry falls in a request's extent (always true without one).
+// Databases, which the web app hasn't.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn in_request(g: &Geometry, req: &Request) -> bool {
     match &req.extent {
         Some(e) => g.extent().intersects(e),

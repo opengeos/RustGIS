@@ -1242,8 +1242,12 @@ impl Layer {
             self.dataset.features.rows().map(|r| r.geometry().map(|g| flat.project(g))).collect()
         } else {
             match flat.held(crs) {
-                // Nothing to count: every place is drawn as it is.
-                Ok(held) if held.is_identity() => self.dataset.features.rows().map(|r| r.geometry().cloned()).collect(),
+                // Every place is drawn as it is, those longitude/latitude can't give too, so none
+                // is left out of this drawing.
+                Ok(held) if held.is_identity() => {
+                    self.unplaced = Unplaced { rev: self.geometry_rev, crs: Some(crs), count: Ok(0) };
+                    self.dataset.features.rows().map(|r| r.geometry().cloned()).collect()
+                }
                 Ok(held) => {
                     let mut lost = 0usize;
                     let geoms = self
@@ -4582,6 +4586,16 @@ mod tests {
             let want = map.project(&to_lonlat.geometry(&stored));
             assert_eq!(gk.projected_in(&map, key)[0].as_ref(), Some(&want), "{key}");
         }
+        // A place longitude/latitude can't give is counted where drawing goes through it (Web
+        // Mercator), and not on a map in the layer's own system, which draws it as it is.
+        let mut d = Dataset::new("wild", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(1e15, 5_400_000.0))), vec![]);
+        d.held_in = Crs::Epsg(31467);
+        let mut wild = Layer::new(3, d);
+        wild.projected_in(&projection::Flat::Mercator, "mercator");
+        assert_eq!(wild.unplaced(), Some(&Ok(1)));
+        wild.projected_in(&flat("EPSG:31467"), "gk");
+        assert_eq!(wild.unplaced(), Some(&Ok(0)), "drawn as it is");
         // A layer held in Web Mercator is drawn on the Web Mercator map as it is.
         let mut merc = held(Crs::WebMercator);
         let stored_merc = merc.dataset.features[0].geometry.clone().unwrap();
