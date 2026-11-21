@@ -197,7 +197,7 @@ pub(crate) fn not_utf8_names_note(columns: &[usize]) -> Option<String> {
 /// text read can also be what the file holds. The values are the ones `dbase` decodes as text: a
 /// character (`C`) column's, up to a NUL, in the rows the header counts that aren't marked deleted
 /// (a row the read then leaves out as unreadable is counted too). It doesn't look at Cancel: it is
-/// one pass over a file that is read whole, so of at most [`crate::io::MAX_BYTES`].
+/// one pass over a file that is read whole, so of at most [`crate::io::max_bytes`].
 pub(crate) fn not_utf8(dbf: &[u8]) -> (Vec<usize>, Vec<usize>) {
     let lossy = |text: &[u8]| std::str::from_utf8(text.split(|b| *b == 0).next().unwrap_or(&[])).is_err();
     let header_len = usize::from(u16::from_le_bytes([dbf.get(8).copied().unwrap_or(0), dbf.get(9).copied().unwrap_or(0)]));
@@ -591,7 +591,7 @@ mod tests {
             b" a\0\xe9\xe9          \xc3\xa9 ",
         ];
         let mut dbf = table(columns, rows);
-        assert_eq!(not_utf8(&dbf), (1, vec![1, 0, 0, 1]));
+        assert_eq!(not_utf8(&dbf), (vec![1], vec![1, 0, 0, 1]));
         // A row past the header's count isn't read.
         dbf.extend_from_slice(b" \xe9t\xe9 20260305 1\xe9bc");
         assert_eq!(not_utf8(&dbf), (vec![1], vec![1, 0, 0, 1]));
