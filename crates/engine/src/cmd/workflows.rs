@@ -80,6 +80,7 @@ pub fn commands() -> Vec<C> {
             r#"{"layer": polygons, "count"?: points per polygon, "seed"?: number, "field"?: numeric field (count per polygon from it, scaled by "rate"), "rate"?: number, "name"?: output}"#,
         ),
         C::new("data.profile", "Data Engineering", "Analyze › Workflows", |s, p| {
+            // All resident rows: completeness profiling is independent of map filters/selection.
             let ds = feature_ds(s, p)?;
             let rows: Vec<Value> = network::profile_fields(ds)
                 .into_iter()
@@ -92,7 +93,7 @@ pub fn commands() -> Vec<C> {
         C::new("data.explore", "Exploratory Analysis", "Analyze › Workflows", explore).roles(&[]).effects(crate::policy::Effects::NONE)
             .view()
             .params(r#"{"layer"?, "fields"?: [numeric fields], "bins"?: number}"#),
-        C::new("data.similar", "Embeddings", "Analyze › Workflows", similar).roles(&[]).effects(crate::policy::Effects::NONE)
+        C::new("data.similar", "Embeddings", "Analyze › Workflows", super::similar::run).roles(&[]).effects(crate::policy::Effects::NONE)
             .params(r#"{"layer"?, "row"?: number (the selected feature when omitted), "fields"?: [numeric fields], "count"?: number, "select"?: bool}"#),
         C::new("data.convert", "Data Interop", "Analyze › Workflows", convert).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
@@ -819,9 +820,13 @@ const SCRIPT_AHEAD: &str = "script.run";
 pub(crate) fn ahead_on_copy(s: &Session, command: &'static str, p: &Value) -> super::reads::ReadWork {
     let name = if command == SCRIPT_AHEAD { "Run Script" } else { "Run Model" };
     let (project, trusted) = (s.project.clone(), s.trusted_models.clone());
+    let readers = s.undo_memory.readers();
+    let retained = readers.retain(crate::undo_memory::allocations(&project));
     // The copy follows the extensions turned on or off here (#1752).
     let extensions = s.extensions().clone();
     let (view_size, active_layer, opened, p) = (s.view_size, s.active_layer, s.opened, p.clone());
+    let selection_generation = s.selection_generation;
+    let (similar_sequence, similar_selected) = (s.similar_sequence.clone(), s.similar_selected);
     // What its tools ask of servers and files goes in this session's Diagnostics, as when they
     // run here: the run here takes their results and asks nothing.
     let requests = s.diagnostics.capture();
@@ -833,15 +838,21 @@ pub(crate) fn ahead_on_copy(s: &Session, command: &'static str, p: &Value) -> su
         copy.view_size = view_size;
         copy.active_layer = active_layer;
         copy.opened = opened;
+        copy.selection_generation = selection_generation;
+        copy.similar_sequence = similar_sequence;
+        copy.similar_selected = similar_selected;
         // The copy shares this session's rows, which this session already counts in what the
         // process holds (#2431): it neither measures nor adds them again.
         copy.undo_memory.memory = None;
+        copy.undo_memory.use_readers(readers);
         copy.sync_policy_generation();
         copy.tools_ahead = Some(super::gp::Ahead::Recording(Vec::new()));
         copy.files_ahead = Some(super::gp::FilesAhead::Recording(Vec::new()));
         copy.zones_ahead = Some(super::imagery::ZonesAhead::Recording(Vec::new()));
         let _ = copy.run(command, &p);
-        super::gp::ran_ahead(&mut copy)
+        let mut ran = super::gp::ran_ahead(&mut copy);
+        ran.retained = Some(retained);
+        ran
     })
 }
 
@@ -904,8 +915,8 @@ fn check_table_prefix(s: &Session, lines: &[(usize, String, Value)]) -> Result<(
 #[cfg(not(target_arch = "wasm32"))]
 /// The commands a script's line may run on a copy of the session ([`runs_on_a_copy`]): those
 /// whose results are taken (a tool, a model, a batch) and those that change only what the taking compares
-/// by value (a selection, a layer's name or query, the environment, the projection). A line that
-/// makes rows of its own (a layer edit, a layer from a selection) isn't one. Table edits are the
+/// by value (a selection, a layer's name or query, topology rules, the environment, the projection).
+/// A line that makes rows of its own (a layer edit, a layer from a selection) isn't one. Table edits are the
 /// exception: their rows are recorded and taken, so later tools retain their shared input.
 pub(crate) const ON_A_COPY: &[&str] = &[
     "edit.enable",
@@ -921,6 +932,9 @@ pub(crate) const ON_A_COPY: &[&str] = &[
     "gp.spatialJoin",
     "gp.zonalStats",
     "gp.env",
+    "data.similar",
+    "topology.rules",
+    "topology.validate",
     "select.all",
     "select.atPoint",
     "select.byAttributes",
@@ -1885,7 +1899,8 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"layer": nid, "points": n}))
 }
 
-fn numeric_fields(ds: &Dataset, p: &Value) -> Result<Vec<usize>, String> {
+/// Numeric fields requested by name, or all numeric fields when omitted; invalid names fail.
+pub(super) fn numeric_fields(ds: &Dataset, p: &Value) -> Result<Vec<usize>, String> {
     match p.get("fields").and_then(Value::as_array) {
         Some(a) => a
             .iter()
@@ -1900,7 +1915,7 @@ fn numeric_fields(ds: &Dataset, p: &Value) -> Result<Vec<usize>, String> {
     }
 }
 
-/// Histograms of numeric fields and their correlation matrix.
+/// Histograms and correlations over All resident rows, independent of map filters/selection.
 fn explore(s: &mut Session, p: &Value) -> CmdResult {
     let ds = feature_ds(s, p)?;
     let fields = numeric_fields(ds, p)?;
@@ -1941,31 +1956,6 @@ fn explore(s: &mut Session, p: &Value) -> CmdResult {
     Ok(
         json!({"histograms": hist, "fields": fields.iter().filter_map(|fi| ds.fields.get(*fi).map(|f| f.name.clone())).collect::<Vec<_>>(), "correlation": matrix}),
     )
-}
-
-fn similar(s: &mut Session, p: &Value) -> CmdResult {
-    let id = s.layer_id(p)?;
-    let l = s.map().layer(id).ok_or("no such layer")?;
-    let row = match p.get("row").and_then(Value::as_u64) {
-        Some(r) => r as usize,
-        None => *l.selection.first().ok_or("select a feature (or give row)")?,
-    };
-    if row >= l.dataset.features.len() {
-        return Err("no such row".into());
-    }
-    let fields = numeric_fields(&l.dataset, p)?;
-    if fields.is_empty() {
-        return Err("the layer has no numeric fields to compare".into());
-    }
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(10).clamp(1, 1000) as usize;
-    let found = network::similar(&l.dataset, row, &fields, n);
-    let rows: Vec<Value> = found.iter().map(|(r, d)| json!({"row": r, "distance": d})).collect();
-    if b(p, "select").unwrap_or(true) {
-        let mut sel: Vec<usize> = found.iter().map(|x| x.0).collect();
-        sel.push(row);
-        super::select::set(s, id, sel, super::select::Mode::New);
-    }
-    Ok(json!({"similar": rows}))
 }
 
 /// Converts text on the caller's thread for scripts and browser downloads. A streamed layer

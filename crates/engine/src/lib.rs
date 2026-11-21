@@ -790,6 +790,13 @@ pub struct Session {
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
+    /// Runtime selection intent, including changes on other layers that a new selection clears.
+    /// Mutation dispatch conservatively advances it too; view-only commands leave it alone.
+    pub(crate) selection_generation: u64,
+    /// Similar requests share an order with script workers; their completion order may differ.
+    pub(crate) similar_sequence: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The last Similar request that applied selection here, independently of external intent.
+    pub(crate) similar_selected: u64,
     /// Bumped each time another project replaces this one (new, open, sample, template), however
     /// the command came (the app, an agent, a script): the interface drops what it kept for the
     /// old one.
@@ -1280,6 +1287,8 @@ impl Session {
         self.statistics_window_thread = enabled.then(|| std::thread::current().id());
     }
 
+    /// Starts an independent session with fresh runtime selection intent and request order.
+    /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {
         // The engine's tests never add Shapefile indexes to the user's cache (#1230).
         #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1319,6 +1328,9 @@ impl Session {
             layout_arrangements: serde_json::Map::new(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
+            selection_generation: 0,
+            similar_sequence: Default::default(),
+            similar_selected: 0,
             opened: 0,
             exchange: None,
             tool: Tool::Explore,

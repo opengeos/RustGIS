@@ -2937,6 +2937,9 @@ impl RustGisApp {
             if id == "table.statistics" {
                 return readjob::run_then(self, "table.statistics", params, Some(table::statistics_landed));
             }
+            if id == "data.similar" {
+                return readjob::run(self, "data.similar", params);
+            }
             if id == "layer.sizeBy" {
                 return readjob::run(self, "layer.sizeBy", params);
             }
@@ -3620,6 +3623,8 @@ impl RustGisApp {
                 if let Some(why) = section.and_then(|s| analysispane::section_blocked(&self.session, s)) {
                     return Err(why);
                 }
+                // A pending ranking belongs to the section/request that started it.
+                analysispane::forget_similar(&mut self.workflow);
                 // A map pick started in another section (or before the pane closes) ends here.
                 self.workflow.pick = None;
                 match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
