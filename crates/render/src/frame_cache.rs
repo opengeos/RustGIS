@@ -31,9 +31,16 @@ use tiny_skia::Pixmap;
 use crate::tiles::TileOutput;
 use crate::{Candidate, PlacedLabel, Sprites, View};
 
-/// The most pixels the kept pictures hold together, checkpoints and layers alone: two views of
-/// 3840 × 2160, about 66 MB; four pictures (two views with their layers alone) at 1920 × 1080.
+/// The most pixels the kept pictures hold together, checkpoints and layers alone, about 66 MB:
+/// two views of 3840 × 2160, or one with its layer alone; two views with their layers alone at
+/// 1920 × 1080.
 const MAX_PIXELS: u64 = 2 * 3840 * 2160;
+
+/// The most pixels one frame's marker sprites can hold ([`crate::MAX_SPRITES`] of at most
+/// [`crate::MAX_SPRITE_REACH`] around their centre): about 2.5 million, 9.8 MB. Each kept view
+/// may hold that beside its pictures, so the sprites never cost a view its layer alone: with them
+/// the kept pictures stay within about 86 MB.
+const SPRITE_PIXELS: u64 = crate::MAX_SPRITES as u64 * (2 * crate::MAX_SPRITE_REACH as u64 + 1).pow(2);
 
 /// Pictures kept, one per view drawn (a map and its draft, two maps on screen).
 const KEPT: usize = 2;
@@ -45,10 +52,12 @@ pub(crate) struct Frame {
     pub view: View,
     pub style_env: Env,
     pub label_env: Env,
-    /// [`rustgis_tiles::cache::generation`]: a tile arrived.
-    pub tiles: u64,
-    /// [`rustgis_map::source::generation`]: a streamed read finished.
-    pub sources: u64,
+    /// [`rustgis_tiles::cache::generation`]: a tile arrived, on a map with tile layers or terrain
+    /// (a tile for another map's view leaves this one's pictures).
+    pub tiles: Option<u64>,
+    /// [`rustgis_map::source::generation`]: a streamed read finished, on a map with a layer read
+    /// from its source.
+    pub sources: Option<u64>,
     /// The world outline's worldview, and how many shapes it had at hand, when it is drawn.
     pub worldview: Option<(crate::sample_data::View, usize)>,
     /// Whether the installed font families were indexed ([`crate::families::installed_now`]).
@@ -279,7 +288,7 @@ pub(crate) fn keep(plan: Plan, captured: Option<(usize, Checkpoint)>, alone: Opt
         kept.push(Kept { frame, looks, at, checkpoint, alone });
         // Within the budget: the older views' layers alone go first, then the older views, then
         // this view's layer alone.
-        while kept.iter().map(Kept::pixels).sum::<u64>() > MAX_PIXELS {
+        while kept.iter().map(Kept::pixels).sum::<u64>() > MAX_PIXELS + KEPT as u64 * SPRITE_PIXELS {
             let older = kept.len().saturating_sub(1);
             if let Some(k) = kept.iter_mut().take(older).find(|k| k.alone.is_some()) {
                 k.alone = None;
@@ -467,6 +476,20 @@ mod tests {
         added.priority = 2;
         map.layers.push(added);
         assert_eq!(draw(&mut map, &view), Some(0), "the labels below rank differently");
+    }
+
+    #[test]
+    fn a_view_of_3840_by_2160_keeps_its_layer_alone_beside_the_marker_sprites() {
+        let (mut map, mut view, _, above) = map();
+        (view.width, view.height) = (3840.0, 2160.0);
+        // The layer dragged is of point markers, drawn from sprites.
+        for t in [20.0, 30.0, 40.0] {
+            if let Some(l) = map.layer_mut(above) {
+                l.transparency = t;
+            }
+            draw(&mut map, &view);
+        }
+        assert!(RECOMBINED.get(), "the layer alone was kept");
     }
 
     #[test]

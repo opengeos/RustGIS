@@ -4259,8 +4259,8 @@ fn render_frame(
             view: *view,
             style_env: style_env.clone(),
             label_env: label_env.clone(),
-            tiles: rustgis_tiles::cache::generation(),
-            sources: rustgis_map::source::generation(),
+            tiles: (!map.tiles.is_empty() || map.view.terrain.is_some()).then(rustgis_tiles::cache::generation),
+            sources: map.layers.iter().any(|l| l.source.is_some()).then(rustgis_map::source::generation),
             // Only when drawn: asking for an outline not at hand says so in the log.
             worldview: map.draws_world_outline().then(|| (worldview, world_of(worldview).len())),
             // Whether they were indexed so far, without indexing them for a map with no text.
@@ -4289,6 +4289,11 @@ fn render_frame(
     let alone_at = cached.as_ref().and_then(|p| p.alone_at);
     let mut drawn_alone: Option<(usize, Pixmap)> = None;
     let mut captured_alone: Option<(usize, frame_cache::Alone)> = None;
+    // Kept only as drawn in full so far: tiles still to come, to draw, or to ask for again after
+    // a failure are drawn again rather than restored as they stood.
+    let complete = |t: &tiles::TileOutput| {
+        !t.pending && t.errors.is_empty() && t.partial.is_empty() && t.pending_in_place.is_empty() && rustgis_tiles::lacking().is_none()
+    };
 
     // Basemap.
     let (water, land, outline, grat) = map.palette();
@@ -4561,7 +4566,7 @@ fn render_frame(
         if cancel::requested() {
             break;
         }
-        if let Some((a, pixels)) = drawn_alone.take() {
+        if let Some((a, pixels)) = drawn_alone.take().filter(|_| complete(&tile_out)) {
             let (candidates, fixed, tiles) = (label_candidates.clone(), fixed_labels.clone(), tile_out.clone());
             let (sprites, bursts) = (ctx.sprites.borrow().clone(), ctx.bursts.get());
             captured_alone = Some((a, frame_cache::Alone { pixels, sprites, bursts, candidates, fixed, tiles }));
@@ -4578,7 +4583,7 @@ fn render_frame(
         if let Some(id) = below.take() {
             draw_tiles!(Some(id));
         }
-        if cached.as_ref().is_some_and(|p| p.capture_at == Some(at)) {
+        if cached.as_ref().is_some_and(|p| p.capture_at == Some(at)) && complete(&tile_out) {
             captured = Some((
                 at,
                 frame_cache::Checkpoint {
@@ -5913,7 +5918,7 @@ fn render_frame(
     if cancel::requested() || (pictureless && (cpu_dirty || holds_picture(&cmds))) {
         return None;
     }
-    if let Some((a, pixels)) = drawn_alone.take() {
+    if let Some((a, pixels)) = drawn_alone.take().filter(|_| complete(&tile_out)) {
         let (candidates, fixed, tiles) = (label_candidates.clone(), fixed_labels.clone(), tile_out.clone());
         let (sprites, bursts) = (ctx.sprites.borrow().clone(), ctx.bursts.get());
         captured_alone = Some((a, frame_cache::Alone { pixels, sprites, bursts, candidates, fixed, tiles }));
