@@ -831,7 +831,7 @@ fn divisions() -> usize {
     4
 }
 
-/// The most subdivisions each division of a scale bar is split into.
+/// The most subdivisions the first division after zero of a scale bar is split into.
 pub const MAX_SCALE_SUBDIVISIONS: usize = 10;
 
 /// The most divisions a scale bar draws to the left of its zero.
@@ -1113,7 +1113,7 @@ pub enum ElementKind {
         /// The alternating bar's light divisions.
         #[serde(default = "white")]
         fill: Rgba,
-        /// Parts each division is split into, 0 (none) to [`MAX_SCALE_SUBDIVISIONS`].
+        /// Parts the first division after zero is split into, 0 (none) to [`MAX_SCALE_SUBDIVISIONS`].
         #[serde(default, skip_serializing_if = "is_default")]
         subdivisions: usize,
         /// Divisions drawn left of zero, 0 to [`MAX_SCALE_BEFORE_ZERO`].
