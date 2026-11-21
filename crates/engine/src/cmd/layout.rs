@@ -4360,14 +4360,13 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
             let n = data.no_number;
             said.push(format!("{n} feature{} of {layer} with no number in {field} left out of the chart", if n == 1 { "" } else { "s" }));
         }
-        if data.mixed > 0 {
-            let n = data.mixed;
-            said.push(format!(
-                "{n} bar{} keep{} the chart's bar colour: {} features have several colours on the map",
-                if n == 1 { "" } else { "s" },
-                if n == 1 { "s" } else { "" },
-                if n == 1 { "its" } else { "their" }
-            ));
+        // Coloured by classes, the bars that keep the bar colour all the same.
+        for (n, why) in [(data.mixed, "have several colours"), (data.unshown, "show no colour")] {
+            if n > 0 {
+                let (s, its) = if n == 1 { ("", "its") } else { ("s", "their") };
+                let keep = if n == 1 { "keeps" } else { "keep" };
+                said.push(format!("{n} bar{s} {keep} the chart's bar colour: {its} features {why} on the map"));
+            }
         }
         said
     };

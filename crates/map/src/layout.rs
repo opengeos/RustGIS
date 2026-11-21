@@ -1301,10 +1301,13 @@ pub struct ChartData {
     pub title: String,
     /// Coloured by classes, each bar's colour as its features have it on the map, in the order of
     /// `bars`: `None` keeps the chart's bar colour (an Other bar, or a bar whose features have
-    /// several). Empty when not coloured by classes.
+    /// several or none). Empty when not coloured by classes.
     pub colors: Vec<Option<Rgba>>,
     /// Bars drawn whose features have several colours on the map, which keep the chart's.
     pub mixed: usize,
+    /// Bars drawn whose features show no colour on the map (a hidden class, points drawn as an
+    /// image), which keep the chart's.
+    pub unshown: usize,
 }
 
 impl ElementKind {
@@ -1626,22 +1629,28 @@ impl ElementKind {
                 drawn.truncate(limit);
             }
         }
-        // Coloured, each bar's colour; an Other bar keeps the chart's.
-        let mut mixed = 0;
+        // Coloured, each bar's colour, those without one counted; an Other bar keeps the chart's.
+        let (mut mixed, mut unshown) = (0, 0);
         let colors: Vec<Option<Rgba>> = match colour {
             None => Vec::new(),
             Some(colour) => drawn
                 .iter()
-                .map(|(_, i)| match gi {
-                    None => colour(*i),
-                    Some(_) => match shades.get(*i) {
-                        Some(Shade::One(c)) => Some(*c),
-                        Some(Shade::Mixed) => {
-                            mixed += 1;
-                            None
-                        }
-                        _ => None,
-                    },
+                .map(|(_, i)| {
+                    let shown = match gi {
+                        None => colour(*i),
+                        Some(_) => match shades.get(*i) {
+                            Some(Shade::One(c)) => Some(*c),
+                            Some(Shade::Mixed) => {
+                                mixed += 1;
+                                return None;
+                            }
+                            _ => None,
+                        },
+                    };
+                    if shown.is_none() {
+                        unshown += 1;
+                    }
+                    shown
                 })
                 .chain(gathered.map(|_| None))
                 .collect(),
@@ -1651,7 +1660,7 @@ impl ElementKind {
         let title = self.chart_title().unwrap_or_default();
         // An Other bar is named, so it isn't taken for one feature's.
         let labelled = gi.is_some() || li.is_some() || gathered.is_some();
-        Some(ChartData { bars: out, labelled, left_out, out_of_range, no_number, title, colors, mixed })
+        Some(ChartData { bars: out, labelled, left_out, out_of_range, no_number, title, colors, mixed, unshown })
     }
 
     /// A chart's title: its own, "" for none, or the title it is given: its field, or the
@@ -2603,20 +2612,21 @@ mod tests {
         let d = cut.chart_data_with(&ds, Some(&by_region)).unwrap();
         assert_eq!(bars(&d).last().map(|b| b.1), Some(CHART_OTHER));
         assert_eq!(d.colors, vec![Some(Rgba::rgb(1, 0, 0)), Some(Rgba::rgb(2, 0, 0)), None]);
-        assert_eq!(d.mixed, 0);
+        assert_eq!((d.mixed, d.unshown), (0, 0), "the Other bar is neither");
         // Features drawn with nothing (a hidden class) give their bar none, not a clear one: N's
-        // features are hidden, so N keeps the chart's colour without being mixed.
+        // features are hidden, so N keeps the chart's colour without being mixed, and is counted.
         let hidden_n = |row: usize| by_region(row).filter(|c| *c != Rgba::rgb(1, 0, 0));
         let d = grouped.chart_data_with(&ds, Some(&hidden_n)).unwrap();
         assert_eq!(d.colors.first(), Some(&None));
-        assert_eq!(d.mixed, 0);
+        assert_eq!((d.mixed, d.unshown), (0, 1));
         let d = one.chart_data_with(&ds, Some(&hidden_n)).unwrap();
         assert_eq!(d.colors.first(), Some(&None), "a, in N");
+        assert_eq!(d.unshown, 2, "a and c, in N");
         // Only some hidden, the bar takes the colour of those that show: N is a, hidden, and c.
         let hidden_a = |row: usize| by_name(row).filter(|_| row != 0);
         let d = grouped.chart_data_with(&ds, Some(&hidden_a)).unwrap();
         assert_eq!(d.colors.first(), Some(&Some(Rgba::rgb(2, 0, 0))));
-        assert_eq!(d.mixed, 0);
+        assert_eq!((d.mixed, d.unshown), (0, 0));
         // The colour a symbol shows: a line's stroke, an area's fill or its outline where the
         // fill is clear, none when it draws nothing.
         use crate::symbology::Symbol;

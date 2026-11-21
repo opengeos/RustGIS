@@ -3984,6 +3984,7 @@ mod tests {
             title: String::new(),
             colors: vec![Some(red), None],
             mixed: 0,
+            unshown: 0,
         };
         let is_red = |c: &Canvas, x: u32, y: u32| c.pixmap().pixel(x, y).is_some_and(|p| p.red() > 150 && p.blue() < 60);
         for orientation in [Orientation::Horizontal, Orientation::Vertical] {
