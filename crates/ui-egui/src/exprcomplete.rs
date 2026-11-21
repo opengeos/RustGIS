@@ -184,6 +184,9 @@ fn values(c: &Completion, ds: &Dataset, asked: bool) -> Vec<Item> {
             let typed = v.written.starts_with('\'') && v.text.to_lowercase().starts_with(&lower) && v.text != c.prefix;
             c.place == Place::Code || typed
         })
+        // In a `LIKE` pattern a `%` or `_` matches more than itself, and the language has no
+        // escape: such a value would pick others too.
+        .filter(|v| !(c.pattern && v.text.contains(['%', '_'])))
         .take(MAX_VALUES)
         .map(|v| Item::Value(v.written, field.name.clone(), read))
         .collect()
@@ -757,6 +760,15 @@ mod tests {
         assert_eq!(offered("name = '", false), ["'Lima'", "'O''Brien'", "'Pamplona'", "'Paris'"]);
         assert_eq!(offered("name = 'pa", false), ["'Pamplona'", "'Paris'"], "letter case aside");
         assert_eq!(offered("name LIKE 'Pa", false), ["'Pamplona'", "'Paris'"]);
+        let mut wild = places();
+        for name in ["Route_66", "100%", "Route 66"] {
+            wild.push(None, vec![Value::Text(name.into()), Value::Null]);
+        }
+        let like = |text: &str| offer_at(text, text.chars().count(), &wild, false).map(|o| o.items).unwrap_or_default();
+        assert_eq!(like("name LIKE 'R"), ["'Route 66'"], "a `_` in a pattern matches more");
+        assert_eq!(like("name ILIKE '1"), Vec::<String>::new(), "so does a `%`");
+        assert_eq!(like("name = 'R"), ["'Route 66'", "'Route_66'"], "not in a comparison");
+        assert_eq!(like("name IN ('R"), ["'Route 66'", "'Route_66'"]);
         assert_eq!(offered("name IN ('Lima', 'O''", false), ["'O''Brien'"], "a doubled quote is one");
         assert!(offered("name = 'Paris", false).is_empty(), "not what's typed whole");
         assert!(offered("name = 'x", false).is_empty());

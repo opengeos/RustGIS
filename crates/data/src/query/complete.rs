@@ -47,6 +47,9 @@ pub struct Completion {
     /// The field (its index in the dataset) a value typed here is compared with: `name = ▮`,
     /// `name LIKE '▮`, `name IN ('a', ▮`, `pop BETWEEN ▮`.
     pub field: Option<usize>,
+    /// Whether the value typed here is a `LIKE` / `ILIKE` pattern, where `%` and `_` match more
+    /// than themselves (`name LIKE '▮`).
+    pub pattern: bool,
 }
 
 /// A call the cursor is in, from [`complete_at`]: its function, which argument (from 0), and
@@ -130,6 +133,7 @@ pub fn complete_at(text: &str, cursor: usize, ds: &Dataset) -> Option<Completion
         symbols: if code { symbols } else { Vec::new() },
         call,
         field: probe.field,
+        pattern: probe.pattern,
     })
 }
 
@@ -158,8 +162,8 @@ pub struct FieldValue {
 pub struct FieldValues {
     /// Each value once, by what is written (`3` and `3.0` are one), in Unique Values' order (by
     /// number when they all read as numbers). No null, true or false (`IS NULL`, `TRUE` and
-    /// `FALSE` are the language's own words), no number that isn't finite, no text that breaks a
-    /// line or is longer than [`VALUE_CHARS`].
+    /// `FALSE` are the language's own words), no number that isn't finite or is written longer
+    /// than [`VALUE_CHARS`] (`1e300` in full), no text that breaks a line or is longer than it.
     pub values: Vec<FieldValue>,
     /// How many features were read.
     pub read: usize,
@@ -183,7 +187,8 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
         if matches!(v, Value::Text(t) if t.chars().nth(VALUE_CHARS).is_some() || t.chars().any(char::is_control)) {
             continue;
         }
-        if let Some(written) = literal(v)
+        // A float is written in full (`1e300` as 301 digits): too long to list, as a text is.
+        if let Some(written) = literal(v).filter(|w| !matches!(v, Value::Float(_)) || w.len() <= VALUE_CHARS)
             && !seen.contains(&written)
         {
             seen.insert(written.clone());
@@ -294,6 +299,8 @@ mod tests {
             ("b", Value::Float(10.0)),
             ("two\nlines", Value::Null),
             ("A", Value::Float(f64::NAN)),
+            ("A", Value::Float(1e300)),
+            ("A", Value::Float(-1e-300)),
             (too_long.as_str(), Value::Null),
         ] {
             d.push(None, vec![Value::Text(t.into()), n, Value::Bool(true)]);
@@ -301,11 +308,11 @@ mod tests {
         d.push(None, vec![Value::Text("x".repeat(VALUE_CHARS)), Value::Float(-1.5)]);
         let written = |field| field_values(&d, field, VALUES_READ).values.into_iter().map(|v| v.written).collect::<Vec<_>>();
         let v = field_values(&d, 0, VALUES_READ);
-        assert_eq!((v.read, v.of), (7, 7));
+        assert_eq!((v.read, v.of), (9, 9));
         let longest = "x".repeat(VALUE_CHARS);
         assert_eq!(written(0), ["'A'".to_string(), "'b'".to_string(), format!("'{longest}'")], "up to the longest text listed");
         assert_eq!(v.values.first(), Some(&FieldValue { written: "'A'".into(), text: "A".into() }));
-        assert_eq!(written(1), ["-1.5", "9", "10"], "by number, `10` and `10.0` once");
+        assert_eq!(written(1), ["-1.5", "9", "10"], "by number, `10` and `10.0` once, none written too long");
         assert!(field_values(&d, 2, VALUES_READ).values.is_empty(), "true and false are keywords");
         assert!(field_values(&d, 9, VALUES_READ).values.is_empty(), "no such field");
         // Past the most read: every other feature, from the first.

@@ -228,8 +228,9 @@ with a text, date or date-time field (`name = 'Pa`, `name LIKE '`, `name IN ('Li
 suggests that field's values that start with what's typed, and the one taken is written with its
 quotes (`'Paris'`, a `'` in it doubled), over the closing quote. Where a value goes with nothing
 typed (`pop > `, `name IN ('Lima', `), Ctrl+Space lists the field's values first, numbers as they
-are. No null, true or false is suggested (use `IS NULL`, `TRUE`, `FALSE`), nor a text longer than
-100 characters, and at most 50 values show at a time: typing narrows them. The values are read from
+are. No null, true or false is suggested (use `IS NULL`, `TRUE`, `FALSE`), nor a value longer than
+100 characters, nor after `LIKE` a value with `%` or `_` (which would match others too), and at most
+50 values show at a time: typing narrows them. The values are read from
 up to 10,000 of the layer's features, evenly spread, so a value few features hold may be missing; a
 streamed layer's come from the features read for the view. The value's help says so when it's
 either. A function taken from the list comes with its brackets, the cursor inside them (after
