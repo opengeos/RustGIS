@@ -2010,13 +2010,12 @@ fn notify_report(s: &mut Session, report: &Report) {
     }
 }
 
-/// Imports a QGIS style onto a layer. On the thread that runs it, as the project import is: it
-/// changes the layer it styles, and RustGIS has no background path yet for a command that reads
-/// files and then changes the session (one would take the reads and the checks of the images off
-/// the window, with Cancel). Its work is bounded by the style: one file of at most [`MAX_FILE`]
-/// bytes, its XML parsed within [`MAX_XML`], and its raster image markers' images within
-/// [`MARKER_READ_BYTES`], each file read once and decoded once to check it (see
-/// [`marker_images`] and [`marker_image`]).
+/// Imports a QGIS style onto a layer. On the thread that runs it: the style import isn't among
+/// the commands whose reads the app makes on a thread first ([`super::reads`]), as it wasn't
+/// before it read marker images. Reading the style and its images there, with Cancel, is its own
+/// change. Its work is bounded by the style: one file of at most [`MAX_FILE`] bytes, its XML
+/// parsed within [`MAX_XML`], and its raster image markers' images within [`MARKER_READ_BYTES`],
+/// each file read once and decoded once to check it (see [`marker_images`] and [`marker_image`]).
 fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
     let id = s.layer_id(p)?;

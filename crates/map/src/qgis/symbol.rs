@@ -890,16 +890,17 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: 
 }
 
 /// Reads the images of the raster image markers under `root` (a project or a style), each
-/// `imageFile` once (each file once, however its path is written), into the report for
-/// [`raster_image`]: a `base64:` one as it is, a file's through `read` (relative to `dir`). One at a web address isn't fetched, nor one kept inside a
-/// `.qgz` (`attachment:`); one relative to no folder (or to a drive's working folder) isn't looked
+/// `imageFile` once (a file once for each spelling of its path from the folder: a leading `./` is
+/// dropped, so `./a.png` and `a.png` are one), into the report for [`raster_image`]: a `base64:`
+/// one as it is, a file's through `read` (relative to `dir`). One at a web address isn't fetched,
+/// nor one kept inside a `.qgz` (`attachment:`); one relative to no folder (or to a drive's working folder) isn't looked
 /// for, and those past the pictures a run keeps ([`MAX_PICTURES`],
 /// [`MAX_PICTURES_BYTES`]) aren't read. An image is kept when read, before its symbol is: one
 /// in a part of the project the import then leaves out stays kept for the run, within those
 /// bounds.
 pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &mut Report) {
     let (mut bytes, mut reads) = (0, 0);
-    // A file's image by its path from the folder: `./a.png` and `a.png` are one.
+    // A file's image by its path from the folder (`./a.png` and `a.png` are one).
     let mut files = std::collections::HashMap::<String, Result<(Picture, f32), String>>::new();
     let rasters = root.descendants().filter(|n| n.has_tag_name("layer") && n.attribute("class") == Some("RasterMarker"));
     for l in rasters.filter(|l| l.attribute("enabled") != Some("0")) {
