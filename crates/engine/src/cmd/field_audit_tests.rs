@@ -350,9 +350,9 @@ fn audit_two_packages_same_feature_last_back_wins_and_is_said() {
     assert!(said.iter().any(|t| t.contains("Cities #")), "the overwritten edit should be named: {said:?}");
 }
 
-/// The office adds a column to the layer while the crew is out. The crew's edits come back.
+/// The office adds a column to the layer while the crew is out. The crew's edits come back, and
+/// the office's values in its new column stay.
 #[test]
-#[ignore = "repro of a known field-sync bug (mobile offline audit); run with --ignored"]
 fn audit_office_adds_a_field_while_crew_is_out() {
     let temp = Temp::new("schema");
     let mut home = home(&temp);
@@ -360,15 +360,19 @@ fn audit_office_adds_a_field_while_crew_is_out() {
     let mut a = phone(&temp, &out, "a");
     let cities = layer(&a, "Cities");
     let name = text_field(&a, cities);
+    let id = a.map().layer(cities).unwrap().dataset.features[0].id;
+    a.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": name, "value": "Crew edit"})).unwrap();
     add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
     let hc = layer(&home, "Cities");
     home.run("edit.addField", &json!({"layer": hc, "name": "inspected", "type": "text"})).unwrap();
-    let (_, back) = package(&mut a, &Value::Null).unwrap();
-    let path = temp.0.join("back.rgisfield");
-    std::fs::write(&path, &back).unwrap();
-    let r = home.run("offline.bringBack", &json!({"path": path.display().to_string()}));
-    eprintln!("bring back after office schema change: {r:?}");
-    assert!(r.is_ok(), "the whole day's edits were refused: {r:?}");
+    let row = home.map().layer(hc).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
+    home.run("edit.setValue", &json!({"layer": hc, "row": row, "field": "inspected", "value": "yes"})).unwrap();
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!((done["updated"].as_u64(), done["added"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1), Some(0)), "{done}");
+    assert_eq!(value_of(&home, hc, id, &name).as_deref(), Some("Crew edit"));
+    assert_eq!(value_of(&home, hc, id, "inspected").as_deref(), Some("yes"));
+    assert_eq!(with_label(&home, hc, &name, "Captured"), 1);
+    assert!(!said.iter().any(|t| t.contains("replaced the map's changes")), "{said:?}");
 }
 
 /// The crew deletes a point on the phone that the office edited meanwhile, and the office

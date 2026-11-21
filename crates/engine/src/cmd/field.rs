@@ -1165,42 +1165,36 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
 }
 
 /// Adds to offline area `ai`'s source layers, and to the area's own copy of them (so features
-/// aren't all taken as edited for lacking it), the fields `edited`'s layers have after theirs: a
-/// field the field added. Only fields added after all of the layer's own, of names it hasn't;
-/// fields that differ otherwise are left for the sync to refuse. Returns them as `layer: field`.
+/// aren't all taken as edited for lacking it), the fields `edited`'s layers have that neither has:
+/// a field the field added (a layer's photos field, made with its first photo). A field the area's
+/// copy has and the source hasn't was removed at home, and isn't put back. Returns them as
+/// `layer: field`.
 fn take_new_fields(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -> Vec<String> {
     let Some(area) = s.project.offline_areas.get(ai) else { return Vec::new() };
     let source = area.map.clone();
-    let same = |a: &[rustgis_data::Field], b: &[rustgis_data::Field]| {
-        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.name.eq_ignore_ascii_case(&y.name) && x.ty == y.ty)
-    };
+    let Some(si) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&source)) else { return Vec::new() };
     let mut added = Vec::new();
     for ol in edited.layers.iter().filter(|l| !l.is_raster()) {
-        let fields = &ol.dataset.fields;
-        let Some(si) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&source)) else { break };
         let Some(sl) = s.project.maps.get(si).and_then(|m| m.layers.iter().find(|l| l.id == ol.id && !l.is_raster())) else { continue };
-        let had = sl.dataset.fields.len();
-        let base_same = s
-            .project
-            .offline_areas
-            .get(ai)
-            .and_then(|a| a.data.layers.iter().find(|l| l.id == ol.id))
-            .is_none_or(|b| same(&b.dataset.fields, &sl.dataset.fields));
-        let Some(extra) = fields.get(had..).filter(|e| !e.is_empty()) else { continue };
-        if !base_same || !fields.get(..had).is_some_and(|own| same(own, &sl.dataset.fields)) {
-            continue;
-        }
-        if extra.iter().any(|f| sl.dataset.field_index(&f.name).is_some()) {
+        let base = s.project.offline_areas.get(ai).and_then(|a| a.data.layers.iter().find(|l| l.id == ol.id));
+        let extra: Vec<rustgis_data::Field> = ol
+            .dataset
+            .fields
+            .iter()
+            .filter(|f| sl.dataset.field_index(&f.name).is_none() && base.is_none_or(|b| b.dataset.field_index(&f.name).is_none()))
+            .cloned()
+            .collect();
+        if extra.is_empty() {
             continue;
         }
         let name = sl.name.clone();
         if let Some(l) = s.project.maps.get_mut(si).and_then(|m| m.layers.iter_mut().find(|l| l.id == ol.id)) {
-            for f in extra {
+            for f in &extra {
                 l.dataset.ensure_field(&f.name, f.ty);
             }
         }
         if let Some(b) = s.project.offline_areas.get_mut(ai).and_then(|a| a.data.layers.iter_mut().find(|l| l.id == ol.id)) {
-            for f in extra {
+            for f in &extra {
                 b.dataset.ensure_field(&f.name, f.ty);
             }
         }
@@ -2369,9 +2363,10 @@ mod tests {
         field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
         let (_, back) = package(&mut field, &Value::Null).unwrap();
         std::fs::remove_file(&photo).unwrap();
-        // At home meanwhile, a field the field doesn't have: the sync is refused.
+        // At home meanwhile, a field the field has is removed: the sync is refused.
         let home_cities = layer(&home, "Cities");
-        home.run("edit.addField", &json!({"layer": home_cities, "name": "extra", "type": "text"})).unwrap();
+        let gone = home.map().layer(home_cities).unwrap().dataset.fields[0].name.clone();
+        home.run("edit.deleteField", &json!({"layer": home_cities, "field": gone})).unwrap();
         let path = temp.path().join("back.rgisfield");
         std::fs::write(&path, &back).unwrap();
         assert!(home.run("offline.bringBack", &json!({"path": path.display().to_string()})).is_err());
