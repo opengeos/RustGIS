@@ -565,8 +565,12 @@ polygon split there), measured as the meridian it runs along. A ring winding aro
 measured as the region it traces by the attribute table
 and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
 while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
-that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
-Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
+that body's sphere. **Mensuration Tools** (`raster.measure`) measure distances, areas and perimeters
+the same way, on the ellipsoid on the Earth and on the body's sphere elsewhere. A distance along the
+surface spaces its height samples along the path on the sphere and takes each step's ground run
+from the leg it lies on at that leg's length on the ellipsoid, so over level ground it equals the
+distance. A volume still takes one cell size for the whole raster, at its centre's latitude. The
+Radius tools still measure a local Mercator distance, so those can differ from the numbers above.
 
 For an ambiguous area, the `raster.measure` command with `kind: "area"` returns an error without a measurement object. To request its finite closed-ring perimeter, use `kind: "distance"` and repeat the first point at the end. The on-map Measure overlay continues to show perimeter alongside the area refusal.
 
@@ -799,7 +803,7 @@ gp.run={"tool":"near","params":{"input":"addresses","near":"hydrants","units":"F
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is
-stored in longitude/latitude before the join. `match` is one of:
+converted to longitude/latitude for the join. `match` is one of:
 
 - **Intersects** (default), **Contains** (target contains join) or **Within** (target lies within
   join).
@@ -1203,7 +1207,8 @@ CRS metadata. Coordinates are used directly, without projection or snapping.
   output memory, including repeated text attributes, before building the segments; unavailable
   memory returns an error.
 - **Feature Envelope To Polygon** (`featureEnvelopeToPolygon`) writes one axis-aligned rectangle
-  around all coordinates of each feature in stored longitude/latitude axes. Point features and
+  around all coordinates of each feature in longitude/latitude axes (converted from the layer's
+  own system). Point features and
   horizontal or vertical lines have zero-area envelopes and are skipped with a count. Longitude
   bounds are literal, including for features spanning the antimeridian.
 - **Unsplit Line** (`unsplitLine`) joins line parts at exactly equal endpoints where precisely
@@ -1549,8 +1554,36 @@ cores; `gp.env` returns the threads and cores as `limits.threads` and `limits.co
 runs on one thread.
 
 `gp.env` also returns the memory limits on this computer (`limits`). On the desktop they follow the
-computer's memory, or a container's limit when it is lower: each plans for a quarter of it, never
-below the web app's fixed limits and never above a ceiling.
+computer's memory, or a memory limit set on RustGIS (a container's, or a service's such as systemd's `MemoryMax`) when it is lower: each plans for a quarter of it, never
+below the web app's fixed limits and never above a ceiling. `limits.memorySource` says what they
+follow: `computer`, `container` (such a limit, lower than the computer's memory),
+`override` or `unknown`. For tests, or to reproduce a smaller computer, set the environment
+variable `RUSTGIS_MEMORY_BYTES` to the memory in bytes (such as `8589934592` for 8 GiB) before
+starting RustGIS: it replaces the memory read from the computer and any container limit, and the
+command line says so on every run. It isn't a way to go faster: a value above the computer's
+memory raises every limit past what it has, and a large job can then run out of memory.
+
+The limits below other than `threadScratchBytes`, `undoBytes` and `projectBytes` plan for less
+when memory is short, never below their floors. They plan for the smallest of three figures:
+- a quarter of the memory;
+- what is left of three quarters of it after what RustGIS holds, which matters once it holds more
+  than half: on a 16 GiB computer holding 10 GiB, 2 GiB instead of 4 GiB;
+- what the computer has free now, less what is kept for drawing and the window (a twentieth of the
+  memory, from 256 MiB up to 2 GiB), which matters when other programs use most of it.
+
+What is held counts the open layers, tables and rasters, what only Undo and Redo keep and the
+copies of edits running in the background, in every project open in the process, as of the last
+command; `limits.heldBytes` gives it, and `limits.freeBytes` what is free. What is free is read each
+time, so the same job can pass now and be refused a minute later when another program has taken
+memory meanwhile. It isn't read when `RUSTGIS_MEMORY_BYTES` is set (`freeBytes` is then `null`), so
+tests give the same limits whatever else runs, nor in a container whose memory limit RustGIS
+follows (the container's own count includes file cache, so the limit bounds it instead). On macOS
+the system counts memory other programs are using as available too, so this figure rarely lowers
+anything there. A file refused for its size says what is held and
+free, and the limit otherwise. Removing layers or tables you no longer need raises the limits once
+Undo no longer keeps them: saving and reopening the project lets go of the Undo history. Reading a
+file again, or opening another project while a large one is open, plans against the lowered limits
+too, so a file that opened earlier in the session can be refused later.
 
 | Limit | Floor (web app value in brackets) | Desktop: a quarter of memory at | Ceiling |
 |---|---|---|---|
@@ -1568,6 +1601,26 @@ Undo history keeps up to 40 steps. When the estimated memory for saved copies of
 exceeds `undoBytes`, RustGIS drops the oldest Undo steps first, then the farthest Redo steps.
 It keeps the newest Undo step even if that step alone exceeds the limit. The first time this
 happens in a project, a message says so. Edits can still create a temporary full copy of a layer.
+
+Before an edit of a layer's or table's features or fields, RustGIS checks that this copy fits
+beside what it already holds: the open layers, tables and rasters, what only Undo and Redo keep,
+and the copies of edits still running in the background, all within three quarters of the
+computer's memory, and that the copy fits in what the computer has free now, less what is kept for
+drawing (Undo steps set aside count as free for it, as the copy reuses their memory). When it doesn't fit, Redo steps are set aside first (the edit clears them
+anyway), then the oldest Undo steps. They are freed only once the edit starts copying; an edit
+that fails before that, or is cancelled before it starts copying, gives them back, unless the
+project was changed while it ran in the background. One that fails after it started copying has
+used them, as a finished edit would have. A message says when steps are freed to make room, the
+first time in a project, and each time steps set aside for a background edit are freed because the
+Undo history changed while it ran. Undo and Redo copy nothing and aren't checked. An edit that
+wouldn't fit even with no Undo history is refused before anything changes, and the message gives
+the size of the copy and what is held, or what is free when other programs use the memory. An edit the desktop runs in the background is checked when it starts; one that needs Undo
+steps set aside while another such edit is still running is refused, to run again once that one
+has finished. Edits made by a
+script, model, task or plugin aren't checked, nor is Paste Special (it makes a layer of its own) or
+reloading or repairing a layer's data. Nothing is checked where RustGIS can't read the computer's
+memory: in the web app, and on a computer that doesn't report it. Sizes are estimated, counting
+each text and part as the block of memory it takes, so they come out above the bytes themselves.
 
 So a computer with 16 GB reads rasters of up to about 500 million samples. A run that passes on one
 computer can be refused on a smaller one; the error names the limit there. Project Raster (`raster.project`) puts a raster
@@ -1640,6 +1693,9 @@ form does: the layers of its kind (polygon, point, raster, vector; any layer, th
 the fields of the tool's input that it takes (numeric, holding coordinates), or its choices
 (`"units": "` offers `Kilometers`, `Meters`, …). Accepting one writes its name
 as the line's JSON needs it (`"Big \"lakes\""`).
+In a `task.addStep` line's `"params"`, a value offers what the step's command takes, as in a line
+of that command: its layers, maps, layouts, tables, label classes and fields, over the layer or
+table its `"params"` give (a `"layer"` outside them doesn't count), the active layer without one.
 In the string of a key that takes an expression (its type is `sql` or `expression` in the
 command's help: `"where"` in `select.byAttributes`, `"expression"` in `edit.calculateField`,
 `labels.by`'s keys…; in a `gp.run` line, a tool's expression, such as `selectByAttributes`'s
