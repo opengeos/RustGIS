@@ -681,8 +681,14 @@ fn draw_page(
                 }
             }
             ElementKind::Chart { frame: f, layer, color, .. } => {
-                let l = frame(*f).and_then(|fr| maps.get(fr.1)).and_then(|m| m.layer_by_name(layer));
-                match l.and_then(|l| e.kind.chart_data_of(l)) {
+                // Coloured by classes, its bars read their features' colours at the frame's scale
+                // and on this page, as the frame draws them.
+                let data = frame(*f).and_then(|&(_, mi, cam, _, _)| {
+                    let m = maps.get(mi)?;
+                    let at = env.at_scale(Some(m.ground_res_at(&cam) / rustgis_geom::PIXEL_M));
+                    e.kind.chart_data_of(m.layer_by_name(layer)?, &at)
+                });
+                match data {
                     Some(data) => {
                         let look = e.kind.chart_look().unwrap_or_default();
                         chart(&mut pm, r, &data, &look, color.unwrap_or(INK), ppp, layout.decimal_comma)

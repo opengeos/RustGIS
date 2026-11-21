@@ -529,9 +529,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   **Color by class** draws each bar in the colour its features have on the map, by the layer's
   symbology: a bar per feature in its feature's, a grouped bar in the colour its features share,
   so grouping by the field the layer's Unique Values class by gives each bar its class's colour.
-  The colour is a symbol's fill (an outline's where the fill is clear, a line's stroke), not its
-  patterns or stacked strokes; features of a hidden class, or points drawn as an image, show
-  none and leave the bar to the others. A bar whose features have several colours or show none,
+  The colour is a symbol's fill (an outline's where the fill is clear, a line's stroke), by
+  each feature's own geometry, as the chart's map frame draws it (at its scale, and on its
+  series page), not its patterns or stacked strokes, nor the layer's transparency: the bars
+  are drawn whole. Features of a hidden class, or points drawn as an image, show none and
+  leave the bar to the others. A bar whose features have several colours or show none,
   and an Other bar, keep the bar colour, and the chart says how many bars do, and why, when it
   is added or changed. The bars follow the symbology when it changes; those counts are not said
   again then.

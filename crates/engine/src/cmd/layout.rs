@@ -4338,7 +4338,13 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
         let Some(l) = s.project.layouts.get(li) else { return };
         let Some(e) = l.element(id) else { return };
         let ElementKind::Chart { frame, layer, field, .. } = &e.kind else { return };
-        let Some(data) = frame_layer(s, l, *frame, layer).and_then(|fl| e.kind.chart_data_of(fl)) else { return };
+        // At the frame's scale, as the page draws it (a series page aside).
+        let scale = match l.element(*frame).map(|f| &f.kind) {
+            Some(ElementKind::MapFrame { scale, .. }) => Some(*scale),
+            _ => None,
+        };
+        let env = rustgis_data::query::Env::default().at_scale(scale);
+        let Some(data) = frame_layer(s, l, *frame, layer).and_then(|fl| e.kind.chart_data_of(fl, &env)) else { return };
         let mut said = Vec::new();
         if data.left_out > 0 {
             let drawn = data.bars.len();
@@ -4363,9 +4369,9 @@ fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
         // Coloured by classes, the bars that keep the bar colour all the same.
         for (n, why) in [(data.mixed, "have several colours"), (data.unshown, "show no colour")] {
             if n > 0 {
-                let (s, its) = if n == 1 { ("", "its") } else { ("s", "their") };
+                let (plural, its) = if n == 1 { ("", "its") } else { ("s", "their") };
                 let keep = if n == 1 { "keeps" } else { "keep" };
-                said.push(format!("{n} bar{s} {keep} the chart's bar colour: {its} features {why} on the map"));
+                said.push(format!("{n} bar{plural} {keep} the chart's bar colour: {its} features {why} on the map"));
             }
         }
         said

@@ -39871,7 +39871,7 @@ fn layout_charts_take_their_layers_classes() {
     assert!(!said(&s, mark).iter().any(|t| t.contains("bar colour")), "{:?}", said(&s, mark));
     let data = |s: &Session| {
         let layer = s.map().layers.iter().find(|l| l.name == "Places").unwrap();
-        s.project.layouts[0].element(chart).unwrap().kind.chart_data_of(layer).unwrap()
+        s.project.layouts[0].element(chart).unwrap().kind.chart_data_of(layer, &rustgis_data::query::Env::default()).unwrap()
     };
     let class_colour = |s: &Session, region: &str| {
         let layer = s.map().layers.iter().find(|l| l.name == "Places").unwrap();

@@ -1466,17 +1466,21 @@ impl ElementKind {
     }
 
     /// [`ElementKind::chart_data`] of `layer`'s features, a chart coloured by classes reading each
-    /// feature's colour as the map draws it ([`crate::Layer::styler`], at no map scale,
-    /// [`crate::symbology::Symbol::shown_colour`]). A feature its symbol draws nothing of, in a hidden class,
-    /// has none.
-    pub fn chart_data_of(&self, layer: &crate::Layer) -> Option<ChartData> {
+    /// feature's colour as the map frame draws it: in `env`, the frame's scale and the series
+    /// page ([`crate::Layer::styler_with`]), by the feature's own geometry, the layer's where it
+    /// has none ([`crate::symbology::Symbol::shown_colour`]). A feature its symbol draws nothing
+    /// of, in a hidden class, has none. The layer's transparency isn't read: a bar is drawn whole.
+    pub fn chart_data_of(&self, layer: &crate::Layer, env: &rustgis_data::query::Env) -> Option<ChartData> {
         if !self.chart_uses_classes() {
             return self.chart_data(&layer.dataset);
         }
-        let styler = layer.styler(None);
-        let g = layer.dataset.geometry_type;
-        let colour = |row: usize| styler.symbol(row).shown_colour(g);
-        self.chart_data_with(&layer.dataset, Some(&colour))
+        let styler = layer.styler_with(env.clone());
+        let ds = &layer.dataset;
+        let colour = |row: usize| {
+            let g = ds.features.geometry(row).map_or(ds.geometry_type, rustgis_data::Geometry::kind);
+            styler.symbol(row).shown_colour(g)
+        };
+        self.chart_data_with(ds, Some(&colour))
     }
 
     /// [`ElementKind::chart_data`], each bar coloured by `colour` (a feature row's colour, none
@@ -2572,6 +2576,34 @@ mod tests {
 
     fn bars(d: &ChartData) -> Vec<(f64, &str)> {
         d.bars.iter().map(|(v, n)| (*v, n.as_str())).collect()
+    }
+
+    /// A layer's colours as its map frame draws them (#2487 part 3): each feature by its own
+    /// geometry (a line in a point layer by its stroke), one without by the layer's, and a colour
+    /// that depends on `@map_scale` at the frame's scale.
+    #[test]
+    fn chart_bars_read_their_layers_colours_as_the_frame_draws_them() {
+        use rustgis_data::query::Env;
+        use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+        let mut ds = Dataset::new("mixed", GeometryType::Point, vec![Field::new("n", FieldType::Double)]);
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Float(3.0)]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]])), vec![Value::Float(2.0)]);
+        ds.push(None, vec![Value::Float(1.0)]);
+        let mut layer = crate::Layer::new(1, ds);
+        let (fill, stroke) = (Rgba::rgb(0, 0, 200), Rgba::rgb(200, 0, 0));
+        let mut symbol = layer.renderer.base_symbol();
+        (symbol.fill, symbol.stroke, symbol.stroke_width) = (fill, stroke, 1.0);
+        layer.renderer = crate::symbology::Renderer::Single(symbol);
+        let kind = chart(serde_json::json!({"field": "n", "classes": true}));
+        // Largest first: the point, the line, the row without a geometry (drawn as a point).
+        let d = kind.chart_data_of(&layer, &Env::default()).unwrap();
+        assert_eq!(d.colors, vec![Some(fill), Some(stroke), Some(fill)]);
+        // A fill that depends on the scale: the frame's, or none without one.
+        layer.symbol_by.fill = Some("CASE WHEN @map_scale < 100000 THEN '#00ff00' ELSE '#ff00ff' END".into());
+        let near = kind.chart_data_of(&layer, &Env::default().at_scale(Some(25_000.0))).unwrap();
+        assert_eq!(near.colors.first(), Some(&Some(Rgba::rgb(0, 255, 0))));
+        let far = kind.chart_data_of(&layer, &Env::default().at_scale(Some(1e6))).unwrap();
+        assert_eq!(far.colors.first(), Some(&Some(Rgba::rgb(255, 0, 255))));
     }
 
     /// Coloured by classes (#2487 part 3): a bar per feature takes its feature's colour, a grouped
