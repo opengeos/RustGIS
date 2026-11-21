@@ -1799,6 +1799,10 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
 /// The most points `raster.measure` takes.
 const MAX_MEASURE_POINTS: usize = 10_000;
 
+/// `raster.measure`: one measurement of `points` on the map's body (a distance, with its length
+/// over the surface when `layer` gives heights; an area and perimeter; a height between two points;
+/// or a volume above a base), recorded in the session's results. The Earth measures on the WGS 84
+/// ellipsoid and another body on its sphere, as the Measure tool does.
 fn measure(s: &mut Session, p: &Value) -> CmdResult {
     let given = p.get("points").and_then(Value::as_array).ok_or("points is required")?;
     // Refused over the limit: a measurement of the first points would read as the whole
@@ -1814,14 +1818,17 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
         d.require_coordinates()?;
     }
     let z = |c: Coord| dem.as_ref().and_then(|d| rasterops::elevation_at(d, 0, c));
-    // Ground lengths and areas on the map's body.
+    // Ground lengths and areas on the map's body: the Earth measures on the WGS 84 ellipsoid, as the
+    // Measure tool and the geoprocessing tools do (#939, #2568); another body measures on its
+    // sphere and scales.
     let body = s.map().body();
+    let earth = body.is_earth();
     let out = match kind {
         "distance" => {
             if pts.len() < 2 {
                 return Err("a distance needs two or more points".into());
             }
-            let flat = body.length(rustgis_geom::geodesic_length_m(&pts));
+            let flat = if earth { rustgis_geom::wgs84_length_m(&pts) } else { body.length(rustgis_geom::geodesic_length_m(&pts)) };
             // Along the surface when there's an elevation raster.
             let surface = dem.as_ref().map(|d| {
                 let prof = rasterops::profile(d, 0, &pts, 500);
@@ -1832,7 +1839,8 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
                                 (Some(x), Some(y)) => y - x,
                                 _ => 0.0,
                             };
-                            (body.length(c.0 - a.0).powi(2) + dh * dh).sqrt()
+                            let run = if earth { rustgis_geom::wgs84_distance_m(a.1, c.1) } else { body.length(c.0 - a.0) };
+                            (run * run + dh * dh).sqrt()
                         }
                         _ => 0.0,
                     })
@@ -1851,11 +1859,15 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             if rustgis_geom::ring_area_is_ambiguous(&ring) {
                 return Err("the area is ambiguous: 1 ring winds beyond one whole surface".into());
             }
-            let area = body.area(rustgis_geom::geodesic_ring_area_m2(&ring));
+            let (perimeter, area) = if earth {
+                rustgis_geom::wgs84_ring_perimeter_area_m2(&ring)
+            } else {
+                (body.length(rustgis_geom::geodesic_ring_perimeter_m(&ring)), body.area(rustgis_geom::geodesic_ring_area_m2(&ring)))
+            };
             if !area.is_finite() {
                 return Err("the area cannot be measured from these coordinates".into());
             }
-            json!({"kind": "area", "squareMetres": area, "perimeterMetres": body.length(rustgis_geom::geodesic_ring_perimeter_m(&ring))})
+            json!({"kind": "area", "squareMetres": area, "perimeterMetres": perimeter})
         }
         "height" => {
             let (Some(a), Some(c)) = (pts.first(), pts.get(1)) else { return Err("a height needs two points (base, top)".into()) };
