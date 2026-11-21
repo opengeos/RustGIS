@@ -406,11 +406,11 @@ fn zarr_window(layer: &Layer) -> bool {
     layer.raster.as_ref().and_then(|r| r.time_zarr.as_ref()).is_some_and(|z| z.window.is_some())
 }
 
-/// Whether a dataset saves coordinates in a coordinate system of its own (`Dataset::held_in`),
-/// which an older reader would take for longitude/latitude. One with no features (a template's
-/// layers) saves none, so an older release may open it.
+/// Whether a dataset is saved in a coordinate system of its own (`Dataset::held_in`): an older
+/// reader would take its coordinates for longitude/latitude, and save it again without its
+/// system (one with no features too, such as a template's layers).
 fn held_natively(ds: &rustgis_data::Dataset) -> bool {
-    !ds.windowed && ds.coord_crs() != rustgis_data::raster::Crs::LonLat && !ds.features.is_empty()
+    !ds.windowed && ds.coord_crs() != rustgis_data::raster::Crs::LonLat
 }
 
 /// The capabilities a layer needs, in [`map_capabilities`]'s order.

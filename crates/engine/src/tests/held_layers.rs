@@ -418,7 +418,8 @@ fn a_held_layer_is_saved_with_its_own_coordinates() {
     assert_eq!(wells["held_in"], json!({"Epsg": 32632}));
     let x = wells["features"][0]["geometry"]["Point"]["x"].as_f64().unwrap();
     assert!((600_000.0..800_000.0).contains(&x), "features saved in UTM 32N: {x}");
-    let (back, _) = opened(&path);
+    let (back, said) = opened(&path);
+    assert!(said.is_empty(), "nothing to say: {said:?}");
     for layer in ["Wells", "Roads", "Parcels"] {
         assert_eq!(back.map().layer_by_name(layer).unwrap().dataset.coord_crs(), UTM, "{layer}");
         assert_eq!(stored(&back, layer), stored(&held, layer), "{layer}: bit for bit");
@@ -444,20 +445,46 @@ fn a_held_layer_is_saved_with_its_own_coordinates() {
     assert!(saved.get("requires").is_none(), "{}", saved["requires"]);
     let wells = &saved["maps"][0]["layers"].as_array().unwrap().iter().find(|l| l["name"] == "Wells").unwrap()["dataset"];
     assert!(wells.get("held_in").is_none());
-    // A held layer with no features (a template's) saves no coordinates, so requires nothing.
+    // A held layer with no features (a template's) requires it too: an older reader would save
+    // it again without its system.
     let mut empty = Session::new(Project::default());
     let mut ds = Dataset::new("Empty", GeometryType::Point, Vec::new());
     ds.hold_in(UTM).unwrap();
     empty.map_mut().add_dataset(ds);
-    assert!(!empty.project.required_capabilities().contains(&"native-coordinates"));
+    assert!(empty.project.required_capabilities().contains(&"native-coordinates"));
 }
 
-/// A session with the project at `path` opened, and what was said meanwhile.
+/// A table held in a system of its own is saved there with its system and requires
+/// `native-coordinates`, and opens back held, bit for bit; one in longitude/latitude requires
+/// nothing (#2032 C2d).
+#[test]
+fn a_held_table_is_saved_with_its_own_coordinates() {
+    let dir = Dir::new("project-table");
+    for (crs, required) in [(UTM, true), (Crs::LonLat, false)] {
+        let mut s = Session::new(Project::default());
+        let mut ds = layers().remove(0);
+        ds.hold_in(crs).unwrap();
+        let rows: Vec<Option<Geometry>> = ds.features.iter().map(|f| f.geometry.clone()).collect();
+        s.project.add_table(ds);
+        let path = dir.path().join(format!("{}.rgis", crs.label().replace(':', "-")));
+        s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.get("requires").is_some_and(|r| r == &json!(["native-coordinates"])), required, "{}", crs.label());
+        let (back, said) = opened(&path);
+        assert!(said.is_empty(), "nothing to say: {said:?}");
+        let t = &back.project.tables[0].dataset;
+        assert_eq!(t.coord_crs(), crs);
+        assert_eq!(t.features.iter().map(|f| f.geometry.clone()).collect::<Vec<_>>(), rows, "{}: bit for bit", crs.label());
+    }
+}
+
+/// A session with the project at `path` opened, and what was said meanwhile besides that it
+/// opened.
 fn opened(path: &std::path::Path) -> (Session, Vec<String>) {
     let mut s = Session::new(Project::default());
     let mark = s.notice_mark();
     s.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
-    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| !t.starts_with("Opened ")).collect();
     (s, said)
 }
 

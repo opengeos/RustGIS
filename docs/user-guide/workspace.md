@@ -28,11 +28,11 @@ smaller one is loaded whole.
 A layer kept in the project is saved in the coordinate system it is held in: a layer read from a
 file in its own system (a UTM Shapefile, say) keeps that system and its coordinates to the last
 digit, and opens again held as it was, drawn, edited and exported as before. Layer files, map
-files, project and map packages, autosave and recovery keep them too; a mobile map package
-simplifies its layers in longitude/latitude and saves them there. Such a project, map or layer
+files, project and map packages, autosave and recovery keep them too; a mobile map package that
+simplifies its layers does so in longitude/latitude and saves them there. Such a project, map or layer
 file needs this version or a later one: an older release refuses it, naming
-`native-coordinates`, rather than read its coordinates as longitude/latitude. A project whose
-layers are all in longitude/latitude is saved as before and opens in older releases.
+`native-coordinates`, rather than read its coordinates as longitude/latitude. Layers in
+longitude/latitude are saved as before and don't need it.
 
 **Open** also accepts a project package (`.rgispkg`), as do drag-and-drop and the desktop
 command line. A package opens as a new, unsaved project; Save writes a plain `.rgis` file.

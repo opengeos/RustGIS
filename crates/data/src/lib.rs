@@ -1415,9 +1415,11 @@ mod tests {
             ds.push(None, vec![Value::Int(2)]);
             ds.push(Some(Geometry::Line(vec![line(8.1)])), vec![Value::Int(3)]);
             ds.hold_in(crs).unwrap();
-            let saved = serde_json::to_value(&ds).unwrap();
-            assert_eq!(saved["held_in"], serde_json::to_value(crs).unwrap(), "{}", crs.label());
-            let back: Dataset = serde_json::from_value(saved).unwrap();
+            // Through JSON text, as a project saves it.
+            let saved = serde_json::to_string(&ds).unwrap();
+            let held_in = serde_json::from_str::<serde_json::Value>(&saved).unwrap()["held_in"].clone();
+            assert_eq!(held_in, serde_json::to_value(crs).unwrap(), "{}", crs.label());
+            let back: Dataset = serde_json::from_str(&saved).unwrap();
             assert_eq!(back.coord_crs(), crs, "{}", crs.label());
             assert_eq!(bits(&back), bits(&ds), "{}", crs.label());
             assert_eq!(back.features.len(), 3);
