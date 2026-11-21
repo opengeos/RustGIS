@@ -3718,7 +3718,11 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // doesn't match the coordinates), or as they are without a system to convert from.
     let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
     if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
-        report.messages.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
+        report.messages.push(if to_lonlat.is_some() {
+            "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place".into()
+        } else {
+            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into()
+        });
     }
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
@@ -6981,6 +6985,32 @@ mod tests {
         assert_eq!(ds.value(0, 0), &Value::Null);
         assert_eq!(ds.value(1, 0).as_f64(), Some(1.5));
         assert!(rep.messages.iter().any(|m| m.contains("1 number isn't finite") && m.contains("'lat'")), "{:?}", rep.messages);
+    }
+
+    /// A `.prj` that doesn't match the coordinates (a geographic system for numbers past 180°) is
+    /// said, though the file is held in its system as it is, as it was when it was converted.
+    #[test]
+    fn a_shapefile_whose_prj_doesnt_fit_is_said() {
+        use shapefile::dbase::{FieldValue, Record, TableWriterBuilder};
+        let dir = std::env::temp_dir().join(format!("rustgis-shp-prj-misfit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shp = dir.join("misfit.shp");
+        {
+            let table = TableWriterBuilder::new().add_character_field("name".try_into().unwrap(), 10);
+            let mut w = shapefile::Writer::from_path(&shp, table).unwrap();
+            let mut r = Record::default();
+            r.insert("name".into(), FieldValue::Character(Some("far".into())));
+            w.write_shape_and_record(&shapefile::Point::new(500.0, 10.0), &r).unwrap();
+        }
+        let prj = r#"GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+        std::fs::write(dir.join("misfit.prj"), prj).unwrap();
+        let (_, rep) = read_path(&shp).unwrap();
+        assert!(
+            rep.messages.iter().any(|m| m.contains("not longitude/latitude") || m.contains("couldn't be converted")),
+            "{:?}",
+            rep.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A projected Shapefile is converted to longitude/latitude by its `.prj` (issue #84).

@@ -820,6 +820,17 @@ fn a_held_layers_undrawable_features_are_said_once() {
     let said = said_of(&s, mark, of_map);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("2 feature(s)") && said[0].ends_with("(map 'Map', layer 'Wells' (2))"), "{said:?}");
+    // On a map in the layers' own system every place is drawn, so nothing is said; the globe's
+    // copy, which leaves them out, says so at the same version of the geometry.
+    s.run("map.projection", &json!({"type": "EPSG:32632"})).unwrap();
+    let mark = s.notice_mark();
+    frame(&mut s);
+    assert!(said_of(&s, mark, of_map).is_empty(), "{:?}", said_of(&s, mark, of_map));
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap().lonlat_in();
+    let _ = s.run("select.clear", &Value::Null);
+    let said = said_of(&s, mark, of_map);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].ends_with("(map 'Map', layer 'Wells' (2))"), "{said:?}");
 }
 
 /// Every cell of a raster layer named in a command's answer.

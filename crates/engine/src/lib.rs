@@ -855,7 +855,7 @@ pub struct Session {
     /// Each layer held in another system (by instance) and the geometry revision and system whose
     /// places were last counted for [`Session::say_unplaced`], so a version of a layer is looked at
     /// once.
-    unplaced_checked: std::collections::HashMap<u64, (u64, rustgis_data::raster::Crs)>,
+    unplaced_checked: std::collections::HashMap<u64, (u64, rustgis_data::raster::Crs, Result<usize, String>)>,
     /// The datum grids the map's layers were last projected with
     /// ([`rustgis_data::raster::crs::grid_generation`]).
     grid_generation: u64,
@@ -3102,8 +3102,10 @@ impl Session {
             for l in map.layers.iter().filter(|l| !l.is_raster() && l.dataset.coord_crs() != rustgis_data::raster::Crs::LonLat) {
                 seen.insert(l.instance_id());
                 let Some(count) = l.unplaced() else { continue };
-                let version = (l.geometry_rev(), l.dataset.coord_crs());
-                if self.unplaced_checked.insert(l.instance_id(), version) == Some(version) {
+                // Said again when the count changes at the same version: a drawing that leaves out
+                // what an earlier one drew (the globe after the layer's own system).
+                let version = (l.geometry_rev(), l.dataset.coord_crs(), count.clone());
+                if self.unplaced_checked.insert(l.instance_id(), version.clone()).as_ref() == Some(&version) {
                     continue;
                 }
                 let named = format!("map '{}', layer '{}'", map.name, l.name);

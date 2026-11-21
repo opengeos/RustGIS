@@ -779,9 +779,10 @@ fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<
                         // Every place the layer keeps has one in longitude/latitude, as when it was
                         // converted there: a feature with one that hasn't is kept without geometry.
                         // Each place is converted to be checked; the layer keeps its own.
+                        // A system with no conversion at all keeps the geometry: drawing says it.
                         let lost = match ds.lonlat_conversion() {
                             Ok(to) => convert_features(&mut ds, |c| to.point(c).filter(|l| l.is_finite()).map(|_| c)),
-                            Err(_) => convert_features(&mut ds, |_| None),
+                            Err(_) => 0,
                         };
                         if lost > 0 {
                             messages.push(format!(
