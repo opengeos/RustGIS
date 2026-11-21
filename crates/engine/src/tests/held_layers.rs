@@ -820,9 +820,11 @@ fn a_held_layers_undrawable_features_are_said_once() {
     let said = said_of(&s, mark, of_map);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("2 feature(s)") && said[0].ends_with("(map 'Map', layer 'Wells' (2))"), "{said:?}");
-    // On a map in the layers' own system every place is drawn, so nothing is said; the globe's
-    // copy, which leaves them out, says so at the same version of the geometry.
+    // A version drawn first on a map in the layers' own system, which draws every place, says
+    // nothing; the globe's copy, which leaves them out, says so at the same version; going back
+    // to Web Mercator, which leaves out as many, says nothing more.
     s.run("map.projection", &json!({"type": "EPSG:32632"})).unwrap();
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Wells").unwrap().touch_geometry();
     let mark = s.notice_mark();
     frame(&mut s);
     assert!(said_of(&s, mark, of_map).is_empty(), "{:?}", said_of(&s, mark, of_map));
@@ -831,6 +833,11 @@ fn a_held_layers_undrawable_features_are_said_once() {
     let said = said_of(&s, mark, of_map);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].ends_with("(map 'Map', layer 'Wells' (2))"), "{said:?}");
+    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+    frame(&mut s);
+    s.run("map.projection", &json!({"type": "EPSG:32632"})).unwrap();
+    frame(&mut s);
+    assert_eq!(said_of(&s, mark, of_map).len(), 1, "{:?}", said_of(&s, mark, of_map));
 }
 
 /// Every cell of a raster layer named in a command's answer.
