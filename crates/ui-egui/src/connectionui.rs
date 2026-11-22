@@ -466,9 +466,17 @@ fn form_error(st: &State) -> Option<String> {
 
 /// Switches `st` to the geodatabase form, filled from the address box's `mssql://` address
 /// (with its other options kept in the Options row), then with these. An address with a
-/// password in it stays in the address box, and why is the error.
+/// password in it, or one that isn't `mssql://`, stays in the address box, and why is the error;
+/// an empty one opens the form as it was.
 pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&str>) -> Result<(), String> {
-    if let Some(m) = parse_mssql(&st.address) {
+    let parsed = parse_mssql(&st.address);
+    if parsed.is_none() && !st.address.trim().is_empty() {
+        return Err(tl!(
+            "This address isn't a SQL Server address (mssql://…), so the form can't be filled from it. Fix it, or keep using the address."
+        )
+        .into());
+    }
+    if let Some(m) = parsed {
         if m.password {
             return Err(tl!(
                 "This address has a password in it, which the form doesn't show: take it out of the address and type it in the Password box, or keep using the address."
@@ -2389,6 +2397,14 @@ mod tests {
         st.address = "mssql://gis@other/assets".into();
         swap_form(&mut st).unwrap();
         assert_eq!((st.server.as_str(), st.user.as_str(), st.database.as_str()), ("other", "gis", "assets"));
+        // An address the form can't read stays in the box, and why is said.
+        st.form = false;
+        st.address = "mssl://gis-db/utility".into();
+        let why = swap_form(&mut st).unwrap_err();
+        assert!(why.contains("mssql://"), "{why}");
+        assert!(!st.form);
+        assert_eq!(st.address, "mssl://gis-db/utility");
+        assert_eq!(st.server, "other");
         // An empty form is filled from the address: a saved connection edited in the form.
         let mut edit = State {
             kind: "sqlserver".into(),
