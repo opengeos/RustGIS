@@ -770,9 +770,10 @@ as a form with what ArcGIS Pro's own dialog asks for:
 instead** swaps back, with the address taken apart into the form: a saved SQL Server connection
 opens in the address box, and **Use the form instead** shows it in the form. The address's other
 options (`encrypt=strict`, `ca=…`) stay in it and show in the form's **Options** row, which
-takes neither a password (type it in **Password**) nor an instance (type it in **Server**). An
-address with a password or key in it stays in the address box, which says why, and so does one
-that isn't `mssql://`. **Database user** with no user can't be saved: no user is Windows sign-in.
+takes no password (type it in **Password**), instance (type it in **Server**) or certificate
+choice (tick the box). An address with a password or key in it stays in the address box, which
+says why, and so does one that isn't `mssql://`. **Database user** with no user can't be saved:
+no user is Windows sign-in.
 
 **From .sde file…** fills the form from a connection file saved by ArcGIS Pro, through
 `connection.readSde` below, and names the connection after the file unless a name was typed.

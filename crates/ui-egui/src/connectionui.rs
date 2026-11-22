@@ -466,9 +466,14 @@ fn form_address(st: &State) -> Result<String, String> {
     })
     .map_err(|e| e.to_string())?;
     let options = st.form_options.trim().trim_matches(|c| c == '&' || c == '?');
-    // The instance has its place in Server, where the form reads it back from.
-    if options.split('&').any(|kv| kv.split('=').next().unwrap_or("").trim().eq_ignore_ascii_case("instance")) {
+    // The instance has its place in Server, and the certificate choice its box: the form reads
+    // them back from there.
+    let keys = || options.split('&').map(|kv| kv.split('=').next().unwrap_or("").trim().to_ascii_lowercase().replace('_', "-"));
+    if keys().any(|k| k == "instance") {
         return Err(tl!("Put the instance in Server, not in Options").into());
+    }
+    if keys().any(|k| k == "trust-server-certificate" || k == "trustservercertificate") {
+        return Err(tl!("Tick Trust the server's certificate instead of typing it in Options").into());
     }
     for option in [options, if st.trust_cert { "trust-server-certificate=true" } else { "" }] {
         if !option.is_empty() {
@@ -2276,7 +2281,16 @@ mod tests {
         assert!(form_error(&windows).is_none());
         // A password, token or key typed in Options belongs in the Password box, and an
         // instance in Server: the form says so rather than compose them.
-        for typed in ["pwd=hunter2", "encrypt=strict&PASSWORD=x", "token=abc", "instance=OTHER", "encrypt=strict&Instance=X"] {
+        for typed in [
+            "pwd=hunter2",
+            "encrypt=strict&PASSWORD=x",
+            "token=abc",
+            "instance=OTHER",
+            "encrypt=strict&Instance=X",
+            "trust-server-certificate=true",
+            "encrypt=strict&TrustServerCertificate=yes",
+            "trust_server_certificate=maybe",
+        ] {
             let refused = State { form_options: typed.into(), ..gdb_form("sql") };
             assert!(form_error(&refused).is_some(), "{typed}");
         }
@@ -2442,13 +2456,35 @@ mod tests {
 
     #[test]
     fn the_from_file_button_picks_a_file_and_cancelling_changes_nothing() {
+        use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
-        app.run("ui.connection", json!({"kind": "sqlserver", "form": true})).unwrap();
-        assert!(crate::dialogs::pick_open(&["sde"], "x").is_none());
+        app.run("ui.connection", json!({"kind": "sqlserver", "form": true, "server": "typed-db"})).unwrap();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(700.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                dialog(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        // Cancelled: the form is as it was.
+        crate::dialogs::PICKED.with(|p| *p.borrow_mut() = None);
+        h.get_by_label("From .sde file…").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.connection.server, "typed-db");
+        assert!(h.state().session.connections.connections.is_empty());
+        // A file picked fills the form from it, and saves nothing.
         crate::dialogs::PICKED.with(|p| *p.borrow_mut() = Some(sde_fixture("sqlserver-os.sde")));
-        let picked = crate::dialogs::pick_open(&["sde"], "x").unwrap();
-        fill_from_sde(&mut app, &picked).unwrap();
-        assert_eq!(app.ui.connection.database, "gis");
+        h.get_by_label("From .sde file…").click();
+        h.run_steps(2);
+        let st = &h.state().ui.connection;
+        assert_eq!((st.server.as_str(), st.database.as_str()), ("gisdb.example.invalid", "gis"));
+        assert!(h.state().session.connections.connections.is_empty());
     }
 
     #[test]
