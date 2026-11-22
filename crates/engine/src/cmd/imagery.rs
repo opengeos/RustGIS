@@ -457,6 +457,14 @@ const EXACT_WHOLE: f64 = 16_777_216.0;
 /// `raster.project`'s is, each cell whose centre falls in a polygon taking its field's value, a
 /// text field's code or one `value` (see `rustgis_analysis::warp::rasterize`). A new layer, and
 /// for a text field a table of its codes.
+///
+/// It runs on the thread that calls it, the app's own on the desktop, as it did before layers
+/// held their own coordinates: it isn't yet one of the commands that make their raster on a thread
+/// of their own (`workflows::IN_BACKGROUND`), since it writes its GeoTIFF to `path` and adds its
+/// class table itself, which a move there has to carry over. Its loops look at Cancel (sizing the
+/// grid, and between shapes in the burn), which stops a run only where a probe is installed (a
+/// model or script run ahead on a copy of the session, `workflows::ahead_on_copy`); run by itself
+/// in the app, nothing installs one, so there it runs to the end.
 fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
     let ln = rasterize_name(p)?;
     let l = s.map().layer_by_name(ln).filter(|l| l.raster.is_none()).ok_or_else(|| format!("no vector layer '{ln}'"))?;
@@ -577,7 +585,8 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
         // said when the grid takes these bounds (no extent given).
         let to = held.to(Crs::LonLat).map_err(|e| format!("{ln}: {e}"))?;
         let mut lonlat = Extent::EMPTY;
-        // A conversion a vertex: Cancel is looked at every few thousand.
+        // A conversion a vertex: Cancel is looked at every few thousand (where a probe is
+        // installed, see above).
         for (i, c) in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).filter(|c| c.is_finite()).enumerate() {
             if i % 4096 == 0 {
                 rustgis_data::progress::check().map_err(|e| e.to_string())?;
@@ -587,7 +596,15 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
                 None => unsized_by += 1,
             }
         }
-        Ok((warp::bounds_in([lonlat.min_x, lonlat.min_y, lonlat.max_x, lonlat.max_y], crs).map_err(|e| format!("{ln}: {e}"))?, None))
+        let mut b = warp::bounds_in([lonlat.min_x, lonlat.min_y, lonlat.max_x, lonlat.max_y], crs).map_err(|e| format!("{ln}: {e}"))?;
+        // Taking in the vertices as the burn places them: between two datums the direct operation
+        // lands apart from the route through WGS 84 (half a metre for DHDN and ETRS89).
+        if held != Crs::LonLat
+            && let Some(p) = warp::placed_bounds(held, crs, &shapes).map_err(|e| format!("{ln}: {e}"))?
+        {
+            b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[2]), b[3].max(p[3])];
+        }
+        Ok((b, None))
     })?;
     if unsized_by > 0 && p.get("extent").is_none_or(Value::is_null) {
         s.notify(

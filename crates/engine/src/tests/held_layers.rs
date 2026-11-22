@@ -2305,6 +2305,21 @@ fn a_held_layer_is_burned_in_its_own_system() {
     assert_eq!(a["cells"], 100, "{a}");
 }
 
+/// Rasterize's default grid in another system takes in the polygons as they are burned, by the
+/// direct operation: a 5 cm square held in Gauss-Krüger zone 3 (DHDN), burned onto 1 cm cells in
+/// ETRS89 / UTM 32N, lands 0.44 m from where the route through WGS 84 puts it, so a grid sized
+/// by that route alone holds none of it.
+#[test]
+fn rasterize_sizes_its_grid_by_the_operation_that_burns() {
+    let (x0, y0) = (3_456_000.0, 5_430_000.0);
+    let ring: Vec<Coord> =
+        [(0.0, 0.0), (0.05, 0.0), (0.05, 0.05), (0.0, 0.05), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect();
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Tiny", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![ring]])], GK3);
+    let a = s.run("raster.rasterize", &json!({"layer": "Tiny", "crs": "EPSG:25832", "cellSize": 0.01, "name": "Burned"})).unwrap();
+    assert!((16..=36).contains(&a["cells"].as_u64().unwrap()), "{a}");
+}
+
 /// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,
 /// and says how many vertices it couldn't place there, left out of that box: a polygon held in UTM
 /// with a vertex far beyond any place UTM holds, burned onto a grid in degrees. With an extent

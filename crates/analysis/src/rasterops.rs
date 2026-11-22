@@ -1110,7 +1110,7 @@ fn means_under(
     }
     let mut sums = vec![0.0; bands.len()];
     let mut n = 0usize;
-    let (cols, rows) = zone_window(r, &e, |c| zone.grid(r, c));
+    let (cols, rows) = zone_window(r, &e, matches!(zone, ZoneIn::Own { .. }), |c| zone.grid(r, c));
     each_rows((r.height - (rows.end - rows.start)) as usize)?;
     for row in rows {
         each_rows(1)?;
@@ -1139,7 +1139,12 @@ fn means_under(
 /// side not to fold back within one stretch (a sixty-fourth of the side at first), which a
 /// projection's smooth image of a parallel or meridian doesn't. The whole raster when a point can't
 /// be placed; none when `e` is empty.
-fn zone_window(r: &Raster, e: &Extent, to_grid: impl Fn(Coord) -> Option<Coord>) -> (Range<u32>, Range<u32>) {
+///
+/// With `interior` (a zone in a system of its own), places inside `e` are placed too, a sixteenth
+/// of it apart: when one can't be, or lands outside the outline's window, the zone's box holds a
+/// place the raster's grid can't take in one piece (a polar zone on a Web Mercator raster, whose
+/// outline lands south of the cells near the pole), and the whole raster is read.
+fn zone_window(r: &Raster, e: &Extent, interior: bool, to_grid: impl Fn(Coord) -> Option<Coord>) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
     }
@@ -1186,11 +1191,23 @@ fn zone_window(r: &Raster, e: &Extent, to_grid: impl Fn(Coord) -> Option<Coord>)
             stretches.push((tm, pm, t1, p1, depth + 1));
         }
     }
+    let (c0, r0, c1, r1) = (c0.floor() - 2.0, r0.floor() - 2.0, c1.ceil() + 2.0, r1.ceil() + 2.0);
+    if interior {
+        const INSIDE: u32 = 16;
+        for i in 1..INSIDE {
+            for j in 1..INSIDE {
+                let (u, v) = (f64::from(i) / f64::from(INSIDE), f64::from(j) / f64::from(INSIDE));
+                let Some((col, row)) = place(Coord::new(e.min_x + u * (e.max_x - e.min_x), e.min_y + v * (e.max_y - e.min_y))) else {
+                    return whole;
+                };
+                if !(c0..=c1).contains(&col) || !(r0..=r1).contains(&row) {
+                    return whole;
+                }
+            }
+        }
+    }
     let clamp = |v: f64, n: u32| v.clamp(0.0, f64::from(n)) as u32;
-    (
-        (clamp(c0.floor() - 2.0, r.width)..clamp(c1.ceil() + 2.0, r.width)),
-        (clamp(r0.floor() - 2.0, r.height)..clamp(r1.ceil() + 2.0, r.height)),
-    )
+    ((clamp(c0, r.width)..clamp(c1, r.width)), (clamp(r0, r.height)..clamp(r1, r.height)))
 }
 
 /// Each class's mean of `bands` over the pixels under its training polygons (lon/lat rings, each
@@ -3141,5 +3158,38 @@ mod tests {
         assert!(parse_bands_str("1,,2", total).is_err(), "empty item between commas is invalid");
         assert!(parse_bands_str(",", total).is_err(), "standalone comma is invalid");
         assert!(parse_bands_str(";", total).is_err(), "standalone semicolon is invalid");
+    }
+
+    /// A polar zone held in its own system on a Web Mercator raster near the pole: the zone's
+    /// outline lands south of the raster, its inside on it. Every cell whose centre is in the zone
+    /// counts, as a scan of them all finds.
+    #[test]
+    fn a_polar_zone_counts_the_cells_inside_it_beyond_its_outline() {
+        let merc = Crs::WebMercator.transformer().unwrap_or_else(|e| panic!("{e}"));
+        let (Some(sw), Some(ne)) = (merc.from_lonlat(Coord::new(-10.0, 84.0)), merc.from_lonlat(Coord::new(10.0, 85.0))) else {
+            panic!("the corners are in Web Mercator")
+        };
+        let cell = 5_000.0;
+        let (w, h) = (((ne.x - sw.x) / cell).ceil() as u32, ((ne.y - sw.y) / cell).ceil() as u32);
+        let gt = GeoTransform { origin_x: sw.x, origin_y: ne.y, pixel_width: cell, pixel_height: -cell };
+        let r = Raster::new("polar", w, h, vec![vec![1.0; (w * h) as usize]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        // NSIDC Sea Ice Polar Stereographic North: a square of 1,000 km each way about the pole,
+        // its sides near 77°N to 81°N.
+        let polar = Crs::Epsg(3413);
+        let d = 1_000_000.0;
+        let ring = vec![Coord::new(-d, -d), Coord::new(d, -d), Coord::new(d, d), Coord::new(-d, d), Coord::new(-d, -d)];
+        let to_polar = polar.transformer().unwrap_or_else(|e| panic!("{e}"));
+        let mut inside = 0;
+        for row in 0..h {
+            for col in 0..w {
+                let c = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
+                let p = merc.to_lonlat(c).and_then(|ll| to_polar.from_lonlat(ll)).unwrap_or_else(|| panic!("{c:?} is in EPSG:3413"));
+                inside += usize::from(p.x.abs() < d && p.y.abs() < d);
+            }
+        }
+        assert!(inside > 1000, "{inside} cells are in the zone");
+        let (means, n) = zonal_means_in(&r, polar, &[0], &[ring]).unwrap_or_else(|e| panic!("{e}")).unwrap_or_else(|| panic!("no cell"));
+        assert_eq!((means, n), (vec![1.0], inside));
     }
 }

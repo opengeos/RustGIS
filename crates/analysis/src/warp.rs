@@ -527,6 +527,24 @@ pub fn rasterize(g: &Grid, shapes: &[Shape], nodata: f32) -> Result<Burned, Stri
     rasterize_in(g, Crs::LonLat, shapes, nodata)
 }
 
+/// The bounds `[min x, min y, max x, max y]` in `crs` of `shapes`' vertices held in `from`, each
+/// placed as [`rasterize_in`] places it (by the direct operation between two datums), so a grid
+/// over them holds what it burns; `None` when none can be placed. Cancel is looked at every few
+/// thousand vertices.
+pub fn placed_bounds(from: Crs, crs: Crs, shapes: &[Shape]) -> Result<Option<[f64; 4]>, String> {
+    let to = crate::tools::ToGrid::new(from, crs)?;
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (i, c) in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).enumerate() {
+        if i % 4096 == 0 {
+            crate::control::check()?;
+        }
+        if let Some(p) = to.vertex(*c) {
+            b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
+        }
+    }
+    Ok((b[0] <= b[2]).then_some(b))
+}
+
 /// [`rasterize`] of shapes in `from`: longitude/latitude, or the system their layer holds its
 /// coordinates in, converted into the grid's (none of it when that is the grid's own), by the
 /// direct operation between two datums.
