@@ -176,6 +176,8 @@ struct BaseRow {
 /// holds the copy's field `i` (`None`: Null).
 struct Print<'a> {
     row: RowRef<'a>,
+    /// The row's shape in longitude/latitude (converted one row at a time, never the layer).
+    geometry: Option<&'a Geometry>,
     fields: &'a [Option<usize>],
 }
 
@@ -184,13 +186,13 @@ impl Serialize for Print<'_> {
         struct Values<'a>(&'a Print<'a>);
         impl Serialize for Values<'_> {
             fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                let Print { row, fields } = self.0;
+                let Print { row, fields, .. } = self.0;
                 s.collect_seq(fields.iter().map(|j| j.map_or(&Value::Null, |j| row.value(j))))
             }
         }
         use serde::ser::SerializeStruct;
         let mut out = s.serialize_struct("BaseRow", 2)?;
-        out.serialize_field("geometry", &self.row.geometry())?;
+        out.serialize_field("geometry", &self.geometry)?;
         out.serialize_field("values", &Values(self))?;
         out.end()
     }
@@ -284,7 +286,11 @@ pub(crate) fn forget(package: &str) -> Result<bool, String> {
     // A keep of its rows still running lets its copy go once it is in place.
     SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(package.to_string());
     let Some(dir) = base_dir(package).filter(|d| d.exists()) else { return Ok(false) };
-    std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // Moved out of its place first, whole, so a removal cut short never leaves half a copy there:
+    // a later keep finds the place free. Moved, it is removed; one that can't be is named.
+    let gone = dir.with_extension(format!("{}.gone", crate::project::field_id()?));
+    std::fs::rename(&dir, &gone).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::remove_dir_all(&gone).map_err(|e| format!("{}: {e}; remove the folder by hand", gone.display()))?;
     Ok(true)
 }
 
@@ -301,9 +307,13 @@ pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&json!({"package": package})).map_err(|e| e.to_string())
 }
 
-/// What [`keep_ahead`] made, for `offline.keepRows` to take: the notices of what was let go (text,
-/// and whether it is an error), or why the rows couldn't be kept.
+/// What [`keep_base`] made: the notices of what was let go (text, and whether it is an error), or
+/// why the rows couldn't be kept.
 type Kept = Result<Vec<(String, bool)>, String>;
+
+/// What [`keep_ahead`] made, for `offline.keepRows` to take: whether there were rows to keep, and
+/// what keeping them made.
+type KeptAhead = (bool, Kept);
 
 /// The key `offline.keepRows`'s read is taken under.
 const KEEP_KEY: &str = "offline.keepRows";
@@ -314,10 +324,10 @@ const KEEP_KEY: &str = "offline.keepRows";
 /// read runs. With none waiting (kept already) it does nothing.
 pub(crate) fn keep_ahead(s: &mut Session) -> Option<super::reads::ReadWork> {
     let given = s.project.given.take();
-    Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> Kept {
+    Some(super::reads::ahead("Keep Field Package Rows", KEEP_KEY.into(), move || -> KeptAhead {
         match given {
-            Some(given) => keep_base(&given),
-            None => rustgis_data::progress::check().map(|()| Vec::new()).map_err(|e| e.to_string()),
+            Some(given) => (true, keep_base(&given)),
+            None => (false, rustgis_data::progress::check().map(|()| Vec::new()).map_err(|e| e.to_string())),
         }
     }))
 }
@@ -328,16 +338,20 @@ pub(crate) fn keep_ahead(s: &mut Session) -> Option<super::reads::ReadWork> {
 /// rows aren't kept, the next opening of the package keeps them, and meanwhile Send Field Package
 /// sends the whole map and says so. `kept` says whether there were rows to keep.
 pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdResult {
-    let ahead = super::reads::take::<Kept>(s, KEEP_KEY);
+    let ahead = super::reads::take::<KeptAhead>(s, KEEP_KEY);
     #[cfg(not(target_arch = "wasm32"))]
     if ahead.is_none() && s.project.given.is_some() && s.statistics_window_thread == Some(std::thread::current().id()) {
         return Err("keeping a field package's rows needs the background read queue".into());
     }
-    // Taken out of the project, so they are let go once kept, however that ends.
-    let done = match (ahead, s.project.given.take()) {
-        (Some(done), _) => done,
-        (None, Some(given)) => keep_base(&given),
-        (None, None) => return Ok(json!({"kept": false})),
+    // A read's answer: its rows were taken out of the project when it started. Kept here, they are
+    // taken out of the project, and let go once kept, however that ends. Only the path that keeps
+    // them takes them, so rows another opening left waiting are never dropped unkept.
+    let (had, done) = match ahead {
+        Some(done) => done,
+        None => match s.project.given.take() {
+            Some(given) => (true, keep_base(&given)),
+            None => return Ok(json!({"kept": false})),
+        },
     };
     let notes = done.map_err(|e| {
         if e == rustgis_data::DataError::Cancelled.to_string() {
@@ -351,7 +365,7 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
     for (text, error) in notes {
         s.notify(text, error);
     }
-    Ok(json!({"kept": true}))
+    Ok(json!({"kept": had}))
 }
 
 /// Keeps the rows `given` holds on this device under its package's identity, unless it keeps them
@@ -425,7 +439,10 @@ fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
     progress::begin(given.layers.iter().map(|(_, _, d)| d.features.len()).sum());
     let mut layers = Vec::new();
     for (id, name, dataset) in &given.layers {
-        let ds = dataset.in_lonlat().map_err(|e| format!("{name}: {e}"))?;
+        // Each row's shape is put in longitude/latitude as it is written: a layer held in another
+        // system isn't copied whole.
+        let to = dataset.lonlat_conversion().map_err(|e| format!("{name}: {e}"))?;
+        let ds = dataset;
         let fields: Vec<Option<usize>> = (0..ds.fields.len()).map(Some).collect();
         let rows_path = dir.join(format!("{id}.rows"));
         let mut rows = std::io::BufWriter::new(std::fs::File::create(&rows_path).map_err(io(&rows_path))?);
@@ -434,7 +451,8 @@ fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
         for row in ds.features.rows() {
             progress::step(1).map_err(|e| e.to_string())?;
             line.clear();
-            serde_json::to_writer(&mut line, &Print { row, fields: &fields }).map_err(|e| e.to_string())?;
+            let geometry = in_lonlat(&to, row, name)?;
+            serde_json::to_writer(&mut line, &Print { row, geometry: geometry.as_deref(), fields: &fields }).map_err(|e| e.to_string())?;
             let len = u32::try_from(line.len())
                 .ok()
                 .filter(|n| *n <= MAX_ROW)
@@ -470,6 +488,21 @@ fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
     progress::check().map_err(|e| e.to_string())?;
     let list = dir.join(LAYERS);
     std::fs::write(&list, serde_json::to_vec(&layers).map_err(|e| e.to_string())?).map_err(io(&list))
+}
+
+/// `row`'s shape in longitude/latitude by `to` (the layer's conversion, made once): borrowed when it
+/// is held there already; refused, naming the feature, when one of its places can't be.
+fn in_lonlat<'a>(
+    to: &rustgis_data::raster::Reprojection,
+    row: RowRef<'a>,
+    layer: &str,
+) -> Result<Option<std::borrow::Cow<'a, Geometry>>, String> {
+    row.geometry()
+        .map(|g| {
+            rustgis_data::Dataset::converted_to_lonlat(to, g)
+                .ok_or_else(|| format!("{layer}: feature {} has a place that can't be given in longitude/latitude", row.id()))
+        })
+        .transpose()
 }
 
 /// A file error, named by the file.
@@ -526,7 +559,9 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
             changes.gone.push(if g.name.is_empty() { format!("#{}", g.layer) } else { g.name.clone() });
             continue;
         };
-        let ds = layer.dataset.in_lonlat()?;
+        // Each row's shape is compared in longitude/latitude, converted one row at a time.
+        let to = layer.dataset.lonlat_conversion()?;
+        let ds = &layer.dataset;
         // Where the map holds each of the copy's fields, by name, and the fields added since.
         let fields: Vec<Option<usize>> = g.fields.iter().map(|n| ds.field_index(n)).collect();
         let added_fields: Vec<usize> = (0..ds.fields.len()).filter(|j| !fields.contains(&Some(*j))).collect();
@@ -540,7 +575,8 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
                     if let Some(s) = seen.get_mut(k) {
                         *s = true;
                     }
-                    let print = fingerprint(&Print { row, fields: &fields })?;
+                    let geometry = in_lonlat(&to, row, &layer.name)?;
+                    let print = fingerprint(&Print { row, geometry: geometry.as_deref(), fields: &fields })?;
                     if index.get(k).is_none_or(|e| e.print != print) || added_fields.iter().any(|j| !row.value(*j).is_null()) {
                         changed.push((k, row));
                     }
@@ -567,7 +603,8 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
                     values.push((f.name.clone(), Value::Null));
                 }
             }
-            let geometry = (row.geometry() != base.geometry.as_ref()).then_some(base.geometry);
+            let now = in_lonlat(&to, row, &layer.name)?;
+            let geometry = (now.as_deref() != base.geometry.as_ref()).then_some(base.geometry);
             if !values.is_empty() || geometry.is_some() {
                 edited.push(Given { id: e.id, values, geometry });
             }
@@ -851,13 +888,16 @@ pub(crate) fn photos_named(
         let Some(l) = edited.layers.iter().find(|l| l.id == lc.layer && !l.is_raster()) else { continue };
         let Some(fi) = field(l) else { continue };
         let Some(name) = l.dataset.fields.get(fi).map(|f| f.name.as_str()) else { continue };
+        // A layer home no longer has takes none of the changes, nor their photos.
+        let Some(home_layer) = home.and_then(|m| m.layers.iter().find(|h| h.id == lc.layer && !h.is_raster())) else { continue };
         // An edit to a feature home no longer has is dropped, its photo with it.
         let mut photo_edits: HashSet<u64> =
             lc.edited.iter().filter(|g| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))).map(|g| g.id).collect();
-        let at_home: HashSet<u64> = home
-            .and_then(|m| m.layers.iter().find(|h| h.id == lc.layer && !h.is_raster()))
-            .map(|h| h.dataset.features.rows().map(|r| r.id()).filter(|id| photo_edits.contains(id)).collect())
-            .unwrap_or_default();
+        let at_home: HashSet<u64> = if photo_edits.is_empty() {
+            HashSet::new()
+        } else {
+            home_layer.dataset.features.rows().map(|r| r.id()).filter(|id| photo_edits.contains(id)).collect()
+        };
         photo_edits.retain(|id| at_home.contains(id));
         let ids: HashSet<u64> = lc.added.iter().copied().chain(photo_edits).collect();
         for row in l.dataset.features.rows().filter(|r| ids.contains(&r.id())) {
@@ -875,14 +915,22 @@ pub(crate) fn photos_named(
 /// uses may still be one a package out holds (a feature deleted here since), so it isn't kept.
 /// Whether it took a new one; refused when none is left.
 pub(crate) fn id_at_home(own: u64, home_top: u64, taken: bool, top: u64, layer: &str) -> Result<(u64, bool), String> {
-    if own > home_top && !taken { Ok((own, false)) } else { top.checked_add(1).map(|id| (id, true)).ok_or_else(|| exhausted(layer)) }
+    let (id, renumbered) =
+        if own > home_top && !taken { (own, false) } else { (top.checked_add(1).ok_or_else(|| exhausted(layer))?, true) };
+    // Above `i64::MAX` no GeoPackage or PostGIS table holds it, and the area couldn't be packaged
+    // again: refused, as an id run out is.
+    if id >= i64::MAX.unsigned_abs() {
+        return Err(exhausted(layer));
+    }
+    Ok((id, renumbered))
 }
 
 /// The refusal when a feature added in the field needs a new id and none is left above the
 /// layer's highest (`u64::MAX`): the command fails, and the project is put back as it was.
 pub(crate) fn exhausted(layer: &str) -> String {
     format!(
-        "cannot bring back layer '{layer}': a feature added in the field needs a new id, and none is left above the layer's highest. Nothing was changed"
+        "cannot bring back layer '{layer}': a feature added in the field needs an id below {}, the largest a GeoPackage or PostGIS feature can have, and none is left above the layer's highest. Nothing was changed",
+        i64::MAX
     )
 }
 
@@ -1013,6 +1061,55 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A read's answer lands without taking rows another opening left waiting: those are kept by
+    /// the keep that follows, not dropped.
+    #[test]
+    fn a_landing_keep_leaves_rows_waiting_for_another() {
+        let id = crate::project::field_id().unwrap();
+        let mut project = Project::new("Field");
+        project.field_origin = Some(crate::project::FieldOrigin {
+            project: crate::project::field_id().unwrap(),
+            area: crate::project::field_id().unwrap(),
+            generation: String::new(),
+            package: id.clone(),
+            ids: Default::default(),
+        });
+        project.given = Some(std::sync::Arc::new(GivenRows::of(&project, &id)));
+        let mut s = Session::new(project);
+        let read = super::super::reads::read_ahead(&mut s, "offline.keepRows", &json!({})).unwrap();
+        let done = read.run(&rustgis_analysis::control::Control::new()).unwrap();
+        // Rows waiting again before the answer lands (another package's, say).
+        let other = crate::project::field_id().unwrap();
+        s.project.given = Some(std::sync::Arc::new(GivenRows::of(&s.project, &other)));
+        super::super::reads::read_land(&mut s, done).unwrap();
+        assert!(s.field_rows_waiting(), "the waiting rows were dropped");
+        s.run("offline.keepRows", &json!({})).unwrap();
+        assert!(!s.field_rows_waiting() && base_dir(&other).unwrap().join(LAYERS).is_file());
+    }
+
+    /// A keep with no rows waiting says it kept none, whether its read ran ahead or not.
+    #[test]
+    fn a_keep_with_nothing_waiting_says_it_kept_none() {
+        let mut s = Session::new(Project::new("Field"));
+        let read = super::super::reads::read_ahead(&mut s, "offline.keepRows", &json!({})).unwrap();
+        let done = read.run(&rustgis_analysis::control::Control::new()).unwrap();
+        assert_eq!(super::super::reads::read_land(&mut s, done).unwrap()["kept"], false);
+        assert_eq!(s.run("offline.keepRows", &json!({})).unwrap()["kept"], false);
+    }
+
+    /// A feature added in the field keeps its id only above every id home had or kept, and no id
+    /// from `i64::MAX` up is ever given: none a GeoPackage or PostGIS table can't hold.
+    #[test]
+    fn ids_at_home_stay_above_home_and_below_the_largest_a_table_holds() {
+        assert_eq!(id_at_home(11, 10, false, 10, "L").unwrap(), (11, false));
+        assert_eq!(id_at_home(9, 10, false, 12, "L").unwrap(), (13, true));
+        assert_eq!(id_at_home(11, 10, true, 12, "L").unwrap(), (13, true));
+        let largest = i64::MAX.unsigned_abs();
+        assert!(id_at_home(largest, 10, false, 10, "L").is_err());
+        assert!(id_at_home(5, 10, false, largest - 1, "L").is_err());
+        assert_eq!(id_at_home(5, 10, false, largest - 2, "L").unwrap(), (largest - 1, true));
     }
 
     /// A keep that failed and then couldn't remove its partial copy says both.

@@ -644,15 +644,22 @@ pub struct FieldOrigin {
     /// feature added in the field is given an id above it, even after the features with the
     /// highest ids are deleted, so it is never taken for one the package gave.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "std::collections::BTreeMap<u32, crate::schema::IdFloor>"))]
     pub ids: std::collections::BTreeMap<u32, u64>,
 }
 
 impl Project {
-    /// Keeps the ids new features are given above those an offline area's packages gave
-    /// ([`OfflineArea::ids`]), in both maps a feature can be added to for the area: its source map
-    /// (by [`OfflineArea::map`]) and its offline map, when open (by its area id, or the offline
-    /// title a map saved before maps carried one has). Run again wherever either is made anew.
-    pub(crate) fn keep_area_ids(&mut self) {
+    /// Keeps the ids new features are given above those field packages hold: in a field project,
+    /// those its package gave ([`FieldOrigin::ids`]); at home, those an offline area's packages gave
+    /// ([`OfflineArea::ids`]), in both maps a feature can be added to for the area, its source map
+    /// (by [`OfflineArea::map`]) and its offline map when open (by its area id, or the offline title
+    /// a map saved before maps carried one has). The session runs it after every command, Undo and
+    /// Redo, and when a project is opened ([`crate::Session::keep_field_floors`]), so a layer whose
+    /// rows were replaced (reloaded, renewed, restored) still keeps them.
+    pub(crate) fn keep_field_floors(&mut self) {
+        if let (Some(origin), Some(map)) = (self.field_origin.clone(), self.maps.first_mut()) {
+            origin.keep_ids(map);
+        }
         for area in &self.offline_areas {
             let offline = format!("{}{}", area.name, crate::cmd::field::OFFLINE);
             let is_area_map = |m: &Map| {
@@ -690,10 +697,10 @@ pub(crate) fn field_id() -> Result<String, String> {
 }
 
 /// Whether the highest ids a field package's layers had ([`FieldOrigin::ids`], [`OfflineArea::ids`])
-/// can be: no more than the largest id a GeoPackage or PostGIS feature can have (`i64::MAX`), so
-/// new features always have ids free above them. A larger one is hostile, and refused.
+/// can be: below the largest id a GeoPackage or PostGIS feature can have (`i64::MAX`), so the next
+/// new feature's id is one either can hold. One at or above it is hostile, and refused.
 pub(crate) fn valid_id_floors(ids: &std::collections::BTreeMap<u32, u64>) -> bool {
-    ids.values().all(|id| *id <= i64::MAX.unsigned_abs())
+    ids.values().all(|id| *id < i64::MAX.unsigned_abs())
 }
 
 pub(crate) fn valid_field_id(id: &str) -> bool {
@@ -729,6 +736,7 @@ pub struct OfflineArea {
     /// layer id: a feature added to the map here is given an id above it, so a package still out
     /// never takes one added since for a feature it was given.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "std::collections::BTreeMap<u32, crate::schema::IdFloor>"))]
     pub ids: std::collections::BTreeMap<u32, u64>,
     /// The snapshot: the map's feature layers holding the features meeting the extent.
     #[cfg_attr(feature = "schema", schemars(with = "crate::schema::Open"))]
@@ -1325,6 +1333,30 @@ impl Project {
         self.next_table_id = self.next_table_id.max(other.next_table_id);
     }
 
+    /// Keeps the ids field packages hold, recorded in another state of the project, in this one,
+    /// which takes its place (undo, redo): each offline area's ([`OfflineArea::ids`], by area id)
+    /// and the field project's own ([`FieldOrigin::ids`], for the same package) only go up. A
+    /// package sent goes on holding its ids whatever is undone at home.
+    pub(crate) fn keep_field_ids(&mut self, other: &Project) {
+        let up = |into: &mut std::collections::BTreeMap<u32, u64>, from: &std::collections::BTreeMap<u32, u64>| {
+            for (layer, id) in from {
+                let held = into.entry(*layer).or_insert(0);
+                *held = (*held).max(*id);
+            }
+        };
+        for area in self.offline_areas.iter_mut().filter(|a| !a.id.is_empty()) {
+            if let Some(was) = other.offline_areas.iter().find(|o| o.id == area.id) {
+                up(&mut area.ids, &was.ids);
+            }
+        }
+        if let (Some(origin), Some(was)) = (self.field_origin.as_mut(), other.field_origin.as_ref())
+            && !origin.package.is_empty()
+            && origin.package == was.package
+        {
+            up(&mut origin.ids, &was.ids);
+        }
+    }
+
     /// Adds a standalone table, and returns the id it got.
     pub fn add_table(&mut self, dataset: Dataset) -> u32 {
         let id = self.new_table_id();
@@ -1823,12 +1855,6 @@ impl Project {
             return Err("not a RustGIS project: an offline field identity is invalid or duplicated".into());
         }
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
-        // A field project's new features stay above the ids its package gave, opened again or not,
-        // and a home map's above those its areas' packages gave.
-        if let (Some(origin), Some(map)) = (p.field_origin.clone(), p.maps.first_mut()) {
-            origin.keep_ids(map);
-        }
-        p.keep_area_ids();
         // (A backstop: `check_format` has refused it already.)
         if p.format > READ_FORMAT {
             return Err(format!("this project was saved by a newer RustGIS (format {}). Update RustGIS to open it.", p.format));

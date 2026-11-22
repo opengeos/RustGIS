@@ -754,6 +754,13 @@ fn a_sent_return_removes_the_rows_its_package_gave_and_a_failed_one_keeps_them()
     a.run("offline.package", &json!({"path": path})).unwrap();
     assert!(path.is_file());
     assert!(!kept.exists(), "a sent return lets the rows go");
+    // Moved out of its place before it was removed, and nothing of it left anywhere.
+    let left: Vec<_> = std::fs::read_dir(kept.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&package_id))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
     assert!(a.notices_since(mark).iter().any(|n| n.text.contains("no longer keeps the rows")), "{:?}", a.notices);
     let back = std::fs::read(&path).unwrap();
     assert!(changes_in(&back).is_some());
@@ -1026,7 +1033,7 @@ fn a_feature_added_at_home_never_takes_an_id_a_package_out_was_given() {
     }
 }
 
-/// A field project whose package gave the largest id a feature can have still gives each new
+/// A field project whose package gave the largest id a floor can be still gives each new
 /// feature an id of its own, saved and opened again: the floor leaves room above it.
 #[test]
 fn new_features_are_given_ids_of_their_own_above_the_largest_floor() {
@@ -1036,7 +1043,7 @@ fn new_features_are_given_ids_of_their_own_above_the_largest_floor() {
     let mut a = phone(&temp, &out, "a");
     let cities = layer(&a, "Cities");
     let name = text_field(&a, cities);
-    let floor = i64::MAX.unsigned_abs();
+    let floor = i64::MAX.unsigned_abs() - 1;
     a.project.field_origin.as_mut().unwrap().ids.insert(cities, floor);
     let saved = temp.0.join("field.rgis");
     a.run("project.saveAs", &json!({"path": saved})).unwrap();
@@ -1082,9 +1089,15 @@ fn a_layer_with_no_ids_left_above_is_not_packaged() {
     let hc = layer(&home, "Cities");
     let fields = home.map().layer(hc).unwrap().dataset.fields.len();
     let inside = || Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(10.0, 5.0)));
-    home.map_mut().layer_mut(hc).unwrap().dataset.features.push_parts(u64::MAX, inside(), vec![rustgis_data::Value::Null; fields]);
-    let refused = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap_err();
-    assert!(refused.contains("Cities") && refused.contains("ids of their own"), "{refused}");
+    // From the largest id a GeoPackage or PostGIS feature can have up: the next would be one neither
+    // can hold.
+    for top in [i64::MAX.unsigned_abs(), u64::MAX] {
+        let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
+        ds.features.retain_rows(|r| r.id() < i64::MAX.unsigned_abs());
+        ds.features.push_parts(top, inside(), vec![rustgis_data::Value::Null; fields]);
+        let refused = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap_err();
+        assert!(refused.contains("Cities") && refused.contains("can hold"), "{top}: {refused}");
+    }
 }
 
 /// A package is out holding the city with the highest id. The office deletes the city and syncs,
@@ -1192,6 +1205,55 @@ fn a_feature_added_in_the_field_never_keeps_an_id_another_package_holds() {
     assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{city}"))), "{said:?}");
     assert_eq!(with_label(&home, cities, &name, "A's point"), 1);
     assert_eq!(with_label(&home, cities, &name, "B's edit"), 0);
+}
+
+/// The office removes a layer while the package is out; the phone adds a feature with a photo to
+/// it. The layer's changes aren't brought back, and said, and neither is the photo, which no
+/// feature here would name.
+#[test]
+fn a_photo_of_a_feature_added_to_a_layer_home_removed_is_not_stored() {
+    let temp = Temp::new("removed-layer-photo");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let photo = temp.0.join("new.jpg");
+    std::fs::write(&photo, b"photo bytes").unwrap();
+    a.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+    a.run(
+        "edit.addFeature",
+        &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10.0, 5.0]}, "attributes": {name.clone(): "Captured", "photos": photo.display().to_string()}}),
+    )
+    .unwrap();
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    std::fs::remove_file(&photo).unwrap();
+    home.run("layer.remove", &json!({"layer": layer(&home, "Cities")})).unwrap();
+    let path = temp.0.join("back.rgisfield");
+    std::fs::write(&path, &back).unwrap();
+    let mark = home.notice_mark();
+    let done = home.run("offline.bringBack", &json!({"path": path})).unwrap();
+    assert_eq!(done["photos"].as_u64(), Some(0), "{done}");
+    assert!(!temp.0.join("Day photos").join("new.jpg").exists());
+    assert!(home.notices_since(mark).iter().any(|n| n.text.contains("are no longer in the map")));
+}
+
+/// The office defines another projection for a layer of the area's open offline map, a change to
+/// where its features are though its rows are as they were: Bring Back refuses, as for any edit
+/// not synced, so renewing the area doesn't lose it.
+#[test]
+fn a_projection_defined_on_the_offline_map_counts_as_unsynced() {
+    let temp = Temp::new("defined-projection");
+    let mut home = home(&temp);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    add_point(&mut a, cities, &name, "Captured", [10.0, 5.0]);
+    home.run("offline.open", &json!({"name": "Day"})).unwrap();
+    home.run("layer.defineProjection", &json!({"layer": cities, "crs": "EPSG:3857"})).unwrap();
+    let (refused, _) = try_bring_back(&temp, &mut a, &mut home, "a");
+    assert!(refused.unwrap_err().contains("aren't synced yet"));
 }
 
 /// A layer removed on the phone is said on sending: its features go back unchanged.

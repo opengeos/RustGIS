@@ -69,7 +69,10 @@ pub fn suggested_name(s: &Session, p: &Value) -> String {
 /// online (a web address, not an archive), and an archive that couldn't be read are said.
 #[cfg(test)]
 pub(crate) fn package(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), String> {
-    let (name, bytes, notes) = package_output(s, p)?;
+    let made = package_output(s, p);
+    // As the command's end keeps the floors of the ids packages hold.
+    s.keep_field_floors();
+    let (name, bytes, notes) = made?;
     for note in notes {
         s.notify(note, false);
     }
@@ -381,11 +384,12 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         // snapshot, holds no floor of its own, and a package still out may hold a higher id.
         let recorded =
             s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(&area)).map(|a| a.ids.clone()).unwrap_or_default();
-        // New features are given ids above the highest: one past `i64::MAX`, the largest a GeoPackage
-        // or PostGIS feature can have, would leave too few, and isn't a floor a project can keep.
-        if let Some(l) = map.layers.iter().find(|l| !l.is_raster() && l.dataset.features.highest_id() > i64::MAX.unsigned_abs()) {
+        // New features are given ids above the highest: at `i64::MAX`, the largest a GeoPackage or
+        // PostGIS feature can have, the next would be one neither can hold, and the floor isn't one a
+        // project can keep.
+        if let Some(l) = map.layers.iter().find(|l| !l.is_raster() && l.dataset.features.highest_id() >= i64::MAX.unsigned_abs()) {
             return Err(format!(
-                "{}: a feature's id is above {}, the largest the field package can keep ids free above, so features added in the field couldn't be given ids of their own. Give the layer's features smaller ids (copy them to a new layer), then package it",
+                "{}: a feature's id is {} or more, so features added in the field couldn't be given ids a GeoPackage or PostGIS table can hold. Give the layer's features smaller ids (copy them to a new layer), then package it",
                 l.name,
                 i64::MAX
             ));
@@ -403,7 +407,6 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
                 *held = (*held).max(*id);
             }
         }
-        s.project.keep_area_ids();
     }
     project.maps = vec![map];
     let home = &s.project;
@@ -550,7 +553,6 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                 field_edit(s, "Prepare home project for field package", |s| {
                     s.project.origin_id = origin;
                     s.project.offline_areas = areas;
-                    s.project.keep_area_ids();
                     Ok(Value::Null)
                 })
                 .map_err(|e| {

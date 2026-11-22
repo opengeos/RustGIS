@@ -349,8 +349,6 @@ pub fn commands() -> Vec<C> {
                 }
                 s.project.maps.push(m);
                 s.project.active_map = s.project.maps.len() - 1;
-                // New features added in it are kept above the ids the area's packages gave.
-                s.project.keep_area_ids();
             }
             s.active_layer = s.map().layers.first().map(|l| l.id);
             s.zoom_to(&extent);
@@ -1167,8 +1165,6 @@ pub(crate) fn renew_area(
             a.generation = id;
         }
     }
-    // The offline map, made anew, keeps new ids above those the area's packages gave.
-    s.project.keep_area_ids();
     Ok(())
 }
 
@@ -1183,7 +1179,11 @@ pub(crate) fn area_unsynced(project: &Project, ai: usize) -> bool {
     layers(open) != layers(&area.data)
         || open.layers.iter().filter(|l| !l.is_raster()).any(|l| {
             area.data.layers.iter().find(|b| b.id == l.id).is_none_or(|b| {
-                l.dataset.fields != b.dataset.fields
+                // Coordinates read in another system (Define Projection) are an edit though the rows
+                // are the same.
+                l.dataset.coord_crs() != b.dataset.coord_crs()
+                    || l.dataset.crs != b.dataset.crs
+                    || l.dataset.fields != b.dataset.fields
                     || (!l.dataset.features.shares(&b.dataset.features) && l.dataset.features != b.dataset.features)
             })
         })

@@ -184,7 +184,7 @@
           "patternProperties": {
             "^\\d+$": {
               "format": "uint64",
-              "maximum": 18446744073709551615,
+              "maximum": 9223372036854775806,
               "minimum": 0,
               "type": "integer"
             }
@@ -659,7 +659,7 @@
           "patternProperties": {
             "^\\d+$": {
               "format": "uint64",
-              "maximum": 18446744073709551615,
+              "maximum": 9223372036854775806,
               "minimum": 0,
               "type": "integer"
             }

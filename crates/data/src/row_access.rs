@@ -140,6 +140,11 @@ impl Features {
         self.id_floor = self.id_floor.max(id);
     }
 
+    /// The id new rows are kept above ([`Features::keep_ids_above`]), 0 for none.
+    pub fn id_floor(&self) -> u64 {
+        self.id_floor
+    }
+
     /// The highest id a row has, or that new rows are kept above ([`Features::keep_ids_above`]):
     /// the next new row's id is one more.
     pub fn highest_id(&self) -> u64 {

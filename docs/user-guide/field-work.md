@@ -208,11 +208,12 @@ Make one from the area's offline map with **Package for the Field** again. A pac
 once: the same package returned again, from the same phone or from a copy on a second one, is
 refused and changes nothing. A feature added on the phone is given an id above every id its package
 gave, and one added on the computer an id above every id the area's packages gave, so neither is
-taken for a feature a package holds. A feature added on the phone keeps its id unless the computer
-uses it already; then it takes the next free one, and the summary says how many did. A package made
-before packages had an identity of their own comes back as a whole map, as described above; one made
-before packages carried a return check comes back with a notice and no such protection: it can undo
-or repeat what came home since. A package for an area the project doesn't have is refused.
+taken for a feature a package holds. A feature added on the phone keeps its id when that is above
+every id the computer's layer has or keeps; otherwise it takes the next free one above them, and the
+summary says how many did. A package made before packages had an identity of their own comes back as
+a whole map, as described above; one made before packages carried a return check comes back with a
+notice and no such protection: it can undo or repeat what came home since. A package for an area the
+project doesn't have is refused.
 
 ### Origin identities and older field copies
 

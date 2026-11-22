@@ -1333,9 +1333,9 @@ mod tests {
         let mut invalid = saved.clone();
         invalid["field_origin"]["package"] = json!("not-an-id");
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
-        // Hostile highest ids, which would leave no id free above them, are refused too; the largest a
-        // feature can have is kept, and leaves room.
-        for bad in [json!(u64::MAX), json!(u64::MAX - 1), json!(i64::MAX.unsigned_abs() + 1)] {
+        // Hostile highest ids, whose next id no GeoPackage or PostGIS table could hold, are refused
+        // too, from the largest such a feature can have (`i64::MAX`) up; the one below it is kept.
+        for bad in [json!(u64::MAX), json!(u64::MAX - 1), json!(i64::MAX.unsigned_abs() + 1), json!(i64::MAX.unsigned_abs())] {
             let mut invalid = saved.clone();
             invalid["field_origin"]["ids"] = json!({"1": bad});
             assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"), "{bad}");
@@ -1347,7 +1347,7 @@ mod tests {
         assert!(kept["requires"].as_array().unwrap().contains(&json!("field-package")), "{}", kept["requires"]);
         assert_eq!(Project::from_json(&kept.to_string()).unwrap().field_origin.unwrap().ids, floors.field_origin.as_ref().unwrap().ids);
         let mut largest = saved.clone();
-        largest["field_origin"]["ids"] = json!({"1": i64::MAX.unsigned_abs()});
+        largest["field_origin"]["ids"] = json!({"1": i64::MAX.unsigned_abs() - 1});
         assert!(Project::from_json(&largest.to_string()).is_ok());
         let mut with_area = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
         with_area.offline_areas.push(super::super::OfflineArea {
