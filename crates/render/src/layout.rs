@@ -8,9 +8,9 @@ use rustgis_data::GeometryType;
 use rustgis_data::query::{Env, SeriesPage};
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
-    ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout,
-    LineHead, MAX_LEGEND_COLUMNS, Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits,
-    TextAlign, TickSide, UnitLabelPosition, frame_camera, layout_text_scale,
+    ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout, LineHead, MAX_LEGEND_COLUMNS,
+    Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide,
+    UnitLabelPosition, frame_camera, layout_text_scale,
 };
 use rustgis_map::symbology::LegendEntry;
 use rustgis_map::{Map, Rgba};
@@ -2463,7 +2463,9 @@ struct BarUnit {
 /// said, rather than any line drawn smaller. A bar with none of the details draws where it always
 /// was at the default size.
 fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma: bool) -> Option<BarLayout> {
-    use rustgis_map::layout::{MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS};
+    use rustgis_map::layout::{
+        MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS,
+    };
     if !(ground_per_pt.is_finite() && ground_per_pt > 0.0 && ppp.is_finite() && ppp > 0.0) {
         return None;
     }
@@ -2618,9 +2620,8 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma
         Some(BarUnit { x, y, text, align })
     };
     let unit = if has_unit { place_unit() } else { None };
-    let unit_right = unit.as_ref().map_or(f32::MIN, |u| {
-        if matches!(u.align, text::Align::Left) { u.x + measure(&u.text) } else { u.x + half(&u.text) }
-    });
+    let unit_right =
+        unit.as_ref().map_or(f32::MIN, |u| if matches!(u.align, text::Align::Left) { u.x + measure(&u.text) } else { u.x + half(&u.text) });
     let right = (x0 + len).max(right_label).max(unit_right);
     // Sideways the bar keeps its length: its first label is kept within its reach by the inset,
     // and its last reaches no further past the box's right side than the default size's does, or
@@ -9081,9 +9082,7 @@ Elaboração: RustGIS",
         // In a box 34 pixels tall (9 mm at a point a pixel), the default leaves room over its
         // labels; at 14 points the bar moves down so they reach no higher than the box's top, and
         // at 40 the box is too short for them and the bar, which is drawn below it.
-        let in_box = |h: f32, pt: f64| {
-            bar_layout(Rect::from_xywh(0.0, 0.0, 400.0, h).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap()
-        };
+        let in_box = |h: f32, pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 400.0, h).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap();
         let rise = |b: &BarLayout| b.label_y - b.px * BAR_LABEL_RISE;
         let (eight, fourteen, forty) = (in_box(34.0, 8.0), in_box(34.0, 14.0), in_box(34.0, 40.0));
         assert!((eight.y0 - (34.0 * 0.62 - eight.bar_h / 2.0)).abs() < 1e-4 && rise(&eight) > 0.0, "the default where it was");
@@ -9092,8 +9091,7 @@ Elaboração: RustGIS",
         assert!(!eight.cramped && !fourteen.cramped);
         // Sideways, its last label at 40 points past a narrow box's right side, its bar the same
         // length: too narrow, its box tall enough. At 8 points the same box holds it.
-        let narrow =
-            |pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 90.0, 400.0).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap();
+        let narrow = |pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 90.0, 400.0).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap();
         let (n8, n40) = (narrow(8.0), narrow(40.0));
         assert!(!n8.cramped && n40.cramped && n40.y0 + n40.bar_h < 400.0 && n40.len == n8.len, "{} {}", n40.y0, n40.len);
         // A publication's short box (17 pixels): the default reaches over it, as it always did,
@@ -9475,7 +9473,9 @@ Elaboração: RustGIS",
         let id = l.add("Scale Bar", (10.0, 0.0, 100.0, 12.0), ElementKind::scale_bar(frame));
         let info = PageInfo::default();
         let set = |l: &mut Layout, size: f64, rows: bool| {
-            if let Some(ElementKind::ScaleBar { text_size, label_position, unit_label_position, .. }) = l.element_mut(id).map(|e| &mut e.kind) {
+            if let Some(ElementKind::ScaleBar { text_size, label_position, unit_label_position, .. }) =
+                l.element_mut(id).map(|e| &mut e.kind)
+            {
                 *text_size = size;
                 (*label_position, *unit_label_position) = if rows {
                     (ScaleLabelPosition::Below, UnitLabelPosition::Above)

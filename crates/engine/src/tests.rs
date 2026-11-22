@@ -11642,7 +11642,8 @@ fn layout_scale_bars_take_their_details() {
         }
         k => panic!("{k:?}"),
     };
-    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, None, SCALE_BAR_TEXT_PT, ScaleBarFit::AdjustDivisionValue);
+    let plain =
+        (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, None, SCALE_BAR_TEXT_PT, ScaleBarFit::AdjustDivisionValue);
     assert_eq!(details(&s, bar), plain);
     s.run(
         "layout.update",

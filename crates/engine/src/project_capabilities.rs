@@ -1417,7 +1417,12 @@ mod tests {
                 // its own.
                 let requires = saved.get("requires").and_then(Value::as_array).cloned().unwrap_or_default();
                 assert_eq!(requires.contains(&json!("layout-scale-bar-details")), required, "{id} {params}");
-                assert!(requires.iter().all(|r| ["layout-scale-bar-details", "layout-chart-look", "layout-text-size"].contains(&r.as_str().unwrap_or(""))), "{id} {params}");
+                assert!(
+                    requires
+                        .iter()
+                        .all(|r| ["layout-scale-bar-details", "layout-chart-look", "layout-text-size"].contains(&r.as_str().unwrap_or(""))),
+                    "{id} {params}"
+                );
             }
         }
     }

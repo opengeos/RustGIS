@@ -9,9 +9,8 @@ use rustgis_engine::map::layout::{
     Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LAYOUT_TEXT_SIZE,
     Layout, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
     MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS,
-    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarFit,
-    ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle,
-    line_length,
+    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarFit, ScaleBarStyle,
+    ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle, line_length,
 };
 use rustgis_engine::map::report::StatKind;
 use rustgis_engine::map::symbology::Dash;
@@ -3922,16 +3921,9 @@ mod tests {
             _ => panic!("a scale bar"),
         };
         assert_eq!(set(&h), (ScaleLabelPosition::Above, None, ScaleBarFit::AdjustDivisionValue));
-        for label in [
-            "Subdivisions",
-            "Divisions before zero",
-            "Decimals",
-            "Text size",
-            "Label position",
-            "Unit label",
-            "Unit label position",
-            "Fit",
-        ] {
+        for label in
+            ["Subdivisions", "Divisions before zero", "Decimals", "Text size", "Label position", "Unit label", "Unit label position", "Fit"]
+        {
             assert!(h.query_by_label(label).is_some(), "{label}");
         }
         // Left empty, the field shows what the bar prints: an automatic unit's abbreviation

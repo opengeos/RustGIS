@@ -4515,7 +4515,13 @@ mod tests {
         };
         assert_eq!(
             got(2),
-            (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, Some(MAX_SCALE_DECIMALS as u8), *LAYOUT_TEXT_SIZE.end(), "x".repeat(MAX_UNIT_LABEL_CHARS))
+            (
+                MAX_SCALE_SUBDIVISIONS,
+                MAX_SCALE_BEFORE_ZERO,
+                Some(MAX_SCALE_DECIMALS as u8),
+                *LAYOUT_TEXT_SIZE.end(),
+                "x".repeat(MAX_UNIT_LABEL_CHARS)
+            )
         );
         assert_eq!(got(3), (0, 0, None, *LAYOUT_TEXT_SIZE.start(), "a b c d".to_string()));
         // One subdivision is the division whole: it loads as none, quietly, and asks for no details.

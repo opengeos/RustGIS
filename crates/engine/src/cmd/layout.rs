@@ -11,8 +11,8 @@ use rustgis_map::layout::{
     Grid, GridEdges, GridKind, GridStyle, Guides, LAYOUT_TEXT_SIZE, Layout, LineDir, LineHead, MAX_CHART_BARS, MAX_CHART_DECIMALS,
     MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES, MAX_LEGEND_COLUMNS, MAX_LEGEND_LABEL_CHARS, MAX_LEGEND_LABELS, MAX_SCALE_BEFORE_ZERO,
     MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MAX_UNIT_LABEL_CHARS, MIN_ELEMENT_MM, MapSeries,
-    Orientation, PAGES, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign,
-    TickSide, UnitLabelPosition, fit_scale, line_angle, line_at_angle, line_length,
+    Orientation, PAGES, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide,
+    UnitLabelPosition, fit_scale, line_angle, line_at_angle, line_length,
 };
 use rustgis_map::report::StatKind;
 use rustgis_map::symbology::{Dash, MAX_DASH_STEP, MAX_DASH_STEPS};
@@ -5005,7 +5005,10 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
             decimals,
             fit,
         } => {
-            if ["style", "units", "divisions", "color", "fill", "textSize", "decimals"].iter().chain(SCALE_BAR_KEYS.iter()).all(|k| p.get(k).is_none())
+            if ["style", "units", "divisions", "color", "fill", "textSize", "decimals"]
+                .iter()
+                .chain(SCALE_BAR_KEYS.iter())
+                .all(|k| p.get(k).is_none())
             {
                 return Ok(None);
             }
