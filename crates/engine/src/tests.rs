@@ -6779,6 +6779,15 @@ fn tessellations_and_points_by_cell_in_every_system() {
     assert!(plane(&s, "moll").contains("ollweide"), "{}", plane(&s, "moll"));
     let n = counted(&s, "moll");
     assert!(n == cities || r.to_string().contains("left out"), "{n} of {cities}: {r}");
+    // The world on it reaches both poles, where its plane loses the longitude.
+    let r = s
+        .run(
+            "gp.run",
+            &json!({"tool": "dggsGrid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": "moll world"}}),
+        )
+        .unwrap();
+    assert!(s.map().layer_by_name("moll world").is_some_and(|l| l.dataset.features.len() > 12), "{r}");
+    assert!(!r.to_string().contains("85.05"), "{r}");
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     s.run(
         "gp.run",

@@ -483,6 +483,12 @@ impl<'a> Plane<'a> {
     /// that doesn't hold it.
     fn holding_point(&self, c: Coord) -> Option<Coord> {
         let m = self.forward(c)?;
+        // A pole is one place whatever its longitude, which a plane that draws it as a point
+        // (Mollweide) can't give back: any finite place for it holds it, on a plane that reaches
+        // the poles (Web Mercator's would be its edge, 85.05°).
+        if c.y.abs() >= 90.0 - 1e-9 && self.lat_limit().is_none() {
+            return Some(m);
+        }
         let back = self.inverse(m)?;
         ((back.y - c.y).abs() < 1e-6 && ((back.x - c.x + 180.0).rem_euclid(360.0) - 180.0).abs() < 1e-6).then_some(m)
     }
@@ -1540,11 +1546,15 @@ mod tests {
     /// round the poles (the hexagon grid's Web Mercator stops at 85.05°).
     #[test]
     fn a_point_falls_in_the_cell_holding_it() {
-        let places: [(f64, f64); 7] =
-            [(179.9999, 10.0), (-179.9999, -40.0), (10.75, 59.91), (-74.08, 4.6), (0.0, 0.0), (120.0, -89.99), (30.0, 89.99)];
+        let places: [(f64, f64); 8] =
+            [(179.9999, 10.0), (-179.9999, -40.0), (10.75, 59.91), (-74.08, 4.6), (0.0, 0.0), (120.0, -89.99), (30.0, 89.99), (45.0, 90.0)];
         for (system, res) in SYSTEMS {
             for (x, y) in places {
                 let polar = y.abs() > 85.0;
+                // The pole itself is a corner of the cells round it, on their outlines, not in one.
+                if y.abs() >= 90.0 && system != "Hexagon" {
+                    continue;
+                }
                 if polar && system == "Hexagon" {
                     // Web Mercator doesn't reach it: the point is left out, and said to be,
                     // never put in the edge cell its latitude would be clamped to.
