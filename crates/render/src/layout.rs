@@ -2367,7 +2367,9 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let label = |j: usize| {
         let v = number(total, divs, j as isize - before as isize);
         if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels {
-            if bar.unit_label.is_some() { last_label(&v, &unit, 2.0 * (inner_right - (x0 + len)), measure) } else { format!("{v} {unit}") }
+            // Centred on the bar's end: half of it each side, inside the nearer edge.
+            let room = 2.0 * (inner_right - (x0 + len)).min((x0 + len) - inner_left);
+            if bar.unit_label.is_some() { last_label(&v, &unit, room, measure) } else { format!("{v} {unit}") }
         } else {
             v
         }
@@ -8888,6 +8890,42 @@ Elaboração: RustGIS",
         let long_cols = columns(&narrow(&long, UnitLabelPosition::AfterLabels));
         let end = bare.iter().rposition(|&c| c).unwrap();
         // The last number: back from its right edge to a 3 px gap.
+        let start = (0..end).rev().find(|&x| x >= 2 && !bare[x] && !bare[x - 1] && !bare[x - 2]).map_or(0, |x| x + 1);
+        let number = &bare[start..=end];
+        let found = (0..=start).any(|d| long_cols[start - d..=end - d] == *number);
+        assert!(found, "the last number {start}..={end} is drawn whole: {long_cols:?}");
+    }
+
+    /// A long unit after the labels of a short bar, centred on its end, stays inside both edges of
+    /// the element, the last number drawn whole.
+    #[test]
+    fn a_unit_after_the_labels_of_a_short_bar_stays_inside_both_edges() {
+        let long = "k".repeat(100);
+        // 79 px to use at 250 m a point, 19.8 km: four 2 km divisions, a 32 px bar ending nearer
+        // the left edge than the right.
+        let draw = |unit: &str| {
+            let bar = BarOptions {
+                units: ScaleUnits::Kilometers,
+                fit: ScaleBarFit::AdjustWidth,
+                unit_label: Some(unit),
+                ..BarOptions::default()
+            };
+            let mut pm = Pixmap::new(93, 60).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            let r = Rect::from_xywh(0.0, 0.0, 93.0, 60.0).unwrap();
+            crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 250.0, &bar, DEFAULT_COLORS, 1.0, false));
+            pm
+        };
+        let (pm, bare) = (draw(&long), draw(""));
+        // The first label, "0", reaches the left edge as on every bar: the long unit adds nothing
+        // there, nor anything at the right edge.
+        let at = |pm: &Pixmap, x: u32| (0..pm.height()).map(|y| pm.pixel(x, y).is_some_and(ink)).collect::<Vec<_>>();
+        assert_eq!(at(&pm, 0), at(&bare, 0), "nothing more at the left edge");
+        assert!(at(&pm, 92).iter().all(|d| !d), "nothing at the right edge");
+        // The last number: its ink columns (rows above the bar) drawn alone are all there.
+        let columns = |pm: &Pixmap| -> Vec<bool> { (0..pm.width()).map(|x| (0..33).any(|y| pm.pixel(x, y).is_some_and(ink))).collect() };
+        let (bare, long_cols) = (columns(&bare), columns(&pm));
+        let end = bare.iter().rposition(|&c| c).unwrap();
         let start = (0..end).rev().find(|&x| x >= 2 && !bare[x] && !bare[x - 1] && !bare[x - 2]).map_or(0, |x| x + 1);
         let number = &bare[start..=end];
         let found = (0..=start).any(|d| long_cols[start - d..=end - d] == *number);
