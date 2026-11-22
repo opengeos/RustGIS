@@ -34,7 +34,8 @@ pub const MARKER_PIXELS: u64 = MARKER_PIXELS_SIDE as u64 * MARKER_PIXELS_SIDE as
 /// The side of the square [`MARKER_PIXELS`] is, for messages (theirs, written out, a test pins).
 pub const MARKER_PIXELS_SIDE: u32 = 2048;
 /// The most pixels of different picture markers' images a run decodes, about 5 s of decoding, and
-/// the most memory they then hold decoded: past either, a new one is drawn as a circle. A run is
+/// the most memory they then hold (decoded, or compressed for an export): past either, a new one
+/// is drawn as a circle. A run is
 /// the process, until RustGIS restarts, as the images it keeps ([`Picture`]) are. A cap per image
 /// alone isn't enough: a run keeps [`rustgis_map::symbology::MAX_PICTURES`] images, and that many
 /// at [`MARKER_PIXELS`] take some 80 s. Each image is decoded once for the whole run, on whichever
@@ -114,8 +115,8 @@ struct Decoded {
     /// narrow image's).
     aspect: f32,
     /// The image compressed for recording canvases (vector exports), the first time one records
-    /// it: every point then shares it, and a writer keeps it once. Smaller than `image`, and not
-    /// counted in [`RUN_MARKER_BYTES`].
+    /// it: every point then shares it, and a writer keeps it once. Charged to the run's bytes
+    /// ([`pack`]); one past them isn't kept, and each place records the image itself.
     packed: OnceLock<Option<Arc<Pixels>>>,
 }
 
@@ -123,7 +124,7 @@ struct Decoded {
 type Marker = Result<Arc<Decoded>, MarkerRefusal>;
 
 /// What the run has decoded of picture markers' images: the pixels they declared and the bytes
-/// they hold decoded ([`RUN_MARKER_PIXELS`], [`RUN_MARKER_BYTES`]).
+/// they hold, decoded or compressed ([`RUN_MARKER_PIXELS`], [`RUN_MARKER_BYTES`]).
 #[derive(Default)]
 struct Budget {
     pixels: u64,
@@ -141,6 +142,16 @@ impl Budget {
         self.pixels += pixels;
         self.bytes += bytes;
         Ok(())
+    }
+
+    /// Charges `bytes` more held for an image already charged (its compressed copy), within
+    /// `max_bytes`; whether they fit, charging nothing if not.
+    fn hold(&mut self, bytes: u64, max_bytes: u64) -> bool {
+        let fits = self.bytes.saturating_add(bytes) <= max_bytes;
+        if fits {
+            self.bytes += bytes;
+        }
+        fits
     }
 }
 
@@ -167,10 +178,10 @@ fn store() -> std::sync::MutexGuard<'static, Store> {
     STORE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Base64 `b64`'s identity in the [`Store`]: two random hashes of all of it, 128 bits together.
-/// Not the cheap [`key`] of the graphics' cache, which a crafted image could share with one
-/// decoded already to pass free; and not a single 64-bit hash, whose key the web may not
-/// randomize, in reach of a birthday search.
+/// Base64 `b64`'s identity in the [`Store`]: two hashes of all of it with different keys, 128 bits
+/// together. Not the cheap [`key`] of the graphics' cache, which a crafted image could share with
+/// one decoded already to pass free; and not a single 64-bit hash, in reach of a birthday search
+/// where the keys are known (the web build may not randomize them; two keys still take 2^64).
 fn content_id(b64: &str) -> u128 {
     static HASHERS: OnceLock<(RandomState, RandomState)> = OnceLock::new();
     let (a, b) = HASHERS.get_or_init(|| (RandomState::new(), RandomState::new()));
@@ -183,6 +194,11 @@ fn content_id(b64: &str) -> u128 {
 /// marker's image (checking one, drawing it, a preview's) comes here, so the caps hold for all of
 /// them; graphics' pictures ([`decode`]) keep their own. What is refused before decoding (from its
 /// first bytes or its header) isn't kept: finding that again costs as little.
+///
+/// Commands and a project's read check images on the UI thread. One image takes at most ~80 ms
+/// ([`MARKER_PIXELS`] at ~19 ns a pixel); everything a run decodes, ~5 s ([`RUN_MARKER_PIXELS`]),
+/// once: one call or file can spend it all, and after that a new image is refused from its header.
+/// Kept on the UI thread for that bound: the check answers whether the command is taken.
 fn marker(b64: &str) -> Marker {
     marker_in(&mut store(), b64)
 }
@@ -204,17 +220,18 @@ fn marker_in(store: &mut Store, b64: &str) -> Marker {
     if pixels > MARKER_PIXELS {
         return Err(TooManyPixels);
     }
-    // What it holds once decoded, at most: scaled down to fit `MARKER_SIDE`.
-    let held = u64::from(w.min(MARKER_SIDE)) * u64::from(h.min(MARKER_SIDE)) * 4;
+    // What it holds once decoded, scaled down to fit `MARKER_SIDE` (to within a pixel of what
+    // `decode_bytes` makes: settled below).
+    let (fw, fh) = fitted(w, h, MARKER_SIDE);
+    let held = u64::from(fw) * u64::from(fh) * 4;
     store.budget.take(pixels, held, (RUN_MARKER_PIXELS, RUN_MARKER_BYTES))?;
     let found = decode_bytes(&bytes, MARKER_SIDE)
         .map(|(image, aspect)| Arc::new(Decoded { image: Arc::new(image), aspect, packed: OnceLock::new() }))
         .ok_or(NotAnImage);
-    if found.is_err() {
-        // Nothing is held for one that doesn't decode; its pixels stay charged, as decoding it
-        // took the time they stand for.
-        store.budget.bytes = store.budget.bytes.saturating_sub(held);
-    }
+    // Settled to what it holds: nothing for one that doesn't decode. Its pixels stay charged, as
+    // decoding it took the time they stand for.
+    let holds = found.as_ref().map_or(0, |d| d.image.data().len() as u64);
+    store.budget.bytes = store.budget.bytes.saturating_sub(held).saturating_add(holds);
     store.images.insert(id, found.clone());
     found
 }
@@ -277,6 +294,17 @@ fn declared(bytes: &[u8]) -> Option<(u32, u32)> {
     (w > 0 && h > 0).then_some((w, h))
 }
 
+/// The size `w` × `h` pixels scale down to so neither side passes `side`, keeping their
+/// proportions (each side at least one pixel); the same where they fit.
+fn fitted(w: u32, h: u32, side: u32) -> (u32, u32) {
+    if w <= side && h <= side {
+        return (w, h);
+    }
+    let (long, short) = (u64::from(w.max(h)), u64::from(w.min(h)));
+    let short = ((short * u64::from(side) + long / 2) / long).clamp(1, u64::from(side.max(1))) as u32;
+    if w >= h { (side, short) } else { (short, side) }
+}
+
 /// Decodes image `bytes`, whose declared size the caller has checked, scaled down to at most
 /// `side` pixels per side, with their height for their width from before.
 fn decode_bytes(bytes: &[u8], side: u32) -> Option<(Pixmap, f32)> {
@@ -330,8 +358,17 @@ pub fn draw(pm: &mut Canvas, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
 /// image compressed (see [`Decoded::packed`]); or why it is drawn as a circle.
 fn with_marker<R>(p: Picture, pack: bool, f: impl FnOnce(&Arc<Pixmap>, f32, Option<&Arc<Pixels>>) -> R) -> Result<R, MarkerRefusal> {
     let found = marker_met(p)?;
-    let packed = if pack { found.packed.get_or_init(|| Pixels::new(Pixmap::as_ref(&found.image)).map(Arc::new)).as_ref() } else { None };
+    let charge = |bytes| store().budget.hold(bytes, RUN_MARKER_BYTES);
+    let packed = if pack { found.packed.get_or_init(|| self::pack(&found.image, charge)).as_ref() } else { None };
     Ok(f(&found.image, found.aspect, packed))
+}
+
+/// Marker image `image` compressed ([`Decoded::packed`]) and its bytes charged with `charge`
+/// (after compressing, so the [`Store`] isn't held meanwhile); `None` where they don't fit, or
+/// where it can't be compressed.
+fn pack(image: &Pixmap, charge: impl FnOnce(u64) -> bool) -> Option<Arc<Pixels>> {
+    let packed = Pixels::new(image.as_ref())?;
+    charge(packed.cost() as u64).then(|| Arc::new(packed))
 }
 
 /// Picture marker `p`'s image at most `side` pixels per side (a preview's), and its height for its
@@ -499,6 +536,36 @@ mod tests {
         // What a run keeps fits, at 177 × 177 each.
         let keeps = rustgis_map::symbology::MAX_PICTURES as u64;
         assert!(keeps * 177 * 177 <= RUN_MARKER_PIXELS && keeps * 177 * 177 * 4 <= RUN_MARKER_BYTES);
+        // A compressed copy is charged on top, or refused charging nothing.
+        assert!(b.hold(8, 1000) && b.bytes == 116);
+        assert!(!b.hold(885, 1000) && b.bytes == 116);
+    }
+
+    /// An image is charged what it holds once scaled down, with its proportions: a wide one is
+    /// charged its strip, not a square, so as many fit as hold the run's bytes.
+    #[test]
+    fn a_marker_image_is_charged_what_it_holds_scaled_down() {
+        assert_eq!(fitted(1400, 700, 700), (700, 350));
+        assert_eq!(fitted(700, 2048, 700), (239, 700));
+        assert_eq!(fitted(4096, 1, 700), (700, 1));
+        assert_eq!(fitted(300, 200, 700), (300, 200));
+        let mut store = Store::default();
+        let wide = png(1400, 700);
+        let found = marker_in(&mut store, &wide).unwrap();
+        assert_eq!((found.image.width(), found.image.height()), (700, 350));
+        assert_eq!(store.budget.bytes, 700 * 350 * 4);
+    }
+
+    /// A marker image's compressed copy is charged to the run's bytes, and not kept past them.
+    #[test]
+    fn a_marker_image_compressed_is_charged_to_the_run() {
+        let mut image = Pixmap::new(64, 64).unwrap();
+        image.fill(tiny_skia::Color::from_rgba8(200, 30, 30, 255));
+        let mut budget = Budget::default();
+        let packed = pack(&image, |b| budget.hold(b, RUN_MARKER_BYTES)).expect("compressed");
+        assert_eq!(budget.bytes, packed.cost() as u64);
+        budget.bytes = RUN_MARKER_BYTES;
+        assert!(pack(&image, |b| budget.hold(b, RUN_MARKER_BYTES)).is_none() && budget.bytes == RUN_MARKER_BYTES);
     }
 
     /// A marker's image is decoded once for the run: the same image met on another thread, or

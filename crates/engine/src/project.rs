@@ -2000,8 +2000,12 @@ pub(crate) fn picture_notices<'a>(
     }
     if !past_run.is_empty() {
         notices.push(NoticeText::format(
-            "Image markers in {names} are past the {mpx} megapixels of marker images RustGIS decodes until it restarts and are drawn as circles",
-            [("names", picture_names(past_run)), ("mpx", (rustgis_render::RUN_MARKER_PIXELS / 1_000_000).to_string().into())],
+            "Image markers in {names} are past what RustGIS decodes of marker images until it restarts ({mpx} megapixels, {mib} MiB) and are drawn as circles",
+            [
+                ("names", picture_names(past_run)),
+                ("mpx", (rustgis_render::RUN_MARKER_PIXELS / 1_000_000).to_string().into()),
+                ("mib", (rustgis_render::RUN_MARKER_BYTES >> 20).to_string().into()),
+            ],
         ));
     }
     notices

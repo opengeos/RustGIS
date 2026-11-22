@@ -1655,9 +1655,10 @@ fn not_empty(image: Option<&Value>) -> Result<(), String> {
 }
 
 /// An `image` (`layer.marker`'s, a line marker's, a dot fill's): a PNG or JPEG image as base64,
-/// which must decode. One kept already is returned; a new one is only checked, its base64 put in
-/// `new` and an empty picture returned in its place, for [`keep_pictures`] to keep once the whole
-/// call is checked: a call refused for a later stroke or fill keeps none of its images.
+/// which must decode. One kept already is returned where it draws; a new one is only checked, its
+/// base64 put in `new` and an empty picture returned in its place, for [`keep_pictures`] to keep
+/// once the whole call is checked: a call refused for a later stroke or fill keeps none of its
+/// images.
 fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, String> {
     const WHAT: &str = "image is a PNG or JPEG image as base64, of at most 2048 × 2048 pixels";
     let b64 = match p.get("image") {
@@ -1671,11 +1672,12 @@ fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, 
     // Checking decodes an image once for the run: one given again (the editor sends a stroke's or
     // a fill's image with every change, a slider every frame) is found decoded. One met earlier in
     // the call was checked then.
-    if !new.contains(&b64) {
-        rustgis_render::picture_marker_check(b64).map_err(|why| format!("{WHAT}: this one {}", why.what()))?;
-    }
+    let refused = |why: rustgis_render::MarkerRefusal| format!("{WHAT}: this one {}", why.what());
     if let Some(kept) = Picture::kept(b64) {
-        return Ok(Some(kept));
+        return rustgis_render::picture_marker_kept_check(kept).map(|_| Some(kept)).map_err(refused);
+    }
+    if !new.contains(&b64) {
+        rustgis_render::picture_marker_check(b64).map_err(refused)?;
     }
     new.push(b64);
     Ok(Some(Picture::default()))
