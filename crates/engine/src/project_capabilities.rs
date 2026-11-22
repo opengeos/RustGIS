@@ -397,7 +397,7 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
     // changes, so a chart's decimals there require this as well, as a scale bar's require
     // `layout-chart-look`; the layout saved with the element requires what it holds anyway.
     let fixed_decimals = |id: &str| {
-        params.get("decimals").is_some_and(Value::is_u64)
+        crate::cmd::uint(params, "decimals").is_some()
             && (id == "layout.update"
                 || params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("scaleBar")))
     };
@@ -1375,6 +1375,8 @@ mod tests {
             ("layout.addElement", json!({"kind": "scaleBar", "decimals": "auto"}), false),
             ("layout.addElement", json!({"kind": "chart", "decimals": 2}), false),
             ("layout.update", json!({"element": 2, "decimals": 2}), true),
+            ("layout.update", json!({"element": 2, "decimals": "2"}), true),
+            ("layout.update", json!({"element": 2, "decimals": 2.0}), true),
             ("layout.update", json!({"element": 2, "decimals": "auto"}), false),
             (
                 "layout.update",

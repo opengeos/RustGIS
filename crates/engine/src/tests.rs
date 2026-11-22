@@ -11398,6 +11398,12 @@ fn layout_scale_bars_take_their_details() {
     assert_eq!(details(&s, bar).5, None);
     s.run("layout.update", &json!({"element": bar, "decimals": 0})).unwrap();
     assert_eq!(details(&s, bar).5, Some(0));
+    // A whole number as the counts take it: a numeric string or a float with no fraction.
+    s.run("layout.update", &json!({"element": bar, "decimals": "2"})).unwrap();
+    assert_eq!(details(&s, bar).5, Some(2));
+    s.run("layout.update", &json!({"element": bar, "decimals": 1.0})).unwrap();
+    assert_eq!(details(&s, bar).5, Some(1));
+    s.run("layout.update", &json!({"element": bar, "decimals": 0})).unwrap();
     s.run("layout.update", &json!({"element": bar, "unitLabel": null})).unwrap();
     assert_eq!(details(&s, bar).3, None);
     // The limits themselves are taken.

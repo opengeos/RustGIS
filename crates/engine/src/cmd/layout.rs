@@ -4997,16 +4997,16 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
                 given_count(p, "subdivisions", MAX_SCALE_SUBDIVISIONS)?.map_or(*subdivisions, |n| if n == 1 { 0 } else { n });
             let divisions_before_zero = given_count(p, "divisionsBeforeZero", MAX_SCALE_BEFORE_ZERO)?.unwrap_or(*divisions_before_zero);
             // As a chart's: "auto", the decimals each label needs, or that many with the thousands
-            // apart; null leaves them as they are.
+            // apart, a whole number given as the counts are; null leaves them as they are.
             let decimals = match p.get("decimals").filter(|v| !v.is_null()) {
                 None => *decimals,
                 Some(v) if v.as_str().is_some_and(|t| t.trim().eq_ignore_ascii_case("auto")) => None,
-                Some(v) => Some(
-                    v.as_u64()
-                        .filter(|n| *n <= MAX_SCALE_DECIMALS as u64)
-                        .map(|n| n as u8)
-                        .ok_or_else(|| format!("decimals is \"auto\" or a whole number from 0 to {MAX_SCALE_DECIMALS}"))?,
-                ),
+                Some(_) => given_count(p, "decimals", MAX_SCALE_DECIMALS)
+                    .ok()
+                    .flatten()
+                    .and_then(|n| u8::try_from(n).ok())
+                    .map(Some)
+                    .ok_or_else(|| format!("decimals is \"auto\" or a whole number from 0 to {MAX_SCALE_DECIMALS}"))?,
             };
             let label_position =
                 given_choice(p, "labelPosition", ScaleLabelPosition::from_name, "above or below")?.unwrap_or(*label_position);
