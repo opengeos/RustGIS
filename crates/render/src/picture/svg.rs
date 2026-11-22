@@ -171,13 +171,14 @@ fn elements(doc: &roxmltree::Document) -> Option<u64> {
     let mut seen = std::collections::HashMap::new();
     let (elements, vertices) = count(doc.root_element(), &ids, &mut seen, 0)?;
     // Markers may sit on every vertex (`marker-mid`) and both ends of every shape, here or through
-    // a style sheet, so each marker is counted as if on all of them.
-    let markers = doc.descendants().filter(|n| n.has_tag_name("marker")).try_fold(0u64, |sum, m| {
-        let (e, _) = count(m, &ids, &mut seen, 0)?;
-        Some(sum.saturating_add(e))
+    // a style sheet, so each marker, its elements and their points, is counted as if on all of them.
+    let (markers, marked) = doc.descendants().filter(|n| n.has_tag_name("marker")).try_fold((0u64, 0u64), |sum, m| {
+        let (e, p) = count(m, &ids, &mut seen, 0)?;
+        Some((sum.0.saturating_add(e), sum.1.saturating_add(p)))
     })?;
     let total = elements.saturating_add(markers.saturating_mul(vertices));
-    (total <= ELEMENTS && vertices <= POINTS).then_some(total)
+    let points = vertices.saturating_add(marked.saturating_mul(vertices));
+    (total <= ELEMENTS && points <= POINTS).then_some(total)
 }
 
 /// [`elements`] of the element `n` and what's under it, with the points of its shapes, memoized in
@@ -200,8 +201,8 @@ fn count<'a>(
     // A plain `href` before an XLink one, as usvg takes them (SVG 2).
     let named = |ns: Option<&str>| n.attributes().find(|a| a.name() == "href" && a.namespace() == ns).map(|a| a.value());
     let href = named(None).or_else(|| named(Some("http://www.w3.org/1999/xlink")));
-    // What a `<use>` repeats counts as if it were under it.
-    let used = n.has_tag_name("use").then(|| href.and_then(|h| h.strip_prefix('#')).and_then(|id| ids.get(id))).flatten();
+    // What a `<use>` repeats counts as if it were under it (its link read past spaces, as usvg does).
+    let used = n.has_tag_name("use").then(|| href.and_then(|h| h.trim().strip_prefix('#')).and_then(|id| ids.get(id))).flatten();
     let mut total = (1u64, points_of(n));
     for under in n.children().filter(|c| c.is_element()).chain(used.copied()) {
         let (e, v) = count(under, ids, seen, depth + 1)?;
@@ -236,6 +237,7 @@ fn points_of(n: roxmltree::Node) -> u64 {
         "circle" => corners(&["r"]),
         "ellipse" => corners(&["rx", "ry"]),
         "rect" if n.has_attribute("rx") || n.has_attribute("ry") => corners(&["rx", "ry"]),
+        "rect" => 4,
         _ => return 0,
     };
     points.saturating_add(2)
@@ -325,7 +327,7 @@ pub(super) fn work(tree: &usvg::Tree, (w, h): (u32, u32), t: tiny_skia::Transfor
     let canvas = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h);
     // resvg clips a layer to the canvas grown by twice its size on each side.
     let reach = tiny_skia::Rect::from_ltrb(-2.0 * w, -2.0 * h, 3.0 * w, 3.0 * h).ok_or(Refusal::TooMuch)?;
-    let mut cost = Cost { units: 0, cap, reach };
+    let mut cost = Cost { units: 0, cap, reach, clipping: false };
     // The pixmap made and cleared, and laid down as the marker's image.
     cost.add(pixels(canvas) / 4)?;
     cost.group(tree.root(), t, canvas, 0)?;
@@ -348,6 +350,8 @@ struct Cost {
     cap: u64,
     /// The farthest a layer reaches.
     reach: tiny_skia::Rect,
+    /// Inside a clip path, where resvg draws each group of its own into a pixmap the clip's size.
+    clipping: bool,
 }
 
 impl Cost {
@@ -367,9 +371,14 @@ impl Cost {
         }
         let t = t.pre_concat(g.transform());
         let onto = if g.should_isolate() {
-            // A layer of its own: made, drawn into and laid onto what's under it.
-            let Some(bounds) = g.layer_bounding_box().and_then(|b| b.transform(t)) else { return Ok(()) };
-            let layer = cut(bounds.to_rect().outset(2.0, 2.0), Some(self.reach));
+            // A layer of its own: made, drawn into and laid onto what's under it; in a clip path,
+            // the clip's whole pixmap (resvg's `clip_group`).
+            let layer = if self.clipping {
+                onto
+            } else {
+                let Some(bounds) = g.layer_bounding_box().and_then(|b| b.transform(t)) else { return Ok(()) };
+                cut(bounds.to_rect().outset(2.0, 2.0), Some(self.reach))
+            };
             let area = pixels(layer);
             self.add(NODE.saturating_add(area.saturating_mul(2)))?;
             // A clip path: a pixmap the layer's size, filled, drawn into and made a mask; a
@@ -378,7 +387,10 @@ impl Cost {
             let mut clip = g.clip_path();
             while let Some(c) = clip {
                 self.add(NODE.saturating_add(area.saturating_mul(4)))?;
-                self.group(c.root(), t.pre_concat(c.transform()), layer, depth + 1)?;
+                let outer = std::mem::replace(&mut self.clipping, true);
+                let drawn = self.group(c.root(), t.pre_concat(c.transform()), layer, depth + 1);
+                self.clipping = outer;
+                drawn?;
                 clip = c.clip_path();
             }
             let mut mask = g.mask();
@@ -564,6 +576,12 @@ mod tests {
         );
         let zigzag = format!("M0 0{}", " L1 1".repeat(5000));
         assert_eq!(doc(&format!(r#"<marker id="m"><circle r="1"/></marker><path d="{zigzag}"/>"#)), None);
+        // A marker's points are copied on each vertex too: few elements, past the points.
+        let half = format!("M0 0{}", " L1 1".repeat(2490));
+        assert_eq!(doc(&format!(r#"<marker id="m"><path d="{half}"/></marker><path d="{half}" marker-mid="url(#m)"/>"#)), None);
+        // A rect without rounded corners is a path of four corners, which a marker sits on too.
+        let rects = r#"<rect width="1" height="1"/>"#.repeat(1000);
+        assert_eq!(doc(&format!(r#"<marker id="m">{rects}</marker>{rects}"#)), None);
         let deep = format!("{}{}", "<g>".repeat(DEPTH as usize + 1), "</g>".repeat(DEPTH as usize + 1));
         assert_eq!(doc(&deep), None);
         // A path of 20,000 segments draws; used ten times its numbers are counted ten times, past
@@ -571,6 +589,8 @@ mod tests {
         let long = format!(r#"<defs><path id="p" d="M0 0{}"/></defs>"#, " L1 1".repeat(20_000));
         assert!(doc(&format!(r##"{long}<use href="#p"/>"##)).is_some());
         assert_eq!(doc(&format!(r##"{long}{}"##, r##"<use href="#p"/>"##.repeat(10))), None);
+        // usvg reads a link past the spaces around it.
+        assert_eq!(doc(&format!(r##"{long}{}"##, r##"<use href=" #p "/>"##.repeat(10))), None);
     }
 
     /// An arc is counted as the curves usvg divides it into, never fewer: a path's, its radii
@@ -727,6 +747,13 @@ mod tests {
             cost(&format!(r#"<pattern id="p" width="{side}" height="{side}" patternUnits="userSpaceOnUse"><rect width="1" height="1"/></pattern><rect width="100" height="100" fill="url(#p)"/>"#)).unwrap()
         };
         assert_eq!(tile(1000) - tile(10), 1000 * 1000 - 10 * 10);
+        // Inside a clip path, resvg draws a shape with a clip path of its own into a pixmap the
+        // enclosing clip's size (`clip_group`), and clips that the same: however small the shape.
+        let clipped = |n: usize| {
+            let inner = r#"<rect width="1" height="1" clip-path="url(#s)"/>"#.repeat(n);
+            cost(&format!(r#"<clipPath id="s"><rect width="1" height="1"/></clipPath><clipPath id="c"><rect width="100" height="100"/>{inner}</clipPath><g clip-path="url(#c)"><rect width="100" height="100"/></g>"#)).unwrap()
+        };
+        assert!(clipped(10) - clipped(1) >= 9 * 6 * 10_000, "{} {}", clipped(10), clipped(1));
     }
 
     /// Working out the cost stops as soon as it passes the cap.
