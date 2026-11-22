@@ -800,7 +800,7 @@ pub fn profile_fields(ds: &Dataset) -> Vec<FieldProfile> {
         .collect()
 }
 
-/// Ranked rows and the count of other resident rows lacking a finite value in every
+/// Ranked rows and the count of other resident rows lacking a finite value in at least one
 /// compared field. Per-field standardization still uses every finite value in that field.
 #[derive(Debug)]
 pub struct Similarity {

@@ -2352,9 +2352,10 @@ struct TopologyChecked {
 
 /// Checks each rule and its query on the worker, with Cancel between rows/rules and counted
 /// query progress. Each rule's row indices and converted data are released before the next.
-/// One row's expression evaluation, coordinate conversion, latitude validation and a gaps
-/// check's polygon union are indivisible library steps, checked around them; geometric checks
-/// otherwise look between features.
+/// One row's expression evaluation or coordinate conversion, the initial full-row copy for a
+/// projected dataset, each complete latitude-validation pass and a gaps check's polygon union
+/// are indivisible library steps, checked around them; geometric checks otherwise look between
+/// features.
 /// A cancellable run takes no work limit (see `rustgis_analysis::topology`).
 fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked, String> {
     use rustgis_analysis::topology as t;

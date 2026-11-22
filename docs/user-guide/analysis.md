@@ -1531,7 +1531,9 @@ An older result also preserves selection applied by a newer Similar request. Ear
 do not prevent later queued requests from selecting their own results.
 Script/model ordering starts when the whole run is queued, so its later-computed steps do not
 overtake a newer Find Similar request. Closing the Workflows pane keeps the current ranking
-and any pending request for reopening the same section; changing its section or layer replaces it.
+and any pending request for reopening the same section. Changing section or layer discards the
+pane's ranking but does not cancel the command; its selection can still apply unless a newer
+selection takes precedence. Use Cancel to stop the computation.
 Desktop scripts prepare only a replayable prefix. Run file or network setup separately before
 the analysis script: a Similar step after setup that cannot be prepared is refused rather than
 run on the window thread. Command-line and Python scripts still run synchronously.
