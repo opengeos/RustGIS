@@ -390,6 +390,11 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 #[serde(remote = "Self")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Project {
+    /// Which layers have been looked at for the project's coordinate system, and which wait for
+    /// their pixels (`crate::cmd::project::take_first_layer_system`): never saved, and kept with
+    /// the project so that Undo and a rolled-back command restore it with the layers.
+    #[serde(skip)]
+    pub(crate) first_layer: FirstLayerSeen,
     /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.
     #[serde(skip)]
     pub(crate) read_notices: Vec<(ReadPart, NoticeText)>,
@@ -486,6 +491,22 @@ pub struct Project {
     /// gives it its system ([`Project::coordinate_system`]). Off by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub crs_from_first_layer: bool,
+}
+
+/// The layers a project taking its system from the first layer added has looked at, by instance
+/// id: those looked at (each once, by the innermost step that added it), and rasters added whose
+/// pixels were still to come.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FirstLayerSeen {
+    pub(crate) considered: std::collections::HashSet<u64>,
+    pub(crate) pending: Vec<u64>,
+}
+
+impl FirstLayerSeen {
+    /// The project has a system, or doesn't take one: the rasters waiting count as looked at.
+    pub(crate) fn settle(&mut self) {
+        self.considered.extend(self.pending.drain(..));
+    }
 }
 
 /// A standalone table: a dataset without geometry, under an id that stays with it. Names can
@@ -1141,6 +1162,7 @@ impl Project {
 
     pub fn new(name: impl Into<String>) -> Self {
         Project {
+            first_layer: FirstLayerSeen::default(),
             read_notices: Vec::new(),
             format: FORMAT,
             name: name.into(),
@@ -2425,6 +2447,7 @@ impl Durable for Project {
     /// Offers classified whole fields once, before any live mutation.
     fn prepare(&self, p: &mut Prepare<'_>) {
         let Self {
+            first_layer: _,
             read_notices: _,
             format: _,
             name: _,

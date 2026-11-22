@@ -247,14 +247,21 @@ fn a_raster_whose_pixels_land_between_commands_still_gives_its_system() {
     )
     .unwrap();
     // Added with its pixels still to come, as a raster read in place is.
-    let watch = crate::cmd::project::first_layer_watch(&s, "layer.addData").unwrap();
+    let spec = *s.registry.get("layer.addData").unwrap();
+    let watch = crate::cmd::project::first_layer_watch(&s, &spec).unwrap();
     let mut layer = rustgis_map::RasterLayer::from_path(r, "dem.tif");
     let pixels = layer.data.take();
-    let id = s.map_mut().add_raster("dem", layer);
+    s.map_mut().add_raster("dem", layer);
     crate::cmd::project::take_first_layer_system(&mut s, &watch);
     assert_eq!(s.project.coordinate_system, None);
-    // They land while the map draws, between commands. A command that changes nothing leaves the
-    // project as it is; the next that changes it finds the raster, unsaved and undone with it.
+    // Removed and brought back by Undo while waiting, it still waits.
+    s.run("layer.remove", &json!({"layer": "dem"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.coordinate_system, None);
+    // Its pixels land while the map draws, between commands. A command that changes nothing
+    // leaves the project as it is; the next that changes it finds the raster, unsaved and undone
+    // with it.
+    let id = s.map().layer_by_name("dem").unwrap().id;
     s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = pixels;
     s.mark_saved();
     s.run("map.zoomIn", &json!({})).unwrap();
@@ -277,4 +284,128 @@ fn a_script_that_fails_after_taking_the_system_gives_it_back() {
     assert_eq!(s.project.coordinate_system, None);
     assert!(s.map().layers.is_empty());
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_tool_output_gives_no_system_only_data_added_does() {
+    let mut s = Session::new(Project::default());
+    s.project.crs_from_first_layer = true;
+    // With no raster waiting: only a command adding data looks.
+    for (id, watched) in [
+        ("gp.run", false),
+        ("model.run", false),
+        ("layer.template", false),
+        ("project.rename", false),
+        ("layer.addData", true),
+        ("layer.addUrl", true),
+        ("service.add", true),
+        ("map.import", true),
+        ("layer.paste", true),
+        ("offline.open", true),
+    ] {
+        let spec = *s.registry.get(id).unwrap_or_else(|| panic!("{id} is a command"));
+        assert_eq!(crate::cmd::project::first_layer_watch(&s, &spec).is_some(), watched, "{id}");
+    }
+}
+
+#[test]
+fn a_script_line_that_clears_the_system_isnt_undone_by_the_script() {
+    let (dir, path) = lv95_file("cleared");
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let script = format!("layer.addData {}\nproject.coordinateSystem {}", json!({"path": path}), json!({"crs": null}));
+    s.run("script.run", &json!({"script": script})).unwrap();
+    assert_eq!(s.project.coordinate_system, None, "the layer was looked at once, by its own line");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A Swiss raster added to the map with its pixels still to come, as one read in place is, by a
+/// step adding data; its pixels, to land later.
+fn waiting_raster(s: &mut Session) -> Option<std::sync::Arc<rustgis_data::raster::Raster>> {
+    let gt = rustgis_data::raster::GeoTransform { origin_x: 2_600_000.0, origin_y: 1_200_000.0, pixel_width: 10.0, pixel_height: -10.0 };
+    let r = rustgis_data::raster::Raster::new(
+        "dem",
+        2,
+        2,
+        vec![vec![1.0; 4]],
+        gt,
+        LV95,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let spec = *s.registry.get("layer.addData").unwrap();
+    let watch = crate::cmd::project::first_layer_watch(s, &spec).unwrap();
+    let mut layer = rustgis_map::RasterLayer::from_path(r, "dem.tif");
+    let pixels = layer.data.take();
+    s.map_mut().add_raster("dem", layer);
+    crate::cmd::project::take_first_layer_system(s, &watch);
+    pixels
+}
+
+fn land(s: &mut Session, pixels: Option<std::sync::Arc<rustgis_data::raster::Raster>>) {
+    let id = s.map().layer_by_name("dem").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = pixels;
+}
+
+#[test]
+fn a_waiting_raster_taken_by_a_step_undone_or_rolled_back_is_still_to_be_found() {
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let pixels = waiting_raster(&mut s);
+    land(&mut s, pixels);
+    // A script whose first line takes it, failing later, gives the project back as it was.
+    let script = format!("project.rename {}\nlayer.remove {}", json!({"name": "A"}), json!({"layer": "No such layer"}));
+    assert!(s.run("script.run", &json!({"script": script})).is_err());
+    assert_eq!(s.project.coordinate_system, None);
+    // An edit takes it; Undo gives it back, and the next edit takes it again.
+    s.run("project.rename", &json!({"name": "B"})).unwrap();
+    assert_eq!(s.project.coordinate_system, Some(LV95));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.coordinate_system, None);
+    s.run("project.rename", &json!({"name": "C"})).unwrap();
+    assert_eq!(s.project.coordinate_system, Some(LV95));
+}
+
+#[test]
+fn a_raster_already_in_the_project_isnt_added_by_the_next_data() {
+    let mut s = Session::new(Project::default());
+    // In the project before the option: its pixels still to come.
+    let gt = rustgis_data::raster::GeoTransform { origin_x: 2_600_000.0, origin_y: 1_200_000.0, pixel_width: 10.0, pixel_height: -10.0 };
+    let r = rustgis_data::raster::Raster::new(
+        "old",
+        2,
+        2,
+        vec![vec![1.0; 4]],
+        gt,
+        LV95,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let mut layer = rustgis_map::RasterLayer::from_path(r, "old.tif");
+    let pixels = layer.data.take();
+    let id = s.map_mut().add_raster("old", layer);
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[7.4,46.9]}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "p.geojson", "text": point})).unwrap();
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = pixels;
+    s.run("project.rename", &json!({"name": "Later"})).unwrap();
+    assert_eq!(s.project.coordinate_system, None);
+}
+
+#[test]
+fn a_raster_waiting_when_a_system_is_chosen_or_the_option_turned_off_gives_none_later() {
+    for settle in [json!({"crs": "EPSG:32632"}), json!({"fromFirstLayer": false})] {
+        let mut s = Session::new(Project::default());
+        s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+        let pixels = waiting_raster(&mut s);
+        s.run("project.coordinateSystem", &settle).unwrap();
+        land(&mut s, pixels);
+        s.run("project.coordinateSystem", &json!({"crs": null, "fromFirstLayer": true})).unwrap();
+        s.run("project.rename", &json!({"name": "Later"})).unwrap();
+        assert_eq!(s.project.coordinate_system, None, "{settle}");
+    }
 }

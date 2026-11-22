@@ -853,10 +853,14 @@ degrees, or one without an EPSG or ESRI code, can't be a map's projection: new m
 Web Mercator, and RustGIS says why. A project without one works as before.
 
 **While it has none, take it from the first layer added** gives the project the system of the next
-layer added that says what system it is in (a raster's, or a file's such as a GeoPackage's or a
-Shapefile's `.prj`), and says so; Undo takes it back with the layer. A layer that names no system,
-taken for longitude/latitude, gives none; one that names WGS 84 or another system in degrees gives
-that, and new maps then stay in Web Mercator. The setting and the option are saved with the project;
+layer added from data (**Home › Add**: a file, a URL, a service, a database; or a map imported, an
+offline map opened, layers pasted) that says what system
+it is in (a raster's, or a file's such as a GeoPackage's or a Shapefile's `.prj`), and says so; Undo
+takes it back with the layer. A tool's output gives none. A layer that names no system, taken for
+longitude/latitude, gives none, nor does a raster read as WGS 84 because its coordinates look like
+degrees; one that names WGS 84 or another system in degrees gives that, and new maps then stay in
+Web Mercator. A raster read in place gives its system once its pixels have arrived, at the next
+change to the project. The setting and the option are saved with the project;
 an older RustGIS refuses a project that has them (it needs `project-crs`) rather than saving it
 again without them.
 

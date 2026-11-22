@@ -989,13 +989,13 @@ impl Session {
                         result
                     })
                 };
-                // Each step that changes the project, however it lands (a read ahead, a download,
-                // a URL read in place, a line of a script or task), may add the layer the project
-                // takes its system from: taken then, so the steps after it (a new map) start in
-                // it, and inside the transaction that made it, so Undo and a failure take it back
-                // and the project is unsaved. A step that changes nothing (a zoom, a read-only
-                // scope) never changes the project for it.
-                let first_layer = if spec.mutates { crate::cmd::project::first_layer_watch(self, spec.id) } else { None };
+                // Each step that adds data, however it lands (a read ahead, a download, a URL
+                // read in place, a line of a script or task), may add the layer the project takes
+                // its system from, and any step that changes the project may find a raster added
+                // earlier whose pixels have landed: taken then, so the steps after it (a new map)
+                // start in it, and inside the transaction that made it, so Undo and a failure take
+                // it back and the project is unsaved ([`crate::cmd::project::first_layer_watch`]).
+                let first_layer = crate::cmd::project::first_layer_watch(self, &spec);
                 let result = match txn {
                     Txn::Own => self.guarded(spec.label, spec.mutates, run),
                     Txn::Shared if spec.id == "edit.applyShapeConversion" => self.shared_step(&spec, |s| s.savepoint(spec.label, run)),
