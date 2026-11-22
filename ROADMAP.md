@@ -71,7 +71,7 @@ A result is right, or RustGIS says what it lost or assumed
 ([AGENTS.md](AGENTS.md#never-silent)).
 - Known silent losses: DuckDB queries (`ST_Force2D`) drop Z without a notice; the OSM reader leaves out rings that don't close, rings and member ways with
   nodes or ways the file doesn't hold, and inner rings outside every outer one; and the text
-  readers' losses listed as `Silent` in `crates/engine/tests/never_silent_reading.rs`, among them
+  readers' losses listed as `Silent` in `crates/engine/tests/integration/never_silent_reading.rs`, among them
   each vertex's Z in DXF and unreadable coordinates, holes and parts in KML, GeoRSS, MapInfo and
   DXF, plus geometry-collection members in XLSX/ODS/XLS/XLSB, error-valued attribute cells in XLSX,
   and attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
@@ -110,10 +110,11 @@ features build on.
   save, not built in memory first.
 - A snapshot test of command ids and parameters, so a removal is always deliberate (the project
   file's JSON Schema, its fixtures and the files past releases saved are checked today).
-- A compressed encoding of today's project JSON, read one release before it is written; a
-  reference system: named connections, copies that remember their source, missing and changed
-  states, a place for results ([#1653](https://github.com/opengeos/RustGIS/issues/1653)).
+- A compressed encoding of today's project JSON, read one release before it is written.
   _Coordinate first._
+- A system for the data a project refers to: named connections, copies that remember their
+  source, missing and changed states, a place for results
+  ([#1653](https://github.com/opengeos/RustGIS/issues/1653)). _Coordinate first._
 - What a project holds by default, its own data or links to it
   ([poll #1660](https://github.com/opengeos/RustGIS/discussions/1660)), and storage that opens a
   large project without reading it whole. _Decide first._

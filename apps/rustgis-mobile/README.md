@@ -246,7 +246,7 @@ On the Android 15 emulator (x86_64, software GPU), from this crate as it is:
 | HTTPS basemap tiles | Yes, with the bundled roots |
 | Rotation | Yes, without a restart |
 | Suspend and resume | Yes: the surface is dropped and made again, the session is kept |
-| The activity destroyed by the system | The session is lost. winit's event loop can't be made twice in a process, so the app ends its process and the next launch starts afresh; without that, the next launch showed nothing |
+| The activity destroyed by the system | The session is lost, but recovery copies written while editing let the next launch offer a complete copy. winit's event loop can't be made twice in a process, so the app ends its process if the loop returns; destroying the activity alone doesn't make it return, so the process may survive until the system ends it |
 | Typing | Key events reach text fields. The soft keyboard itself needs a phone to judge |
 | Size | 78 MB for arm64 without symbols, 89 MB in the APK for x86_64 |
 
