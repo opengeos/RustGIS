@@ -1,15 +1,18 @@
-"""Warns when a pull request leaves a defect for the release quality pass.
+"""Fails a pull request that leaves a defect for the release quality pass.
 
 A review point may wait for the release quality pass when the reply to it ends with
 `<!-- quality-sweep -->`, but only a quality point may (AGENTS.md, "Review comments"). The Claude
 review (claude-code-review.yml, posting as github-actions) ends each inline finding with its
 category, `<!-- review-category: bug -->` and so on, so the reviewer classifies a finding and the
-author doesn't. This check warns about a deferral reply in a thread that the reviewer opened with
-a `bug`, `security` or `agents-md` finding, or whose opening comment someone else has since edited.
-It never fails: whoever merges reads the warnings and decides.
+author doesn't. This check refuses a deferral reply in a thread that the reviewer opened with a
+`bug`, `security` or `agents-md` finding, or whose opening comment someone else has since edited.
 
 Threads opened by anyone else (CodeRabbit, people) or by a review from before categories carry no
-category, so they are only listed in a notice: a reviewer there can answer the reply.
+category and are let through: a reviewer there can answer the reply. They are listed in a notice.
+
+A maintainer overrides the check for a finding, misclassified or accepted as it is, by replying in
+its thread with `<!-- deferral-approved -->`. The pull request's author may be that maintainer: the
+override is a deliberate, recorded decision, not a second opinion.
 
 CI runs this on each push and again in the merge queue, which sees replies posted after the last
 push. It needs GH_TOKEN (read access to pull requests), GITHUB_REPOSITORY, and PR_NUMBER or, in the
@@ -23,9 +26,11 @@ import subprocess
 import sys
 
 DEFER = "<!-- quality-sweep -->"
+APPROVE = "<!-- deferral-approved -->"
 CATEGORY = re.compile(r"<!--\s*review-category:\s*([a-z-]+)\s*-->")
 MUST_FIX = {"bug", "security", "agents-md"}
 REVIEWER = "github-actions"
+MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 QUEUE_REF = re.compile(r"/pr-(\d+)-[0-9a-f]{40}$")
 
 THREADS = """
@@ -41,7 +46,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
 }
 """
 COMMENTS = """pageInfo { hasNextPage endCursor }
-  nodes { url body lastEditedAt author { login __typename } editor { login } }"""
+  nodes { url body authorAssociation lastEditedAt author { login __typename } editor { login } }"""
 MORE_COMMENTS = """
 query($id: ID!, $endCursor: String) {
   node(id: $id) { ... on PullRequestReviewThread { comments(first: 100, after: $endCursor) { %s } } }
@@ -71,9 +76,22 @@ def edited_by_someone_else(opening):
     return ((opening.get("editor") or {}).get("login")) != REVIEWER
 
 
+def approved(replies):
+    """Whether a maintainer overrode the check for the thread's deferral."""
+    for reply in replies:
+        author = reply.get("author") or {}
+        if (
+            APPROVE in (reply.get("body") or "")
+            and author.get("__typename") != "Bot"
+            and reply.get("authorAssociation") in MAINTAINERS
+        ):
+            return True
+    return False
+
+
 def check(threads):
-    """Sorts the threads that hold a deferral reply into (flagged, unclassified) lists of messages."""
-    flagged, unclassified = [], []
+    """Sorts the threads that hold a deferral reply into (refused, unclassified) lists of messages."""
+    refused, unclassified = [], []
     for thread in threads:
         comments = thread.get("comments") or []
         if not comments:
@@ -95,8 +113,9 @@ def check(threads):
             if kind is None:
                 unclassified.append(f"{where} (review without a category): {deferral.get('url')}")
             continue
-        flagged.append(f"{where}: left for the release quality pass, but {reason}. {deferral.get('url')}")
-    return flagged, unclassified
+        if not approved(replies):
+            refused.append(f"{where}: left for the release quality pass, but {reason}. {deferral.get('url')}")
+    return refused, unclassified
 
 
 def graphql(query, **variables):
@@ -143,25 +162,23 @@ def escape(text):
 
 
 def main():
-    """Lists the pull request's deferrals of findings that must be fixed, as warnings. Never fails for them."""
+    """Checks the pull request and exits 1 if it defers a finding that must be fixed."""
     number = pr_number()
-    flagged, unclassified = check(fetch(os.environ["GITHUB_REPOSITORY"], number))
+    refused, unclassified = check(fetch(os.environ["GITHUB_REPOSITORY"], number))
     for line in unclassified:
         print(f"::notice::Deferred without a review category, not checked: {escape(line)}")
-    for line in flagged:
-        print(f"::warning::{escape(line)}")
-    if flagged:
-        report = (
-            f"#{number} leaves {len(flagged)} finding(s) for the release quality pass that the review classed as "
-            "must-fix. Fix each in the pull request, or link a filed issue in the reply for a defect too large "
-            "for it. If the review misclassified one, say so in its thread."
+    for line in refused:
+        print(f"::error::{escape(line)}")
+    if refused:
+        print(
+            f"#{number} leaves {len(refused)} finding(s) that must be fixed for the release quality pass. "
+            "Fix each in the pull request and take the marker out of the reply; for a defect too large "
+            "for it, link a filed issue in the reply instead of the marker. To let one wait all the same, "
+            "a maintainer replies in its thread with <!-- deferral-approved -->. "
+            "Then run the checks again (re-run the job, or queue the pull request again)."
         )
-    else:
-        report = f"#{number}: no deferral to the release quality pass is on a finding that must be fixed."
-    print(report)
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write("\n".join([report, "", *(f"- {line}" for line in flagged)]) + "\n")
+        return 1
+    print(f"#{number}: no deferral to the release quality pass is on a finding that must be fixed.")
     return 0
 
 

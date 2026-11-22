@@ -292,10 +292,9 @@ jobs:
       - name: Count direct row uses
         run: cargo run --locked -q -p xtask -- rows
 
-  # Warns when a review point left for the release quality pass isn't a quality point
-  # (.github/scripts/review-deferrals.py); it never fails for one, so `Tests pass` doesn't need it.
-  # The merge queue's run sees replies posted after the last push. It runs the checkout with a
-  # read-only token and no secrets, like every job here.
+  # A review point left for the release quality pass must be a quality point
+  # (.github/scripts/review-deferrals.py). The merge queue's run sees replies posted after the last
+  # push. It runs the checkout with a read-only token and no secrets, like every job here.
   deferrals:
     name: Review deferrals
     runs-on: ubuntu-latest
@@ -308,7 +307,7 @@ jobs:
           persist-credentials: false
       - name: Test the check
         run: python3 -m unittest discover -s .github/scripts -p 'test_review_deferrals.py'
-      - name: Warn about defects left for the release quality pass
+      - name: No defect left for the release quality pass
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -419,7 +418,7 @@ jobs:
   # unless their conditions below hold (the same as on the jobs), and every other job always runs.
   tests_pass:
     name: Tests pass
-    needs: [lint, wasm, ios, android, licenses, schema, rows, plan, select, test]
+    needs: [lint, wasm, ios, android, licenses, schema, rows, deferrals, plan, select, test]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:

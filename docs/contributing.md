@@ -41,10 +41,12 @@ the marker.
 
 The Claude review gives each inline comment a hidden category (bug, security, performance,
 quality or AGENTS.md). CI's **Review deferrals** check, which runs on each push and again in the
-merge queue, warns when a reply leaves a bug, security or AGENTS.md finding for the release quality
-pass. It doesn't block the merge; whoever merges reads the warnings first. If the review
-misclassified a finding, say so in its thread. Comments from other reviewers carry no category, so
-the check only lists them: those reviewers answer the reply themselves.
+merge queue, fails when a reply leaves a bug, security or AGENTS.md finding for the release quality
+pass. A maintainer can override it for one finding, because the review misclassified it or because
+it can wait all the same, by replying in its thread with `<!-- deferral-approved -->` and running
+the check again. The pull request's author may be that maintainer. Comments from
+other reviewers carry no category, so the check lets them through: those reviewers answer the
+reply themselves.
 
 Changes to saved or generated output must classify each new owning field: address, executable
 parameters, generated text or user data. Use the shared durable-output transaction and keep
