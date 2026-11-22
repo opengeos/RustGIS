@@ -2351,6 +2351,9 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     // Where the first division after zero is cut into its subdivisions.
     let cuts: Vec<f32> = (1..parts).map(|p| zero_x + seg * p as f32 / parts as f32).collect();
     let dark_at = |j: usize| (j as isize - before as isize).rem_euclid(2) == 0;
+    // An alternating bar's fills alternate from zero, the cut division's parts counted one by one:
+    // the first part dark, the divisions after them going on from the last part.
+    let filled_dark = |j: usize| if j < before { dark_at(j) } else { (parts - 1 + (j - before)).is_multiple_of(2) };
     let line = Stroke { width: 0.6 * ppp as f32, ..Stroke::default() };
     let stroke = |pm: &mut Canvas, pts: &[(f32, f32)], w: &Stroke| {
         let mut pb = PathBuilder::new();
@@ -2366,16 +2369,16 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
             for j in 0..divs {
                 let x = x0 + seg * j as f32;
                 if j == before && parts > 1 {
-                    // Alternating parts, the last dark against the light division after it.
+                    // Alternating parts from zero, the first dark.
                     let part = seg / parts as f32;
                     for p in 0..parts {
-                        let c = if (parts - 1 - p).is_multiple_of(2) { dark } else { light };
+                        let c = if p.is_multiple_of(2) { dark } else { light };
                         if let Some(b) = Rect::from_xywh(x + part * p as f32, y0, part, bar_h) {
                             pm.fill_rect(b, &paint(c, 1.0), Transform::identity(), None);
                         }
                     }
                 } else if let Some(b) = Rect::from_xywh(x, y0, seg, bar_h) {
-                    let c = if dark_at(j) { dark } else { light };
+                    let c = if filled_dark(j) { dark } else { light };
                     pm.fill_rect(b, &paint(c, 1.0), Transform::identity(), None);
                 }
             }
@@ -8492,12 +8495,25 @@ Elaboração: RustGIS",
         };
         let runs = |pm: &Pixmap| dark_runs(pm, 37);
         assert_eq!(runs(&with(&|_| {})), 2);
-        // The first division cut in four alternating parts, the last dark: two runs there, one after.
-        assert_eq!(runs(&with(&|b| b.subdivisions = 4)), 3);
+        // The first division cut in four alternating parts from zero, the first dark, and the
+        // divisions after going on from them: parts 0 and 2, then divisions 1 and 3.
+        assert_eq!(runs(&with(&|b| b.subdivisions = 4)), 4);
         assert_eq!(with(&|b| b.subdivisions = 1).data(), with(&|_| {}).data(), "one part is the division whole");
         // Two whole divisions before zero: six divisions, three dark.
         assert_eq!(runs(&with(&|b| b.divisions_before_zero = 2)), 3);
         assert_eq!(bar_ink_rows(&with(&|b| b.divisions_before_zero = 2)), bar_ink_rows(&with(&|_| {})), "the same rows, bar and labels");
+        // Across zero the light division before it meets a dark part: the bar's first ink is at
+        // zero, as on the same bar uncut, with the light division left of it.
+        let first_ink = |pm: &Pixmap| (0..pm.width()).find(|&x| pm.pixel(x, 37).is_some_and(ink));
+        let uncut = with(&|b| b.divisions_before_zero = 1);
+        let cut = with(&|b| {
+            b.divisions_before_zero = 1;
+            b.subdivisions = 4;
+        });
+        let zero = first_ink(&uncut).unwrap();
+        assert!(zero > 20, "a division before zero: {zero}");
+        assert_eq!(first_ink(&cut), Some(zero), "dark right of zero");
+        assert!(cut.pixel(zero + 1, 37).is_some_and(ink) && !cut.pixel(zero - 2, 37).is_some_and(ink), "dark right of zero, light left");
         // A single or stepped line gets short ticks inside its first division.
         for style in [ScaleBarStyle::Line, ScaleBarStyle::Stepped] {
             let plain = with(&|b| b.style = style);
