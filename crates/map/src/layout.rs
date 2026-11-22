@@ -2556,11 +2556,6 @@ pub struct Layout {
     /// Spanish, French or German do; off, the other way round.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub decimal_comma: bool,
-    /// The width (mm) a publication's scale bar box had, as measured, when its bar took details:
-    /// made plain again, the box is measured again only while it still has that width, so one set
-    /// by hand keeps it. `None` while the bar is plain, so a plain bar's layout saves as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scale_box_measured: Option<f64>,
     #[serde(default)]
     next_id: u32,
 }
@@ -2583,7 +2578,6 @@ impl Layout {
             series: None,
             guides: Guides::default(),
             decimal_comma: false,
-            scale_box_measured: None,
             next_id: 1,
         }
     }

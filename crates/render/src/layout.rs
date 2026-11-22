@@ -2262,6 +2262,49 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
     Some(if w < width_pt && bar_plan(ground_per_pt, w, units) == Some(plan) { w } else { width_pt })
 }
 
+/// [`scale_bar_width_pt`] for the scale bar `bar` as it is set: the narrowest element, in points,
+/// in which it draws the same bar as in one `width_pt` wide, with every setting it has (its
+/// subdivisions, divisions before zero, labels, unit label and where it sits, decimals, fit and
+/// text size), its ink and `pad_pt` after it included, as [`bar_layout`] places it for the
+/// drawing. A bar without the details is measured as [`scale_bar_width_pt`] measures it, so its
+/// box is the one it always had. `width_pt` when no narrower one draws that bar; `None` when it
+/// draws none, or `bar` is no scale bar.
+pub fn scale_bar_box_width_pt(ground_per_pt: f64, width_pt: f64, bar: &ElementKind, comma: bool, pad_pt: f64) -> Option<f64> {
+    let options = BarOptions::of(bar)?;
+    if !bar.scale_bar_uses_details() {
+        return scale_bar_width_pt(ground_per_pt, width_pt, (options.units, options.divisions, options.text_size), comma, pad_pt);
+    }
+    // At a point a pixel; the height leaves the width as it is.
+    let place = |w: f64| Rect::from_xywh(0.0, 0.0, w as f32, 60.0).and_then(|r| bar_layout(r, ground_per_pt, &options, 1.0, comma));
+    let wide = place(width_pt)?;
+    let unit = |b: &BarLayout| b.unit.as_ref().map(|u| u.text.clone());
+    let labels = |b: &BarLayout| b.labels.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>();
+    // The same bar: its length and divisions, each label and its unit label written in full as
+    // they are in the wider box, and its ink and padding inside the box.
+    let same = |w: f64| {
+        place(w).is_some_and(|b| {
+            b.total == wide.total
+                && b.divs == wide.divs
+                && labels(&b) == labels(&wide)
+                && unit(&b) == unit(&wide)
+                && f64::from(b.right) + pad_pt <= w
+        })
+    };
+    if !same(width_pt) {
+        return Some(width_pt);
+    }
+    // A narrower box draws a bar no longer: the narrowest one that draws this one, halved for.
+    let (mut lo, mut hi) = (0.0, width_pt);
+    for _ in 0..48 {
+        let mid = (lo + hi) / 2.0;
+        if same(mid) { hi = mid } else { lo = mid }
+    }
+    // A little over, as for a plain bar, so the f32 rectangle an export rebuilds the width from
+    // doesn't pick the next shorter length.
+    let w = hi * (1.0 + 1e-4);
+    Some(if w < width_pt && same(w) { w } else { width_pt })
+}
+
 /// How far a scale bar starts in from its box's left side, in pixels, for its first label `first`
 /// at `k` times the default size (#2581): [`BAR_INSET`] in proportion, or more, so that label
 /// reaches no further past the side than it does at the default size, as the bar moves down to

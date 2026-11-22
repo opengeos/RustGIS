@@ -2154,13 +2154,10 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // would draw, which sets its length and divisions. The box is the narrowest that draws that same
     // bar: the renderer gives a bar at most 85 % of its box, so the box is at least the bar's length
     // over 0.85.
-    let bar_kind = match ElementKind::scale_bar(frame) {
-        ElementKind::ScaleBar { units, divisions, text_size, .. } => Some((units, divisions, text_size)),
-        _ => None,
-    };
+    let bar_kind = ElementKind::scale_bar(frame);
     let scale_box = |ground_per_pt: f64, scale: f64| {
         let text = ("{scale}", small_pt, false);
-        let w = bar_kind.map_or((fw * 0.3).max(25.0), |bar| scale_box_width(ground_per_pt, scale, fw, bar, comma, text));
+        let w = scale_box_width(ground_per_pt, scale, fw, &bar_kind, comma, text);
         (w, sh + nh)
     };
     let ground_per_pt = |s: &Session, center: Coord, scale: f64| {
@@ -5645,36 +5642,19 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     // Its frame drawn at another scale or width, or the text under its bar changed: a
     // publication's scale bar box measured again.
     let given = |keys: &[&str]| keys.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    let refit = basis.filter(|basis| {
+        // Anything that changes the bar's labels or their room, a text size or unit label given
+        // back (`null`) included.
+        let restyled = id == basis.bar_id && BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some());
+        (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled
+    });
     // A map frame drawn at another view: its scale bars' lengths and labels change (#2581).
     let frame_view = given(&["scale", "center", "bearing", "pitch", "map"])
         && s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| matches!(e.kind, ElementKind::MapFrame { .. }));
-    let detailed = |s: &Session| s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| e.kind.scale_bar_uses_details());
-    let mut plain_again_bar = false;
-    let refit = match basis {
-        Some(basis) => {
-            // Made plain again, the box kept for its details is measured for the plain bar.
-            let plain_again = basis.detailed && !detailed(s);
-            // A text size given back (`null`) changes the bar's labels too.
-            let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || p.get("textSize").is_some() || plain_again);
-            // Given details, the box keeps its width: whether it was measured is noted to tell, made
-            // plain again, a measured box from one set by hand.
-            if id == basis.bar_id && !basis.detailed && detailed(s) {
-                note_scale_box_measure(s, li, &basis);
-            }
-            plain_again_bar = id == basis.bar_id && plain_again;
-            let refits =
-                (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled;
-            refits.then_some(basis)
-        }
-        None => None,
-    };
     if frame_view {
         frame_view_changed(s, li, id, refit.as_ref());
     } else if let Some(basis) = &refit {
         refit_scale_box(s, li, basis);
-    }
-    if plain_again_bar && let Some(l) = s.project.layouts.get_mut(li) {
-        l.scale_box_measured = None;
     }
     // After the scale box is refitted: a text is measured in the box it is saved with.
     if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) || BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some()) {
@@ -5691,19 +5671,13 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
 /// `scale` and `ground_per_pt` ground metres a point: the bar a box 30 % of the frame's width (25
 /// mm at least) would draw sets its length and divisions, and the box is the narrowest that draws
 /// that same bar (at least its length over the 85 % of a box the renderer gives a bar), its last
-/// label included at the bar's text size, and holds the text written under it: `text` (its
-/// `{scale}` filled), in `text_pt` points, bold or not.
-fn scale_box_width(
-    ground_per_pt: f64,
-    scale: f64,
-    frame_w_mm: f64,
-    bar: (ScaleUnits, usize, f64),
-    comma: bool,
-    text: (&str, f64, bool),
-) -> f64 {
+/// label included at the bar's text size, with every setting the bar has, as the renderer draws it
+/// ([`crate::render::layout::scale_bar_box_width_pt`]), and holds the text written under it:
+/// `text` (its `{scale}` filled), in `text_pt` points, bold or not.
+fn scale_box_width(ground_per_pt: f64, scale: f64, frame_w_mm: f64, bar: &ElementKind, comma: bool, text: (&str, f64, bool)) -> f64 {
     let (text, text_pt, bold) = text;
     let (widest, pt_per_mm) = ((frame_w_mm * 0.3).max(25.0), rustgis_map::layout::PT_PER_MM);
-    let bar_w = crate::render::layout::scale_bar_width_pt(ground_per_pt, widest * pt_per_mm, bar, comma, 1.5 * pt_per_mm)
+    let bar_w = crate::render::layout::scale_bar_box_width_pt(ground_per_pt, widest * pt_per_mm, bar, comma, 1.5 * pt_per_mm)
         .map_or(widest, |w| w / pt_per_mm);
     let written = text.replace("{scale}", &crate::render::layout::scale_ratio_text(scale, comma));
     bar_w.max(scale_text_mm(&written, text_pt, bold)).min(widest)
@@ -5719,7 +5693,8 @@ fn scale_text_mm(text: &str, text_pt: f64, bold: bool) -> f64 {
 const PLACED_OVER_MAP: [&str; 3] = ["Legend Box", "Locator", "North Arrow"];
 
 /// What a publication's scale bar box is measured from: its frame (id, centre, scale, width), its
-/// bar (id, units, divisions) and the text under the bar (id, text, size, boldness).
+/// bar (id, and the bar as it is set: every setting changes its labels or their room) and the
+/// text under the bar (id, text, size, boldness).
 #[derive(Clone)]
 struct BoxBasis {
     frame: u32,
@@ -5727,16 +5702,11 @@ struct BoxBasis {
     scale: f64,
     frame_w: f64,
     bar_id: u32,
-    units: ScaleUnits,
-    divisions: usize,
-    text_size: f64,
+    bar: ElementKind,
     text_id: u32,
     text: String,
     size: f64,
     bold: bool,
-    /// The bar has details ([`ElementKind::scale_bar_uses_details`]): measured as a plain bar,
-    /// the box would cut it, so it keeps its width while this holds.
-    detailed: bool,
 }
 
 /// The text under a publication's scale bar as the page draws it from `b`: `{scale}` filled as
@@ -5753,13 +5723,13 @@ fn basis_text(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> String {
 fn basis_width(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> f64 {
     let ground_per_pt = m.ground_res_at(&rustgis_map::layout::frame_camera(m, b.center, b.scale, 0.0, 0.0));
     let filled = basis_text(l, m, b);
-    scale_box_width(ground_per_pt, b.scale, b.frame_w, (b.units, b.divisions, b.text_size), l.decimal_comma, (&filled, b.size, b.bold))
+    scale_box_width(ground_per_pt, b.scale, b.frame_w, &b.bar, l.decimal_comma, (&filled, b.size, b.bold))
 }
 
 /// The automatic width (mm) of layout `li`'s publication scale bar box as things are now.
 #[cfg(test)]
 pub(crate) fn scale_box_auto(s: &Session, li: usize) -> Option<f64> {
-    let b = scale_box_basis(s, li).filter(|b| !b.detailed)?;
+    let b = scale_box_basis(s, li)?;
     let l = s.project.layouts.get(li)?;
     let ElementKind::MapFrame { map, .. } = &l.element(b.frame)?.kind else { return None };
     let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
@@ -5767,15 +5737,11 @@ pub(crate) fn scale_box_auto(s: &Session, li: usize) -> Option<f64> {
 }
 
 /// The basis of a layout's publication scale bar box as it is now (#1379); `None` without one.
-/// A bar with details has one too, marked `detailed`: [`refit_scale_box`] decides from the bar
-/// as it is then.
 fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
     let l = s.project.layouts.get(li)?;
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (bar, written) = (named("Scale Bar")?, named("Scale")?);
-    let (ElementKind::ScaleBar { frame, units, divisions, text_size, .. }, ElementKind::Text { text, size, bold, .. }) =
-        (&bar.kind, &written.kind)
-    else {
+    let (ElementKind::ScaleBar { frame, .. }, ElementKind::Text { text, size, bold, .. }) = (&bar.kind, &written.kind) else {
         return None;
     };
     let fr = l.element(*frame)?;
@@ -5786,14 +5752,11 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         scale: *scale,
         frame_w: fr.w,
         bar_id: bar.id,
-        units: *units,
-        divisions: *divisions,
-        text_size: *text_size,
+        bar: bar.kind.clone(),
         text_id: written.id,
         text: text.clone(),
         size: *size,
         bold: *bold,
-        detailed: bar.kind.scale_bar_uses_details(),
     })
 }
 
@@ -5823,15 +5786,14 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
 /// other than the first (whose map the page fills the text from) is left as it is; so is a text
 /// longer than the widest box a publication gives. Only a box as wide as `before` (what it was
 /// measured from before the change: its frame, bar and text) is measured again: one set
-/// by hand keeps its width. A change to the text under the bar or to the bar's units, divisions or
-/// text size measures it again too. A bar with details keeps its box: measured as a plain bar, the box
-/// would cut it. Made plain again, its box (kept while it had details, so not comparable with a
-/// measured width) is measured for the plain bar if it still has the width it was measured at
-/// when the bar took them ([`note_scale_box_measure`]). A box that would then cover the legend, locator or north arrow, which
+/// by hand keeps its width. A change to the text under the bar or to anything of the bar's that
+/// changes its labels or their room (its units, divisions, text size, subdivisions, divisions
+/// before zero, labels, unit label and where it sits, decimals or fit) measures it again too,
+/// with every setting the bar has. A box that would then cover the legend, locator or north arrow, which
 /// it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
-    let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame && !b.detailed) else { return };
+    let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame) else { return };
     let Some(l) = s.project.layouts.get(li) else { return };
     let Some(fr) = l.element(frame) else { return };
     let ElementKind::MapFrame { map, .. } = &fr.kind else { return };
@@ -5861,15 +5823,8 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     if scale_text_mm(&filled, now.size, now.bold) > (fr.w * 0.3).max(25.0) {
         return;
     }
-    // The width the box had from its basis before the change: another one was set by hand. A
-    // box kept for a bar with details wasn't measured from it, so it is measured now if it still
-    // has the width noted, measured, when the bar took them.
-    let measured = if before.detailed {
-        l.scale_box_measured.is_some_and(|noted| (boxed.w - noted).abs() <= 1e-6)
-    } else {
-        (boxed.w - basis_width(l, m, before)).abs() <= 0.01
-    };
-    if !measured {
+    // The width the box had from its basis before the change: another one was set by hand.
+    if (boxed.w - basis_width(l, m, before)).abs() > 0.01 {
         return;
     }
     let w = basis_width(l, m, &now);
@@ -5897,23 +5852,6 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
                 (e.x, e.w) = (x, w);
             }
         }
-    }
-}
-
-/// Notes the width of layout `li`'s publication scale bar box as its bar takes details, if it is
-/// the width measured from `before` (what it was measured from as a plain bar); `None` for one
-/// set by hand. [`refit_scale_box`] measures the box again, the bar plain again, only while it
-/// still has the width noted.
-fn note_scale_box_measure(s: &mut Session, li: usize, before: &BoxBasis) {
-    let noted = (|| {
-        let l = s.project.layouts.get(li)?;
-        let ElementKind::MapFrame { map, .. } = &l.element(before.frame)?.kind else { return None };
-        let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
-        let w = l.elements.iter().find(|e| e.name == "Scale Box")?.w;
-        ((w - basis_width(l, m, before)).abs() <= 0.01).then_some(w)
-    })();
-    if let Some(l) = s.project.layouts.get_mut(li) {
-        l.scale_box_measured = noted;
     }
 }
 

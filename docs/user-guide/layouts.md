@@ -279,9 +279,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   reach no further past its top and left than the default size's, and `null` gives the default
   back) (`"style":"line","units":"miles","divisions":2,"color":"#1F4E79","textSize":12`). A box too
   small for its labels and bar (too short, which draws the bar below it, or too narrow for its last
-  label), or a label that runs off the page, is said when its size, text size, units or divisions
-  change or its frame is drawn at another scale, and an export reports it as cut off, as it does a
-  text. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
+  label), or a label that runs off the page, is said when its size, text size, units, divisions or
+  details change or its frame is drawn at another scale, and an export reports it as cut off, as it
+  does a text. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
   division after zero cut into unlabelled parts), **Divisions before zero** (0 to 2, labelled with
   negatives), **Label position** (above or below the bar), a **Unit label** (the unit's name as
   printed: its abbreviation unless set; untick **Show unit label** for none) and its **Unit label

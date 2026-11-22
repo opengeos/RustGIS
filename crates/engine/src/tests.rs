@@ -11788,11 +11788,12 @@ fn layout_scale_bars_take_their_details() {
     assert_eq!(back, s.project.layouts[0]);
 }
 
-/// A publication's scale bar box isn't measured again for a bar with details: it would be sized
-/// for a plain bar and cut this one (#1379). Plain again, it is measured again, and refitted
-/// when its frame's scale changes.
+/// A publication's scale bar box is measured from every setting its bar has (#1379), as the
+/// renderer draws it: a detail given measures it again for the detailed bar, its frame drawn at
+/// another scale measures it again, and made plain again it is the plain bar's box once more. A
+/// width set by hand is kept, as for a plain bar.
 #[test]
-fn a_publication_scale_box_keeps_a_detailed_bar() {
+fn a_publication_scale_box_follows_a_detailed_bar() {
     use rustgis_map::layout::ElementKind;
     let mut s = world();
     // The profile and extent publication_layouts_fit_their_pages uses.
@@ -11800,34 +11801,43 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     let li = s.project.layouts.len() - 1;
     let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
     let (bar, frame) = (named(&s, "Scale Bar").id, s.project.layouts[li].first_frame().unwrap());
-    assert!(crate::cmd::layout::scale_box_auto(&s, li).is_some());
-    s.run("layout.update", &json!({"layout": li, "element": bar, "unitLabelPosition": "afterBar"})).unwrap();
-    assert_eq!(crate::cmd::layout::scale_box_auto(&s, li), None, "a detailed bar has no automatic box");
-    let w = named(&s, "Scale Box").w;
+    let auto = |s: &Session| crate::cmd::layout::scale_box_auto(s, li).expect("an automatic box");
+    let boxed = |s: &Session| named(s, "Scale Box").w;
+    let plain = boxed(&s);
+    assert!((plain - auto(&s)).abs() < 0.01, "{plain} vs {}", auto(&s));
+    // A unit after the bar takes room beside it: the box is measured again for it, and wider.
+    s.run("layout.update", &json!({"layout": li, "element": bar, "unitLabel": "Kilometres", "unitLabelPosition": "afterBar"})).unwrap();
+    let detailed = boxed(&s);
+    assert!((detailed - auto(&s)).abs() < 0.01, "measured for the detailed bar: {detailed} vs {}", auto(&s));
+    assert!((detailed - plain).abs() > 0.5, "the detailed bar's box: {detailed} vs {plain}");
+    // Each of its details measures it again: a division before zero needs room for its label.
+    s.run("layout.update", &json!({"layout": li, "element": bar, "divisionsBeforeZero": 1})).unwrap();
+    assert!((boxed(&s) - auto(&s)).abs() < 0.01, "{} vs {}", boxed(&s), auto(&s));
+    // Its frame drawn at another scale: measured again, details and all.
     let scale = match &s.project.layouts[li].element(frame).unwrap().kind {
         ElementKind::MapFrame { scale, .. } => *scale,
         k => panic!("{k:?}"),
     };
     s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
-    assert!((named(&s, "Scale Box").w - w).abs() < 1e-9, "kept, not measured for a plain bar");
-    s.run("layout.update", &json!({"layout": li, "element": bar, "unitLabelPosition": "afterLabels"})).unwrap();
-    let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("plain again, an automatic box");
-    assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "plain again, measured again: {} vs {auto}", named(&s, "Scale Box").w);
-    // Its frame drawn at another scale once more: the plain bar's box is refitted.
-    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 4.0})).unwrap();
-    let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("an automatic box");
-    assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "refitted: {} vs {auto}", named(&s, "Scale Box").w);
+    assert!((boxed(&s) - auto(&s)).abs() < 0.01, "refitted: {} vs {}", boxed(&s), auto(&s));
+    // Plain again: the plain bar's box at that scale.
+    s.run(
+        "layout.update",
+        &json!({"layout": li, "element": bar, "unitLabel": null, "unitLabelPosition": "afterLabels", "divisionsBeforeZero": 0}),
+    )
+    .unwrap();
+    assert!(!named(&s, "Scale Bar").kind.scale_bar_uses_details());
+    assert!((boxed(&s) - auto(&s)).abs() < 0.01, "plain again, measured again: {} vs {}", boxed(&s), auto(&s));
     // A width set by hand (the box, its bar and the text under it, as the box moves together)
-    // survives the bar going detailed and plain again.
-    let hand = auto + 7.0;
+    // is kept whatever the bar is given, as for a plain bar.
+    let hand = auto(&s) + 7.0;
     for n in ["Scale Box", "Scale Bar", "Scale"] {
         s.run("layout.update", &json!({"layout": li, "element": named(&s, n).id, "w": hand})).unwrap();
     }
     s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 4})).unwrap();
-    assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "kept while detailed");
+    assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept with a detail: {} vs {hand}", boxed(&s));
     s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 0})).unwrap();
-    assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "set by hand, kept: {} vs {hand}", named(&s, "Scale Box").w);
-    assert_eq!(s.project.layouts[li].scale_box_measured, None, "a plain bar's layout saves no measure");
+    assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept plain again: {} vs {hand}", boxed(&s));
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything
