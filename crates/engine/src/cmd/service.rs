@@ -478,8 +478,8 @@ fn added_layers(r: &Value) -> Vec<u32> {
 /// otherwise (#2080).
 pub(crate) fn apply_drawing_info(s: &mut Session, r: &Value, name: &str, drawing: &Value) {
     let mut notes = rustgis_map::arcgis_style::Notes::default();
-    // As `layer.marker` checks an image: one kept already decodes into the drawing's cache,
-    // a new one is decoded once before it is kept.
+    // A new image is checked as `layer.marker` checks one: decoded once for the run, in its
+    // store, before it is kept.
     let readable = |b64: &str| rustgis_render::picture_marker_check(b64).map(|_| ()).map_err(rustgis_render::MarkerRefusal::whose);
     for id in added_layers(r) {
         if let Some(l) = s.map_mut().layer_mut(id) {

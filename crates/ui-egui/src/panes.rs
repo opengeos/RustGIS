@@ -5828,11 +5828,13 @@ pub(crate) fn stroke_image(layer: u32, class: Option<&ClassRef>, strokes: &[Line
 }
 
 /// A marker as an editor sends it back: an image that can't be drawn (one a file gave that wasn't
-/// kept, or that doesn't decode) becomes the circle it is drawn as, which the command takes where
-/// it refuses the image. Whether it was replaced.
+/// kept, that doesn't decode or that has too many pixels) becomes the circle it is drawn as, which
+/// the command takes where it refuses the image. One drawn as a circle only for what the run has
+/// spent is sent as it is, to draw after a restart. Whether it was replaced.
 pub(crate) fn drawn_marker(m: Marker) -> (Marker, bool) {
+    let lost = |p| rustgis_engine::render::picture_marker_kept_check(p).is_err_and(rustgis_engine::render::MarkerRefusal::lasts);
     match m {
-        Marker::Picture(p) if !rustgis_engine::render::picture_marker_draws(p) => (Marker::Circle, true),
+        Marker::Picture(p) if lost(p) => (Marker::Circle, true),
         m => (m, false),
     }
 }
