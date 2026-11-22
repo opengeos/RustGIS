@@ -101,9 +101,14 @@ fn undrawn(n: roxmltree::Node) -> bool {
         "animate" | "animateColor" | "animateMotion" | "animateTransform" | "discard" | "set" => return true,
         "style" => {
             let sheet = sheet_of(n);
-            // An at-rule's name is any case; `@keyframes` moves what a still image can't.
+            // An at-rule's name is any case; `@keyframes` moves what a still image can't, with a
+            // vendor's prefix too (`@-webkit-keyframes`).
             let lower = sheet.to_ascii_lowercase();
-            return lower.contains("@import") || lower.contains("@keyframes") || elsewhere(&sheet);
+            let keyframes = lower.split('@').skip(1).any(|r| {
+                let name = r.strip_prefix('-').and_then(|v| v.split_once('-')).map_or(r, |(_, rest)| rest);
+                name.starts_with("keyframes")
+            });
+            return lower.contains("@import") || keyframes || elsewhere(&sheet);
         }
         "foreignObject" => {
             return !(n.parent_element().is_some_and(|p| p.has_tag_name("switch")) && n.has_attribute("requiredExtensions"));
@@ -690,6 +695,10 @@ mod tests {
             r#"<style>@IMPORT "pins.css";</style><rect width="9" height="9"/>"#.to_string(),
             r#"<rect width="9" height="9" fill="URL(paints.svg#red)"/>"#.to_string(),
             r#"<style>@keyframes s { to { opacity: 0 } } rect { animation: s 1s }</style><rect width="9" height="9"/>"#.to_string(),
+            r#"<style>@-webkit-keyframes s { to { opacity: 0 } } rect { -webkit-animation: s 1s }</style><rect width="9" height="9"/>"#
+                .to_string(),
+            r#"<style>@-moz-keyframes s { to { opacity: 0 } } rect { -moz-animation: s 1s }</style><rect width="9" height="9"/>"#
+                .to_string(),
             r#"<style>rect { fill: url(paints.svg#red) }</style><rect width="9" height="9"/>"#.to_string(),
         ] {
             assert_eq!(read(&svg(&undrawn)).err(), Some(Refusal::Undrawn), "{undrawn}");
@@ -704,6 +713,8 @@ mod tests {
         assert_eq!(read(&svg(r#"<style>@im<!-- -->port "pins.css";</style>"#)).err(), Some(Refusal::Undrawn));
         let linked = r#"<?xml-stylesheet href="pins.css"?><svg xmlns="http://www.w3.org/2000/svg"><rect width="9" height="9"/></svg>"#;
         assert_eq!(read(linked).err(), Some(Refusal::Undrawn));
+        // A class named after keyframes is no animation.
+        assert!(read(&svg(r#"<style>.no-keyframes { fill: red }</style><rect class="no-keyframes" width="9" height="9"/>"#)).is_ok());
         let switched = r#"<switch><foreignObject requiredExtensions="http://ns.example/editor" width="1" height="1"/><g><rect width="9" height="9"/></g></switch>"#;
         assert!(read(&svg(switched)).is_ok());
         let own = r##"<linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
