@@ -2332,3 +2332,24 @@ fn rasterize_says_the_vertices_left_out_of_its_extent() {
     let b = said(&s, mark);
     assert!(!b.iter().any(|t| t.contains(left_out)), "{b:?}");
 }
+
+/// A point the layer's own system can't give in longitude/latitude is counted apart from one the
+/// grid's system can't hold: IDW from points held in UTM, one far beyond any place UTM holds,
+/// says that UTM can't give it, not that the grid can't hold it.
+#[test]
+fn a_point_its_own_system_cant_give_is_said_as_such() {
+    let mut s = Session::new(Project::default());
+    let at = [Coord::new(784_000.0, 5_401_300.0), Coord::new(785_000.0, 5_402_300.0), Coord::new(1e12, 1e12)];
+    add_in(&mut s, "Samples", GeometryType::Point, at.iter().map(|c| Geometry::Point(*c)).collect(), UTM);
+    let mark = s.notice_mark();
+    let answer = s
+        .run(
+            "gp.run",
+            &json!({"tool": "idwInterpolation", "params": {"input": "Samples", "field": "v", "pixelSize": 100, "crs": "EPSG:3857", "output": "Idw"}}),
+        )
+        .unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).chain([answer.to_string()]).collect();
+    let own = format!("1 point(s) that {} can't give in longitude/latitude were left out", UTM.label());
+    assert!(said.iter().any(|t| t.contains(&own)), "{said:?}");
+    assert!(!said.iter().any(|t| t.contains("beyond what")), "{said:?}");
+}
