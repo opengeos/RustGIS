@@ -11530,6 +11530,17 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 4.0})).unwrap();
     let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("an automatic box");
     assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "refitted: {} vs {auto}", named(&s, "Scale Box").w);
+    // A width set by hand (the box, its bar and the text under it, as the box moves together)
+    // survives the bar going detailed and plain again.
+    let hand = auto + 7.0;
+    for n in ["Scale Box", "Scale Bar", "Scale"] {
+        s.run("layout.update", &json!({"layout": li, "element": named(&s, n).id, "w": hand})).unwrap();
+    }
+    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 14})).unwrap();
+    assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "kept while detailed");
+    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 8})).unwrap();
+    assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "set by hand, kept: {} vs {hand}", named(&s, "Scale Box").w);
+    assert_eq!(s.project.layouts[li].scale_box_measured, None, "a plain bar's layout saves no measure");
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything

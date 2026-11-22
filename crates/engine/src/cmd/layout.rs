@@ -5609,8 +5609,21 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         let plain_again =
             basis.detailed && !s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| e.kind.scale_bar_uses_details());
         let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || plain_again);
+        // Given details, the box keeps its width: whether it was measured is noted to tell, made
+        // plain again, a measured box from one set by hand.
+        let detailed_now =
+            !basis.detailed && s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| e.kind.scale_bar_uses_details());
+        if id == basis.bar_id && detailed_now {
+            note_scale_box_measure(s, li, &basis);
+        }
         if (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled {
             refit_scale_box(s, li, &basis);
+        }
+        if id == basis.bar_id
+            && plain_again
+            && let Some(l) = s.project.layouts.get_mut(li)
+        {
+            l.scale_box_measured = None;
         }
     }
     // After the scale box is refitted: a text is measured in the box it is saved with.
@@ -5736,7 +5749,8 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
 /// by hand keeps its width. A change to the text under the bar or to the bar's units or divisions
 /// measures it again too. A bar with details keeps its box: measured as a plain bar, the box
 /// would cut it. Made plain again, its box (kept while it had details, so not comparable with a
-/// measured width) is measured for the plain bar. A box that would then cover the legend, locator or north arrow, which
+/// measured width) is measured for the plain bar if it still has the width it was measured at
+/// when the bar took them ([`note_scale_box_measure`]). A box that would then cover the legend, locator or north arrow, which
 /// it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
@@ -5771,8 +5785,14 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
         return;
     }
     // The width the box had from its basis before the change: another one was set by hand. A
-    // box kept for a bar with details wasn't measured from it, so it is measured now.
-    if !before.detailed && (boxed.w - basis_width(l, m, before)).abs() > 0.01 {
+    // box kept for a bar with details wasn't measured from it, so it is measured now if it still
+    // has the width noted, measured, when the bar took them.
+    let measured = if before.detailed {
+        l.scale_box_measured.is_some_and(|noted| (boxed.w - noted).abs() <= 1e-6)
+    } else {
+        (boxed.w - basis_width(l, m, before)).abs() <= 0.01
+    };
+    if !measured {
         return;
     }
     let w = basis_width(l, m, &now);
@@ -5800,6 +5820,23 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
                 (e.x, e.w) = (x, w);
             }
         }
+    }
+}
+
+/// Notes the width of layout `li`'s publication scale bar box as its bar takes details, if it is
+/// the width measured from `before` (what it was measured from as a plain bar); `None` for one
+/// set by hand. [`refit_scale_box`] measures the box again, the bar plain again, only while it
+/// still has the width noted.
+fn note_scale_box_measure(s: &mut Session, li: usize, before: &BoxBasis) {
+    let noted = (|| {
+        let l = s.project.layouts.get(li)?;
+        let ElementKind::MapFrame { map, .. } = &l.element(before.frame)?.kind else { return None };
+        let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
+        let w = l.elements.iter().find(|e| e.name == "Scale Box")?.w;
+        ((w - basis_width(l, m, before)).abs() <= 0.01).then_some(w)
+    })();
+    if let Some(l) = s.project.layouts.get_mut(li) {
+        l.scale_box_measured = noted;
     }
 }
 
