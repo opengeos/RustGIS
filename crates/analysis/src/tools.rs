@@ -5243,6 +5243,15 @@ impl ToGrid {
         Ok(self.direct.as_ref().map_or(via, |d| d.point_near(c, via)))
     }
 
+    /// The places of the North and South Pole in the grid's system, those it holds: none when the
+    /// systems are the same.
+    pub(crate) fn poles(&self) -> Vec<Coord> {
+        if self.same {
+            return Vec::new();
+        }
+        [90.0, -90.0].into_iter().filter_map(|lat| self.to.from_lonlat(Coord::new(0.0, lat)).filter(|p| p.is_finite())).collect()
+    }
+
     /// A polygon's vertex in the grid's system, as the grid's transformer takes a place in
     /// longitude/latitude, with no check: Web Mercator takes a latitude past 85.05° as 85.05°, so a
     /// zone reaching past it keeps its part below, as zones in longitude/latitude always did. Then

@@ -1110,7 +1110,13 @@ fn means_under(
     }
     let mut sums = vec![0.0; bands.len()];
     let mut n = 0usize;
-    let (cols, rows) = zone_window(r, &e, matches!(zone, ZoneIn::Own { .. }), |c| zone.grid(r, c));
+    // A pole inside the zone's box, in a system other than the raster's: there a projection's grid
+    // tears or runs off without end (a Web Mercator raster's), so the outline bounds nothing.
+    let (cols, rows) = match zone {
+        ZoneIn::Own { to_zone, .. } if to_zone.poles().iter().any(|p| e.contains(*p)) => (0..r.width, 0..r.height),
+        ZoneIn::Own { .. } => zone_window(r, &e, true, |c| zone.grid(r, c)),
+        ZoneIn::LonLat => zone_window(r, &e, false, |c| zone.grid(r, c)),
+    };
     each_rows((r.height - (rows.end - rows.start)) as usize)?;
     for row in rows {
         each_rows(1)?;
@@ -1140,10 +1146,11 @@ fn means_under(
 /// projection's smooth image of a parallel or meridian doesn't. The whole raster when a point can't
 /// be placed; none when `e` is empty.
 ///
-/// With `interior` (a zone held in a system other than longitude/latitude), places inside `e` are placed too, a sixteenth
-/// of it apart: when one can't be, or lands outside the outline's window, the zone's box holds a
-/// place the raster's grid can't take in one piece (a polar zone on a Web Mercator raster, whose
-/// outline lands south of the cells near the pole), and the whole raster is read.
+/// With `interior` (a zone held in a system other than longitude/latitude), places inside `e` are
+/// placed too, a sixteenth of it apart: when one can't be, or lands outside the outline's window,
+/// the zone's box holds a place the raster's grid can't take in one piece, and the whole raster is
+/// read. (A box holding a pole, where a Web Mercator raster's grid runs off, is read whole before
+/// this: `means_under`.)
 fn zone_window(r: &Raster, e: &Extent, interior: bool, to_grid: impl Fn(Coord) -> Option<Coord>) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
@@ -3179,7 +3186,8 @@ mod tests {
         let polar = Crs::Epsg(3413);
         // Centred on the pole, and off it.
         let to_polar = polar.transformer().unwrap_or_else(|e| panic!("{e}"));
-        for (x0, x1, y0, y1) in [(-1e6, 1e6, -1e6, 1e6), (-0.9e6, 1.1e6, -1.05e6, 0.95e6)] {
+        // The last reaches far south: no sample inside it lands near the pole.
+        for (x0, x1, y0, y1) in [(-1e6, 1e6, -1e6, 1e6), (-0.9e6, 1.1e6, -1.05e6, 0.95e6), (-1e6, 31e6, -1e6, 31e6)] {
             let ring = vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)];
             let mut inside = 0;
             for row in 0..h {
