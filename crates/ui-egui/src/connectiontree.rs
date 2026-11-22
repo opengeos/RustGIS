@@ -461,10 +461,19 @@ fn row_icon(child: &Value) -> Option<&'static str> {
     }
 }
 
-/// Paints a row's icon ([`row_icon`]) at the start of the row, when it has one.
+/// A row of an enterprise geodatabase: it has an icon's slot, painted or blank, so the names of
+/// rows with and without an icon line up.
+fn has_icon_slot(child: &Value) -> bool {
+    child["what"] == "dataset" || child.get("item").is_some()
+}
+
+/// Paints a row's icon ([`row_icon`]) at the start of the row, or leaves its slot blank.
 fn paint_row_icon(ui: &mut Ui, t: &Tokens, child: &Value) {
+    if !has_icon_slot(child) {
+        return;
+    }
+    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 16.0), Sense::hover());
     if let Some(icon) = row_icon(child) {
-        let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 16.0), Sense::hover());
         crate::icons::paint(ui.painter(), r, icon, t.icon, t.accent);
     }
 }
@@ -612,10 +621,10 @@ fn branch(
         // made up (a geodatabase's Tables): its name says what it is. A service folder, which is
         // read when opened, says "folder".
         let what = child["what"].as_str().unwrap_or("");
+        paint_row_icon(ui, t, child);
         if !(what == "folder" && node.is_none()) {
             ui.label(RichText::new(what_label(what)).small().weak());
         }
-        paint_row_icon(ui, t, child);
         let r = ui.add(Label::new(child["name"].as_str().unwrap_or("")).sense(Sense::click()));
         clicked = r.clicked();
         if node.is_some() {
@@ -748,6 +757,14 @@ mod tests {
         assert_eq!(icon(json!({"what": "dataset", "node": "dataset:V2F0ZXI"})), Some("catalog"));
         assert_eq!(icon(json!({"what": "table", "detail": "MULTIPOLYGON"})), None);
         assert_eq!(icon(json!({"what": "folder"})), None);
+        // A geodatabase's row with no icon keeps the slot, so its name lines up with the others;
+        // other connections' rows and the made-up groups have none.
+        let slot = |v: Value| has_icon_slot(&v);
+        assert!(slot(json!({"what": "table", "item": "featureClass", "geometry": null})));
+        assert!(slot(json!({"what": "table", "item": "other"})));
+        assert!(slot(json!({"what": "dataset", "node": "dataset:V2F0ZXI"})));
+        assert!(!slot(json!({"what": "table", "detail": "MULTIPOLYGON"})));
+        assert!(!slot(json!({"what": "folder"})));
     }
 
     fn harness() -> Harness {
