@@ -316,7 +316,7 @@ fn saved_accounts(app: &mut RustGisApp) -> Vec<chatgpt::Credentials> {
 #[cfg(not(target_arch = "wasm32"))]
 fn poll_sign_in(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some((checking, slot)) = app.assistant.sign_in_read.as_ref() else { return };
-    let Some(read) = slot.lock().ok().and_then(|mut s| s.take()) else { return };
+    let Some(read) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
     let checking = checking.clone();
     app.assistant.sign_in_read = None;
     let Some(cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()).filter(Config::login) else { return };
@@ -559,7 +559,7 @@ fn sync_sign_in(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 fn take(slot: &Reply) -> Option<Result<HttpResponse, rustgis_assistant::Error>> {
-    slot.lock().ok().and_then(|mut s| s.take())
+    slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
 }
 
 /// Ends the agent threads on this computer (with every process they started), and the relay if
@@ -718,7 +718,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(r) = app.assistant.signout.as_ref().and_then(|s| s.lock().ok().and_then(|mut s| s.take())) {
+    if let Some(r) = app.assistant.signout.as_ref().and_then(|s| s.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()) {
         app.assistant.signout = None;
         if r.is_err() {
             app.assistant.login_error = Some(

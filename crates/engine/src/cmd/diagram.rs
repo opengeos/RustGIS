@@ -245,8 +245,9 @@ pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
     }
 }
 
-/// What [`hidden_notice`] says about `l`, or `None` when its diagram (if any) shows: also given
-/// for each such layer a project, map file or layer file opens with.
+/// What [`hidden_notice`] says about `l`, or `None` when its diagram (if any) shows. Opening a
+/// project, map file or layer file checks only whether this is `Some`, counting such layers by
+/// kind in one notice each; this text isn't shown there.
 pub(crate) fn hidden_text(l: &rustgis_map::Layer) -> Option<String> {
     l.diagram.as_ref()?;
     // A name read from a file may be any length.

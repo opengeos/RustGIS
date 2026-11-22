@@ -294,7 +294,10 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
     let epochs = epochs as usize;
     // Without a name given, a new model never replaces one: it gets a name of its own.
     let (name, auto) = match ps(p, "model") {
-        Some(_) => (name(&json!({"name": p.get("model")}), format!("{}_model", r.name))?, None),
+        Some(m) => match m.trim() {
+            "" => (format!("{}_model", r.name), None),
+            m => (super::within("model", "a model's name", m, 200)?, None),
+        },
         None => {
             let base = format!("{}_model", r.name);
             (free_name(s, &base), Some(base))
