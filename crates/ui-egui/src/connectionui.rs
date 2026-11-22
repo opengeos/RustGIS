@@ -691,7 +691,8 @@ fn definition(st: &State) -> Value {
         // An address the form can't make is left empty: Save and Test say why first.
         let address = form_address(st).unwrap_or_default();
         let name =
-            if st.name.trim().is_empty() { i18n::fmt("Geodatabase on {server}", &[("server", st.server.trim())]) } else { st.name.clone() };
+            // Saved data, so not translated; only the Name box's hint is.
+            if st.name.trim().is_empty() { format!("Geodatabase on {}", st.server.trim()) } else { st.name.clone() };
         return json!({"kind":st.kind, "name":name, "group":st.group, "address":address});
     }
     let address = st.address.trim();
