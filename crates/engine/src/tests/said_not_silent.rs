@@ -159,12 +159,13 @@ fn a_project_with_keys_this_version_doesnt_read_says_so() {
     file["maps"][0]["layers"][2]["shine"] = json!(3);
     file["maps"][0]["layers"][3]["shine"] = json!(4);
     file["layouts"][0]["tilt"] = json!(5);
+    file["layouts"][0]["a\nb"] = json!(6);
     let mut opened = Project::from_json(&file.to_string()).unwrap();
     let maps = format!("{:?}", opened.take_read_notices(&[ReadPart::Maps]));
     assert!(maps.contains("\"5\"") && maps.contains("maps.0.haze") && maps.contains("and 2 more"), "{maps}");
     let mut opened = Project::from_json(&file.to_string()).unwrap();
     let layouts = format!("{:?}", opened.take_read_notices(&[ReadPart::Layouts]));
-    assert!(layouts.contains("\"1\"") && layouts.contains("layouts.0.tilt"), "{layouts}");
+    assert!(layouts.contains("\"2\"") && layouts.contains("layouts.0.tilt") && layouts.contains(r"a\\nb"), "{layouts}");
     let mut opened = Project::from_json(&file.to_string()).unwrap();
     let items = format!("{:?}", opened.take_read_notices(&[ReadPart::Items]));
     assert!(items.contains("\"1\"") && items.contains("glow") && !items.contains("haze"), "{items}");

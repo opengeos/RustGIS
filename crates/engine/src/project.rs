@@ -2037,7 +2037,10 @@ impl UnknownKeys {
         // those of the maps it takes.
         let seen = self.counted.entry((part, map)).or_default();
         if *seen < MAX_UNKNOWN_NAMED {
-            self.named.push((part, map, crate::project::short_name(place)));
+            // A key from the file is shown on one line of plain text: control characters escaped.
+            let shown: String =
+                place.chars().flat_map(|c| if c.is_control() { c.escape_debug().collect::<Vec<_>>() } else { vec![c] }).collect();
+            self.named.push((part, map, crate::project::short_name(&shown)));
         }
         *seen += 1;
     }
