@@ -4,14 +4,15 @@
 committed limits that AGENTS.md says only come down: the xtask checks fail when the code is over
 its limit, but nothing stopped a pull request from editing the limit up to make them pass. This
 check compares each limit with the one on the base commit (the pull request's base branch, or the
-merge queue entry's parent) and fails when one is higher or has been removed. A new line (a new memory scenario) is fine. Lowering a limit is what
-the files are for.
+merge queue entry's parent) and fails when one is higher or has been removed. A new line (a new
+memory scenario) is fine. Lowering a limit is what the files are for.
 
 A limit may need to rise for a reason a maintainer accepts. A maintainer overrides the check for
 one change by commenting on the pull request, or reviewing it, with a line of its own that the
-failure prints for that change, such as `<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`.
-The line names the file, the limit and the value it was approved at, so a later push that raises
-the limit further, or another limit, needs its own approval. A removed limit is approved the same
+failure prints for that change, such as
+`<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`. The line names the file, the
+limit and the value it was approved at, so a later push that raises the limit further, or another
+limit, needs its own approval. A removed limit is approved the same
 way (`... memory-limits.txt save removed -->`), as is a deleted file. A maintainer here is the
 repository's owner, a member of its organization or a collaborator, as GitHub labels the message;
 the pull request's author may be that maintainer: the override is a deliberate, recorded decision.
@@ -36,7 +37,8 @@ import re
 import subprocess
 import sys
 
-LIMIT_FILES = ["xtask/row-uses.txt", "xtask/memory-limits.txt"]
+ROWS_FILE = "xtask/row-uses.txt"
+LIMIT_FILES = [ROWS_FILE, "xtask/memory-limits.txt"]
 APPROVE = "ratchet-raise-approved"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # What Rust's `str::trim` removes (Unicode White_Space). Python's `strip` also removes U+001C to
@@ -45,10 +47,12 @@ RUST_WHITESPACE = "\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u
 QUEUE_REF = re.compile(r"/pr-(\d+)-[0-9a-f]{40}$")
 
 
-def parse(text):
+def parse(text, rows_file=False):
     """The `name = number` lines of a limits file, a `#` starting a comment; the first line of a name counts.
 
     The xtask readers take the first line of a name too, so a later one can't move the limit.
+    `rows_file` reads `xtask/row-uses.txt` as `cargo xtask rows` does: only `count` matters, and a
+    line without an `=` is ignored. `cargo xtask memory` rejects a line without one.
     """
     limits = {}
     # Lines end at LF or CRLF only, as in Rust's `str::lines`: `splitlines` would also split at a
@@ -58,6 +62,9 @@ def parse(text):
         if not line:
             continue
         name, sep, value = line.partition("=")
+        name = name.strip(RUST_WHITESPACE)
+        if rows_file and (not sep or name != "count"):
+            continue
         if not sep:
             raise ValueError(f"line {n}: expected `name = number`")
         value = value.strip(RUST_WHITESPACE)
@@ -67,7 +74,7 @@ def parse(text):
             raise ValueError(f"line {n}: `{value}` is not a number") from None
         if not math.isfinite(number):
             raise ValueError(f"line {n}: `{value}` is not a finite number")
-        limits.setdefault(name.strip(RUST_WHITESPACE), (number, value))
+        limits.setdefault(name, (number, value))
     return limits
 
 
@@ -85,13 +92,14 @@ def compare(path, base_text, head_text):
     if base_text is None:
         return [], []
     try:
-        base = parse(base_text)
+        base = parse(base_text, path == ROWS_FILE)
     except ValueError as error:
-        return [], [f"{path} on the base can't be read ({error}), so its limits aren't compared"]
+        # The limits can't be compared, so a raise could hide behind this: it needs a maintainer's say.
+        return [(f"{path}: can't be read on the base ({error}), so its limits can't be compared", f"{path} unreadable on base")], []
     if head_text is None:
         return [(f"{path}: deleted, but it holds {len(base)} limit(s) that only go down", f"{path} deleted")], []
     try:
-        head = parse(head_text)
+        head = parse(head_text, path == ROWS_FILE)
     except ValueError as error:
         return [(f"{path}: {error}", None)], []
     problems = []
@@ -153,7 +161,7 @@ def approved(found, token):
     return any(
         not m.get("bot")
         and m.get("association") in MAINTAINERS
-        and any(row.strip() == line for row in (m.get("body") or "").splitlines())
+        and any(row.strip() == line for row in (m.get("body") or "").split("\n"))
         for m in found
     )
 
