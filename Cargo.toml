@@ -165,6 +165,10 @@ opt-level = 1
 [profile.dev.package.rustgis-analysis]
 opt-level = 1
 
+# `rustgis-plugins` (wasmi 2) hits `0xc0000005` access violations on x86_64-pc-windows-msvc at opt-level 0.
+[profile.dev.package.rustgis-plugins]
+opt-level = 1
+
 [profile.dev.package.rustgis-render]
 opt-level = 2
 

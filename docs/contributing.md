@@ -169,8 +169,8 @@ A test that fails now and then can be retried with `--retries 1`.
 
 **Dev optimization levels.** In `Cargo.toml`, `[profile.dev]` defaults to `opt-level = 0` so UI,
 engine, CLI and test binaries compile quickly, while third-party crates and `rustgis-render` build
-at `opt-level = 2` and `rustgis-geom`, `rustgis-data` and `rustgis-analysis` build at
-`opt-level = 1` so geometry, raster and analysis tests stay fast.
+at `opt-level = 2` and `rustgis-geom`, `rustgis-data`, `rustgis-analysis` and `rustgis-plugins`
+build at `opt-level = 1` so geometry, raster, analysis and plugin tests stay fast and reliable.
 
 **rust-analyzer in its own folder.** An editor's rust-analyzer and the terminal share `target/`:
 each waits for the other's lock ("Blocking waiting for file lock"), and as they build with
