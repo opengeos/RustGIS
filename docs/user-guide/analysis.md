@@ -181,8 +181,9 @@ Statistics, Pivot Table, Join Field, Select Layer By Attribute, Export Features,
 Line, Split Line At Vertices, Feature Envelope To Polygon, Unsplit Line, Feature Vertices To
 Points, Check Geometry and Repair Geometry; the overlays Clip, Erase, Intersect, Identity, Union,
 Symmetrical Difference, Update, Split and Dissolve; Minimum Bounding Geometry (convex hull),
-Feature To Point and Summarize Within; Select Layer By Location and Spatial Join; and Buffer,
-Simplify, Points Along Lines and Near. Their other inputs are converted into that system for the
+Feature To Point and Summarize Within; Select Layer By Location and Spatial Join; Buffer,
+Simplify, Points Along Lines and Near; and IDW Interpolation, Kriging, Kernel Density, Zonal
+Statistics and Tabulate Area. Their other inputs are converted into that system for the
 run, and their new layers are kept in it, so the coordinates of what they copy stay exactly as they
 were. An overlay there takes each edge as straight in that system, not in Web Mercator as it does in
 longitude/latitude, so where an edge crosses another can differ from the same tool's result in
@@ -204,7 +205,11 @@ metre is not quite a metre on the ground: in a UTM zone, from 1.0004 m on its ce
 about 0.999 m at its edges on the equator (0.9998 m at 48.7°N), so a buffer of 100 km around a point
 2.5° east of the central meridian at 48.7°N reaches 100,017 m on the ground on its west side and
 99,972 m on its east side. Near's nearest point is that system's x and y, and Points Along Lines'
-angle is from grid north. Area, length and perimeter fields stay on the ellipsoid.
+angle is from grid north. An interpolation or density surface is made in that system unless
+another is given, from its points' own coordinates; one given another system, and Zonal Statistics
+and Tabulate Area on a raster in another system, convert the points or zones straight into it, with
+the transformation between the two datums where they differ. Area, length and perimeter fields
+stay on the ellipsoid.
 
 In the desktop app a tool runs in the background, so the map and the rest of the window stay in
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
