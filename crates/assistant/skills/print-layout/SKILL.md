@@ -23,8 +23,9 @@ description: Make a printable page layout — map frame, title, legend, north ar
    `"miles"`, `"feet"`), `"divisions"` and a `"style"` (`"alternating"`, `"stepped"`, `"line"`); it can also take
    `"subdivisions"` (0–10), `"divisionsBeforeZero"` (0–2), `"labelPosition"` (`"above"`, `"below"`), `"unitLabel"`
    (text; `""` for none), `"unitLabelPosition"` (`"afterLabels"`, `"afterBar"`, `"above"`, `"below"`), `"decimals"`
-   (`"auto"`, the default, or 0–3 fixed with the thousands set apart, as a chart's), `"labelSize"` (4–24 pt) and `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`). `"grid"` adds a
-   graticule to the frame (`"style": "ticks"` for neatline ticks, `"format": "dms"`, `"edges"`).
+   (`"auto"`, the default, or 0–3 fixed with the thousands set apart, as a chart's), `"labelSize"` (4–24 pt) and
+   `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`). `"grid"` adds a graticule to the frame
+   (`"style": "ticks"` for neatline ticks, `"format": "dms"`, `"edges"`).
 5. Adjust with `layout.update` (`{"element": id, "x", "y", "w", "h", "text", "size", "bold"}`). The ids come from the
    results of the earlier calls.
 6. `layout.export` `{"path": "map.pdf"}`, or `.png` with a `dpi` (300 for print). Exporting writes a file, so the
