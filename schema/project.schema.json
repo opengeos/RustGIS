@@ -1130,7 +1130,8 @@
           "native-coordinates",
           "layout-legend-text",
           "label-guide",
-          "project-crs"
+          "project-crs",
+          "layout-scale-bar-details"
         ],
         "type": "string"
       },
@@ -1231,7 +1232,8 @@
     "native-coordinates",
     "layout-legend-text",
     "label-guide",
-    "project-crs"
+    "project-crs",
+    "layout-scale-bar-details"
   ],
   "x-rustgis-reads-format": 2,
   "x-rustgis-writes-format": 2
