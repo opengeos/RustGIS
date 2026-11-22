@@ -1226,9 +1226,9 @@ systems, chosen with **System**, so the same place can be compared in several gr
 
 | System | Cells | Resolutions | Id field |
 |---|---|---|---|
-| **H3** | hexagons (and twelve pentagons a resolution), whose areas vary by about two to one | 0–15, each about a seventh of the one before: 5 is about 250 km², 9 about 0.1 km² | `h3`, H3's own hex text (`8966…fff`), as DuckDB, PostgreSQL and Python's `h3` read it |
-| **S2** | quadrilaterals from the faces of a cube | 0–30, each a quarter: 10 is about 80 km², 14 about 0.3 km² | `s2`, the cell's S2 token |
-| **A5** | pentagons of equal area | 0–30, as A5 Grid's | `a5`, as A5 Grid's |
+| **H3** (Uber) | hexagons (and twelve pentagons a resolution), whose areas vary by about two to one | 0–15, each about a seventh of the one before: 5 is about 250 km², 9 about 0.1 km² | `h3`, H3's own hex text (`8966…fff`), as DuckDB, PostgreSQL and Python's `h3` read it |
+| **S2** (Google) | quadrilaterals from the faces of a cube | 0–30, each a quarter: 10 is about 80 km², 14 about 0.3 km² | `s2`, the cell's S2 token |
+| **A5** (Felix Palmer) | pentagons of equal area | 0–30, as A5 Grid's | `a5`, as A5 Grid's |
 | **Hexagon** | flat hexagons on the map's projection | 0–24, each a quarter; a cell at a resolution has an A5 cell's area there on the map's plane | `hex`, its axial coordinates `q,r` |
 
 - **The hexagon grid** is laid on the active map's projection (Web Mercator when the map is a

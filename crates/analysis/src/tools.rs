@@ -657,7 +657,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Choice(&crate::dggs::System::NAMES),
                 required: false,
                 default: "\"H3\"",
-                help: "Hexagon lays flat hexagons on the map's projection (Web Mercator for a globe), anchored at its origin: a place gets the same cell with any layer, in that projection.",
+                help: "H3 (Uber) hexagons, S2 (Google) cells, A5 (Felix Palmer) equal-area pentagons. Hexagon lays flat hexagons on the map's projection (Web Mercator for a globe), anchored at its origin: a place gets the same cell with any layer, in that projection.",
             },
             P {
                 name: "resolution",
