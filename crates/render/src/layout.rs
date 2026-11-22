@@ -2448,16 +2448,18 @@ struct BarFit {
 
 /// A scale bar of `before` divisions before zero and `after` after it, counting in a unit `unit_m`
 /// metres long, fitted to `room_m` ground metres by `fit`: the roundest length divided as asked
-/// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit, at most
-/// ten in all, the divisions before zero included (`AdjustDivision`), or the asked divisions each a
-/// round length (`AdjustWidth`). `None` when it draws none.
+/// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit
+/// (`AdjustDivision`), or the asked divisions each a round length (`AdjustWidth`); under every fit
+/// at most ten in all, the divisions before zero included. `None` when it draws none.
 fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usize) -> Option<BarFit> {
+    // Ten in all under every fit, the divisions before zero among them, and at least one after zero.
+    let most = rustgis_map::layout::MAX_SCALE_DIVISIONS.saturating_sub(before).max(1);
+    let after = after.clamp(1, most);
     let count = (before + after) as f64;
     let (total, after) = match fit {
         ScaleBarFit::AdjustDivisionValue => (rustgis_geom::nice_distance(room_m / unit_m), after),
         ScaleBarFit::AdjustDivision => {
-            // Ten in all, the divisions before zero among them, and at least one after zero.
-            let most = rustgis_map::layout::MAX_SCALE_DIVISIONS.saturating_sub(before).max(1) as f64;
+            let most = most as f64;
             let fits = |value: f64| (room_m / unit_m / value + 1e-9).floor() - before as f64;
             // More than ten would fit: the next round division (1, 2, 5, 10 …) until ten do, so
             // the bar fills its room as far as a round value allows rather than stopping short.
@@ -9119,6 +9121,14 @@ Elaboração: RustGIS",
             most = most.max(b.divs);
         }
         assert_eq!(most, rustgis_map::layout::MAX_SCALE_DIVISIONS, "a wide room reaches ten");
+        // Ten asked and two before zero: ten in all under every fit, not twelve.
+        for fit in ScaleBarFit::ALL {
+            let bar = BarOptions { fit, divisions: 10, divisions_before_zero: 2, ..BarOptions::default() };
+            let b = bar_layout(Rect::from_xywh(0.0, 0.0, 300.0, 60.0).unwrap(), 100.0, &bar, 1.0, false).unwrap();
+            assert!(b.divs <= rustgis_map::layout::MAX_SCALE_DIVISIONS, "{fit:?}: {} divisions", b.divs);
+            let middle = (b.y0 + b.bar_h / 2.0) as u32;
+            assert!(dark_runs(&draw_bar(&bar, 300), middle) <= 5, "{fit:?}: at most five dark of ten");
+        }
     }
 
     /// The narrowest element keeps its bar where an export rebuilds it from an f32 rectangle: near
