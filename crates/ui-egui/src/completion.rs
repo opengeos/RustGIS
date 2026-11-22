@@ -703,7 +703,8 @@ fn rows(
             // Set first, so it counts from the box's corner: set after, a minimum counts from
             // where the content ended.
             ui.set_min_size(size);
-            let mut area = egui::ScrollArea::vertical().id_salt("help").max_height(size.y).auto_shrink([false, false]);
+            // Its own ID per item: a new help starts with no fling left from the last one's scroll.
+            let mut area = egui::ScrollArea::vertical().id_salt(("help", shown)).max_height(size.y).auto_shrink([false, false]);
             if scroll.help_for != Some(shown) {
                 area = area.vertical_scroll_offset(0.0);
                 scroll.help_for = Some(shown);
