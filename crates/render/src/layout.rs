@@ -8427,11 +8427,13 @@ Elaboração: RustGIS",
     }
 
     /// 64-bit FNV-1a over the pixmaps' bytes.
+    #[cfg(not(target_arch = "wasm32"))]
     fn fnv(pms: &[Pixmap]) -> u64 {
         pms.iter().flat_map(|p| p.data().iter()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
     }
 
     /// A plain scale bar on a white `w` x 60 pixmap, in the default colours.
+    #[cfg(not(target_arch = "wasm32"))]
     fn draw_default(style: ScaleBarStyle, units: ScaleUnits, divisions: usize, ground: f64, w: u32, ppp: f64, comma: bool) -> Pixmap {
         let mut pm = Pixmap::new(w, 60).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
@@ -8441,13 +8443,27 @@ Elaboração: RustGIS",
         pm
     }
 
-    /// How [`scale_bars_without_details_draw_as_before`]'s bars drew before scale bars had details.
-    const PINNED: u64 = 0xc3cb_47e7_d78d_abb4;
+    /// How [`scale_bars_without_details_draw_as_before`]'s bars drew before scale bars had details,
+    /// their labels in the built-in face.
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED: u64 = 0x3975_8d68_da45_882b;
 
     /// A bar with none of the details draws exactly as main drew it: every style, unit, division
-    /// count, ground resolution, density and decimal mark.
+    /// count, ground resolution, density and decimal mark. Its labels are drawn in the built-in
+    /// face, whatever fonts the machine has: in a process of its own, told so before any text.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn scale_bars_without_details_draw_as_before() {
+        if std::env::var_os("RUSTGIS_SCALE_BAR_PIN_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "layout::tests::scale_bars_without_details_draw_as_before", "--nocapture"])
+                .env("RUSTGIS_SCALE_BAR_PIN_CHILD", "1")
+                .env("RUSTGIS_BUILTIN_FONTS", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
         let mut drawn = Vec::new();
         for style in ScaleBarStyle::ALL {
             for units in [ScaleUnits::Auto, ScaleUnits::Miles, ScaleUnits::Feet, ScaleUnits::Meters] {
