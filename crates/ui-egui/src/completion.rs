@@ -798,7 +798,8 @@ fn rows(
 /// How the help scrolls in its box `boxed`, of which the popup, held to its room and maybe
 /// scrolled, shows what's inside `clip`: the height its scroll area takes, from the box's top to
 /// the shown part's bottom (so the help's end comes into view there), and a page, the shown part
-/// less a line (so no line passes unseen). A row at least of each.
+/// less a line (so no line passes unseen). A row at least of each, so a page always moves: with
+/// less than a line shown, that sliver goes by unread.
 fn help_view(boxed: egui::Rect, clip: egui::Rect, row: f32) -> (f32, f32) {
     let floor = row.min(boxed.height());
     let seen = (clip.bottom() - boxed.top()).clamp(floor, boxed.height());
@@ -1698,7 +1699,9 @@ mod tests {
                     m.layer_ids().filter(|l| l.order == egui::Order::Foreground).filter_map(|l| m.area_rect(l.id)).find(|r| r.contains(row))
                 })
             };
-            let shown = popup(h).map_or(0.0, |p| p.bottom() - top);
+            // Its scroll's view ends the frame's margin above the popup's bottom.
+            let margin = h.ctx.global_style().spacing.menu_margin.bottom as f32;
+            let shown = popup(h).map_or(0.0, |p| p.bottom() - margin - top);
             h.key_press(egui::Key::PageDown);
             h.run();
             let down = h.get_by_label(long).rect().top();
