@@ -1676,9 +1676,9 @@ fn picture<'a>(p: &'a Value, new: &mut Vec<&'a str>) -> Result<Option<Picture>, 
     if let Some(kept) = Picture::kept(b64) {
         // One refused only for what the run has spent is kept as it is, drawn as a circle until a
         // restart, so an edit that sends it again (a script's) isn't refused for it.
-        return match rustgis_render::picture_marker_kept_check(kept) {
-            Err(why) if why.lasts() => Err(refused(why)),
-            _ => Ok(Some(kept)),
+        return match rustgis_render::picture_marker_kept_refusal(kept) {
+            Some(why) => Err(refused(why)),
+            None => Ok(Some(kept)),
         };
     }
     if !new.contains(&b64) {

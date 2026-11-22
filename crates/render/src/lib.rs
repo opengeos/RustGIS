@@ -609,6 +609,13 @@ pub fn picture_marker_kept_check(p: rustgis_map::Picture) -> Result<f32, MarkerR
     picture::marker_drawn(p)
 }
 
+/// Why kept picture marker `p` can't be given again, by command or by a symbol editor: a refusal
+/// for the image itself. `None` where it draws, or is drawn as a circle only until a restart (past
+/// what the run decodes), and is kept as it is.
+pub fn picture_marker_kept_refusal(p: rustgis_map::Picture) -> Option<MarkerRefusal> {
+    picture::marker_kept_refusal(p)
+}
+
 /// Whether picture marker `p` draws rather than a circle ([`picture_marker_kept_check`]).
 pub fn picture_marker_draws(p: rustgis_map::Picture) -> bool {
     picture_marker_kept_check(p).is_ok()

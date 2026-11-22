@@ -405,6 +405,18 @@ pub(crate) fn marker_drawn(p: Picture) -> Result<f32, MarkerRefusal> {
     marker_met(p).map(|found| found.aspect)
 }
 
+/// Why kept picture marker `p` can't be given again: a refusal that lasts whatever the run
+/// ([`MarkerRefusal::lasts`]). One drawn as a circle only for what the run has spent is kept as it
+/// is, to draw after a restart. Commands and the symbol editors alike go by this.
+pub(crate) fn marker_kept_refusal(p: Picture) -> Option<MarkerRefusal> {
+    lasting(&marker_met(p))
+}
+
+/// [`marker_kept_refusal`] of what a picture met came to.
+fn lasting(found: &Marker) -> Option<MarkerRefusal> {
+    found.as_ref().err().copied().filter(|why| why.lasts())
+}
+
 /// [`marker_drawn`], `None` where it is drawn as a circle.
 pub(crate) fn marker_aspect(p: Picture) -> Option<f32> {
     marker_drawn(p).ok()
@@ -601,6 +613,16 @@ mod tests {
     fn only_the_runs_refusal_passes() {
         use MarkerRefusal::*;
         assert_eq!([NotAnImage, TooManyPixels, PastRunPixels].map(MarkerRefusal::lasts), [true, true, false]);
+        // A kept image the run's spent budget refuses is kept as it is; one refused for itself
+        // isn't; one that draws is.
+        let mut store = Store::default();
+        let fine = png(8, 8);
+        assert_eq!(lasting(&marker_in(&mut store, &fine)), None);
+        assert_eq!(lasting(&marker_in(&mut store, "bm90IGFuIGltYWdl")), Some(NotAnImage));
+        assert_eq!(lasting(&marker_in(&mut store, &declaring(2049, 2048))), Some(TooManyPixels));
+        store.budget.pixels = RUN_MARKER_PIXELS;
+        let spent = marker_in(&mut store, &png(9, 9));
+        assert_eq!((spent.as_ref().err(), lasting(&spent)), (Some(&PastRunPixels), None));
     }
 
     /// A marker's image is decoded once for the run: the same image met on another thread, or
