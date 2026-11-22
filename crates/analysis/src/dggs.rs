@@ -1,14 +1,27 @@
-//! A5 grids (opengeos/RustGIS#551): [A5](https://a5geo.org)'s pentagonal cells, which all have
-//! the same area at a given resolution, as a polygon layer, and points counted by cell.
+//! Grids of cells with global ids (opengeos/RustGIS#551): Generate Tessellation and Aggregate
+//! Points to Grid, in four systems.
 //!
-//! A count per cell is then a density with no per-cell normalisation, unlike a grid whose cells
-//! change size with latitude or projection. Cells are identified by A5's 64-bit ids, written in
-//! hex (`a5`) so they survive CSV and JSON and join with data from other A5 tools.
+//! - **A5** ([a5geo.org](https://a5geo.org)): pentagons, all of one area at a resolution, so a
+//!   count per cell is a density with no per-cell normalisation. Ids are A5's 64-bit ids in hex.
+//! - **H3** (the `h3o` crate): hexagons and twelve pentagons a resolution, whose areas vary by
+//!   about two to one. Ids are H3's own hex text.
+//! - **S2** (the `s2` crate): quadrilaterals from a cube's faces. Ids are S2 tokens.
+//! - **Hexagon**: a flat hexagon grid on the active map's projection plane (Web Mercator for a
+//!   globe), anchored at the plane's origin, not at a layer's corner, so a place falls in the
+//!   same cell whatever layer it's gridded with. Ids are its axial coordinates, `q,r`, and only
+//!   mean something in the plane the layer names (`plane`). A cell at resolution r has the area
+//!   of an A5 cell at r on that plane, so the two compare at one resolution.
+//!
+//! Ids are text, so they survive CSV and JSON and join with data from other tools of the system.
+//! A5's tools (`a5Grid`, `a5Aggregate`) are this module's with the system fixed.
 
 use std::collections::{HashMap, HashSet};
+use std::f64::consts::{PI, TAU};
 
+use geo::{PreparedGeometry, Relate};
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::{Coord, Extent};
+use s2::region::Region;
 use serde_json::Value as Json;
 
 use crate::{Inputs, Output, ToolResult};
@@ -20,6 +33,82 @@ pub const MAX_RESOLUTION: i32 = 30;
 /// How far over [`MAX_CELLS`] an area's [`estimate`] may go before it's refused without being
 /// covered: the estimate is rough, and the exact count still applies after.
 const ESTIMATE_MARGIN: f64 = 2.0;
+/// The most cells a covering looks at before keeping those in the area (S2's descent, the
+/// hexagon grid's rows): past it the run is refused, as one over the cap.
+const MAX_CANDIDATES: u64 = 4 * MAX_CELLS;
+
+/// A grid system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum System {
+    A5,
+    H3,
+    S2,
+    Hexagon,
+}
+
+impl System {
+    /// The names a `system` parameter takes, as the tool's choice lists them.
+    pub const NAMES: [&'static str; 4] = ["H3", "S2", "A5", "Hexagon"];
+
+    fn parse(s: &str) -> Result<System, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "h3" => Ok(System::H3),
+            "s2" => Ok(System::S2),
+            "a5" => Ok(System::A5),
+            "hexagon" | "hex" => Ok(System::Hexagon),
+            other => Err(format!("System is H3, S2, A5 or Hexagon, not {}", other.chars().take(40).collect::<String>())),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            System::A5 => "A5",
+            System::H3 => "H3",
+            System::S2 => "S2",
+            System::Hexagon => "Hexagon",
+        }
+    }
+
+    /// The id field's name: the system's, as A5's layers have always had (`a5`).
+    fn field(self) -> &'static str {
+        match self {
+            System::A5 => "a5",
+            System::H3 => "h3",
+            System::S2 => "s2",
+            System::Hexagon => "hex",
+        }
+    }
+
+    /// The finest resolution. The hexagon grid stops at 24 (cells of about 1.5 m²): finer, the
+    /// plane's metres far from its origin are coarser than a cell.
+    fn finest(self) -> i32 {
+        match self {
+            System::A5 | System::S2 => 30,
+            System::H3 => 15,
+            System::Hexagon => 24,
+        }
+    }
+
+    /// A cell's mean area on the ground at a resolution, in square metres, for the [`estimate`].
+    fn mean_area_m2(self, res: i32) -> f64 {
+        let sphere = 4.0 * PI * radius() * radius();
+        match self {
+            System::A5 | System::Hexagon => a5::cell_area(res),
+            System::H3 => h3_res(res).map_or(f64::NAN, |r| sphere / r.cell_count() as f64),
+            System::S2 => sphere / (6.0 * 4f64.powi(res)),
+        }
+    }
+}
+
+/// A5's authalic sphere, in metres; S2's areas on the unit sphere are scaled to it, and the
+/// hexagon grid's cells are measured on it.
+fn radius() -> f64 {
+    (a5::cell_area(-1) / (4.0 * PI)).sqrt()
+}
+
+fn h3_res(res: i32) -> Option<h3o::Resolution> {
+    u8::try_from(res).ok().and_then(|r| h3o::Resolution::try_from(r).ok())
+}
 
 fn num(p: &Json, k: &str) -> Option<f64> {
     p.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).filter(|f: &f64| f.is_finite())
@@ -29,11 +118,15 @@ fn text<'a>(p: &'a Json, k: &str) -> &'a str {
     p.get(k).and_then(Json::as_str).unwrap_or("")
 }
 
-/// The resolution asked for: a whole number from 0 to 30.
-fn resolution(p: &Json, default: f64) -> Result<i32, String> {
+/// The resolution asked for: a whole number from 0 to the system's finest.
+fn resolution(p: &Json, default: f64, system: System) -> Result<i32, String> {
     let r = num(p, "resolution").unwrap_or(default);
-    if r.fract() != 0.0 || !(0.0..=f64::from(MAX_RESOLUTION)).contains(&r) {
-        return Err(format!("Resolution is a whole number from 0 to {MAX_RESOLUTION}"));
+    let finest = system.finest();
+    if r.fract() != 0.0 || !(0.0..=f64::from(finest)).contains(&r) {
+        return Err(match system {
+            System::A5 => format!("Resolution is a whole number from 0 to {finest}"),
+            s => format!("{} resolution is a whole number from 0 to {finest}", s.name()),
+        });
     }
     Ok(r as i32)
 }
@@ -45,28 +138,42 @@ fn output_name(p: &Json, default: &str) -> String {
     }
 }
 
-/// A cell's area in square kilometres (every cell of a resolution has it).
-fn area_km2(res: i32) -> f64 {
-    a5::cell_area(res) / 1e6
-}
-
-/// A cell's outline as a longitude/latitude ring. Its longitudes run on from one vertex to the
-/// next (past ±180° for a cell across the antimeridian), and a cell around a pole is closed along
-/// the pole, so the ring is a polygon the map can draw.
-pub fn ring(cell: u64) -> Option<Vec<Coord>> {
-    let b = a5::cell_to_boundary(cell, None).ok()?;
-    let mut out: Vec<Coord> = Vec::with_capacity(b.len() + 4);
-    for ll in &b {
-        let (mut lon, lat) = (ll.longitude(), ll.latitude());
-        if let Some(prev) = out.last() {
-            while lon - prev.x > 180.0 {
-                lon -= 360.0;
+/// A ring of longitudes and latitudes made one the map can draw: closed, its longitudes run on
+/// from one vertex to the next (past ±180° for a cell across the antimeridian), and, for a cell
+/// around a pole, closed along the pole.
+fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
+    let mut open: Vec<Coord> = points.into_iter().collect();
+    if open.len() > 1 && open.first() == open.last() {
+        open.pop();
+    }
+    // A corner on a pole has no longitude of its own (S2's face cells have one): on a map of
+    // longitudes and latitudes the pole is a line, from the longitude of the corner before it to
+    // that of the one after.
+    let n = open.len();
+    let mut out: Vec<Coord> = Vec::with_capacity(n + 8);
+    for (i, c) in open.iter().enumerate() {
+        if c.y.abs() >= 90.0 - 1e-9 && n > 2 {
+            let around = |k: usize| open.get(k % n).copied().unwrap_or(*c);
+            let (prev, next) = (around(i + n - 1), around(i + 1));
+            out.push(Coord::new(prev.x, c.y.signum() * 90.0));
+            out.push(Coord::new(next.x, c.y.signum() * 90.0));
+        } else {
+            out.push(*c);
+        }
+    }
+    let start = *out.first()?;
+    out.push(start);
+    let mut prev: Option<f64> = None;
+    for c in &mut out {
+        if let Some(p) = prev {
+            while c.x - p > 180.0 {
+                c.x -= 360.0;
             }
-            while lon - prev.x < -180.0 {
-                lon += 360.0;
+            while c.x - p < -180.0 {
+                c.x += 360.0;
             }
         }
-        out.push(Coord::new(lon, lat));
+        prev = Some(c.x);
     }
     let (first, last) = (*out.first()?, *out.last()?);
     // Around a pole the longitudes turn a whole circle: close the ring along the pole.
@@ -78,6 +185,12 @@ pub fn ring(cell: u64) -> Option<Vec<Coord>> {
         out.push(first);
     }
     (out.len() >= 4).then_some(out)
+}
+
+/// An A5 cell's outline as a [`drawable`] longitude/latitude ring.
+pub fn ring(cell: u64) -> Option<Vec<Coord>> {
+    let b = a5::cell_to_boundary(cell, None).ok()?;
+    drawable(b.iter().map(|ll| Coord::new(ll.longitude(), ll.latitude())))
 }
 
 /// The part of a closed ring west (`west`) or east of the meridian at `x`, closed; the points
@@ -103,11 +216,10 @@ fn clip(ring: &[Coord], x: f64, west: bool) -> Vec<Coord> {
     out
 }
 
-/// A cell as a polygon for the map: its [`ring`], or, for a cell across the antimeridian (and one
-/// round a pole), its two sides of ±180°, each within −180° to 180°, as the parts of one polygon,
-/// the way Natural Earth splits a country there.
-pub fn parts(cell: u64) -> Option<Vec<Vec<Vec<Coord>>>> {
-    let r = ring(cell)?;
+/// A [`drawable`] ring as a polygon for the map: itself, or, for one across the antimeridian
+/// (and one round a pole), its two sides of ±180°, each within −180° to 180°, as the parts of one
+/// polygon, the way Natural Earth splits a country there.
+fn split(r: Vec<Coord>) -> Option<Vec<Vec<Vec<Coord>>>> {
     let (lo, hi) = r.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
     if lo >= -180.0 && hi <= 180.0 {
         return Some(vec![vec![r]]);
@@ -122,6 +234,43 @@ pub fn parts(cell: u64) -> Option<Vec<Vec<Vec<Coord>>>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// An A5 cell as a polygon for the map ([`split`]).
+pub fn parts(cell: u64) -> Option<Vec<Vec<Vec<Coord>>>> {
+    split(ring(cell)?)
+}
+
+/// A shape (its outer ring, then its holes) as shapes within −180° to 180°: itself, or, for one
+/// whose ring runs on past ±180°, its two sides of the meridian, the far one moved back a turn.
+/// Every ring comes back closed. H3's tiler, S2's descent and the hexagon grid's plane take
+/// longitudes on the globe only.
+fn on_the_globe_sides(shape: &[Vec<Coord>]) -> Vec<Vec<Vec<Coord>>> {
+    let rings: Vec<Vec<Coord>> = shape
+        .iter()
+        .filter_map(|r| {
+            let first = *r.first()?;
+            let mut r = r.clone();
+            if r.last() != Some(&first) {
+                r.push(first);
+            }
+            Some(r)
+        })
+        .collect();
+    let (lo, hi) = rings.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+    if lo >= -180.0 && hi <= 180.0 {
+        return vec![rings];
+    }
+    let (edge, turn) = if hi > 180.0 { (180.0, -360.0) } else { (-180.0, 360.0) };
+    let near: Vec<Vec<Coord>> = rings.iter().map(|r| clip(r, edge, edge > 0.0)).collect();
+    let far: Vec<Vec<Coord>> =
+        rings.iter().map(|r| clip(r, edge, edge < 0.0).into_iter().map(|c| Coord::new(c.x + turn, c.y)).collect()).collect();
+    // A side whose outer ring has no area is left out, and so is a hole wholly on the other side.
+    [near, far]
+        .into_iter()
+        .filter(|side| side.first().is_some_and(|outer| outer.len() >= 4))
+        .map(|side| side.into_iter().filter(|r| r.len() >= 4).collect())
+        .collect()
+}
+
 /// Whether a polygon's ring can be covered: three corners or more, each a longitude and latitude
 /// (within ±90°, and ±360° so a ring that runs on past the antimeridian is kept).
 fn usable(ring: &[Coord]) -> bool {
@@ -129,26 +278,22 @@ fn usable(ring: &[Coord]) -> bool {
     ring.len() - usize::from(closed) >= 3 && ring.iter().all(|c| c.is_finite() && c.y.abs() <= 90.0 && c.x.abs() <= 360.0)
 }
 
-/// The fields every A5 layer starts with: the cell's id (hex), resolution and area.
-fn cell_fields() -> Vec<Field> {
-    vec![Field::new("a5", FieldType::Text), Field::new("resolution", FieldType::Integer), Field::new("area_km2", FieldType::Double)]
-}
-
-fn cell_attrs(cell: u64, res: i32) -> Vec<Value> {
-    vec![Value::Text(a5::u64_to_hex(cell)), Value::Int(i64::from(res)), Value::Float(area_km2(res))]
+/// A longitude folded into −180° to 180°, for a point.
+fn fold(lon: f64) -> f64 {
+    if (-180.0..=180.0).contains(&lon) { lon } else { (lon + 180.0).rem_euclid(360.0) - 180.0 }
 }
 
 /// An extent as a ring, its edges followed every degree, so a parallel isn't taken for a great
 /// circle.
-fn extent_ring(e: Extent) -> Vec<a5::LonLat> {
+fn extent_ring(e: Extent) -> Vec<Coord> {
     let steps = |a: f64, b: f64| ((b - a).abs().ceil() as usize).clamp(1, 720);
     let mut ring = Vec::new();
     let n = steps(e.min_x, e.max_x);
-    ring.extend((0..n).map(|i| a5::LonLat::new(e.min_x + (e.max_x - e.min_x) * i as f64 / n as f64, e.min_y)));
+    ring.extend((0..n).map(|i| Coord::new(e.min_x + (e.max_x - e.min_x) * i as f64 / n as f64, e.min_y)));
     let m = steps(e.min_y, e.max_y);
-    ring.extend((0..m).map(|i| a5::LonLat::new(e.max_x, e.min_y + (e.max_y - e.min_y) * i as f64 / m as f64)));
-    ring.extend((0..n).map(|i| a5::LonLat::new(e.max_x - (e.max_x - e.min_x) * i as f64 / n as f64, e.max_y)));
-    ring.extend((0..m).map(|i| a5::LonLat::new(e.min_x, e.max_y - (e.max_y - e.min_y) * i as f64 / m as f64)));
+    ring.extend((0..m).map(|i| Coord::new(e.max_x, e.min_y + (e.max_y - e.min_y) * i as f64 / m as f64)));
+    ring.extend((0..n).map(|i| Coord::new(e.max_x - (e.max_x - e.min_x) * i as f64 / n as f64, e.max_y)));
+    ring.extend((0..m).map(|i| Coord::new(e.min_x, e.max_y - (e.max_y - e.min_y) * i as f64 / m as f64)));
     ring
 }
 
@@ -169,44 +314,48 @@ fn too_many(n: impl std::fmt::Display, res: i32) -> String {
     format!("{n} cells at resolution {res} is too many (at most {MAX_CELLS}): use a coarser resolution or a smaller area")
 }
 
-/// About how many cells cover a polygon (its outer ring, then its holes) at a resolution, worked
-/// out before A5 covers it: its area over a cell's, and a cell per cell's width along its rings,
-/// where a covering adds the cells its edges cross. Edges are taken as great circles.
-fn estimate(rings: &[Vec<a5::LonLat>], res: i32) -> f64 {
-    // A5's authalic sphere.
-    let radius = (a5::cell_area(-1) / (4.0 * std::f64::consts::PI)).sqrt();
+/// A ring's area (absolute) and length on the authalic sphere, its edges taken as great circles,
+/// in square metres and metres.
+fn on_the_sphere(ring: &[Coord]) -> (f64, f64) {
+    let r = radius();
+    let (mut twice, mut arc) = (0.0, 0.0);
+    for (k, a) in ring.iter().enumerate() {
+        let Some(b) = ring.get((k + 1) % ring.len()) else { break };
+        let (l1, p1, l2, p2) = (a.x.to_radians(), a.y.to_radians(), b.x.to_radians(), b.y.to_radians());
+        let mut dl = l2 - l1;
+        if dl > PI {
+            dl -= TAU;
+        } else if dl < -PI {
+            dl += TAU;
+        }
+        twice += dl * (2.0 + p1.sin() + p2.sin());
+        let h = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+        arc += 2.0 * h.clamp(0.0, 1.0).sqrt().asin();
+    }
+    ((twice / 2.0).abs() * r * r, arc * r)
+}
+
+/// About how many cells of `cell` square metres cover a polygon (its outer ring, then its
+/// holes), worked out before it's covered: its area over a cell's, and a cell per cell's width
+/// along its rings, where a covering adds the cells its edges cross. Edges are taken as great
+/// circles.
+fn estimate(rings: &[Vec<Coord>], cell: f64) -> f64 {
     let (mut area, mut length) = (0.0, 0.0);
     for (i, ring) in rings.iter().enumerate() {
-        let (mut twice, mut arc) = (0.0, 0.0);
-        for (k, a) in ring.iter().enumerate() {
-            let b = &ring[(k + 1) % ring.len()];
-            let (l1, p1, l2, p2) =
-                (a.longitude().to_radians(), a.latitude().to_radians(), b.longitude().to_radians(), b.latitude().to_radians());
-            let mut dl = l2 - l1;
-            if dl > std::f64::consts::PI {
-                dl -= std::f64::consts::TAU;
-            } else if dl < -std::f64::consts::PI {
-                dl += std::f64::consts::TAU;
-            }
-            twice += dl * (2.0 + p1.sin() + p2.sin());
-            let h = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
-            arc += 2.0 * h.clamp(0.0, 1.0).sqrt().asin();
-        }
-        let a = (twice / 2.0).abs() * radius * radius;
+        let (a, l) = on_the_sphere(ring);
         area += if i == 0 { a } else { -a };
-        length += arc * radius;
+        length += l;
     }
-    let cell = a5::cell_area(res);
-    if !area.is_finite() || !length.is_finite() {
+    if !area.is_finite() || !length.is_finite() || cell.is_nan() || cell <= 0.0 {
         return f64::INFINITY;
     }
     area.max(0.0) / cell + length / cell.sqrt()
 }
 
-/// The cells at a resolution of coverings (each compacted, as A5 gives them), each once and in id
-/// order; more than [`MAX_CELLS`] is an error. A covering's cells don't overlap, so it's counted
-/// exactly before any is made. Coverings can overlap one another (neighbouring parcels, buffers),
-/// so they're merged into a set as they come and a cell they share counts once.
+/// The cells at a resolution of A5 coverings (each compacted, as A5 gives them), each once and in
+/// id order; more than [`MAX_CELLS`] is an error. A covering's cells don't overlap, so it's
+/// counted exactly before any is made. Coverings can overlap one another (neighbouring parcels,
+/// buffers), so they're merged into a set as they come and a cell they share counts once.
 fn cells_of(coverings: impl IntoIterator<Item = Result<Vec<u64>, String>>, res: i32) -> Result<Vec<u64>, String> {
     // A coarser cell holds the ratio of the two resolutions' cell counts.
     let total = a5::get_num_cells(res);
@@ -235,6 +384,34 @@ fn cells_of(coverings: impl IntoIterator<Item = Result<Vec<u64>, String>>, res: 
     Ok(cells)
 }
 
+/// Adds a covering's cells to a run's, refusing once they pass [`MAX_CELLS`].
+fn gather(cells: &mut HashSet<u64>, more: impl IntoIterator<Item = u64>, res: i32) -> Result<(), String> {
+    for c in more {
+        cells.insert(c);
+        if cells.len() as u64 > MAX_CELLS {
+            return Err(too_many(format!("At least {}", cells.len()), res));
+        }
+    }
+    Ok(())
+}
+
+fn sorted(cells: HashSet<u64>) -> Vec<u64> {
+    let mut cells: Vec<u64> = cells.into_iter().collect();
+    cells.sort_unstable();
+    cells
+}
+
+/// A shape's rings as a `geo` polygon (in whatever plane its coordinates are).
+fn geo_polygon(shape: &[Vec<Coord>]) -> Option<geo::Polygon<f64>> {
+    let ls = |r: &Vec<Coord>| geo::LineString::from(r.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>());
+    let (outer, holes) = shape.split_first()?;
+    Some(geo::Polygon::new(ls(outer), holes.iter().map(ls).collect()))
+}
+
+fn geo_multi(parts: &[Vec<Vec<Coord>>]) -> geo::MultiPolygon<f64> {
+    geo::MultiPolygon::new(parts.iter().filter_map(|p| geo_polygon(p)).collect())
+}
+
 /// "1 polygon part" or "2 polygon parts" (and points) without a usable outline (or position).
 fn left_out(n: usize, what: &str, lacking: &str) -> String {
     match n {
@@ -243,26 +420,460 @@ fn left_out(n: usize, what: &str, lacking: &str) -> String {
     }
 }
 
-/// The A5 Grid tool: the cells at a resolution over the map's extent, a layer's polygons (or its
-/// extent, for points and lines), or the whole world.
-pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    let res = resolution(p, 5.0)?;
-    let options = a5::PolygonToCellsOptions {
-        containment: if text(p, "containment") == "Center" { a5::Containment::Center } else { a5::Containment::Overlapping },
+/// Cells left out because their outline couldn't be drawn: for the hexagon grid, corners the
+/// map's projection can't take back to longitudes and latitudes.
+fn undrawable(n: usize, g: &Grid<'_>) -> String {
+    let why = match g.system {
+        System::Hexagon => format!("its corners are outside what {} reaches", g.plane.name()),
+        _ => "its outline couldn't be worked out".into(),
     };
+    match n {
+        1 => format!("1 cell was left out: {why}"),
+        n => format!("{n} cells were left out: {}", why.replacen("its", "their", 1)),
+    }
+}
+
+/// The plane the anchored hexagon grid is laid on: the active map's flat projection, or Web
+/// Mercator for a globe (or no map). Its origin, (0, 0), anchors the grid.
+struct Plane<'a> {
+    inp: &'a dyn Inputs,
+    /// The map's projection, when the map is flat.
+    map: Option<String>,
+}
+
+impl<'a> Plane<'a> {
+    fn of(inp: &'a dyn Inputs) -> Self {
+        Plane { inp, map: inp.projection_name() }
+    }
+
+    fn name(&self) -> String {
+        self.map.clone().unwrap_or_else(|| "Web Mercator".into())
+    }
+
+    fn forward(&self, c: Coord) -> Option<Coord> {
+        match self.map {
+            Some(_) => self.inp.project(c),
+            None => c.is_finite().then(|| rustgis_geom::lonlat_to_merc(c)),
+        }
+        .filter(|c| c.is_finite())
+    }
+
+    fn inverse(&self, m: Coord) -> Option<Coord> {
+        match self.map {
+            Some(_) => self.inp.unproject(m),
+            None => m.is_finite().then(|| rustgis_geom::merc_to_lonlat(m)),
+        }
+        .filter(|c| c.is_finite())
+    }
+}
+
+const SQRT3: f64 = 1.732_050_807_568_877_2;
+
+/// Pointy-top hexagons on a plane, of side (and circumradius) `size`, the one at axial `(0, 0)`
+/// centred on the origin.
+#[derive(Clone, Copy)]
+struct Hex {
+    size: f64,
+}
+
+impl Hex {
+    /// A resolution's hexagon: the area of an A5 cell at that resolution, on the plane.
+    fn at(res: i32) -> Self {
+        Hex { size: (2.0 * a5::cell_area(res) / (3.0 * SQRT3)).sqrt() }
+    }
+
+    fn centre(self, q: i64, r: i64) -> Coord {
+        Coord::new(self.size * SQRT3 * (q as f64 + r as f64 / 2.0), self.size * 1.5 * r as f64)
+    }
+
+    /// The hexagon holding a point of the plane, by rounding its cube coordinates.
+    fn holding(self, m: Coord) -> Option<(i64, i64)> {
+        let q = (SQRT3 / 3.0 * m.x - m.y / 3.0) / self.size;
+        let r = (2.0 / 3.0 * m.y) / self.size;
+        let s = -q - r;
+        let (mut rq, mut rr, rs) = (q.round(), r.round(), s.round());
+        let (dq, dr, ds) = ((rq - q).abs(), (rr - r).abs(), (rs - s).abs());
+        if dq > dr && dq > ds {
+            rq = -rr - rs;
+        } else if dr > ds {
+            rr = -rq - rs;
+        }
+        let fits = |v: f64| v.is_finite() && v.abs() <= f64::from(i32::MAX);
+        (fits(rq) && fits(rr)).then_some((rq as i64, rr as i64))
+    }
+
+    /// Its corners on the plane, closed, each side cut in `per_side` so it bends with the
+    /// projection once taken back to longitudes and latitudes.
+    fn corners(self, q: i64, r: i64, per_side: usize) -> Vec<Coord> {
+        let c = self.centre(q, r);
+        let corner = |k: usize| {
+            let a = (30.0 + 60.0 * k as f64).to_radians();
+            Coord::new(c.x + self.size * a.cos(), c.y + self.size * a.sin())
+        };
+        let mut out = Vec::with_capacity(6 * per_side + 1);
+        for k in 0..6 {
+            let (a, b) = (corner(k), corner(k + 1));
+            out.extend((0..per_side).map(|i| {
+                let t = i as f64 / per_side as f64;
+                Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y))
+            }));
+        }
+        out.push(corner(0));
+        out
+    }
+}
+
+/// A hexagon's axial coordinates in one id: `q` in the high half, `r` in the low one.
+fn pack(q: i64, r: i64) -> u64 {
+    (u64::from(q as i32 as u32) << 32) | u64::from(r as i32 as u32)
+}
+
+fn unpack(id: u64) -> (i64, i64) {
+    (i64::from((id >> 32) as u32 as i32), i64::from(id as u32 as i32))
+}
+
+/// A grid: a system at a resolution, and for the hexagon grid, its plane.
+struct Grid<'a> {
+    system: System,
+    res: i32,
+    plane: Plane<'a>,
+    hex: Hex,
+}
+
+impl<'a> Grid<'a> {
+    fn new(system: System, res: i32, inp: &'a dyn Inputs) -> Self {
+        Grid { system, res, plane: Plane::of(inp), hex: Hex::at(res) }
+    }
+
+    /// The cell holding a longitude/latitude point.
+    fn cell_of(&self, c: Coord) -> Option<u64> {
+        if !c.is_finite() || c.y.abs() > 90.0 {
+            return None;
+        }
+        let lon = fold(c.x);
+        match self.system {
+            System::A5 => a5::lonlat_to_cell(a5::LonLat::new(c.x, c.y), self.res).ok(),
+            System::H3 => Some(u64::from(h3o::LatLng::new(c.y, lon).ok()?.to_cell(h3_res(self.res)?))),
+            System::S2 => {
+                let id = s2::cellid::CellID::from(s2::latlng::LatLng::from_degrees(c.y, lon));
+                Some(id.parent(u64::try_from(self.res).ok()?).0)
+            }
+            System::Hexagon => {
+                let (q, r) = self.hex.holding(self.plane.forward(Coord::new(lon, c.y))?)?;
+                Some(pack(q, r))
+            }
+        }
+    }
+
+    /// A cell's outline, [`drawable`].
+    fn ring(&self, id: u64) -> Option<Vec<Coord>> {
+        match self.system {
+            System::A5 => ring(id),
+            System::H3 => {
+                let cell = h3o::CellIndex::try_from(id).ok()?;
+                drawable(cell.boundary().iter().map(|ll| Coord::new(ll.lng(), ll.lat())))
+            }
+            System::S2 => {
+                let cell = s2::cell::Cell::from(s2::cellid::CellID(id));
+                // Coarse cells' sides are long great circles: followed, so they're drawn bent.
+                let per_side = 1usize << (8 - self.res.clamp(0, 8));
+                let corners: [[f64; 3]; 4] = std::array::from_fn(|k| {
+                    let v = cell.vertex(k).0;
+                    [v.x, v.y, v.z]
+                });
+                let mut pts = Vec::with_capacity(4 * per_side);
+                for (k, a) in corners.iter().enumerate() {
+                    let (a, b) = (*a, corners.get((k + 1) % 4).copied().unwrap_or(*a));
+                    for i in 0..per_side {
+                        let t = i as f64 / per_side as f64;
+                        let v = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])];
+                        let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        pts.push(Coord::new(v[1].atan2(v[0]).to_degrees(), (v[2] / n).clamp(-1.0, 1.0).asin().to_degrees()));
+                    }
+                }
+                drawable(pts)
+            }
+            System::Hexagon => {
+                let (q, r) = unpack(id);
+                let per_side = if self.res < 10 { 4 } else { 1 };
+                let pts: Option<Vec<Coord>> = self.hex.corners(q, r, per_side).into_iter().map(|m| self.plane.inverse(m)).collect();
+                drawable(pts?)
+            }
+        }
+    }
+
+    fn id_text(&self, id: u64) -> String {
+        match self.system {
+            System::A5 => a5::u64_to_hex(id),
+            System::H3 => h3o::CellIndex::try_from(id).map(|c| c.to_string()).unwrap_or_default(),
+            System::S2 => s2::cellid::CellID(id).to_token(),
+            System::Hexagon => {
+                let (q, r) = unpack(id);
+                format!("{q},{r}")
+            }
+        }
+    }
+
+    /// A cell's area on the ground, in square kilometres.
+    fn area_km2(&self, id: u64, ring: &[Coord]) -> f64 {
+        match self.system {
+            System::A5 => a5::cell_area(self.res) / 1e6,
+            System::H3 => h3o::CellIndex::try_from(id).map_or(f64::NAN, |c| c.area_km2()),
+            System::S2 => s2::cell::Cell::from(s2::cellid::CellID(id)).exact_area() * radius() * radius() / 1e6,
+            System::Hexagon => on_the_sphere(ring).0 / 1e6,
+        }
+    }
+
+    /// The fields every layer of the grid starts with: the cell's id, resolution and area, and
+    /// for the hexagon grid, the plane its ids are in.
+    fn fields(&self) -> Vec<Field> {
+        let mut f =
+            vec![Field::new(self.system.field(), FieldType::Text), Field::new("resolution", FieldType::Integer), Field::new("area_km2", FieldType::Double)];
+        if self.system == System::Hexagon {
+            f.push(Field::new("plane", FieldType::Text));
+        }
+        f
+    }
+
+    /// A cell as a polygon for the map and its first attributes ([`Grid::fields`]).
+    fn feature(&self, id: u64) -> Option<(Geometry, Vec<Value>, f64)> {
+        let ring = self.ring(id)?;
+        let area = self.area_km2(id, &ring);
+        let polygon = split(ring)?;
+        let mut attrs = vec![Value::Text(self.id_text(id)), Value::Int(i64::from(self.res)), Value::Float(area)];
+        if self.system == System::Hexagon {
+            attrs.push(Value::Text(self.plane.name()));
+        }
+        Some((Geometry::Polygon(polygon), attrs, area))
+    }
+
+    /// Every cell of the globe (the plane's world, for the hexagon grid).
+    fn world(&self, center: bool) -> Result<Vec<u64>, String> {
+        let res = self.res;
+        match self.system {
+            System::A5 => cells_of([a5::get_res0_cells()], res),
+            System::H3 => {
+                let r = h3_res(res).ok_or("No such H3 resolution")?;
+                if r.cell_count() > MAX_CELLS {
+                    return Err(too_many(r.cell_count(), res));
+                }
+                Ok(sorted(h3o::CellIndex::base_cells().flat_map(|c| c.children(r)).map(u64::from).collect()))
+            }
+            System::S2 => {
+                let level = u64::try_from(res).map_err(|_| "No such S2 level".to_string())?;
+                let n = 6u64.saturating_mul(4u64.saturating_pow(res as u32));
+                if n > MAX_CELLS {
+                    return Err(too_many(n, res));
+                }
+                let mut cells = Vec::new();
+                for face in 0..6 {
+                    let f = s2::cellid::CellID::from_face(face);
+                    let (mut id, end) = (f.child_begin_at_level(level), f.child_end_at_level(level));
+                    while id != end {
+                        cells.push(id.0);
+                        id = id.next();
+                    }
+                }
+                cells.sort_unstable();
+                Ok(cells)
+            }
+            System::Hexagon => {
+                self.cover(&[vec![extent_ring(Extent::new(-180.0, -rustgis_geom::MAX_LAT, 180.0, rustgis_geom::MAX_LAT))]], center)
+            }
+        }
+    }
+
+    /// The cells covering polygons of longitudes and latitudes (each its outer ring, then its
+    /// holes), each once and in id order: those that overlap them, or with `center`, those whose
+    /// centre is in them. Polygons can overlap; a cell they share counts once.
+    fn cover(&self, shapes: &[Vec<Vec<Coord>>], center: bool) -> Result<Vec<u64>, String> {
+        let res = self.res;
+        if self.system == System::A5 {
+            let options = a5::PolygonToCellsOptions {
+                containment: if center { a5::Containment::Center } else { a5::Containment::Overlapping },
+            };
+            let lonlat = |s: &Vec<Vec<Coord>>| -> Vec<Vec<a5::LonLat>> {
+                s.iter().map(|r| r.iter().map(|c| a5::LonLat::new(c.x, c.y)).collect()).collect()
+            };
+            return cells_of(shapes.iter().map(|s| a5::polygon_to_cells(&lonlat(s), res, Some(options))), res);
+        }
+        let sides: Vec<Vec<Vec<Coord>>> = shapes.iter().flat_map(|s| on_the_globe_sides(s)).collect();
+        let mut cells: HashSet<u64> = HashSet::new();
+        for side in &sides {
+            match self.system {
+                System::H3 => self.h3_cover(side, center, &mut cells)?,
+                System::S2 => self.s2_cover(side, center, &mut cells)?,
+                System::Hexagon => self.hex_cover(side, center, &mut cells)?,
+                System::A5 => {}
+            }
+        }
+        Ok(sorted(cells))
+    }
+
+    fn h3_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
+        use h3o::geom::{ContainmentMode, TilerBuilder};
+        let r = h3_res(self.res).ok_or("No such H3 resolution")?;
+        // The sides are within ±180° already: the tiler's guess at polygons across the
+        // antimeridian would take a world-wide view for one.
+        let mut tiler = TilerBuilder::new(r)
+            .containment_mode(if center { ContainmentMode::ContainsCentroid } else { ContainmentMode::Covers })
+            .disable_transmeridian_heuristic()
+            .build();
+        let Some(polygon) = geo_polygon(side) else { return Ok(()) };
+        tiler.add(polygon).map_err(|e| format!("H3 can't cover a polygon: {e}"))?;
+        gather(cells, tiler.into_coverage().map(u64::from), self.res)
+    }
+
+    fn s2_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
+        let level = u8::try_from(self.res).map_err(|_| "No such S2 level".to_string())?;
+        let Some(polygon) = geo_polygon(side) else { return Ok(()) };
+        let Some(outer) = side.first() else { return Ok(()) };
+        let e = outer.iter().fold(Extent::EMPTY, |e, c| e.union(&Extent::new(c.x, c.y, c.x, c.y)));
+        // The descent looks at every cell of the polygon's bounding box: its count, first.
+        let looked = estimate(&[extent_ring(e)], self.system.mean_area_m2(self.res));
+        if looked > ESTIMATE_MARGIN * MAX_CELLS as f64 {
+            return Err(too_many(if looked.is_finite() { format!("About {looked:.0}") } else { "Too many".into() }, self.res));
+        }
+        let rect = s2::rect::Rect::from_degrees(e.min_y.max(-90.0), e.min_x, e.max_y.min(90.0), e.max_x);
+        let prepared = PreparedGeometry::from(polygon);
+        let mut stack: Vec<s2::cell::Cell> = (0..6).map(|f| s2::cell::Cell::from(s2::cellid::CellID::from_face(f))).collect();
+        let mut seen = 0u64;
+        while let Some(cell) = stack.pop() {
+            if !rect.intersects_cell(&cell) {
+                continue;
+            }
+            if cell.level() < level {
+                stack.extend(cell.children().into_iter().flatten());
+                continue;
+            }
+            seen += 1;
+            if seen > MAX_CANDIDATES {
+                return Err(too_many("Too many", self.res));
+            }
+            let keep = if center {
+                let c = s2::latlng::LatLng::from(cell.center());
+                prepared.relate(&geo::Point::new(c.lng.deg(), c.lat.deg())).is_intersects()
+            } else {
+                let Some(r) = self.ring(cell.id.0) else { continue };
+                let Some(p) = split(r) else { continue };
+                prepared.relate(&geo_multi(&p)).is_intersects()
+            };
+            if keep {
+                gather(cells, [cell.id.0], self.res)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The hexagons over a polygon, on the plane: each row's from the polygon's leftmost to its
+    /// rightmost point within the row, then those that overlap it (or hold their centre in it).
+    fn hex_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
+        let res = self.res;
+        let reach = || format!("The map's projection ({}) doesn't reach the whole area: choose a smaller area", self.plane.name());
+        let rings: Vec<Vec<Coord>> =
+            side.iter().map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>()).collect::<Option<_>>().ok_or_else(reach)?;
+        let Some(outer) = rings.first() else { return Ok(()) };
+        let size = self.hex.size;
+        let (row_h, width) = (1.5 * size, SQRT3 * size);
+        let (ymin, ymax) = outer.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.y), hi.max(c.y)));
+        let (r0, r1) = (((ymin - size) / row_h).floor(), ((ymax + size) / row_h).ceil());
+        if !(r1 - r0).is_finite() || r1 - r0 > MAX_CANDIDATES as f64 {
+            return Err(too_many("Too many", res));
+        }
+        let first_row = r0 as i64;
+        // Row j's hexagons reach from j·row_h − size to j·row_h + size: the outer ring's
+        // leftmost and rightmost point there (a hole is inside it).
+        let mut span = vec![(f64::INFINITY, f64::NEG_INFINITY); (r1 - r0) as usize + 1];
+        let mut steps = 0u64;
+        for w in outer.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
+            let (j0, j1) = (((lo - size) / row_h).ceil() as i64, ((hi + size) / row_h).floor() as i64);
+            steps += u64::try_from(j1 - j0 + 1).unwrap_or(0);
+            if steps > MAX_CANDIDATES {
+                return Err(too_many("Too many", res));
+            }
+            for j in j0..=j1 {
+                let (b0, b1) = (j as f64 * row_h - size, j as f64 * row_h + size);
+                let at = |y: f64| if b.y == a.y { a.x } else { a.x + (y.clamp(lo, hi) - a.y) / (b.y - a.y) * (b.x - a.x) };
+                let (x0, x1) = if b.y == a.y { (a.x.min(b.x), a.x.max(b.x)) } else { (at(b0).min(at(b1)), at(b0).max(at(b1))) };
+                if let Some(s) = usize::try_from(j - first_row).ok().and_then(|i| span.get_mut(i)) {
+                    *s = (s.0.min(x0), s.1.max(x1));
+                }
+            }
+        }
+        // The hexagons of each row within its span, counted before any is tested.
+        let range = |j: i64, (x0, x1): (f64, f64)| {
+            let half = j as f64 / 2.0;
+            (((x0 - width / 2.0) / width - half).ceil() as i64, ((x1 + width / 2.0) / width - half).floor() as i64)
+        };
+        let rows: Vec<(i64, i64, i64)> = span
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.0 <= s.1)
+            .map(|(i, s)| {
+                let j = first_row + i as i64;
+                let (q0, q1) = range(j, *s);
+                (j, q0, q1)
+            })
+            .collect();
+        let n: u64 = rows.iter().map(|(_, q0, q1)| u64::try_from(q1 - q0 + 1).unwrap_or(0)).fold(0, u64::saturating_add);
+        if n > (ESTIMATE_MARGIN * MAX_CELLS as f64) as u64 {
+            return Err(too_many(format!("About {n}"), res));
+        }
+        let Some(polygon) = geo_polygon(&rings) else { return Ok(()) };
+        let prepared = PreparedGeometry::from(polygon);
+        let fits = |v: i64| i32::try_from(v).is_ok();
+        for (j, q0, q1) in rows {
+            for q in q0..=q1 {
+                if !fits(q) || !fits(j) {
+                    return Err(reach());
+                }
+                let keep = if center {
+                    let c = self.hex.centre(q, j);
+                    prepared.relate(&geo::Point::new(c.x, c.y)).is_intersects()
+                } else {
+                    let corners = self.hex.corners(q, j, 1);
+                    prepared.relate(&geo::Polygon::new(corners.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>().into(), vec![])).is_intersects()
+                };
+                if keep {
+                    gather(cells, [pack(q, j)], res)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The A5 Grid tool: [`tessellate`] in A5.
+pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    tessellate(inp, p, System::A5)
+}
+
+/// The Generate Tessellation tool: [`tessellate`] in the system the `system` parameter names.
+pub fn tessellation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    tessellate(inp, p, System::parse(text(p, "system"))?)
+}
+
+/// The cells at a resolution over the map's extent, a layer's polygons (or its extent, for
+/// points and lines), or the whole world.
+fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, String> {
+    let res = resolution(p, 5.0, system)?;
+    let center = text(p, "containment") == "Center";
     let area = match text(p, "area") {
         "" | "Map Extent" => "Map Extent",
         a @ ("Input Layer" | "World") => a,
         a => return Err(format!("Area is Map Extent, Input Layer or World, not {}", a.chars().take(40).collect::<String>())),
     };
+    let g = Grid::new(system, res, inp);
     // Polygons left out for want of a usable outline.
     let mut skipped = 0usize;
     let off = "is outside the globe's longitudes and latitudes (−180° to 180°, −90° to 90°)";
     let cells: Vec<u64> = if area == "World" {
-        cells_of([a5::get_res0_cells()], res)?
+        g.world(center)?
     } else {
         // The polygons to cover, each its rings.
-        let shapes: Vec<Vec<Vec<a5::LonLat>>> = if area == "Input Layer" {
+        let shapes: Vec<Vec<Vec<Coord>>> = if area == "Input Layer" {
             let name = text(p, "input");
             let ds = inp.dataset(name).ok_or_else(|| format!("No layer named {name}"))?;
             let sel = inp.selection(name);
@@ -278,9 +889,7 @@ pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                                 skipped += 1;
                                 continue;
                             }
-                            shapes.push(
-                                poly.iter().filter(|r| usable(r)).map(|r| r.iter().map(|c| a5::LonLat::new(c.x, c.y)).collect()).collect(),
-                            );
+                            shapes.push(poly.iter().filter(|r| usable(r)).cloned().collect());
                         }
                     }
                     Some(g) => extent = extent.union(&g.extent()),
@@ -301,34 +910,64 @@ pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let e = inp.view_extent().ok_or("There's no map view to fill; choose World or Input Layer")?;
             vec![vec![extent_ring(on_the_globe(e).ok_or_else(|| format!("The map view {off}"))?)]]
         };
-        // Far too many is refused before A5 works on it; the count after is exact.
-        let guess: f64 = shapes.iter().map(|s| estimate(s, res)).sum();
-        if guess > ESTIMATE_MARGIN * MAX_CELLS as f64 {
-            return Err(too_many(if guess.is_finite() { format!("About {guess:.0}") } else { "Too many".into() }, res));
+        // Far too many is refused before the system works on it; the count after is exact. The
+        // hexagon grid counts its cells on its plane instead, where they're of one size.
+        if system != System::Hexagon {
+            let guess: f64 = shapes.iter().map(|s| estimate(s, system.mean_area_m2(res))).sum();
+            if guess > ESTIMATE_MARGIN * MAX_CELLS as f64 {
+                return Err(too_many(if guess.is_finite() { format!("About {guess:.0}") } else { "Too many".into() }, res));
+            }
         }
-        let cells = cells_of(shapes.iter().map(|s| a5::polygon_to_cells(s, res, Some(options))), res)?;
+        let cells = g.cover(&shapes, center)?;
         if cells.is_empty() {
             return Err(format!("No cell at resolution {res} has its centre in the area: choose Cells: Overlapping or a finer resolution"));
         }
         cells
     };
-    let mut out = Dataset::new(output_name(p, &format!("A5 r{res}")), GeometryType::Polygon, cell_fields());
+    let mut out = Dataset::new(output_name(p, &format!("{} r{res}", system.name())), GeometryType::Polygon, g.fields());
+    let (mut total, mut undrawn) = (0.0, 0usize);
     for c in &cells {
-        if let Some(polygon) = parts(*c) {
-            out.push(Some(Geometry::Polygon(polygon)), cell_attrs(*c, res));
+        match g.feature(*c) {
+            Some((polygon, attrs, area)) => {
+                total += area;
+                out.push(Some(polygon), attrs);
+            }
+            None => undrawn += 1,
         }
     }
-    let mut msg = format!("A5 grid: {} cells at resolution {res}, each {:.6} km²", out.features.len(), area_km2(res));
+    let n = out.features.len();
+    let mut msg = match system {
+        System::A5 => format!("A5 grid: {n} cells at resolution {res}, each {:.6} km²", a5::cell_area(res) / 1e6),
+        System::Hexagon => format!(
+            "Hexagon grid on {}: {n} cells at resolution {res}, {:.6} km² each on average on the ground",
+            g.plane.name(),
+            total / n.max(1) as f64
+        ),
+        s => format!("{} grid: {n} cells at resolution {res}, {:.6} km² each on average", s.name(), total / n.max(1) as f64),
+    };
     if skipped > 0 {
         msg.push_str(&format!("; {}", left_out(skipped, "polygon part", "outline")));
+    }
+    if undrawn > 0 {
+        msg.push_str(&format!("; {}", undrawable(undrawn, &g)));
     }
     Ok(ToolResult { losses: Vec::new(), output: Output::Layer(out), messages: vec![msg] })
 }
 
-/// The Aggregate Points to A5 tool: a layer's points counted by the cell holding them (and a
-/// numeric field summed and averaged), as the cells that hold any.
+/// The Aggregate Points to A5 tool: [`aggregate_in`] A5.
 pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    let res = resolution(p, 9.0)?;
+    aggregate_in(inp, p, System::A5)
+}
+
+/// The Aggregate Points to Grid tool: [`aggregate_in`] the system the `system` parameter names.
+pub fn aggregate_to_grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    aggregate_in(inp, p, System::parse(text(p, "system"))?)
+}
+
+/// A layer's points counted by the cell holding them (and a numeric field summed and averaged),
+/// as the cells that hold any.
+fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, String> {
+    let res = resolution(p, 9.0, system)?;
     let name = text(p, "input");
     let ds = inp.dataset(name).ok_or_else(|| format!("No layer named {name}"))?;
     if ds.geometry_type != GeometryType::Point {
@@ -338,6 +977,7 @@ pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         "" => None,
         f => Some(ds.field_index(f).ok_or_else(|| format!("{name} has no field {f}"))?),
     };
+    let g = Grid::new(system, res, inp);
     let sel = inp.selection(name);
     let rows: Vec<usize> = if sel.is_empty() { (0..ds.features.len()).collect() } else { sel.to_vec() };
     // Per cell: its points, and the field's sum and how many values it had (a feature's value
@@ -358,7 +998,7 @@ pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 outside += 1;
                 continue;
             }
-            let Ok(cell) = a5::lonlat_to_cell(a5::LonLat::new(c.x, c.y), res) else {
+            let Some(cell) = g.cell_of(c) else {
                 outside += 1;
                 continue;
             };
@@ -378,19 +1018,23 @@ pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     if by.is_empty() {
         return Err(format!("{name} has no points to count"));
     }
-    let mut fields = cell_fields();
+    let mut fields = g.fields();
     fields.extend([Field::new("count", FieldType::Integer), Field::new("density_per_km2", FieldType::Double)]);
     let fname = field.and_then(|i| ds.fields.get(i)).map(|f| f.name.clone());
     if let Some(f) = &fname {
         fields.extend([Field::new(format!("{f}_sum"), FieldType::Double), Field::new(format!("{f}_mean"), FieldType::Double)]);
     }
-    let mut out = Dataset::new(output_name(p, &format!("{name} A5 r{res}")), GeometryType::Polygon, fields);
+    let mut out = Dataset::new(output_name(p, &format!("{name} {} r{res}", system.name())), GeometryType::Polygon, fields);
     let mut cells: Vec<(&u64, &(u64, f64, u64))> = by.iter().collect();
     cells.sort_unstable_by_key(|(c, _)| **c);
-    let area = area_km2(res);
+    let (mut total, mut undrawn, mut unplaced) = (0.0, 0usize, 0u64);
     for (c, (n, sum, nv)) in cells {
-        let Some(polygon) = parts(*c) else { continue };
-        let mut attrs = cell_attrs(*c, res);
+        let Some((polygon, mut attrs, area)) = g.feature(*c) else {
+            undrawn += 1;
+            unplaced += n;
+            continue;
+        };
+        total += area;
         attrs.extend([Value::Int(i64::try_from(*n).unwrap_or(i64::MAX)), Value::Float(*n as f64 / area)]);
         if fname.is_some() {
             attrs.extend([
@@ -398,11 +1042,18 @@ pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 if *nv > 0 { Value::Float(sum / *nv as f64) } else { Value::Null },
             ]);
         }
-        out.push(Some(Geometry::Polygon(polygon)), attrs);
+        out.push(Some(polygon), attrs);
     }
-    let mut msg = format!("{} cells at resolution {res} ({area:.6} km² each) hold the points", out.features.len());
+    let n = out.features.len();
+    let mut msg = match system {
+        System::A5 => format!("{n} cells at resolution {res} ({:.6} km² each) hold the points", a5::cell_area(res) / 1e6),
+        s => format!("{n} {} cells at resolution {res} ({:.6} km² each on average) hold the points", s.name(), total / n.max(1) as f64),
+    };
     if outside > 0 {
         msg.push_str(&format!("; {}", left_out(outside, "point", "position")));
+    }
+    if undrawn > 0 {
+        msg.push_str(&format!("; {}, with {unplaced} of the points", undrawable(undrawn, &g)));
     }
     Ok(ToolResult { losses: Vec::new(), output: Output::Layer(out), messages: vec![msg] })
 }
@@ -566,13 +1217,14 @@ mod tests {
             (Extent::new(-180.0, -90.0, 180.0, 90.0), 3),
         ] {
             let shape = vec![extent_ring(e)];
+            let lonlat: Vec<Vec<a5::LonLat>> = vec![shape[0].iter().map(|c| a5::LonLat::new(c.x, c.y)).collect()];
             let options = a5::PolygonToCellsOptions { containment: a5::Containment::Overlapping };
-            let n = cells_of([a5::polygon_to_cells(&shape, res, Some(options))], res).unwrap().len() as f64;
-            let guess = estimate(&shape, res);
+            let n = cells_of([a5::polygon_to_cells(&lonlat, res, Some(options))], res).unwrap().len() as f64;
+            let guess = estimate(&shape, a5::cell_area(res));
             assert!(guess > n / ESTIMATE_MARGIN && guess < n * ESTIMATE_MARGIN, "{e:?} r{res}: {guess} for {n}");
         }
         // The whole globe's area is the authalic sphere's: every cell of a resolution.
-        let world = estimate(&[extent_ring(Extent::new(-180.0, -90.0, 180.0, 90.0))], 5);
+        let world = estimate(&[extent_ring(Extent::new(-180.0, -90.0, 180.0, 90.0))], a5::cell_area(5));
         assert!(world > a5::get_num_cells(5) as f64);
     }
 
@@ -637,5 +1289,221 @@ mod tests {
         ] {
             assert!(aggregate(&inp, &bad).is_err(), "{bad}");
         }
+    }
+
+    /// Inputs with one layer, a view and a flat map projection: a plain plate carrée in metres,
+    /// so the hexagon grid's plane is one the test can check by hand.
+    struct Flat(Dataset, Option<Extent>);
+    const M: f64 = 111_320.0;
+    impl Inputs for Flat {
+        fn dataset(&self, n: &str) -> Option<&Dataset> {
+            (n == self.0.name).then_some(&self.0)
+        }
+        fn selection(&self, _: &str) -> &[usize] {
+            &[]
+        }
+        fn view_extent(&self) -> Option<Extent> {
+            self.1
+        }
+        fn projection_name(&self) -> Option<String> {
+            Some("Plate Carrée".into())
+        }
+        fn project(&self, c: Coord) -> Option<Coord> {
+            (c.x.abs() <= 180.0).then(|| Coord::new(c.x * M, c.y * M))
+        }
+        fn unproject(&self, m: Coord) -> Option<Coord> {
+            Some(Coord::new(m.x / M, m.y / M))
+        }
+    }
+
+    const SYSTEMS: [(&str, i32); 4] = [("H3", 7), ("S2", 12), ("A5", 11), ("Hexagon", 13)];
+
+    fn holds(d: &Dataset, row: usize, c: Coord) -> bool {
+        use geo::Intersects;
+        let Some(Geometry::Polygon(p)) = &d.features[row].geometry else { return false };
+        geo_multi(p).intersects(&geo::Point::new(c.x, c.y))
+    }
+
+    /// Every system covers an area with cells of its own ids, closed and each once, and a point
+    /// counted by cell falls in the cell whose outline holds it, which the grid has too.
+    #[test]
+    fn every_system_covers_and_counts() {
+        let bogota = Extent::new(-74.2, 4.5, -74.0, 4.8);
+        let pts = [(-74.08, 4.6, 1.0), (-74.15, 4.71, 2.0), (-74.03, 4.52, 3.0), (-74.19, 4.79, 4.0)];
+        for (system, res) in SYSTEMS {
+            let inp = One(points(&pts), Some(bogota));
+            let p = serde_json::json!({"system": system, "resolution": res});
+            let d = layer(tessellation(&inp, &p).unwrap());
+            let key = System::parse(system).unwrap().field();
+            assert_eq!(d.fields[0].name, key);
+            assert!(d.features.len() > 4, "{system}: {}", d.features.len());
+            let ids: HashSet<String> = (0..d.features.len()).map(|r| d.value(r, 0).to_string()).collect();
+            assert_eq!(ids.len(), d.features.len(), "{system}: ids once each");
+            for f in d.features.iter() {
+                let Some(Geometry::Polygon(p)) = &f.geometry else { panic!("a polygon") };
+                assert!(p.iter().all(|part| part[0].first() == part[0].last()), "{system}");
+            }
+            assert!((0..d.features.len()).all(|r| d.value(r, 2).as_f64().is_some_and(|a| a > 0.0)), "{system}: areas");
+            let by = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts", "field": "v"})).unwrap());
+            let count = by.field_index("count").unwrap();
+            let total: i64 = (0..by.features.len()).map(|r| by.value(r, count).as_f64().unwrap() as i64).sum();
+            assert_eq!(total, 4, "{system}");
+            for (x, y, _) in pts {
+                let c = Coord::new(x, y);
+                let row = (0..by.features.len()).find(|r| holds(&by, *r, c)).unwrap_or_else(|| panic!("{system}: {x},{y} in no cell"));
+                let id = by.value(row, 0).clone();
+                assert!((0..d.features.len()).any(|r| d.value(r, 0) == &id), "{system}: {id:?} not in the grid");
+            }
+        }
+    }
+
+    /// A point's cell holds it, everywhere: across the antimeridian, far north and south, and
+    /// round the poles (the hexagon grid's Web Mercator stops at 85.05°).
+    #[test]
+    fn a_point_falls_in_the_cell_holding_it() {
+        let places: [(f64, f64); 7] = [(179.9999, 10.0), (-179.9999, -40.0), (10.75, 59.91), (-74.08, 4.6), (0.0, 0.0), (120.0, -89.99), (30.0, 89.99)];
+        for (system, res) in SYSTEMS {
+            for (x, y) in places {
+                let polar = y.abs() > 85.0;
+                if polar && system == "Hexagon" {
+                    continue;
+                }
+                let inp = One(points(&[(x, y, 1.0)]), None);
+                let r = if polar { res.min(5) } else { res };
+                let by = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": r, "input": "pts"})).unwrap());
+                assert_eq!(by.features.len(), 1, "{system} {x},{y}");
+                assert!(holds(&by, 0, Coord::new(x, y)), "{system} {x},{y}: {:?}", by.features[0].geometry);
+            }
+        }
+    }
+
+    /// A polygon across the antimeridian is covered on both sides, and its cells drawn within ±180°.
+    #[test]
+    fn cells_across_the_antimeridian() {
+        let mut across = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        let wide = vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 10.0), Coord::new(170.0, 10.0), Coord::new(170.0, 0.0)];
+        across.push(Some(Geometry::Polygon(vec![vec![wide]])), vec![]);
+        for (system, res) in [("H3", 3), ("S2", 6), ("Hexagon", 5)] {
+            let inp = One(across.clone(), None);
+            let d = layer(tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"})).unwrap());
+            for lon in [175.0, -175.0] {
+                assert!((0..d.features.len()).any(|r| holds(&d, r, Coord::new(lon, 5.0))), "{system} {lon}");
+            }
+            assert!(
+                d.features.iter().all(|f| match &f.geometry {
+                    Some(Geometry::Polygon(p)) => p.iter().flatten().flatten().all(|c| (-180.0..=180.0).contains(&c.x)),
+                    _ => false,
+                }),
+                "{system}"
+            );
+        }
+    }
+
+    /// The world in each system, counted against the system's own count, and the cap.
+    #[test]
+    fn the_world_and_the_cap() {
+        let inp = One(points(&[]), Some(Extent::new(-75.0, -35.0, -35.0, 5.0)));
+        let world = |system: &str, res: i32| tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "World"}));
+        assert_eq!(layer(world("H3", 0).unwrap()).features.len(), 122);
+        assert_eq!(layer(world("S2", 2).unwrap()).features.len(), 96);
+        let h3 = layer(world("H3", 1).unwrap());
+        let sum: f64 = (0..h3.features.len()).map(|r| h3.value(r, 2).as_f64().unwrap()).sum();
+        let sphere = 4.0 * PI * radius() * radius() / 1e6;
+        assert!((sum / sphere - 1.0).abs() < 1e-3, "{sum} for {sphere}");
+        let s2 = layer(world("S2", 3).unwrap());
+        let sum: f64 = (0..s2.features.len()).map(|r| s2.value(r, 2).as_f64().unwrap()).sum();
+        assert!((sum / sphere - 1.0).abs() < 1e-6, "{sum} for {sphere}");
+        assert!(!layer(world("Hexagon", 1).unwrap()).features.is_empty());
+        for (system, res) in [("H3", 6), ("S2", 9), ("Hexagon", 9)] {
+            assert!(world(system, res).unwrap_err().contains("too many"), "{system}");
+        }
+        // Refused before any covering: far too many for the view.
+        for (system, res) in [("H3", 15), ("S2", 30), ("Hexagon", 24)] {
+            let e = tessellation(&inp, &serde_json::json!({"system": system, "resolution": res})).unwrap_err();
+            assert!(e.contains("too many"), "{system}: {e}");
+        }
+        for bad in [
+            serde_json::json!({"system": "H3", "resolution": 16}),
+            serde_json::json!({"system": "Hexagon", "resolution": 25}),
+            serde_json::json!({"system": "S2", "resolution": 31}),
+            serde_json::json!({"system": "S2", "resolution": -1}),
+            serde_json::json!({"system": "ISEA3H"}),
+        ] {
+            assert!(tessellation(&inp, &bad).is_err(), "{bad}");
+            assert!(aggregate_to_grid(&One(points(&[(0.0, 0.0, 1.0)]), None), &bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Ids are the systems' own: H3's text, S2's token, and the hexagon grid's axial coordinates.
+    #[test]
+    fn ids_are_the_systems_own() {
+        let inp = One(points(&[(-74.08, 4.6, 1.0)]), None);
+        let at = |system: &str, res: i32| {
+            let d = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap());
+            d.value(0, 0).to_string()
+        };
+        let h3 = h3o::LatLng::new(4.6, -74.08).unwrap().to_cell(h3o::Resolution::Nine).to_string();
+        assert_eq!(at("H3", 9), h3);
+        let s2 = s2::cellid::CellID::from(s2::latlng::LatLng::from_degrees(4.6, -74.08)).parent(14);
+        assert_eq!(at("S2", 14), s2.to_token());
+        assert_eq!(s2::cellid::CellID::from_token(&at("S2", 14)), s2);
+        assert_eq!(at("A5", 9), a5::u64_to_hex(a5::lonlat_to_cell(a5::LonLat::new(-74.08, 4.6), 9).unwrap()));
+        // The origin's hexagon is 0,0, and its neighbours' coordinates are a step away.
+        let origin = One(points(&[(0.0, 0.0, 1.0)]), None);
+        let d = layer(aggregate_to_grid(&origin, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
+        assert_eq!(d.value(0, 0).to_string(), "0,0");
+        assert_eq!(d.value(0, 3).to_string(), "Web Mercator");
+        for (q, r) in [(3, -2), (-7, 11), (0, 1)] {
+            let hex = Hex::at(10);
+            let c = rustgis_geom::merc_to_lonlat(hex.centre(q, r));
+            let one = One(points(&[(c.x, c.y, 1.0)]), None);
+            let d = layer(aggregate_to_grid(&one, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
+            assert_eq!(d.value(0, 0).to_string(), format!("{q},{r}"));
+        }
+    }
+
+    /// The hexagon grid is anchored: two areas that overlap make the same cells where they do, and
+    /// it's laid on the map's plane, which the layer names, its hexagons regular there.
+    #[test]
+    fn the_hexagon_grid_is_anchored_on_the_maps_plane() {
+        let p = serde_json::json!({"system": "Hexagon", "resolution": 12});
+        let cells = |e: Extent| {
+            let d = layer(tessellation(&Flat(points(&[]), Some(e)), &p).unwrap());
+            (0..d.features.len()).map(|r| (d.value(r, 0).to_string(), format!("{:?}", d.features[r].geometry))).collect::<HashMap<_, _>>()
+        };
+        let (a, b) = (cells(Extent::new(-74.2, 4.5, -74.0, 4.7)), cells(Extent::new(-74.1, 4.6, -73.9, 4.8)));
+        let shared: Vec<&String> = a.keys().filter(|k| b.contains_key(*k)).collect();
+        assert!(!shared.is_empty());
+        assert!(shared.iter().all(|k| a[*k] == b[*k]), "the same cell, the same outline");
+        let d = layer(tessellation(&Flat(points(&[]), Some(Extent::new(-74.2, 4.5, -74.0, 4.7))), &p).unwrap());
+        assert_eq!(d.value(0, 3).to_string(), "Plate Carrée");
+        // On the plate carrée plane its corners are a side's length from its centre.
+        let Some(Geometry::Polygon(poly)) = &d.features[0].geometry else { panic!("a polygon") };
+        let ring: Vec<Coord> = poly[0][0].iter().map(|c| Coord::new(c.x * M, c.y * M)).collect();
+        let n = (ring.len() - 1) as f64;
+        let centre = ring.iter().take(ring.len() - 1).fold(Coord::new(0.0, 0.0), |s, c| Coord::new(s.x + c.x / n, s.y + c.y / n));
+        let size = Hex::at(12).size;
+        assert!(ring.iter().all(|c| ((c.x - centre.x).hypot(c.y - centre.y) / size - 1.0).abs() < 1e-6), "{ring:?}");
+        // A place the plane doesn't reach is said to be.
+        let mut far = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        let wide = vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 1.0), Coord::new(170.0, 1.0), Coord::new(170.0, 0.0)];
+        far.push(Some(Geometry::Polygon(vec![vec![wide]])), vec![]);
+        let r = tessellation(&Flat(far, None), &serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"}));
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// Generate Tessellation in A5 is A5 Grid, and Aggregate Points to Grid in A5 is Aggregate
+    /// Points to A5.
+    #[test]
+    fn a5_through_the_shared_tools_is_unchanged() {
+        let inp = One(points(&[(-55.72, -12.55, 1.0), (10.75, 59.91, 2.0)]), Some(Extent::new(-56.5, -13.5, -55.0, -12.0)));
+        let p = serde_json::json!({"resolution": 7, "system": "A5"});
+        let (a, b) = (grid(&inp, &p).unwrap(), tessellation(&inp, &p).unwrap());
+        assert_eq!(a.messages, b.messages);
+        assert_eq!(format!("{:?}", layer(a)), format!("{:?}", layer(b)));
+        let p = serde_json::json!({"resolution": 9, "system": "A5", "input": "pts", "field": "v"});
+        let (a, b) = (aggregate(&inp, &p).unwrap(), aggregate_to_grid(&inp, &p).unwrap());
+        assert_eq!(a.messages, b.messages);
+        assert_eq!(format!("{:?}", layer(a)), format!("{:?}", layer(b)));
     }
 }

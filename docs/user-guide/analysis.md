@@ -424,6 +424,8 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Tissot's Indicatrix | `tissot` | Cartography › Projections |
 | A5 Grid | `a5Grid` | Analysis › DGGS |
 | Aggregate Points to A5 | `a5Aggregate` | Analysis › DGGS |
+| Generate Tessellation | `dggsGrid` | Analysis › DGGS |
+| Aggregate Points to Grid | `dggsAggregate` | Analysis › DGGS |
 | Select Layer By Location | `selectByLocation` | Data Management › Layers and Table Views |
 | Select Layer By Attribute | `selectByAttributes` | Data Management › Layers and Table Views |
 | Summarize Within | `countPoints` | Analysis › Summarize |
@@ -1218,6 +1220,32 @@ with latitude or the map's projection.
 - Both write `a5` (the cell's 64-bit id in hex, as other A5 tools read it: DuckDB, PostgreSQL,
   Python's `pya5`, R), `resolution` and `area_km2`. A cell across the antimeridian, or round a pole, is
   split at ±180° into two parts of one polygon, each within −180° to 180°.
+
+**Generate Tessellation** and **Aggregate Points to Grid** do the same in any of four grid
+systems, chosen with **System**, so the same place can be compared in several grids:
+
+| System | Cells | Resolutions | Id field |
+|---|---|---|---|
+| **H3** | hexagons (and twelve pentagons a resolution), whose areas vary by about two to one | 0–15, each about a seventh of the one before: 5 is about 250 km², 9 about 0.1 km² | `h3`, H3's own hex text (`8966…fff`), as DuckDB, PostgreSQL and Python's `h3` read it |
+| **S2** | quadrilaterals from the faces of a cube | 0–30, each a quarter: 10 is about 80 km², 14 about 0.3 km² | `s2`, the cell's S2 token |
+| **A5** | pentagons of equal area | 0–30, as A5 Grid's | `a5`, as A5 Grid's |
+| **Hexagon** | flat hexagons on the map's projection | 0–24, each a quarter; a cell at a resolution has an A5 cell's area there on the map's plane | `hex`, its axial coordinates `q,r` |
+
+- **The hexagon grid** is laid on the active map's projection (Web Mercator when the map is a
+  globe), anchored at that projection's origin rather than at a layer's corner, so a place falls in
+  the same cell whatever layer or extent it's gridded with. Its ids only mean something in that
+  projection, which the `plane` field names. In a projection local to the area (a national or UTM
+  system), every cell has about the same area on the ground; in Web Mercator, cells shrink on the
+  ground away from the equator. A cell whose corners the projection can't take back to longitudes
+  and latitudes is left out, and counted in the run's message.
+- **Areas and counts:** every layer writes the cell's id, `resolution` and `area_km2`, the cell's
+  own area on the ground; **Aggregate Points to Grid** adds `count`, `density_per_km2` (by that
+  cell's area, since H3, S2 and hexagon cells differ in size) and a field's `_sum` and `_mean`, as
+  Aggregate Points to A5 does. The two tools share ids, so their layers join on the id field.
+- **Limits:** a run makes at most 200,000 cells, and one whose area would need far more is refused
+  before it's covered, with the count in the message. Cells across the antimeridian are split
+  there, as A5's are.
+- **A5 Grid** and **Aggregate Points to A5** are these tools with System: A5.
 
 ### Network tools
 

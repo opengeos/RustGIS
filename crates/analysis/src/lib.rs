@@ -220,6 +220,12 @@ pub trait Inputs {
     fn project(&self, _c: rustgis_geom::Coord) -> Option<rustgis_geom::Coord> {
         None
     }
+    /// A point of the active map's projection plane, in metres, back to longitude/latitude: the
+    /// inverse of [`Inputs::project`], for a tool that lays something out on that plane (the
+    /// anchored hexagon grid). `None` where the projection doesn't reach, or with no flat map.
+    fn unproject(&self, _m: rustgis_geom::Coord) -> Option<rustgis_geom::Coord> {
+        None
+    }
     /// The longitude/latitude extent the map's view shows, when there is a view.
     fn view_extent(&self) -> Option<rustgis_geom::Extent> {
         None
