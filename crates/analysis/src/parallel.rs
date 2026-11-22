@@ -106,7 +106,7 @@ pub(crate) fn for_each_row<T: Send, S>(
         return Ok(());
     }
     let run = control::current();
-    let plane = crate::convert::plane();
+    let plane = crate::convert::run_plane();
     let still = rustgis_data::source::remote::current_still();
     let rows = std::sync::Mutex::new(rows.enumerate());
     let failed = AtomicBool::new(false);
@@ -114,7 +114,7 @@ pub(crate) fn for_each_row<T: Send, S>(
         rustgis_data::source::remote::with_optional_still(still.clone(), || {
             let _stop = StopOnPanic(&failed);
             let _run = control::install(run.clone());
-            let _plane = crate::convert::install_plane(plane);
+            let _plane = crate::convert::install(plane);
             let mut s = scratch();
             let mut taken = Vec::with_capacity(BATCH);
             while !failed.load(Ordering::Relaxed) && !control::cancelled() {
@@ -211,7 +211,7 @@ fn try_map_by<T: Sync, S, R: Send, E: Send + From<Cancelled>>(
             .collect();
     }
     let run = control::current();
-    let plane = crate::convert::plane();
+    let plane = crate::convert::run_plane();
     let still = rustgis_data::source::remote::current_still();
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
@@ -219,7 +219,7 @@ fn try_map_by<T: Sync, S, R: Send, E: Send + From<Cancelled>>(
         rustgis_data::source::remote::with_optional_still(still.clone(), || {
             let _stop = StopOnPanic(&failed);
             let _run = control::install(run.clone());
-            let _plane = crate::convert::install_plane(plane);
+            let _plane = crate::convert::install(plane);
             let mut s = scratch();
             let mut made = Vec::new();
             while !failed.load(Ordering::Relaxed) {
@@ -508,8 +508,8 @@ mod tests {
     /// plane isn't worked on in the analysis plane on the threads it hands rows or items to.
     #[test]
     fn the_threads_work_in_the_runs_plane() {
-        use crate::convert::{Plane, install_plane, plane};
-        let _own = install_plane(Plane::Own);
+        use crate::convert::{EAST_NORTH, Plane, RunPlane, install, plane};
+        let _own = install(RunPlane { plane: Plane::Own, unit_m: 1.0, axes: EAST_NORTH });
         let items: Vec<u32> = (0..5_000).collect();
         let planes = try_map_on(&items, 4, || (), |_, _, _| Ok::<_, Cancelled>(plane())).unwrap();
         assert!(planes.iter().all(|p| *p == Plane::Own));
