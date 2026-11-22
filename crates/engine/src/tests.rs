@@ -13680,6 +13680,24 @@ fn scale_bars_and_grids_take_a_label_size() {
     }
     s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
     assert_eq!(bar_size(&s, bar), SCALE_BAR_TEXT_PT, "null gives the default back");
+    // Its labels' room (#2581): a box too short for them at 40 points is said, on the size and on
+    // a resize; one that holds them, or the default, says nothing.
+    let said = |s: &Session, mark: u64| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join(" | ");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": 14})).unwrap();
+    assert_eq!(said(&s, mark), "", "14 points fit its 12 mm box");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": 40})).unwrap();
+    assert!(said(&s, mark).contains("its box is too short for its labels"), "{}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "h": 60, "y": 20})).unwrap();
+    assert_eq!(said(&s, mark), "", "a taller box holds them");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "h": 12})).unwrap();
+    assert!(said(&s, mark).contains("its box is too short"), "{}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
+    assert_eq!(said(&s, mark), "", "the default fits");
 
     s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "step": 10})).unwrap();
     assert_eq!(grid_size(&s), GRID_LABEL_PT);

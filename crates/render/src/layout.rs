@@ -290,22 +290,31 @@ pub fn text_loss(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, id: u
     losses(layout, maps, dpi, info, Some(id)).pop()
 }
 
-/// Whether a scale bar `e` drawn in `r` puts a label's ink past the page's `size` in pixels,
-/// its labels placed by [`bar_layout`] as the drawing places them: their line's middle at
-/// `label_y`, each centred on its advance as `text_at` draws it. `None` when it draws no bar.
-fn bar_labels_cut(layout: &Layout, maps: &[Map], e: &rustgis_map::layout::Element, r: Rect, ppp: f32, size: (f32, f32)) -> Option<bool> {
+/// Whether a scale bar `e` drawn in `r` puts a label's ink past the page's `size` in pixels, and
+/// whether its box is too short for its labels and bar ([`BarLayout::taller`]), its labels placed
+/// by [`bar_layout`] as the drawing places them: their line's middle at `label_y`, each centred on
+/// its advance as `text_at` draws it. `None` when it draws no bar.
+fn bar_labels_cut(
+    layout: &Layout,
+    maps: &[Map],
+    e: &rustgis_map::layout::Element,
+    r: Rect,
+    ppp: f32,
+    size: (f32, f32),
+) -> Option<(bool, bool)> {
     let ElementKind::ScaleBar { frame, units, divisions, text_size, .. } = &e.kind else { return None };
     let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(*frame)?.kind else { return None };
     let m = maps.get(map_index(maps, map)?)?;
     let ground = m.ground_res_at(&frame_camera(m, *center, *scale, *bearing, *pitch));
     let bar = bar_layout(r, ground, (*units, *divisions, *text_size), f64::from(ppp), layout.decimal_comma)?;
     let (w, h) = size;
-    Some(bar.labels.iter().any(|(x, s)| {
+    let off_page = bar.labels.iter().any(|(x, s)| {
         let pen = x - text::measure(s, bar.px / 1.33, false) / 2.0;
         text::styled_bounds(s, bar.px, text::Face::default(), 0.0).is_some_and(|ink| {
             pen + ink.left() < 0.0 || bar.label_y + ink.top() < 0.0 || pen + ink.right() > w || bar.label_y + ink.bottom() > h
         })
-    }))
+    });
+    Some((off_page, bar.taller))
 }
 
 /// The texts cut off, of the whole page or of the element `only`.
@@ -326,12 +335,13 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, ((e.w * k) as f32).max(1.0), ((e.h * k) as f32).max(1.0))?;
             // A scale bar's labels where it draws them, at their size (#2581).
             if matches!(e.kind, ElementKind::ScaleBar { .. }) {
-                return bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32)).filter(|cut| *cut).map(|_| TextLoss {
+                let (off_page, taller) = bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32))?;
+                return (off_page || taller).then(|| TextLoss {
                     id: e.id,
                     name: e.name.clone(),
                     left_out: 0,
                     at_least: false,
-                    below_box: false,
+                    below_box: taller,
                     past_limit: false,
                 });
             }
@@ -438,7 +448,7 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
     // Scale bars alone: their labels are no text to break (#2581).
     let bars = clipped.iter().all(|(id, _)| matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::ScaleBar { .. })));
     let advice = if bars {
-        "move the scale bar inside the page, or reduce its text size"
+        "make the scale bar taller or move it inside the page, or reduce its text size"
     } else if wraps.contains(&Some(false)) {
         "resize or move the text, reduce its size, add line breaks, or turn on Wrap to the box"
     } else if wraps.iter().all(|w| *w == Some(true)) {
@@ -447,6 +457,19 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
         "resize or move the text, reduce its size, or add line breaks"
     };
     Some(format!("Text is cut off in {} layout element(s): {names}; {advice}", clipped.len()))
+}
+
+/// What a scale bar whose labels don't fit is told (#2581), from its [`TextLoss`]: its box too
+/// short for its labels and bar (the bar is then drawn below it), or a label off the page.
+pub fn scale_bar_fit_notice(loss: &TextLoss) -> String {
+    let name = &loss.name;
+    if loss.below_box {
+        format!(
+            "Scale bar \"{name}\": its box is too short for its labels at their size, so its bar is drawn below it; make it taller or reduce its text size"
+        )
+    } else {
+        format!("Scale bar \"{name}\": a label runs off the page; move it inside the page or reduce its text size")
+    }
 }
 
 /// What a text that loses lines is told (#2346), from its [`TextLoss`]: `None` when none of its
@@ -1968,6 +1991,8 @@ fn mgrs_squares(
 /// edges (a slanting meridian on a projected map) is labelled there only well clear of the labels
 /// already set on that edge. Their room from the corners and between them is in `unit`s, a point
 /// at the labels' default size in pixels, so it follows their size.
+/// A label left out for want of room is thinning, as on any map, not a loss to report: the grid
+/// still shows its lines, and the user guide says labels go where there is room.
 fn kept_labels(
     mut labels: Vec<(Edge, f32, String, bool)>,
     (pw, ph): (f32, f32),
@@ -2143,6 +2168,9 @@ const BAR_SHARE: f64 = 0.85;
 /// more, a pixel is no larger than a point, so the box is never too narrow. It follows the labels'
 /// size, as their room does (#2581).
 const BAR_INSET: f32 = 2.0;
+/// How far a scale bar label's digits rise above the middle of their line, in label sizes: what
+/// the room over the bar holds.
+const BAR_LABEL_RISE: f32 = 0.5;
 
 /// What a scale bar counts: its whole length in its unit, that unit in metres and its abbreviation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2201,11 +2229,15 @@ struct BarLayout {
     px: f32,
     label_y: f32,
     labels: Vec<(f32, String)>,
+    /// Its box is too short for its labels and bar: the bar is drawn below it.
+    taller: bool,
 }
 
 /// Where a scale bar in `r` draws, at `ground_per_pt` ground metres a point of paper, in `units`
 /// with `divisions` steps and its labels at `text_size` points: the drawing and the text-cut check
-/// ([`losses`]) take the same, so they agree. `None` when it draws no bar.
+/// ([`losses`]) take the same, so they agree. `None` when it draws no bar. A label that would
+/// touch its neighbour is left out, as on any map: the ends always show, and the user guide says
+/// each step is labelled where there is room. That is thinning, not a loss to report.
 fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f64, comma: bool) -> Option<BarLayout> {
     let (units, divisions, text_size) = bar;
     let k = layout_text_scale(text_size, SCALE_BAR_TEXT_PT) as f32;
@@ -2213,10 +2245,18 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
     let BarPlan { total, unit_m, abbr } = bar_plan(ground_per_pt, f64::from(r.width()) / ppp, units)?;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
     let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    let (x0, y0) = (r.x() + BAR_INSET * k, r.y() + r.height() * 0.62 - bar_h / 2.0);
-    let seg = len / divisions as f32;
-    // Labels at the divisions, the last with the unit, over the bar; their room follows their size.
+    // Labels at the divisions, the last with the unit, over the bar; their room follows their size
+    // (#2581). They reach no higher than the box's top, or than the default size's reach when that
+    // is higher (a publication's short box): the bar moves down to give them room, and a box too
+    // short for both has the bar below it ([`BarLayout::taller`]). At the default size the bar is
+    // where it always was.
     let px = SCALE_BAR_TEXT_PT as f32 * k * 1.33 * ppp as f32;
+    let rise = |px: f32| px * (0.7 + BAR_LABEL_RISE);
+    let at = r.y() + r.height() * 0.62 - bar_h / 2.0;
+    let top = r.y().min(at - rise(SCALE_BAR_TEXT_PT as f32 * 1.33 * ppp as f32));
+    let (x0, y0) = (r.x() + BAR_INSET * k, at.max(top + rise(px)));
+    let taller = y0 + bar_h > r.bottom() + 0.01;
+    let seg = len / divisions as f32;
     let label_y = y0 - px * 0.7;
     let gap = 3.0 * k * ppp as f32;
     let all: Vec<(f32, String)> = (0..=divisions).map(|i| (x0 + seg * i as f32, bar_label(total, divisions, i, abbr, comma))).collect();
@@ -2232,7 +2272,7 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
         right = x + half(&s);
         labels.push((x, s));
     }
-    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels })
+    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, taller })
 }
 
 /// A scale bar filling most of the element's width, in `units`, with `divisions` labelled steps,
@@ -2250,7 +2290,7 @@ fn scale_bar(
 ) {
     let (units, divisions, style, text_size) = bar;
     let (dark, light) = colors;
-    let Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels }) =
+    let Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, .. }) =
         bar_layout(r, ground_per_pt, (units, divisions, text_size), ppp, comma)
     else {
         return;
@@ -8384,12 +8424,30 @@ Elaboração: RustGIS",
         let crowded = bar_layout(Rect::from_xywh(0.0, 0.0, 120.0, 80.0).unwrap(), 100.0, (ScaleUnits::Auto, 10, 40.0), 1.0, false).unwrap();
         assert!(crowded.labels.len() < 11, "{} labels", crowded.labels.len());
         assert_eq!(crowded.labels.first().map(|l| l.1.as_str()), Some("0"));
+        // In a box 34 pixels tall (9 mm at a point a pixel), the default leaves room over its
+        // labels; at 14 points the bar moves down so they reach no higher than the box's top, and
+        // at 40 the box is too short for them and the bar, which is drawn below it.
+        let in_box = |h: f32, pt: f64| {
+            bar_layout(Rect::from_xywh(0.0, 0.0, 400.0, h).unwrap(), 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false).unwrap()
+        };
+        let rise = |b: &BarLayout| b.label_y - b.px * BAR_LABEL_RISE;
+        let (eight, fourteen, forty) = (in_box(34.0, 8.0), in_box(34.0, 14.0), in_box(34.0, 40.0));
+        assert!((eight.y0 - (34.0 * 0.62 - eight.bar_h / 2.0)).abs() < 1e-4 && rise(&eight) > 0.0, "the default where it was");
+        assert!(fourteen.y0 > eight.y0 && rise(&fourteen).abs() < 1e-3 && !fourteen.taller, "moved down: {}", fourteen.y0);
+        assert!(forty.taller && rise(&forty).abs() < 1e-3, "too short: the bar at {}", forty.y0);
+        assert!(!eight.taller && !fourteen.taller);
+        // A publication's short box (17 pixels): the default reaches over it, as it always did,
+        // and a larger size reaches no higher.
+        let (short8, short12) = (in_box(17.0, 8.0), in_box(17.0, 12.0));
+        assert!((short8.y0 - (17.0 * 0.62 - short8.bar_h / 2.0)).abs() < 1e-4 && rise(&short8) < 0.0);
+        assert!((rise(&short12) - rise(&short8)).abs() < 1e-3, "{} against {}", rise(&short12), rise(&short8));
         let width = |pt| scale_bar_width_pt(100.0, 300.0, (ScaleUnits::Auto, 4, pt), false, 4.0).unwrap();
         assert!(width(40.0) > width(SCALE_BAR_TEXT_PT), "{} against {}", width(40.0), width(SCALE_BAR_TEXT_PT));
     }
 
-    /// A scale bar's labels a page cuts off are reported as a text's are, measured where they are
-    /// drawn (#2581): at the top of the page they fit at 8 points and run off it at 40.
+    /// A scale bar's labels that don't fit are reported as a text is, measured where they are
+    /// drawn (#2581): at 40 points a box too short for them and its bar, and a label past the
+    /// page's right edge.
     #[test]
     fn a_scale_bars_labels_off_the_page_are_reported() {
         let maps = vec![Map::new("m")];
@@ -8399,7 +8457,7 @@ Elaboração: RustGIS",
             (10.0, 30.0, 100.0, 50.0),
             serde_json::from_value(serde_json::json!({"MapFrame":{"map":"m", "center":{"x":0,"y":0}, "scale":1000000}})).unwrap(),
         );
-        let bar = l.add("Scale Bar", (10.0, 0.0, 100.0, 20.0), ElementKind::scale_bar(frame));
+        let bar = l.add("Scale Bar", (10.0, 0.0, 100.0, 12.0), ElementKind::scale_bar(frame));
         let info = PageInfo::default();
         assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "8 points fit");
         if let Some(ElementKind::ScaleBar { text_size, .. }) = l.element_mut(bar).map(|e| &mut e.kind) {
@@ -8407,8 +8465,15 @@ Elaboração: RustGIS",
         }
         assert_eq!(clipped_text(&l, &maps, 96.0, &info), vec![(bar, "Scale Bar".into())]);
         let note = clipped_text_notice(&l, &clipped_text(&l, &maps, 96.0, &info)).unwrap();
-        assert!(note.contains("reduce its text size"), "{note}");
-        assert!(text_loss(&l, &maps, 96.0, &info, bar).is_some());
+        assert!(note.contains("make the scale bar taller"), "{note}");
+        let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
+        assert!(loss.below_box && scale_bar_fit_notice(&loss).contains("its box is too short"), "{loss:?}");
+        // A tall box holds them; off the page's right edge, its last label is cut.
+        l.element_mut(bar).unwrap().h = 60.0;
+        assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "a tall box holds them");
+        l.element_mut(bar).unwrap().x = 60.0;
+        let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
+        assert!(!loss.below_box && scale_bar_fit_notice(&loss).contains("runs off the page"), "{loss:?}");
         l.element_mut(bar).unwrap().visible = false;
         assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "a hidden bar draws nothing");
     }

@@ -3540,12 +3540,15 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
 
 /// Says how many lines of the text `id` of the layout `li` don't fit its box (#2346), as the
 /// layout view and an export count them: on the series' current page, measured at 300 dpi as a
-/// wrapped text is broken.
+/// wrapped text is broken. For a scale bar `id`, whether its box is too short for its labels or
+/// one runs off the page (#2581).
 fn say_text_fit(s: &mut Session, li: usize, id: u32) {
     let Some(l) = s.project.layouts.get(li) else { return };
-    if !matches!(l.element(id).map(|e| &e.kind), Some(ElementKind::Text { .. })) {
-        return;
-    }
+    let bar = match l.element(id).map(|e| &e.kind) {
+        Some(ElementKind::Text { .. }) => false,
+        Some(ElementKind::ScaleBar { .. }) => true,
+        _ => return,
+    };
     let page = l.series.as_ref().map_or(0, |sr| sr.page);
     let series = series_info(s, li, page);
     let info = rustgis_render::layout::PageInfo {
@@ -3553,9 +3556,12 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
         pages: series.as_ref().map_or(1, |i| i.0),
         page_name: series.map(|i| i.1).unwrap_or_default(),
     };
-    let said = rustgis_render::layout::text_loss(l, &s.project.maps, 300.0, &info, id)
-        .as_ref()
-        .and_then(rustgis_render::layout::lines_left_out_notice);
+    let loss = rustgis_render::layout::text_loss(l, &s.project.maps, 300.0, &info, id);
+    let said = match &loss {
+        // A scale bar's labels (#2581): its box too short for them, or one off the page.
+        Some(loss) if bar => Some(rustgis_render::layout::scale_bar_fit_notice(loss)),
+        loss => loss.as_ref().and_then(rustgis_render::layout::lines_left_out_notice),
+    };
     if let Some(said) = said {
         s.warn(said);
     }
@@ -3566,6 +3572,9 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
 /// pick), except one that shows a text without ink, which `update` tells apart.
 const TEXT_FIT_KEYS: [&str; 12] =
     ["text", "size", "w", "h", "wrap", "font", "fallback", "bold", "italic", "letterSpacing", "align", "visible"];
+/// What a scale bar is given that changes its labels (#2581): its text size (`null` included, which
+/// gives the default back), and its units and divisions, which change what they say.
+const BAR_FIT_KEYS: [&str; 3] = ["textSize", "units", "divisions"];
 
 /// The `"columns"` a legend is given, refused outside 1 to [`MAX_LEGEND_COLUMNS`].
 fn legend_columns_param(p: &Value) -> Result<Option<usize>, String> {
@@ -5508,7 +5517,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     // After the scale box is refitted: a text is measured in the box it is saved with.
-    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) || BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some()) {
         say_text_fit(s, li, id);
     }
     say_held(s, "Element Properties", held);

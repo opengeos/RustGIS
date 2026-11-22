@@ -275,9 +275,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   labelled where there is room, its **Color** (the lines, the dark divisions and the labels), its
   **Fill** (the alternating bar's light divisions) and its **Text size** (`"textSize"`, 4 to 100
   points, 8 by default; the room over the bar and between the labels follows, the bar keeps its
-  length and height, and `null` gives the default back)
-  (`"style":"line","units":"miles","divisions":2,"color":"#1F4E79","textSize":12`). An export
-  reports a label that runs off the page as cut off, as it does a text. A legend's
+  length and height and moves down in its box to make room for larger labels, which reach no
+  higher than the default size's, and `null` gives the default back)
+  (`"style":"line","units":"miles","divisions":2,"color":"#1F4E79","textSize":12`). A box too
+  short for its labels and bar, which then draws the bar below it, or a label that runs off the
+  page is said when its size, text size, units or divisions change, and an export reports it as cut
+  off, as it does a text. A legend's
   parts:
   - **What a legend lists**: what its frame draws: only layers with a feature at the frame's
     scale (through their definition query, display filters and scale range) and, for Unique
