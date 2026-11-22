@@ -196,15 +196,15 @@ Mercator, Plate Carrée, Robinson, Equal Earth and the like), whose plane has th
 seam and the poles as lines, is worked on in longitude/latitude, as Web Mercator is. If another
 input has a place that system can't hold, the tool works in longitude/latitude instead, and its
 message says so. A layer in longitude/latitude, Web Mercator or another geographic system is worked
-on in longitude/latitude, as before. In a projected system a tool works in, distances in metres (Buffer's,
-Simplify's tolerance, Points Along Lines' spacing, Near's, and the search distances of Select Layer
-By Location and Spatial Join) are measured flat there, in its unit, as distances in a projected
-system are: a kilometre is 1000 of its metres, or 3280.833 of its US survey feet. A flat metre is
-not quite a metre on the ground: in a UTM zone, from 1.0004 m on its central meridian to about 0.999
-m at its edges on the equator (0.9998 m at 48.7°N), so a buffer of 100 km around a point 2.5° east
-of the central meridian at 48.7°N reaches 100,017 m on the ground on its west side and 99,972 m on
-its east side. Near's nearest point is that system's x and y, and Points Along Lines' angle is from
-grid north. Area, length and perimeter fields stay on the ellipsoid.
+on in longitude/latitude, as before. In a projected system a tool works in, distances in metres
+(Buffer's, Simplify's tolerance, Points Along Lines' spacing, Near's, and the search distances of
+Select Layer By Location and Spatial Join) are measured flat there, in its unit, as distances in a
+projected system are: a kilometre is 1000 of its metres, or 3280.833 of its US survey feet. A flat
+metre is not quite a metre on the ground: in a UTM zone, from 1.0004 m on its central meridian to
+about 0.999 m at its edges on the equator (0.9998 m at 48.7°N), so a buffer of 100 km around a point
+2.5° east of the central meridian at 48.7°N reaches 100,017 m on the ground on its west side and
+99,972 m on its east side. Near's nearest point is that system's x and y, and Points Along Lines'
+angle is from grid north. Area, length and perimeter fields stay on the ellipsoid.
 
 In the desktop app a tool runs in the background, so the map and the rest of the window stay in
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
@@ -869,9 +869,8 @@ to longitude/latitude. `match` is one of:
 Distances are on the ground (the WGS 84 ellipsoid, as for Buffer; flat, for a target layer in a
 projected system, see above), between the features' nearest points (edges and vertices alike), and
 are zero for features that intersect. `distanceField` names a field added for the distance to the
-joined feature, in `units`; it applies to
-**Closest** and **Within a distance** only, as `distance` does, and the Tools pane shows them
-only for those.
+joined feature, in `units`; it applies to **Closest** and **Within a distance** only, as `distance`
+does, and the Tools pane shows them only for those.
 
 **Join one to one** (the default `operation`) copies the first matching feature's attributes;
 **Join one to many** makes a row for each match. Both add `join_count`, the total matches for

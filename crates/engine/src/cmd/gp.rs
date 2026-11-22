@@ -1526,11 +1526,16 @@ fn streamed_inputs(
 /// Mercator and the other world projections (whose plane has the antimeridian as a seam and the
 /// poles as lines, [`Crs::is_world_projection`]), and other geographic or geocentric systems, keep
 /// the longitude/latitude path, whose plane and geodesics their coordinates need. So does a system
-/// whose conversion can't be made, whose unit and axes ([`Crs::unit_and_axes`]) aren't known.
+/// whose conversion can't be made or gives no parameters, whose unit and axes
+/// ([`Crs::unit_and_axes`]) aren't known.
 ///
 /// [`ToolSpec::works_in_own_system`]: rustgis_analysis::ToolSpec::works_in_own_system
 fn works_in(crs: Crs) -> bool {
-    crs != Crs::LonLat && !crs.is_world_projection() && !crs.is_geographic() && !crs.is_geocentric() && crs.transformer().is_ok()
+    crs != Crs::LonLat
+        && !crs.is_world_projection()
+        && !crs.is_geographic()
+        && !crs.is_geocentric()
+        && crs.transformer().is_ok_and(|t| t.params().is_some())
 }
 
 /// The system a run works in: its first input's own ([`Dataset::coord_crs`]) when the tool works
