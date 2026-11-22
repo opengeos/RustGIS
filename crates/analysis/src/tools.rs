@@ -649,7 +649,7 @@ pub static TOOLS: &[ToolSpec] = &[
         id: "dggsGrid",
         name: "Generate Tessellation",
         toolbox: "Analysis › DGGS",
-        summary: "Cells of a grid system (H3 hexagons, S2 quadrilaterals, A5 pentagons or hexagons anchored on the map's plane) at a resolution, over the map's extent, a layer or the world, as polygons with their ids.",
+        summary: "Cells of a grid system (H3 hexagons, S2 quadrilaterals, A5 pentagons, or flat hexagons anchored on the map's plane) at a resolution, over the map's extent, a layer or the world, as polygons with their ids.",
         params: &[
             P {
                 name: "system",

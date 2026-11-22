@@ -59,8 +59,12 @@ impl System {
             "s2" => Ok(System::S2),
             "a5" => Ok(System::A5),
             "hexagon" | "hex" => Ok(System::Hexagon),
-            other => Err(format!("System is H3, S2, A5 or Hexagon, not {}", other.chars().take(40).collect::<String>())),
+            other => Err(System::unknown(other)),
         }
+    }
+
+    fn unknown(given: &str) -> String {
+        format!("System is H3, S2, A5 or Hexagon, not {}", given.chars().take(40).collect::<String>())
     }
 
     fn name(self) -> &'static str {
@@ -466,8 +470,12 @@ impl<'a> Plane<'a> {
 
     /// How far north and south the plane reaches, when it stops short of the poles: Web
     /// Mercator's 85.05°, past which it clamps latitudes rather than refusing them.
+    /// Told by the plane itself, not its name: a point near a pole that doesn't come back where it
+    /// was, where one at Web Mercator's limit does.
     fn lat_limit(&self) -> Option<f64> {
-        (self.name() == "Web Mercator").then_some(rustgis_geom::MAX_LAT)
+        let limit = rustgis_geom::MAX_LAT;
+        let back = |lat: f64| self.forward(Coord::new(0.0, lat)).and_then(|m| self.inverse(m)).is_some_and(|c| (c.y - lat).abs() < 1e-6);
+        (!back(89.9) && back(limit - 1e-6)).then_some(limit)
     }
 
     /// A point on the plane, only where the plane takes it back to the same place: a
@@ -571,13 +579,24 @@ struct Grid<'a> {
     res: i32,
     plane: Plane<'a>,
     hex: Hex,
-    /// Whether a covering cut its area at the plane's [`Plane::lat_limit`], to say so.
-    cut: std::cell::Cell<bool>,
+    /// Whether a covering cut its area at the plane's [`Plane::lat_limit`], in the north (1) or
+    /// the south (2), to say so.
+    cut: std::cell::Cell<u8>,
 }
 
 impl<'a> Grid<'a> {
     fn new(system: System, res: i32, inp: &'a dyn Inputs) -> Self {
-        Grid { system, res, plane: Plane::of(inp), hex: Hex::at(res), cut: std::cell::Cell::new(false) }
+        Grid { system, res, plane: Plane::of(inp), hex: Hex::at(res), cut: std::cell::Cell::new(0) }
+    }
+
+    /// Where a covering was cut at the plane's limit, in words.
+    fn cut_sides(&self) -> Option<&'static str> {
+        match self.cut.get() {
+            0 => None,
+            1 => Some("north"),
+            2 => Some("south"),
+            _ => Some("north and south"),
+        }
     }
 
     /// The cell holding a longitude/latitude point.
@@ -826,7 +845,8 @@ impl<'a> Grid<'a> {
         let cut: Vec<Vec<Coord>>;
         let side: &[Vec<Coord>] = match self.plane.lat_limit() {
             Some(limit) if side.iter().flatten().any(|c| c.y.abs() > limit) => {
-                self.cut.set(true);
+                let (north, south) = (side.iter().flatten().any(|c| c.y > limit), side.iter().flatten().any(|c| c.y < -limit));
+                self.cut.set(self.cut.get() | u8::from(north) | (u8::from(south) << 1));
                 let mut rings = side.iter().map(|r| clip_lat(&clip_lat(r, limit, true), -limit, false));
                 // Nothing of the outer ring within reach, nothing to cover: its holes aren't one.
                 let Some(outer) = rings.next().filter(|r| r.len() >= 4) else { return Ok(()) };
@@ -949,7 +969,7 @@ fn system_of(p: &Json) -> Result<System, String> {
     match p.get("system") {
         None | Some(Json::Null) => Ok(System::H3),
         Some(Json::String(s)) => System::parse(s),
-        Some(other) => Err(format!("System is H3, S2, A5 or Hexagon, not {}", other.to_string().chars().take(40).collect::<String>())),
+        Some(other) => Err(System::unknown(&other.to_string())),
     }
 }
 
@@ -989,7 +1009,11 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
             let rows: Vec<usize> = if sel.is_empty() { (0..ds.features.len()).collect() } else { sel.to_vec() };
             let mut shapes = Vec::new();
             let mut extent = Extent::EMPTY;
+            let mut pace = Pace::default();
             for r in rows {
+                if pace.stop(16) {
+                    return Err(control::Cancelled.into());
+                }
                 match ds.features.get(r).and_then(|f| f.geometry.as_ref()) {
                     Some(Geometry::Polygon(polys)) => {
                         // A polygon whose outline isn't a ring is left out; so is a hole that isn't one.
@@ -1030,9 +1054,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
         }
         let cells = g.cover(shapes, center)?;
         if cells.is_empty() {
-            if g.cut.get() {
+            if let Some(sides) = g.cut_sides() {
                 return Err(format!(
-                    "The area is beyond {:.2}° north or south, which {} doesn't reach: choose an area within it",
+                    "The area is beyond {:.2}° {sides}, which {} doesn't reach: choose an area within it",
                     rustgis_geom::MAX_LAT,
                     g.plane.name()
                 ));
@@ -1072,9 +1096,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
     if holes > 0 {
         msg.push_str(&format!("; {}, so the area inside is covered too", left_out(holes, "hole", "outline")));
     }
-    if g.cut.get() {
+    if let Some(sides) = g.cut_sides() {
         msg.push_str(&format!(
-            "; the area beyond {:.2}° north and south, which {} doesn't reach, was left out",
+            "; the area beyond {:.2}° {sides}, which {} doesn't reach, was left out",
             rustgis_geom::MAX_LAT,
             g.plane.name()
         ));
@@ -1152,7 +1176,8 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
         }
     }
     if by.is_empty() {
-        return Err(format!("{name} has no points to count"));
+        let why = if outside > 0 { format!(": {}", left_out(outside, "point", "position")) } else { String::new() };
+        return Err(format!("{name} has no points to count{why}"));
     }
     let mut fields = g.fields();
     fields.extend([Field::new("count", FieldType::Integer), Field::new("density_per_km2", FieldType::Double)]);
@@ -1605,7 +1630,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            north.messages[0].contains("the area beyond 85.05° north and south, which Web Mercator doesn't reach, was left out"),
+            north.messages[0].contains("the area beyond 85.05° north, which Web Mercator doesn't reach, was left out"),
             "{:?}",
             north.messages
         );
@@ -1615,6 +1640,32 @@ mod tests {
             Some(Geometry::Polygon(p)) => p.iter().flatten().flatten().all(|c| c.y < 86.0),
             _ => false,
         }));
+        // Wholly past it, the area is refused, and the side named.
+        let e = tessellation(
+            &One(points(&[]), Some(Extent::new(-10.0, -89.0, 10.0, -86.0))),
+            &serde_json::json!({"system": "Hexagon", "resolution": 6}),
+        )
+        .unwrap_err();
+        assert!(e.contains("beyond 85.05° south, which Web Mercator doesn't reach"), "{e}");
+        // Every point left out: the error says why.
+        let e = aggregate_to_grid(&One(points(&[(0.0, 89.0, 1.0)]), None), &serde_json::json!({"system": "Hexagon", "input": "pts"}))
+            .unwrap_err();
+        assert!(e.contains("no points to count: 1 point without a usable position was left out"), "{e}");
+        // A hole without a usable outline is left out, and said to be: its area is covered.
+        let square =
+            vec![Coord::new(-74.2, 4.5), Coord::new(-74.0, 4.5), Coord::new(-74.0, 4.7), Coord::new(-74.2, 4.7), Coord::new(-74.2, 4.5)];
+        let mut holed = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        holed.push(Some(Geometry::Polygon(vec![vec![square.clone(), vec![Coord::new(-74.1, 4.6), Coord::new(-74.05, 4.6)]]])), vec![]);
+        let p = serde_json::json!({"system": "H3", "resolution": 7, "area": "Input Layer", "input": "pts"});
+        let r = tessellation(&One(holed, None), &p).unwrap();
+        assert!(
+            r.messages[0].contains("1 hole without a usable outline was left out, so the area inside is covered too"),
+            "{:?}",
+            r.messages
+        );
+        let mut plain = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        plain.push(Some(Geometry::Polygon(vec![vec![square]])), vec![]);
+        assert!(!tessellation(&One(plain, None), &p).unwrap().messages[0].contains("hole"));
         for bad in [
             serde_json::json!({"system": 5}),
             serde_json::json!({"system": "H3", "resolution": 16}),
