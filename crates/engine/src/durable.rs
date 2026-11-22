@@ -309,7 +309,7 @@ impl<'a> Prepare<'a> {
     /// Counts the values offline area `area`'s saved conflicts are written without, as
     /// [`Self::count_numbers`] does a layer's, and refuses the output when a shape that lost has a
     /// coordinate that isn't a number: the file couldn't be opened again.
-    pub(crate) fn count_conflicts(&mut self, area: &str, conflicts: &[crate::project::AreaConflict]) {
+    pub(crate) fn count_conflicts(&mut self, area: &str, conflicts: &[std::sync::Arc<crate::project::AreaConflict>]) {
         if conflicts.is_empty() {
             return;
         }

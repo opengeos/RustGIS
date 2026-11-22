@@ -18216,11 +18216,13 @@ fn saving_kept_conflicts_counts_numbers_written_as_null_and_refuses_bad_shapes()
         (done, s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>())
     };
     let point = |x: f64| Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(x, 1.0)));
-    s.project.offline_areas[0].conflicts = vec![kept(vec![("population".into(), rustgis_data::Value::Int(10))], point(1.0))].into();
+    s.project.offline_areas[0].conflicts = vec![kept(vec![("population".into(), rustgis_data::Value::Int(10))], point(1.0)).into()];
     let (done, notices) = said(&mut s);
     assert!(done.is_ok() && notices.iter().all(|n| !n.contains("written as null")), "{notices:?}");
-    std::sync::Arc::make_mut(&mut s.project.offline_areas[0].conflicts)
-        .push(kept(vec![("population".into(), rustgis_data::Value::Float(f64::NAN))], point(1.0)));
+    let mark = s.notice_mark();
+    s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("listed as null")), "a clean list says nothing");
+    s.project.offline_areas[0].conflicts.push(kept(vec![("population".into(), rustgis_data::Value::Float(f64::NAN))], point(1.0)).into());
     let (done, notices) = said(&mut s);
     assert!(done.is_ok(), "{done:?}");
     assert!(
@@ -18228,7 +18230,17 @@ fn saving_kept_conflicts_counts_numbers_written_as_null_and_refuses_bad_shapes()
         "{notices:?}"
     );
     let before = std::fs::read(&path).unwrap();
-    std::sync::Arc::make_mut(&mut s.project.offline_areas[0].conflicts).push(kept(Vec::new(), point(f64::NAN)));
+    s.project.offline_areas[0].conflicts.push(kept(Vec::new(), point(f64::NAN)).into());
+    // Listed, the value and the shape are null, and said.
+    let mark = s.notice_mark();
+    let listed = s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(
+        (&listed["conflicts"][1]["values"]["population"], &listed["conflicts"][2]["geometry"]),
+        (&Value::Null, &Value::Null),
+        "{listed}"
+    );
+    let listing: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(listing.iter().any(|n| n.contains("Offline area 'Fieldwork': 2 kept value(s) or shape(s)")), "{listing:?}");
     let (done, _) = said(&mut s);
     let e = done.unwrap_err();
     assert!(e.contains("offline area 'Fieldwork'") && e.contains("Assets #1") && e.contains("dismiss it first"), "{e}");

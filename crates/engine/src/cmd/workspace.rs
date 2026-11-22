@@ -314,11 +314,19 @@ pub fn commands() -> Vec<C> {
             let ai = area_index(s, p)?;
             let a = s.project.offline_areas.get(ai).ok_or("no such area")?;
             let listed = json!({"area": a.name, "map": a.map, "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()});
-            // JSON has no NaN or infinity: such a kept value is listed as null, and said.
-            let nulled = a.conflicts.iter().flat_map(|c| &c.values).filter(|(_, v)| v.is_non_finite()).count();
+            // JSON has no NaN or infinity: such a kept value, or a shape with such a coordinate, is
+            // listed as null, and said.
+            let nulled = a.conflicts.iter().flat_map(|c| &c.values).filter(|(_, v)| v.is_non_finite()).count()
+                + a.conflicts.iter().filter(|c| c.geometry.as_ref().is_some_and(|g| !g.is_finite())).count();
             if nulled > 0 {
-                let area = a.name.clone();
-                s.notify(format!("Offline area '{area}': {nulled} kept value(s) aren't finite numbers (NaN or infinity), so they are listed as null"), false);
+                let area = crate::project::short_name(&a.name);
+                s.notify_text(
+                    crate::notice_text::NoticeText::format(
+                        "Offline area '{area}': {count} kept value(s) or shape(s) hold a number that isn't finite (NaN or infinity), so they are listed as null",
+                        [("area", area.into()), ("count", nulled.to_string().into())],
+                    ),
+                    false,
+                );
             }
             Ok(listed)
         }).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -336,12 +344,17 @@ pub fn commands() -> Vec<C> {
             if let Some(unknown) = picked.as_ref().and_then(|p| p.iter().copied().filter(|i| usize::try_from(*i).map_or(true, |i| i >= held)).min()) {
                 return Err(format!("offline area '{}' has no conflict {unknown}: it has {held}", a.name));
             }
-            let mut i = 0u64;
-            std::sync::Arc::make_mut(&mut a.conflicts).retain(|_| {
-                let keep = picked.as_ref().is_some_and(|p| !p.contains(&i));
-                i += 1;
-                keep
-            });
+            match &picked {
+                None => a.conflicts = Vec::new(),
+                Some(picked) => {
+                    let mut i = 0u64;
+                    a.conflicts.retain(|_| {
+                        let keep = !picked.contains(&i);
+                        i += 1;
+                        keep
+                    });
+                }
+            }
             Ok(json!({"dismissed": held - a.conflicts.len(), "left": a.conflicts.len()}))
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": offline area, "conflicts"?: [number] (indexes from offline.conflicts; every one when omitted)}"#),
@@ -1223,7 +1236,8 @@ fn area_index(s: &Session, p: &Value) -> Result<usize, String> {
 }
 
 /// Conflict `c`, the `i`th of its area, as `offline.conflicts` lists it: its values as JSON, and
-/// the shape that lost as GeoJSON (null for none) when the shape lost.
+/// the shape that lost as GeoJSON (null for none, or for one with a coordinate that isn't a number)
+/// when the shape lost.
 fn conflict_json(i: usize, c: &AreaConflict) -> Value {
     let values: serde_json::Map<String, Value> = c.values.iter().map(|(n, v)| (n.clone(), v.to_json())).collect();
     let mut out = json!({
@@ -1239,7 +1253,9 @@ fn conflict_json(i: usize, c: &AreaConflict) -> Value {
     if c.shape
         && let Some(o) = out.as_object_mut()
     {
-        o.insert("geometry".into(), c.geometry.as_ref().map_or(Value::Null, rustgis_data::io::geometry_to_geojson));
+        // A shape with a coordinate that isn't a number has no GeoJSON: null, counted by the caller.
+        let shape = c.geometry.as_ref().filter(|g| g.is_finite()).map_or(Value::Null, rustgis_data::io::geometry_to_geojson);
+        o.insert("geometry".into(), shape);
     }
     out
 }
@@ -1276,7 +1292,7 @@ pub(crate) fn keep_conflicts(s: &mut Session, ai: usize, found: Vec<AreaConflict
     if !found.is_empty()
         && let Some(a) = s.project.offline_areas.get_mut(ai)
     {
-        std::sync::Arc::make_mut(&mut a.conflicts).extend(found);
+        a.conflicts.extend(found.into_iter().map(std::sync::Arc::new));
     }
 }
 

@@ -1351,9 +1351,10 @@ mod tests {
         let saved = serde_json::to_value(&project).unwrap();
         assert!(saved["requires"].as_array().unwrap().contains(&json!("field-conflicts")), "{}", saved["requires"]);
         assert_eq!(Project::from_json(&saved.to_string()).unwrap().offline_areas[0].conflicts, *kept);
-        // An Undo step's copy of the project shares them.
-        let copy = project.clone();
-        assert!(std::sync::Arc::ptr_eq(&copy.offline_areas[0].conflicts, &project.offline_areas[0].conflicts));
+        // An Undo step's copy of the project shares each one, and so does a list changed after it.
+        let mut copy = project.clone();
+        copy.offline_areas[0].conflicts.remove(0);
+        assert!(std::sync::Arc::ptr_eq(&copy.offline_areas[0].conflicts[0], &project.offline_areas[0].conflicts[1]));
         let mut none = project.clone();
         none.offline_areas[0].conflicts = Default::default();
         let saved = serde_json::to_value(&none).unwrap();
