@@ -12978,6 +12978,16 @@ fn a_legend_takes_a_text_size() {
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": id, "textSize": 9})).unwrap();
     assert_eq!(said(&s, mark), "");
+    // Added in a box too small for it: told whenever a text size is given, 9 included, as
+    // `"columns"` is; given nothing, it says nothing, as before.
+    for pt in [40, 9] {
+        let mark = s.notice_mark();
+        s.run("layout.addElement", &json!({"kind": "legend", "textSize": pt, "x": 10, "y": 10, "w": 5, "h": 5})).unwrap();
+        assert!(said(&s, mark).contains("are left out"), "{pt} pt: {}", said(&s, mark));
+    }
+    let mark = s.notice_mark();
+    s.run("layout.addElement", &json!({"kind": "legend", "x": 10, "y": 10, "w": 5, "h": 5})).unwrap();
+    assert_eq!(said(&s, mark), "", "nothing given, nothing said");
     // With a size of its own, a box made too small for it says so too, in one column; at the
     // default size a resize says nothing, as before.
     s.run("layout.update", &json!({"element": id, "w": 150, "h": 150})).unwrap();
@@ -12989,6 +12999,16 @@ fn a_legend_takes_a_text_size() {
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": id, "w": 40, "h": 40})).unwrap();
     assert_eq!(said(&s, mark), "", "a default legend is told on a resize only in columns");
+    // `null` columns or missing-value row changes nothing and says nothing; a `null` text size gives
+    // 9 points back and is told, as a new size is.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "columns": null, "showNoData": null})).unwrap();
+    assert_eq!(said(&s, mark), "", "nothing changed, nothing said");
+    s.run("layout.update", &json!({"element": id, "textSize": 40, "w": 150, "h": 150})).unwrap();
+    s.run("layout.update", &json!({"element": id, "w": 5, "h": 5})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "textSize": null})).unwrap();
+    assert!(said(&s, mark).contains("are left out"), "{}", said(&s, mark));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

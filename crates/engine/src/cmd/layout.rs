@@ -3353,6 +3353,19 @@ fn say_raster_keys(s: &mut Session, li: usize, id: u32) {
     }
 }
 
+/// Whether a legend `kind`, after a command with `p`, says what it loses in its box (#2581): the
+/// one rule `layout.addElement` and `layout.update` both take. Told when it is given what sets
+/// what it needs of its box (its columns, its missing-value row, or its text size, `null`
+/// included, which gives the default back) or labels (text chosen for the box), and, in columns
+/// or at a text size of its own, when its box or what it lists changes. A move changes neither.
+fn tells_legend_fit(kind: &ElementKind, p: &Value) -> bool {
+    let ElementKind::Legend { columns, text_size, .. } = kind else { return false };
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let watched = *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT;
+    let refitted = ["w", "h", "title", "allClasses", "hideOther", "exclude", "labels"].iter().any(|k| given(k));
+    ["columns", "showNoData", "labels"].iter().any(|k| given(k)) || p.get("textSize").is_some() || (watched && refitted)
+}
+
 /// Says what a legend loses in its box, as `layout.publication` does for its own, or that it can't
 /// tell.
 fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
@@ -3797,10 +3810,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(e) = l.element_mut(id) {
         e.background = background;
     }
-    // In columns, or with labels or a text size of its own (which may be wider than its box), it
-    // says what it loses in its box.
-    let labelled = kind == "legend" && ["labels", "textSize"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
-    if p.get("columns").is_some_and(|v| !v.is_null()) || labelled || b(p, "showNoData").unwrap_or(false) {
+    if l.element(id).is_some_and(|e| tells_legend_fit(&e.kind, p)) {
         say_legend_fit(s, i, id);
     }
     if kind == "legend" {
@@ -5068,13 +5078,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let new_columns = legend_columns_param(p)?;
-    // The legend's text size it had, to tell a new one from the same (#2581); `None` on any other
-    // element, which takes none.
-    let old_text_size = match s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind) {
-        Some(ElementKind::Legend { text_size, .. }) => Some(*text_size),
-        _ => None,
-    };
-    let is_legend = old_text_size.is_some();
+    let is_legend = s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| matches!(e.kind, ElementKind::Legend { .. }));
     if p.get("textSize").is_some_and(|v| !v.is_null()) && !is_legend {
         return Err(ONLY_LEGEND_TEXT_SIZE.into());
     }
@@ -5296,26 +5300,12 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
         _ => {}
     }
-    // A legend in columns, or with a text size of its own (#2581), is told again when its box or what
-    // it lists changes; a move changes neither. One in one column at the default size is told only
-    // of what it is given for its box, as before.
-    let in_columns = matches!(&e.kind, ElementKind::Legend { columns, text_size, .. }
-        if *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT);
-    let refitted = f(p, "w").is_some()
-        || f(p, "h").is_some()
-        || ps(p, "title").is_some()
-        || b(p, "allClasses").is_some()
-        || b(p, "hideOther").is_some()
-        || p.get("exclude").is_some_and(|v| !v.is_null())
-        || p.get("labels").is_some_and(|v| !v.is_null());
-    // Labels or a new text size given are told in one column too: text chosen for the box.
-    let resized = new_text_size.is_some_and(|pt| old_text_size != Some(pt));
-    let labelled = matches!(&e.kind, ElementKind::Legend { .. }) && (p.get("labels").is_some_and(|v| !v.is_null()) || resized);
     // Told what it leaves out, or whether it lists every class, it says again which rasters it
     // can't key.
     let excluding =
         matches!(&e.kind, ElementKind::Legend { .. }) && (p.get("exclude").is_some_and(|v| !v.is_null()) || b(p, "allClasses").is_some());
-    if new_columns.is_some() || (in_columns && refitted) || labelled || b(p, "showNoData").is_some() {
+    let fit = tells_legend_fit(&e.kind, p);
+    if fit {
         say_legend_fit(s, li, id);
     }
     if excluding {

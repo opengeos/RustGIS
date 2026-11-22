@@ -3161,9 +3161,10 @@ pub fn frame_plain_under(
 /// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`), with its stacked
 /// `strokes` and `fills` (#2490): a point as [`point_swatch`] draws it, or a line or a filled box a
 /// swatch wide in the middle of the box (`across` pixels: [`LEGEND_SWATCH`] in the legend's size),
-/// by the paths the map draws its features with, its widths at `ppp`. See-through (`opacity`) or
-/// grown with the layer's reference scale at 1:`scale`, it is composited as one and cut to the box,
-/// as a point's is.
+/// by the paths the map draws its features with, its widths at `ppp`. A line or polygon swatch
+/// stacked, see-through (`opacity`), grown with the layer's reference scale at 1:`scale` or reaching
+/// past its row is composited as one and cut to its row's top and bottom, its sides as wide as its
+/// ink ([`swatch_ink`]).
 fn swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
@@ -3179,42 +3180,85 @@ fn swatch(
         point_swatch(pm, (x, y, w, h), (s, strokes), opacity, ppp * k);
         return;
     }
-    // A layer with no stack keeps the swatch it always had, cut to its row when its line reaches
-    // past it; any stack is drawn as the map draws it, cut to the box.
+    // Every line or polygon swatch is cut to its row's top and bottom, so a line wider than its row,
+    // or shifted off it, doesn't paint over the rows beside it (#2518); its sides keep their ink, as
+    // wide as the map draws it, into the gap before the text (#2581).
     let plain = if gt == GeometryType::Polyline { strokes.is_empty() } else { fills.is_empty() };
-    let overflow = if plain { swatch_overflow((x, y, w, h), gt, s, (across, ppp * k)) } else { None };
-    if plain && opacity >= 0.999 && k == 1.0 && overflow.is_none() {
+    let ink = swatch_ink((x, y, w, h), gt, (s, strokes, fills), (across, ppp * k));
+    let within = ink.is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01);
+    if plain && opacity >= 0.999 && k == 1.0 && within {
+        // A layer with no stack, within its row: the swatch it always had.
         flat_swatch(pm, (x, y, w, h), gt, s, (across, ppp));
-    } else if plain {
-        let cut = overflow.unwrap_or((x, y, w, h));
-        composited(pm, cut, opacity, |c, (left, top)| flat_swatch(c, (x - left, y - top, w, h), gt, s, (across, ppp * k)));
-    } else {
-        composited(pm, (x, y, w, h), opacity, |c, (left, top)| {
-            stacked_swatch(c, (x - left, y - top, w, h), l, (s, strokes, fills), (ppp, across), k)
-        });
+        return;
     }
+    let (left, right) = ink.map_or((x, x + w), |b| (x.min(b.left()), (x + w).max(b.right())));
+    composited(pm, (left, y, right - left, h), opacity, |c, (cl, ct)| {
+        let cell = (x - cl, y - ct, w, h);
+        if plain {
+            flat_swatch(c, cell, gt, s, (across, ppp * k));
+        } else {
+            stacked_swatch(c, cell, l, (s, strokes, fills), (ppp, across), k);
+        }
+    });
 }
 
-/// Where a plain line or polygon swatch is cut when its line, as [`flat_swatch`] strokes it (its
-/// joins too), reaches past its row's top or bottom: the row, as wide as the stroked line, so a
-/// wide line in a legend of small text doesn't paint over the rows above and below it while its
-/// sides keep the width the map draws it at (#2581). `None` when it stays within its row. The
-/// sides aren't a reason to cut: a polygon's swatch is as wide as its column, so its outline has
-/// always reached past them, into the gap before the text.
-fn swatch_overflow(
+/// Where a line or polygon swatch drawn in `cell`, `across` pixels wide, its widths at `wppp`,
+/// puts ink: a plain one's line stroked as [`flat_swatch`] strokes it (its joins too); a stacked
+/// line's `strokes` the map draws, as it strokes them ([`crate::line_stroke`]), an offset one as
+/// wide as its width and twice its offset, mitred, as its shifted line's corners are
+/// (`offset_polyline`), a marked one as far as [`crate::line_markers::reach`]; a stacked polygon's
+/// box and its outline. `None` for no shape. [`swatch`] keeps its sides when it cuts the swatch to
+/// its row.
+fn swatch_ink(
     cell: (f32, f32, f32, f32),
     gt: GeometryType,
-    s: &rustgis_map::Symbol,
-    (across, ppp): (f32, f32),
-) -> Option<(f32, f32, f32, f32)> {
-    let (x, y, w, h) = cell;
-    let (path, stroke) = flat_swatch_outline(cell, gt, s, (across, ppp))?;
-    let b = path.stroke(&stroke, 1.0)?.bounds();
-    if b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01 {
-        return None;
+    (s, strokes, fills): (&rustgis_map::Symbol, &[rustgis_map::LineStroke], &[rustgis_map::fills::FillLayer]),
+    (across, wppp): (f32, f32),
+) -> Option<Rect> {
+    let line = gt == GeometryType::Polyline;
+    if (line && strokes.is_empty()) || (!line && fills.is_empty()) {
+        let (p, stroke) = flat_swatch_outline(cell, gt, s, (across, wppp))?;
+        return p.stroke(&stroke, 1.0).map(|p| p.bounds());
     }
-    let (left, right) = (x.min(b.left()), (x + w).max(b.right()));
-    Some((left, y, right - left, h))
+    if !line {
+        let b = swatch_box(cell, across)?;
+        let o = if s.stroke.a() > 0 { s.stroke_width.max(0.0) * wppp / 2.0 } else { 0.0 };
+        return Rect::from_ltrb(b.left() - o, b.top() - o, b.right() + o, b.bottom() + o);
+    }
+    let path = swatch_line_path(cell, across)?;
+    let b = path.bounds();
+    strokes
+        .iter()
+        .filter_map(|st| {
+            let (c, w) = st.resolve(s);
+            let w = if w.is_finite() { w.max(0.0) } else { 0.0 };
+            if st.markers.is_some() {
+                let r = crate::line_markers::reach(std::slice::from_ref(st), w) * wppp;
+                return Rect::from_ltrb(b.left() - r, b.top() - r, b.right() + r, b.bottom() + r);
+            }
+            // One the map skips (no width or no colour) puts no ink.
+            if w <= 0.0 || c.a() == 0 {
+                return None;
+            }
+            let mut stroke = crate::line_stroke(st, (w * wppp).max(0.5) + 2.0 * st.offset.abs() * wppp);
+            if st.offset != 0.0 {
+                stroke.line_join = tiny_skia::LineJoin::Miter;
+            }
+            path.stroke(&stroke, 1.0).map(|p| p.bounds())
+        })
+        .reduce(|a, c| {
+            Rect::from_ltrb(a.left().min(c.left()), a.top().min(c.top()), a.right().max(c.right()), a.bottom().max(c.bottom())).unwrap_or(a)
+        })
+}
+
+/// A line swatch's zigzag ([`swatch_line`]) as a path.
+fn swatch_line_path(cell: (f32, f32, f32, f32), across: f32) -> Option<tiny_skia::Path> {
+    let [a, b, c] = swatch_line(cell, across);
+    let mut pb = PathBuilder::new();
+    pb.move_to(a.0, a.1);
+    pb.line_to(b.0, b.1);
+    pb.line_to(c.0, c.1);
+    pb.finish()
 }
 
 /// A plain line or polygon swatch's line, `across` pixels wide in the box: a line's zigzag or a
@@ -3226,12 +3270,7 @@ fn flat_swatch_outline(
     (across, wppp): (f32, f32),
 ) -> Option<(tiny_skia::Path, Stroke)> {
     if gt == GeometryType::Polyline {
-        let [a, b, c] = swatch_line(cell, across);
-        let mut pb = PathBuilder::new();
-        pb.move_to(a.0, a.1);
-        pb.line_to(b.0, b.1);
-        pb.line_to(c.0, c.1);
-        Some((pb.finish()?, Stroke { width: s.stroke_width.max(1.0) * wppp, ..Stroke::default() }))
+        Some((swatch_line_path(cell, across)?, Stroke { width: s.stroke_width.max(1.0) * wppp, ..Stroke::default() }))
     } else {
         Some((PathBuilder::from_rect(swatch_box(cell, across)?), Stroke { width: s.stroke_width.max(0.5) * wppp, ..Stroke::default() }))
     }
@@ -8444,23 +8483,34 @@ Elaboração: RustGIS",
         // Its fill inside its outline's edge pixels: 16 points more across, at twice the size.
         let (one, two) = (across(1.0), across(2.0));
         assert_eq!(two - one, 16, "{one} and {two} px");
-        // A line wider than its row, at a small size, is cut to its row: nothing above the box.
+        // A line wider than its row, at a small size, is cut to its row (#2518): nothing above the
+        // box.
+        let small = LegendOptions { size: 4.0 / 9.0, ..opts };
+        let drawn = |map: &Map, at: (f32, f32), opts: LegendOptions| {
+            let mut pm = Pixmap::new(200, 200).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            crate::canvas::with_canvas(&mut pm, |c| {
+                legend(c, Rect::from_xywh(at.0, at.1, 200.0 - at.0, 200.0 - at.1).unwrap(), map, ("", 1), None, opts, 1.0)
+            });
+            pm
+        };
+        // The first row and column `colour` takes.
+        let ink = |pm: &Pixmap, (r, g, b): (u8, u8, u8)| {
+            let at = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (r, g, b));
+            ((0..pm.height()).find(|&y| (0..pm.width()).any(|x| at(x, y))), (0..pm.width()).find(|&x| (0..pm.height()).any(|y| at(x, y))))
+        };
         let wide = rustgis_map::Symbol { stroke: red, stroke_width: 20.0, ..rustgis_map::Symbol::default_for(GeometryType::Polyline, 0) };
         let map = shape_legend_map(GeometryType::Polyline, |l| l.renderer = rustgis_map::Renderer::Single(wide));
-        let mut pm = Pixmap::new(200, 200).unwrap();
-        pm.fill(tiny_skia::Color::WHITE);
-        let opts = LegendOptions { size: 4.0 / 9.0, ..opts };
-        crate::canvas::with_canvas(&mut pm, |c| {
-            legend(c, Rect::from_xywh(0.0, 50.0, 200.0, 150.0).unwrap(), &map, ("", 1), None, opts, 1.0)
-        });
-        let red_at = |y: u32| (0..pm.width()).any(|x| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 0, 0)));
-        assert!((50..60).any(red_at), "the line is drawn");
-        assert!(!(0..50).any(red_at), "nothing above the legend's box");
-        // A thin one keeps the plain swatch it always had.
+        let (top, _) = ink(&drawn(&map, (0.0, 50.0), small), (255, 0, 0));
+        assert!(top.is_some_and(|y| y >= 50), "drawn, nothing above the legend's box: {top:?}");
+        // A thin one stays within its row and keeps the plain swatch it always had.
         let thin = rustgis_map::Symbol { stroke_width: 1.0, ..wide };
-        assert_eq!(swatch_overflow((0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW), GeometryType::Polyline, &thin, (LEGEND_SWATCH, 1.0)), None);
-        // A polygon's wide outline is cut to its row only: its sides keep their whole width, past
-        // the swatch's column on the left as the plain swatch's outline always reached.
+        let row = (0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW);
+        let b = swatch_ink(row, GeometryType::Polyline, (&thin, &[], &[]), (LEGEND_SWATCH, 1.0)).unwrap();
+        assert!(b.top() >= 0.0 && b.bottom() <= LEGEND_ROW, "{b:?}");
+        // A polygon's wide outline is cut at its row's top and bottom only, plain or stacked: its
+        // sides keep their whole width, past the swatch's column on the left as the plain swatch's
+        // outline always reached.
         let blue = Rgba::rgb(0, 0, 255);
         let outlined = rustgis_map::Symbol {
             fill: red,
@@ -8468,15 +8518,18 @@ Elaboração: RustGIS",
             stroke_width: 12.0,
             ..rustgis_map::Symbol::default_for(GeometryType::Polygon, 0)
         };
-        let map = shape_legend_map(GeometryType::Polygon, |l| l.renderer = rustgis_map::Renderer::Single(outlined));
-        let mut pm = Pixmap::new(200, 200).unwrap();
-        pm.fill(tiny_skia::Color::WHITE);
-        crate::canvas::with_canvas(&mut pm, |c| {
-            legend(c, Rect::from_xywh(50.0, 50.0, 150.0, 150.0).unwrap(), &map, ("", 1), None, opts, 1.0)
-        });
-        let blue_at = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (0, 0, 255));
-        assert!((44..50).any(|x| (50..60).any(|y| blue_at(x, y))), "the outline's outer half on the left is kept");
-        assert!(!(0..200).any(|x| (0..50).any(|y| blue_at(x, y))), "nothing above the legend's box");
+        let solid = rustgis_map::fills::FillLayer { color: Some(red), pattern: rustgis_map::fills::FillPattern::Solid };
+        // (The stacked one at the default size: a stack is always composited, and cut, as #2518 set.)
+        for (fills, opts) in [(vec![], small), (vec![solid], LegendOptions { size: 1.0, ..opts })] {
+            let stacked = !fills.is_empty();
+            let map = shape_legend_map(GeometryType::Polygon, |l| {
+                l.renderer = rustgis_map::Renderer::Single(outlined);
+                l.fill_layers = fills;
+            });
+            let (top, left) = ink(&drawn(&map, (50.0, 50.0), opts), (0, 0, 255));
+            assert!(top.is_some_and(|y| y >= 50), "stacked {stacked}: nothing above the legend's box: {top:?}");
+            assert!(left.is_some_and(|x| (44..50).contains(&x)), "stacked {stacked}: its outer half on the left kept: {left:?}");
+        }
         // The title's room follows; a size past the range, or none at all, is brought into it.
         assert!((legend_title_mm(18.0) - 2.0 * legend_title_mm(9.0)).abs() < 1e-12);
         assert_eq!(legend_size(1e9), 100.0 / 9.0);
