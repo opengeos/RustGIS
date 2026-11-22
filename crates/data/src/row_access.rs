@@ -152,11 +152,13 @@ impl Features {
     }
 
     /// The id the first of `n` new rows takes, one above [`Features::highest_id`], when all `n`
-    /// have one free above it below `u64::MAX`; `None` when they haven't, for a caller to refuse
-    /// rather than give two rows one id.
+    /// have one free above it below `i64::MAX`, the largest id a GeoPackage or PostGIS feature can
+    /// have (so the last still leaves room for the next); `None` when they haven't, for a caller to
+    /// refuse rather than give an id a table can't hold, or two rows one id.
     pub fn free_ids(&self, n: usize) -> Option<u64> {
         let first = self.highest_id().checked_add(1)?;
-        first.checked_add(u64::try_from(n).ok()?.saturating_sub(1)).map(|_| first)
+        let last = first.checked_add(u64::try_from(n).ok()?.saturating_sub(1))?;
+        (last < i64::MAX.unsigned_abs()).then_some(first)
     }
 
     /// Appends `feature` as the last row, keeping its id.

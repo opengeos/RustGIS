@@ -7314,8 +7314,41 @@ fn field_floors_hold_for_every_command(shard: usize) {
             check(&s, &before, &format!("{id} {p}, then Undo"));
             let _ = s.run("edit.redo", &Value::Null);
             check(&s, &before, &format!("{id} {p}, then Redo"));
+            // The same command landed from a read made ahead (Reload Data, Load All…), as the app
+            // runs those: a landed read replaces rows too.
+            let mut s = Session::new(fixture.project.clone());
+            let before = held(&s);
+            if let Ok(read) = crate::cmd::reads::read_ahead(&mut s, id, p)
+                && read.reads()
+                && let Ok(done) = read.run(&rustgis_analysis::control::Control::new())
+            {
+                let _ = crate::cmd::reads::read_land(&mut s, done);
+                check(&s, &before, &format!("{id} {p}, landed from a read"));
+            }
         }
     }
+}
+
+/// A read made ahead lands through the same end as any command: a layer whose rows it replaced
+/// keeps the floor of the ids a package holds, so the next feature added is above it.
+#[test]
+fn a_landed_read_keeps_the_floor_of_the_ids_a_package_holds() {
+    let mut home = world();
+    crate::cmd::field::package(&mut home, &json!({"name": "Floor", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let cities = home.map().layer_by_name("Cities").unwrap().id;
+    let floor = home.project.offline_areas[0].ids[&cities] + 1000;
+    home.project.offline_areas[0].ids.insert(cities, floor);
+    let mut s = Session::new(home.project.clone());
+    // As a reload replaces the layer's rows: the floor they carried is gone.
+    let rows = s.map().layer(cities).unwrap().dataset.features.to_rows();
+    s.map_mut().layer_mut(cities).unwrap().dataset.features = rows.into();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.id_floor(), 0);
+    let read = crate::cmd::reads::read_ahead(&mut s, "table.statistics", &json!({"layer": cities, "field": "pop_max"})).unwrap();
+    let done = read.run(&rustgis_analysis::control::Control::new()).unwrap();
+    crate::cmd::reads::read_land(&mut s, done).unwrap();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.id_floor(), floor);
+    s.run("edit.addFeature", &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10, 5]}, "attributes": {}})).unwrap();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.last().unwrap().id, floor + 1);
 }
 
 /// [`field_floors_hold_for_every_command`] reaches a command that makes a feature: Add Feature with

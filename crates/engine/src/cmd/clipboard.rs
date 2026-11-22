@@ -285,7 +285,9 @@ mod tests {
         s.run("edit.copy", &Value::Null).unwrap();
         let ds = &mut s.map_mut().layer_mut(id).unwrap().dataset;
         let fields = ds.fields.len();
-        ds.features.push_parts(u64::MAX - 1, None, vec![Attr::Null; fields]);
+        // One id left below `i64::MAX`, the largest a GeoPackage or PostGIS feature can have.
+        let top = i64::MAX.unsigned_abs() - 2;
+        ds.features.push_parts(top, None, vec![Attr::Null; fields]);
         let before = s.map().layer(id).unwrap().dataset.features.len();
         let refused = s.run("edit.paste", &json!({"layer": id})).unwrap_err();
         assert!(refused.contains("no ids are left"), "{refused}");
@@ -295,15 +297,15 @@ mod tests {
         let countries = s.map().layer_by_name("Countries").unwrap().id;
         let ds = &mut s.map_mut().layer_mut(countries).unwrap().dataset;
         let fields = ds.fields.len();
-        ds.features.push_parts(u64::MAX - 1, None, vec![Attr::Null; fields]);
+        ds.features.push_parts(top, None, vec![Attr::Null; fields]);
         let mixed = r#"{"type":"FeatureCollection","features":[
             {"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}},
             {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0.5,0.5]}}]}"#;
         let pasted = s.run("edit.paste", &json!({"layer": countries, "text": mixed})).unwrap();
         assert_eq!(pasted["pasted"], 1, "{pasted}");
-        assert!(s.map().layer(countries).unwrap().dataset.features.iter().any(|f| f.id == u64::MAX));
+        assert!(s.map().layer(countries).unwrap().dataset.features.iter().any(|f| f.id == top + 1));
         // With room for them, they paste.
-        s.map_mut().layer_mut(id).unwrap().dataset.features.retain_rows(|r| r.id() != u64::MAX - 1);
+        s.map_mut().layer_mut(id).unwrap().dataset.features.retain_rows(|r| r.id() != top);
         s.run("edit.paste", &json!({"layer": id})).unwrap();
     }
 
