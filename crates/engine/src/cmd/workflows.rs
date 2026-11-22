@@ -1781,7 +1781,7 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
     if r.overflowing > 0 {
         s.notify(
             format!(
-                "{source_name}: {} lines cost so much that a segment's cost is past the largest number, and were closed in the route network",
+                "{source_name}: {} line(s) cost so much that a segment's cost is past the largest number, and were closed in the route network",
                 r.overflowing
             ),
             false,

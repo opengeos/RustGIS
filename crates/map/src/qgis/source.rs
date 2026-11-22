@@ -516,6 +516,9 @@ fn file(datasource: &str, dir: &str) -> Source {
     let (mut layer, mut subset, mut ignored) = (None, None, Vec::new());
     // Every part is read for the layer and the filter; at most 32 others are named in the note,
     // the rest counted.
+    // Only the named ones are kept (a project file is hostile input: the rest are only counted),
+    // the `layerid=` ones among the counted apart.
+    let (mut more, mut more_ids) = (0usize, 0usize);
     for p in parts {
         if let Some(v) = p.strip_prefix("layername=") {
             layer = Some(v.to_string());
@@ -523,14 +526,20 @@ fn file(datasource: &str, dir: &str) -> Source {
             subset = Some(v.to_string()).filter(|s| !s.trim().is_empty());
         } else if !p.trim().is_empty() && p.trim() != "layerid=0" {
             // (layerid=0 is the first layer, which is what opens.)
-            ignored.push(noted_option(p.trim()));
+            if ignored.len() < 32 {
+                ignored.push(noted_option(p.trim()));
+            } else {
+                more += 1;
+                more_ids += usize::from(p.trim().starts_with("layerid="));
+            }
         }
     }
     // A layer named as well as numbered: the name is what's read.
     if layer.is_some() {
         ignored.retain(|o: &String| !o.starts_with("layerid="));
+        more = more.saturating_sub(more_ids);
     }
-    Source::File { path: absolute(path, dir), layer, subset, ignored: named_options(ignored.into_iter(), 0) }
+    Source::File { path: absolute(path, dir), layer, subset, ignored: named_options(ignored.into_iter(), more) }
 }
 
 /// At most 32 of a file source's unread `options`, as its note names them, and the rest, with
