@@ -701,6 +701,8 @@ pub const NOTE_TEMPLATES: &[&str] = &[
     "{name}: the picture can't be read ({why})",
     "{name}: the picture's pixels don't match its size",
     "{name}: the picture is empty",
+    "{name}: the picture can't be read: its decoder failed",
+    "{name}: the picture wasn't read: the system refused a thread to read it on; attach it again",
     "{name}: the picture needs more than {limit} MiB to read",
     "Pictures you attached don't go to a subagent: it gets the task's text only.",
     "Pictures you attached don't go to {agent}: it gets the task's text only.",

@@ -5240,3 +5240,22 @@ fn a_picture_too_heavy_at_the_longest_side_is_drawn_smaller_until_it_fits() {
     assert!(p.width < 1176 && p.width == p.height, "more than one smaller try: {}", p.width);
     assert_eq!(p.original, (2000, 2000));
 }
+
+#[test]
+fn a_message_joining_one_left_unanswered_takes_no_more_than_four_pictures() {
+    let mut s = sample();
+    let mut a = Agent::new(cfg("anthropic"), &s);
+    let four = |tag: &str| (1..=4).map(|i| picture(&format!("{tag}{i}.jpg"))).collect::<Vec<_>>();
+    assert!(matches!(a.ask_with("first", four("a"), &s), Step::Send(_)));
+    // The request fails; the message stays, unanswered, and the next one joins it.
+    let failed = Ok(HttpResponse { status: 400, body: br#"{"error":{"message":"bad request"}}"#.to_vec(), headers: vec![] });
+    let _ = a.receive(a.generation(), failed, &mut s);
+    let Step::Send(req) = a.ask_with("second", four("b"), &s) else { panic!("sent") };
+    let b = body(&req);
+    let content = b["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content.iter().filter(|c| c["type"] == "image").count(), 4);
+    let text = content.iter().filter_map(|c| c["text"].as_str()).collect::<String>();
+    assert!(text.contains("a1.jpg") && text.contains("no longer attached"), "{text}");
+    let said = "A message takes at most 4 pictures: a1.jpg, a2.jpg, a3.jpg, a4.jpg left out.";
+    assert!(a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == said)));
+}

@@ -196,9 +196,8 @@ fn pasted(app: &mut RustGisApp, image: std::sync::Arc<egui::ColorImage>) {
 fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Picture, Note> + Send + 'static) {
     let label = name.clone();
     let read = move || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| {
-            Err(Note::with("{name}: the picture can't be read ({why})", [("name", label), ("why", "the decoder failed".into())]))
-        })
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(read))
+            .unwrap_or_else(|_| Err(Note::with("{name}: the picture can't be read: its decoder failed", [("name", label)])))
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -216,8 +215,13 @@ fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Pictu
         if spawned.is_ok() {
             app.assistant.pictures.reading.push((name, slot));
         } else {
-            let why = "the system refused a thread to read it on; attach it again".to_string();
-            finished(app, Err(Note::with("{name}: the picture can't be read ({why})", [("name", name), ("why", why)])));
+            finished(
+                app,
+                Err(Note::with(
+                    "{name}: the picture wasn't read: the system refused a thread to read it on; attach it again",
+                    [("name", name)],
+                )),
+            );
         }
     }
     #[cfg(target_arch = "wasm32")]

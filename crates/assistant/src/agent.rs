@@ -504,6 +504,20 @@ impl Agent {
                 }
                 last.push_str(&message);
                 waiting.append(&mut pictures);
+                // The joined message takes no more pictures than one message: the earlier
+                // message's go first, named in their place, and said.
+                let over = waiting.len().saturating_sub(crate::attach::MAX_PER_MESSAGE);
+                if over > 0 {
+                    let gone: Vec<Picture> = waiting.drain(..over).collect();
+                    for p in &gone {
+                        last.push_str(&format!("\n\n{}", compact::escape_user(&p.caption())));
+                    }
+                    let names: Vec<&str> = gone.iter().map(|p| p.name.as_str()).collect();
+                    self.transcript.push(Entry::Note(Note::with(
+                        "A message takes at most {most} pictures: {names} left out.",
+                        [("most", crate::attach::MAX_PER_MESSAGE.to_string()), ("names", names.join(", "))],
+                    )));
+                }
             }
             _ => self.turns.push(Turn::User(message, pictures)),
         }

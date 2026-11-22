@@ -132,8 +132,9 @@ enum Problem {
     ScriptTooLarge { name: String },
     /// The image picked for a marker's «Image…» is over `MARKER_FILE_MAX_BYTES`.
     MarkerTooLarge,
-    /// The picture `name`, picked for the AI Assistant's message, is over `ASSISTANT_FILE_MAX_BYTES`.
-    PictureTooLarge { name: String },
+    /// The pictures `names`, picked for the AI Assistant's message, are over
+    /// `ASSISTANT_FILE_MAX_BYTES`: said once, with how many.
+    PicturesTooLarge { names: Vec<String> },
     /// The pictures `names`, picked for the AI Assistant's message, are past what a message takes.
     PicturesLeftOut { names: Vec<String> },
     /// The file `name` is over the size a pick reads into memory ([`PICK_MAX_BYTES`]), by
@@ -224,7 +225,16 @@ impl<P: Phone> App<P> {
                 }
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
                 Problem::MarkerTooLarge => rustgis_ui_egui::marker_file_too_large().to_string(),
-                Problem::PictureTooLarge { name } => i18n::note(&rustgis_ui_egui::rustgis_assistant::attach::too_large(name)),
+                Problem::PicturesTooLarge { names } => {
+                    let n = names.len();
+                    let first = names.into_iter().next().unwrap_or_default();
+                    let first = i18n::note(&rustgis_ui_egui::rustgis_assistant::attach::too_large(first));
+                    if n == 1 {
+                        first
+                    } else {
+                        i18n::fmt("{n} pictures weren't attached, such as {first}", &[("n", &n.to_string()), ("first", &first)])
+                    }
+                }
                 Problem::PicturesLeftOut { names } => i18n::fmt(
                     "{names} weren't attached: a message takes at most {n} pictures",
                     &[("names", &names.join(", ")), ("n", &rustgis_ui_egui::rustgis_assistant::attach::MAX_PER_MESSAGE.to_string())],
@@ -376,6 +386,7 @@ fn read_batch(purpose: &str, mut files: Vec<(String, PathBuf)>, inbox: &Inbox, p
     }
     let max = PICK_MAX_BYTES;
     let mut read = Vec::new();
+    let mut too_large = Vec::new();
     for (name, path) in files {
         let shortcut = mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -387,7 +398,7 @@ fn read_batch(purpose: &str, mut files: Vec<(String, PathBuf)>, inbox: &Inbox, p
         } else if mark.starts_with(rustgis_ui_egui::MARKER_PICK) && size > rustgis_ui_egui::MARKER_FILE_MAX_BYTES as u64 {
             say(Problem::MarkerTooLarge);
         } else if mark == rustgis_ui_egui::ASSISTANT_PICK && size > rustgis_ui_egui::ASSISTANT_FILE_MAX_BYTES as u64 {
-            say(Problem::PictureTooLarge { name });
+            too_large.push(name);
         } else if held.saturating_add(size) > max {
             // Refused before it is read: no more than the cap is held in memory at once, in
             // one file or in the files picked together.
@@ -402,6 +413,9 @@ fn read_batch(purpose: &str, mut files: Vec<(String, PathBuf)>, inbox: &Inbox, p
             }
         }
         remove_copy(&path);
+    }
+    if !too_large.is_empty() {
+        say(Problem::PicturesTooLarge { names: too_large });
     }
     let (read, found) = rustgis_engine::data::io::gather_shapefiles(read);
     for text in found {
