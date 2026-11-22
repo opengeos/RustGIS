@@ -3,8 +3,8 @@
 `xtask/row-uses.txt` (`cargo xtask rows`) and `xtask/memory-limits.txt` (`cargo xtask memory`) are
 committed limits that AGENTS.md says only come down: the xtask checks fail when the code is over
 its limit, but nothing stopped a pull request from editing the limit up to make them pass. This
-check compares each limit with the one in the commit the change was made on and fails when one
-is higher or has been removed. A new line (a new memory scenario) is fine. Lowering a limit is what
+check compares each limit with the one on the base commit (the pull request's base branch, or the
+merge queue entry's parent) and fails when one is higher or has been removed. A new line (a new memory scenario) is fine. Lowering a limit is what
 the files are for.
 
 A limit may need to rise for a reason a maintainer accepts. A maintainer overrides the check for
@@ -24,8 +24,8 @@ Only these two files are checked. The other hand-kept lists (the commands the ho
 the known-silent reader cases, the cancellation exemptions) grow for good reasons, and AGENTS.md
 doesn't say they only go down.
 
-CI runs this on pull requests and in the merge queue. It needs BASE_SHA (the commit the change was
-made on, or the queue entry's parent), GH_TOKEN (read access to pull requests, used only when a
+CI runs this on pull requests and in the merge queue. It needs BASE_SHA (the pull request's base
+commit, or the queue entry's parent), GH_TOKEN (read access to pull requests, used only when a
 limit has risen), GITHUB_REPOSITORY, and PR_NUMBER or, in the merge queue, MERGE_GROUP_REF.
 """
 
@@ -39,6 +39,9 @@ import sys
 LIMIT_FILES = ["xtask/row-uses.txt", "xtask/memory-limits.txt"]
 APPROVE = "ratchet-raise-approved"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# What Rust's `str::trim` removes (Unicode White_Space). Python's `strip` also removes U+001C to
+# U+001F, so a line that starts with one would read as a different key here than in the xtask readers.
+RUST_WHITESPACE = "\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 QUEUE_REF = re.compile(r"/pr-(\d+)-[0-9a-f]{40}$")
 
 
@@ -50,20 +53,21 @@ def parse(text):
     limits = {}
     # Lines end at LF or CRLF only, as in Rust's `str::lines`: `splitlines` would also split at a
     # vertical tab, form feed or bare CR, which the xtask readers keep inside the line.
-    for n, line in enumerate(text.split("\n"), 1):
-        line = line.removesuffix("\r").split("#", 1)[0].strip()
+    for n, raw in enumerate(text.split("\n"), 1):
+        line = raw.removesuffix("\r").split("#", 1)[0].strip(RUST_WHITESPACE)
         if not line:
             continue
         name, sep, value = line.partition("=")
         if not sep:
             raise ValueError(f"line {n}: expected `name = number`")
+        value = value.strip(RUST_WHITESPACE)
         try:
-            number = float(value.strip())
+            number = float(value)
         except ValueError:
-            raise ValueError(f"line {n}: `{value.strip()}` is not a number") from None
+            raise ValueError(f"line {n}: `{value}` is not a number") from None
         if not math.isfinite(number):
-            raise ValueError(f"line {n}: `{value.strip()}` is not a finite number")
-        limits.setdefault(name.strip(), (number, value.strip()))
+            raise ValueError(f"line {n}: `{value}` is not a finite number")
+        limits.setdefault(name.strip(RUST_WHITESPACE), (number, value))
     return limits
 
 

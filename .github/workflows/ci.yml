@@ -314,7 +314,7 @@ jobs:
         run: python3 .github/scripts/review-deferrals.py
 
   # xtask/row-uses.txt and xtask/memory-limits.txt only go down (AGENTS.md): the check against the
-  # commit the change was made on (.github/scripts/ratchet-limits.py) fails when one rose or went.
+  # base commit (.github/scripts/ratchet-limits.py) fails when one rose or went.
   # The merge queue's run sees a maintainer's approval posted after the last push. Read-only token,
   # no secrets, like every job here.
   ratchets:

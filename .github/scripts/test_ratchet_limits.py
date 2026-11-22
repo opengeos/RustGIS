@@ -156,6 +156,13 @@ class RatchetLimits(unittest.TestCase):
             head = f"# note{separator}count = 782\ncount = 999\n"
             self.assertEqual(len(self.problems(ROWS, head)), 1, repr(separator))
         self.assertEqual(MODULE.parse("count = 5\r\ncount = 9\r\n")["count"][0], 5)
+        # Python's `strip` removes U+001C to U+001F; Rust's `trim` doesn't, so the xtask readers
+        # take the second line's 999 as the limit.
+        for control in ("\x1c", "\x1d", "\x1e", "\x1f"):
+            found = self.problems(ROWS, f"{control}count = 782\ncount = 999\n")
+            self.assertEqual(len(found), 1, repr(control))
+            self.assertIn("rose from 782 to 999", found[0])
+        self.assertEqual(MODULE.parse("\u3000count\u00a0=\u2003 5 \n")["count"][0], 5)
         self.assertEqual(self.problems(ROWS, ROWS.replace("\n", "\r\n")), [])
 
     def test_main_never_lets_an_unreadable_file_through(self):
