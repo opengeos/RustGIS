@@ -33863,6 +33863,21 @@ fn connection_test_fetches_one_xyz_tile_with_the_selected_login() {
 }
 
 #[test]
+fn connection_xyz_test_refuses_a_text_answer_and_an_unexpanded_placeholder() {
+    use crate::connections::tile_test::{TEXT_ANSWER, UNEXPANDED};
+    let mut s = Session::new(Project::default());
+    let answer = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}.png","answer":"<html></html>"});
+    let text = s.run("connection.test", &answer).unwrap_err();
+    assert_eq!(text, TEXT_ANSWER);
+    let unknown = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}/{foo}.png","probe":true});
+    let unexpanded = s.run("connection.test", &unknown).unwrap_err();
+    assert_eq!(unexpanded, UNEXPANDED);
+    // Clean input still passes: the same template without the unknown placeholder probes.
+    let clean = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}.png","probe":true});
+    assert_eq!(s.run("connection.test", &clean).unwrap()["tile"]["zoom"], 0);
+}
+
+#[test]
 fn connection_test_probes_and_answers() {
     #[cfg(not(target_arch = "wasm32"))]
     if isolate_process_test("tests::connection_test_probes_and_answers") {
