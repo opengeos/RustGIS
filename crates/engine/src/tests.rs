@@ -28768,6 +28768,24 @@ fn raster_export_paths_report_band_class_and_credit_changes() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Given both an extent and a cellSize, Project Raster takes the grid as given: a source whose
+/// footprint can't be placed whole in the output's system (the whole world in the south polar
+/// stereographic one, which can't hold the North Pole) is projected onto it, where without them it
+/// is refused for want of a footprint.
+#[test]
+fn raster_project_takes_a_given_grid_without_the_sources_footprint() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 10.0, pixel_height: -10.0 };
+    let r = Raster::new("World", 36, 18, vec![vec![1.0; 36 * 18]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "World", rustgis_map::RasterLayer::from_bytes(r, "World.tif".to_string(), bytes)).unwrap();
+    let e = s.run("raster.project", &json!({"layer": "World", "crs": 3031})).unwrap_err();
+    assert!(e.contains("can't be placed in"), "{e}");
+    let v = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": [-180, -90, 180, -60], "cellSize": 500_000})).unwrap();
+    assert!(v["width"].as_u64().is_some_and(|w| w > 0), "{v}");
+}
+
 /// Class labels describe source values; interpolating or averaging those values drops the labels
 /// with a notice, while nearest, mode and palette-safe sampling retain them.
 #[test]
@@ -51260,6 +51278,10 @@ fn raster_tools_run_on_another_thread() {
                 .map(|o| o.iter().filter(|(k, _)| !named.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
         };
         assert_eq!(besides(&here), besides(&there), "{command} {p}");
+        // Each run says them, or neither: only their values differ.
+        for key in named {
+            assert_eq!(here.get(key).map(Value::is_string), there.get(key).map(Value::is_string), "{command} {key}: {here} {there}");
+        }
         // A name said is the one the layer got.
         if let Some(name) = there["name"].as_str() {
             let id = there["layer"].as_u64().unwrap() as u32;

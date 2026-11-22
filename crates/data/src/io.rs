@@ -1176,6 +1176,15 @@ pub fn stage_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<StagedWrite> {
     stage_at(link_target(path)?, |w| w.write_all(bytes)).map(|(staged, ())| staged)
 }
 
+/// [`stage_atomic`] for a write that streams: `write` fills the file beside the destination (a
+/// symbolic link's target), which [`StagedWrite::commit`] installs; dropping the result discards it.
+pub fn stage_streamed<T, E: From<std::io::Error>>(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
+) -> std::result::Result<(StagedWrite, T), E> {
+    stage_at(link_target(path)?, write)
+}
+
 /// Stages and installs a write, retaining the old file on error or cancellation.
 fn atomic_write_at<T, E: From<std::io::Error>>(
     path: std::path::PathBuf,

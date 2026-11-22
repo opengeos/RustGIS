@@ -3104,8 +3104,9 @@ impl RustGisApp {
                 return exportjob::start(self, command, params).inspect_err(|e| self.command_failed(id, e, mark));
             }
             // A command that makes a raster grows with its input: on a thread of its own, its
-            // progress and Cancel in the Workflows pane, whoever asks (Command Search, the
-            // assistant). Run again with what it made (`ran`), it adds the raster here.
+            // progress and Cancel in the Workflows pane, when asked here (Command Search; the
+            // Assistant runs its commands on the session). Run again with what it made (`ran`),
+            // it adds the raster here.
             if params.get("ran").is_none_or(Value::is_null)
                 && let Some((command, name)) = rustgis_engine::cmd::workflows::runs_in_background(id)
             {

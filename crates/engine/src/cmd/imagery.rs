@@ -522,7 +522,7 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
     let (spec, notes) = grid_spec(s, p, crs)?;
     // Without a grid, its cells are given: no polygon sets a cell size.
     if matches!(spec, GridSpec::Build { cell: None, .. }) {
-        return Err("cellSize is required: a number, or [x, y], in the output's units, or a grid".into());
+        return Err(with_notes("cellSize is required: a number, or [x, y], in the output's units, or a grid".into(), &notes));
     }
     let extent_given = p.get("extent").is_some_and(|v| !v.is_null());
     // The layer's rows are shared, not copied: every pass over the polygons runs on the work's
@@ -717,17 +717,19 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let e = out.extent();
             info["extent"] = json!([e.min_x, e.min_y, e.max_x, e.max_y]);
             // A file written is the layer's source; without one the pixels are kept in the project.
-            let mut written = Vec::new();
+            // Written beside it, the file is put in its place as the layer is added: a run cancelled
+            // before then leaves the file there as it was.
+            let (mut written, mut staged) = (Vec::new(), None);
             let mut rl = match &path {
                 Some(path) => {
-                    let wrote = super::raster::write_geotiff_with_guidance(
+                    let (wrote, file) = super::raster::write_cog_staged(
                         &out,
                         0,
-                        true,
                         path,
                         "export the resulting layer with share.exportRaster and give \"band\" for another",
                     )?;
                     written = wrote.notes;
+                    staged = Some(file);
                     info["path"] = json!(path);
                     info["cog"] = wrote.answer.get("cog").cloned().unwrap_or(Value::Null);
                     RasterLayer::from_path(out, path.clone())
@@ -740,6 +742,21 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             {
                 rl.style.renderer = rustgis_map::raster::unique_values(&d, 0, rustgis_map::Ramp::Harbour);
             }
+            // A text field's table of codes, made here (one row a class); named as it is added.
+            let table = text.then(|| {
+                let mut table = rustgis_data::Dataset::new(
+                    String::new(),
+                    GeometryType::None,
+                    vec![rustgis_data::Field::new("code", FieldType::Integer), rustgis_data::Field::new("value", FieldType::Text)],
+                );
+                for (i, c) in classes.iter().enumerate() {
+                    table.push_next(None, vec![rustgis_data::Value::Int(i as i64 + 1), rustgis_data::Value::Text(c.clone())]);
+                }
+                table
+            });
+            // All the codes are in the table; in the answer, as many as a unique-value legend shows.
+            let listed: Vec<Value> = classes.iter().take(256).enumerate().map(|(i, c)| json!({"code": i + 1, "value": c})).collect();
+            let class_count = classes.len();
             let notes = std::mem::take(&mut notes);
             let then: super::workflows::Then = Box::new(move |s: &mut Session, v: &mut Value| {
                 say(s, notes);
@@ -750,24 +767,20 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
                 let id = v.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok());
                 let layer = id.and_then(|id| s.map().layer(id)).map(|l| l.name.clone()).unwrap_or(out_name.clone());
                 v["name"] = json!(layer);
-                if text {
-                    let mut table = rustgis_data::Dataset::new(
-                        free_table_name(s, &format!("{layer} classes")),
-                        GeometryType::None,
-                        vec![rustgis_data::Field::new("code", FieldType::Integer), rustgis_data::Field::new("value", FieldType::Text)],
-                    );
-                    for (i, c) in classes.iter().enumerate() {
-                        table.push_next(None, vec![rustgis_data::Value::Int(i as i64 + 1), rustgis_data::Value::Text(c.clone())]);
-                    }
+                if let Some(mut table) = table {
+                    table.name = free_table_name(s, &format!("{layer} classes"));
                     v["classTable"] = json!(table.name);
                     s.project.add_table(table);
-                    v["classCount"] = json!(classes.len());
-                    // All the codes are in the table; here, as many as a unique-value legend shows.
-                    v["classes"] = classes.iter().take(256).enumerate().map(|(i, c)| json!({"code": i + 1, "value": c})).collect();
+                    v["classCount"] = json!(class_count);
+                    v["classes"] = listed.into();
                 }
             });
             let name = info.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-            Ok(super::workflows::made_layer(name, rl, Some(info), Some(then)))
+            let made = super::workflows::made_layer(name, rl, Some(info), Some(then));
+            Ok(match staged {
+                Some(file) => made.committing(file),
+                None => made,
+            })
         })();
         made.map_err(|e| with_notes(e, &notes))
     }))
@@ -892,8 +905,57 @@ enum GridSpec {
         crs: Crs,
         cell: Option<(f64, f64)>,
         origin: (f64, f64),
-        bounds: Option<[f64; 4]>,
+        bounds: Option<Bounds>,
     },
+}
+
+/// A grid's extent as given: a box in its system, or a polygon layer's features, whose bounds are
+/// worked out by [`GridSpec::finish`] (where the command's work runs: they grow with the layer).
+enum Bounds {
+    Given([f64; 4]),
+    /// Its selected features (`rows`), or all of them (`None`).
+    Layer {
+        name: String,
+        dataset: rustgis_data::Dataset,
+        rows: Option<Vec<usize>>,
+    },
+}
+
+impl Bounds {
+    /// In `crs`.
+    fn in_crs(self, crs: Crs) -> Result<[f64; 4], String> {
+        match self {
+            Bounds::Given(b) => Ok(b),
+            Bounds::Layer { name, dataset, rows } => {
+                let rows: Box<dyn Iterator<Item = usize>> = match rows {
+                    Some(rows) => Box::new(rows.into_iter()),
+                    None => Box::new(0..dataset.features.len()),
+                };
+                // Cancel is looked at every few thousand features; a cancelled pass stops there.
+                let mut cancelled = None;
+                let shapes = rows
+                    .enumerate()
+                    .map_while(|(k, row)| {
+                        if k % 4096 == 0
+                            && let Err(e) = rustgis_data::progress::check()
+                        {
+                            cancelled = Some(e.to_string());
+                            return None;
+                        }
+                        Some(row)
+                    })
+                    .filter_map(|r| dataset.features.geometry(r));
+                let e = dataset.lonlat_extent_of(shapes);
+                if let Some(e) = cancelled {
+                    return Err(e);
+                }
+                if e.is_empty() {
+                    return Err(format!("{name} has no features to take an extent from"));
+                }
+                warp::bounds_in([e.min_x, e.min_y, e.max_x, e.max_y], crs)
+            }
+        }
+    }
 }
 
 impl GridSpec {
@@ -904,6 +966,7 @@ impl GridSpec {
         match self {
             GridSpec::Fixed(g) => Ok(g),
             GridSpec::Build { crs, cell, origin, bounds } => {
+                let bounds = bounds.map(|b| b.in_crs(crs)).transpose()?;
                 let (bounds, cell) = match (bounds, cell) {
                     (Some(b), Some(c)) => (b, c),
                     (b, c) => {
@@ -922,9 +985,17 @@ impl GridSpec {
 
 /// The grid `p` gives ([`grid_param`]), with what to say of it (a template read from its overview).
 fn grid_spec(s: &Session, p: &Value, crs: Crs) -> Result<(GridSpec, Notes), String> {
+    let mut notes = Vec::new();
+    // A refusal says what was to be said before it (a typed system's warning).
+    match grid_spec_noting(s, p, crs, &mut notes) {
+        Ok(spec) => Ok((spec, notes)),
+        Err(e) => Err(with_notes(e, &notes)),
+    }
+}
+
+fn grid_spec_noting(s: &Session, p: &Value, crs: Crs, notes: &mut Notes) -> Result<GridSpec, String> {
     // A grid named as anything but a raster layer's name is refused rather than ignored.
     let template = project_grid(p)?;
-    let mut notes = Vec::new();
     let spec = match template {
         Some(template) => {
             if ["crs", "cellSize", "origin", "extent"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
@@ -970,20 +1041,16 @@ fn grid_spec(s: &Session, p: &Value, crs: Crs) -> Result<(GridSpec, Notes), Stri
                 Some(Value::String(_)) if project_extent_name(p).is_some() => {
                     let l = project_extent_name(p).ok_or("extent layer is required")?;
                     let layer = s.map().layer_by_name(l).filter(|l| l.raster.is_none()).ok_or_else(|| format!("no vector layer '{l}'"))?;
-                    let rows: Vec<usize> =
-                        if layer.selection.is_empty() { (0..layer.dataset.features.len()).collect() } else { layer.selection.clone() };
-                    let e = layer.rows_extent(rows);
-                    if e.is_empty() {
-                        return Err(format!("{l} has no features to take an extent from"));
-                    }
-                    Some(warp::bounds_in([e.min_x, e.min_y, e.max_x, e.max_y], crs)?)
+                    let rows = (!layer.selection.is_empty()).then(|| layer.selection.clone());
+                    // Its rows shared, not copied ([`Bounds::in_crs`] reads them).
+                    Some(Bounds::Layer { name: l.to_string(), dataset: layer.dataset.clone(), rows })
                 }
                 Some(v @ (Value::Array(_) | Value::String(_))) => {
                     let area = super::catalogs::area(s, &json!({"bbox": v})).map_err(|e| e.replacen("bbox", "extent", 1))?;
                     if area[0] > area[2] {
                         return Err("an extent across the antimeridian: give it one side at a time".into());
                     }
-                    Some(warp::bounds_in(area, crs)?)
+                    Some(Bounds::Given(warp::bounds_in(area, crs)?))
                 }
                 // A number, a flag or an object isn't an extent: refused, not read as the view.
                 Some(_) => return Err(EXTENT.into()),
@@ -991,7 +1058,7 @@ fn grid_spec(s: &Session, p: &Value, crs: Crs) -> Result<(GridSpec, Notes), Stri
             GridSpec::Build { crs, cell, origin, bounds }
         }
     };
-    Ok((spec, notes))
+    Ok(spec)
 }
 
 fn is_tif(path: &str) -> bool {
