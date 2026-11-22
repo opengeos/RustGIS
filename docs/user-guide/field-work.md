@@ -167,8 +167,9 @@ in the app's own folder (`field bases`), found by the package's identity, so it 
 the field project is saved and opened again, or recovered. It writes the copy in the background once
 the map is open, with progress and **Cancel** in the status bar; cancelled, no copy is kept, and
 opening the package again starts a fresh one. A returned package opened on another device keeps no
-copy. Once **Send Field Package** has written the return, the copy is removed: a package comes back
-once, so make a new one for more edits. The copy of a package opened but never sent stays in that
+copy. Once **Send Field Package** has written the return, the copy is removed and the package is
+marked as sent in that folder: a package comes back once, so opening it again, even after a restart,
+keeps no copy and says so; make a new one for more edits. The copy of a package opened but never sent stays in that
 folder until it is removed by hand. **Send Field Package** compares the map with that copy and sends
 the list of changes with the map. A package opened on a device that doesn't keep its rows (the
 browser, or a field project copied to another device) goes back as a whole map, and the phone says

@@ -153,6 +153,12 @@ fn base_dir(package: &str) -> Option<PathBuf> {
     crate::project::valid_field_id(package).then(|| bases().map(|b| b.join(package))).flatten()
 }
 
+/// The mark that package `package`'s return was sent, beside where its copy is kept: it outlasts a
+/// restart, so the copy is never made again ([`forget`]).
+fn spent_mark(package: &str) -> Option<PathBuf> {
+    crate::project::valid_field_id(package).then(|| bases().map(|b| b.join(format!("{package}.spent")))).flatten()
+}
+
 /// One layer of a given copy, as [`LAYERS`] lists it.
 #[derive(Serialize, Deserialize)]
 struct BaseLayer {
@@ -280,11 +286,19 @@ impl GivenRows {
 }
 
 /// Removes the rows package `package` gave this device, once its return has been written: home
-/// brings a package back once, so they are no longer needed. Whether there were any.
+/// brings a package back once, so they are no longer needed. Whether there were any. The package
+/// is marked spent first, on disk ([`spent_mark`]), so opening it again, after a restart too, keeps
+/// nothing; a mark that can't be written is an error, and the copy is left.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forget(package: &str) -> Result<bool, String> {
     // A keep of its rows still running lets its copy go once it is in place.
     SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(package.to_string());
+    if let Some(mark) = spent_mark(package) {
+        if let Some(parent) = mark.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&mark, b"").map_err(|e| format!("{}: {e}", mark.display()))?;
+    }
     let Some(dir) = base_dir(package).filter(|d| d.exists()) else { return Ok(false) };
     // Moved out of its place first, whole, so a removal cut short never leaves half a copy there:
     // a later keep finds the place free. Moved, it is removed; one that can't be is named.
@@ -294,13 +308,17 @@ pub(crate) fn forget(package: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-/// The packages whose returns this run of RustGIS has sent ([`forget`]).
+/// The packages whose returns this run of RustGIS has sent ([`forget`]), as well as marked on disk.
 static SPENT: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-/// Whether package `package`'s return has been sent in this run.
+/// Whether package `package`'s return has been sent, in this run or an earlier one.
 fn is_spent(package: &str) -> bool {
-    SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(package)
+    SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(package) || spent_mark(package).is_some_and(|m| m.is_file())
 }
+
+/// What a keep says when its package has gone back already.
+const ALREADY_SENT: &str =
+    "The field package had already gone back, so the rows it gave weren't kept on this device: make a new field package for more edits";
 
 /// What a package going out from home holds under [`GIVEN`].
 pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
@@ -379,6 +397,10 @@ pub(crate) fn keep_base(given: &GivenRows) -> Kept {
     if dir.join(LAYERS).is_file() {
         return Ok(Vec::new());
     }
+    // Its return sent before it was opened again, maybe in an earlier run: nothing is kept.
+    if is_spent(&given.package) {
+        return Ok(vec![(ALREADY_SENT.into(), false)]);
+    }
     let parent = dir.parent().ok_or("no folder for the field package's rows")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     let part = parent.join(format!("{}.{}.part", given.package, crate::project::field_id()?));
@@ -391,10 +413,7 @@ pub(crate) fn keep_base(given: &GivenRows) -> Kept {
     if written.is_ok() && is_spent(&given.package) {
         notes.extend(let_go(&dir, "the rows of a field package already sent back"));
         if notes.iter().all(|(_, error)| !error) {
-            notes.push((
-                "The field package had already gone back, so the rows it gave weren't kept on this device: make a new field package for more edits".into(),
-                false,
-            ));
+            notes.push((ALREADY_SENT.into(), false));
         }
     }
     outcome(written, notes)
@@ -1061,6 +1080,34 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A package sent back, then opened again after a restart (which forgets what this run sent),
+    /// keeps nothing, and says why: the mark on disk outlasts the run.
+    #[test]
+    fn a_package_sent_back_keeps_no_rows_when_opened_after_a_restart() {
+        let id = crate::project::field_id().unwrap();
+        let mut project = Project::new("Field");
+        project.field_origin = Some(crate::project::FieldOrigin {
+            project: crate::project::field_id().unwrap(),
+            area: crate::project::field_id().unwrap(),
+            generation: String::new(),
+            package: id.clone(),
+            ids: Default::default(),
+        });
+        let given = GivenRows::of(&project, &id);
+        assert!(keep_base(&given).unwrap().is_empty());
+        assert!(forget(&id).unwrap());
+        // A restart: this run's memory of what was sent is gone, the mark isn't.
+        SPENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
+        assert!(is_spent(&id));
+        let notes = keep_base(&given).unwrap();
+        assert!(!base_dir(&id).unwrap().exists());
+        assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+        // A package not sent is kept as before.
+        let other = crate::project::field_id().unwrap();
+        assert!(!is_spent(&other) && keep_base(&GivenRows::of(&project, &other)).unwrap().is_empty());
+        assert!(base_dir(&other).unwrap().join(LAYERS).is_file());
     }
 
     /// A read's answer lands without taking rows another opening left waiting: those are kept by

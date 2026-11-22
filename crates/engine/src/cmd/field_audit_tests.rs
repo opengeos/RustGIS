@@ -758,9 +758,11 @@ fn a_sent_return_removes_the_rows_its_package_gave_and_a_failed_one_keeps_them()
     let left: Vec<_> = std::fs::read_dir(kept.parent().unwrap())
         .unwrap()
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with(&package_id))
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&package_id) && !e.file_name().to_string_lossy().ends_with(".spent"))
         .collect();
     assert!(left.is_empty(), "{left:?}");
+    // Only the mark that it was sent is left, so opening it again keeps nothing.
+    assert!(kept.with_extension("spent").is_file());
     assert!(a.notices_since(mark).iter().any(|n| n.text.contains("no longer keeps the rows")), "{:?}", a.notices);
     let back = std::fs::read(&path).unwrap();
     assert!(changes_in(&back).is_some());
