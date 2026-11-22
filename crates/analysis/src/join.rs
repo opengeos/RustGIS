@@ -3,11 +3,11 @@
 //! the overlap a feature has with a polygon, and the rules that roll the values of several matches
 //! up into one.
 //!
-//! Distances are on the WGS 84 ellipsoid, as buffers' are. The nearest points of two features are
-//! found in an azimuthal equidistant plane, centred first between the features and then between
-//! the points found, and measured along the geodesic between them. In a run in a projected
-//! system's own plane ([`crate::convert::Plane::Own`], #2032 C2e-3), they are found there and
-//! measured straight, in the system's unit times its length.
+//! In a run in longitude/latitude, distances are on the WGS 84 ellipsoid, as buffers' are. The
+//! nearest points of two features are found in an azimuthal equidistant plane, centred first
+//! between the features and then between the points found, and measured along the geodesic between
+//! them. In a run in a projected system's own plane ([`crate::convert::Plane::Own`], #2032 C2e-3),
+//! they are found there and measured straight, in the system's unit times its length.
 
 use rustgis_data::{Coord, Dataset, FieldType, Geometry, Value};
 use rustgis_geom::{Aeqd, Extent, WGS84_MIN_RADIUS_M, geodesic_interpolate, geodesic_length_m, geodesic_ring_area_m2, wgs84_distance_m};
@@ -53,7 +53,8 @@ pub fn first_coord(g: &Geometry) -> Option<Coord> {
     first
 }
 
-/// The ground distance (metres) between two features that don't intersect: between their nearest
+/// The distance (metres) between two features that don't intersect, on the ground (flat in a
+/// projected system's own plane, see the module's docs): between their nearest
 /// points, edges and vertices alike. `None` for a geometry without a finite coordinate.
 ///
 /// The nearest pair is found in a plane centred between the features' first vertices, then again

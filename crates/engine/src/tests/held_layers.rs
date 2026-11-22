@@ -1936,10 +1936,15 @@ fn distances_are_measured_flat_in_the_held_system() {
     assert!((field_numbers(&s, "Nearest", "near_y")[0] - (y0 + 500.0)).abs() < 1e-6);
 
     // Spatial Join: the closest, and those within a kilometre, nearest first.
-    let p = json!({"tool": "spatialJoin", "params": {"target": "Origin", "join": "Around", "match": "Closest", "units": "Meters", "distanceField": "dist", "output": "Closest"}});
+    let p = json!({"tool": "spatialJoin", "params": {
+        "target": "Origin", "join": "Around", "match": "Closest", "units": "Meters", "distanceField": "dist", "output": "Closest"
+    }});
     s.run("gp.run", &p).unwrap();
     assert!((field_numbers(&s, "Closest", "dist")[0] - 500.0).abs() < 1e-6);
-    let p = json!({"tool": "spatialJoin", "params": {"target": "Origin", "join": "Around", "match": "Within a distance", "distance": 1000, "units": "Meters", "distanceField": "dist", "operation": "Join one to many", "output": "Within"}});
+    let p = json!({"tool": "spatialJoin", "params": {
+        "target": "Origin", "join": "Around", "match": "Within a distance", "distance": 1000, "units": "Meters",
+        "distanceField": "dist", "operation": "Join one to many", "output": "Within"
+    }});
     s.run("gp.run", &p).unwrap();
     let within = field_numbers(&s, "Within", "dist");
     assert_eq!(within.len(), 2, "{within:?}");
@@ -2011,4 +2016,32 @@ fn a_direction_is_from_grid_north_whatever_the_axes() {
     let angles = field_numbers(&s, "Steps", "angle");
     assert_eq!(angles.len(), 3, "{angles:?}");
     assert!(angles.iter().all(|a| (a - 90.0).abs() < 1e-9), "{angles:?}");
+}
+
+/// The tools that measure flat in a held layer's own system take junk distances and places without
+/// a panic: they refuse, or make what they can.
+#[test]
+fn distance_tools_take_junk_in_the_held_system() {
+    let mut s = session(UTM);
+    let far = UTM.to(Crs::LonLat).unwrap().point(Coord::new(500_000.0, 5_400_000.0)).unwrap();
+    add_held(&mut s, "Junk", GeometryType::Polyline, vec![Geometry::Line(vec![vec![far, far, Coord::new(f64::NAN, 1.0)]])], UTM);
+    for d in [json!(0), json!(-1), json!(1e308), json!(-1e308), json!("x"), json!(null), json!(5e-324)] {
+        for (tool, params) in [
+            ("buffer", json!({"input": "Junk", "distance": d})),
+            ("buffer", json!({"input": "Parcels", "distance": d, "dissolve": "All"})),
+            ("simplify", json!({"input": "Roads", "tolerance": d})),
+            ("pointsAlongLines", json!({"input": "Junk", "distance": d})),
+            ("pointsAlongLines", json!({"input": "Roads", "distance": d, "startOffset": d, "endOffset": d, "includeEnd": "Yes"})),
+            ("near", json!({"input": "Wells", "near": "Junk", "distance": d})),
+            ("selectByLocation", json!({"input": "Wells", "select": "Junk", "distance": d})),
+            ("spatialJoin", json!({"target": "Wells", "join": "Roads", "match": "Closest", "distance": d})),
+            ("spatialJoin", json!({"target": "Wells", "join": "Junk", "match": "Within a distance", "distance": d})),
+        ] {
+            // Refused or done: not a panic, which a tool run gives back as "<Tool> failed
+            // unexpectedly".
+            if let Err(e) = s.run("gp.run", &json!({"tool": tool, "params": params})) {
+                assert!(!e.contains("failed unexpectedly"), "{tool} {params}: {e}");
+            }
+        }
+    }
 }

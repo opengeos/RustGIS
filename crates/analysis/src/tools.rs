@@ -3765,7 +3765,8 @@ const ELLIPSOID_STRETCH: f64 = 1.005;
 /// sphere, stretched by [`ELLIPSOID_STRETCH`]. A few operations a segment, against an iterative
 /// solution for the exact length, it sizes the point list before each segment is solved, once.
 /// (Leaving out a vertex only shortens a part.) Coordinates are folded and clamped as GeographicLib
-/// takes them, so the bound holds for any finite ones.
+/// takes them, so the bound holds for any finite ones. In a projected system's own plane, the bound
+/// is the edges' flat metres, as the walk adds them up, and a hair more.
 fn length_bound(line: &[Vec<Coord>], ring: bool) -> f64 {
     if let Some(unit) = crate::convert::own_unit_m() {
         let mut verts = line.iter().flatten().filter(|c| c.is_finite());
