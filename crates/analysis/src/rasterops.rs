@@ -1066,6 +1066,17 @@ impl ZoneIn {
         matches!(self, Self::Own { to_zone, .. } if to_zone.poles().iter().any(|p| e.contains(*p)))
     }
 
+    /// The columns and rows of `r` whose cell centres can fall in the zone's box `e`: the whole
+    /// raster when the box holds a pole ([`ZoneIn::holds_a_pole`]), else [`zone_window`], with its
+    /// interior samples for a zone in a system of its own.
+    pub(crate) fn window(&self, r: &Raster, e: &Extent) -> (Range<u32>, Range<u32>) {
+        match self {
+            _ if self.holds_a_pole(e) => (0..r.width, 0..r.height),
+            Self::Own { .. } => zone_window(r, e, true, |c| self.grid(r, c)),
+            Self::LonLat => zone_window(r, e, false, |c| self.grid(r, c)),
+        }
+    }
+
     /// A place in the raster's system in the zone's.
     pub(crate) fn zone(&self, r: &Raster, w: Coord) -> Option<Coord> {
         match self {
@@ -1130,11 +1141,7 @@ fn means_under(
     let mut n = 0usize;
     for (k, e) in boxes.iter().enumerate() {
         let earlier = index.as_ref().filter(|ix| ix.any_candidate(e, |j| j < k && boxes[j].intersects(e)));
-        let (cols, rows) = match zone {
-            _ if zone.holds_a_pole(e) => (0..r.width, 0..r.height),
-            ZoneIn::Own { .. } => zone_window(r, e, true, |c| zone.grid(r, c)),
-            ZoneIn::LonLat => zone_window(r, e, false, |c| zone.grid(r, c)),
-        };
+        let (cols, rows) = zone.window(r, e);
         each_rows((r.height - (rows.end - rows.start)) as usize)?;
         for row in rows {
             each_rows(1)?;
@@ -1419,6 +1426,12 @@ pub fn transform_polygon_to_lonlat(rings: &[Vec<Coord>], tr: Option<&Transformer
     }
 
     Ok(out_rings)
+}
+
+/// The polygon parts of a (multi-)polygon feature, checked and taken apart into rings, in the
+/// system they are in: [`transform_feature_polygons_to_lonlat`] with no transformer.
+pub fn validated_polygon_parts(polys: &[Vec<Vec<Coord>>]) -> Result<Vec<Vec<Vec<Coord>>>, PolygonTransformError> {
+    transform_feature_polygons_to_lonlat(polys, None)
 }
 
 /// Transforms and validates all polygon parts of a (multi-)polygon feature to WGS 84 lon/lat coordinates.
@@ -3152,14 +3165,14 @@ mod tests {
 
         // Multipart features
         let multi_valid = vec![vec![ext.clone(), hole1.clone()], vec![sq(20.0, 20.0, 30.0, 30.0)]];
-        let multi_res = transform_feature_polygons_to_lonlat(&multi_valid, None).unwrap();
+        let multi_res = validated_polygon_parts(&multi_valid).unwrap();
         assert_eq!(multi_res.len(), 2);
         assert_eq!(multi_res[0].len(), 2);
         assert_eq!(multi_res[1].len(), 1);
 
         // Multipart with failing part
         let multi_bad = vec![vec![ext.clone()], vec![vec![Coord::new(1.0, 1.0)]]];
-        assert!(transform_feature_polygons_to_lonlat(&multi_bad, None).is_err());
+        assert!(validated_polygon_parts(&multi_bad).is_err());
     }
 
     #[test]

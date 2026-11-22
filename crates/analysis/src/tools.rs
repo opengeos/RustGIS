@@ -8295,7 +8295,7 @@ fn zonal_stats_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<
             Ok::<_, String>(match &f.geometry {
                 Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
                     // Checked and taken apart into rings, in the run's system as they are.
-                    match crate::rasterops::transform_feature_polygons_to_lonlat(polys, None) {
+                    match crate::rasterops::validated_polygon_parts(polys) {
                         Ok(rings) => {
                             let mut failed_parts = Vec::new();
                             let st = crate::rasterops::zonal_statistics_from(r, to, &bands, &rings, &mut failed_parts)?;
