@@ -6,7 +6,7 @@
 //! The registry is checked against the file by `command_surface_matches_the_snapshot` (an engine
 //! test, so it runs in `cargo xtask ci`); `cargo xtask commands` rewrites the file.
 
-use crate::{CommandSpec, param_list};
+use crate::{CommandSpec, param_entries};
 
 /// Where the snapshot is kept, from the repository's root.
 pub const PATH: &str = "crates/engine/command-surface.txt";
@@ -23,16 +23,17 @@ pub fn text(commands: &[CommandSpec]) -> String {
     out
 }
 
-/// One command's line of the snapshot.
+/// One command's line of the snapshot: every key the description names, as `param_keys` reads
+/// them, so `"lon" | "x": degrees` records both.
 fn line(c: &CommandSpec) -> String {
     let mut line = c.id.to_string();
-    for p in param_list(c.params).unwrap_or_default() {
+    param_entries(c.params, |key, optional| {
         line.push(' ');
-        line.push_str(p.key);
-        if p.optional {
+        line.push_str(key);
+        if optional {
             line.push('?');
         }
-    }
+    });
     line
 }
 
@@ -63,13 +64,23 @@ mod tests {
     /// commands by id and key. An added command fails too, so the file never goes stale.
     #[test]
     fn command_surface_matches_the_snapshot() {
-        let diff = differences(include_str!("../command-surface.txt"), &text(&crate::cmd::all()));
+        let (saved, current) = (include_str!("../command-surface.txt"), text(&crate::cmd::all()));
+        let diff = differences(saved, &current);
+        // Equal ids and keys but another text: a repeated id, or lines out of order.
         assert!(
-            diff.is_empty(),
-            "the registered commands differ from {PATH}:\n{}\nIf that is intended, run `cargo xtask commands` and commit the file (a removal or rename \
-             breaks scripts, the command line and plugins that call it)",
-            diff.join("\n")
+            saved == current,
+            "the registered commands differ from {PATH}:\n{}\nIf that is intended, run `cargo xtask commands` and commit the file (a removal or \
+             rename breaks scripts, the command line and plugins that call it)",
+            if diff.is_empty() { "the same ids and keys, but a repeated id or another order".to_string() } else { diff.join("\n") }
         );
+    }
+
+    /// A key written as an alternative (`"lon" | "x": degrees`) is in the snapshot like any other.
+    #[test]
+    fn alternative_keys_are_recorded() {
+        let spec =
+            crate::CommandSpec::new("a.go", "Go", "", |_, _| Ok(Default::default())).params(r#"{"lon" | "x": degrees, "n"?: number}"#);
+        assert_eq!(line(&spec), "a.go lon x n?");
     }
 
     /// The differences name what moved: a command gone, a key gone, a key made required and a command new.
