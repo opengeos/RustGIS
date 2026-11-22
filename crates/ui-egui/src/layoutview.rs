@@ -3854,6 +3854,7 @@ mod tests {
             below_box,
             past_limit,
             off_page: false,
+            unit_label: None,
         };
         assert_eq!(lines_left_out_label(&loss(0, false, false)), None);
         assert_eq!(lines_left_out_label(&loss(3, true, false)).as_deref(), Some("3 lines don't fit the box"));

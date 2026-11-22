@@ -14473,6 +14473,25 @@ fn a_legend_takes_columns_from_one_to_three() {
     }
 }
 
+/// A scale bar's unit label too long for its box is said when it is given: shortened with an
+/// ellipsis to fit, as a cut text is; one that fits says nothing.
+#[test]
+fn a_scale_bars_unit_label_shortened_to_fit_is_said() {
+    let mut s = Session::new(Project::default());
+    s.run("layout.new", &json!({"template": "map"})).unwrap();
+    let bar = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "scaleBar").unwrap().id;
+    let said = |s: &Session, mark: u64| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join(" | ");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "unitLabel": "Km"})).unwrap();
+    assert_eq!(said(&s, mark), "", "a short unit label fits");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "unitLabel": "k".repeat(100)})).unwrap();
+    assert!(said(&s, mark).contains("its unit label is shortened to fit"), "{}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "unitLabel": null})).unwrap();
+    assert_eq!(said(&s, mark), "", "the abbreviation is never shortened");
+}
+
 /// A scale bar's `textSize` and a grid's `labelSize` (#2581): 8 points unless given, the edges 4
 /// and 100 taken, `null` giving 8 back, refused out of range or as anything but a number with the
 /// element keeping its own, refused on other elements (where `null` is let through), undone as any

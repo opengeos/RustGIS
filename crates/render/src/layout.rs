@@ -282,6 +282,18 @@ pub struct TextLoss {
     pub past_limit: bool,
     /// Some of its ink crosses the page's edge: a text's drawn lines, or a scale bar's labels.
     pub off_page: bool,
+    /// A scale bar's unit label shortened with an ellipsis to fit its room, or left out with no
+    /// room for even its first character; `None` for a text, or a unit label drawn whole.
+    pub unit_label: Option<UnitLabelCut>,
+}
+
+/// How a scale bar's unit label is cut to fit its room ([`TextLoss::unit_label`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitLabelCut {
+    /// Shortened with an ellipsis.
+    Shortened,
+    /// Left out: not even its first character fits.
+    LeftOut,
 }
 
 /// [`clipped_text`], with how many of each text's lines are left out of its box ([`TextLoss`]):
@@ -298,8 +310,8 @@ pub fn text_loss(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, id: u
 /// Whether a scale bar `e` drawn in `r` puts a label's ink past the page's `size` in pixels, and
 /// whether its box is too small for its labels and bar ([`BarLayout::cramped`]), its labels placed
 /// by [`bar_layout`] as the drawing places them: their line's middle at `label_y`, each centred on
-/// its advance as `text_at` draws it, and its unit label where it is drawn. `None` when it draws
-/// no bar.
+/// its advance as `text_at` draws it, and its unit label where it is drawn; and whether that unit
+/// label is shortened or left out to fit ([`BarLayout::unit_cut`]). `None` when it draws no bar.
 fn bar_labels_cut(
     layout: &Layout,
     maps: &[Map],
@@ -307,7 +319,7 @@ fn bar_labels_cut(
     r: Rect,
     ppp: f32,
     size: (f32, f32),
-) -> Option<(bool, bool)> {
+) -> Option<(bool, bool, Option<UnitLabelCut>)> {
     let ElementKind::ScaleBar { frame, .. } = &e.kind else { return None };
     let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(*frame)?.kind else { return None };
     let m = maps.get(map_index(maps, map)?)?;
@@ -322,7 +334,7 @@ fn bar_labels_cut(
         text::styled_bounds(s, bar.px, text::Face::default(), 0.0)
             .is_some_and(|ink| pen + ink.left() < 0.0 || y + ink.top() < 0.0 || pen + ink.right() > w || y + ink.bottom() > h)
     });
-    Some((off_page, bar.cramped))
+    Some((off_page, bar.cramped, bar.unit_cut))
 }
 
 /// The texts cut off, of the whole page or of the element `only`.
@@ -347,8 +359,8 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                 if color.a() == 0 {
                     return None;
                 }
-                let (off_page, cramped) = bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32))?;
-                return (off_page || cramped).then(|| TextLoss {
+                let (off_page, cramped, unit_label) = bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32))?;
+                return (off_page || cramped || unit_label.is_some()).then(|| TextLoss {
                     id: e.id,
                     name: e.name.clone(),
                     left_out: 0,
@@ -356,6 +368,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                     below_box: cramped,
                     past_limit: false,
                     off_page,
+                    unit_label,
                 });
             }
             let (s, size, face, align, spacing, rotation, title, broken) = match &e.kind {
@@ -430,7 +443,16 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             }
             // A wrapped text ends at the line past the 200 drawn ([`wrapped`]): it may go on.
             let at_least = broken && s.lines().nth(200).is_some();
-            (cut || off_page).then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least, below_box, past_limit, off_page })
+            (cut || off_page).then(|| TextLoss {
+                id: e.id,
+                name: e.name.clone(),
+                left_out,
+                at_least,
+                below_box,
+                past_limit,
+                off_page,
+                unit_label: None,
+            })
         })
         .collect()
 }
@@ -476,8 +498,8 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
 
 /// What scale bars whose labels don't fit are told (#2581), from their [`TextLoss`]es: one notice
 /// a kind, with the bars' count and names. Their boxes too small for their labels and bars (a bar
-/// drawn below its box, or an end label past its side), and a label off the page, each said of
-/// every bar it is true of.
+/// drawn below its box, or an end label past its side), a label off the page, and a unit label
+/// shortened or left out to fit ([`UnitLabelCut`]), each said of every bar it is true of.
 pub fn scale_bar_fit_notices(losses: &[TextLoss]) -> Vec<String> {
     let said = |small: bool| {
         let kind = |l: &&TextLoss| if small { l.below_box } else { l.off_page };
@@ -497,7 +519,27 @@ pub fn scale_bar_fit_notices(losses: &[TextLoss]) -> Vec<String> {
             }
         }
     };
-    [said(true), said(false)].into_iter().flatten().collect()
+    // A unit label shortened to fit, or left out with no room for it.
+    let unit_said = |cut: UnitLabelCut| {
+        let names: Vec<String> = losses.iter().filter(|l| l.unit_label == Some(cut)).map(|l| format!("\"{}\"", l.name)).collect();
+        let (n, names) = (names.len(), names.join(", "));
+        match (n, cut) {
+            (0, _) => None,
+            (1, UnitLabelCut::Shortened) => Some(format!(
+                "Scale bar {names}: its unit label is shortened to fit; make its box larger, reduce its text size or shorten the unit label"
+            )),
+            (1, UnitLabelCut::LeftOut) => Some(format!(
+                "Scale bar {names}: its unit label is left out, as there is no room for it; make its box larger, reduce its text size or shorten the unit label"
+            )),
+            (_, UnitLabelCut::Shortened) => Some(format!(
+                "{n} scale bars ({names}): their unit labels are shortened to fit; make their boxes larger, reduce their text size or shorten the unit labels"
+            )),
+            (_, UnitLabelCut::LeftOut) => Some(format!(
+                "{n} scale bars ({names}): their unit labels are left out, as there is no room for them; make their boxes larger, reduce their text size or shorten the unit labels"
+            )),
+        }
+    };
+    [said(true), said(false), unit_said(UnitLabelCut::Shortened), unit_said(UnitLabelCut::LeftOut)].into_iter().flatten().collect()
 }
 
 /// What a text that loses lines is told (#2346), from its [`TextLoss`]: `None` when none of its
@@ -2455,6 +2497,8 @@ struct BarLayout {
     unit: Option<BarUnit>,
     /// The furthest right its ink reaches, in pixels: its bar, its last label or its unit label.
     right: f32,
+    /// Its unit label shortened with an ellipsis or left out to fit its room: said, as a cut text.
+    unit_cut: Option<UnitLabelCut>,
     /// Its box is too small for its labels and bar: too short, the bar drawn below it or its
     /// lines below the bar past its foot, or too narrow, an end label reaching past its side
     /// further than the default size's does or, above the default size, over its first label.
@@ -2580,9 +2624,9 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma
         if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels {
             // Centred on the bar's end: half of it each side, inside the nearer edge.
             let room = 2.0 * (inner_right - (x0 + len)).min((x0 + len) - inner_left);
-            if bar.unit_label.is_some() { last_label(&v, &unit, room, measure) } else { format!("{v} {unit}") }
+            if bar.unit_label.is_some() { last_label(&v, &unit, room, measure) } else { (format!("{v} {unit}"), None) }
         } else {
-            v
+            (v, None)
         }
     };
     // Each line above the bar moves it down, each below up; labels over it alone leave it where it
@@ -2606,7 +2650,15 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma
     let row = |n: usize| (BAR_LABEL_MID + 1.25 * n as f32) * px;
     let seg = len / divs as f32;
     let label_y = if bar.label_position == ScaleLabelPosition::Below { y0 + bar_h + row(0) } else { y0 - row(0) };
-    let all: Vec<(f32, String)> = (0..=divs).map(|j| (x0 + seg * j as f32, label(j))).collect();
+    // The last label's unit, cut to fit or not.
+    let mut unit_cut = None;
+    let all: Vec<(f32, String)> = (0..=divs)
+        .map(|j| {
+            let (s, cut) = label(j);
+            unit_cut = unit_cut.or(cut);
+            (x0 + seg * j as f32, s)
+        })
+        .collect();
     let last = all.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
     let mut right_label = f32::MIN;
     let mut labels = Vec::new();
@@ -2625,22 +2677,24 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma
     let place_unit = || {
         let mid = x0 + len / 2.0;
         let (x, y, align) = match unit_at {
-            UnitLabelPosition::AfterLabels => return None,
+            UnitLabelPosition::AfterLabels => return (None, None),
             UnitLabelPosition::AfterBar => (x0 + len + gap + p, y0 + bar_h / 2.0, text::Align::Left),
             UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
             UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
         };
         let room = if unit_at == UnitLabelPosition::AfterBar { beside - gap - p } else { inner_right - inner_left };
-        let text = shortened(&unit, room, measure)?;
+        let Some(text) = shortened(&unit, room, measure) else { return (None, Some(UnitLabelCut::LeftOut)) };
+        let cut = (text != unit).then_some(UnitLabelCut::Shortened);
         let x = if matches!(align, text::Align::Center) {
             let w = measure(&text) / 2.0;
             x.min(inner_right - w).max(inner_left + w)
         } else {
             x
         };
-        Some(BarUnit { x, y, text, align })
+        (Some(BarUnit { x, y, text, align }), cut)
     };
-    let unit = if has_unit { place_unit() } else { None };
+    let (unit, placed_cut) = if has_unit { place_unit() } else { (None, None) };
+    let unit_cut = unit_cut.or(placed_cut);
     let unit_right =
         unit.as_ref().map_or(f32::MIN, |u| if matches!(u.align, text::Align::Left) { u.x + measure(&u.text) } else { u.x + half(&u.text) });
     let right = (x0 + len).max(right_label).max(unit_right);
@@ -2660,7 +2714,7 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma
             _ => false,
         };
     let cramped = low || past_side || clash;
-    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, before, divs, parts, total, unit, right, cramped })
+    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, before, divs, parts, total, unit, right, unit_cut, cramped })
 }
 
 /// A scale bar filling most of the element's width as `bar` asks, placed by [`bar_layout`]: its
@@ -2753,16 +2807,16 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
 
 /// The last label of a scale bar, its number `v` followed by `unit`, as it fits `room` pixels
 /// measured by `measure`: the unit shortened with an ellipsis, never the number, and left out when
-/// not even its first character fits.
-fn last_label(v: &str, unit: &str, room: f32, measure: impl Fn(&str) -> f32) -> String {
+/// not even its first character fits, with how it was cut.
+fn last_label(v: &str, unit: &str, room: f32, measure: impl Fn(&str) -> f32) -> (String, Option<UnitLabelCut>) {
     let whole = format!("{v} {unit}");
     if measure(&whole) <= room {
-        return whole;
+        return (whole, None);
     }
     let after = measure(&format!("{v} "));
     match shortened(unit, room - after, &measure) {
-        Some(u) => format!("{v} {u}"),
-        None => v.to_string(),
+        Some(u) => (format!("{v} {u}"), Some(UnitLabelCut::Shortened)),
+        None => (v.to_string(), Some(UnitLabelCut::LeftOut)),
     }
 }
 
@@ -7044,7 +7098,16 @@ mod tests {
         let loss = text_losses(&l, &[], 96.0, &info);
         assert_eq!(
             loss,
-            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true, below_box: false, past_limit: true, off_page: false }]
+            vec![TextLoss {
+                id,
+                name: "Note".into(),
+                left_out: 1,
+                at_least: true,
+                below_box: false,
+                past_limit: true,
+                off_page: false,
+                unit_label: None
+            }]
         );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.starts_with("1 or more lines of the text \"Note\""), "{said}");
@@ -7064,7 +7127,16 @@ mod tests {
         let loss = losses(&l);
         assert_eq!(
             loss,
-            vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false, below_box: true, past_limit: false, off_page: false }]
+            vec![TextLoss {
+                id,
+                name: "Note".into(),
+                left_out: 3,
+                at_least: false,
+                below_box: true,
+                past_limit: false,
+                off_page: false,
+                unit_label: None
+            }]
         );
         // The element alone is measured the same, and another id finds nothing.
         assert_eq!(text_loss(&l, &[], 96.0, &info, id).as_ref(), loss.first());
@@ -7095,7 +7167,16 @@ mod tests {
         let loss = text_losses(&l, &[], 96.0, &info);
         assert_eq!(
             loss,
-            vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false, below_box: true, past_limit: true, off_page: false }]
+            vec![TextLoss {
+                id,
+                name: "Note".into(),
+                left_out: 2999,
+                at_least: false,
+                below_box: true,
+                past_limit: true,
+                off_page: false,
+                unit_label: None
+            }]
         );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.ends_with("make the box taller or the text smaller, and split it, as a text draws at most 200 lines"), "{said}");
@@ -7106,7 +7187,16 @@ mod tests {
         let loss = text_losses(&tall, &[], 96.0, &info);
         assert_eq!(
             loss,
-            vec![TextLoss { id, name: "Note".into(), left_out: 50, at_least: false, below_box: false, past_limit: true, off_page: false }]
+            vec![TextLoss {
+                id,
+                name: "Note".into(),
+                left_out: 50,
+                at_least: false,
+                below_box: false,
+                past_limit: true,
+                off_page: false,
+                unit_label: None
+            }]
         );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert_eq!(
@@ -7118,7 +7208,16 @@ mod tests {
         l.element_mut(id).unwrap().h = 2.0;
         assert_eq!(
             text_losses(&l, &[], 96.0, &info),
-            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false, below_box: false, past_limit: true, off_page: false }]
+            vec![TextLoss {
+                id,
+                name: "Note".into(),
+                left_out: 1,
+                at_least: false,
+                below_box: false,
+                past_limit: true,
+                off_page: false,
+                unit_label: None
+            }]
         );
     }
 
@@ -9452,10 +9551,48 @@ Elaboração: RustGIS",
         assert_eq!(shortened(&long, 105.0, counted).as_deref(), Some("kkkkkkkkk…"));
         assert!(calls.get() <= 9, "{} measurements", calls.get());
         // After the last label, only the unit is shortened, never the number.
-        assert_eq!(last_label("25", "Kilometres", 130.0, measure), "25 Kilometres");
-        assert_eq!(last_label("25", "Kilometres", 80.0, measure), "25 Kilo…");
-        assert_eq!(last_label("25", "Kilometres", 40.0, measure), "25", "the number alone when not a letter fits");
-        assert_eq!(last_label("1,250", "km", 10.0, measure), "1,250", "the number is never cut");
+        assert_eq!(last_label("25", "Kilometres", 130.0, measure), ("25 Kilometres".into(), None));
+        assert_eq!(last_label("25", "Kilometres", 80.0, measure), ("25 Kilo…".into(), Some(UnitLabelCut::Shortened)));
+        assert_eq!(
+            last_label("25", "Kilometres", 40.0, measure),
+            ("25".into(), Some(UnitLabelCut::LeftOut)),
+            "the number alone when not a letter fits"
+        );
+        assert_eq!(last_label("1,250", "km", 10.0, measure), ("1,250".into(), Some(UnitLabelCut::LeftOut)), "the number is never cut");
+    }
+
+    /// A unit label shortened with an ellipsis, or left out with no room for it, is said, as a cut
+    /// text is, wherever it is placed; one drawn whole, or a plain bar's abbreviation, is not.
+    #[test]
+    fn a_shortened_or_left_out_unit_label_is_said() {
+        let long = "Kilometres ".repeat(9);
+        let cut = |w: f32, unit: Option<&str>, unit_label_position| {
+            let bar = BarOptions { unit_label: unit, unit_label_position, units: ScaleUnits::Kilometers, ..BarOptions::default() };
+            bar_layout(Rect::from_xywh(0.0, 0.0, w, 60.0).unwrap(), 100.0, &bar, 1.0, false).unwrap().unit_cut
+        };
+        for at in UnitLabelPosition::ALL {
+            assert_eq!(cut(200.0, Some(&long), at), Some(UnitLabelCut::Shortened), "{at:?}");
+            assert_eq!(cut(400.0, Some("Km"), at), None, "{at:?}: drawn whole");
+            assert_eq!(cut(200.0, None, at), None, "{at:?}: the abbreviation");
+        }
+        // Not even a letter of it fits after the bar's last label in a box this narrow.
+        assert_eq!(cut(20.0, Some(&long), UnitLabelPosition::AfterLabels), Some(UnitLabelCut::LeftOut));
+        let loss = |name: &str, unit_label| TextLoss {
+            id: 1,
+            name: name.into(),
+            left_out: 0,
+            at_least: false,
+            below_box: false,
+            past_limit: false,
+            off_page: false,
+            unit_label,
+        };
+        let said = scale_bar_fit_notices(&[loss("A", Some(UnitLabelCut::Shortened))]);
+        assert_eq!(said.len(), 1);
+        assert!(said[0].starts_with("Scale bar \"A\": its unit label is shortened to fit"), "{said:?}");
+        let said = scale_bar_fit_notices(&[loss("A", Some(UnitLabelCut::LeftOut)), loss("B", Some(UnitLabelCut::LeftOut))]);
+        assert!(said.len() == 1 && said[0].starts_with("2 scale bars (\"A\", \"B\"): their unit labels are left out"), "{said:?}");
+        assert!(scale_bar_fit_notices(&[loss("A", None)]).is_empty());
     }
 
     /// A bar whose lines just fit its box, so none is written smaller, still draws them all inside it.
