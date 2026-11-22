@@ -124,30 +124,25 @@ fn undrawn(n: roxmltree::Node) -> bool {
 
 /// Whether a marker may be drawn on a shape inside another marker: usvg draws it on each of that
 /// marker's vertices wherever that marker is (its `convert_children` of a marker), which
-/// [`elements`] doesn't count. A shape takes one by its own or an ancestor's attribute or `style`,
-/// or from a style sheet, whose reach isn't read here, so any sheet naming markers counts; one a
-/// `<use>` in a marker repeats is inside it too. One marker can only nest itself, a cycle usvg
-/// drops.
+/// [`elements`] doesn't count. A shape there takes a marker by inheritance: from itself or what
+/// holds it inside the marker, from the marker and what holds it, from a style sheet (whose reach
+/// isn't read here), or, through a `<use>` in the marker, from anything the copy it makes holds or
+/// that holds it. So any of those naming a marker counts. One marker can only nest itself, a cycle
+/// usvg drops (it follows a `<use>`'s copy too).
 fn nested_markers(doc: &roxmltree::Document) -> bool {
     let markers: Vec<_> = doc.descendants().filter(|n| n.has_tag_name("marker")).collect();
     if markers.len() < 2 {
         return false;
     }
-    let sheet = doc.descendants().filter(|n| n.has_tag_name("style")).any(|n| sheet_of(n).to_ascii_lowercase().contains("marker"));
     let carries = |n: roxmltree::Node| {
         n.attributes().any(|a| {
             matches!(a.name(), "marker" | "marker-start" | "marker-mid" | "marker-end")
                 || (a.name() == "style" && a.value().to_ascii_lowercase().contains("marker"))
         })
     };
-    let shape =
-        |n: &roxmltree::Node| matches!(n.tag_name().name(), "path" | "line" | "polyline" | "polygon" | "rect" | "circle" | "ellipse");
-    let nested = |s: roxmltree::Node| sheet || s.ancestors().any(carries);
-    // A `<use>` in a marker repeats a shape from anywhere, which takes a marker of its own or one
-    // inherited from that marker.
+    let sheet = doc.descendants().filter(|n| n.has_tag_name("style")).any(|n| sheet_of(n).to_ascii_lowercase().contains("marker"));
     let uses = markers.iter().any(|m| m.descendants().any(|n| n.has_tag_name("use")));
-    markers.iter().any(|m| m.descendants().filter(shape).any(nested))
-        || (uses && (doc.descendants().filter(shape).any(nested) || markers.iter().any(|m| m.ancestors().any(carries))))
+    sheet || markers.iter().any(|m| m.ancestors().any(carries) || m.descendants().any(carries)) || (uses && doc.descendants().any(carries))
 }
 
 /// Style element `n`'s sheet: its text, comments left out, as usvg reads it (`style_texts`).
@@ -667,6 +662,11 @@ mod tests {
             let body = format!(r#"{nested}<path d="{zigzag}" marker-mid="url(#a)"/>"#);
             assert_eq!(read(&svg(&body)).err(), Some(Refusal::TooMuch), "{body}");
         }
+        // A `<use>` passes its marker to the copy it makes, with no shape naming one.
+        let used = format!(
+            r##"<defs><path id="p" d="{zigzag}"/><path id="q" d="{zigzag}"/></defs><marker id="b"><circle r="1"/></marker><marker id="a"><use href="#p" marker-mid="url(#b)"/></marker><use href="#q" marker-mid="url(#a)"/>"##
+        );
+        assert_eq!(read(&svg(&used)).err(), Some(Refusal::TooMuch));
         // Two markers side by side, or one with a style sheet (it can only nest itself, which
         // usvg drops), are read.
         let side = format!(
@@ -676,6 +676,13 @@ mod tests {
         let one =
             format!(r#"<style>path {{ marker-mid: url(#a) }}</style><marker id="a"><path d="M0 0L1 1"/></marker><path d="{zigzag}"/>"#);
         assert!(read(&svg(&one)).is_ok());
+        // The same through a `<use>` (usvg follows its copy and drops the cycle), quickly.
+        let started = std::time::Instant::now();
+        let cycle = format!(
+            r##"<path id="p" d="{zigzag}" marker-mid="url(#a)"/><marker id="a"><use href="#p"/></marker><path d="{zigzag}" marker-mid="url(#a)"/>"##
+        );
+        assert!(read(&svg(&cycle)).is_ok());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     /// Filters are refused, wherever the group with them is.
