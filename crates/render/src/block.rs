@@ -687,9 +687,10 @@ pub(crate) fn runs(map: &Map, b: &Block, scale: f64, env: &rustgis_data::query::
 
 /// Whether walls leave off part of how a polygon whose symbol fills with `fill`, or with the
 /// stacked `fills` in its place, looks: a gradient or shapeburst that shows over its topmost
-/// solid fill (over everything, without one), which [`unit_paint`] leaves off.
+/// opaque solid fill (over everything, without one), which [`unit_paint`] leaves off.
 fn left_off(fill: Rgba, fills: &[FillLayer]) -> bool {
-    let top = fills.iter().rposition(|f| matches!(f.pattern, FillPattern::Solid));
+    // Only an opaque solid hides what is under it on the map.
+    let top = fills.iter().rposition(|f| matches!(f.pattern, FillPattern::Solid) && f.color.unwrap_or(fill).a() == 255);
     fills
         .iter()
         .skip(top.map_or(0, |i| i + 1))
@@ -2070,9 +2071,15 @@ mod tests {
             "{said:?}"
         );
         // Under a solid fill, it doesn't show on the map either: nothing to say.
-        m.layers[0].fill_layers = vec![FillLayer { color: None, pattern: burst }, FillLayer { color: None, pattern: FillPattern::Solid }];
+        m.layers[0].fill_layers =
+            vec![FillLayer { color: None, pattern: burst }, FillLayer { color: Some(Rgba::rgb(0, 0, 0)), pattern: FillPattern::Solid }];
         runs(&m, &b, 10_000.0, &Default::default());
         assert!(crate::approximations::take().is_empty());
+        // Under a see-through one, it shows on the map: said.
+        let glass = FillLayer { color: Some(Rgba::new(255, 0, 0, 128)), pattern: FillPattern::Solid };
+        m.layers[0].fill_layers = vec![FillLayer { color: None, pattern: burst }, glass];
+        runs(&m, &b, 10_000.0, &Default::default());
+        assert_eq!(crate::approximations::take().len(), 1);
         m.layers[0].fill_layers.clear();
         // No such layer: the walls' colour all along.
         m.view.terrain.as_mut().unwrap().block.as_mut().unwrap().walls_layer = Some("none".into());

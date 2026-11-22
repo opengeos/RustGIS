@@ -512,6 +512,8 @@ impl MapView {
             self.callout_map.clear();
             self.attribution.clear();
             self.tile_errors.clear();
+            // What the old project's frames approximated on workers isn't the new one's.
+            rustgis_engine::render::forget_relayed_approximations();
             self.drape = Default::default();
             self.tilt_drape = Default::default();
             self.filling = false;
@@ -1844,13 +1846,14 @@ pub(crate) fn say_tile_error(said: &mut std::collections::HashSet<String>, sessi
     let (layer, why) = error.split_once(": ").map_or(("", error.as_str()), |(l, w)| (l, w));
     for kind in why.split("; ") {
         let notice = if layer.is_empty() { kind.to_string() } else { format!("{layer}: {kind}") };
-        if said.insert(tile_error_kind(&notice)) {
+        // The layer's name as it is: only the reason loses its counts.
+        if said.insert(format!("{layer}\0{}", tile_error_kind(kind))) {
             session.notify(notice, true);
         }
     }
 }
 
-/// Tile error `e` without its counts of tiles ("12 tiles left out", "3 tiles are partial",
+/// Tile error reason `e` without its counts of tiles ("12 tiles left out", "3 tiles are partial",
 /// "2 warped tile components left out" each become `#`): what it says beside them, the layer and
 /// the reason, is its kind.
 fn tile_error_kind(e: &str) -> String {
@@ -5000,6 +5003,11 @@ mod tile_redraw_tests {
         let mark = app.session.notice_mark();
         say_tile_error(&mut app.map.tile_errors, &mut app.session, "Tiles: 9 tiles left out: refused; sprite left out".into());
         assert_eq!(said(&app, mark), ["Tiles: sprite left out"]);
+        // Layers whose names hold what a count looks like stay apart.
+        let mark = app.session.notice_mark();
+        say_tile_error(&mut app.map.tile_errors, &mut app.session, "2024 tiles west: missing source".into());
+        say_tile_error(&mut app.map.tile_errors, &mut app.session, "2025 tiles west: missing source".into());
+        assert_eq!(said(&app, mark).len(), 2);
     }
 
     /// What the map view's frames approximated is said once a project each (#2639).
@@ -5009,7 +5017,7 @@ mod tile_redraw_tests {
         rustgis_engine::render::take_approximations();
         let mark = app.session.notice_mark();
         super::say_approximations(&mut app);
-        assert!(app.session.notices_since(mark).is_empty(), "nothing approximated, nothing said");
+        assert!(!app.session.notices_since(mark).iter().any(|n| n.text.starts_with("road: ")), "nothing approximated, nothing said");
         use rustgis_engine::data::{Dataset, Geometry, GeometryType};
         use rustgis_engine::geom::Coord;
         use rustgis_engine::map::{Basemap, Camera, LineStroke, Map, symbology::Dash};
@@ -5025,7 +5033,8 @@ mod tile_redraw_tests {
             rustgis_engine::render::render(&mut m, &view).unwrap();
             super::say_approximations(&mut app);
         }
-        let said: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        // Other tests' map view workers may hand theirs over meanwhile: only this map's are looked at.
+        let said: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.starts_with("road: ")).collect();
         assert!(said.len() == 1 && said[0].starts_with("road: 1 dashed line(s) drawn solid"), "{said:?}");
     }
 

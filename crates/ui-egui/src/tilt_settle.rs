@@ -64,6 +64,7 @@ type Stop = std::sync::Arc<std::sync::atomic::AtomicBool>;
 
 fn draw(mut map: Map, view: View, backend: Backend, stop: Stop) -> Done {
     let t0 = web_time::Instant::now();
+    let epoch = render::approximations_epoch();
     let _stop = render::cancel::install(stop.clone());
     let archives = render::archive_revisions([&map]);
     // On the UI thread in the browser, a frame's worth of tile pictures at a time; on a worker
@@ -77,7 +78,7 @@ fn draw(mut map: Map, view: View, backend: Backend, stop: Stop) -> Done {
     #[cfg(not(target_arch = "wasm32"))]
     let (rendered, incomplete) = (render::render_backend(&mut map, &view, backend), false);
     // What it approximated, for the map view to say (Never silent): this is its worker's thread.
-    render::relay_approximations();
+    render::relay_approximations(epoch);
     // Stopped only if it came back without a picture: a stop after the renderer's last look
     // leaves a finished frame.
     let cancelled = rendered.is_none() && stop.load(std::sync::atomic::Ordering::Relaxed);

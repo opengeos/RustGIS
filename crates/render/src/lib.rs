@@ -4807,6 +4807,8 @@ fn render_frame(
         .and_then(|w| Some((map.layer_by_name(&w.layer)?.id, w.shore)));
     // The layer drawn last, whose tile layers go over it before the next.
     let mut below: Option<u32> = None;
+    // A frame returning part-way leaves its layer's approximations to no one.
+    let _approximating = approximations::LayerScope;
     for (at, li) in order.into_iter().enumerate() {
         // Each layer drawn is a layer of the recording (#1815); what comes between them isn't.
         pm.layer(None);
@@ -8052,9 +8054,22 @@ pub fn take_approximations() -> Vec<(String, String)> {
 }
 
 /// Hands what frames drawn on this thread approximated over to [`take_approximations`]: called
-/// by a worker thread once it has drawn a frame for the map view.
-pub fn relay_approximations() {
-    approximations::relay();
+/// by a worker thread once it has drawn a frame for the map view, started at `epoch`
+/// ([`approximations_epoch`]). Nothing is handed over once the map view has forgotten what was
+/// ([`forget_relayed_approximations`]) since.
+pub fn relay_approximations(epoch: u64) {
+    approximations::relay(epoch);
+}
+
+/// The epoch a worker's frame for the map view starts at (see [`relay_approximations`]).
+pub fn approximations_epoch() -> u64 {
+    approximations::epoch()
+}
+
+/// Forgets what workers handed over for [`take_approximations`], and what frames started before
+/// hand over later: the map view opened another project.
+pub fn forget_relayed_approximations() {
+    approximations::forget_relayed();
 }
 
 fn take_shadow_notices() -> Vec<String> {
@@ -11344,15 +11359,15 @@ mod tests {
         m.view.terrain = terrain(Some(block(Some([-1000.0, -1000.0, 1000.0, 1000.0]))));
         let b = g.block(&m).expect("a block");
         assert!((b.base + 500.0).abs() < 1e-6, "{}", b.base);
-        take_approximations();
+        approximations::take();
         let cut = render(&mut m, &view).expect("a frame");
         // Ground with a height everywhere in it: nothing said of it (#2639). Half off the DEM:
         // said, with how much.
-        assert!(!take_approximations().iter().any(|(_, e)| e.starts_with("Block diagram")));
+        assert!(!approximations::take().iter().any(|e| e.starts_with("Block diagram")));
         m.view.terrain = terrain(Some(block(Some([4000.0, -1000.0, 6000.0, 1000.0]))));
         render(&mut m, &view).expect("a frame");
-        let said = take_approximations();
-        assert!(said.iter().any(|(_, e)| e.starts_with("Block diagram: about 49%") && e.contains("no height")), "{said:?}");
+        let said = approximations::take();
+        assert!(said.iter().any(|e| e.starts_with("Block diagram: about 49%") && e.contains("no height")), "{said:?}");
         m.view.terrain = terrain(None);
         let whole = render(&mut m, &view).expect("a frame");
         // The near edge's middle, on the ground and at the base.
@@ -14136,14 +14151,14 @@ mod tests {
         assert!((10..=13).contains(&runs), "{runs} changes along the row");
         // A pattern under a pixel a round draws solid rather than cut into slivers.
         // Dashes drawn as dashes say nothing (#2639).
-        assert!(take_approximations().is_empty());
+        assert!(approximations::take().is_empty());
         let dash = rustgis_map::symbology::Dash::new(&[0.2, 0.2]);
         m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
         assert!(dark(&mut m).iter().all(|d| *d), "too fine: solid");
         // Drawn solid, it says so once for the layer, however many frames draw it (#2639).
         dark(&mut m);
-        let said = take_approximations();
-        assert!(said.len() == 1 && said.iter().all(|(_, e)| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
+        let said = approximations::take();
+        assert!(said.len() == 1 && said.iter().all(|e| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
         // An export reads it too.
         let (_, said) = shadows_said(|| render_png(&mut m, &view));
         assert!(said.notices.iter().any(|e| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
