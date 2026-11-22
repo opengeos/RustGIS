@@ -153,9 +153,10 @@ pub(crate) fn layer(name: Option<&str>) {
     let solid = SOLID_DASHES.with(|c| c.replace(0));
     LAYER.with(|l| {
         let mut l = l.borrow_mut();
-        if solid > 0
-            && let Some(was) = l.as_deref()
-        {
+        if solid > 0 {
+            // Counted outside any layer (nothing draws lines there today): said for the map, not
+            // dropped.
+            let was = l.as_deref().unwrap_or("Map");
             note(format!("{was}\0dashes"), solid_dashes_text(was, solid));
         }
         match name {
@@ -293,6 +294,15 @@ mod tests {
         dashes_drawn_solid();
         layer(None);
         assert!(!HIGHLIGHTING.with(Cell::get));
+    }
+
+    #[test]
+    fn lines_counted_outside_a_layer_are_said_for_the_map() {
+        take();
+        layer(None);
+        dashes_drawn_solid();
+        layer(None);
+        assert_eq!(take(), vec![solid_dashes_text("Map", 1)]);
     }
 
     #[test]
