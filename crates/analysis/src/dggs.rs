@@ -811,7 +811,7 @@ impl<'a> Grid<'a> {
         // The descent looks at every cell of the bounding box, which for a thin, slanted polygon
         // can be many more than it covers: counted first, and refused as work, not as cells.
         let boxed = estimate(&[extent_ring(e)], self.system.mean_area_m2(self.res));
-        if boxed > ESTIMATE_MARGIN * MAX_CELLS as f64 {
+        if boxed > MAX_WORK as f64 {
             return Err(too_much_work(self.res));
         }
         let rect = s2::rect::Rect::from_degrees(e.min_y.max(-90.0), e.min_x, e.max_y.min(90.0), e.max_x);
@@ -895,8 +895,8 @@ impl<'a> Grid<'a> {
                 }
             }
         }
-        // The hexagons of each row within its span, counted before any is tested: that many is
-        // the most the polygon can take, so past the margin it's refused as cells.
+        // The hexagons of each row within its span, counted before any is tested: each is looked
+        // at, so past the work limit it's refused as work (a concave polygon takes fewer).
         let range = |j: i64, (x0, x1): (f64, f64)| {
             let half = j as f64 / 2.0;
             (((x0 - width / 2.0) / width - half).ceil() as i64, ((x1 + width / 2.0) / width - half).floor() as i64)
@@ -912,8 +912,8 @@ impl<'a> Grid<'a> {
             })
             .collect();
         let n: u64 = rows.iter().map(|(_, q0, q1)| u64::try_from(q1 - q0 + 1).unwrap_or(0)).fold(0, u64::saturating_add);
-        if n > (ESTIMATE_MARGIN * MAX_CELLS as f64) as u64 {
-            return Err(too_many(format!("About {n}"), res));
+        if n > MAX_WORK {
+            return Err(too_much_work(res));
         }
         let Some(polygon) = geo_polygon(&rings) else { return Ok(()) };
         let prepared = PreparedGeometry::from(polygon);
@@ -1591,6 +1591,34 @@ mod tests {
         }
     }
 
+    /// What a covering looks at is held to the work limit, not the cell cap: a thin S2 strip
+    /// across a wide box, and a hexagon U whose rows span its gap, look at between two and four
+    /// times the cap's cells but take far fewer, and are covered.
+    #[test]
+    fn looked_at_past_the_cap_but_within_the_work_limit() {
+        let res = 14;
+        for (system, shape) in [("S2", "strip"), ("Hexagon", "U")] {
+            let side = System::parse(system).unwrap().mean_area_m2(res).sqrt() / 111_320.0;
+            let ring: Vec<Coord> = if shape == "strip" {
+                // A box of about 520,000 cells, the strip its diagonal, a few cells wide.
+                let (w, t) = (720.0 * side, 3.0 * side);
+                vec![(0.0, 0.0), (t, 0.0), (w, w - t), (w, w), (w - t, w), (0.0, t), (0.0, 0.0)]
+            } else {
+                // Rows of about 930 hexagons each, 640 of them: some 600,000 candidates.
+                let (w, h, t) = (1000.0 * side, 600.0 * side, 4.0 * side);
+                vec![(0.0, 0.0), (w, 0.0), (w, h), (w - t, h), (w - t, t), (t, t), (t, h), (0.0, h), (0.0, 0.0)]
+            }
+            .into_iter()
+            .map(|(x, y)| Coord::new(-74.0 + x, 1.0 + y))
+            .collect();
+            let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+            d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+            let p = serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"});
+            let cells = layer(grid(&One(d, None), &p).unwrap_or_else(|e| panic!("{system}: {e}"))).features.len() as u64;
+            assert!(cells > 0 && cells < MAX_CELLS / 4, "{system}: {cells}");
+        }
+    }
+
     /// The world in each system, counted against the system's own count, and the cap.
     #[test]
     fn the_world_and_the_cap() {
@@ -1606,9 +1634,10 @@ mod tests {
         let sum: f64 = (0..s2.features.len()).map(|r| s2.value(r, 2).as_f64().unwrap()).sum();
         assert!((sum / sphere - 1.0).abs() < 1e-6, "{sum} for {sphere}");
         assert!(!layer(world("Hexagon", 1).unwrap()).features.is_empty());
-        for (system, res) in [("H3", 6), ("S2", 9), ("Hexagon", 9)] {
+        for (system, res) in [("H3", 6), ("S2", 9)] {
             assert!(world(system, res).unwrap_err().contains("too many"), "{system}");
         }
+        assert!(world("Hexagon", 9).unwrap_err().contains(&format!("looking at more than {MAX_WORK} cells")));
         // Refused before any covering: far too many for the view, as cells, or (S2's descent, the
         // hexagon grid's rows) as cells to look at.
         for (system, res) in [("H3", 15), ("S2", 30), ("Hexagon", 24)] {
