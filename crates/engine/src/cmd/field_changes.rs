@@ -429,10 +429,12 @@ fn outcome(written: Result<(), String>, notes: Vec<(String, bool)>) -> Kept {
     }
 }
 
-/// Removes `dir`, `what`: nothing to say when it goes, the folder and why when it can't.
+/// Removes `dir`, `what`: nothing to say when it goes, or is gone already (a send that raced the
+/// keep removed it), the folder and why when it can't.
 fn let_go(dir: &Path, what: &str) -> Option<(String, bool)> {
     std::fs::remove_dir_all(dir)
         .err()
+        .filter(|e| e.kind() != std::io::ErrorKind::NotFound)
         .map(|e| (format!("{}: {what} couldn't be removed from this device ({e}); remove the folder by hand", dir.display()), true))
 }
 
@@ -1080,6 +1082,14 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A folder a racing send removed first is gone, not a failure to remove it.
+    #[test]
+    fn letting_go_of_a_folder_already_gone_says_nothing() {
+        let dir = test_bases::root().unwrap().join("already gone");
+        assert!(!dir.exists());
+        assert_eq!(let_go(&dir, "a copy"), None);
     }
 
     /// A package sent back, then opened again after a restart (which forgets what this run sent),
