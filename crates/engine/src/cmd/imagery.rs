@@ -53,7 +53,7 @@ pub fn commands() -> Vec<C> {
             r#"{"layer": raster, "crs"?: EPSG code or "EPSG:n" of the output (default the layer's), "cellSize"?: number or [x, y] in the output's units (default about the layer's pixel there), "origin"?: [x, y] a cell corner falls on (default [0, 0], so grids of the same cellSize line up), "extent"?: polygon layer (its selected or all features' bounds) | [west, south, east, north] in degrees | "view" (default the layer's footprint), "grid"?: raster layer whose coordinate system, cells and extent are taken exactly (instead of crs, cellSize, origin and extent), "resampling"?: "nearest" (default) | "bilinear" | "cubic" | "average" (the mean of the pixels whose centres fall in a cell) | "mode" (their most frequent value, the least of those tied), "name"?: new layer (default "<layer> projected"), "path"?: GeoTIFF to write it to}"#,
         ),
         C::new("raster.rasterize", "Polygons to Raster", "Analyze › Raster", rasterize).inputs(rasterize_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
-            r#"{"layer": polygon layer (its selected or all features; a later one over an earlier), "field"?: numeric field (its values) or text field (codes 1 to n in sorted order of its values, listed in a table named after the result with classes), "value"?: number every polygon gives when there is no field (default 1), "nodata"?: number of the cells under no polygon (default 0), "crs"?: EPSG code or "EPSG:n" of the output (default the layer's), "cellSize"?: number or [x, y] in the output's units (required without grid), "origin"?: [x, y] a cell corner falls on (default [0, 0], so grids of the same cellSize line up), "extent"?: polygon layer (its selected or all features' bounds) | [west, south, east, north] in degrees | "view"; default the polygons' bounds, "grid"?: raster layer whose coordinate system, cells and extent are taken exactly (instead of crs, cellSize, origin and extent), "name"?: new layer (default "<layer> raster"), "path"?: GeoTIFF to write it to}"#,
+            r#"{"layer": polygon layer (its selected or all features; a later one over an earlier), "field"?: numeric field (its values) or text field (codes 1 to n in sorted order of its values, listed in a table named after the result with classes), "value"?: number every polygon gives when there is no field (default 1), "nodata"?: number of the cells under no polygon (default 0), "crs"?: EPSG code or "EPSG:n" of the output (default the system the layer holds its coordinates in), "cellSize"?: number or [x, y] in the output's units (required without grid), "origin"?: [x, y] a cell corner falls on (default [0, 0], so grids of the same cellSize line up), "extent"?: polygon layer (its selected or all features' bounds) | [west, south, east, north] in degrees | "view"; default the polygons' bounds, "grid"?: raster layer whose coordinate system, cells and extent are taken exactly (instead of crs, cellSize, origin and extent), "name"?: new layer (default "<layer> raster"), "path"?: GeoTIFF to write it to}"#,
         ),
         // A fit is a measurement of the points, not a project change: no undo step.
         C::new("raster.gcpFit", "Control Point Fit", "Imagery › Alignment", gcp_fit).roles(&[]).effects(crate::policy::Effects::NONE).view().params(
@@ -562,24 +562,35 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
     }
     // By default, the system the layer holds its coordinates in (else the one it was read in) and
     // the polygons' bounds.
-    let own = shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).fold(Extent::EMPTY, |mut e, c| {
+    let held_bounds = shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).fold(Extent::EMPTY, |mut e, c| {
         e.expand(*c);
         e
     });
     let crs = if held == Crs::LonLat { ds.crs.unwrap_or(Crs::LonLat) } else { held };
+    let mut unsized_by = 0usize;
     let grid = grid_param(s, p, crs, |crs| {
-        if crs == held {
-            return Ok(([own.min_x, own.min_y, own.max_x, own.max_y], None));
+        if crs == held && held != Crs::LonLat {
+            return Ok(([held_bounds.min_x, held_bounds.min_y, held_bounds.max_x, held_bounds.max_y], None));
         }
-        // In another system, the bounds of the polygons' box in longitude/latitude, as before.
-        let to = held.to(Crs::LonLat)?;
-        let lonlat =
-            shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).filter_map(|c| to.point(*c)).fold(Extent::EMPTY, |mut e, c| {
-                e.expand(c);
-                e
-            });
-        Ok((warp::bounds_in([lonlat.min_x, lonlat.min_y, lonlat.max_x, lonlat.max_y], crs)?, None))
+        // Otherwise the bounds of the polygons' box in longitude/latitude, as before. A place the
+        // layer's system can't give there (a missing one aside) doesn't size the grid, and is
+        // said when the grid takes these bounds (no extent given).
+        let to = held.to(Crs::LonLat).map_err(|e| format!("{ln}: {e}"))?;
+        let mut lonlat = Extent::EMPTY;
+        for c in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).filter(|c| c.is_finite()) {
+            match to.point(*c) {
+                Some(c) => lonlat.expand(c),
+                None => unsized_by += 1,
+            }
+        }
+        Ok((warp::bounds_in([lonlat.min_x, lonlat.min_y, lonlat.max_x, lonlat.max_y], crs).map_err(|e| format!("{ln}: {e}"))?, None))
     })?;
+    if unsized_by > 0 && p.get("extent").is_none_or(Value::is_null) {
+        s.notify(
+            format!("{ln}: {unsized_by} vertices that can't be placed in longitude/latitude were left out of the grid's extent: give an extent to take them in"),
+            false,
+        );
+    }
     // The smallest pixel type the GeoTIFF writer keeps that holds every value and the no-data.
     let whole = |max: f64| shapes.iter().map(|s| f64::from(s.value)).chain([nodata]).all(|v| v.fract() == 0.0 && (0.0..=max).contains(&v));
     let data_type = if whole(255.0) {
@@ -589,7 +600,7 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         "Float32"
     };
-    let burned = warp::rasterize_in(&grid, held, &shapes, nodata as f32)?;
+    let burned = warp::rasterize_in(&grid, held, &shapes, nodata as f32).map_err(|e| format!("{ln}: {e}"))?;
     if burned.cells == 0 {
         return Err(format!("no cell centre of the grid falls inside {ln}'s polygons: give a smaller cellSize, or a grid over them"));
     }
@@ -1037,7 +1048,7 @@ fn spectral_read(s: &mut Session, p: &Value, r: &Arc<Raster>, zone: Option<&str>
         let (crs, rings) = zone_rings(s, z)?;
         // Read on a thread of its own as the app sent the command, when still of this raster and
         // this polygon; here otherwise.
-        let (means, n) = zone_means(s, r, crs, rings)?.ok_or("no pixels fall in the zone")?;
+        let (means, n) = zone_means(s, r, crs, rings).map_err(|e| format!("{z}: {e}"))?.ok_or("no pixels fall in the zone")?;
         return answer(json!({"bands": names, "values": means, "pixels": n}));
     }
     let c = Coord::new(f(p, "lon").ok_or("give lon and lat, points or a zone")?, f(p, "lat").ok_or("lat is required")?);
@@ -1284,9 +1295,11 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
             let (pl, skipped) = (pl.to_string(), failed_features.len());
             Ok(Box::new(move || {
                 let mut failed_parts = Vec::new();
-                let (cols, rows, mask) = rasterops::polygon_mask_in(&r, held, &polygons, &mut failed_parts)?.ok_or_else(|| {
-                    format!("no cell of {} falls inside {pl} ({} polygon part(s) failed raster projection)", r.name, failed_parts.len())
-                })?;
+                let (cols, rows, mask) = rasterops::polygon_mask_in(&r, held, &polygons, &mut failed_parts)
+                    .map_err(|e| format!("{pl}: {e}"))?
+                    .ok_or_else(|| {
+                        format!("no cell of {} falls inside {pl} ({} polygon part(s) failed raster projection)", r.name, failed_parts.len())
+                    })?;
                 let clipped = clip_window(&r, cols, rows, Some(&mask), out)?;
                 let mut messages = Vec::new();
                 if skipped > 0 {

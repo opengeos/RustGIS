@@ -1037,7 +1037,7 @@ pub fn zonal_means_in(r: &Raster, from: Crs, bands: &[usize], rings: &[Vec<Coord
 /// ([`crate::tools::ToGrid`] both ways).
 pub(crate) enum ZoneIn {
     LonLat,
-    Own { to_zone: crate::tools::ToGrid, to_grid: crate::tools::ToGrid },
+    Own { to_zone: Box<crate::tools::ToGrid>, to_grid: Box<crate::tools::ToGrid> },
 }
 
 impl ZoneIn {
@@ -1045,7 +1045,10 @@ impl ZoneIn {
         Ok(if from == Crs::LonLat {
             Self::LonLat
         } else {
-            Self::Own { to_zone: crate::tools::ToGrid::new(r.crs, from)?, to_grid: crate::tools::ToGrid::new(from, r.crs)? }
+            Self::Own {
+                to_zone: Box::new(crate::tools::ToGrid::new(r.crs, from)?),
+                to_grid: Box::new(crate::tools::ToGrid::new(from, r.crs)?),
+            }
         })
     }
 
@@ -1086,8 +1089,9 @@ pub fn polygon_mask_in(
 /// once, all of them): an error stops it.
 ///
 /// A cell counts when its centre, in the zone's system (`zone`), lies in the zone (inside the
-/// outer ring and in no hole). Only the cells in the zone's window are tested ([`zone_window`]), not every
-/// cell of the raster, in the same row-major order, so the sums are those of testing them all.
+/// outer ring and in no hole). Only the cells in the zone's window are tested ([`zone_window`]),
+/// not every cell of the raster, in the same row-major order, so the sums are those of testing
+/// them all.
 fn means_under(
     r: &Raster,
     zone: &ZoneIn,
@@ -1123,14 +1127,13 @@ fn means_under(
 
 /// The columns and rows of `r` whose cell centres can fall in the extent `e`, in the zone's system
 /// (`to_grid` places it in the raster's): its outline placed on the raster's grid, with two cells
-/// to spare. Each side is sampled, and
-/// each stretch between samples near the raster is halved until its ends are at most a cell
-/// apart, so a side that curves on the grid (a parallel on a polar raster) bows only a fraction
-/// of a cell between them, whatever the zone's size. A stretch whose ends are farther from the
-/// raster than the distance between them isn't halved: that takes the side not to fold back
-/// within one stretch (a sixty-fourth of the side at first), which a projection's smooth image of
-/// a parallel or meridian doesn't. The whole raster when a point can't be placed; none when `e` is
-/// empty.
+/// to spare. Each side is sampled, and each stretch between samples near the raster is halved until
+/// its ends are at most a cell apart, so a side that curves on the grid (a parallel on a polar
+/// raster) bows only a fraction of a cell between them, whatever the zone's size. A stretch whose
+/// ends are farther from the raster than the distance between them isn't halved: that takes the
+/// side not to fold back within one stretch (a sixty-fourth of the side at first), which a
+/// projection's smooth image of a parallel or meridian doesn't. The whole raster when a point can't
+/// be placed; none when `e` is empty.
 fn zone_window(r: &Raster, e: &Extent, to_grid: impl Fn(Coord) -> Option<Coord>) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
