@@ -2358,19 +2358,19 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
         // In longitude/latitude, a copy only of a layer held in another system; refused, naming
         // the layer, rather than checked on coordinates of another system.
         // A cancel while converting is the check's cancel, said as the rules' is. A conversion's
-        // error already starts with its layer's name; it isn't given twice. A covering layer's is
-        // named as that layer, not the one checked.
-        let named = |layer: &str, e: String| {
+        // error starts with its data's own name, which the map's name for the layer may not be (a
+        // name taken on a clash): that is replaced by the map's, so the layer is named once. A
+        // covering layer's is named as that layer, not the one checked.
+        let named = |source: &str, layer: &str, e: String| {
             if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) {
                 "the topology check was cancelled".to_string()
-            } else if e.starts_with(&format!("{layer}:")) {
-                e
             } else {
-                format!("{layer}: {e}")
+                let rest = e.strip_prefix(&format!("{source}: ")).unwrap_or(&e);
+                format!("{layer}: {rest}")
             }
         };
-        let data = i.data.in_lonlat().map_err(|e| named(&i.layer, e))?;
-        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(|e| named(&i.by_layer, e))).transpose()?;
+        let data = i.data.in_lonlat().map_err(|e| named(&i.data.name, &i.layer, e))?;
+        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(|e| named(&b.name, &i.by_layer, e))).transpose()?;
         rustgis_analysis::validate_latitudes(&data, i.rows.iter().copied())?;
         found.push(match (&i.rule, &by) {
             (TopologyRule::MustNotOverlap { .. }, _) => t::overlaps(&data, &i.rows),
@@ -2680,7 +2680,8 @@ mod tests {
         s.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().name = "Borders".into();
         s.map_mut().editing.topology = vec![TopologyRule::MustBeCoveredBy { layer: "Cities".into(), by: "Borders".into() }];
         let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
-        assert!(e.starts_with("Borders: "), "{e}");
+        assert!(e.starts_with("Borders: feature"), "{e}");
+        assert_eq!(e.matches("Countries").count() + e.matches("Borders").count(), 1, "{e}");
         assert!(!e.contains("Cities"), "{e}");
     }
 
