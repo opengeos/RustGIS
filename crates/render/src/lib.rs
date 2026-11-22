@@ -1193,13 +1193,10 @@ impl Ctx<'_> {
     /// pixel a round, or one that would cut the path into more than [`MAX_DASHES`] dashes (each
     /// is a path of its own), would only cost time. The whole path counts, on screen or not: the
     /// dashing doesn't skip what's off screen.
-    /// Drawn solid, it says so for the layer being drawn ([`approximations::dashes_drawn_solid`]).
+    /// Drawn solid, [`Self::stacked_path`] says so for the layer being drawn, once a line
+    /// ([`approximations::dashes_drawn_solid`]).
     fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<Vec<f32>> {
-        let steps = dash_steps(d, self.ppp, path);
-        if steps.is_none() {
-            approximations::dashes_drawn_solid();
-        }
-        steps
+        dash_steps(d, self.ppp, path)
     }
 
     /// `starts`: where along its line each of `path`'s pieces begins ([`Self::ring_path_at`]), so a
@@ -1224,6 +1221,8 @@ impl Ctx<'_> {
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
         // The line in device pixels, made for the first stroke of markers.
         let mut runs: Option<Vec<line_markers::Run>> = None;
+        // Whether a dashed stroke of the line was drawn solid: said once for the line.
+        let mut solid = false;
         for st in strokes {
             let (c, w) = st.resolve(s);
             if let Some(m) = &st.markers {
@@ -1244,6 +1243,7 @@ impl Ctx<'_> {
             let Some(drawn) = drawn else { continue };
             let stroke = line_stroke(st, (w * self.ppp).max(0.5));
             let steps = st.dash.and_then(|d| self.dash(&d, drawn));
+            solid |= st.dash.is_some() && steps.is_none();
             let period: f32 = steps.iter().flatten().sum();
             // A dashed line cut into pieces: each piece starts its pattern where its line is. Only
             // while every piece has its start: one off would shift every later piece's dashes.
@@ -1266,6 +1266,9 @@ impl Ctx<'_> {
                     pm.stroke_path(drawn, &paint(c, 1.0), &Stroke { dash, ..stroke }, Transform::identity(), None);
                 }
             }
+        }
+        if solid {
+            approximations::dashes_drawn_solid();
         }
     }
 
@@ -1542,6 +1545,8 @@ impl Ctx<'_> {
     /// Draws a selected feature in the selection colour: a halo under its strokes or marks, or
     /// its outline.
     fn highlight(&self, pm: &mut Canvas, g: &Geometry, s: &Symbol, strokes: &[LineStroke], turn: f32) {
+        // The feature is drawn already: what its highlight draws solid isn't counted again.
+        let _highlighting = approximations::Highlighting::start();
         let cyan = paint(SELECTION, 1.0);
         match g {
             Geometry::Line(parts) if !strokes.is_empty() => {
@@ -8034,6 +8039,11 @@ pub struct ShadowsSaid {
     /// shadows aren't drawn: …"); then what else the frames drew otherwise than their layers
     /// ask, each once ("Roads: dashed lines are drawn solid …", see `approximations`).
     pub notices: Vec<String>,
+    /// What each of [`Self::notices`] is, in the same order, for whoever says them once each:
+    /// a cast-shadow notice by its text, an approximation by its kind
+    /// (`approximated\0{kind}`, as the map view keys them), whose text carries a count that
+    /// changes from one frame to the next.
+    pub keys: Vec<String>,
     /// Some were drawn without them still being worked out (on the interface's thread, which
     /// doesn't wait): drawn again once they land, they show them.
     pub to_come: bool,
@@ -8053,12 +8063,15 @@ pub fn shadows_said<T>(f: impl FnOnce() -> T) -> (T, ShadowsSaid) {
 /// else they approximated ([`approximations::take`]).
 fn take_said() -> ShadowsSaid {
     let mut notices = take_shadow_notices();
-    for e in approximations::take() {
-        if !notices.contains(&e) {
+    let mut keys = notices.clone();
+    for (kind, e) in approximations::take_keyed(&[]) {
+        let key = format!("approximated\0{kind}");
+        if !keys.contains(&key) {
+            keys.push(key);
             notices.push(e);
         }
     }
-    ShadowsSaid { notices, to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
+    ShadowsSaid { notices, keys, to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
 }
 
 /// What frames drawn on this thread approximated since the last call, and what map view frames
@@ -14161,6 +14174,20 @@ mod tests {
         // An export reads it too.
         let (_, said) = shadows_said(|| render_png(&mut m, &view));
         assert!(said.notices.iter().any(|e| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
+        // Keyed by kind for whoever says each once: the text's count changes, the kind doesn't.
+        let at = said.notices.iter().position(|e| e.starts_with("road: ")).unwrap();
+        assert_eq!(said.keys.get(at).map(String::as_str), Some("approximated\0road\0dashes"), "{said:?}");
+        assert_eq!(said.keys.len(), said.notices.len());
+        // The notice counts lines, not drawing passes: one line with two dashed strokes, selected
+        // (its halo and its strokes drawn again over it), is still one line (#2657).
+        let fine = rustgis_map::LineStroke { dash, ..stroke };
+        let layer = m.layer_mut(id).unwrap();
+        layer.line_strokes = vec![fine, rustgis_map::LineStroke { width: Some(2.0), ..fine }];
+        layer.selection = vec![0];
+        approximations::take();
+        render(&mut m, &view).unwrap();
+        let said = approximations::take();
+        assert!(said.len() == 1 && said[0].starts_with("road: 1 dashed line(s) drawn solid"), "{said:?}");
     }
 
     #[test]

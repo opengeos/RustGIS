@@ -27,6 +27,9 @@ thread_local! {
     static LAYER: RefCell<Option<String>> = const { RefCell::new(None) };
     /// How many dashed lines of [`LAYER`] were drawn solid ([`dashes_drawn_solid`]).
     static SOLID_DASHES: Cell<u32> = const { Cell::new(0) };
+    /// Whether a selected feature's highlight is being drawn ([`Highlighting`]): its redraws of a
+    /// line already drawn aren't counted again.
+    static HIGHLIGHTING: Cell<bool> = const { Cell::new(false) };
     /// How many kinds [`SAID`] turned away, full ([`KEPT`]): said when it is taken.
     static TURNED_AWAY: Cell<usize> = const { Cell::new(0) };
 }
@@ -182,9 +185,31 @@ impl Drop for LayerScope {
 }
 
 /// A dashed line of the layer being drawn ([`layer`]) is drawn solid: a round of its pattern is
-/// under a pixel, or it would cut the line into too many dashes. Cheap: called for every stroke.
+/// under a pixel, or it would cut the line into too many dashes. Called once for a line however
+/// many of its strokes are dashed, and not for a selected line's highlight ([`Highlighting`]),
+/// which draws the line again: the notice counts lines, not drawing passes.
 pub(crate) fn dashes_drawn_solid() {
+    if HIGHLIGHTING.with(Cell::get) {
+        return;
+    }
     SOLID_DASHES.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Held while a selected feature's highlight is drawn (its halo and its strokes again over the
+/// line already drawn): what those passes draw solid isn't counted again.
+pub(crate) struct Highlighting(bool);
+
+impl Highlighting {
+    pub(crate) fn start() -> Self {
+        Self(HIGHLIGHTING.with(|h| h.replace(true)))
+    }
+}
+
+impl Drop for Highlighting {
+    fn drop(&mut self) {
+        let was = self.0;
+        HIGHLIGHTING.with(|h| h.set(was));
+    }
 }
 
 /// What [`dashes_drawn_solid`] says of layer `name`, `n` of whose lines were drawn solid.
@@ -249,6 +274,25 @@ mod tests {
         layer(Some("Roads"));
         layer(None);
         assert!(take().is_empty());
+    }
+
+    #[test]
+    fn a_highlight_drawn_over_a_line_is_not_counted_again() {
+        take();
+        layer(Some("Roads"));
+        dashes_drawn_solid();
+        {
+            let _h = Highlighting::start();
+            dashes_drawn_solid();
+            dashes_drawn_solid();
+        }
+        layer(None);
+        assert_eq!(take(), vec![solid_dashes_text("Roads", 1)]);
+        // Once it is over, lines count again.
+        layer(Some("Roads"));
+        dashes_drawn_solid();
+        layer(None);
+        assert!(!HIGHLIGHTING.with(Cell::get));
     }
 
     #[test]
