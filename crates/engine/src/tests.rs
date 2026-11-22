@@ -298,8 +298,11 @@ fn script_keeps_its_undo_step_when_a_line_changes_nothing() {
     let (depth, order) = (s.undo_depth(), names(&s));
     let top = &order[0];
     let stay = format!("layer.move {}", json!({"layer": top, "to": 0}));
-    // Nor does a script of comments alone.
-    for script in [format!("{stay}\n{stay}"), "# nothing\n\n".into()] {
+    // Nor do lines that only read or move the view, before or after one that changes nothing, nor
+    // comments alone: as each run by itself.
+    let reads = "info.project {}\nmap.zoomIn {}";
+    for script in [format!("{stay}\n{stay}"), reads.into(), format!("{stay}\n{reads}"), format!("{reads}\n{stay}"), "# nothing\n\n".into()]
+    {
         s.run("script.run", &json!({"script": script})).unwrap();
         assert_eq!((names(&s), s.undo_depth(), s.dirty()), (order.clone(), depth, false), "{script}");
     }
@@ -320,6 +323,46 @@ fn script_keeps_its_undo_step_when_a_line_changes_nothing() {
     assert_eq!((names(&s), s.undo_depth()), (order.clone(), depth + 1));
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(names(&s).last(), Some(top));
+}
+
+/// A task's steps are counted as a script's lines: an undo step only when one edited (#2621).
+#[test]
+fn task_takes_an_undo_step_only_when_a_step_edits() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let order = names(&s);
+    let top = order[0].clone();
+    let stay = json!({"title": "Stay", "command": "layer.move", "params": {"layer": &top, "to": 0}});
+    let down = json!({"title": "Down", "command": "layer.move", "params": {"layer": &top, "to": 99}});
+    let read = json!({"title": "Read", "command": "info.project", "params": {}});
+    for (n, (steps, edits)) in
+        [(json!([&stay, &read]), false), (json!([&read]), false), (json!([&down, &stay]), true), (json!([&stay, &down, &read]), true)]
+            .into_iter()
+            .enumerate()
+    {
+        let name = format!("Task {n}");
+        s.run("task.new", &json!({"name": &name, "steps": steps})).unwrap();
+        s.mark_saved();
+        let depth = s.undo_depth();
+        s.run("task.run", &json!({"task": &name})).unwrap();
+        assert_eq!((s.undo_depth(), s.dirty()), (depth + usize::from(edits), edits), "{steps}");
+        if edits {
+            s.run("edit.undo", &Value::Null).unwrap();
+            assert_eq!(names(&s), order, "{steps}");
+        }
+    }
+    // A task run as a script's line: a no-op task leaves the script none, an editing one its one.
+    for (task, edits) in [("Task 0", false), ("Task 2", true)] {
+        s.mark_saved();
+        let depth = s.undo_depth();
+        let script = format!("info.project {{}}\ntask.run {}", json!({"task": task}));
+        s.run("script.run", &json!({"script": script})).unwrap();
+        assert_eq!((s.undo_depth(), s.dirty()), (depth + usize::from(edits), edits), "{task}");
+        if edits {
+            s.run("edit.undo", &Value::Null).unwrap();
+            assert_eq!(names(&s), order, "{task}");
+        }
+    }
 }
 
 #[test]

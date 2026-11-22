@@ -128,6 +128,16 @@ impl CommandSpec {
         self.mutates || self.effects.contains(policy::Effect::Edits)
     }
 
+    /// Whether, run as a step of another command ([`Session::shared_step`]), it counts as an edit
+    /// of that command's transaction unless it says it changed nothing. Only a reviewed read is
+    /// left out: a view command that declares no effect at all. Anything else may change what
+    /// the transaction restores even without an undo step of its own (`project.new` replaces the
+    /// project, `project.saveAs` moves its file, `edit.undo` takes a step back), and an unreviewed
+    /// command counts as an edit.
+    pub fn edits_in_a_step(&self) -> bool {
+        self.mutates || self.effects != policy::Effects::NONE
+    }
+
     /// Whether the parameter description includes a required top-level input.
     pub fn needs_input(&self) -> bool {
         needs_input(self.params)
@@ -729,6 +739,15 @@ struct PutAside {
     edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
 }
 
+/// What the steps of one transaction did ([`Session::shared_step`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct StepTally {
+    /// A step left a request or changed nothing ([`Session::request_only`]).
+    pub(crate) requested: bool,
+    /// A step edited the project, or may have ([`CommandSpec::edits_in_a_step`]).
+    pub(crate) edited: bool,
+}
+
 pub struct Session {
     pub(crate) constructions: construction::Cache,
     policy: policy::State,
@@ -1012,6 +1031,9 @@ pub struct Session {
     /// nothing, it only left a request (a plugin's own answer can't claim that). Also set by a move
     /// that left everything where it was (`layout.arrange`, `layer.move`): no step to undo.
     request_only: bool,
+    /// What the commands run as steps of the transaction running now did ([`Session::shared_step`]):
+    /// the one account scripts, tasks and plugins decide their undo step from.
+    pub(crate) shared_steps: StepTally,
     /// Set by [`Session::run_leaving_downloads`]: `layer.addUrl` leaves what it would wait for
     /// to the front end ([`Session::request_url`]), as in the browser.
     leave_downloads: bool,
@@ -1423,6 +1445,7 @@ impl Session {
             #[cfg(test)]
             queue_gp_files: false,
             request_only: false,
+            shared_steps: StepTally::default(),
             leave_downloads: false,
             saved_secrets_opted_in: false,
             plugin_retries: Vec::new(),
@@ -2163,6 +2186,20 @@ impl Session {
         self.guarded_inner(label, true, false, f)
     }
 
+    /// Runs `run`, the command `spec`, as a step of the command running now, in its transaction
+    /// (a script's line, a task's step, a plugin's call): it takes no undo step of its own, and
+    /// what it did goes into [`Session::shared_steps`]. Whether it left a request or changed
+    /// nothing ([`Session::request_only`]) is its own, never the enclosing command's.
+    pub(crate) fn shared_step(&mut self, spec: &CommandSpec, run: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
+        let outer = std::mem::take(&mut self.request_only);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        let unchanged = std::mem::replace(&mut self.request_only, outer);
+        // A failed step counts too: in a shared transaction nothing undoes what it did part way.
+        self.shared_steps.requested |= unchanged;
+        self.shared_steps.edited |= spec.edits_in_a_step() && !unchanged;
+        res.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
     /// Commits the snapshot to history only for commands that own an Undo step. Nested guards
     /// leave memory eviction to the enclosing transaction, which can still fail or replace them.
     fn guarded_inner(
@@ -2195,6 +2232,8 @@ impl Session {
         // Edit counts roll back with the project when a command fails part way.
         let counts = mutates.then(|| self.edit_counts.clone());
         self.request_only = false;
+        // Its steps' account is its own: an enclosing command's comes back after it.
+        let outer_steps = std::mem::take(&mut self.shared_steps);
         self.quiet_failure = false;
         // Requests a failed command left for the front end go with its other changes.
         let requests = self.url_request_checkpoint();
@@ -2203,6 +2242,7 @@ impl Session {
         let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
+        self.shared_steps = outer_steps;
         self.depth = self.depth.saturating_sub(1);
         self.restorable = self.restorable.saturating_sub(u32::from(mutates));
         // A command that changed a streamed layer's features or fields (not by reading its
