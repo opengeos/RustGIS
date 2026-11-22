@@ -269,7 +269,8 @@ pub(crate) fn add_layer_from(
             if public {
                 cache::restrict_to_public(&list);
             }
-            let slot = crate::fetch_into(&list);
+            // (Recording one read from the internet: what it names is fetched only from there.)
+            let slot = crate::fetch_document_into(&list);
             let resolve = crate::TilesResolve {
                 params: p,
                 list: list.clone(),
@@ -737,6 +738,58 @@ mod tests {
             let asked = layer["offer"]["url"].as_str().unwrap();
             assert!(asked.starts_with(items), "{asked}");
             assert_eq!(cache::ceiling_for(asked) == Reach::Public, observed == Reach::Public, "observed {observed:?}");
+        }
+    }
+
+    /// An OGC API layer's tile set documents, read by the dialog, hold what they name to where
+    /// they were read from: under a listing from the local network, a tile set list read from the
+    /// internet has the tile set it leads to fetched only from there, and the layer's template too.
+    /// One read from the local network leaves both as they were.
+    #[test]
+    fn tile_set_documents_read_from_the_internet_hold_what_they_name() {
+        use rustgis_engine::render::rustgis_tiles::address::{Origin, Reach};
+        let root = "https://tileset-root.example/ogc";
+        let list = "https://tileset-list.example/collections/relief/map/tiles";
+        let tileset = "https://tileset-list.example/tiles/WebMercatorQuad";
+        let template = "https://tileset-tiles.example/relief/{tileMatrix}/{tileRow}/{tileCol}.png";
+        let collections = json!({"collections":[{"id":"relief","title":"Relief","links":[{"rel":"tilesets-map","href":list}]}]});
+        for observed in [Reach::Public, Reach::Local] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let body = if clean.starts_with(list) {
+                    json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","links":[{"rel":"self","href":tileset}]}]})
+                } else {
+                    json!({"links":[{"rel":"item","type":"image/png","href":template}]})
+                };
+                // The list is where the test says; a fetch connects no wider than its ceiling.
+                let reach = if clean.starts_with(list) { observed } else { Reach::Local };
+                let origin = Origin::with_observed_reach(&clean, reach.min(ceiling)).unwrap();
+                done(Ok(cache::Fetched { bytes: body.to_string().into_bytes(), origin }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            let text = collections.to_string();
+            let listing = app.session.run("service.layers", &json!({"url": root, "type": "ogcapi", "text": text})).unwrap();
+            let layer = listing["layers"].as_array().and_then(|l| l.iter().find(|l| l.get("tilesets").is_some())).unwrap().clone();
+            assert!(!from_public(&layer), "the listing is the user's own: {listing}");
+            let src = ServiceSource { url: root.into(), kind: "ogcapi", text, documents: Vec::new() };
+            add_layer_from(&mut app, &src, &layer, "", None, false, None, None).unwrap();
+            app.poll_service_steps();
+            app.poll_service_steps();
+            assert!(app.ui.service_steps.is_empty(), "both tile set documents were read");
+            {
+                let asked = asked.lock().unwrap();
+                assert_eq!(asked.len(), 2, "{asked:?}");
+                assert_eq!(asked[0].1, Reach::Local, "a document the user's listing names");
+                assert!(asked[1].0.starts_with(tileset), "{asked:?}");
+                assert_eq!(asked[1].1, observed, "the tile set, its list observed {observed:?}");
+            }
+            let added = app.session.map().tiles.last().map(|t| t.url.clone()).unwrap_or_default();
+            assert!(added.starts_with("https://tileset-tiles.example/relief/"), "{added} {:?}", app.dialogs.error);
+            assert_eq!(cache::ceiling_for(&added), observed, "the template, its list observed {observed:?}");
         }
     }
 

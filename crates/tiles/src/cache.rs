@@ -1758,6 +1758,12 @@ pub fn download_detailed_with_origin(url: &str, max: usize, done: DoneFetchedDet
     download_fetched_reaching(url, max, DOWNLOAD_TIMEOUT, &[], Reaching::Any, done);
 }
 
+/// Like [`download_within`], preserving the final post-redirect [`crate::address::Origin`] and
+/// observed network reach alongside the bytes.
+pub fn download_within_with_origin(url: &str, max: usize, timeout: std::time::Duration, done: FetchedDone) {
+    download_fetched_reaching(url, max, timeout, &[], Reaching::Any, Box::new(move |r| done(r.map_err(|f| f.message))));
+}
+
 /// Like [`download`], preserving the final post-redirect [`crate::address::Origin`] and observed
 /// network reach alongside the downloaded bytes.
 pub fn download_with_origin(url: &str, done: FetchedDone) {

@@ -140,6 +140,7 @@ mod zarrui;
 
 use rustgis_engine::cmd::service_added::Removal;
 use rustgis_engine::render::rustgis_tiles::failure::Failure;
+use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
@@ -674,7 +675,6 @@ pub(crate) fn fetch_document_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
 
 /// [`fetch_detailed_into`], its failure told as `told` gives it.
 fn fetch_document_as<E: Send + 'static>(url: &str, told: fn(Failure) -> E) -> Slot<Result<Vec<u8>, E>> {
-    use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
     let slot: Slot<Result<Vec<u8>, E>> = Slot::default();
     let land = slot.clone();
     let asked = url.to_string();
@@ -6451,12 +6451,11 @@ impl RustGisApp {
                                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
                                         != rustgis_engine::render::rustgis_tiles::logins::origin(&next);
                                     // A tile set document read from the internet leads only there.
-                                    use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
                                     if cache::ceiling_for(&resolve.doc) == Reach::Public {
                                         cache::restrict_to_public(&next);
                                     }
                                     resolve.doc = next;
-                                    resolve.slot = fetch_into(&resolve.doc);
+                                    resolve.slot = fetch_document_into(&resolve.doc);
                                 }
                                 Err(e) => {
                                     self.notice_service_query_loss(resolve.withheld_addresses);
@@ -6473,6 +6472,11 @@ impl RustGisApp {
                             rustgis_engine::render::rustgis_tiles::logins::inner(&resolve.fallback),
                         ),
                     };
+                    // After a tile set document read from the internet, the tiles come only from
+                    // there: the template it names, or the usual one in its place.
+                    if cache::ceiling_for(&resolve.doc) == Reach::Public {
+                        cache::restrict_to_public(&template);
+                    }
                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
                         != rustgis_engine::render::rustgis_tiles::logins::origin(&template);
                     self.notice_service_query_loss(resolve.withheld_addresses);
@@ -6513,7 +6517,6 @@ impl RustGisApp {
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
                         let mut p = json!({"url": get, "name": title, "coverage": true});
                         // Its service's document came from the internet: so does the coverage.
-                        use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
                         if cache::ceiling_for(&get) == Reach::Public {
                             p["fromDocument"] = json!(true);
                         }

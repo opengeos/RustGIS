@@ -319,7 +319,8 @@ fn read_documents_with(
                 rustgis_data::ogc::parse(&address, bytes)
             }
         };
-        // Another fetches what is supplied or read off the frame: the restriction goes with it.
+        // The app fetches a document that is supplied or read off the frame, so it is told the
+        // reach through the address's record.
         if ceiling == Reach::Public && (supplied.is_some() || left) && !rejected && !repeated {
             cache::restrict_to_public(&address);
         }
@@ -869,7 +870,9 @@ enum LeftStop {
 /// whose query was withheld, as that does. A document that can't be asked for now (too many being
 /// read) fails the command, as it does for the capabilities: it wasn't read, so it doesn't fall
 /// back to the standard tile address. Every fallback to that address is said. With `public` (the
-/// service's document was read from the internet), the app reads the documents from there only.
+/// service's document was read from the internet), the app reads the documents from there only;
+/// so it does after a document it read from there ([`cache::ceiling_for`] records it), and the
+/// template is then fetched from there too.
 fn left_template(
     s: &mut Session,
     source: &str,
@@ -878,18 +881,21 @@ fn left_template(
     withheld: &mut u32,
     public: bool,
 ) -> Result<LeftTemplate, String> {
-    let mut read = |doc: &str| {
+    let mut public = public;
+    let walked = walk_template(source, list, vector, withheld, |doc: &str| {
         if public {
             cache::restrict_to_public(doc);
         }
-        s.left_document(doc)
-    };
-    let read = |doc: &str| match read(doc) {
-        Err(e) => Err(LeftStop::Failed(e)),
-        Ok(None) => Err(LeftStop::Waiting(doc.to_string())),
-        Ok(Some(read)) => Ok(read),
-    };
-    match walk_template(source, list, vector, withheld, read) {
+        match s.left_document(doc) {
+            Err(e) => Err(LeftStop::Failed(e)),
+            Ok(None) => Err(LeftStop::Waiting(doc.to_string())),
+            Ok(Some(read)) => {
+                public |= read.is_ok() && cache::ceiling_for(doc) == Reach::Public;
+                Ok(read)
+            }
+        }
+    });
+    match walked {
         Ok(mut out) => {
             if let Some(text) = out.fallback.take() {
                 s.notify(text, false);
@@ -1319,11 +1325,12 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
     // An OGC API layer's tiles: the template its tileset advertises (given, or read now), else
     // the usual path.
     let advertised = match (&layer.tilesets, ps(p, "tiles")) {
+        // The app read it, and recorded a template from a document on the internet as such.
         (Some(list), Some(t)) => AdvertisedTemplate {
             template: Some(checked_template(source, t)?),
             crossed_origin: crosses_origin(source, list) || crosses_origin(list, t),
             fallback: None,
-            public: false,
+            public: cache::ceiling_for(t) == Reach::Public,
         },
         (Some(list), None) if leaving => {
             match left_template(s, source, list, matches!(layer.offer, Offer::VectorTiles { .. }), withheld, public)? {
@@ -1843,6 +1850,60 @@ mod tests {
         let (t, said) = read(template("https://x.org/paint/{tileMatrix}/{tileCol}/{tileRow}.png"), &nothing_more);
         assert_eq!(t.as_deref(), Some("https://x.org/paint/{z}/{x}/{y}.png"));
         assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// A plugin's `service.add` reads its documents off the frame: one read from the internet,
+    /// as the read observed it, has what it links to read only from there, the documents its
+    /// listing names and the tile set documents and template of a layer alike. One read from the
+    /// local network leaves them as they were.
+    #[test]
+    fn documents_read_off_the_frame_hold_what_they_link_to() {
+        use crate::render::rustgis_tiles::address::Origin;
+        for observed in [Reach::Public, Reach::Local] {
+            let host = if observed == Reach::Public { "left-public" } else { "left-local" };
+            // What the read gives the command, run again, as the app's fetch observed it.
+            let land = |s: &mut Session, url: &str, body: Value| {
+                let origin = Origin::with_observed_reach(url, observed).unwrap();
+                let read = crate::cmd::plugins::fetch::document_read(
+                    url,
+                    Ok(cache::Fetched { bytes: serde_json::to_vec(&body).unwrap(), origin }),
+                );
+                let asked = s.asked_for(&json!({"url": url, "document": true}));
+                let mut added = crate::cmd::plugins::fetch::Added::default();
+                added.document = Some(read.unwrap().into());
+                s.rerun_landed.push((asked, Ok(json!({})), added));
+            };
+            let root = format!("https://{host}.example/ogc");
+            let caps = rustgis_data::ogc::capabilities_url(&root, Some("ogcapi"));
+            let next = format!("https://{host}-links.example/collections");
+            let mut s = Session::new(crate::Project::default());
+            s.call_requests = Some(Vec::new());
+            land(&mut s, &caps, json!({"links":[{"rel":"data","type":"application/json","href":next}]}));
+            let found = read_documents(&mut s, &json!({"url": root, "type": "ogcapi"}), true, None).unwrap();
+            assert_eq!(found.next.as_deref(), Some(next.as_str()));
+            assert_eq!(cache::ceiling_for(&next), observed, "the linked document, its landing page observed {observed:?}");
+
+            let (source, list) = (format!("https://{host}-api.example/collections"), format!("https://{host}-api.example/relief/tiles"));
+            let tileset = format!("https://{host}-api.example/relief/tiles/WebMercatorQuad");
+            let mut s = Session::new(crate::Project::default());
+            s.call_requests = Some(Vec::new());
+            land(&mut s, &list, json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","links":[{"rel":"self","href":tileset}]}]}));
+            let LeftTemplate::Waiting(next) = left_template(&mut s, &source, &list, false, &mut 0, false).unwrap() else {
+                panic!("it waits for the tile set");
+            };
+            assert!(next.starts_with(&tileset), "{next}");
+            assert_eq!(cache::ceiling_for(&next), observed, "the tile set, its list observed {observed:?}");
+            land(
+                &mut s,
+                &next,
+                json!({"links":[{"rel":"item","type":"image/png","href":format!("https://{host}-tiles.example/{{tileMatrix}}/{{tileCol}}/{{tileRow}}.png")}]}),
+            );
+            let LeftTemplate::Read(out) = left_template(&mut s, &source, &list, false, &mut 0, false).unwrap() else {
+                panic!("the template was read");
+            };
+            assert!(out.template.is_some_and(|t| t.starts_with(&format!("https://{host}-tiles.example/"))));
+            assert_eq!(out.public, observed == Reach::Public, "the template, observed {observed:?}");
+        }
     }
 
     /// A tile list that can't be asked for, with as many documents being read as can be, fails
