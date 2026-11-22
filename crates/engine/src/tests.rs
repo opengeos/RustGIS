@@ -15586,6 +15586,10 @@ fn terrain_block_cut_to_polygons() {
             [[10.005, 45.005], [10.015, 45.005], [10.015, 45.015], [10.005, 45.015], [10.005, 45.005]],
             [[10.008, 45.008], [10.012, 45.008], [10.012, 45.012], [10.008, 45.012], [10.008, 45.008]],
         ]}},
+        {"type": "Feature", "properties": {"nome": "e"}, "geometry": {"type": "Polygon", "coordinates": [
+            [[10.005, 45.005], [10.015, 45.005], [10.015, 45.015], [10.005, 45.015], [10.005, 45.005]],
+            [[10.018, 45.008], [10.019, 45.008], [10.019, 45.009], [10.018, 45.009], [10.018, 45.008]],
+        ]}},
     ]});
     let data = base64::engine::general_purpose::STANDARD.encode(areas.to_string().as_bytes());
     s.run("layer.addDataBytes", &json!({"fileName": "areas.geojson", "data": data})).unwrap();
@@ -15633,6 +15637,11 @@ fn terrain_block_cut_to_polygons() {
     let mut opened = Session::new(Project::default());
     crate::cmd::project::reset_to(&mut opened, holed.project.clone());
     assert!(!holed.notices.iter().chain(&opened.notices).any(|n| n.text.contains("hole")), "{:?}", opened.notices);
+    // A hole lying outside its own outer ring cuts nothing: left out, and said.
+    let v = holed.run("map.terrain", &json!({"layer": dem, "block": {"shape": {"layer": "bacias", "where": "nome = 'e'"}}})).unwrap();
+    assert_eq!((&v["block"]["outline"]["holes"], &v["block"]["outline"]["stray"]), (&json!(0), &json!(1)));
+    let stray = "1 hole(s) of 'bacias' lying outside their own polygon's outer ring were left out";
+    assert!(holed.notices.iter().any(|n| n.text.contains(stray)), "{:?}", holed.notices);
     // A saved block cut to a polygon off the DEM is kept as the project opens, and said.
     let mut far = s.project.clone();
     if let Some(b) = far.maps[0].view.terrain.as_mut().and_then(|t| t.block.as_mut()) {

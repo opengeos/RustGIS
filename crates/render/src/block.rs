@@ -369,7 +369,8 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
     // A hole wholly inside the triangle is cut from its polygon's part round it, joined to it
     // by a seam there and back from the part's nearest corner: the hole runs the other way, so
     // filled by winding it stays empty, and the seam's two edges, on no side, give no wall. A
-    // hole in no part of its polygon (one lying outside its own outer ring) cuts nothing.
+    // hole in no part of its polygon cuts nothing (one outside its own outer ring was already
+    // left out, [`Outline::from_polygons`]).
     for (ring, hole) in wells {
         let polygon = o.kind(ring).0;
         let Some(h) = hole.first().copied() else { continue };
@@ -1321,7 +1322,9 @@ pub(crate) fn draw_walls(
     // cover it and it shows only down the well. A hole with no stretch under the ground drawn
     // isn't in the picture: no floor.
     for sides in b.outline.iter().flat_map(|o| o.hole_sides()) {
-        let Some(depth) = edges.iter().filter(|e| sides.contains(&usize::from(e.side))).map(|e| e.depth).min_by(f64::total_cmp) else {
+        // Each side's stretches by binary search ([`of_side`]), not a scan of all of them.
+        let depth = sides.clone().filter_map(|s| u16::try_from(s).ok()).flat_map(|s| of_side(s).iter().map(|e| e.depth));
+        let Some(depth) = depth.min_by(f64::total_cmp) else {
             continue;
         };
         let mut floor = PathBuilder::new();
@@ -1732,6 +1735,13 @@ mod tests {
         let flat = ring(&[(20.0, 0.0), (30.0, 0.0), (25.0, 0.0)]);
         let alone = Outline::from_polygons(vec![vec![square.clone()], vec![flat, hole.clone()]]).expect("an outline");
         assert_eq!((alone.side_count(), alone.holes(), alone.dropped()), (4, 0, 0));
+        // One lying outside its own outer ring cuts nothing and makes no ground: left out, counted.
+        let stray = ring(&[(20.0, 20.0), (22.0, 20.0), (22.0, 22.0), (20.0, 22.0)]);
+        let o = Outline::from_polygons(vec![vec![square.clone(), stray]]).expect("an outline");
+        assert_eq!((o.side_count(), o.holes(), o.stray()), (4, 0, 1));
+        let [x0, y0, x1, y1] = o.extent();
+        let b = Block { x0, y0, x1, y1, outline: Some(Arc::new(o)), ..unit_block() };
+        assert!(pieces([Coord::new(19.0, 20.5), Coord::new(21.0, 20.5), Coord::new(19.0, 21.5)], &b).is_empty());
         let o = Outline::from_polygons(vec![vec![square, hole]]).expect("an outline");
         assert_eq!((o.side_count(), o.holes()), (8, 1));
         assert!(o.contains(Coord::new(2.0, 2.0)) && !o.contains(Coord::new(5.0, 5.0)));

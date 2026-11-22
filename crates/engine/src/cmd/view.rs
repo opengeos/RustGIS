@@ -458,24 +458,26 @@ fn block_polygons(s: &Session, o: &serde_json::Map<String, Value>) -> Result<rus
 
 /// What simplifying a polygon block's outline lost: rings narrower than the spacing, and corners
 /// past a third of the finest mesh cell or its smallest rings, to stay under 65 535 sides (said
-/// when it is set and when a project opens).
+/// when it is set and when a project opens), and holes left out as they lay outside their own
+/// polygon.
 pub(crate) fn outline_simplified(layer: &str, o: &rustgis_render::terrain::Outline) -> Option<String> {
     let (spacing, coarsened) = o.spacing();
     // Rings narrower than the spacing, with no area left once thinned (#2318).
     let narrow =
         (o.narrow() > 0).then(|| format!("{} ring(s) of '{layer}' narrower than {spacing:.0} m were left out of the block", o.narrow()));
-    let left = match o.dropped() {
-        0 if !coarsened => return narrow,
-        0 => String::new(),
-        n => format!(", and its {n} smallest ring(s) were left out"),
+    let stray = (o.stray() > 0)
+        .then(|| format!("{} hole(s) of '{layer}' lying outside their own polygon's outer ring were left out (not cut)", o.stray()));
+    let merged = match o.dropped() {
+        0 if !coarsened => None,
+        n => {
+            let left = if n == 0 { String::new() } else { format!(", and its {n} smallest ring(s) were left out") };
+            Some(format!(
+                "the outline of '{layer}' the block is cut to has too many corners: corners up to {spacing:.0} m apart were merged (less in smaller rings){left}, to stay under 65535 sides"
+            ))
+        }
     };
-    let said = format!(
-        "the outline of '{layer}' the block is cut to has too many corners: corners up to {spacing:.0} m apart were merged (less in smaller rings){left}, to stay under 65535 sides"
-    );
-    Some(match narrow {
-        Some(n) => format!("{said}; {n}"),
-        None => said,
-    })
+    let said: Vec<String> = [merged, narrow, stray].into_iter().flatten().collect();
+    (!said.is_empty()).then(|| said.join("; "))
 }
 
 /// The name of the polygon layer `name` for `what` (water, a block's walls), checked: a polygon
@@ -746,7 +748,7 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
     // A polygon block's outline as drawn: its sides and how near its corners were let lie.
     if let Some((_, o)) = &outline {
         let (spacing, coarsened) = o.spacing();
-        out["block"]["outline"] = json!({"sides": o.side_count(), "spacing": spacing, "coarsened": coarsened, "dropped": o.dropped(), "holes": o.holes(), "narrow": o.narrow()});
+        out["block"]["outline"] = json!({"sides": o.side_count(), "spacing": spacing, "coarsened": coarsened, "dropped": o.dropped(), "holes": o.holes(), "stray": o.stray(), "narrow": o.narrow()});
     }
     if matches!(t.source, TerrainSource::Layer(_)) && t.block.is_some() && dem_box.is_none() {
         out["block"]["pendingDem"] = json!(true);

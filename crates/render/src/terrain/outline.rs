@@ -50,6 +50,8 @@ pub struct Outline {
     dropped: usize,
     /// How many holes the outline keeps, each cut as a well.
     holes: usize,
+    /// How many holes lay outside their own polygon's outer ring: left out, as they cut nothing.
+    stray: usize,
     /// How many rings with an area had none left once thinned (narrower than the spacing).
     narrow: usize,
 }
@@ -117,12 +119,22 @@ impl Outline {
     pub(crate) fn from_polygons(polygons: Vec<Vec<Vec<Coord>>>) -> Option<Outline> {
         // Only rings with an area count: one without gives no ground and sets no spacing. Each
         // keeps its polygon's number and whether it is a hole; a polygon whose outer ring has no
-        // area gives no holes either.
+        // area gives no holes either. A hole outside its outer ring (an invalid polygon) would
+        // close on its own as ground ([`crate::block`]'s cut follows a polygon's rings): left out
+        // and counted.
         let (mut rings, mut kinds): (Vec<Vec<Coord>>, Vec<(u32, bool)>) = (Vec::new(), Vec::new());
+        let mut stray = 0;
         for (p, polygon) in polygons.into_iter().enumerate() {
+            let mut outer = 0;
             for (i, r) in polygon.into_iter().enumerate() {
                 let r: Vec<Coord> = r.into_iter().filter(|c| c.x.is_finite() && c.y.is_finite()).collect();
                 if r.len() >= 3 && area2(&r).abs() > 0.0 && area2(&r).is_finite() {
+                    if i == 0 {
+                        outer = rings.len();
+                    } else if !r.first().is_some_and(|c| within(&rings[outer], *c)) {
+                        stray += 1;
+                        continue;
+                    }
                     rings.push(r);
                     kinds.push((p as u32, i > 0));
                 } else if i == 0 {
@@ -159,7 +171,7 @@ impl Outline {
         // A hole whose outer ring was left out goes with it: alone it would cut ground no ring
         // holds. Counted with the ring: narrow here, past the sides below.
         let orphans = |t: &mut Vec<(usize, Vec<Coord>)>| {
-            let outers: Vec<u32> = t.iter().filter(|(i, _)| !kinds[*i].1).map(|(i, _)| kinds[*i].0).collect();
+            let outers: std::collections::HashSet<u32> = t.iter().filter(|(i, _)| !kinds[*i].1).map(|(i, _)| kinds[*i].0).collect();
             t.retain(|(i, _)| !kinds[*i].1 || outers.contains(&kinds[*i].0));
         };
         orphans(&mut thinned);
@@ -219,6 +231,7 @@ impl Outline {
             sides,
             rings: starts,
             holes: kept.iter().filter(|k| k.1).count(),
+            stray,
             kinds: kept,
             extent: [x0, y0, x1, y1],
             rows,
@@ -249,6 +262,11 @@ impl Outline {
     /// How many holes the outline keeps, each cut as a well with its own walls.
     pub fn holes(&self) -> usize {
         self.holes
+    }
+
+    /// How many holes lay outside their own polygon's outer ring (an invalid polygon): left out.
+    pub fn stray(&self) -> usize {
+        self.stray
     }
 
     /// Ring `r`'s polygon and whether it is a hole.
@@ -367,6 +385,17 @@ fn thin(ring: &[Coord], gap: f64) -> Option<Vec<Coord>> {
         out.reverse();
     }
     Some(out)
+}
+
+/// Whether `p` lies inside `ring`, even-odd.
+fn within(ring: &[Coord], p: Coord) -> bool {
+    let mut inside = false;
+    for (a, z) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        if (a.y > p.y) != (z.y > p.y) && p.x < a.x + (p.y - a.y) / (z.y - a.y) * (z.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// Twice the signed area of `ring` (positive anticlockwise).
