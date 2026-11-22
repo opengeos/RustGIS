@@ -3,7 +3,7 @@
 A review point may wait for the release quality pass when the reply to it ends with
 `<!-- quality-sweep -->`, but only a quality point may (AGENTS.md, "Review comments"). The Claude
 review (claude-code-review.yml, posting as github-actions) ends each inline finding with its
-category, `<!-- review-category: bug -->` and so on, so the reviewer classifies a finding and the
+category, a last line `Category: bug` and so on, so the reviewer classifies a finding and the
 author doesn't. This check refuses a deferral reply in a thread that the reviewer opened with a
 `bug`, `security` or `agents-md` finding, or whose opening comment someone else has since edited.
 
@@ -11,7 +11,8 @@ Threads opened by anyone else (CodeRabbit, people) or by a review from before ca
 category and are let through: a reviewer there can answer the reply. They are listed in a notice.
 
 A maintainer overrides the check for a finding, misclassified or accepted as it is, by replying in
-its thread with `<!-- deferral-approved -->`. The pull request's author may be that maintainer: the
+its thread with `<!-- deferral-approved -->`. A maintainer here is the repository's owner, a member
+of its organization or a collaborator, as GitHub labels the reply. The author may be that maintainer: the
 override is a deliberate, recorded decision, not a second opinion.
 
 CI runs this on each push and again in the merge queue, which sees replies posted after the last
@@ -25,9 +26,11 @@ import re
 import subprocess
 import sys
 
-DEFER = "<!-- quality-sweep -->"
+# The marker ends the reply; only other hidden comments (a tool's own bookkeeping) may follow it.
+DEFER = re.compile(r"<!-- quality-sweep -->(?:\s|<!--.*?-->)*\Z", re.S)
 APPROVE = "<!-- deferral-approved -->"
-CATEGORY = re.compile(r"<!--\s*review-category:\s*([a-z-]+)\s*-->")
+# Visible text on a line of its own: the review's inline-comment tool strips hidden comments.
+CATEGORY = re.compile(r"^Category:[ \t]*([a-z-]+)[ \t]*$", re.M)
 MUST_FIX = {"bug", "security", "agents-md"}
 REVIEWER = "github-actions"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -97,7 +100,7 @@ def check(threads):
         if not comments:
             continue
         opening, replies = comments[0], comments[1:]
-        deferral = next((r for r in replies if DEFER in (r.get("body") or "")), None)
+        deferral = next((r for r in replies if DEFER.search(r.get("body") or "")), None)
         if deferral is None:
             continue
         where = f"{thread.get('path')}:{thread.get('line') or thread.get('originalLine') or '?'}"

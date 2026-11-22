@@ -30,7 +30,7 @@ def thread(*comments, path="crates/data/src/dbf.rs"):
 
 
 def finding(text, kind=None, editor=None):
-    marker = f"\n\n<!-- review-category: {kind} -->" if kind else ""
+    marker = f"\n\nCategory: {kind}" if kind else ""
     return comment(REVIEWER, text + marker, editor=editor)
 
 
@@ -61,7 +61,7 @@ class ReviewDeferrals(unittest.TestCase):
         self.assertEqual(self.check(thread(finding(BUG, "bug"), answer)), ([], []))
 
     def test_a_grouped_comment_takes_its_most_serious_category(self):
-        both = finding(BUG + "\n<!-- review-category: quality -->", "agents-md")
+        both = finding(BUG + "\nCategory: quality", "agents-md")
         refused, _ = self.check(thread(both, DEFER))
         self.assertIn("classed it as agents-md", refused[0])
 
@@ -85,6 +85,16 @@ class ReviewDeferrals(unittest.TestCase):
         refused, unclassified = self.check(rabbit, person, old_review)
         self.assertEqual(refused, [])
         self.assertEqual(len(unclassified), 3)
+
+    def test_the_marker_ends_the_reply_apart_from_other_hidden_comments(self):
+        mention = reply("No <!-- quality-sweep --> here; fixed in this push.")
+        tracked = reply("Left for the release quality pass. <!-- quality-sweep -->\n<!-- followup:inline:42 -->\n")
+        self.assertEqual(self.check(thread(finding(BUG, "bug"), mention)), ([], []))
+        self.assertEqual(len(self.check(thread(finding(BUG, "bug"), tracked))[0]), 1)
+
+    def test_a_category_is_a_line_of_its_own(self):
+        prose = finding("The Category: bug label in the legend is cut short.\n\nCategory: quality")
+        self.assertEqual(self.check(thread(prose, DEFER)), ([], []))
 
     def test_a_marker_in_the_opening_comment_is_not_a_deferral(self):
         self.assertEqual(self.check(thread(finding(BUG + " <!-- quality-sweep -->", "bug"))), ([], []))

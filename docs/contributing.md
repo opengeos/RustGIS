@@ -39,12 +39,13 @@ the input that triggers it is rare, the fix needs a wider change or earlier code
 defect too large for the pull request gets an issue, filed and linked from the reply, instead of
 the marker.
 
-The Claude review gives each inline comment a hidden category (bug, security, performance,
-quality or AGENTS.md). CI's **Review deferrals** check, which runs on each push and again in the
+The Claude review ends each inline comment with its category (`Category: bug`, security,
+performance, quality or agents-md). CI's **Review deferrals** check, which runs on each push and again in the
 merge queue, fails when a reply leaves a bug, security or AGENTS.md finding for the release quality
 pass. A maintainer can override it for one finding, because the review misclassified it or because
 it can wait all the same, by replying in its thread with `<!-- deferral-approved -->` and running
-the check again. The pull request's author may be that maintainer. Comments from
+the check again. A maintainer here is the repository's owner, a member of its organization or a
+collaborator, and the pull request's author may be that maintainer. Comments from
 other reviewers carry no category, so the check lets them through: those reviewers answer the
 reply themselves.
 
