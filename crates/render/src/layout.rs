@@ -2321,7 +2321,12 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let number = |total: f64, divs: usize, k: isize| bar_number(total * k as f64 / divs as f64, total / divs as f64, decimals, comma);
     // Left of zero the first label is a negative one, centred on the bar's end: the bar starts far
     // enough in for it.
-    let pad_of = |f: &BarFit| if before > 0 { (half(&number(f.total, before + f.after, -(before as isize))) - 2.0).max(0.0) } else { 0.0 };
+    // It takes at most half the bar's room, as a unit after the bar does: a wider one reaches left
+    // of the box rather than leave the bar a sliver.
+    let most_pad = ((r.width() * BAR_SHARE as f32 - beside) * 0.5).max(0.0);
+    let pad_of = |f: &BarFit| {
+        if before > 0 { (half(&number(f.total, before + f.after, -(before as isize))) - 2.0).clamp(0.0, most_pad) } else { 0.0 }
+    };
     // The bar in what's left of its room once `taken` pixels of the box are its labels'.
     let fitted = |taken: f32| {
         let taken_pt = f64::from(taken) / ppp;
