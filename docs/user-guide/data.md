@@ -767,8 +767,11 @@ as a form with what ArcGIS Pro's own dialog asks for:
 - **Name** (`Geodatabase on <server>` when left blank) and **Group**.
 
 **Enter an address instead** swaps the form for the `mssql://…` address box, and **Use the form
-instead** swaps back; a saved SQL Server connection opens in the form with its address taken
-apart.
+instead** swaps back, with the address taken apart into the form: a saved SQL Server connection
+opens in the address box, and **Use the form instead** shows it in the form. The address's other
+options (`encrypt=strict`, `ca=…`) stay in it and show in the form's **Options** row. An address
+with a password in it stays in the address box, which says why. **Database user** with no user
+can't be saved: no user is Windows sign-in.
 
 **From .sde file…** fills the form from a connection file saved by ArcGIS Pro, through
 `connection.readSde` below, and names the connection after the file unless a name was typed.
@@ -787,9 +790,8 @@ rustgis-cli run --cmd 'connection.readSde={"path":"utility.sde"}'
 ```
 
 A saved connection's **Test** result names the geodatabase's release ("Enterprise geodatabase
-11.3.0, 40 tables with geometry"). When the account can't
-read the geodatabase's catalog, the result says why, and the database browses as plain SQL
-Server, with a note.
+11.3.0, 40 tables with geometry"). When the account can't read the geodatabase's catalog, the
+result says why, and the database browses as plain SQL Server, with a note.
 
 The connection's tree shows what ArcGIS Pro shows, and none of the geodatabase's machinery:
 
@@ -823,9 +825,10 @@ column (`Mains:SHAPE`).
 `info.databaseTables` lists a geodatabase's tables as `items`: each has `item` (`featureClass`,
 `table` or `other`), `dataset`, `alias`, `versioning` (`none`, `traditional` or `branch`) and
 `display`, the name the tree shows, and a feature class's `geometry` (`points`, `lines` or
-`polygons`, from its definition, else `null`); an `other` table, which the geodatabase doesn't register, has
-`dataset`, `alias` and `versioning` as `null` and its name with its schema as `display`. A database
-with 10,000 spatial columns or more has only the first 10,000 read, and the listing says so. `connection.browse` lists the tree level by level.
+`polygons`, from its definition, else `null`); an `other` table, which the geodatabase doesn't
+register, has `dataset`, `alias` and `versioning` as `null` and its name with its schema as
+`display`. A database with 10,000 spatial columns or more has only the first 10,000 read, and the
+listing says so. `connection.browse` lists the tree level by level.
 
 **Versions.** A feature class shows the current rows of the **Default** version. When a `.sde`
 file names any other version, `connection.readSde` says so in a notice naming it: the layers

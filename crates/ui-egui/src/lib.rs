@@ -4292,8 +4292,9 @@ impl RustGisApp {
                 // form, which stays open to enter the connection by hand.
                 if p.get("form").and_then(Value::as_bool) == Some(true) && self.ui.connection.kind == "sqlserver" {
                     let text = |key: &str| p.get(key).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
-                    connectionui::use_form(&mut self.ui.connection, text("server"), text("database"));
-                    if let Some(file) = text("sdeFile")
+                    if let Err(e) = connectionui::use_form(&mut self.ui.connection, text("server"), text("database")) {
+                        self.dialogs.error = Some(e);
+                    } else if let Some(file) = text("sdeFile")
                         && let Err(e) = connectionui::fill_from_sde(self, file)
                     {
                         self.dialogs.error = Some(e);

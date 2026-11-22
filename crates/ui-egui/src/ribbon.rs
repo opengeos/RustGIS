@@ -530,7 +530,7 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
                         menu_item(ui, app, "", label, "ui.connection", json!({"kind": kind}));
                         // An Esri enterprise geodatabase is a SQL Server connection, entered as
                         // ArcGIS Pro asks for it or from its .sde file.
-                        if kind == "sqlserver" && !cfg!(target_arch = "wasm32") {
+                        if kind == "sqlserver" {
                             let form = json!({"kind": "sqlserver", "form": true});
                             menu_item(ui, app, "", "Enterprise Geodatabase…", "ui.connection", form);
                         }

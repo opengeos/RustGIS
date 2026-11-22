@@ -75,6 +75,9 @@ pub struct State {
     pub trust_cert: bool,
     /// The Name was typed: a `.sde` file read afterwards leaves it as it is.
     pub typed_name: bool,
+    /// The address's options the form has no field for (`encrypt=strict&ca=…`), as written:
+    /// shown in the form's Options row and kept in the address it makes.
+    pub form_options: String,
 }
 
 pub enum TestAnswer {
@@ -376,6 +379,10 @@ pub(crate) struct Mssql {
     pub database: String,
     /// `trust-server-certificate=true` (or `yes`) is in the address.
     pub trust_cert: bool,
+    /// The address has a password in it (`user:password@`), which the form doesn't show.
+    pub password: bool,
+    /// The query's other options, as written and in order (`encrypt=strict&ca=…`).
+    pub options: String,
 }
 
 /// The server, user, database and certificate choice of an
@@ -385,21 +392,26 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     let rest = address.trim().strip_prefix("mssql://")?;
     let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
-    let (user, hostport) = match authority.rsplit_once('@') {
-        Some((userinfo, hostport)) => (Some(percent_decode(userinfo.split(':').next().unwrap_or(""))), hostport),
-        None => (None, authority),
+    let (user, password, hostport) = match authority.rsplit_once('@') {
+        Some((userinfo, hostport)) => {
+            let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+            (Some(percent_decode(user)), !password.is_empty(), hostport)
+        }
+        None => (None, false, authority),
     };
     let (host, port) = match hostport.rsplit_once(':') {
         Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, Some(port)),
         _ => (hostport, None),
     };
-    let param = |name: &str| {
-        query
-            .split('&')
-            .filter_map(|kv| kv.split_once('='))
-            .find(|(k, _)| k.to_ascii_lowercase().replace('_', "-") == name)
-            .map(|(_, v)| percent_decode(v))
-    };
+    let key = |kv: &str| kv.split('=').next().unwrap_or("").to_ascii_lowercase().replace('_', "-");
+    let param =
+        |name: &str| query.split('&').filter_map(|kv| kv.split_once('=')).find(|(k, _)| key(k) == name).map(|(_, v)| percent_decode(v));
+    // What the form has fields for; everything else is kept as written.
+    let options = query
+        .split('&')
+        .filter(|kv| !kv.is_empty() && !matches!(key(kv).as_str(), "instance" | "trust-server-certificate" | "trustservercertificate"))
+        .collect::<Vec<_>>()
+        .join("&");
     let instance = param("instance").filter(|v| !v.is_empty());
     let trust_cert = param("trust-server-certificate")
         .or_else(|| param("trustservercertificate"))
@@ -413,7 +425,7 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
         server.push(',');
         server.push_str(port);
     }
-    Some(Mssql { server, user: user.filter(|u| !u.is_empty()), database: percent_decode(database), trust_cert })
+    Some(Mssql { server, user: user.filter(|u| !u.is_empty()), database: percent_decode(database), trust_cert, password, options })
 }
 
 /// The address the geodatabase form makes, or why it can't.
@@ -423,6 +435,10 @@ fn form_address(st: &State) -> Result<String, String> {
         return Err(tl!("Type the server").into());
     }
     let windows = st.sign_in == "windows";
+    // No user is Windows sign-in to the engine: a database user must be named.
+    if !windows && st.user.trim().is_empty() {
+        return Err(tl!("Type the user name, or choose Windows sign-in").into());
+    }
     let address = mssql_address(&SdeConnection {
         platform: "sqlserver".into(),
         server: st.server.clone(),
@@ -432,12 +448,15 @@ fn form_address(st: &State) -> Result<String, String> {
         version: None,
     })
     .map_err(|e| e.to_string())?;
-    Ok(if st.trust_cert {
-        let joiner = if address.contains('?') { '&' } else { '?' };
-        format!("{address}{joiner}trust-server-certificate=true")
-    } else {
-        address
-    })
+    let mut address = address;
+    let options = st.form_options.trim().trim_matches(|c| c == '&' || c == '?');
+    for option in [options, if st.trust_cert { "trust-server-certificate=true" } else { "" }] {
+        if !option.is_empty() {
+            address.push(if address.contains('?') { '&' } else { '?' });
+            address.push_str(option);
+        }
+    }
+    Ok(address)
 }
 
 /// Why the geodatabase form can't make an address (`None` outside the form, or when it can).
@@ -445,21 +464,27 @@ fn form_error(st: &State) -> Option<String> {
     if st.form { form_address(st).err() } else { None }
 }
 
-/// Switches `st` to the geodatabase form, with these filled in. A form with no server yet is
-/// filled from the connection's address, so a saved connection is edited in the form as it is.
-pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&str>) {
-    st.form = true;
-    if st.sign_in.is_empty() {
-        st.sign_in = "sql".into();
-    }
-    if st.server.trim().is_empty()
-        && let Some(m) = parse_mssql(&st.address)
-    {
+/// Switches `st` to the geodatabase form, filled from the address box's `mssql://` address
+/// (with its other options kept in the Options row), then with these. An address with a
+/// password in it stays in the address box, and why is the error.
+pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&str>) -> Result<(), String> {
+    if let Some(m) = parse_mssql(&st.address) {
+        if m.password {
+            return Err(tl!(
+                "This address has a password in it, which the form doesn't show: take it out of the address and type it in the Password box, or keep using the address."
+            )
+            .into());
+        }
         st.sign_in = if m.user.is_some() { "sql" } else { "windows" }.into();
         st.user = m.user.unwrap_or_default();
         st.server = m.server;
         st.database = m.database;
         st.trust_cert = m.trust_cert;
+        st.form_options = m.options;
+    }
+    st.form = true;
+    if st.sign_in.is_empty() {
+        st.sign_in = "sql".into();
     }
     if let Some(server) = server {
         st.server = server.to_owned();
@@ -467,25 +492,29 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
     if let Some(database) = database {
         st.database = database.to_owned();
     }
+    Ok(())
 }
 
 /// "Enter an address instead" / "Use the form instead": what the form composed goes into the
-/// address box, and the form keeps what it had.
-fn swap_form(st: &mut State) {
+/// address box, and the address box's address fills the form. A form with a server typed that
+/// can't make an address stays, and why is the error; so does an address the form can't show.
+/// A form with no server has nothing to lose: the address box is left as it was.
+fn swap_form(st: &mut State) -> Result<(), String> {
     if st.form {
-        if let Ok(address) = form_address(st) {
-            st.address = address;
+        if !st.server.trim().is_empty() {
+            st.address = form_address(st)?;
         }
         st.form = false;
+        Ok(())
     } else {
-        use_form(st, None, None);
+        use_form(st, None, None)
     }
 }
 
 /// The geodatabase form's rows in the dialog's grid: platform, server, how to sign in, the user
 /// and password (for a database user), database, the certificate choice, name and group. True
 /// when edited.
-fn geodatabase_rows(ui: &mut egui::Ui, st: &mut State) -> bool {
+fn form_rows(ui: &mut egui::Ui, st: &mut State) -> bool {
     let mut changed = false;
     if st.sign_in.is_empty() {
         st.sign_in = "sql".into();
@@ -550,6 +579,16 @@ fn geodatabase_rows(ui: &mut egui::Ui, st: &mut State) -> bool {
         ))
         .changed();
     ui.end_row();
+    // The address's options the form has no field for, shown so none is kept out of sight.
+    if !st.form_options.is_empty() {
+        let input_label = ui.label(tl!("Options"));
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut st.form_options).desired_width(360.0))
+            .labelled_by(input_label.id)
+            .on_hover_text(tl!("The address's other options, as written, such as encrypt=strict or ca=…: they stay in the address."))
+            .changed();
+        ui.end_row();
+    }
     let input_label = ui.label(tl!("Name"));
     let default = i18n::fmt("Geodatabase on {server}", &[("server", st.server.trim())]);
     let edited =
@@ -1467,7 +1506,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     ui.add_enabled_ui(!generating, |ui| {
     egui::Grid::new("connection").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         if form_mode {
-            changed |= geodatabase_rows(ui, st);
+            changed |= form_rows(ui, st);
             return;
         }
         ui.label(tl!("Type"));
@@ -1807,7 +1846,13 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         }
     }
     if toggle_form {
-        swap_form(&mut app.ui.connection);
+        match swap_form(&mut app.ui.connection) {
+            Ok(()) => app.dialogs.error = None,
+            Err(e) => {
+                app.dialogs.info = None;
+                app.dialogs.error = Some(e);
+            }
+        }
     }
     if from_sde
         && let Some(path) = crate::dialogs::pick_open(&["sde"], tl!("ArcGIS Pro connection file"))
@@ -2173,6 +2218,12 @@ mod tests {
         st.server = "  ".into();
         assert!(form_error(&st).is_some());
         assert!(form_error(&gdb_form("sql")).is_none());
+        // Database user with no user: no user is Windows sign-in, so it is refused, not composed.
+        let no_user = State { user: "  ".into(), ..gdb_form("sql") };
+        assert_eq!(form_error(&no_user).as_deref(), Some("Type the user name, or choose Windows sign-in"));
+        assert_eq!(definition(&no_user)["address"], "");
+        let windows = State { user: String::new(), ..gdb_form("windows") };
+        assert!(form_error(&windows).is_none());
         // Address mode is never checked against the form.
         st.form = false;
         assert!(form_error(&st).is_none());
@@ -2315,29 +2366,71 @@ mod tests {
     #[test]
     fn the_geodatabase_form_and_the_address_swap_without_losing_what_was_typed() {
         let mut st = State { address: "mssql://old@elsewhere/db".into(), ..gdb_form("sql") };
-        swap_form(&mut st);
+        swap_form(&mut st).unwrap();
         assert!(!st.form);
         assert_eq!(definition(&st)["address"], "mssql://sde@gis-db/utility?instance=GIS");
-        // A form that can't make an address leaves the address as it was.
-        st.form = true;
-        st.server = "bad host!".into();
-        swap_form(&mut st);
-        assert_eq!(st.address, "mssql://sde@gis-db/utility?instance=GIS");
-        // Back to the form: its fields are as they were.
-        swap_form(&mut st);
+        // Back to the form: the address fills it as it was typed.
+        swap_form(&mut st).unwrap();
         assert!(st.form);
-        assert_eq!((st.server.as_str(), st.user.as_str(), st.database.as_str()), ("bad host!", "sde", "utility"));
+        assert_eq!((st.server.as_str(), st.user.as_str(), st.database.as_str()), ("gis-db\\GIS", "sde", "utility"));
+        // A form that can't make an address stays the form, says why, and leaves the address.
+        st.server = "bad host!".into();
+        assert!(swap_form(&mut st).is_err());
+        assert!(st.form);
+        assert_eq!(st.address, "mssql://sde@gis-db/utility?instance=GIS");
+        assert_eq!(st.server, "bad host!");
+        // An empty form goes to the address box as it was: nothing was typed to lose.
+        let mut empty = State { kind: "sqlserver".into(), form: true, address: "mssql://h/d".into(), ..Default::default() };
+        swap_form(&mut empty).unwrap();
+        assert!(!empty.form);
+        assert_eq!(empty.address, "mssql://h/d");
+        // An address edited in the box is what the form shows next.
+        st.form = false;
+        st.address = "mssql://gis@other/assets".into();
+        swap_form(&mut st).unwrap();
+        assert_eq!((st.server.as_str(), st.user.as_str(), st.database.as_str()), ("other", "gis", "assets"));
         // An empty form is filled from the address: a saved connection edited in the form.
         let mut edit = State {
             kind: "sqlserver".into(),
             address: "mssql://gis-db/utility?trust-server-certificate=true".into(),
             ..Default::default()
         };
-        swap_form(&mut edit);
+        swap_form(&mut edit).unwrap();
         assert_eq!(
             (edit.server.as_str(), edit.database.as_str(), edit.sign_in.as_str(), edit.trust_cert),
             ("gis-db", "utility", "windows", true)
         );
+    }
+
+    /// The address's options the form has no field for are kept and shown, not dropped (review:
+    /// `encrypt` and `ca` lost on Save); an address with a password stays in the box.
+    #[test]
+    fn an_address_with_options_or_a_password_goes_through_the_form_whole() {
+        let mut st = State {
+            kind: "sqlserver".into(),
+            address: r"mssql://sde@gis-db/utility?instance=GIS&encrypt=strict&ca=C:\certs\ca.pem&trust-server-certificate=true".into(),
+            ..Default::default()
+        };
+        swap_form(&mut st).unwrap();
+        assert_eq!(st.form_options, r"encrypt=strict&ca=C:\certs\ca.pem");
+        assert!(st.trust_cert);
+        assert_eq!(
+            definition(&st)["address"],
+            r"mssql://sde@gis-db/utility?instance=GIS&encrypt=strict&ca=C:\certs\ca.pem&trust-server-certificate=true"
+        );
+        swap_form(&mut st).unwrap();
+        assert_eq!(st.address, r"mssql://sde@gis-db/utility?instance=GIS&encrypt=strict&ca=C:\certs\ca.pem&trust-server-certificate=true");
+        // Options with no instance start the query.
+        let mut plain =
+            State { kind: "sqlserver".into(), address: "mssql://gis-db/utility?connect-timeout=30".into(), ..Default::default() };
+        swap_form(&mut plain).unwrap();
+        assert_eq!(definition(&plain)["address"], "mssql://gis-db/utility?connect-timeout=30");
+        // A password in the address: the form isn't used, and why is said.
+        let mut secret = State { kind: "sqlserver".into(), address: "mssql://sde:hunter2@gis-db/utility".into(), ..Default::default() };
+        let why = swap_form(&mut secret).unwrap_err();
+        assert!(why.contains("password"), "{why}");
+        assert!(!secret.form);
+        assert!(secret.server.is_empty());
     }
 
     #[test]
