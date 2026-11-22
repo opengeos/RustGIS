@@ -119,7 +119,7 @@ impl GpkgUpload {
     pub fn open(self, layer: Option<&str>) -> Result<GpkgSource> {
         let Self { conn, copy } = self;
         let path = copy.path().to_path_buf();
-        let mut source = GpkgSource::open_conn(conn, &path, layer, None, file_identity(&path))?;
+        let mut source = GpkgSource::open_conn(conn, &path, layer, file_identity(&path))?;
         source.temp = Some(copy);
         Ok(source)
     }
@@ -171,7 +171,7 @@ impl GpkgSource {
         // if the working directory changes in between.
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         let id = file_identity(&path);
-        Self::open_conn(open_db(&path)?, &path, layer, None, id)
+        Self::open_conn(open_db(&path)?, &path, layer, id)
     }
 
     /// Opens a GeoPackage held in memory, through a temporary copy (SQLite reads files). The copy
@@ -182,16 +182,11 @@ impl GpkgSource {
 
     /// Opens a feature table (`layer`, else the first) on an open database from its metadata,
     /// noting what reading changes: an unknown coordinate system, other tables, Z or M values
-    /// dropped. `id` is the file's identity taken before it was opened.
+    /// dropped. `id` identifies the file for later traversals. On-disk sources capture it before
+    /// opening; an upload identifies its private copy.
     /// `path` is the file as the caller named it, made absolute. SQLite's own name for it resolves symbolic links
     /// (macOS's temporary folder `/var` is `/private/var`), so it isn't the path to record.
-    fn open_conn(
-        conn: Connection,
-        path: &Path,
-        layer: Option<&str>,
-        temp: Option<tempfile::NamedTempFile>,
-        id: Option<(u64, u64)>,
-    ) -> Result<Self> {
+    fn open_conn(conn: Connection, path: &Path, layer: Option<&str>, id: Option<(u64, u64)>) -> Result<Self> {
         let tables = feature_tables(&conn)?;
         let table = match layer {
             Some(l) => tables
@@ -317,7 +312,7 @@ impl GpkgSource {
             zm_dropped: false,
         };
         let file = Some((path.to_path_buf(), id));
-        let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
+        let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp: None, file };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = src.peek_kind();
         }

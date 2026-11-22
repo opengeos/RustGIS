@@ -2072,7 +2072,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         && !rustgis_data::cityjson::is_cityjson_name(path)
         && ["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
         && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR)
-        && json_city_model_path(path)
+        && may_be_city_model_path(path)
     {
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         if rustgis_data::io::is_cityjson(path, &bytes) {
@@ -2618,7 +2618,7 @@ fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
         && !(lower.ends_with(".json")
             && (given("crs") || given("layer"))
             && std::fs::metadata(path).is_ok_and(|m| m.len() <= rustgis_data::io::BYTES_FLOOR)
-            && json_city_model_path(path))
+            && may_be_city_model_path(path))
         && streams_geojson(p, path)
     {
         let (path, may_load) = (path.to_string(), b(p, "stream").is_none());
@@ -2651,8 +2651,8 @@ fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
 /// Shapefile or GeoJSON file opened in place ([`in_place_ahead`]), or a standalone dBASE table.
 /// `None` for any other file, which [`add_data`] reads as it adds it. Each is picked only where
 /// `add_data` takes that read, so a read made is never wasted; a few it makes whole are left to it
-/// (a `.json` with a coordinate system or layer given, a large GeoJSON that isn't a
-/// FeatureCollection).
+/// (a possible CityJSON `.json` with a coordinate system or layer given, or a large GeoJSON
+/// that isn't a FeatureCollection).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     use super::reads::ahead;
@@ -2696,11 +2696,11 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     let lower = path.to_ascii_lowercase();
     // A GeoJSON read whole: small with no "stream" given (which add_data decides by), or any size
     // (within the reader's limit) with `"stream": false`; and not a CityJSON model (named so, or a
-    // .json with a coordinate system or a layer given).
+    // .json whose head could identify CityJSON, with a coordinate system or a layer given).
     let geojson = is_geojson(&path)
         && !rustgis_data::cityjson::is_cityjson_name(&path)
         && b(p, "stream") != Some(true)
-        && !(lower.ends_with(".json") && (given("crs") || given("layer")) && json_city_model_path(&path))
+        && !(lower.ends_with(".json") && (given("crs") || given("layer")) && may_be_city_model_path(&path))
         && std::fs::metadata(&path)
             .is_ok_and(|m| m.is_file() && (b(p, "stream") == Some(false) || m.len() <= rustgis_data::source::geojson::IN_PLACE_ABOVE));
     // A ZIP, a city model, a GML or a GPX file: its layers, read whole. A model named `.json` (not
@@ -3133,7 +3133,7 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let model_json = path.to_ascii_lowercase().ends_with(".json")
         && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR)
-        && json_city_model_path(path);
+        && may_be_city_model_path(path);
     if rustgis_data::io::is_multi_layer_name(path) || model_json {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         // Listed within the size Add Data takes it at.
@@ -3176,9 +3176,10 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Reads at most 64 KiB to route a plain .json without allocating the whole file.
 /// An inconclusive head keeps the existing whole-file fallback (within its size cap), so a
-/// CityJSON root type after a large metadata value still works. Root payload keys let us stop
-/// before either a CityObjects object or a GeoJSON features array, even when type comes last.
-fn json_city_model_path(path: &str) -> bool {
+/// CityJSON root type after a large metadata value or extension member still works. A root type
+/// or CityObjects key lets us stop before its payload. A features key alone is inconclusive:
+/// CityJSON permits extension members, and its root type may follow them.
+fn may_be_city_model_path(path: &str) -> bool {
     use std::io::Read;
     let mut head = Vec::new();
     match rustgis_data::provenance::open(path).and_then(|f| f.take(64 << 10).read_to_end(&mut head)) {
@@ -3202,7 +3203,6 @@ fn json_city_model_head(head: &[u8]) -> bool {
                 match key.as_str() {
                     "type" => self.0.set(Some(map.next_value::<String>()? == "CityJSON")),
                     "CityObjects" => self.0.set(Some(true)),
-                    "features" => self.0.set(Some(false)),
                     _ => {
                         map.next_value::<IgnoredAny>()?;
                         continue;
@@ -3348,8 +3348,8 @@ fn add_source_read(
             all.into_iter().map(Some).collect()
         }
         // In the browser an uploaded GeoPackage adds every table, listed by the pure-Rust reader.
-        // (The desktop opens uploads with SQLite, one temporary copy per table, so it adds the
-        // first; files on disk add them all.)
+        // The desktop adds the first feature table from one private SQLite copy shared with
+        // inspection, reporting other tables through the source notes; files on disk add all.
         #[cfg(target_arch = "wasm32")]
         (None, Origin::Bytes(name, bytes)) if name.to_ascii_lowercase().ends_with(".gpkg") => {
             let mut all = source::gpkg_mem::layers(source::Shared(bytes.clone())).map_err(err)?;
@@ -7637,24 +7637,42 @@ mod tests {
     fn json_head_stops_before_payloads() {
         for head in [
             br#"{"type":"FeatureCollection","features":["#.as_slice(),
-            br#"{"features":["#,
             br#"{"metadata":{"type":"CityJSON","CityObjects":{}},"type":"FeatureCollection""#,
         ] {
             assert!(!super::json_city_model_head(head));
         }
-        for head in
-            [br#"{"type":"CityJSON","CityObjects":{"#.as_slice(), br#"{"CityObjects":{"#, br#"{"metadata":{"description":"unfinished"#]
-        {
+        for head in [
+            br#"{"type":"CityJSON","CityObjects":{"#.as_slice(),
+            br#"{"CityObjects":{"#,
+            br#"{"features":["#,
+            br#"{"metadata":{"description":"unfinished"#,
+        ] {
             assert!(super::json_city_model_head(head));
         }
+    }
+
+    /// A CityJSON extension named features cannot decide the format before its root type.
+    #[test]
+    fn json_head_preserves_cityjson_extension_members() {
+        let text = r#"{"features":[],"type":"CityJSON","CityObjects":{},"version":"2.0","vertices":[]}"#;
+        assert!(rustgis_data::cityjson::looks_like_cityjson(text));
+        assert!(super::json_city_model_head(text.as_bytes()));
+        let large_extension = format!("{{\"features\":[\"{}", "x".repeat(64 << 10));
+        assert!(super::json_city_model_head(large_extension.as_bytes().get(..64 << 10).unwrap()));
     }
 
     /// Listing GeoJSON never reads its full payload merely to rule out a city model.
     #[test]
     fn listing_json_layers_only_reads_the_head() {
-        let dir = std::env::temp_dir().join(format!("rustgis-json-head-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("points.json");
+        struct Dir(std::path::PathBuf);
+        impl Drop for Dir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Dir(std::env::temp_dir().join(format!("rustgis-json-head-{}", std::process::id())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("points.json");
         let mut bytes = br#"{"type":"FeatureCollection","features":[]}"#.to_vec();
         bytes.resize(128 << 10, b' ');
         std::fs::write(&path, bytes).unwrap();
@@ -7665,7 +7683,6 @@ mod tests {
         let inputs = capture.inputs();
         assert_eq!(inputs.len(), 1);
         assert!(inputs[0].sha256.is_none(), "a whole-file read was captured");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Overlays left out for their pictures' size are said, with the budget; none, nothing said.
