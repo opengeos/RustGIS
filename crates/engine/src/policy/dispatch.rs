@@ -517,11 +517,18 @@ impl Session {
                 }
                 let node = self.admit(node)?;
                 // Its lines run nested: what they couldn't read as true or false is said here (#1600).
-                self.with_unread_bools(Some("script.run"), |s| {
+                let result = self.with_unread_bools(Some("script.run"), |s| {
                     s.with_node(node, |s| {
                         s.guarded("Run Script", true, |s| crate::cmd::workflows::run_script(s, &json!({"script":script})))
                     })
-                })
+                });
+                // Not a command, so no `command_epilogue`: its lines' declaration check is raised here.
+                #[cfg(any(test, feature = "declaration-check"))]
+                if self.depth == 0 {
+                    let broken = self.declaration_broken.take();
+                    assert!(broken.is_none(), "{}", broken.unwrap_or_default());
+                }
+                result
             }
             CallKind::Adapter { .. } => {
                 let node = self.call_node(&self.scope(), call)?;

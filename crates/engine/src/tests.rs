@@ -472,6 +472,23 @@ fn a_script_line_that_changes_layers_must_say_it_mutates() {
     let _ = s.run("script.run", &json!({"script": "test.quietLayer {}"}));
 }
 
+/// And as a line of a script an agent or the assistant runs, which doesn't go through
+/// `command_epilogue` (#2696).
+#[test]
+#[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
+fn a_scoped_script_line_that_changes_layers_must_say_it_mutates() {
+    struct Live;
+    impl crate::policy::Revocation for Live {
+        fn allows(&self, _: crate::policy::Effects) -> bool {
+            true
+        }
+    }
+    let mut s = world();
+    s.registry.commands.push(quiet_layer());
+    let scope = crate::policy::Scope::agent(crate::policy::AgentAccess::Full, true, "declared", None, std::sync::Arc::new(Live));
+    let _ = s.run_scoped(scope, &crate::policy::Call::script("test.quietLayer {}"));
+}
+
 /// A task's steps are counted as a script's lines: an undo step only when one edited (#2621).
 #[test]
 fn task_takes_an_undo_step_only_when_a_step_edits() {
