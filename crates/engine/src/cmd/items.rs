@@ -1033,8 +1033,8 @@ fn run_task_steps(s: &mut Session, p: &Value) -> CmdResult {
         .map_err(|e| format!("step {} ({}): {e}", i + 1, st.title))?;
         done.push(json!({"step": i, "title": st.title, "result": r}));
     }
-    // An undo step only when a step edited ([`Session::shared_step`]). Run as a step itself (in a
-    // script), the account is the enclosing transaction's, earlier steps included, which decides.
+    // An undo step only when a step edited ([`Session::shared_step`]); run inside a script, the
+    // script's account, earlier steps included, decides.
     s.request_only = !s.shared_steps.edited;
     Ok(json!({"task": t.name, "ran": done}))
 }

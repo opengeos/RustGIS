@@ -1155,8 +1155,8 @@ fn run_script_here(s: &mut Session, p: &Value, prepared: bool) -> CmdResult {
         let r = r.map_err(|e| format!("line {n}: {id}: {e}"))?;
         out.push(json!({"line": n, "command": id, "result": r}));
     }
-    // An undo step only when a line edited ([`Session::shared_step`]). Run as a step itself (in a
-    // task), the account is the enclosing transaction's, earlier steps included, which decides.
+    // An undo step only when a line edited ([`Session::shared_step`]); run inside a task, the
+    // task's account, earlier steps included, decides.
     s.request_only = !s.shared_steps.edited;
     Ok(json!({"ran": out}))
 }

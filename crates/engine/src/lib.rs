@@ -621,6 +621,8 @@ const MAX_LOSS_NOTICE_KINDS: usize = 32;
 
 const UNDO_LIMIT: usize = 40;
 
+/// The file a project belongs to, which undo restores with it.
+#[derive(PartialEq, Eq)]
 struct ProjectFiles {
     identity: u64,
     path: Option<PathBuf>,
@@ -732,28 +734,24 @@ struct PutAside {
 /// What the steps of one transaction did ([`Session::shared_step`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StepTally {
-    /// A step left a request or changed nothing ([`Session::request_only`]).
+    /// A step left a request or changed nothing ([`Session::request_only`]); the plugin bridge
+    /// reads it.
     pub(crate) requested: bool,
-    /// A step changed what an undo step restores: it edited the project, or moved the history,
-    /// replaced the project, rebound its file or marked it unsaved ([`Restored`]).
+    /// A step mutated the project, or moved what [`Restored`] measures.
     pub(crate) edited: bool,
 }
 
-/// What a command that doesn't mutate can change that an undo step restores, or that tells it
-/// changed the project: the history state (`edit.undo`), the project replaced (`project.new`),
-/// its file (`project.saveAs`), and the unsaved mark a write leaves when it changed layers
-/// (Publish to Source), which undo doesn't restore. The project's contents change only by
-/// commands that mutate, save its history log: an export records itself there, as a log entry
-/// and not an edit, as when it runs by itself. Compared before and after a shared step
-/// ([`Session::shared_step`]), so whether it edited is measured, not inferred from what it may
-/// reach: a read over the network or an export moves none of these.
+/// What a command that doesn't mutate can move of what undo restores: the history state
+/// (`edit.undo`), the project replaced (`project.new`), its file (`project.saveAs`), and the
+/// unsaved mark a write that changed layers leaves (Publish to Source). Measured before and after
+/// a shared step ([`Session::shared_step`]), not inferred from what the command may reach. The
+/// project's contents change only by commands that mutate, except its history log, where an
+/// export records itself as a log entry, not an edit, as when it runs by itself.
 #[derive(PartialEq, Eq)]
 struct Restored {
     state: u64,
     opened: u64,
-    file_identity: u64,
-    path: Option<PathBuf>,
-    opened_package: Option<PathBuf>,
+    files: ProjectFiles,
     unsaved_marks: u64,
 }
 
@@ -2199,21 +2197,20 @@ impl Session {
     /// (a script's line, a task's step, a plugin's call): it takes no undo step of its own, and
     /// what it did goes into [`Session::shared_steps`]. Whether it left a request or changed
     /// nothing ([`Session::request_only`]) is its own, never the enclosing command's. It edited
-    /// when it mutates and didn't say it changed nothing, or when it changed what an undo step
-    /// restores besides the project's contents ([`Restored`]). A failed step that kept a record
-    /// (a failure note, a source file written) moved the history state, so it counts too.
+    /// when it mutated and didn't say it changed nothing, or when [`Restored`] moved: a failed
+    /// step that kept a record (a failure note, a source file written) moved the history state.
     pub(crate) fn shared_step(&mut self, spec: &CommandSpec, run: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let outer = std::mem::take(&mut self.request_only);
         let before = self.restored();
         #[cfg(debug_assertions)]
-        let layers: Vec<_> = self.project.maps.iter().map(Map::layer_mark).collect();
+        let layers = (!spec.mutates).then(|| self.project.maps.iter().map(Map::layer_mark).collect::<Vec<_>>());
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
         let unchanged = std::mem::replace(&mut self.request_only, outer);
         let moved = self.restored() != before;
         // A command that doesn't mutate leaves the layers alone, or the measure above misses it.
         #[cfg(debug_assertions)]
         debug_assert!(
-            spec.mutates || moved || res.is_err() || self.project.maps.iter().map(Map::layer_mark).eq(layers),
+            moved || res.is_err() || layers.is_none_or(|layers| self.project.maps.iter().map(Map::layer_mark).eq(layers)),
             "{} doesn't mutate but changed the layers",
             spec.id
         );
@@ -2224,14 +2221,11 @@ impl Session {
     }
 
     fn restored(&self) -> Restored {
-        Restored {
-            state: self.state,
-            opened: self.opened,
-            file_identity: self.file_identity,
-            path: self.path.clone(),
-            opened_package: self.opened_package.clone(),
-            unsaved_marks: self.unsaved_marks,
-        }
+        Restored { state: self.state, opened: self.opened, files: self.project_files(), unsaved_marks: self.unsaved_marks }
+    }
+
+    fn project_files(&self) -> ProjectFiles {
+        ProjectFiles { identity: self.file_identity, path: self.path.clone(), opened_package: self.opened_package.clone() }
     }
 
     /// Commits the snapshot to history only for commands that own an Undo step. Nested guards
@@ -2256,11 +2250,7 @@ impl Session {
         let opened = self.opened;
         // The layer chosen before the command comes back with the project when it fails.
         let open_layer = self.active_layer;
-        let files = mutates.then(|| ProjectFiles {
-            identity: self.file_identity,
-            path: self.path.clone(),
-            opened_package: self.opened_package.clone(),
-        });
+        let files = mutates.then(|| self.project_files());
         self.depth += 1;
         self.restorable += u32::from(mutates);
         // Edit counts roll back with the project when a command fails part way.
@@ -2325,9 +2315,7 @@ impl Session {
                 // A step made under the same merge key as the last one is part of it: undo goes
                 // back to before the first of them. Only a command run by itself merges.
                 let key = merge;
-                let files = files.filter(|files| {
-                    files.identity != self.file_identity || files.path != self.path || files.opened_package != self.opened_package
-                });
+                let files = files.filter(|files| *files != self.project_files());
                 if key.is_none() || key != self.merged || self.undo.is_empty() {
                     let allocations = undo_memory::allocations(&snap);
                     self.undo.push((
