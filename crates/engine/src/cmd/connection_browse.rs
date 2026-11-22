@@ -777,11 +777,13 @@ fn catalogs(s: &mut Session, bytes: &[u8], origin: &address::Origin) -> Result<F
     for note in crate::cmd::stac::catalog_link_notes(refused, skipped, omitted) {
         s.notify(note, false);
     }
-    if dropped > 0 {
-        s.notify(
-            format!("{dropped} catalog links were left out because their node addresses are too long or contain control characters"),
+    match dropped {
+        0 => {}
+        1 => s.notify("1 catalog link was left out because its node address is too long or contains control characters".to_string(), false),
+        n => s.notify(
+            format!("{n} catalog links were left out because their node addresses are too long or contain control characters"),
             false,
-        );
+        ),
     }
     let mut found = Found::new(children);
     found.truncated |= dropped > 0 || refused > 0 || omitted > 0 || skipped > 0;

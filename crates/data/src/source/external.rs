@@ -49,7 +49,7 @@ impl ReloadWorkspace {
     /// in a folder named as a workspace that holds its owner lock, marked as one. A user's cache
     /// folder that only has such a name (`RUSTGIS_GDAL_CACHE=/data/reload-2024`) isn't one. A lock
     /// that is there but can't be opened or read is held by a live owner (Windows refuses reads of
-    /// a locked range).
+    /// a locked range); one shorter than the marker isn't a workspace's.
     pub fn contains_file(path: &Path) -> bool {
         use std::io::Read;
         let Some(parent) = path.parent() else { return false };

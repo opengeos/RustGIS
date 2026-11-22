@@ -3727,8 +3727,19 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // Paired by position: a record marked deleted is read as any other, and left out with its shape.
     let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
     // Each shape is read with its record, a shape that can't be read too: `shapefile`'s own pairing
-    // returns a shape's error before reading its record, which shifts every later record.
-    for (k, (shape, record)) in shapes.iter_shapes().zip(dbf.iter_records()).enumerate() {
+    // returns a shape's error before reading its record, which shifts every later record. Shapes
+    // past the last record, and records past the last shape, are counted.
+    let records = dbf.header().num_records as usize;
+    let (mut shape_iter, mut record_iter) = (shapes.iter_shapes(), dbf.iter_records());
+    let (mut pairs, mut extra_shapes) = (0usize, 0usize);
+    while let Some(shape) = shape_iter.next() {
+        let Some(record) = record_iter.next() else {
+            // Up to the first that can't be read: past it, the file can't be followed.
+            extra_shapes = 1 + shape_iter.by_ref().take_while(std::result::Result::is_ok).count();
+            break;
+        };
+        let k = pairs;
+        pairs += 1;
         if is_deleted(k) {
             left_out += 1;
             continue;
@@ -3799,6 +3810,14 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     }
     ds.drop_zm(&mut report, zm_shapes);
     report.messages.extend(deleted_records_note(name, left_out, true));
+    if extra_shapes > 0 {
+        report.messages.push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out"));
+    }
+    if records > pairs && extra_shapes == 0 {
+        report
+            .messages
+            .push(format!("{name}: {} dBASE record(s) past the .shp's last shape have no shape and were left out", records - pairs));
+    }
     dbf_notices(&ds, &mut report, &counts);
     ds.geometry_type = dominant_type(&ds);
     // A bad .prj must not turn a spatial layer into an attribute-only table and hide the
@@ -8885,6 +8904,37 @@ mod tests {
             let names: Vec<_> = ds.features.iter().map(|f| f.attrs[0].clone()).collect();
             assert_eq!(names, [Value::Text("b".into()), Value::Text("c".into())], "deleted: {deleted}");
             assert_eq!(report.skipped, usize::from(!deleted), "{:?}", report.messages);
+        }
+    }
+
+    /// A `.dbf` one record short leaves the last shape out, and says so; one with a record more
+    /// than the shapes says that. A matching pair says neither.
+    #[test]
+    fn shapes_and_records_that_dont_pair_are_said() {
+        let said = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("past the")).cloned().collect::<Vec<_>>();
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(ds.features.len(), 3);
+        assert!(said(&report).is_empty(), "{:?}", report.messages);
+        let dbf_path = path.with_extension("dbf");
+        let clean = std::fs::read(&dbf_path).unwrap();
+        for (records, want) in [
+            (2u32, "pts: 1 shape(s) past the .dbf's last record have no attributes and were left out"),
+            (4, "pts: 1 dBASE record(s) past the .shp's last shape have no shape and were left out"),
+        ] {
+            let mut dbf = clean.clone();
+            dbf[4..8].copy_from_slice(&records.to_le_bytes());
+            if records == 4 {
+                // A fourth record, a copy of the third, before the end-of-file marker.
+                let (at, len) = (dbf_record_at(&dbf, 2), dbf_record_at(&dbf, 1) - dbf_record_at(&dbf, 0));
+                let row = dbf[at..at + len].to_vec();
+                dbf.splice(at + len..at + len, row);
+            }
+            std::fs::write(&dbf_path, &dbf).unwrap();
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            assert_eq!(ds.features.len(), records.min(3) as usize);
+            assert_eq!(said(&report), [want]);
         }
     }
 
