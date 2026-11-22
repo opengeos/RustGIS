@@ -2314,18 +2314,22 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let Some(first) = fitted(beside) else { return };
     // The room left of zero follows the bar's length: fitted again with the first label's, and once
     // more if the shorter bar's first label is wider ("-1.25" for "-1").
-    let fit = if before > 0 {
+    // Where a refit leaves no room, the fit before it draws, its first label perhaps starting a
+    // little left of the box.
+    let (fit, pad) = if before > 0 {
         let reserved = pad_of(&first);
         match fitted(beside + reserved) {
-            Some(f) if pad_of(&f) > reserved => fitted(beside + pad_of(&f)),
-            f => f,
+            Some(f) if pad_of(&f) > reserved => match fitted(beside + pad_of(&f)) {
+                Some(g) => (g, pad_of(&g)),
+                None => (f, reserved),
+            },
+            Some(f) => (f, pad_of(&f)),
+            None => (first, 0.0),
         }
     } else {
-        Some(first)
+        (first, 0.0)
     };
-    let Some(fit) = fit else { return };
     let BarFit { total, after } = fit;
-    let pad = pad_of(&fit);
     let divs = before + after;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
     // Division `j` counts `j - before` from zero. Its label, the last with the unit when it follows
@@ -8503,6 +8507,18 @@ Elaboração: RustGIS",
             });
             assert!(darkness(&cut, 35, 39) > darkness(&plain, 35, 39) + 100, "{style:?}");
         }
+    }
+
+    /// A bar whose first negative label leaves it no room still draws: as it would without the
+    /// label's room, the label perhaps starting a little left of the box.
+    #[test]
+    fn a_scale_bar_before_zero_draws_where_its_first_label_leaves_no_room() {
+        let bar = BarOptions { label_size: 24.0, divisions_before_zero: 2, divisions: 10, ..BarOptions::default() };
+        let mut pm = Pixmap::new(40, 60).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let r = Rect::from_xywh(0.0, 0.0, 40.0, 60.0).unwrap();
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+        assert!(marked_span(&pm, 37).is_some(), "ink drawn");
     }
 
     #[test]
