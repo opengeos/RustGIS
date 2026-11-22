@@ -98,7 +98,8 @@ enum Heights {
 }
 
 /// A map's block diagram as a frame draws it (#1914, `TerrainBlock`): the box the ground is cut
-/// to (Web Mercator) and the height of its base.
+/// to (Web Mercator; for a round block the square round its circle, for one cut to polygons the
+/// box round their outline) and the height of its base.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     pub x0: f64,
@@ -166,8 +167,9 @@ impl Ground {
     }
 
     /// How many polygons of `map`'s water layer have their shore read at wider steps than half a
-    /// cell of the heights a view of `camera` reads (#1915; see [`Ground::water_coarse`]), from
-    /// their shapes alone: nothing is read, no elevation tile asked for. 0 without water.
+    /// cell of the heights a view of `camera` reads, to keep a long shore's reading bounded, so
+    /// their level may lie a little above their lowest shore (#1915). From their shapes alone:
+    /// nothing is read, no elevation tile asked for. 0 without water.
     pub fn water_coarse_unread(map: &Map, camera: &Camera) -> usize {
         Ground::heights_of(map, camera).map_or(0, |g| water::coarse_shores(map, camera, &g))
     }
@@ -247,13 +249,6 @@ impl Ground {
     /// height known along their shore and no level given (#1915). 0 without water.
     pub fn water_unlevelled(&self) -> usize {
         self.water.as_ref().map_or(0, |w| w.unlevelled)
-    }
-
-    /// How many polygons of the terrain's water layer had their shore read at wider steps than
-    /// half the ground's cell, to keep a long shore's reading bounded: their level may lie a
-    /// little above their lowest shore (#1915). 0 without water.
-    pub fn water_coarse(&self) -> usize {
-        self.water.as_ref().map_or(0, |w| w.coarse)
     }
 
     /// How high the ground stands at `m` in a view of `cam`, in logical pixels at the centre's

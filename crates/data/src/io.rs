@@ -520,7 +520,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             let mut notes = Vec::new();
             let cpg = crate::dbf::read_cpg(path, &mut notes);
             let (ds, mut report) = read_dbf(std::fs::read(path)?, cpg.as_deref(), &name, &mut csv_memory_budget())?;
-            report.messages.extend(notes);
+            report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
             (ds, report)
         }
         "shp" => read_shapefile_in(path, &name, None)?,
@@ -799,12 +799,13 @@ pub struct GpkgWritten {
 /// As [`write_path`], in the coordinate system `crs` (a GeoPackage, Shapefile or FlatGeobuf; see
 /// [`write_bytes_in`]).
 pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
-    write_path_to(ds, path, crs, &GpkgTable::default()).map(|(left_out, _)| left_out)
+    write_path_to(ds, path, crs, &GpkgTable::default()).map(|(left_out, _, _)| left_out)
 }
 
 /// As [`write_path_in`], a GeoPackage's table placed as `gpkg` says (other formats ignore it):
-/// also returns the table written.
-pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>)> {
+/// also returns the table written, and notes to give with the export (a Shapefile's old parts it
+/// couldn't remove once the new ones landed, [`kept_backups_note`]).
+pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>, Vec<String>)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if crs != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()) {
         check_projected(&ext, crs)?;
@@ -826,7 +827,7 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
                 // Every feature is written: a layer of several kinds of geometry gets a GEOMETRY
                 // column, and one that declares no type takes its geometry's.
                 let table = crate::source::gpkg::write_table_in(ds, path, crs, gpkg)?;
-                Ok((0, Some(table)))
+                Ok((0, Some(table), Vec::new()))
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -838,8 +839,8 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
             crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let parts: Vec<(std::path::PathBuf, Vec<u8>)> = parts.into_iter().map(|(e, bytes)| (shapefile_part(path, e), bytes)).collect();
-            place_shapefile(path, &stage_shapefile(&parts)?)?;
-            Ok((left_out, None))
+            let kept = place_shapefile(path, &stage_shapefile(&parts)?)?;
+            Ok((left_out, None, kept_backups_note(path, &kept).into_iter().collect()))
         }
         _ if crs != Crs::LonLat && !PROJECTED_FORMATS.contains(&ext.as_str()) => {
             Err(DataError::Unsupported(format!(".{ext} in {} (it holds longitude/latitude only)", crs.label())))
@@ -847,7 +848,7 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
         _ => {
             let (bytes, left_out) = projected_bytes(ds, &ext, crs)?;
             write_atomic(path, &bytes)?;
-            Ok((left_out, None))
+            Ok((left_out, None, Vec::new()))
         }
     }
 }
@@ -891,7 +892,11 @@ pub(crate) fn unstage(staged: &[(std::path::PathBuf, std::path::PathBuf)]) {
 /// first and put back if any new part fails to land, and a Cancel before the last part lands
 /// rolls back the same way. Once all have landed, the old parts and the spatial indexes that
 /// would no longer match (`.qix`, `.sbn`, `.sbx`) are removed.
-pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<()> {
+///
+/// Returns the old parts that landed but couldn't be removed afterwards, each as the hidden copy
+/// that holds it ([`kept_backups_note`] says them). When a part fails to land and every old part is
+/// put back, the error names `path` and says nothing changed.
+pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<Vec<std::path::PathBuf>> {
     let mut written: Vec<&(std::path::PathBuf, std::path::PathBuf)> = staged.iter().collect();
     written.sort_by_key(|(_, target)| target == path);
     let mut backups: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
@@ -932,11 +937,14 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
         placed.push(target.clone());
     }
     if let Err(e) = result {
+        // A new part that can't be removed, where no old one is put back over it, is named.
+        let mut kept = Vec::new();
         for p in &placed {
-            let _ = std::fs::remove_file(p);
+            if std::fs::remove_file(p).is_err() && !backups.iter().any(|(_, target)| target == p) {
+                kept.push(format!("the new {} is left", p.display()));
+            }
         }
         // An old part that can't be put back is named, so it isn't lost under its temporary name.
-        let mut kept = Vec::new();
         for (bak, target) in &backups {
             if std::fs::rename(bak, target).is_err() {
                 kept.push(format!("{} is kept as {}", target.display(), bak.display()));
@@ -947,13 +955,18 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
         sync_folder(path);
         let e = DataError::from(e);
         if kept.is_empty() {
-            return Err(e);
+            // With no old file, there was nothing to put back.
+            let outcome = if backups.is_empty() { "nothing was written" } else { "the old file was put back, nothing changed" };
+            // Its kind kept, for a caller that tells failures apart by it.
+            return Err(match e {
+                DataError::Io(e) => DataError::Io(std::io::Error::new(e.kind(), format!("{}: {e}; {outcome}", path.display()))),
+                e => e,
+            });
         }
-        return Err(DataError::Format(format!("{e}; putting the old file back failed: {}", kept.join(", "))));
+        return Err(DataError::Format(format!("{}: {e}; undoing the write failed: {}", path.display(), kept.join(", "))));
     }
-    for (bak, _) in &backups {
-        let _ = std::fs::remove_file(bak);
-    }
+    // A copy that can't be removed is returned, to be said: it holds an old part beside the file.
+    let left: Vec<std::path::PathBuf> = backups.into_iter().filter(|(bak, _)| remove_backup(bak).is_err()).map(|(bak, _)| bak).collect();
     // A spatial index left from an older file of the same name would no longer match.
     for stale in ["qix", "sbn", "sbx"] {
         // Sidecars may use any letter case, even beside a lowercase `.shp`.
@@ -968,7 +981,37 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
     }
     // Every part is renamed within `path`'s folder.
     sync_folder(path);
-    Ok(())
+    Ok(left)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes [`remove_backup`] fail on this thread, for the tests of a copy that can't be removed
+    /// (no permission does that alone: the folder must still take the renames).
+    static KEEP_BACKUPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Removes an old part's copy once the new parts have landed ([`place_shapefile`]).
+fn remove_backup(bak: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if KEEP_BACKUPS.get() {
+        return Err(std::io::Error::other("kept for the test"));
+    }
+    std::fs::remove_file(bak)
+}
+
+/// What is said of the old parts of the Shapefile at `path` that [`place_shapefile`] couldn't
+/// remove once the new ones landed; `None` when there are none.
+pub(crate) fn kept_backups_note(path: &Path, kept: &[std::path::PathBuf]) -> Option<String> {
+    (!kept.is_empty()).then(|| {
+        let copies: Vec<String> = kept.iter().map(|k| k.display().to_string()).collect();
+        format!(
+            "{}: {} old part(s) couldn't be removed after the new ones landed; they are kept as {} and can be deleted",
+            path.display(),
+            kept.len(),
+            copies.join(", ")
+        )
+    })
 }
 
 /// Makes a rename into `path`'s folder survive a power cut: on Linux and macOS a synced file can
@@ -3075,7 +3118,7 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
         cpg: crate::dbf::read_cpg(path, &mut notes),
     };
     let (ds, mut report) = read_shapefile_parts(parts, name, crs)?;
-    report.messages.extend(notes);
+    report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
     Ok((ds, report))
 }
 
@@ -3480,16 +3523,21 @@ struct DbfRead {
     /// For each field, its text values that aren't UTF-8 in a table read as UTF-8
     /// ([`crate::dbf::not_utf8`]).
     not_utf8: Vec<usize>,
+    /// The records marked deleted, by position, ascending: the reader gives them as any other
+    /// ([`crate::dbf::take_deleted`]), and they are left out by position.
+    deleted: Vec<usize>,
 }
 
 /// Opens dBASE attributes with the Shapefile reader's code-page and date/number handling.
-fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
+/// `name` is the layer's, for the error of a `.dbf` it can't open.
+fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfRead> {
     use std::io::Cursor;
     let mut encoding_notes = Vec::new();
     let encoding = crate::dbf::encoding(cpg, bytes.get(29).copied().unwrap_or(0), &mut encoding_notes);
     // Counted before a date column is marked a character one below: its values aren't text.
     let (names, not_utf8) = if encoding.is_utf8() { crate::dbf::not_utf8(&bytes) } else { (Vec::new(), Vec::new()) };
     encoding_notes.extend(crate::dbf::not_utf8_names_note(&names));
+    let deleted = crate::dbf::take_deleted(&mut bytes);
     crate::dbf::readable_header_date(&mut bytes);
     let date_columns = crate::dbf::dates_as_text(&mut bytes);
     crate::dbf::floats_as_numeric(&mut bytes);
@@ -3499,7 +3547,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
         // A date's year may be padded with spaces on the left (`   10101`): keep them.
         .with_options(shapefile::dbase::ReadingOptions::default().character_trim(shapefile::dbase::TrimOption::End))
         .build(Cursor::new(bytes))
-        .map_err(|e| DataError::Format(format!("Shapefile: the .dbf: {e}")))?;
+        .map_err(|e| DataError::Format(format!("{name}: the .dbf: {e}")))?;
     // Field order comes from the .dbf header (records are unordered maps).
     let order: Vec<(String, FieldType)> = dbf
         .fields()
@@ -3519,7 +3567,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
         })
         .collect();
     let fields = order.into_iter().map(|(n, t)| Field::new(n, t)).collect();
-    Ok(DbfRead { reader: dbf, fields, decimals, report: ReadReport { messages: encoding_notes, ..Default::default() }, not_utf8 })
+    Ok(DbfRead { reader: dbf, fields, decimals, report: ReadReport { messages: encoding_notes, ..Default::default() }, not_utf8, deleted })
 }
 
 /// Reads a geometry-free dBASE table, checking cancellation and counting progress per record.
@@ -3527,14 +3575,19 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
 /// same budget as delimited tables; archive members share the remaining allowance.
 /// The bounded file read and header decoding finish before cancellation can be observed.
 fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
-    let DbfRead { mut reader, fields, decimals, mut report, not_utf8 } = dbf_reader(bytes, cpg)?;
+    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(bytes, cpg, name)?;
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8);
     let allowance = *budget;
     let mut left = allowance;
     crate::progress::begin(reader.header().num_records as usize);
-    for record in reader.iter_records() {
+    let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
+    for (k, record) in reader.iter_records().enumerate() {
         crate::progress::step(1)?;
+        if is_deleted(k) {
+            left_out += 1;
+            continue;
+        }
         match record {
             Ok(record) => {
                 let attrs = dbf_attrs(&record, &ds.fields, &mut counts);
@@ -3564,18 +3617,41 @@ fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) 
             Err(_) => report.skipped += 1,
         }
     }
-    // The iterator passes over records marked deleted; the header still counts them.
-    let deleted = (reader.header().num_records as usize).saturating_sub(ds.features.len() + report.skipped);
-    if deleted > 0 {
-        report.messages.push(format!("{name}: {deleted} dBASE records marked deleted were left out"));
-    }
+    report.messages.extend(deleted_records_note(name, left_out, false));
     dbf_notices(&ds, &mut report, &counts);
     integral_numeric_to_integer(&mut ds, &decimals);
-    if report.skipped > 0 {
-        report.messages.push(format!("{name}: {} dBASE records were unreadable and left out", report.skipped));
+    match report.skipped {
+        0 => {}
+        1 => report.messages.push(format!("{name}: 1 dBASE record was unreadable and left out")),
+        n => report.messages.push(format!("{name}: {n} dBASE records were unreadable and left out")),
     }
     *budget = left;
     Ok((ds, report))
+}
+
+/// Whether the record at a position, asked in ascending order, is one of `deleted` (ascending).
+fn deleted_by_position(deleted: &[usize]) -> impl FnMut(usize) -> bool + '_ {
+    let mut next = deleted.iter().peekable();
+    move |k| {
+        while next.next_if(|d| **d < k).is_some() {}
+        next.next_if(|d| **d == k).is_some()
+    }
+}
+
+/// The notice for `n` records of `name`'s `.dbf` marked deleted and left out, and for a
+/// Shapefile (`with_shapes`), their shapes with them.
+fn deleted_records_note(name: &str, n: usize, with_shapes: bool) -> Option<String> {
+    deleted_records_text(n, with_shapes).map(|t| format!("{name}: {t}"))
+}
+
+/// [`deleted_records_note`] without the layer's name.
+pub(crate) fn deleted_records_text(n: usize, with_shapes: bool) -> Option<String> {
+    let (what, shapes) = match n {
+        0 => return None,
+        1 => ("1 dBASE record marked deleted was left out".to_string(), ", with its shape"),
+        n => (format!("{n} dBASE records marked deleted were left out"), ", with their shapes"),
+    };
+    Some(if with_shapes { format!("{what}{shapes}") } else { what })
 }
 
 /// Converts one record to typed values, sharing loss counts with the containing dataset.
@@ -3667,13 +3743,12 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     use shapefile::Shape;
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
-    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8 } = dbf_reader(parts.dbf, parts.cpg.as_deref())?;
-    let shapes = match parts.shx {
+    let DbfRead { reader: mut dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref(), name)?;
+    let mut shapes = match parts.shx {
         Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
         None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
     }
     .map_err(fmt)?;
-    let mut reader = shapefile::Reader::new(shapes, dbf);
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let to_lonlat = match crs {
         Some(c) => {
@@ -3692,9 +3767,55 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8);
     let mut source_kind = GeometryType::None;
     let pt = |x: f64, y: f64| Coord::new(x, y);
-    for item in reader.iter_shapes_and_records() {
-        let Ok((shape, record)) = item else {
+    // Paired by position: a record marked deleted is read as any other, and left out with its shape.
+    let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
+    // Each shape is read with its record, a shape that can't be read too: `shapefile`'s own pairing
+    // returns a shape's error before reading its record, which shifts every later record. Shapes
+    // past the last record, and records past the last shape, are counted.
+    // Without a `.shx`, a shape that can't be read leaves the reader inside it: the shapes after it
+    // can't be found, so the pairing stops there, and the records after it are said.
+    let records = dbf.header().num_records as usize;
+    let indexed = shapes.shape_count().is_ok();
+    let mut lost_extra = false;
+    let (mut shape_iter, mut record_iter) = (shapes.iter_shapes(), dbf.iter_records());
+    let (mut pairs, mut extra_shapes, mut extra_unreadable, mut lost_track) = (0usize, 0usize, 0usize, false);
+    while let Some(shape) = shape_iter.next() {
+        let Some(record) = record_iter.next() else {
+            // Counted, those that can't be read too; without a `.shx` up to the first of those,
+            // past which the file can't be followed.
+            let mut shape = shape;
+            loop {
+                crate::progress::check()?;
+                extra_shapes += 1;
+                if shape.is_err() {
+                    extra_unreadable += 1;
+                    if !indexed {
+                        lost_extra = true;
+                        break;
+                    }
+                }
+                match shape_iter.next() {
+                    Some(next) => shape = next,
+                    None => break,
+                }
+            }
+            break;
+        };
+        let k = pairs;
+        pairs += 1;
+        lost_track = shape.is_err() && !indexed;
+        if is_deleted(k) {
+            left_out += 1;
+            if lost_track {
+                break;
+            }
+            continue;
+        }
+        let (Ok(shape), Ok(record)) = (shape, record) else {
             report.skipped += 1;
+            if lost_track {
+                break;
+            }
             continue;
         };
         zm_shapes += usize::from(!matches!(
@@ -3758,6 +3879,27 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         ds.push_next(geom, attrs);
     }
     ds.drop_zm(&mut report, zm_shapes);
+    report.messages.extend(deleted_records_note(name, left_out, true));
+    if extra_shapes > 0 {
+        let unreadable = match (extra_unreadable, lost_extra) {
+            (0, _) => String::new(),
+            (_, true) => " (the last of them can't be read, and without a .shx the .shp isn't followed past it)".to_string(),
+            (n, false) => format!(" ({n} of them can't be read)"),
+        };
+        report
+            .messages
+            .push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out{unreadable}"));
+    }
+    if lost_track && records > pairs {
+        report.messages.push(format!(
+            "{name}: shape {pairs} can't be read and the Shapefile has no .shx to find the next one by: the {} record(s) after it were left out",
+            records.saturating_sub(pairs)
+        ));
+    } else if records > pairs && extra_shapes == 0 && !lost_track {
+        report
+            .messages
+            .push(format!("{name}: {} dBASE record(s) past the .shp's last shape have no shape and were left out", records - pairs));
+    }
     dbf_notices(&ds, &mut report, &counts);
     ds.geometry_type = dominant_type(&ds);
     // A bad .prj must not turn a spatial layer into an attribute-only table and hide the
@@ -3774,7 +3916,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // In longitude/latitude, as the file's places come out there (beyond it: a `.prj` that
     // doesn't match the coordinates), or as they are without a system to convert from.
     let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
-    if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
+    if e.beyond_lonlat() {
         report.messages.push(if to_lonlat.is_some() {
             "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place".into()
         } else {
@@ -4397,10 +4539,12 @@ impl CsvLosses {
     pub fn notes(&self, fields: &[Field], target: &str) -> Vec<String> {
         let mut notes = Vec::new();
         if self.as_one_point > 0 {
-            let what = if self.as_one_point == 1 { "1 feature has".to_string() } else { format!("{} features have", self.as_one_point) };
-            notes.push(format!(
-                "{target}: {what} more than one point (a multipoint, line or polygon) and was written as one, as CSV holds a point a row"
-            ));
+            let what = if self.as_one_point == 1 {
+                "1 feature has more than one point (a multipoint, line or polygon) and was".to_string()
+            } else {
+                format!("{} features have more than one point (a multipoint, line or polygon) and were", self.as_one_point)
+            };
+            notes.push(format!("{target}: {what} written as one, as CSV holds a point a row"));
         }
         if self.unwritten > 0 {
             let what = if self.unwritten == 1 { "1 feature".to_string() } else { format!("{} features", self.unwritten) };
@@ -5428,6 +5572,73 @@ mod tests {
         let mut areas = mixed.clone();
         areas.features.truncate(1);
         assert_eq!(write_path(&areas, &dir.path().join("areas.shp"))?, 0);
+        Ok(())
+    }
+
+    /// Placing a Shapefile's parts: old parts whose copies can't be removed once the new ones land
+    /// are returned and said; a clean placement leaves and says nothing; a placement rolled back
+    /// whole names the file and says nothing changed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn placing_a_shapefile_says_old_parts_it_keeps_and_a_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let shp = dir.path().join("parcels.shp");
+        let dbf = dir.path().join("parcels.dbf");
+        let entries = || -> std::io::Result<usize> { Ok(std::fs::read_dir(dir.path())?.count()) };
+        std::fs::write(&shp, b"old shp")?;
+        std::fs::write(&dbf, b"old dbf")?;
+        let parts = |tag: &str| vec![(shp.clone(), format!("{tag} shp").into_bytes()), (dbf.clone(), format!("{tag} dbf").into_bytes())];
+
+        KEEP_BACKUPS.set(true);
+        let kept = place_shapefile(&shp, &stage_shapefile(&parts("new"))?);
+        KEEP_BACKUPS.set(false);
+        let kept = kept?;
+        assert_eq!(std::fs::read(&shp)?, b"new shp");
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|k| k.exists()));
+        let note = kept_backups_note(&shp, &kept).unwrap_or_default();
+        assert!(note.contains("2 old part(s) couldn't be removed") && note.contains("can be deleted"), "{note}");
+        assert!(kept.iter().all(|k| note.contains(&k.display().to_string())), "{note}");
+        for k in &kept {
+            std::fs::remove_file(k)?;
+        }
+
+        // Clean: nothing kept, nothing said, nothing left beside the file.
+        let kept = place_shapefile(&shp, &stage_shapefile(&parts("newer"))?)?;
+        assert!(kept.is_empty() && kept_backups_note(&shp, &kept).is_none());
+        assert_eq!(entries()?, 2);
+
+        // A part that fails to land (its staged copy gone): every old part is put back.
+        let staged = stage_shapefile(&parts("newest"))?;
+        let (gone, _) = staged.iter().find(|(_, target)| *target == dbf).ok_or("no staged .dbf")?;
+        std::fs::remove_file(gone)?;
+        let error = place_shapefile(&shp, &staged).err().ok_or("placed")?.to_string();
+        assert!(
+            error.contains(&format!("{}: ", shp.display())) && error.ends_with("the old file was put back, nothing changed"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&shp)?, b"newer shp");
+        assert_eq!(std::fs::read(&dbf)?, b"newer dbf");
+        assert_eq!(entries()?, 2);
+
+        // A new file that fails to land had nothing to put back, and says so.
+        let fresh = dir.path().join("fresh.shp");
+        let parts = vec![(fresh.clone(), b"shp".to_vec()), (fresh.with_extension("dbf"), b"dbf".to_vec())];
+        let staged = stage_shapefile(&parts)?;
+        let (gone, _) = staged.iter().find(|(_, target)| *target == fresh).ok_or("no staged .shp")?;
+        std::fs::remove_file(gone)?;
+        let error = place_shapefile(&fresh, &staged).err().ok_or("placed")?.to_string();
+        assert!(error.ends_with("nothing was written") && !error.contains("put back"), "{error}");
+        assert_eq!(entries()?, 2);
+
+        // An export over the file says the old parts it keeps.
+        let mut ds = Dataset::new("parcels", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![]);
+        KEEP_BACKUPS.set(true);
+        let written = write_path_to(&ds, &shp, Crs::LonLat, &GpkgTable::default());
+        KEEP_BACKUPS.set(false);
+        let (_, _, notes) = written?;
+        assert!(notes.len() == 1 && notes.iter().all(|n| n.contains("couldn't be removed")), "{notes:?}");
         Ok(())
     }
 
@@ -8761,5 +8972,210 @@ mod tests {
         let own = shapefile_geometry_notes(&line, "out.shp", utm);
         assert!(own.iter().any(|n| n.contains("1 vertex with a missing or infinite coordinate")), "{own:?}");
         assert!(shapefile_geometry_notes(&line, "out.shp", Crs::Epsg(25832)).is_empty());
+    }
+
+    /// The `.dbf` of three points, named `a`, `b` and `c`, with a numeric `n` of 1, 2 and 3.
+    fn three_named_points(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("pts.shp");
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+        let mut ds = Dataset::new("pts", GeometryType::Point, fields);
+        for (k, name) in ["a", "b", "c"].iter().enumerate() {
+            let x = k as f64;
+            ds.push(Some(Geometry::Point(Coord::new(x, x))), vec![Value::Text((*name).into()), Value::Int(k as i64 + 1)]);
+        }
+        write_path(&ds, &path).unwrap();
+        path
+    }
+
+    /// Where record `k` of a `.dbf` starts (its deletion flag).
+    fn dbf_record_at(dbf: &[u8], k: usize) -> usize {
+        let header = usize::from(u16::from_le_bytes([dbf[8], dbf[9]]));
+        let len = usize::from(u16::from_le_bytes([dbf[10], dbf[11]]));
+        header + k * len
+    }
+
+    /// A Shapefile whose `.dbf` marks its middle record deleted: that record's shape is left out
+    /// with it, each kept shape keeps its own attributes (dBASE's reader passing over the record
+    /// once paired every later shape with the next record, and dropped the last shape), and one
+    /// notice gives the count. A clean file says nothing of it.
+    #[test]
+    fn a_deleted_dbf_record_leaves_its_shape_out_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let deleted = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("marked deleted")).count();
+        let (clean, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(clean.features.len(), 3);
+        assert_eq!(deleted(&report), 0, "{:?}", report.messages);
+        let dbf_path = path.with_extension("dbf");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        let at = dbf_record_at(&dbf, 1);
+        dbf[at] = b'*';
+        std::fs::write(&dbf_path, &dbf).unwrap();
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        let kept: Vec<_> = ds
+            .features
+            .iter()
+            .map(|f| {
+                let Some(Geometry::Point(p)) = f.geometry.clone() else { panic!("a point") };
+                (p.x, f.attrs[0].clone())
+            })
+            .collect();
+        assert_eq!(kept, [(0.0, Value::Text("a".into())), (2.0, Value::Text("c".into()))]);
+        assert_eq!(deleted(&report), 1, "{:?}", report.messages);
+        assert!(
+            report.messages.iter().any(|m| m == "pts: 1 dBASE record marked deleted was left out, with its shape"),
+            "{:?}",
+            report.messages
+        );
+        assert_eq!(report.skipped, 0);
+    }
+
+    /// A shape that can't be read is left out with its own record, counted: the later shapes keep
+    /// theirs (`shapefile`'s pairing read no record for it, shifting every later one), whether or
+    /// not the record is also marked deleted.
+    #[test]
+    fn an_unreadable_shape_leaves_its_own_record_out() {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = three_named_points(dir.path());
+            // The first record's shape type (after the 100-byte header and 8-byte record header).
+            let mut shp = std::fs::read(&path).unwrap();
+            shp[108..112].copy_from_slice(&99i32.to_le_bytes());
+            std::fs::write(&path, &shp).unwrap();
+            if deleted {
+                let dbf_path = path.with_extension("dbf");
+                let mut dbf = std::fs::read(&dbf_path).unwrap();
+                let at = dbf_record_at(&dbf, 0);
+                dbf[at] = b'*';
+                std::fs::write(&dbf_path, &dbf).unwrap();
+            }
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            let names: Vec<_> = ds.features.iter().map(|f| f.attrs[0].clone()).collect();
+            assert_eq!(names, [Value::Text("b".into()), Value::Text("c".into())], "deleted: {deleted}");
+            assert_eq!(report.skipped, usize::from(!deleted), "{:?}", report.messages);
+        }
+    }
+
+    /// With a `.shx`, the shapes past the `.dbf`'s last record are all counted, those that can't
+    /// be read too.
+    #[test]
+    fn shapes_past_the_last_record_are_all_counted_with_an_shx() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let dbf_path = path.with_extension("dbf");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        dbf[4..8].copy_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&dbf_path, &dbf).unwrap();
+        // The second shape's type: each point record is 8 + 20 bytes.
+        let mut shp = std::fs::read(&path).unwrap();
+        shp[136..140].copy_from_slice(&99i32.to_le_bytes());
+        std::fs::write(&path, &shp).unwrap();
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(ds.features.len(), 1);
+        let want = "pts: 2 shape(s) past the .dbf's last record have no attributes and were left out (1 of them can't be read)";
+        assert!(report.messages.iter().any(|m| m == want), "{:?}", report.messages);
+    }
+
+    /// Without a `.shx`, a shape that can't be read ends the pairing: the shapes after it can't be
+    /// found, so the records after it are left out and said rather than paired with what is read
+    /// from inside the broken shape.
+    #[test]
+    fn without_an_shx_an_unreadable_shape_ends_the_pairing() {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = three_named_points(dir.path());
+            std::fs::remove_file(path.with_extension("shx")).unwrap();
+            let mut shp = std::fs::read(&path).unwrap();
+            shp[108..112].copy_from_slice(&99i32.to_le_bytes());
+            std::fs::write(&path, &shp).unwrap();
+            if deleted {
+                let dbf_path = path.with_extension("dbf");
+                let mut dbf = std::fs::read(&dbf_path).unwrap();
+                let at = dbf_record_at(&dbf, 0);
+                dbf[at] = b'*';
+                std::fs::write(&dbf_path, &dbf).unwrap();
+            }
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            assert!(ds.features.is_empty(), "deleted: {deleted}");
+            let last = {
+                let dir = tempfile::tempdir().unwrap();
+                let path = three_named_points(dir.path());
+                std::fs::remove_file(path.with_extension("shx")).unwrap();
+                let mut shp = std::fs::read(&path).unwrap();
+                // The third shape's type: each point record is 8 + 20 bytes.
+                shp[164..168].copy_from_slice(&99i32.to_le_bytes());
+                std::fs::write(&path, &shp).unwrap();
+                read_shapefile_in(&path, "pts", None).unwrap()
+            };
+            assert_eq!((last.0.features.len(), last.1.skipped), (2, 1));
+            assert!(last.1.messages.iter().all(|m| !m.contains("no .shx") && !m.contains("past the")), "{:?}", last.1.messages);
+            assert!(
+                report.messages.iter().any(|m| m.contains("no .shx to find the next one by: the 2 record(s) after it were left out")),
+                "{:?}",
+                report.messages
+            );
+        }
+    }
+
+    /// A `.dbf` one record short leaves the last shape out, and says so; one with a record more
+    /// than the shapes says that. A matching pair says neither.
+    #[test]
+    fn shapes_and_records_that_dont_pair_are_said() {
+        let said = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("past the")).cloned().collect::<Vec<_>>();
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(ds.features.len(), 3);
+        assert!(said(&report).is_empty(), "{:?}", report.messages);
+        let dbf_path = path.with_extension("dbf");
+        let clean = std::fs::read(&dbf_path).unwrap();
+        for (records, want) in [
+            (2u32, "pts: 1 shape(s) past the .dbf's last record have no attributes and were left out"),
+            (4, "pts: 1 dBASE record(s) past the .shp's last shape have no shape and were left out"),
+        ] {
+            let mut dbf = clean.clone();
+            dbf[4..8].copy_from_slice(&records.to_le_bytes());
+            if records == 4 {
+                // A fourth record, a copy of the third, before the end-of-file marker.
+                let (at, len) = (dbf_record_at(&dbf, 2), dbf_record_at(&dbf, 1) - dbf_record_at(&dbf, 0));
+                let row = dbf[at..at + len].to_vec();
+                dbf.splice(at + len..at + len, row);
+            }
+            std::fs::write(&dbf_path, &dbf).unwrap();
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            assert_eq!(ds.features.len(), records.min(3) as usize);
+            assert_eq!(said(&report), [want]);
+        }
+    }
+
+    /// A standalone table: a record marked deleted is left out and counted, and one dBASE can't
+    /// read (a number that isn't one) is left out and said, with the rows on both sides kept.
+    /// Clean input says neither.
+    #[test]
+    fn a_dbf_table_counts_deleted_and_unreadable_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let clean = std::fs::read(path.with_extension("dbf")).unwrap();
+        let notes = |r: &ReadReport| {
+            r.messages.iter().filter(|m| m.contains("marked deleted") || m.contains("unreadable")).cloned().collect::<Vec<_>>()
+        };
+        let (ds, report) = read_bytes("t.dbf", &clean).unwrap();
+        assert_eq!(ds.features.len(), 3);
+        assert!(notes(&report).is_empty(), "{:?}", report.messages);
+        let mut one_deleted = clean.clone();
+        let at = dbf_record_at(&one_deleted, 1);
+        one_deleted[at] = b'*';
+        let (ds, report) = read_bytes("t.dbf", &one_deleted).unwrap();
+        assert_eq!(ds.features.iter().map(|f| f.attrs[0].clone()).collect::<Vec<_>>(), [Value::Text("a".into()), Value::Text("c".into())]);
+        assert_eq!(notes(&report), ["t: 1 dBASE record marked deleted was left out"]);
+        // The `n` column follows the 1-byte flag and the `name` column.
+        let mut unreadable = clean.clone();
+        let name_len = usize::from(unreadable[32 + 16]);
+        let at = dbf_record_at(&unreadable, 1) + 1 + name_len;
+        let n_len = usize::from(unreadable[64 + 16]);
+        unreadable[at..at + n_len].fill(b'x');
+        let (ds, report) = read_bytes("t.dbf", &unreadable).unwrap();
+        assert_eq!(ds.features.iter().map(|f| f.attrs[0].clone()).collect::<Vec<_>>(), [Value::Text("a".into()), Value::Text("c".into())]);
+        assert_eq!(notes(&report), ["t: 1 dBASE record was unreadable and left out"]);
     }
 }
