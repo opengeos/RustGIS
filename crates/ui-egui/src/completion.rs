@@ -12,6 +12,7 @@ use egui::text::CCursor;
 use egui::widgets::text_edit::{TextEditOutput, TextEditState};
 use egui::{Id, Key, Modifiers, Ui};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The list's narrowest width.
 const MIN_WIDTH: f32 = 220.0;
@@ -451,6 +452,10 @@ impl<O: Offered> List<O> {
         // was pressed for, while that list stays open with a help: taken now and handed back below
         // only then.
         let page = std::mem::take(&mut self.scroll.page);
+        // Closed: what the rows said goes with the list.
+        if self.open.is_none() {
+            self.scroll.described = Arc::default();
+        }
         // The window left (another app took the focus, the box keeps its own): the list closes, as a
         // code editor's does, and comes back only once what's typed or the cursor changes.
         if !ui.input(|i| i.focused) {
@@ -513,7 +518,7 @@ impl<O: Offered> List<O> {
             self.scroll = Scroll::default();
         } else if self.open.as_ref().is_some_and(|(o, _)| *o != offer) {
             // The same items, but what they say may not be (a field's type, read again).
-            self.scroll.described.clear();
+            self.scroll.described = Arc::default();
         }
         let kept = self.open.as_ref().and_then(|(o, s)| o.items().get(*s));
         let selected = kept.and_then(|item| offer.items().iter().position(|i| i == item)).unwrap_or(0);
@@ -594,8 +599,10 @@ struct Scroll {
     /// Where the help's box was, the gap before it included: with the pointer there, the help
     /// stays the one shown (the item the pointer left, to read or scroll its help).
     help_at: Option<egui::Rect>,
-    /// What each row says to a screen reader, worked out once (`rows`).
-    described: HashMap<usize, Option<String>>,
+    /// What each row says to a screen reader, worked out once per row while the offer is the same
+    /// (`rows`). Shared, not copied, with each copy of the box's state (`load` clones it every
+    /// frame): a row worked out copies it at most once in that frame.
+    described: Arc<HashMap<usize, Option<String>>>,
     /// Page Up (-1) or Page Down (1) pressed for the help, not yet applied (`rows`).
     page: i32,
     /// How far the help's box scrolled at most last frame: a page down stops there.
@@ -672,11 +679,15 @@ fn rows(
             // What the help says, for a screen reader: worked out only when one is there, and once
             // per row while the list is the same (`Scroll::described`), not for each of some 600
             // rows each frame.
-            if ui.ctx().has_accesskit_node(r.id)
-                && let Some(d) = described.entry(i).or_insert_with(|| describe(i).filter(|d| !d.is_empty()))
-            {
-                let d = d.clone();
-                ui.ctx().accesskit_node_builder(r.id, |node| node.set_description(d));
+            if ui.ctx().has_accesskit_node(r.id) {
+                if !described.contains_key(&i) {
+                    // An empty one says nothing: none is given (a field with no type nor alias).
+                    Arc::make_mut(&mut described).insert(i, describe(i).filter(|d| !d.is_empty()));
+                }
+                if let Some(Some(d)) = described.get(&i) {
+                    let d = d.clone();
+                    ui.ctx().accesskit_node_builder(r.id, |node| node.set_description(d));
+                }
             }
             // Taken as the button goes down, as in a code editor: the press already takes the
             // focus from the box, and a click (down, then up a frame or more later) could find
@@ -839,9 +850,9 @@ struct MenuState {
 /// screen reader focused, which takes the highlight), Enter accepts it, a click accepts
 /// the item clicked, Escape or a press elsewhere closes the list; each item after its `icon`, with
 /// the `help` on the highlighted one, or the one under the pointer, beside it when it `has_help`,
-/// and what it says (`describe`) given to a screen reader with each. The same from the keyboard: Tab to the button,
-/// Enter (or Space) opens it, and Tab on to another widget closes it. Returns the button, and the
-/// item accepted.
+/// and what it says (`describe`) given to a screen reader with each. The same from the keyboard:
+/// Tab to the button, Enter (or Space) opens it, and Tab on to another widget closes it. Returns
+/// the button, and the item accepted.
 pub(crate) fn menu(
     ui: &mut Ui,
     label: impl Into<egui::WidgetText>,
@@ -1722,6 +1733,42 @@ mod tests {
         h.get_by_label("Open").click();
         h.run();
         check(&mut h, &long, "a button's list");
+    }
+
+    /// What the rows say to a screen reader is worked out once and shared, not copied, frame
+    /// after frame (a box's state is cloned on each load), and goes when the list closes.
+    #[test]
+    fn a_list_s_descriptions_are_kept_once_and_go_with_it() {
+        use std::sync::Arc;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+            |ui, list: &mut super::List<Words>| {
+                let id = egui::Id::unique("box");
+                let _ = list.keys(ui, id);
+                let label = ui.label("Expression");
+                let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true };
+                let mut text = String::new();
+                let out = egui::TextEdit::singleline(&mut text).id(id).event_filter(filter).show(ui);
+                let _ = out.response.response.clone().labelled_by(label.id);
+                if !out.response.response.has_focus() {
+                    out.response.response.request_focus();
+                }
+                let visible = ui.clip_rect();
+                let offer = Words(vec!["one".into(), "two".into()]);
+                let describe = |_: &Words, item: &str| Some(format!("about {item}"));
+                list.show(ui, egui::Id::unique("list"), &out, visible, |_| Some(offer), |_, _| None, describe, |_, _, _, _| {});
+            },
+            super::List::default(),
+        );
+        h.run_steps(3);
+        let first = Arc::clone(&h.state().scroll.described);
+        assert_eq!(first.len(), 2, "each row described");
+        h.run_steps(3);
+        assert!(Arc::ptr_eq(&first, &h.state().scroll.described), "not worked out nor copied again");
+        drop(first);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().open.is_none(), "closed");
+        assert!(h.state().scroll.described.is_empty(), "gone with the list");
     }
 
     /// A page pressed on the frame a list closes (Escape, Enter, a click on a row with another
