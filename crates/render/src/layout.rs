@@ -1905,8 +1905,17 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
         Edge::Left | Edge::Right if !vertical => label_px,
         _ => text::measure(s, label_px / 1.33, false),
     };
+    // How far a label reaches in from its edge: past the inset, its height, or a side's flat
+    // label its width.
+    let across = |edge: Edge, s: &str| {
+        inset
+            + match edge {
+                Edge::Left | Edge::Right if !vertical => text::measure(s, label_px / 1.33, false),
+                _ => label_px,
+            }
+    };
     let mut drawn = Vec::new();
-    for (edge, at, s) in kept_labels(labels, (pw, ph), along, label_px, unit) {
+    for (edge, at, s) in kept_labels(labels, (pw, ph), (along, across), label_px, unit) {
         let tw = text::measure(&s, label_px / 1.33, false);
         // Its centre, and half its size across and down (its halo and descenders included).
         let (flat, upright) = ((tw / 2.0, label_px * 0.6), (label_px * 0.6, tw / 2.0));
@@ -2005,8 +2014,9 @@ fn mgrs_squares(
 
 /// The graticule labels drawn, of those at each edge crossing (`labels`: edge, place along it,
 /// text, a meridian's or not) on a frame `size` pixels, `label_h` tall: away from the corners (all
-/// of a label, `along` its edge, fits, and none at a side's ends by a top or bottom label), and
-/// none over another. Meridians are labelled along the top and
+/// of a label, `along` its edge, fits, and none at a side's ends by a top or bottom label), within
+/// the frame across (how far it reaches in from its edge, `across`, at most the frame's other
+/// side: a label larger than a short frame isn't cut by it), and none over another. Meridians are labelled along the top and
 /// bottom and parallels along the sides first; a line that leaves the frame through the other
 /// edges (a slanting meridian on a projected map) is labelled there only well clear of the labels
 /// already set on that edge. Their room from the corners and between them is in `unit`s, a point
@@ -2016,7 +2026,7 @@ fn mgrs_squares(
 fn kept_labels(
     mut labels: Vec<(Edge, f32, String, bool)>,
     (pw, ph): (f32, f32),
-    along: impl Fn(Edge, &str) -> f32,
+    (along, across): (impl Fn(Edge, &str) -> f32, impl Fn(Edge, &str) -> f32),
     label_h: f32,
     unit: f32,
 ) -> Vec<(Edge, f32, String)> {
@@ -2027,7 +2037,10 @@ fn kept_labels(
     for (edge, at, s, lon) in labels {
         let length = along(edge, &s);
         let side = matches!(edge, Edge::Left | Edge::Right);
-        let limit = if side { ph } else { pw };
+        let (limit, room) = if side { (ph, pw) } else { (pw, ph) };
+        if across(edge, &s) > room {
+            continue;
+        }
         // A side's labels keep two label heights from the corners, below the top's labels and
         // above the bottom's, so a corner holds no two.
         let margin = (length / 2.0 + 3.0 * unit).max(12.0 * unit).max(if side { 2.0 * label_h } else { 0.0 });
@@ -8648,8 +8661,17 @@ Elaboração: RustGIS",
             label(Edge::Top, 4.0, "44°W", true),
             label(Edge::Right, 15.0, "2°S", false),
         ];
-        let kept: Vec<String> = kept_labels(labels, (600.0, 500.0), along, 10.0, 1.0).into_iter().map(|(.., s)| s).collect();
+        let kept: Vec<String> =
+            kept_labels(labels.clone(), (600.0, 500.0), (along, |_: Edge, _: &str| 20.0), 10.0, 1.0).into_iter().map(|(.., s)| s).collect();
         assert_eq!(kept, ["6°S", "42°W", "34°W"]);
+        // Labels reaching further in than a short frame is across are left out, not cut by it:
+        // on a frame 30 pixels tall, the top's; the sides', 600 wide, keep theirs.
+        let kept: Vec<String> = kept_labels(labels, (600.0, 30.0), (along, |_: Edge, _: &str| 40.0), 10.0, 1.0)
+            .into_iter()
+            .filter(|(edge, ..)| *edge == Edge::Top)
+            .map(|(.., s)| s)
+            .collect();
+        assert!(kept.is_empty(), "{kept:?}");
     }
 
     /// A layout with a decimal comma swaps the marks of the numbers it prints, `{scale}` included,
