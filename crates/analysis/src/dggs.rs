@@ -55,9 +55,9 @@ impl System {
 
     fn parse(s: &str) -> Result<System, String> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "" | "h3" => Ok(System::H3),
+            "" | "a5" => Ok(System::A5),
+            "h3" => Ok(System::H3),
             "s2" => Ok(System::S2),
-            "a5" => Ok(System::A5),
             "hexagon" | "hex" => Ok(System::Hexagon),
             other => Err(System::unknown(other)),
         }
@@ -976,19 +976,16 @@ fn too_much_work(res: i32) -> String {
 /// The system a tool's `system` parameter names: H3 when it's left out.
 fn system_of(p: &Json) -> Result<System, String> {
     match p.get("system") {
-        None | Some(Json::Null) => Ok(System::H3),
+        // A5 when it names none: the tools were A5's before they took a system.
+        None | Some(Json::Null) => Ok(System::A5),
         Some(Json::String(s)) => System::parse(s),
         Some(other) => Err(System::unknown(&other.to_string())),
     }
 }
 
-/// The A5 Grid tool: [`tessellate`] in A5.
+/// The Generate Tessellation tool (`a5Grid`): [`tessellate`] in the system the `system`
+/// parameter names, A5 when it names none.
 pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    tessellate(inp, p, System::A5)
-}
-
-/// The Generate Tessellation tool: [`tessellate`] in the system the `system` parameter names.
-pub fn tessellation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     tessellate(inp, p, system_of(p)?)
 }
 
@@ -1121,13 +1118,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
     Ok(ToolResult { losses: Vec::new(), output: Output::Layer(out), messages: vec![msg] })
 }
 
-/// The Aggregate Points to A5 tool: [`aggregate_in`] A5.
+/// The Aggregate Points to Grid tool (`a5Aggregate`): [`aggregate_in`] the system the `system`
+/// parameter names, A5 when it names none.
 pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    aggregate_in(inp, p, System::A5)
-}
-
-/// The Aggregate Points to Grid tool: [`aggregate_in`] the system the `system` parameter names.
-pub fn aggregate_to_grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     aggregate_in(inp, p, system_of(p)?)
 }
 
@@ -1517,7 +1510,7 @@ mod tests {
         for (system, res) in SYSTEMS {
             let inp = One(points(&pts), Some(bogota));
             let p = serde_json::json!({"system": system, "resolution": res});
-            let d = layer(tessellation(&inp, &p).unwrap());
+            let d = layer(grid(&inp, &p).unwrap());
             let key = System::parse(system).unwrap().field();
             assert_eq!(d.fields[0].name, key);
             assert!(d.features.len() > 4, "{system}: {}", d.features.len());
@@ -1528,9 +1521,8 @@ mod tests {
                 assert!(p.iter().all(|part| part[0].first() == part[0].last()), "{system}");
             }
             assert!((0..d.features.len()).all(|r| d.value(r, 2).as_f64().is_some_and(|a| a > 0.0)), "{system}: areas");
-            let by = layer(
-                aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts", "field": "v"})).unwrap(),
-            );
+            let by =
+                layer(aggregate(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts", "field": "v"})).unwrap());
             let count = by.field_index("count").unwrap();
             let total: i64 = (0..by.features.len()).map(|r| by.value(r, count).as_f64().unwrap() as i64).sum();
             assert_eq!(total, 4, "{system}");
@@ -1560,14 +1552,14 @@ mod tests {
                     // Web Mercator doesn't reach it: the point is left out, and said to be,
                     // never put in the edge cell its latitude would be clamped to.
                     let inp = One(points(&[(x, y, 1.0), (-74.08, 4.6, 1.0)]), None);
-                    let r = aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap();
+                    let r = aggregate(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap();
                     assert!(r.messages[0].contains("1 point without a usable position was left out"), "{x},{y}: {:?}", r.messages);
                     assert_eq!(layer(r).features.len(), 1);
                     continue;
                 }
                 let inp = One(points(&[(x, y, 1.0)]), None);
                 let r = if polar { res.min(5) } else { res };
-                let by = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": r, "input": "pts"})).unwrap());
+                let by = layer(aggregate(&inp, &serde_json::json!({"system": system, "resolution": r, "input": "pts"})).unwrap());
                 assert_eq!(by.features.len(), 1, "{system} {x},{y}");
                 assert!(holds(&by, 0, Coord::new(x, y)), "{system} {x},{y}: {:?}", by.features[0].geometry);
             }
@@ -1584,8 +1576,7 @@ mod tests {
         for (system, res) in [("H3", 3), ("S2", 6), ("Hexagon", 5)] {
             let inp = One(across.clone(), None);
             let d = layer(
-                tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"}))
-                    .unwrap(),
+                grid(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"})).unwrap(),
             );
             for lon in [175.0, -175.0] {
                 assert!((0..d.features.len()).any(|r| holds(&d, r, Coord::new(lon, 5.0))), "{system} {lon}");
@@ -1604,7 +1595,7 @@ mod tests {
     #[test]
     fn the_world_and_the_cap() {
         let inp = One(points(&[]), Some(Extent::new(-75.0, -35.0, -35.0, 5.0)));
-        let world = |system: &str, res: i32| tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "World"}));
+        let world = |system: &str, res: i32| grid(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "World"}));
         assert_eq!(layer(world("H3", 0).unwrap()).features.len(), 122);
         assert_eq!(layer(world("S2", 2).unwrap()).features.len(), 96);
         let h3 = layer(world("H3", 1).unwrap());
@@ -1621,7 +1612,7 @@ mod tests {
         // Refused before any covering: far too many for the view, as cells, or (S2's descent, the
         // hexagon grid's rows) as cells to look at.
         for (system, res) in [("H3", 15), ("S2", 30), ("Hexagon", 24)] {
-            let e = tessellation(&inp, &serde_json::json!({"system": system, "resolution": res})).unwrap_err();
+            let e = grid(&inp, &serde_json::json!({"system": system, "resolution": res})).unwrap_err();
             assert!(e.contains("too many") || e.contains(&format!("looking at more than {MAX_WORK} cells")), "{system}: {e}");
         }
         // What a run looks at is counted over all its polygons: one block is covered, but many
@@ -1637,20 +1628,18 @@ mod tests {
                 One(d, None)
             };
             let p = serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"});
-            let one = layer(tessellation(&copies(1), &p).unwrap()).features.len() as u64;
+            let one = layer(grid(&copies(1), &p).unwrap()).features.len() as u64;
             let n = (MAX_WORK / one + 2) as usize;
-            let e = tessellation(&copies(n), &p).unwrap_err();
+            let e = grid(&copies(n), &p).unwrap_err();
             // S2's polygons are summed by the estimate made before any is covered, so its run is
             // refused there; the hexagon grid's, by what its rows look at.
             let expected = if system == "S2" { "too many" } else { "looking at more than" };
             assert!(e.contains(expected), "{system}: {one} cells, {n} copies: {e}");
         }
         // Past 85.05° Web Mercator doesn't reach: the hexagon grid's area is cut there, and said to be.
-        let north = tessellation(
-            &One(points(&[]), Some(Extent::new(-10.0, 80.0, 10.0, 89.0))),
-            &serde_json::json!({"system": "Hexagon", "resolution": 6}),
-        )
-        .unwrap();
+        let north =
+            grid(&One(points(&[]), Some(Extent::new(-10.0, 80.0, 10.0, 89.0))), &serde_json::json!({"system": "Hexagon", "resolution": 6}))
+                .unwrap();
         assert!(
             north.messages[0].contains("the area beyond 85.05° north, which Web Mercator doesn't reach, was left out"),
             "{:?}",
@@ -1663,15 +1652,14 @@ mod tests {
             _ => false,
         }));
         // Wholly past it, the area is refused, and the side named.
-        let e = tessellation(
+        let e = grid(
             &One(points(&[]), Some(Extent::new(-10.0, -89.0, 10.0, -86.0))),
             &serde_json::json!({"system": "Hexagon", "resolution": 6}),
         )
         .unwrap_err();
         assert!(e.contains("beyond 85.05° south, which Web Mercator doesn't reach"), "{e}");
         // Every point left out: the error says why.
-        let e = aggregate_to_grid(&One(points(&[(0.0, 89.0, 1.0)]), None), &serde_json::json!({"system": "Hexagon", "input": "pts"}))
-            .unwrap_err();
+        let e = aggregate(&One(points(&[(0.0, 89.0, 1.0)]), None), &serde_json::json!({"system": "Hexagon", "input": "pts"})).unwrap_err();
         assert!(e.contains("no points to count: 1 point without a usable position was left out"), "{e}");
         // A hole without a usable outline is left out, and said to be: its area is covered.
         let square =
@@ -1679,7 +1667,7 @@ mod tests {
         let mut holed = Dataset::new("pts", GeometryType::Polygon, vec![]);
         holed.push(Some(Geometry::Polygon(vec![vec![square.clone(), vec![Coord::new(-74.1, 4.6), Coord::new(-74.05, 4.6)]]])), vec![]);
         let p = serde_json::json!({"system": "H3", "resolution": 7, "area": "Input Layer", "input": "pts"});
-        let r = tessellation(&One(holed, None), &p).unwrap();
+        let r = grid(&One(holed, None), &p).unwrap();
         assert!(
             r.messages[0].contains("1 hole without a usable outline was left out, so the area inside is covered too"),
             "{:?}",
@@ -1687,7 +1675,7 @@ mod tests {
         );
         let mut plain = Dataset::new("pts", GeometryType::Polygon, vec![]);
         plain.push(Some(Geometry::Polygon(vec![vec![square]])), vec![]);
-        assert!(!tessellation(&One(plain, None), &p).unwrap().messages[0].contains("hole"));
+        assert!(!grid(&One(plain, None), &p).unwrap().messages[0].contains("hole"));
         for bad in [
             serde_json::json!({"system": 5}),
             serde_json::json!({"system": "H3", "resolution": 16}),
@@ -1696,8 +1684,8 @@ mod tests {
             serde_json::json!({"system": "S2", "resolution": -1}),
             serde_json::json!({"system": "ISEA3H"}),
         ] {
-            assert!(tessellation(&inp, &bad).is_err(), "{bad}");
-            assert!(aggregate_to_grid(&One(points(&[(0.0, 0.0, 1.0)]), None), &bad).is_err(), "{bad}");
+            assert!(grid(&inp, &bad).is_err(), "{bad}");
+            assert!(aggregate(&One(points(&[(0.0, 0.0, 1.0)]), None), &bad).is_err(), "{bad}");
         }
     }
 
@@ -1706,7 +1694,7 @@ mod tests {
     fn ids_are_the_systems_own() {
         let inp = One(points(&[(-74.08, 4.6, 1.0)]), None);
         let at = |system: &str, res: i32| {
-            let d = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap());
+            let d = layer(aggregate(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap());
             d.value(0, 0).to_string()
         };
         let h3 = h3o::LatLng::new(4.6, -74.08).unwrap().to_cell(h3o::Resolution::Nine).to_string();
@@ -1717,14 +1705,14 @@ mod tests {
         assert_eq!(at("A5", 9), a5::u64_to_hex(a5::lonlat_to_cell(a5::LonLat::new(-74.08, 4.6), 9).unwrap()));
         // The origin's hexagon is 0,0, and its neighbours' coordinates are a step away.
         let origin = One(points(&[(0.0, 0.0, 1.0)]), None);
-        let d = layer(aggregate_to_grid(&origin, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
+        let d = layer(aggregate(&origin, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
         assert_eq!(d.value(0, 0).to_string(), "0,0");
         assert_eq!(d.value(0, 3).to_string(), "Web Mercator");
         for (q, r) in [(3, -2), (-7, 11), (0, 1)] {
             let hex = Hex::at(10);
             let c = rustgis_geom::merc_to_lonlat(hex.centre(q, r));
             let one = One(points(&[(c.x, c.y, 1.0)]), None);
-            let d = layer(aggregate_to_grid(&one, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
+            let d = layer(aggregate(&one, &serde_json::json!({"system": "Hexagon", "resolution": 10, "input": "pts"})).unwrap());
             assert_eq!(d.value(0, 0).to_string(), format!("{q},{r}"));
         }
     }
@@ -1735,14 +1723,14 @@ mod tests {
     fn the_hexagon_grid_is_anchored_on_the_maps_plane() {
         let p = serde_json::json!({"system": "Hexagon", "resolution": 12});
         let cells = |e: Extent| {
-            let d = layer(tessellation(&Flat(points(&[]), Some(e)), &p).unwrap());
+            let d = layer(grid(&Flat(points(&[]), Some(e)), &p).unwrap());
             (0..d.features.len()).map(|r| (d.value(r, 0).to_string(), format!("{:?}", d.features[r].geometry))).collect::<HashMap<_, _>>()
         };
         let (a, b) = (cells(Extent::new(-74.2, 4.5, -74.0, 4.7)), cells(Extent::new(-74.1, 4.6, -73.9, 4.8)));
         let shared: Vec<&String> = a.keys().filter(|k| b.contains_key(*k)).collect();
         assert!(!shared.is_empty());
         assert!(shared.iter().all(|k| a[*k] == b[*k]), "the same cell, the same outline");
-        let d = layer(tessellation(&Flat(points(&[]), Some(Extent::new(-74.2, 4.5, -74.0, 4.7))), &p).unwrap());
+        let d = layer(grid(&Flat(points(&[]), Some(Extent::new(-74.2, 4.5, -74.0, 4.7))), &p).unwrap());
         assert_eq!(d.value(0, 3).to_string(), "Plate Carrée");
         // On the plate carrée plane its corners are a side's length from its centre.
         let Some(Geometry::Polygon(poly)) = &d.features[0].geometry else { panic!("a polygon") };
@@ -1757,13 +1745,10 @@ mod tests {
         let wide =
             vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 1.0), Coord::new(170.0, 1.0), Coord::new(170.0, 0.0)];
         far.push(Some(Geometry::Polygon(vec![vec![wide]])), vec![]);
-        let e = tessellation(
-            &Flat(far, None),
-            &serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"}),
-        )
-        .unwrap_err();
+        let e = grid(&Flat(far, None), &serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"}))
+            .unwrap_err();
         assert!(e.contains("(Plate Carrée) doesn't reach the whole area"), "{e}");
-        let edge = tessellation(
+        let edge = grid(
             &Flat(points(&[]), Some(Extent::new(172.0, 0.0, 174.99, 2.0))),
             &serde_json::json!({"system": "Hexagon", "resolution": 9}),
         )
@@ -1781,17 +1766,18 @@ mod tests {
         }));
     }
 
-    /// Generate Tessellation in A5 is A5 Grid, and Aggregate Points to Grid in A5 is Aggregate
-    /// Points to A5.
+    /// A model or script saved before the tools took a system names none, and gets A5, as it did.
     #[test]
     fn a5_through_the_shared_tools_is_unchanged() {
         let inp = One(points(&[(-55.72, -12.55, 1.0), (10.75, 59.91, 2.0)]), Some(Extent::new(-56.5, -13.5, -55.0, -12.0)));
-        let p = serde_json::json!({"resolution": 7, "system": "A5"});
-        let (a, b) = (grid(&inp, &p).unwrap(), tessellation(&inp, &p).unwrap());
+        let (old, a5) = (serde_json::json!({"resolution": 7}), serde_json::json!({"resolution": 7, "system": "A5"}));
+        let (a, b) = (grid(&inp, &old).unwrap(), grid(&inp, &a5).unwrap());
+        assert!(a.messages[0].starts_with("A5 grid: "), "{:?}", a.messages);
         assert_eq!(a.messages, b.messages);
         assert_eq!(format!("{:?}", layer(a)), format!("{:?}", layer(b)));
-        let p = serde_json::json!({"resolution": 9, "system": "A5", "input": "pts", "field": "v"});
-        let (a, b) = (aggregate(&inp, &p).unwrap(), aggregate_to_grid(&inp, &p).unwrap());
+        let old = serde_json::json!({"resolution": 9, "input": "pts", "field": "v"});
+        let a5 = serde_json::json!({"resolution": 9, "system": "A5", "input": "pts", "field": "v"});
+        let (a, b) = (aggregate(&inp, &old).unwrap(), aggregate(&inp, &a5).unwrap());
         assert_eq!(a.messages, b.messages);
         assert_eq!(format!("{:?}", layer(a)), format!("{:?}", layer(b)));
     }

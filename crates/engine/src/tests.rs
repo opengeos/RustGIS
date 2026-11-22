@@ -6752,17 +6752,14 @@ fn tessellations_and_points_by_cell_in_every_system() {
     for (system, res, key) in [("H3", 1, "h3"), ("S2", 3, "s2"), ("A5", 2, "a5"), ("Hexagon", 2, "hex")] {
         let out = format!("{system} cells");
         let r = s
-            .run("gp.run", &json!({"tool": "dggsGrid", "params": {"system": system, "resolution": res, "area": "World", "output": out}}))
+            .run("gp.run", &json!({"tool": "a5Grid", "params": {"system": system, "resolution": res, "area": "World", "output": out}}))
             .unwrap();
         let cells = s.map().layer_by_name(&out).unwrap_or_else(|| panic!("{r}"));
         assert_eq!(cells.dataset.fields[0].name, key);
         assert!(cells.dataset.features.len() > 12, "{system}");
         let by = format!("{system} by cell");
-        s.run(
-            "gp.run",
-            &json!({"tool": "dggsAggregate", "params": {"system": system, "input": "Cities", "resolution": res, "output": by}}),
-        )
-        .unwrap();
+        s.run("gp.run", &json!({"tool": "a5Aggregate", "params": {"system": system, "input": "Cities", "resolution": res, "output": by}}))
+            .unwrap();
         assert_eq!(counted(&s, &by), cities, "{system}");
     }
     let plane = |s: &Session, name: &str| s.map().layer_by_name(name).unwrap().dataset.value(0, 3).to_string();
@@ -6773,7 +6770,7 @@ fn tessellations_and_points_by_cell_in_every_system() {
     let r = s
         .run(
             "gp.run",
-            &json!({"tool": "dggsAggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "moll"}}),
+            &json!({"tool": "a5Aggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "moll"}}),
         )
         .unwrap();
     assert!(plane(&s, "moll").contains("ollweide"), "{}", plane(&s, "moll"));
@@ -6783,7 +6780,7 @@ fn tessellations_and_points_by_cell_in_every_system() {
     let r = s
         .run(
             "gp.run",
-            &json!({"tool": "dggsGrid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": "moll world"}}),
+            &json!({"tool": "a5Grid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": "moll world"}}),
         )
         .unwrap();
     assert!(s.map().layer_by_name("moll world").is_some_and(|l| l.dataset.features.len() > 12), "{r}");
@@ -6791,11 +6788,11 @@ fn tessellations_and_points_by_cell_in_every_system() {
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     s.run(
         "gp.run",
-        &json!({"tool": "dggsAggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "globe"}}),
+        &json!({"tool": "a5Aggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "globe"}}),
     )
     .unwrap();
     assert_eq!(plane(&s, "globe"), "Web Mercator");
-    assert!(s.run("gp.run", &json!({"tool": "dggsGrid", "params": {"system": "H3", "resolution": 7, "area": "World"}})).is_err());
+    assert!(s.run("gp.run", &json!({"tool": "a5Grid", "params": {"system": "H3", "resolution": 7, "area": "World"}})).is_err());
 }
 
 #[test]
