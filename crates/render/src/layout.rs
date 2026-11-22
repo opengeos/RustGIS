@@ -2284,9 +2284,6 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     } else {
         DEFAULT_SCALE_LABEL_SIZE
     };
-    let px = label_pt as f32 * 1.33 * ppp as f32;
-    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
-    let gap = 3.0 * ppp as f32;
     // The unit's words: its abbreviation unless the bar names it, on one line.
     let unit: String = match bar.unit_label {
         None => abbr.to_string(),
@@ -2294,6 +2291,26 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     };
     let has_unit = !unit.trim().is_empty();
     let unit_at = bar.unit_label_position;
+    let rows = bar_rows(bar.label_position, unit_at, has_unit);
+    let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
+    // How far `n` lines of text `px` high reach out from the bar: the middle of the last and half
+    // a line past it.
+    let reach = |n: usize, px: f32| if n == 0 { 0.0 } else { (1.3 + 1.25 * (n - 1) as f32) * px };
+    // A bar with a line of its own for its unit or another label size: its lines written smaller
+    // (never under 4 pt) where they and the bar need more than the box's height, and kept inside
+    // it. The plain bar, one line at the default size, draws as it always has.
+    let kept_inside = rows.up + rows.down > 1 || label_pt != DEFAULT_SCALE_LABEL_SIZE;
+    let full_px = label_pt as f32 * 1.33 * ppp as f32;
+    let per_px = reach(rows.up, 1.0) + reach(rows.down, 1.0);
+    let squeezed = kept_inside && per_px > 0.0 && bar_h + per_px * full_px > r.height();
+    let px = if squeezed {
+        let least = (*SCALE_LABEL_SIZE.start() as f32 * 1.33 * ppp as f32).min(full_px);
+        ((r.height() - bar_h) / per_px).clamp(least, full_px)
+    } else {
+        full_px
+    };
+    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
+    let gap = 3.0 * ppp as f32;
     // The pixels a unit after the bar takes from it, at most half the bar's room.
     let beside = if has_unit && unit_at == UnitLabelPosition::AfterBar {
         (text::measure(&unit, px / 1.33, false) + gap + ppp as f32).min(r.width() * BAR_SHARE as f32 * 0.5)
@@ -2340,12 +2357,16 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         let v = number(total, divs, j as isize - before as isize);
         if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels { format!("{v} {unit}") } else { v }
     };
-    let rows = bar_rows(bar.label_position, unit_at, has_unit);
     // Each line above the bar moves it down, each below up; labels over it alone leave it where it
     // always was.
     let centre = 0.62 + 0.12 * (rows.up as f32 - 1.0 - rows.down as f32);
-    let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    let (x0, y0) = (r.x() + BAR_INSET + pad, r.y() + r.height() * centre - bar_h / 2.0);
+    let mut y0 = r.y() + r.height() * centre - bar_h / 2.0;
+    if squeezed {
+        // Its smaller lines inside the box: from its top, if they can't all be.
+        let (top, bottom) = (r.y() + reach(rows.up, px), r.bottom() - reach(rows.down, px) - bar_h);
+        y0 = if top <= bottom { y0.clamp(top, bottom) } else { top };
+    }
+    let x0 = r.x() + BAR_INSET + pad;
     // The middle of text line `n` out from the bar.
     let row = |n: usize| (0.7 + 1.25 * n as f32) * px;
     let seg = len / divs as f32;
@@ -2439,8 +2460,28 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
             UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
             UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
         };
-        text::text_at(pm, &unit, x, y, px, dark, false, align, false);
+        // After the bar, in the room kept for it: shortened with an ellipsis, or left out when not
+        // even its first character fits.
+        let shown = if unit_at == UnitLabelPosition::AfterBar {
+            match shortened(&unit, beside - gap - ppp as f32, |s| text::measure(s, px / 1.33, false)) {
+                Some(t) => t,
+                None => return,
+            }
+        } else {
+            unit
+        };
+        text::text_at(pm, &shown, x, y, px, dark, false, align, false);
     }
+}
+
+/// `t` as it fits `room` pixels measured by `measure`: whole, or cut a character at a time and
+/// ended with an ellipsis, keeping at least one character. `None` when not even that fits.
+fn shortened(t: &str, room: f32, measure: impl Fn(&str) -> f32) -> Option<String> {
+    if measure(t) <= room {
+        return Some(t.to_string());
+    }
+    let chars: Vec<char> = t.chars().collect();
+    (1..chars.len()).rev().map(|n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end())).find(|s| measure(s) <= room)
 }
 
 /// The text lines a scale bar has above and below it, and the line its unit takes on its side
@@ -8805,10 +8846,51 @@ Elaboração: RustGIS",
                     let room = width as f32 * 0.85 * 0.5;
                     let (least, most) = ((room * 0.4) as u32 - 2, (room + 2.0) as u32);
                     assert!(end >= a + least && end <= a + most, "width {width}: the bar keeps half its room, {a}..{end}");
-                    assert!(unit.is_some_and(|x| x >= end + 3), "width {width}: the unit after the bar, from {unit:?}");
+                    // Shortened to the room kept for it, the unit stays inside the bar's room and
+                    // the element; at 40 px it may not fit at all and is left out.
+                    if width > 40 {
+                        assert!(unit.is_some_and(|x| x >= end + 3), "width {width}: the unit after the bar, from {unit:?}");
+                    }
+                    let inside = (BAR_INSET + width as f32 * 0.85 + 1.0).min(width as f32 - 1.0) as u32;
+                    let past = (inside..width).find(|&x| marked(x));
+                    assert!(past.is_none(), "width {width}: the unit stays in the bar's room, ink at {past:?}");
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_unit_label_after_the_bar_is_shortened_to_its_room() {
+        let measure = |s: &str| s.chars().count() as f32 * 10.0;
+        assert_eq!(shortened("Feet", 40.0, measure).as_deref(), Some("Feet"));
+        assert_eq!(shortened("Kilometres", 40.0, measure).as_deref(), Some("Kil…"));
+        assert_eq!(shortened("Kilo metres", 60.0, measure).as_deref(), Some("Kilo…"), "no space before the ellipsis");
+        assert_eq!(shortened("Kilometres", 20.0, measure).as_deref(), Some("K…"));
+        assert_eq!(shortened("Kilometres", 19.0, measure), None, "nothing when not even a letter fits");
+        assert_eq!(shortened("", -1.0, measure), None);
+    }
+
+    /// A bar in a box too short for its lines writes them smaller, all inside the box.
+    #[test]
+    fn a_scale_bar_unit_label_row_stays_inside_a_short_box() {
+        let bar = BarOptions {
+            unit_label: Some("Kilometres"),
+            unit_label_position: UnitLabelPosition::Above,
+            label_position: ScaleLabelPosition::Below,
+            units: ScaleUnits::Kilometers,
+            ..BarOptions::default()
+        };
+        // A 20 px box in the middle of a taller page, so ink outside it would show.
+        let mut pm = Pixmap::new(300, 60).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let r = Rect::from_xywh(0.0, 20.0, 300.0, 20.0).unwrap();
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+        // Any mark, the small text's light edges too.
+        let marked = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|p| p.red() < 250 || p.green() < 250 || p.blue() < 250);
+        let rows: Vec<u32> = (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| marked(x, y))).collect();
+        assert!(!rows.is_empty() && rows.iter().all(|y| (20..40).contains(y)), "inside the box: {rows:?}");
+        // Above the bar and under it: the unit and the labels both drawn.
+        assert!(rows.first().is_some_and(|&y| y < 26) && rows.last().is_some_and(|&y| y > 33), "{rows:?}");
     }
 
     /// A page draws its scale bar's details through `draw_page`: the unit label in the bar's colour.
