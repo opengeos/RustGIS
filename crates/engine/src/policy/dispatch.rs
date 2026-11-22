@@ -1010,8 +1010,10 @@ impl Session {
                     crate::cmd::project::take_first_layer_system(self, &before);
                 }
                 #[cfg(any(test, feature = "declaration-check"))]
-                if let Some(before) = declared {
-                    assert!(self.restored().layers == before, "{} doesn't mutate but changed the layers", spec.id);
+                if let Some(before) = declared
+                    && self.restored().layers != before
+                {
+                    self.declaration_broken.get_or_insert_with(|| format!("{} doesn't mutate but changed the layers", spec.id));
                 }
                 self.url_completion_landed(spec.id, &params, &result);
                 if result.is_ok() && (spec.mutates || spec.effects.contains(crate::policy::Effect::History)) && spec.id != "data.similar" {
