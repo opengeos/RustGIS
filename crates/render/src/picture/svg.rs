@@ -125,8 +125,9 @@ fn undrawn(n: roxmltree::Node) -> bool {
 /// Whether a marker may be drawn on a shape inside another marker: usvg draws it on each of that
 /// marker's vertices wherever that marker is (its `convert_children` of a marker), which
 /// [`elements`] doesn't count. A shape takes one by its own or an ancestor's attribute or `style`,
-/// or from a style sheet, whose reach isn't read here, so any sheet naming markers counts. One
-/// marker can only nest itself, a cycle usvg drops.
+/// or from a style sheet, whose reach isn't read here, so any sheet naming markers counts; one a
+/// `<use>` in a marker repeats is inside it too. One marker can only nest itself, a cycle usvg
+/// drops.
 fn nested_markers(doc: &roxmltree::Document) -> bool {
     let markers: Vec<_> = doc.descendants().filter(|n| n.has_tag_name("marker")).collect();
     if markers.len() < 2 {
@@ -141,7 +142,12 @@ fn nested_markers(doc: &roxmltree::Document) -> bool {
     };
     let shape =
         |n: &roxmltree::Node| matches!(n.tag_name().name(), "path" | "line" | "polyline" | "polygon" | "rect" | "circle" | "ellipse");
-    markers.iter().any(|m| m.descendants().filter(shape).any(|s| sheet || s.ancestors().any(carries)))
+    let nested = |s: roxmltree::Node| sheet || s.ancestors().any(carries);
+    // A `<use>` in a marker repeats a shape from anywhere, which takes a marker of its own or one
+    // inherited from that marker.
+    let uses = markers.iter().any(|m| m.descendants().any(|n| n.has_tag_name("use")));
+    markers.iter().any(|m| m.descendants().filter(shape).any(nested))
+        || (uses && (doc.descendants().filter(shape).any(nested) || markers.iter().any(|m| m.ancestors().any(carries))))
 }
 
 /// Style element `n`'s sheet: its text, comments left out, as usvg reads it (`style_texts`).
@@ -648,6 +654,14 @@ mod tests {
             ),
             format!(
                 r#"<style>path {{ marker-mid: url(#b) }}</style><marker id="b"><circle r="1"/></marker><marker id="a"><path d="{zigzag}"/></marker>"#
+            ),
+            // A shape a `<use>` inside a marker repeats, with a marker of its own or one inherited
+            // from that marker.
+            format!(
+                r##"<marker id="b"><circle r="1"/></marker><path id="p" d="{zigzag}" marker-mid="url(#b)"/><marker id="a"><use href="#p"/></marker>"##
+            ),
+            format!(
+                r##"<marker id="b"><circle r="1"/></marker><path id="p" d="{zigzag}"/><marker id="a" marker-mid="url(#b)"><use href="#p"/></marker>"##
             ),
         ] {
             let body = format!(r#"{nested}<path d="{zigzag}" marker-mid="url(#a)"/>"#);
