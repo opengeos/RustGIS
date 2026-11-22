@@ -11363,7 +11363,7 @@ fn layout_scale_bars_take_their_details() {
         }
         k => panic!("{k:?}"),
     };
-    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, 0, 8.0, ScaleBarFit::AdjustDivisionValue);
+    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, None, 8.0, ScaleBarFit::AdjustDivisionValue);
     assert_eq!(details(&s, bar), plain);
     s.run(
         "layout.update",
@@ -11371,8 +11371,16 @@ fn layout_scale_bars_take_their_details() {
             "unitLabelPosition": "afterBar", "decimals": 2, "labelSize": 10.5, "fit": "adjustDivision"}),
     )
     .unwrap();
-    let all =
-        (3, 1, ScaleLabelPosition::Below, Some("Feet".to_string()), UnitLabelPosition::AfterBar, 2, 10.5, ScaleBarFit::AdjustDivision);
+    let all = (
+        3,
+        1,
+        ScaleLabelPosition::Below,
+        Some("Feet".to_string()),
+        UnitLabelPosition::AfterBar,
+        Some(2),
+        10.5,
+        ScaleBarFit::AdjustDivision,
+    );
     assert_eq!(details(&s, bar), all);
     // One undo step brings the whole bar back.
     s.run("edit.undo", &Value::Null).unwrap();
@@ -11384,7 +11392,12 @@ fn layout_scale_bars_take_their_details() {
     assert_eq!((details(&s, bar).6, details(&s, bar).7), (12.0, ScaleBarFit::AdjustWidth));
     // Null keeps a value, except a unit label's: the abbreviation again. "" prints none. 1 subdivision is none.
     s.run("layout.update", &json!({"element": bar, "decimals": null, "fit": null, "unitLabel": "", "subdivisions": 1})).unwrap();
-    assert_eq!((details(&s, bar).0, details(&s, bar).3.clone(), details(&s, bar).5), (0, Some(String::new()), 2));
+    assert_eq!((details(&s, bar).0, details(&s, bar).3.clone(), details(&s, bar).5), (0, Some(String::new()), Some(2)));
+    // Decimals as a chart's: "auto" gives each label the decimals it needs again; 0 is fixed.
+    s.run("layout.update", &json!({"element": bar, "decimals": " Auto "})).unwrap();
+    assert_eq!(details(&s, bar).5, None);
+    s.run("layout.update", &json!({"element": bar, "decimals": 0})).unwrap();
+    assert_eq!(details(&s, bar).5, Some(0));
     s.run("layout.update", &json!({"element": bar, "unitLabel": null})).unwrap();
     assert_eq!(details(&s, bar).3, None);
     // The limits themselves are taken.
@@ -11404,6 +11417,9 @@ fn layout_scale_bars_take_their_details() {
         json!({"divisionsBeforeZero": 3}),
         json!({"divisionsBeforeZero": []}),
         json!({"decimals": 4}),
+        json!({"decimals": -1}),
+        json!({"decimals": 2.5}),
+        json!({"decimals": "two"}),
         json!({"decimals": {}}),
         json!({"labelSize": 3.9}),
         json!({"labelSize": 24.1}),
@@ -11446,7 +11462,7 @@ fn layout_scale_bars_take_their_details() {
         .unwrap() as u32;
     assert_eq!(
         details(&s, added),
-        (2, 2, ScaleLabelPosition::Below, Some("Kilometres".into()), UnitLabelPosition::Above, 1, 9.0, ScaleBarFit::AdjustWidth)
+        (2, 2, ScaleLabelPosition::Below, Some("Kilometres".into()), UnitLabelPosition::Above, Some(1), 9.0, ScaleBarFit::AdjustWidth)
     );
     let count = s.project.layouts[0].elements.len();
     for bad in [
@@ -11461,12 +11477,14 @@ fn layout_scale_bars_take_their_details() {
         assert_eq!(s.project.layouts[0].elements.len(), count, "{bad}");
     }
     let arrow = find(&s, "northArrow").id;
-    for bad in [json!({"decimals": 2}), json!({"unitLabel": null}), json!({"fit": "adjustWidth"})] {
+    for bad in [json!({"unitLabel": null}), json!({"fit": "adjustWidth"})] {
         let mut p = bad.clone();
         p["element"] = json!(arrow);
         let err = s.run("layout.update", &p).unwrap_err();
         assert!(err.contains("only scale bars"), "{err}");
     }
+    // Decimals, which a chart takes too, are refused for the other elements still.
+    assert!(s.run("layout.update", &json!({"element": arrow, "decimals": 2})).is_err());
     // A locked bar takes no change, a null unit label included.
     s.run("layout.update", &json!({"element": bar, "locked": true})).unwrap();
     for p in [json!({"decimals": 1}), json!({"unitLabel": null})] {

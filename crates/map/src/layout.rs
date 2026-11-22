@@ -1129,9 +1129,10 @@ pub enum ElementKind {
         /// Where the unit label sits.
         #[serde(default, skip_serializing_if = "is_default")]
         unit_label_position: UnitLabelPosition,
-        /// Decimal places in the numbers, 0 to [`MAX_SCALE_DECIMALS`].
-        #[serde(default, skip_serializing_if = "is_default")]
-        decimals: usize,
+        /// Decimal places in the numbers, 0 to [`MAX_SCALE_DECIMALS`], their thousands set apart;
+        /// none (auto), the decimals each label needs, as bars always printed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decimals: Option<u8>,
         /// The numbers' size in points, within [`SCALE_LABEL_SIZE`].
         #[serde(default = "scale_label_size", skip_serializing_if = "is_scale_label_size")]
         label_size: f64,
@@ -1563,7 +1564,7 @@ impl ElementKind {
             label_position: ScaleLabelPosition::default(),
             unit_label: None,
             unit_label_position: UnitLabelPosition::default(),
-            decimals: 0,
+            decimals: None,
             label_size: DEFAULT_SCALE_LABEL_SIZE,
             fit: ScaleBarFit::default(),
         }
@@ -2761,7 +2762,7 @@ impl Layout {
                     *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
                     *subdivisions = (*subdivisions).min(MAX_SCALE_SUBDIVISIONS);
                     *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
-                    *decimals = (*decimals).min(MAX_SCALE_DECIMALS);
+                    *decimals = decimals.map(|d| d.min(MAX_SCALE_DECIMALS as u8));
                     *label_size =
                         finite_or(*label_size, DEFAULT_SCALE_LABEL_SIZE).clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end());
                     // The label is one line: a break in a hand-edited file is a space.
@@ -4351,7 +4352,7 @@ mod tests {
         else {
             panic!("a scale bar")
         };
-        assert_eq!((*subdivisions, *divisions_before_zero, *decimals, *label_size), (0, 0, 0, 8.0));
+        assert_eq!((*subdivisions, *divisions_before_zero, *decimals, *label_size), (0, 0, None, 8.0));
         assert_eq!(
             (*label_position, unit_label.clone(), *unit_label_position, *fit),
             (ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, ScaleBarFit::AdjustDivisionValue)
@@ -4372,7 +4373,7 @@ mod tests {
         {
             (*subdivisions, *divisions_before_zero, *label_position) = (4, 1, ScaleLabelPosition::Below);
             (*unit_label, *unit_label_position) = (Some("Kilometres".into()), UnitLabelPosition::AfterBar);
-            (*decimals, *label_size, *fit) = (2, 10.5, ScaleBarFit::AdjustWidth);
+            (*decimals, *label_size, *fit) = (Some(2), 10.5, ScaleBarFit::AdjustWidth);
         }
         assert!(all.scale_bar_uses_details());
         let s = serde_json::to_string(&all).unwrap();
@@ -4403,6 +4404,13 @@ mod tests {
         }
         assert!(blank.scale_bar_uses_details());
         assert!(serde_json::to_string(&blank).unwrap().contains(r#""unit_label":"""#));
+        // Fixed at no decimals is a setting too, apart from auto: its thousands are set apart.
+        let mut whole = bar.clone();
+        if let ElementKind::ScaleBar { decimals, .. } = &mut whole {
+            *decimals = Some(0);
+        }
+        assert!(whole.scale_bar_uses_details());
+        assert!(serde_json::to_string(&whole).unwrap().contains(r#""decimals":0"#));
         // A loaded layout's out-of-range values are brought into range, and said.
         let text = format!(
             r#"{{"name":"x","width":200,"height":100,"elements":[
@@ -4417,10 +4425,13 @@ mod tests {
             Some(ElementKind::ScaleBar { subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. }) => {
                 (*subdivisions, *divisions_before_zero, *decimals, *label_size, unit_label.clone().unwrap_or_default())
             }
-            _ => (0, 0, 0, 0.0, String::new()),
+            _ => (0, 0, None, 0.0, String::new()),
         };
-        assert_eq!(got(2), (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS)));
-        assert_eq!(got(3), (0, 0, 0, 4.0, "a b c d".to_string()));
+        assert_eq!(
+            got(2),
+            (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, Some(MAX_SCALE_DECIMALS as u8), 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS))
+        );
+        assert_eq!(got(3), (0, 0, None, 4.0, "a b c d".to_string()));
         assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));

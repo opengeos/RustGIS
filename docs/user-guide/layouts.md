@@ -277,8 +277,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   parts), **Divisions before zero** (0 to 2, labelled with negatives), **Label position** (above or below the
   bar), a **Unit label** (the unit's name as printed: its abbreviation unless set; untick **Show unit label**
   for none) and its **Unit label position** (after the labels, after the bar, or on a line of its own above
-  or below), **Decimals** (0 to 3; with 1 to 3 the thousands are set apart; 0 gives each label the decimals
-  it needs, as before; the layout's decimal comma applies), a **Label size** (4 to 24 points, default 8) and a **Fit** for when round divisions
+  or below), **Decimals** (Automatic, or 0 to 3 fixed with the thousands set apart; Automatic gives each
+  label the decimals it needs, as before; the layout's decimal comma applies; `"auto"` or a number, as a chart's), a **Label size** (4 to 24 points, default 8) and a **Fit** for when round divisions
   don't fill the box: *Adjust division value* (the default) divides the roundest length that fits, so a
   division may not be round; *Adjust number of divisions* keeps a round division and adds or drops divisions;
   *Adjust width* keeps the divisions and draws the bar only as wide as they need

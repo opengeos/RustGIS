@@ -231,7 +231,10 @@ of its own or placed elsewhere, decimals, a label size or a fit other than the d
 `decimals`, `label_size`, `fit` on a scale bar element) require `layout-scale-bar-details`, so an
 older reader refuses them instead of drawing a plain bar and saving it again without them. Saved
 `layout.addElement` and `layout.update` commands that set one require it too, since an older
-reader ignores the keys; giving the defaults, or `"unitLabel": null`, needs nothing. A saved
+reader ignores the keys; giving the defaults, `"decimals": "auto"` or `"unitLabel": null`, needs
+nothing. Decimals fixed at any number, 0 included, are a detail. A chart takes `decimals` too:
+a saved `layout.update` can't tell whose they are, so a number there requires both this and
+`layout-chart-look`, while a `layout.addElement` says which kind it adds. A saved
 `layout.import` whose `text` has such a bar requires it as well. Layout files are not covered, as
 for backgrounds (#2277).
 

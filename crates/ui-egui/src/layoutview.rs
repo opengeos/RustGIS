@@ -8,9 +8,10 @@ use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke,
 use rustgis_engine::map::layout::{
     Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LEGEND_TEXT_SIZE,
     Layout, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
-    MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS,
-    MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, SCALE_LABEL_SIZE, ScaleBarFit, ScaleBarStyle,
-    ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle, line_length,
+    MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS,
+    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, SCALE_LABEL_SIZE, ScaleBarFit,
+    ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle,
+    line_length,
 };
 use rustgis_engine::map::report::StatKind;
 use rustgis_engine::map::symbology::Dash;
@@ -2079,11 +2080,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             update(app, json!({"divisions": n}));
                         }
                         ui.end_row();
-                        // Each division split into parts, divisions left of zero, and the numbers' decimal places.
+                        // Each division split into parts, and divisions left of zero.
                         for (label, key, current, max) in [
                             ("Subdivisions", "subdivisions", *subdivisions, MAX_SCALE_SUBDIVISIONS),
                             ("Divisions before zero", "divisionsBeforeZero", *divisions_before_zero, MAX_SCALE_BEFORE_ZERO),
-                            ("Decimals", "decimals", *decimals, MAX_SCALE_DECIMALS),
                         ] {
                             let input_label = ui.label(tl!(label));
                             let mut n = current as u64;
@@ -2101,6 +2101,16 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             }
                             ui.end_row();
                         }
+                        // The numbers' decimal places, as a chart's: automatic, as each label needs, or fixed.
+                        let input_label = ui.label(tl!("Decimals"));
+                        let auto = tl!("Automatic");
+                        let mut items = vec![(auto.to_string(), decimals.is_none(), json!("auto"))];
+                        items.extend((0..=MAX_SCALE_DECIMALS as u8).map(|d| (d.to_string(), *decimals == Some(d), json!(d))));
+                        let current = decimals.map_or(auto.to_string(), |d| d.to_string());
+                        if let Some(v) = choice(ui, ("scale_decimals", id), input_label.id, &current, &items) {
+                            update(app, json!({"decimals": v}));
+                        }
+                        ui.end_row();
                         let input_label = ui.label(tl!("Label size"));
                         let mut size = *label_size;
                         let drag = Dragged::lend(ui, drag_key("labelSize"), &mut size);
@@ -3896,6 +3906,22 @@ mod tests {
         h.get_by_label("Adjust width").click();
         h.run_steps(2);
         assert_eq!(set(&h).2, ScaleBarFit::AdjustWidth);
+        // Decimals as a chart's: automatic at first, fixed when picked, automatic again.
+        let decimals = |h: &egui_kittest::Harness<'_, RustGisApp>| match &h.state().session.project.layouts[li].element(bar).unwrap().kind {
+            ElementKind::ScaleBar { decimals, .. } => *decimals,
+            _ => panic!("a scale bar"),
+        };
+        assert_eq!(decimals(&h), None);
+        h.get_by_label("Decimals").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "2").click();
+        h.run_steps(2);
+        assert_eq!(decimals(&h), Some(2));
+        h.get_by_label("Decimals").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Automatic").click();
+        h.run_steps(2);
+        assert_eq!(decimals(&h), None);
         // Typed, the unit label is set once left.
         h.get_by_label("Unit label").focus();
         h.run_steps(2);

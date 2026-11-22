@@ -388,10 +388,19 @@ fn bar_details(e: &rustgis_map::layout::Element) -> bool {
 }
 
 /// A layout command that gives a scale bar a detail off its default: an older reader ignores the
-/// keys and draws a plain bar. Giving the defaults, or `"unitLabel": null` (the abbreviation an
-/// older reader's bar prints), keeps a bar as an older reader draws it.
+/// keys and draws a plain bar. Giving the defaults, `"decimals": "auto"`, or `"unitLabel": null`
+/// (the abbreviation an older reader's bar prints), keeps a bar as an older reader draws it.
 fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
     use rustgis_map::layout::{DEFAULT_SCALE_LABEL_SIZE, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
+    // A fixed number of decimals, 0 included, not "auto". A chart takes decimals too: a
+    // `layout.addElement` says which kind it adds, but a `layout.update` doesn't say what it
+    // changes, so a chart's decimals there require this as well, as a scale bar's require
+    // `layout-chart-look`; the layout saved with the element requires what it holds anyway.
+    let fixed_decimals = |id: &str| {
+        params.get("decimals").is_some_and(Value::is_u64)
+            && (id == "layout.update"
+                || params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("scaleBar")))
+    };
     match id {
         "layout.addElement" | "layout.update" => {
             let num = |k: &str| crate::cmd::f(params, k);
@@ -401,7 +410,7 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
                 || name("labelPosition").and_then(ScaleLabelPosition::from_name).is_some_and(|v| v != ScaleLabelPosition::default())
                 || params.get("unitLabel").is_some_and(Value::is_string)
                 || name("unitLabelPosition").and_then(UnitLabelPosition::from_name).is_some_and(|v| v != UnitLabelPosition::default())
-                || num("decimals").is_some_and(|n| n >= 1.0)
+                || fixed_decimals(id)
                 || num("labelSize").is_some_and(|n| n != DEFAULT_SCALE_LABEL_SIZE)
                 || name("fit").and_then(ScaleBarFit::from_name).is_some_and(|v| v != ScaleBarFit::default())
         }
@@ -1209,7 +1218,13 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                let expected = if required { json!(["layout-chart-look"]) } else { Value::Null };
+                // An update's decimals may be a scale bar's too, which it can't tell apart.
+                let bar_too = id == "layout.update" && params.get("decimals").is_some_and(Value::is_u64);
+                let expected = match (required, bar_too) {
+                    (true, true) => json!(["layout-chart-look", "layout-scale-bar-details"]),
+                    (true, false) => json!(["layout-chart-look"]),
+                    _ => Value::Null,
+                };
                 assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
             }
         }
@@ -1354,9 +1369,16 @@ mod tests {
             ("layout.update", json!({"element": 2, "fit": "adjustWidth"}), true),
             ("layout.update", json!({"element": 2, "labelSize": 9}), true),
             ("layout.update", json!({"element": 2, "unitLabel": null}), false),
+            // Fixed decimals, none too, are a detail; "auto" isn't. An update's may be a chart's,
+            // which it can't tell apart; an addElement's for a chart is the chart's alone.
+            ("layout.addElement", json!({"kind": "scaleBar", "decimals": 0}), true),
+            ("layout.addElement", json!({"kind": "scaleBar", "decimals": "auto"}), false),
+            ("layout.addElement", json!({"kind": "chart", "decimals": 2}), false),
+            ("layout.update", json!({"element": 2, "decimals": 2}), true),
+            ("layout.update", json!({"element": 2, "decimals": "auto"}), false),
             (
                 "layout.update",
-                json!({"element": 2, "subdivisions": 1, "divisionsBeforeZero": 0, "labelPosition": "above", "unitLabelPosition": "afterLabels", "decimals": 0, "labelSize": 8, "fit": "adjustDivisionValue"}),
+                json!({"element": 2, "subdivisions": 1, "divisionsBeforeZero": 0, "labelPosition": "above", "unitLabelPosition": "afterLabels", "decimals": "auto", "labelSize": 8, "fit": "adjustDivisionValue"}),
                 false,
             ),
             ("layout.update", json!({"element": 2, "divisions": 3}), false),
@@ -1373,8 +1395,10 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                let expected = if required { json!(["layout-scale-bar-details"]) } else { Value::Null };
-                assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
+                // Decimals a chart takes too may require its capability as well.
+                let requires = saved.get("requires").and_then(Value::as_array).cloned().unwrap_or_default();
+                assert_eq!(requires.contains(&json!("layout-scale-bar-details")), required, "{id} {params}");
+                assert!(requires.iter().all(|r| r == "layout-scale-bar-details" || r == "layout-chart-look"), "{id} {params}");
             }
         }
     }

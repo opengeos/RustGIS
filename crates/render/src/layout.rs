@@ -2100,19 +2100,21 @@ fn scale_number(v: f64, step: f64) -> String {
 }
 
 /// A scale bar's number for `v`, a multiple of `step`, with a decimal comma when `comma`. With no
-/// `decimals`, as [`scale_number`] prints it and no thousands separators, as bars always printed;
-/// with 1 to [`MAX_SCALE_DECIMALS`](rustgis_map::layout::MAX_SCALE_DECIMALS), that many places and
-/// the thousands apart. A minus only in front of a digit other than zero; NaN and infinity print 0.
-fn bar_number(v: f64, step: f64, decimals: usize, comma: bool) -> String {
+/// `decimals` (auto), as [`scale_number`] prints it and no thousands separators, as bars always
+/// printed; with 0 to [`MAX_SCALE_DECIMALS`](rustgis_map::layout::MAX_SCALE_DECIMALS), that many
+/// places and the thousands apart. A minus only in front of a digit other than zero; NaN and
+/// infinity print 0.
+fn bar_number(v: f64, step: f64, decimals: Option<usize>, comma: bool) -> String {
     let v = if v.is_finite() { v } else { 0.0 };
-    let places = decimals.min(rustgis_map::layout::MAX_SCALE_DECIMALS);
-    let body = if places == 0 {
-        decimal(scale_number(v.abs(), step), comma)
-    } else {
-        let s = format!("{:.*}", places, v.abs());
-        let (whole, part) = s.split_once('.').unwrap_or((s.as_str(), ""));
-        let whole = rustgis_map::graphics::thousands(whole.parse().unwrap_or(0.0));
-        decimal(format!("{whole}.{part}"), comma)
+    let body = match decimals {
+        None => decimal(scale_number(v.abs(), step), comma),
+        Some(d) => {
+            let places = d.min(rustgis_map::layout::MAX_SCALE_DECIMALS);
+            let s = format!("{:.*}", places, v.abs());
+            let (whole, part) = s.split_once('.').unwrap_or((s.as_str(), ""));
+            let whole = rustgis_map::graphics::thousands(whole.parse().unwrap_or(0.0));
+            if part.is_empty() { decimal(whole, comma) } else { decimal(format!("{whole}.{part}"), comma) }
+        }
     };
     if v < 0.0 && body.chars().any(|c| matches!(c, '1'..='9')) { format!("-{body}") } else { body }
 }
@@ -2180,7 +2182,7 @@ struct BarOptions<'a> {
     label_position: ScaleLabelPosition,
     unit_label: Option<&'a str>,
     unit_label_position: UnitLabelPosition,
-    decimals: usize,
+    decimals: Option<u8>,
     label_size: f64,
     fit: ScaleBarFit,
 }
@@ -2276,7 +2278,7 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let parts = bar.subdivisions.clamp(1, MAX_SCALE_SUBDIVISIONS);
     let width_pt = f64::from(r.width()) / ppp;
     let Some(BarPlan { unit_m, abbr, .. }) = bar_plan(ground_per_pt, width_pt, bar.units) else { return };
-    let decimals = bar.decimals.min(MAX_SCALE_DECIMALS);
+    let decimals = bar.decimals.map(|d| usize::from(d).min(MAX_SCALE_DECIMALS));
     let label_pt = if bar.label_size.is_finite() {
         bar.label_size.clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end())
     } else {
@@ -8651,19 +8653,23 @@ Elaboração: RustGIS",
 
     #[test]
     fn scale_numbers_have_decimals_and_thousands() {
-        // 0 decimals: as each label needs, with no separators, exactly as before.
-        assert_eq!(bar_number(5000.0, 1000.0, 0, false), "5000");
-        assert_eq!(bar_number(0.0125, 0.0125, 0, false), "0.0125");
-        assert_eq!(bar_number(-500.0, 500.0, 0, false), "-500");
-        assert_eq!(bar_number(2.5, 1.25, 0, true), "2,5");
+        // Auto: as each label needs, with no separators, exactly as before.
+        assert_eq!(bar_number(5000.0, 1000.0, None, false), "5000");
+        assert_eq!(bar_number(0.0125, 0.0125, None, false), "0.0125");
+        assert_eq!(bar_number(-500.0, 500.0, None, false), "-500");
+        assert_eq!(bar_number(2.5, 1.25, None, true), "2,5");
         // Fixed decimals with their thousands apart, the marks swapped under a decimal comma.
-        assert_eq!(bar_number(1250.0, 250.0, 2, false), "1,250.00");
-        assert_eq!(bar_number(1250.0, 250.0, 2, true), "1.250,00");
-        assert_eq!(bar_number(12500.0, 2500.0, 3, true), "12.500,000");
-        assert_eq!(bar_number(-1500.0, 500.0, 1, true), "-1.500,0");
-        assert_eq!(bar_number(0.0, 5.0, 2, false), "0.00");
-        assert_eq!(bar_number(-0.001, 5.0, 1, false), "0.0", "no sign on a zero");
-        assert_eq!(bar_number(f64::NAN, 1.0, 2, false), "0.00", "never a panic");
+        assert_eq!(bar_number(5000.0, 1000.0, Some(0), false), "5,000");
+        assert_eq!(bar_number(5000.0, 1000.0, Some(0), true), "5.000");
+        assert_eq!(bar_number(3.75, 1.25, Some(0), false), "4", "fixed at none, rounded");
+        assert_eq!(bar_number(1250.0, 250.0, Some(2), false), "1,250.00");
+        assert_eq!(bar_number(1250.0, 250.0, Some(2), true), "1.250,00");
+        assert_eq!(bar_number(12500.0, 2500.0, Some(3), true), "12.500,000");
+        assert_eq!(bar_number(-1500.0, 500.0, Some(1), true), "-1.500,0");
+        assert_eq!(bar_number(0.0, 5.0, Some(2), false), "0.00");
+        assert_eq!(bar_number(-0.001, 5.0, Some(1), false), "0.0", "no sign on a zero");
+        assert_eq!(bar_number(f64::NAN, 1.0, Some(2), false), "0.00", "never a panic");
+        assert_eq!(bar_number(1250.0, 250.0, Some(9), false), "1,250.000", "at most 3");
     }
 
     #[test]
@@ -8684,7 +8690,7 @@ Elaboração: RustGIS",
         assert_eq!(bar_ink_rows(&cut).first(), bar_ink_rows(&above).first());
         // A bigger label is taller; decimals change the labels.
         assert!(bar_ink_rows(&with(&|b| b.label_size = 16.0)).len() > rows.len() + 4);
-        assert_ne!(with(&|b| b.decimals = 2).data(), above.data());
+        assert_ne!(with(&|b| b.decimals = Some(2)).data(), above.data());
         assert_ne!(with(&|b| b.divisions_before_zero = 1).data(), above.data());
     }
 
