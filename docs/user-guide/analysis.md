@@ -1205,7 +1205,9 @@ gp.run={"tool":"tabulateIntersection","params":{"zones":"parcels","classes":"flo
 points by its cells, in one of four grid systems chosen with **System**, so the same place can be
 compared in several grids. System is **A5** unless another is chosen; the tools were A5 Grid and
 Aggregate Points to A5 before they took a system, and keep their ids (`a5Grid`, `a5Aggregate`),
-so a model or script saved before gets A5, as it did.
+so a model or script saved before gets A5, as it did. A project, model or web tool that saves a
+run in another system can't be opened in a release before this one, which would make A5 cells
+instead.
 
 | System | Cells | Resolutions | Id field |
 |---|---|---|---|
