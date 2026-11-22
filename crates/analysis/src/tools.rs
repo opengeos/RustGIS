@@ -5365,8 +5365,9 @@ fn merc_extent(g: &impl geo::CoordsIter<Scalar = f64>) -> Extent {
 /// Summarize Within: each polygon's count of the (selected) point features that meet it, inside it
 /// or on its edge; a feature of several points counts once in each polygon it meets. Each point is
 /// tested only against the polygons whose extents hold it, through an [`ExtentIndex`], and, at a
-/// pole, those reaching it, which it touches at any longitude. The extents are in the analysis
-/// plane, where the test runs, which goes on past 85.05° to the poles (#1033). The statistics
+/// pole, those reaching it, which it touches at any longitude. The extents are in the run's plane
+/// ([`crate::convert::plane`]), where the test runs: the analysis plane, which goes on past 85.05° to
+/// the poles (#1033), or a projected layer's own coordinates. The statistics
 /// asked for, of the point layer's fields, are over the same points, as `<STAT>_<field>` after
 /// `point_count`.
 fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -6873,7 +6874,8 @@ impl AtPoles {
     }
 }
 
-/// The poles polygons in the analysis plane reach, from their box there: north, then south.
+/// The poles polygons in the run's plane reach, from their box there: north, then south (none in
+/// a projected layer's own coordinates, [`crate::convert::plane`]).
 fn plane_poles(mp: &MultiPolygon<f64>) -> (bool, bool) {
     use geo::BoundingRect;
     let lat = |y: f64| rustgis_geom::plane_to_lonlat(Coord::new(0.0, y)).y;

@@ -1579,7 +1579,6 @@ fn inputs_in(
     work: Crs,
 ) -> Result<(std::collections::HashMap<String, Dataset>, Vec<String>), String> {
     let mut converted = std::collections::HashMap::new();
-    // What a run that crosses edges is told of an input's converted edges ([`bent_edges`]).
     // The converted inputs with edges that bend ([`bent_edges`]): name, how many, how far.
     let mut bent: Vec<(String, usize, f64)> = Vec::new();
     let reads_edges = work != Crs::LonLat && spec.is_some_and(rustgis_analysis::ToolSpec::reads_edges);
@@ -1848,7 +1847,7 @@ fn env_rows(
             // (Each feature converted: a Cancel is looked for every 256 of them.)
             let mut rows = Vec::new();
             for (i, r) in ds.features.rows().enumerate() {
-                if i % 256 == 0 {
+                if i.is_multiple_of(256) {
                     rustgis_data::progress::check().map_err(|e| format!("{}: {e}", l.name))?;
                 }
                 if r.geometry().is_some_and(meets) {
