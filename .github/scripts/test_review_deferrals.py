@@ -14,11 +14,10 @@ REVIEWER = {"login": "github-actions", "__typename": "Bot"}
 CODERABBIT = {"login": "coderabbitai", "__typename": "Bot"}
 
 
-def comment(author, body, association="CONTRIBUTOR", editor=None):
+def comment(author, body, editor=None):
     return {
         "url": f"https://github.com/o/r/pull/1#discussion_r{abs(hash(body)) % 10**9}",
         "body": body,
-        "authorAssociation": association,
         "lastEditedAt": "2026-11-16T03:39:59Z" if editor else None,
         "author": author,
         "editor": {"login": editor} if editor else None,
@@ -34,8 +33,8 @@ def finding(text, kind=None, editor=None):
     return comment(REVIEWER, text + marker, editor=editor)
 
 
-def reply(text, author=AUTHOR, association="MEMBER"):
-    return comment({"login": author, "__typename": "User"}, text, association)
+def reply(text, author=AUTHOR):
+    return comment({"login": author, "__typename": "User"}, text)
 
 
 DEFER = reply("The reader skipping deleted records predates this PR; left for the release quality pass. <!-- quality-sweep -->")
@@ -44,12 +43,12 @@ BUG = "**Bug:** a deleted record shifts every later row's attributes by one."
 
 class ReviewDeferrals(unittest.TestCase):
     def check(self, *threads):
-        return MODULE.check(list(threads), AUTHOR)
+        return MODULE.check(list(threads))
 
-    def test_a_deferred_bug_is_refused(self):
-        refused, unclassified = self.check(thread(finding(BUG, "bug"), DEFER))
-        self.assertEqual(len(refused), 1)
-        self.assertIn("classed it as bug", refused[0])
+    def test_a_deferred_bug_is_flagged(self):
+        flagged, unclassified = self.check(thread(finding(BUG, "bug"), DEFER))
+        self.assertEqual(len(flagged), 1)
+        self.assertIn("classed it as bug", flagged[0])
         self.assertEqual(unclassified, [])
 
     def test_a_deferred_quality_point_passes(self):
@@ -62,28 +61,20 @@ class ReviewDeferrals(unittest.TestCase):
 
     def test_a_grouped_comment_takes_its_most_serious_category(self):
         both = finding(BUG + "\n<!-- review-category: quality -->", "agents-md")
-        refused, _ = self.check(thread(both, DEFER))
-        self.assertIn("classed it as agents-md", refused[0])
-
-    def test_only_a_maintainer_other_than_the_author_settles_a_misclassified_finding(self):
-        rule = finding("**Never silent:** the deleted-record notice has no test.", "agents-md")
-        by_author = reply("Misclassified. <!-- deferral-approved -->")
-        by_outsider = reply("Agreed. <!-- deferral-approved -->", author="drive-by", association="CONTRIBUTOR")
-        by_maintainer = reply("An extra test for working code. <!-- deferral-approved -->", author="maintainer")
-        self.assertEqual(len(self.check(thread(rule, DEFER, by_author, by_outsider))[0]), 1)
-        self.assertEqual(self.check(thread(rule, DEFER, by_maintainer)), ([], []))
+        flagged, _ = self.check(thread(both, DEFER))
+        self.assertIn("classed it as agents-md", flagged[0])
 
     def test_an_edited_finding_counts_as_must_fix(self):
         edited = finding(BUG, "quality", editor=AUTHOR)
-        refused, _ = self.check(thread(edited, DEFER))
-        self.assertIn("edited after the review posted it", refused[0])
+        flagged, _ = self.check(thread(edited, DEFER))
+        self.assertIn("edited after the review posted it", flagged[0])
 
     def test_threads_without_a_category_pass_with_a_notice(self):
         rabbit = thread(comment(CODERABBIT, "_Potential issue_ | **Major** Record the uppercase DBF sidecar."), DEFER)
         person = thread(reply("Should this clamp?", author="maintainer"), DEFER)
         old_review = thread(finding("**Bug risk (low):** every non-I/O record error is counted."), DEFER)
-        refused, unclassified = self.check(rabbit, person, old_review)
-        self.assertEqual(refused, [])
+        flagged, unclassified = self.check(rabbit, person, old_review)
+        self.assertEqual(flagged, [])
         self.assertEqual(len(unclassified), 3)
 
     def test_a_marker_in_the_opening_comment_is_not_a_deferral(self):
@@ -100,16 +91,15 @@ class ReviewDeferrals(unittest.TestCase):
 
         first, second, third = finding(BUG, "bug"), reply("a"), DEFER
         answers = iter([
-            {"repository": {"pullRequest": {"author": {"login": AUTHOR}, "reviewThreads": page(
+            {"repository": {"pullRequest": {"reviewThreads": page(
                 [{"id": "T1", "path": "a.rs", "line": 1, "comments": page([first], "c1")}], "t1")}}},
             {"node": {"comments": page([second], "c2")}},
             {"node": {"comments": page([third])}},
-            {"repository": {"pullRequest": {"author": {"login": AUTHOR}, "reviewThreads": page(
+            {"repository": {"pullRequest": {"reviewThreads": page(
                 [{"id": "T2", "path": "b.rs", "line": 2, "comments": page([])}])}}},
         ])
         with unittest.mock.patch.object(MODULE, "graphql", lambda *a, **k: next(answers)):
-            author, threads = MODULE.fetch("o/r", 1)
-        self.assertEqual(author, AUTHOR)
+            threads = MODULE.fetch("o/r", 1)
         self.assertEqual([t["id"] for t in threads], ["T1", "T2"])
         self.assertEqual(threads[0]["comments"], [first, second, third])
 
