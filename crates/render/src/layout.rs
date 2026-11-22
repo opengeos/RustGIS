@@ -2351,11 +2351,21 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let BarFit { total, after } = fit;
     let divs = before + after;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
+    let x0 = r.x() + BAR_INSET + pad;
+    // The box less the insets the bar keeps.
+    let (inner_left, inner_right) = (r.x() + BAR_INSET, r.right() - BAR_INSET);
+    let measure = |s: &str| text::measure(s, px / 1.33, false);
     // Division `j` counts `j - before` from zero. Its label, the last with the unit when it follows
-    // the labels.
+    // the labels: a unit the bar names shortened so the label, centred on the bar's end, ends
+    // inside the box, and left out when not even a letter of it fits. The abbreviation, short,
+    // follows the number as it always has.
     let label = |j: usize| {
         let v = number(total, divs, j as isize - before as isize);
-        if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels { format!("{v} {unit}") } else { v }
+        if j == divs && has_unit && unit_at == UnitLabelPosition::AfterLabels {
+            if bar.unit_label.is_some() { last_label(&v, &unit, 2.0 * (inner_right - (x0 + len)), measure) } else { format!("{v} {unit}") }
+        } else {
+            v
+        }
     };
     // Each line above the bar moves it down, each below up; labels over it alone leave it where it
     // always was.
@@ -2366,7 +2376,6 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         let (top, bottom) = (r.y() + reach(rows.up, px), r.bottom() - reach(rows.down, px) - bar_h);
         y0 = if top <= bottom { y0.clamp(top, bottom) } else { top };
     }
-    let x0 = r.x() + BAR_INSET + pad;
     // The middle of text line `n` out from the bar.
     let row = |n: usize| (0.7 + 1.25 * n as f32) * px;
     let seg = len / divs as f32;
@@ -2460,17 +2469,33 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
             UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
             UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
         };
-        // After the bar, in the room kept for it: shortened with an ellipsis, or left out when not
-        // even its first character fits.
-        let shown = if unit_at == UnitLabelPosition::AfterBar {
-            match shortened(&unit, beside - gap - ppp as f32, |s| text::measure(s, px / 1.33, false)) {
-                Some(t) => t,
-                None => return,
-            }
+        // After the bar, in the room kept for it; on a line of its own, in the box's width and
+        // moved in as far as it must be to stay inside it. Shortened with an ellipsis, or left out
+        // when not even its first character fits.
+        let room = if unit_at == UnitLabelPosition::AfterBar { beside - gap - ppp as f32 } else { inner_right - inner_left };
+        let Some(shown) = shortened(&unit, room, measure) else { return };
+        let x = if matches!(align, text::Align::Center) {
+            let w = measure(&shown) / 2.0;
+            x.min(inner_right - w).max(inner_left + w)
         } else {
-            unit
+            x
         };
         text::text_at(pm, &shown, x, y, px, dark, false, align, false);
+    }
+}
+
+/// The last label of a scale bar, its number `v` followed by `unit`, as it fits `room` pixels
+/// measured by `measure`: the unit shortened with an ellipsis, never the number, and left out when
+/// not even its first character fits.
+fn last_label(v: &str, unit: &str, room: f32, measure: impl Fn(&str) -> f32) -> String {
+    let whole = format!("{v} {unit}");
+    if measure(&whole) <= room {
+        return whole;
+    }
+    let after = measure(&format!("{v} "));
+    match shortened(unit, room - after, &measure) {
+        Some(u) => format!("{v} {u}"),
+        None => v.to_string(),
     }
 }
 
@@ -8817,6 +8842,35 @@ Elaboração: RustGIS",
         // A label of spaces prints nothing and takes no room: after the bar or on a line of its own.
         assert_eq!(draw(Some("   "), UnitLabelPosition::AfterBar).data(), none.data());
         assert_eq!(draw(Some("   "), UnitLabelPosition::Above).data(), draw(Some(""), UnitLabelPosition::Above).data());
+        // A 100-character unit stays inside a 93 px element wherever it is placed.
+        let long: String = "Kilometres ".repeat(10).chars().take(100).collect();
+        let narrow = |text: &str, at| {
+            draw_bar(
+                &BarOptions { unit_label: Some(text), unit_label_position: at, units: ScaleUnits::Kilometers, ..BarOptions::default() },
+                93,
+            )
+        };
+        let marked = |p: tiny_skia::PremultipliedColorU8| p.red() < 200 || p.green() < 200 || p.blue() < 200;
+        for at in UnitLabelPosition::ALL {
+            let pm = narrow(&long, at);
+            let past: Vec<(u32, u32)> = (0..pm.height())
+                .flat_map(|y| (92..pm.width()).map(move |x| (x, y)))
+                .filter(|&(x, y)| pm.pixel(x, y).is_some_and(marked))
+                .collect();
+            assert!(past.is_empty(), "{at:?}: ink past the element at {past:?}");
+            assert_ne!(pm.data(), narrow("", at).data(), "{at:?}: the unit is drawn, shortened");
+        }
+        // After the labels, the unit is shortened and the last label's number kept whole: the ink
+        // columns of the number drawn alone are all there, moved left with the label.
+        let columns = |pm: &Pixmap| -> Vec<bool> { (0..pm.width()).map(|x| (0..33).any(|y| pm.pixel(x, y).is_some_and(ink))).collect() };
+        let bare = columns(&narrow("", UnitLabelPosition::AfterLabels));
+        let long_cols = columns(&narrow(&long, UnitLabelPosition::AfterLabels));
+        let end = bare.iter().rposition(|&c| c).unwrap();
+        // The last number: back from its right edge to a 3 px gap.
+        let start = (0..end).rev().find(|&x| x >= 2 && !bare[x] && !bare[x - 1] && !bare[x - 2]).map_or(0, |x| x + 1);
+        let number = &bare[start..=end];
+        let found = (0..=start).any(|d| long_cols[start - d..=end - d] == *number);
+        assert!(found, "the last number {start}..={end} is drawn whole: {long_cols:?}");
     }
 
     #[test]
@@ -8869,6 +8923,11 @@ Elaboração: RustGIS",
         assert_eq!(shortened("Kilometres", 20.0, measure).as_deref(), Some("K…"));
         assert_eq!(shortened("Kilometres", 19.0, measure), None, "nothing when not even a letter fits");
         assert_eq!(shortened("", -1.0, measure), None);
+        // After the last label, only the unit is shortened, never the number.
+        assert_eq!(last_label("25", "Kilometres", 130.0, measure), "25 Kilometres");
+        assert_eq!(last_label("25", "Kilometres", 80.0, measure), "25 Kilo…");
+        assert_eq!(last_label("25", "Kilometres", 40.0, measure), "25", "the number alone when not a letter fits");
+        assert_eq!(last_label("1,250", "km", 10.0, measure), "1,250", "the number is never cut");
     }
 
     /// A bar in a box too short for its lines writes them smaller, all inside the box.
