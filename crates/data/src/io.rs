@@ -1000,7 +1000,9 @@ fn remove_backup(bak: &Path) -> std::io::Result<()> {
 }
 
 /// What is said of the old parts of the Shapefile at `path` that [`place_shapefile`] couldn't
-/// remove once the new ones landed; `None` when there are none.
+/// remove once the new ones landed; `None` when there are none. Publishing, its one user, is the
+/// desktop's.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn kept_backups_note(path: &Path, kept: &[std::path::PathBuf]) -> Option<String> {
     (!kept.is_empty()).then(|| {
         let copies: Vec<String> = kept.iter().map(|k| k.display().to_string()).collect();
