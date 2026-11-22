@@ -152,6 +152,11 @@ the pull request which of these it reaches and why the rest don't apply:
 `cargo xtask ci` (fmt, clippy -D warnings, tests, layers) before every commit.
 `cargo xtask test-hygiene` (also in CI) requires `// test-wait: reason` on timer waits in tests and
 `#[ignore = "reason"]` on ignored tests; prefer completion or progress signals.
+The engine test `command_surface_matches_the_snapshot` fails on any difference between the registered
+commands and `crates/engine/command-surface.txt` (each command id with its parameter keys and optional
+marks, not the help text): a pull request that adds, removes or renames a command
+or a parameter runs `cargo xtask commands` and commits the file. A removal or rename is a
+coordinate-first change.
 `cargo xtask memory` (in CI on Linux) fails when a command line workflow's peak memory grows past
 its limit in `xtask/memory-limits.txt`; a change that lowers one commits the lower limit with it.
 `cargo xtask rows` (also in CI) fails when code outside `rustgis-data` uses a layer's rows directly
