@@ -8623,17 +8623,24 @@ Elaboração: RustGIS",
         }
     }
 
-    /// A bar whose first negative label leaves it no room still draws: as it would without the
-    /// label's room, the label perhaps starting a little left of the box.
+    /// A bar whose first negative label leaves it no room still draws: the label takes at most
+    /// half the bar's room, reaching left of the box past that.
     #[test]
     fn a_scale_bar_before_zero_draws_where_its_first_label_leaves_no_room() {
         let bar = BarOptions { label_size: 24.0, divisions_before_zero: 2, divisions: 10, ..BarOptions::default() };
         let mut pm = Pixmap::new(40, 60).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         let r = Rect::from_xywh(0.0, 0.0, 40.0, 60.0).unwrap();
-        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+        // Filled in its colour throughout, so along its middle the bar is one solid run.
+        let solid = (DEFAULT_COLORS.0, DEFAULT_COLORS.0);
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, solid, 1.0, false));
         // Moved down so its big labels stay inside the box, the bar is drawn under them.
         assert!((40..50).any(|y| marked_span(&pm, y).is_some()), "ink drawn");
+        // Its own row, the middle of the 6 px bar under the labels (rows 41 to 47): one solid run,
+        // half the bar's room at least (34 px, the 1 km that fits in 17), not a sliver.
+        assert!(dark_runs(&pm, 44) > 0, "the bar is drawn");
+        let (a, b) = marked_span(&pm, 44).unwrap();
+        assert!(b - a >= 8, "the bar keeps half its room: {a}..{b}");
     }
 
     #[test]
