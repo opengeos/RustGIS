@@ -1533,6 +1533,18 @@ fn a_join_tables_places_dont_decide_the_system() {
     assert_eq!(bits(&held_coords(&s, "Owned")), bits(&held_coords(&s, "Parcels")));
     let ds = &s.map().layer_by_name("Owned").unwrap().dataset;
     assert_eq!(ds.value(0, ds.field_index("owner").unwrap()).to_string(), "far owner");
+    // The same as a standalone table given by its number: read as it is too.
+    let mut table = s.map().layer_by_name("Far").unwrap().dataset.clone();
+    table.name = "Far table".into();
+    let id = s.project.add_table(table);
+    let mark = s.notice_mark();
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": id, "joinField": "n", "output": "Owned_2"}});
+    s.run("gp.run", &p).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!said.iter().any(|t| t.contains("worked in longitude/latitude")), "{said:?}");
+    let ds = &s.map().layer_by_name("Owned_2").unwrap().dataset;
+    assert_eq!(ds.coord_crs(), UTM);
+    assert_eq!(ds.value(0, ds.field_index("owner").unwrap()).to_string(), "far owner");
 }
 
 /// A project giving Web Mercator and longitude/latitude as their EPSG codes (`{"Epsg": 3857}`,
@@ -1770,7 +1782,7 @@ fn bent_edges_are_found_beyond_their_middle_and_on_closing_edges() {
     };
     // Across UTM zone 32N's central meridian (9°E) at the equator, point-symmetric about where they
     // cross: its middle, (9°E, 0°), is on the chord and on the edge in Web Mercator alike, and it
-    // bends away to either side, by metres at its quarters (CodeRabbit's example, on #2659).
+    // bends away to either side, by metres at its quarters.
     let (n, far) = bent(Geometry::Line(vec![vec![Coord::new(8.0, -1.0), Coord::new(10.0, 1.0)]]));
     assert_eq!(n, 1);
     assert!(far > 1.0, "{far}");
@@ -1786,7 +1798,7 @@ fn bent_edges_are_found_beyond_their_middle_and_on_closing_edges() {
 
 /// A line held in UTM along a northing is tilted in longitude/latitude: an environment's extent
 /// near a corner of its box there, away from the line, admits it, in a run in longitude/latitude
-/// and in the held system alike (CodeRabbit, on #2659).
+/// and in the held system alike.
 #[test]
 fn the_environments_extent_admits_a_tilted_line_by_its_box_in_longitude_latitude() {
     let mut ss = both();
@@ -1813,7 +1825,7 @@ fn the_environments_extent_admits_a_tilted_line_by_its_box_in_longitude_latitude
 }
 
 /// A standalone table with geometry given by its number is converted into the system the run
-/// works in, as one given by name is (claude-review, on #2659).
+/// works in, as one given by name is.
 #[test]
 fn a_numbered_table_is_converted_into_the_held_system() {
     let mut ss = both();

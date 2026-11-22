@@ -1527,8 +1527,9 @@ fn attributes_only(spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) ->
             let aliases = rustgis_analysis::param_aliases(spec, p.name);
             if aliases.is_empty() { vec![p.name] } else { aliases.to_vec() }
         })
-        .filter_map(|k| params.get(k).and_then(Value::as_str))
-        .map(str::to_ascii_lowercase)
+        .filter_map(|k| params.get(k))
+        // A standalone table given by its number, by the key it would be converted under.
+        .filter_map(|v| v.as_str().map(str::to_ascii_lowercase).or_else(|| v.as_u64().and_then(|n| u32::try_from(n).ok()).map(table_key)))
         .collect()
 }
 
@@ -1802,7 +1803,7 @@ fn env_inputs(
     env: &crate::project::GpEnvironment,
     params: &Value,
 ) -> Result<std::collections::HashMap<String, Vec<usize>>, String> {
-    let rows = env_rows(map, full, env, params);
+    let rows = env_rows(map, full, env, params)?;
     if let Some((name, v)) = rows.iter().next()
         && v.is_empty()
     {
@@ -1818,10 +1819,10 @@ fn env_rows(
     full: &std::collections::HashMap<String, Dataset>,
     env: &crate::project::GpEnvironment,
     params: &Value,
-) -> std::collections::HashMap<String, Vec<usize>> {
-    let Some(e) = env.extent else { return std::collections::HashMap::new() };
+) -> Result<std::collections::HashMap<String, Vec<usize>>, String> {
+    let Some(e) = env.extent else { return Ok(std::collections::HashMap::new()) };
     let Some(input) = params.get("target").or_else(|| params.get("input")).and_then(Value::as_str) else {
-        return std::collections::HashMap::new();
+        return Ok(std::collections::HashMap::new());
     };
     // The layer the name finds (the first of that name), as the tool will.
     map.layer_by_name(input)
@@ -1844,9 +1845,17 @@ fn env_rows(
                 Some(to) => Dataset::geometry_to_lonlat_by(to, g).map_or_else(|_| by_own(g), |g| g.extent().intersects(&e)),
                 None => false,
             };
-            let rows: Vec<usize> =
-                ds.features.rows().enumerate().filter(|(_, r)| r.geometry().is_some_and(meets)).map(|(i, _)| i).collect();
-            (l.name.to_ascii_lowercase(), rows)
+            // (Each feature converted: a Cancel is looked for every 256 of them.)
+            let mut rows = Vec::new();
+            for (i, r) in ds.features.rows().enumerate() {
+                if i % 256 == 0 {
+                    rustgis_data::progress::check().map_err(|e| format!("{}: {e}", l.name))?;
+                }
+                if r.geometry().is_some_and(meets) {
+                    rows.push(i);
+                }
+            }
+            Ok((l.name.to_ascii_lowercase(), rows))
         })
         .collect()
 }
@@ -1895,10 +1904,13 @@ impl Inputs for MapInputs<'_> {
     }
     fn table(&self, id: u32) -> Option<&Dataset> {
         // Converted before the run when the tool's parameters give its number ([`inputs_in`]);
-        // else read as it is only in the system the tool works in, as a layer is.
+        // else read as it is only in the system the tool works in, as a layer is, or when the
+        // tool reads only its attributes (Join Field's join table).
         self.loaded.get(&table_key(id)).or_else(|| {
             self.snap.tables.iter().find(|t| t.id == id).map(|t| &t.dataset).filter(|d| {
-                d.geometry_type == rustgis_data::GeometryType::None || d.coord_crs().to(self.work).is_ok_and(|to| to.is_identity())
+                d.geometry_type == rustgis_data::GeometryType::None
+                    || self.unread.contains(&table_key(id))
+                    || d.coord_crs().to(self.work).is_ok_and(|to| to.is_identity())
             })
         })
     }

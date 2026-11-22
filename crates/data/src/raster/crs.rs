@@ -687,7 +687,10 @@ impl Crs {
             Crs::Epsg(c) => epsg_proj4(c).map(|d| d.to_string()),
             Crs::Custom(_) => self.custom_def().map(|d| d.proj4.clone()),
         };
-        proj4.is_some_and(|d| d.split_whitespace().filter_map(|t| t.strip_prefix("+proj=")).any(|m| WORLD.contains(&m)))
+        // (A method may be written quoted, as PROJ reads it.)
+        proj4.is_some_and(|d| {
+            d.split_whitespace().filter_map(|t| t.strip_prefix("+proj=")).map(|m| m.trim_matches('"')).any(|m| WORLD.contains(&m))
+        })
     }
 
     /// Whether its coordinates are geocentric (X, Y and Z from the Earth's centre), not a map's.
@@ -2564,6 +2567,7 @@ mod tests {
         assert!(Crs::WebMercator.is_world_projection() && !Crs::LonLat.is_world_projection());
         // PROJ's own spelling of Web Mercator, as a file may give it.
         assert!(Crs::parse("+proj=webmerc +datum=WGS84 +units=m +no_defs").unwrap().is_world_projection());
+        assert!(Crs::parse("+proj=\"eqc\" +datum=WGS84 +units=m").unwrap().is_world_projection());
     }
 
     /// A saved code another variant stands for reads as that variant, so Web Mercator saved as
