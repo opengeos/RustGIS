@@ -2101,8 +2101,8 @@ fn scale_number(v: f64, step: f64) -> String {
 /// The share of its element's width a scale bar's length may take.
 const BAR_SHARE: f64 = 0.85;
 /// A scale bar's labels' size, in points, and how far its bar starts in from the element's left
-/// edge, in pixels. [`scale_bar_width_pt`] measures the labels at that size and counts the inset as
-/// that many points, never less than the bar is drawn in by when a point is a pixel or more.
+/// edge, in pixels. [`scale_bar_width_pt`] counts that inset as as many points: when a point is a
+/// pixel or more, a pixel is no larger than a point, so the box is never too narrow.
 const BAR_LABEL_PT: f32 = 8.0;
 const BAR_INSET: f32 = 2.0;
 
