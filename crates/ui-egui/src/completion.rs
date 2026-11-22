@@ -611,8 +611,8 @@ struct Scroll {
     /// stays the one shown (the item the pointer left, to read or scroll its help).
     help_at: Option<egui::Rect>,
     /// What each row says to a screen reader, worked out once per row while the offer and what it's
-    /// read from (`said`) are the same (`rows`). Shared, not copied, with each copy of the box's state (`load` clones it every
-    /// frame): a row worked out copies it at most once in that frame.
+    /// read from (`said`) are the same (`rows`). Shared, not copied, with each copy of the box's
+    /// state (`load` clones it every frame): a row worked out copies it at most once in that frame.
     described: Arc<HashMap<usize, Option<String>>>,
     /// What `described` was read from (`List::show`'s `said`).
     said: u64,

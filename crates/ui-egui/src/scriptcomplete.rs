@@ -1872,7 +1872,7 @@ mod tests {
         let (label, before) = said(&h).expect("a row named");
         assert_eq!(label, "Cities");
         let n = count(&h);
-        assert!(before.contains(&n.to_string()), "{before}");
+        assert!(before.contains(&format!(" {n} features")), "{before}");
         // Some cities deleted as the app does it, by commands (which move the session's revision).
         let session = &mut h.state_mut().session;
         let revision = session.revision;
@@ -1888,7 +1888,7 @@ mod tests {
         let left = count(&h);
         assert!(left < n, "some deleted: {left} of {n}");
         let (_, after) = said(&h).expect("still open");
-        assert!(after.contains(&format!("{left} ")) && !after.contains(&format!("{n} ")), "the new count: {after}");
+        assert!(after.contains(&format!(" {left} features")) && !after.contains(&format!(" {n} features")), "the new count: {after}");
         // A streamed layer's read as the map is drawn: no command, the revision kept.
         let session = &mut h.state_mut().session;
         let id = session.map().layer_by_name("Cities").map(|l| l.id);
@@ -1897,7 +1897,7 @@ mod tests {
         }
         h.run();
         let (_, read) = said(&h).expect("still open");
-        assert!(read.contains(&format!("{} ", left - 1)), "the count read with the view: {read}");
+        assert!(read.contains(&format!(" {} features", left - 1)), "the count read with the view: {read}");
     }
 
     /// In an expression's string (#1240) the list holds the line's layer's fields, Enter puts the
