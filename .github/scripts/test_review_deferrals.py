@@ -83,9 +83,10 @@ class ReviewDeferrals(unittest.TestCase):
         rabbit = thread(comment(CODERABBIT, "_Potential issue_ | **Major** Record the uppercase DBF sidecar."), DEFER)
         person = thread(reply("Should this clamp?", author="maintainer"), DEFER)
         old_review = thread(finding("**Bug risk (low):** every non-I/O record error is counted."), DEFER)
-        refused, unclassified = self.check(rabbit, person, old_review)
+        unknown = thread(finding(BUG, "bugs"), DEFER)
+        refused, unclassified = self.check(rabbit, person, old_review, unknown)
         self.assertEqual(refused, [])
-        self.assertEqual(len(unclassified), 3)
+        self.assertEqual(len(unclassified), 4)
 
     def test_the_marker_counts_wherever_it_sits_as_the_sweep_collects_it(self):
         trailing = reply("Left for the release quality pass. <!-- quality-sweep --> Will do after the merge.")

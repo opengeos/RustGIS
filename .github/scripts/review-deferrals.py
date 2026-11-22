@@ -41,6 +41,7 @@ APPROVE = "<!-- deferral-approved -->"
 # Markdown emphasis and code marks around the label or the value, and capitals, are let through.
 CATEGORY = re.compile(r"^[*_`]*Category[*_`]*:[*_` \t]*([A-Za-z-]+)[*_`]*\.?[ \t\r]*$", re.M)
 MUST_FIX = {"bug", "security", "agents-md"}
+MAY_WAIT = {"performance", "quality"}
 REVIEWER = "github-actions"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 QUEUE_REF = re.compile(r"/pr-(\d+)-[0-9a-f]{40}$")
@@ -77,6 +78,7 @@ def category(opening):
     if not is_reviewer(opening):
         return None
     found = [c.lower() for c in CATEGORY.findall(opening.get("body") or "")]
+    found = [c for c in found if c in MUST_FIX | MAY_WAIT]  # an unknown word is no category
     serious = [c for c in found if c in MUST_FIX]
     return (serious or found or [None])[0]
 

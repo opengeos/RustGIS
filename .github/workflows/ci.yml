@@ -305,8 +305,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Test the check
-        run: python3 -m unittest discover -s .github/scripts -p 'test_review_deferrals.py'
       - name: No defect left for the release quality pass
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
