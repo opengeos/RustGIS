@@ -160,6 +160,9 @@ its limit in `xtask/memory-limits.txt`; a change that lowers one commits the low
 It counts only the libraries and programs built for the host, not tests, examples, benches or code
 built only for other targets, nor a row indexed without reading a field (`features[i]` alone); use
 the accessors there too.
+Both limit files only go down: CI's `Limits only go down` job fails a pull request that raises or
+removes a limit against its base (a new memory scenario is fine). A maintainer approves a deliberate
+raise by commenting on the pull request with a message ending in `<!-- ratchet-raise-approved -->`.
 While you work, `cargo xtask changed` runs the same checks on only the packages your branch changes
 and those that depend on them (and `test-hygiene` on the whole workspace, and formatting, `layers` and
 `rows` when packages are checked), or everything when a
