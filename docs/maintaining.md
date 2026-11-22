@@ -191,7 +191,8 @@ chart is given, and saving it again without them. Saved `layout.addElement` comm
 that set one of them require it too. A saved `layout.update` requires it for `values`,
 `decimals`, `barColor` and `labelAlign` only: its `title` and `orientation` may be a legend's or
 a colorbar's, which the command alone doesn't tell, and the project the update ran on requires it
-for its chart anyway. Giving the defaults needs nothing. A saved `layout.import` whose `text` has
+for its chart anyway (`decimals` may also be a scale bar's, so such an update requires
+`layout-scale-bar-details` as well). Giving the defaults needs nothing. A saved `layout.import` whose `text` has
 such a chart requires it as well. Layout files are not covered, as for backgrounds (#2277).
 
 Projects with a layout chart coloured by its layer's classes (`classes` on a chart element)
