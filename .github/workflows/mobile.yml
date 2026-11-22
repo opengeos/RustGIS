@@ -392,7 +392,7 @@ jobs:
           sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "::notice::$(xcodebuild -version | head -1), iOS SDK $sdk"
           # App Store Connect requires the iOS 27 SDK from April 2027 (ITMS-90725).
-          [ "${sdk%%.*}" -ge 27 ] || { echo "::error::iOS SDK $sdk is below 27: this runner has no Xcode 27."; exit 1; }
+          [ "${sdk%%.*}" -ge 27 ] || { echo "::error::$(basename "$newest") has the iOS $sdk SDK; App Store uploads need iOS 27 or later."; exit 1; }
 
       # The whole bundle, unsigned: any failure on the way fails the step.
       - name: Build the app
