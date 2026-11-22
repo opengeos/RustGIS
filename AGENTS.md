@@ -169,9 +169,7 @@ immediately; label-gated build jobs in `ci.yml` start from the next push.
 
 ## Review comments
 - Fix in the pull request what a review finds wrong: bugs, crash paths, silent data loss, a broken
-  rule from this file. None of these makes a defect a quality point: it predates the pull request,
-  the input is rare, the fix needs a wider change, earlier code does the same. A defect too large
-  for the pull request gets an issue, filed and linked from the reply, not the marker below.
+  rule from this file.
 - A quality point (style, naming, wording, a refactor, an extra test for code that works) may
   wait for the **release quality pass**, where maintainers handle them together before each
   release. Reply that it's left for the release quality pass, end the reply with
@@ -179,8 +177,7 @@ immediately; label-gated build jobs in `ci.yml` start from the next push.
 - The Claude review ends each inline finding with its category (a last line such as `Category: bug`).
   CI's `Review deferrals` job fails, on each push and in the merge queue, when the marker answers
   a `bug`, `security` or `agents-md` finding, or one edited since it was posted. A maintainer
-  overrides it for one finding by replying `<!-- deferral-approved -->` in its thread; agents
-  never post that reply.
+  overrides it for one finding by replying `<!-- deferral-approved -->` in its thread.
 
 ## Looking at the app
 - `cargo run --release -p rustgis` (opens the World Atlas sample).

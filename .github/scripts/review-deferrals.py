@@ -9,6 +9,11 @@ author doesn't. This check refuses a deferral reply in a thread that the reviewe
 
 Threads opened by anyone else (CodeRabbit, people) or by a review from before categories carry no
 category and are let through: a reviewer there can answer the reply. They are listed in a notice.
+An edited review finding is refused whatever category it now shows, since the edit may have
+removed or changed it; the override below settles a harmless edit.
+
+`performance` is left out on purpose: a faster path may wait. A performance finding that is also a
+crash path or breaks "Size for real data" carries `bug` or `agents-md`, the more serious category.
 
 A maintainer overrides the check for a finding, misclassified or accepted as it is, by replying in
 its thread with `<!-- deferral-approved -->`. A maintainer here is the repository's owner, a member
@@ -26,11 +31,12 @@ import re
 import subprocess
 import sys
 
-# The marker ends the reply; only other hidden comments (a tool's own bookkeeping) may follow it.
-DEFER = re.compile(r"<!-- quality-sweep -->(?:\s|<!--.*?-->)*\Z", re.S)
+DEFER = "<!-- quality-sweep -->"
+HIDDEN = re.compile(r"<!--.*?-->", re.S)
 APPROVE = "<!-- deferral-approved -->"
 # Visible text on a line of its own: the review's inline-comment tool strips hidden comments.
-CATEGORY = re.compile(r"^Category:[ \t]*([a-z-]+)[ \t]*$", re.M)
+# Markdown emphasis and code marks around the label or the value, and capitals, are let through.
+CATEGORY = re.compile(r"^[*_`]*Category[*_`]*:[*_` \t]*([A-Za-z-]+)[*_`]*[ \t]*$", re.M)
 MUST_FIX = {"bug", "security", "agents-md"}
 REVIEWER = "github-actions"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -67,9 +73,15 @@ def category(opening):
     """The category a reviewer finding gives itself: the most serious of its markers, or None."""
     if not is_reviewer(opening):
         return None
-    found = CATEGORY.findall(opening.get("body") or "")
+    found = [c.lower() for c in CATEGORY.findall(opening.get("body") or "")]
     serious = [c for c in found if c in MUST_FIX]
     return (serious or found or [None])[0]
+
+
+def defers(reply):
+    """Whether a reply ends with the deferral marker; only other hidden comments (a tool's bookkeeping) may follow it."""
+    _, marker, after = (reply.get("body") or "").rpartition(DEFER)
+    return bool(marker) and not HIDDEN.sub("", after).strip()
 
 
 def edited_by_someone_else(opening):
@@ -100,7 +112,7 @@ def check(threads):
         if not comments:
             continue
         opening, replies = comments[0], comments[1:]
-        deferral = next((r for r in replies if DEFER.search(r.get("body") or "")), None)
+        deferral = next((r for r in replies if defers(r)), None)
         if deferral is None:
             continue
         where = f"{thread.get('path')}:{thread.get('line') or thread.get('originalLine') or '?'}"
@@ -126,7 +138,7 @@ def graphql(query, **variables):
     args = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         args += ["-F" if isinstance(value, int) else "-f", f"{key}={value}"]
-    out = subprocess.run(args, check=True, capture_output=True, text=True).stdout
+    out = subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
     return json.loads(out)["data"]
 
 

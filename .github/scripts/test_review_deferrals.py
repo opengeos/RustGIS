@@ -92,6 +92,19 @@ class ReviewDeferrals(unittest.TestCase):
         self.assertEqual(self.check(thread(finding(BUG, "bug"), mention)), ([], []))
         self.assertEqual(len(self.check(thread(finding(BUG, "bug"), tracked))[0]), 1)
 
+    def test_many_hidden_comments_after_the_marker_are_read_in_linear_time(self):
+        crowded = reply("Left. <!-- quality-sweep -->" + "<!-- a -->" * 5000 + "x")
+        self.assertEqual(self.check(thread(finding(BUG, "bug"), crowded)), ([], []))
+
+    def test_a_category_line_may_be_emphasised_or_capitalised(self):
+        for line in ("**Category:** bug", "Category: `bug`", "Category: Bug", "_Category_: BUG"):
+            refused, _ = self.check(thread(comment(REVIEWER, BUG + "\n\n" + line), DEFER))
+            self.assertEqual(len(refused), 1, line)
+
+    def test_an_edited_finding_without_a_category_is_refused_too(self):
+        refused, unclassified = self.check(thread(finding(BUG, editor=AUTHOR), DEFER))
+        self.assertEqual((len(refused), unclassified), (1, []))
+
     def test_a_category_is_a_line_of_its_own(self):
         prose = finding("The Category: bug label in the legend is cut short.\n\nCategory: quality")
         self.assertEqual(self.check(thread(prose, DEFER)), ([], []))
