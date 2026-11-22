@@ -1454,7 +1454,7 @@ The suite is an optional download, so RustGIS itself stays small: the **GeoLibre
 single `geolibre` program (about 20 MB to download). In the Tools pane, click
 **Install Whitebox and GeoLibre tools** under *Whitebox and GeoLibre tools*: RustGIS downloads the runner for your
 platform from the geolibre-rust release it was built and tested with
-([1.8.0](https://github.com/opengeos/geolibre-rust/releases/tag/v1.8.0), the same runner the browser
+([1.8.3](https://github.com/opengeos/geolibre-rust/releases/tag/v1.8.3), the same runner the browser
 uses), checks it against its published SHA-256 checksum (which catches a corrupted download; the
 release itself is trusted as when you download it by hand), checks that it starts and reports a
 version RustGIS works with, and only then installs it in its data folder
@@ -1469,6 +1469,11 @@ it installed and removes the `geolibre` folder only if it is empty. Other files 
 you located yourself, and one on your `PATH` are left alone; RustGIS looks for a runner again.
 You can install the tools again at any time. In the browser,
 **Remove** unloads the tools and stops loading them when RustGIS starts.
+
+An existing desktop runner is kept when RustGIS updates. To update a runner installed by RustGIS,
+uninstall the tools and install them again; for a runner you located yourself, download the new
+release and use **Locate…**. Runner 1.8.3 corrects the OSGB36 datum conversion that offset stream
+vectors from their raster: rerun **Raster Streams to Vector** to replace an older output.
 
 **In your language.** The tools' names, descriptions, parameters and toolboxes come in English.
 GeoLibre translates them into some twenty languages, in
