@@ -3785,6 +3785,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
             // past which the file can't be followed.
             let mut shape = shape;
             loop {
+                crate::progress::check()?;
                 extra_shapes += 1;
                 if shape.is_err() {
                     extra_unreadable += 1;
