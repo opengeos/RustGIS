@@ -1251,7 +1251,10 @@ fn finite(ps: &[P3]) -> bool {
 }
 
 /// Whether retained, placed vertices have heights the single elevation attribute cannot hold.
-/// Compare after all object/block transforms: a placement may flatten previously varying Z.
+/// Compare computed heights exactly after entity and block transforms, which may flatten source Z.
+/// Tilted entity axes or rotated/nested block placements can introduce sub-resolution roundoff;
+/// report those computed differences conservatively. A tolerance can hide exact source-height loss.
+/// Only a construction and placement proof rules out sampled variation without such a tolerance.
 fn has_varying_z<'a>(mut points: impl Iterator<Item = &'a P3>, first: Option<P3>, constant_z: bool) -> bool {
     let Some(first) = first else { return false };
     // Only a source construction and placement proof can dismiss sampled roundoff. A numeric
