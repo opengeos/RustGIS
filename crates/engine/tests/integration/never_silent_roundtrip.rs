@@ -418,9 +418,32 @@ fn renames(notices: &[String]) -> Vec<(String, String)> {
 /// The words a notice of a change in no field uses for it, by the start of the change (#2639): a
 /// geometry changed, dropped or made up is said by a notice of geometry, a feature count by one of
 /// features. A change in no field that isn't listed (a file not read back) is said by none.
+/// Each is matched as a whole word, so "converted" isn't "vert" nor "string" "ring".
 const NO_FIELD_WORDS: &[(&str, &[&str])] = &[
-    ("geometry", &["geometr", "point", "line", "polygon", "ring", "part", "coordinate", "vert"]),
-    ("feature count changed", &["feature", "waypoint", "track", "row"]),
+    (
+        "geometry",
+        &[
+            "geometry",
+            "geometries",
+            "point",
+            "points",
+            "multipoint",
+            "multipoints",
+            "line",
+            "lines",
+            "polygon",
+            "polygons",
+            "ring",
+            "rings",
+            "part",
+            "parts",
+            "coordinate",
+            "coordinates",
+            "vertex",
+            "vertices",
+        ],
+    ),
+    ("feature count changed", &["feature", "features", "waypoint", "waypoints", "track", "tracks", "row", "rows"]),
 ];
 
 /// What a notice says in its own words, lower case: without the file it names before its first
@@ -442,7 +465,7 @@ fn is_said(change: &str, field: Option<&str>, said: &Said, renamed: &[(String, S
         let words = NO_FIELD_WORDS.iter().find(|(start, _)| change.starts_with(start)).map_or(&[][..], |(_, words)| *words);
         return notices.any(|n| {
             let n = prose(n);
-            words.iter().any(|w| n.contains(w))
+            n.split(|c: char| !c.is_alphanumeric()).any(|word| words.contains(&word))
         });
     };
     if let Some((old, new)) = change.strip_prefix("field renamed (").and_then(|c| c.strip_suffix(')')).and_then(|c| c.split_once(" → ")) {
@@ -658,6 +681,10 @@ fn a_change_in_no_field_needs_a_notice_of_its_kind() {
     // Nor by a notice of a field or a file named like one.
     let named = said("/tmp/geometry.shp: 1 value of 'geometry' was cut to at most 254 bytes");
     assert!(!is_said("geometry changed", None, &named, &[]));
+    // Words are matched whole: "converted", "string" and "borrow" aren't "vert", "ring", "row".
+    let words = said("l.csv: 1 value converted to a string during the borrow");
+    assert!(!is_said("geometry changed", None, &words, &[]));
+    assert!(!is_said("feature count changed (3 → 2)", None, &words, &[]));
     assert!(is_said("geometry dropped", None, &said("l.gpx: 1 geometry part written as a track"), &[]));
     assert!(is_said("feature count changed (3 → 2)", None, &said("l.kml: 1 feature without geometry left out"), &[]));
 }

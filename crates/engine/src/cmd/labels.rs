@@ -325,7 +325,7 @@ pub fn commands() -> Vec<C> {
                 let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
                 s.notify_text(
                     NoticeText::format(
-                        "{name}: {keys} kept, but it places only labels along a line (parallel or curved), which this class's aren't",
+                        "{name}: {keys} kept, but it does nothing here: it places only labels along a line (parallel or curved) where the layer has lines",
                         [("name", name.into()), ("keys", unused.join(" and ").into())],
                     ),
                     false,

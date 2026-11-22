@@ -177,7 +177,7 @@ fn label_repeat_and_line_offset_where_they_do_nothing_are_said() {
     // On points: kept, and said.
     let mark = s.notice_mark();
     s.run("labels.placement", &json!({"layer": "Cities", "repeat": 100, "lineOffset": 4})).unwrap();
-    assert!(says(&s, mark, "Cities: repeat and lineOffset kept, but it places only labels along a line"), "{:?}", said(&s, mark));
+    assert!(says(&s, mark, "Cities: repeat and lineOffset kept, but it does nothing here"), "{:?}", said(&s, mark));
     let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
     assert!(c.repeat.is_some() && c.line_offset == 4.0);
     // On lines placed parallel: nothing to say; nor for 0 or null, which take them away.
