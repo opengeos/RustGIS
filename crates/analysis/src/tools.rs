@@ -1914,6 +1914,62 @@ fn coord_bytes(g: &Geometry) -> usize {
     g.coord_count().saturating_mul(std::mem::size_of::<geo::Coord<f64>>())
 }
 
+/// Selects workers lazily: an explicit count, a small run or the single-threaded browser
+/// never pays for a geometry sizing pass. Estimation reports its own phase; actual work starts
+/// a fresh counted phase once the worker count is known.
+fn geometry_threads(items: usize, requested: Option<usize>, estimate: impl FnOnce() -> Result<usize, String>) -> Result<usize, String> {
+    let threads = match requested {
+        Some(n) => n,
+        None if crate::parallel::threads_for(items, PARALLEL_FEATURES) <= 1 => 1,
+        None => crate::parallel::threads_for_scratch(items, PARALLEL_FEATURES, estimate()?),
+    };
+    crate::control::begin(items);
+    Ok(threads)
+}
+
+/// Largest selected geometry's coordinate storage. Estimation is cancellable between features;
+/// counting one feature's vertices is one uninterrupted step, as the conversion itself is.
+fn largest_geometry_bytes(ds: &Dataset, rows: &[usize]) -> Result<usize, String> {
+    crate::control::begin(rows.len());
+    let mut largest = 0;
+    for &row in rows {
+        crate::control::check()?;
+        if let Some(g) = ds.features.geometry(row) {
+            largest = largest.max(coord_bytes(g));
+        }
+        crate::control::advance(1);
+    }
+    Ok(largest)
+}
+
+/// Peak per-feature overlay storage, estimated from the masks it may actually meet: converted
+/// and dissolved input, the masks' union and output. Overlapping masks can each retain the
+/// entire input as an inside piece, so cuts budget another input copy per candidate mask.
+/// The index's candidate references can exceed the number of zones before deduplication.
+/// Like Clip's estimate this sizes coordinate storage, not a worst-case bound on edge crossings.
+fn overlay_scratch(ds: &Dataset, rows: &[usize], zones: &[Zone], near: (&ExtentIndex, &AtPoles), inside: bool) -> Result<usize, String> {
+    crate::control::begin(rows.len().saturating_add(zones.len()));
+    let mut sizes = Vec::with_capacity(zones.len());
+    for zone in zones {
+        crate::control::check()?;
+        sizes.push(kept_union_bytes(&[], &zone.poly));
+        crate::control::advance(1);
+    }
+    let candidates = near.0.references.max(zones.len()).saturating_mul(std::mem::size_of::<usize>());
+    let mut largest = 0;
+    for &row in rows {
+        crate::control::check()?;
+        if let Some(g) = ds.features.geometry(row) {
+            let hits = meeting(g, &g.extent(), zones, near);
+            let masks = hits.iter().filter_map(|&i| sizes.get(i)).fold(0usize, |n, &b| n.saturating_add(b));
+            let copies = if inside { hits.len().saturating_add(4) } else { 4 };
+            largest = largest.max(coord_bytes(g).saturating_mul(copies).saturating_add(masks.saturating_mul(3)));
+        }
+        crate::control::advance(1);
+    }
+    Ok(largest.saturating_add(candidates))
+}
+
 /// One thread's recent multi-mask unions for Clip, least recently used first, with the memory
 /// each holds ([`kept_union_bytes`]), kept within `cap` bytes; and the latest union too big for
 /// that, kept on its own until a feature wants another union, or meets one mask or none, so
@@ -2164,8 +2220,8 @@ fn erase_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
 
 /// Each of `input_rows`' parts outside every zone, as [`outside`] gives it, in their order: `None`
 /// for a row with no feature or no geometry, `Some(None)` for one left with nothing. Made on
-/// `threads` threads (by the number of rows when `None`), each feature on its own (#1252); Cancel
-/// is looked at, and progress counted, between features.
+/// `threads` threads (by rows and estimated per-feature scratch when `None`), each feature on
+/// its own (#1252); Cancel is looked at, and progress counted, between features.
 fn outside_each(
     ds: &Dataset,
     input_rows: &[usize],
@@ -2173,8 +2229,7 @@ fn outside_each(
     near: (&ExtentIndex, &AtPoles),
     threads: Option<usize>,
 ) -> Result<Vec<Option<Option<Geometry>>>, String> {
-    crate::control::begin(input_rows.len());
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(input_rows.len(), PARALLEL_FEATURES));
+    let threads = geometry_threads(input_rows.len(), threads, || overlay_scratch(ds, input_rows, zones, near, false))?;
     crate::parallel::try_map_on(
         input_rows,
         threads,
@@ -2226,7 +2281,8 @@ enum ZoneMade {
 /// as they cover nothing. A polygon of one part is only oriented, its edges kept exactly, so one
 /// with no area stays a zone, as it always has.
 ///
-/// On `threads` threads (by the number of zones when `None`). A zone of several parts is a union:
+/// On `threads` threads (by the number of zones and the largest geometry's scratch when `None`).
+/// A zone of several parts is a union:
 /// each zone is made on its own, on several threads when there are many (#1252), and they come
 /// back in order, as on one thread; Cancel is looked at, and progress counted, between zones.
 fn overlay_zones_on<'a>(
@@ -2242,8 +2298,7 @@ fn overlay_zones_on<'a>(
         return Err(format!("'{}' is not a polygon layer", ov.name));
     }
     let zone_rows = each_once(rows(inp, p, k, ov));
-    crate::control::begin(zone_rows.len());
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(zone_rows.len(), PARALLEL_FEATURES));
+    let threads = geometry_threads(zone_rows.len(), threads, || Ok(largest_geometry_bytes(ov, &zone_rows)?.saturating_mul(2)))?;
     let made = crate::parallel::try_map_on(
         &zone_rows,
         threads,
@@ -2439,7 +2494,8 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
     overlay_on(inp, p, op, None)
 }
 
-/// [`overlay`] on `threads` threads (by the number of items in each step when `None`).
+/// [`overlay`] on `threads` threads (by the items and estimated per-worker scratch in each step
+/// when `None`). The estimate pass checks Cancel between features, before the work it sizes.
 fn overlay_on(inp: &dyn Inputs, p: &Json, op: Overlay, threads: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -2454,14 +2510,13 @@ fn overlay_on(inp: &dyn Inputs, p: &Json, op: Overlay, threads: Option<usize>) -
     let at_poles = AtPoles::new(zones.iter().map(|z| poles(&z.ext)));
     let mut out = overlay_schema(ds, ov, out_name(p, format!("{}_{}", ds.name, op.suffix())), ds.geometry_type);
     let zone_attrs = |z: &Zone| ov.features.get(z.row).map(|o| o.attrs.as_slice());
-    let threads_for = |n: usize| threads.unwrap_or_else(|| crate::parallel::threads_for(n, PARALLEL_FEATURES));
     // Each input feature is cut on its own: its parts in the zones it overlaps (the part only for
     // the tools that keep it, the zone's index for all) and its part outside them.
     let input_rows = rows(inp, p, "input", ds);
-    crate::control::begin(input_rows.len());
+    let workers = geometry_threads(input_rows.len(), threads, || overlay_scratch(ds, &input_rows, &zones, (&index, &at_poles), true))?;
     let cuts = crate::parallel::try_map_on(
         &input_rows,
-        threads_for(input_rows.len()),
+        workers,
         || (),
         |_, _, &r| {
             let cut = ds.features.get(r).and_then(|f| f.geometry.as_ref()).map(|g| {
@@ -2501,9 +2556,26 @@ fn overlay_on(inp: &dyn Inputs, p: &Json, op: Overlay, threads: Option<usize>) -
     if op.keeps_overlay_rest() {
         crate::control::begin(zones.len());
         let pairs: Vec<(&Zone, &Vec<usize>)> = zones.iter().zip(&covering).collect();
+        // A remainder worker collects all covering input polygons, unions them, then subtracts
+        // them from its zone. Estimate the largest such collection before starting workers.
+        let workers = geometry_threads(pairs.len(), threads, || {
+            crate::control::begin(pairs.len());
+            let mut scratch = 0;
+            for (z, inputs) in &pairs {
+                crate::control::check()?;
+                let mut cover = 0usize;
+                for &row in *inputs {
+                    crate::control::check()?;
+                    cover = cover.saturating_add(ds.features.geometry(row).map_or(0, coord_bytes));
+                }
+                scratch = scratch.max(cover.saturating_mul(3).saturating_add(kept_union_bytes(&[], &z.poly).saturating_mul(2)));
+                crate::control::advance(1);
+            }
+            Ok(scratch)
+        })?;
         let rests = crate::parallel::try_map_on(
             &pairs,
-            threads_for(pairs.len()),
+            workers,
             || (),
             |_, _, &(z, inputs)| {
                 let rest = if inputs.is_empty() {
@@ -4552,8 +4624,8 @@ fn simplify_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<Too
     let (mut before, mut after, mut without) = (0usize, 0usize, 0usize);
     let mut notes = SimplifyNotes::default();
     let input_rows = rows(inp, p, "input", ds);
-    crate::control::begin(input_rows.len());
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(input_rows.len(), PARALLEL_FEATURES));
+    // Converted coordinates, latitude/scale arrays, simplifier work and the rebuilt geometry.
+    let threads = geometry_threads(input_rows.len(), threads, || Ok(largest_geometry_bytes(ds, &input_rows)?.saturating_mul(8)))?;
     let simplified = crate::parallel::try_map_on(
         &input_rows,
         threads,
@@ -7436,8 +7508,19 @@ fn near_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRes
     // Each feature's nearest one is found on its own, on several threads when there are many
     // (#1252); the rows are then made in input order.
     let targets = rows(inp, p, "input", ds);
-    crate::control::begin(targets.len());
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(targets.len(), PARALLEL_FEATURES));
+    let threads = geometry_threads(targets.len(), threads, || {
+        crate::control::begin(feats.len());
+        let mut near_bytes = 0;
+        for feature in &feats {
+            crate::control::check()?;
+            near_bytes = near_bytes.max(coord_bytes(feature.geom));
+            crate::control::advance(1);
+        }
+        Ok(largest_geometry_bytes(ds, &targets)?
+            .saturating_mul(3)
+            .saturating_add(near_bytes.saturating_mul(2))
+            .saturating_add(index.references.max(feats.len()).saturating_mul(std::mem::size_of::<usize>())))
+    })?;
     let hits = crate::parallel::try_map_on(
         &targets,
         threads,
@@ -7566,12 +7649,21 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
         }
     }
 
-    let threads_for = |n: usize| threads.unwrap_or_else(|| crate::parallel::threads_for(n, PARALLEL_FEATURES));
+    let mut join_bytes = None;
+    let mut join_scratch = || -> Result<usize, String> {
+        if let Some(bytes) = join_bytes {
+            return Ok(bytes);
+        }
+        let bytes = largest_geometry_bytes(join, &join_rows)?.saturating_mul(2);
+        join_bytes = Some(bytes);
+        Ok(bytes)
+    };
+    let join_threads = geometry_threads(join_rows.len(), threads, &mut join_scratch)?;
     // The join features converted: Cancel looked at, and progress counted, feature by feature.
     crate::control::begin(join_rows.len());
     let join_geoms: Vec<Located<'_>> = crate::parallel::try_map_on(
         &join_rows,
-        threads_for(join_rows.len()),
+        join_threads,
         || (),
         |_, _, &jr| {
             let located = join.features.get(jr).and_then(|f| f.geometry.as_ref()).map(|g| {
@@ -7626,10 +7718,16 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     // that target's result, raised here in target order, so a threaded run fails at the same
     // row as one thread does.
     crate::control::begin(target_rows.len());
-    // A thread's candidate list can hold every join feature (the index scans them all when it has
-    // no grid), so that scratch bounds the threads too.
-    let cand_bytes = join_geoms.len().saturating_mul(std::mem::size_of::<usize>());
-    let target_threads = threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(target_rows.len(), PARALLEL_FEATURES, cand_bytes));
+    // Candidate indices, converted target/work/output and, for Largest Overlap, temporary
+    // boolean-overlay geometry comparable to the join's conversion scratch. Shared converted
+    // join geometries themselves are not copied per worker.
+    let target_threads = geometry_threads(target_rows.len(), threads, || {
+        Ok(join_geoms
+            .len()
+            .saturating_mul(std::mem::size_of::<usize>())
+            .saturating_add(largest_geometry_bytes(target, &target_rows)?.saturating_mul(3))
+            .saturating_add(if mode == JoinMatch::LargestOverlap { join_scratch()? } else { 0 }))
+    })?;
     for batch in target_rows.chunks(target_threads.max(1).saturating_mul(FEATURE_BATCH)) {
         let found = crate::parallel::try_map_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
             let Some(tf) = target.features.get(tr) else { return Ok(Ok(None)) };
@@ -13964,6 +14062,30 @@ mod tests {
         assert!((x.unwrap() - 11.0).abs() < 1e-7 && (y.unwrap() - 11.0).abs() < 1e-7, "{x:?} {y:?}");
     }
 
+    /// Zones may overlap each other: 64 identical masks retain 64 complete input shapes.
+    /// Counting those output coordinates catches an estimate that assumes disjoint zones.
+    #[test]
+    fn overlay_scratch_covers_repeated_inside_pieces() {
+        let ring: Vec<Coord> = (0..=1000)
+            .map(|i| {
+                let angle = (i % 1000) as f64 * std::f64::consts::TAU / 1000.0;
+                Coord::new(angle.cos(), angle.sin())
+            })
+            .collect();
+        let geometry = Geometry::Polygon(vec![vec![ring]]);
+        let mut ds = Dataset::new("input", GeometryType::Polygon, vec![]);
+        ds.push(Some(geometry.clone()), vec![]);
+        let mask = polygon_of(&sq(-2.0, -2.0, 4.0)).unwrap();
+        let zones: Vec<Zone> = (0..64).map(|row| Zone { row, ext: Extent::new(-2.0, -2.0, 2.0, 2.0), poly: mask.clone() }).collect();
+        let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
+        let poles = AtPoles::new(zones.iter().map(|z| super::poles(&z.ext)));
+        let estimated = overlay_scratch(&ds, &[0], &zones, (&index, &poles), true).unwrap();
+        let (pieces, _) = cut(&geometry, &zones, (&index, &poles), false);
+        assert_eq!(pieces.len(), 64);
+        let retained: usize = pieces.iter().map(|(_, g)| coord_bytes(g)).sum();
+        assert!(estimated >= retained, "{estimated} estimated bytes, {retained} in output coordinates alone");
+    }
+
     /// Intersect, Identity, Union and Symmetrical Difference give the same rows, bit for bit, on
     /// several threads as on one (#1252): overlapping squares of two layers, overlay features of
     /// two parts, and input features without geometry.
@@ -13989,14 +14111,14 @@ mod tests {
         for op in [Overlay::Intersect, Overlay::Identity, Overlay::Union, Overlay::SymmetricalDifference] {
             let one = layer(overlay_on(&m, &p, op, Some(1)).unwrap());
             assert!(one.features.len() > 100, "{op:?}: {}", one.features.len());
-            for threads in [2, 7, 16] {
-                let many = layer(overlay_on(&m, &p, op, Some(threads)).unwrap());
-                assert_eq!(many.features.len(), one.features.len(), "{op:?}, {threads} threads");
+            for threads in [None, Some(2), Some(7), Some(16)] {
+                let many = layer(overlay_on(&m, &p, op, threads).unwrap());
+                assert_eq!(many.features.len(), one.features.len(), "{op:?}, {threads:?} threads");
                 for (a, b) in one.features.iter().zip(&many.features) {
                     assert_eq!(
                         format!("{:?}", (&a.geometry, &a.attrs)),
                         format!("{:?}", (&b.geometry, &b.attrs)),
-                        "{op:?}, {threads} threads"
+                        "{op:?}, {threads:?} threads"
                     );
                 }
             }
