@@ -349,7 +349,8 @@ pub(crate) fn validate(g: &Geometry) -> Result<(), String> {
 /// `v` as a value of a `ty` field. A date-time into a date field is the day it shows. A number goes into a number field as it is, not through the
 /// text it shows (which rounds a decimal to six places); a decimal, or text written as one, into a
 /// whole-number field loses its fraction (toward zero); a whole number past 2^53 into a decimal
-/// field is the nearest decimal. Not a number is null. Other values go through their text (a
+/// field is the nearest decimal. Not a number, and an infinity in a whole-number field, are null.
+/// Other values go through their text (a
 /// decimal into a text field as it's shown, to six places), and what the field can't hold is
 /// null. A number past the 64-bit range is held at the range's end, as it was; [`coerce_cut`], for
 /// callers that say what was cut, makes it null instead.
@@ -1838,6 +1839,7 @@ mod tests {
         assert_eq!(coerce_cut(Value::Float(f64::NAN), FieldType::Integer), (Value::Null, Cut::NotANumber));
         assert_eq!(coerce(Value::Float(f64::NAN), FieldType::Integer), Value::Null);
         assert_eq!(coerce_cut(Value::Float(f64::INFINITY), FieldType::Integer), (Value::Null, Cut::NotFinite));
+        assert_eq!(coerce(Value::Float(f64::INFINITY), FieldType::Integer), Value::Null);
         assert_eq!(coerce(Value::Float(-1e30), FieldType::Integer), Value::Int(i64::MIN));
         assert_eq!(coerce(Value::Float(0.1 + 0.2), FieldType::Double), Value::Float(0.1 + 0.2));
         // Text past the range, whole or decimal: null where it's said, at the range's end elsewhere.
