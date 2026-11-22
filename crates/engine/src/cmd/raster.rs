@@ -33,8 +33,11 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes).roles(&[]).effects(crate::policy::Effects::NONE)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles|.jp2|.j2k|.dxf|.pdf (JPEG 2000: desktop, through GDAL; PDF: desktop, command line and Python)", "data": base64, "zoom"?: bool, "layer"?: "one layer of a zip, KML or GPX by name, or a PDF's page number (the first when left out or blank)", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData)}"#),
+        C::new("raster.imageGrid", "Original Image Grid", "Analyze › Annotate", crate::image_grid::query)
+            .inputs(crate::cmd::Inputs::single_layer).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).view()
+            .params(r#"{"layer"?:name|id}"#),
+        C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes::<MAX_UPLOAD_BYTES>).roles(&[]).effects(crate::policy::Effects::NONE)
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.grb|.grib|.grb2|.grib2 (GRIB)|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles|.jp2|.j2k|.dxf|.pdf (JPEG 2000: desktop, through GDAL; PDF: desktop, command line and Python)", "data": base64, "zoom"?: bool, "layer"?: "one layer of a zip, KML or GPX by name, or a PDF's page number (the first when left out or blank)", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData)}"#),
         C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "shadow"?: 0..1 (shadedRelief: how dark the shadows the terrain casts are; left out, kept; 0 casts none), "sky"?: 0..1 (shadedRelief: how much the share of the sky each cell sees dims its ambient light; left out, kept; 0 leaves it whole), "fill"?: 0..1 (shadedRelief: a fill light from the side opposite the sun that lightens the slopes turned toward it; left out, kept; 0 has none), "ambient"?: 0..1|null (shadedRelief: the share of the colour a slope turned fully from the sun keeps; left out, kept; null, the default: 0.25, or 0.5 balanced), "balanced"?: bool (shadedRelief: flat ground keeps the ramp's colour and slopes facing the sun brighten, up to 1.3; left out, kept; false, the default, lights as before), "rock"?: {"from"?: 0..90, "to"?: 0..90, "color"?: #RRGGBB} | false (shadedRelief: steep slopes tinted toward a rock colour before the light, from the ground's own slope in degrees, without the Z factor: the ramp below from, the colour above to, blended between; left out, kept; an object's missing keys keep the current rock's, or 25, 40 and #B2ACA4; false or null removes it), "grey"?: bool (shadedRelief without its colour ramp)}"#,
         ),
@@ -88,7 +91,7 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", |s, p| super::exports::write_here(s, p, "share.exportRaster")).view().when(need_exportable).inputs(export_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
-            r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands), "cog"?: bool (a cloud-optimised GeoTIFF: 512 px tiles, Deflate, overviews; default false, an untiled GeoTIFF), "tiles"?: "a tile layer's name, or its index (0 = top): its raster tiles (XYZ, WMTS, WMS, a raster archive) put together as an RGBA GeoTIFF in Web Mercator; by default the tile layer picked in the Layers pane, when no layer is given or active", "bbox"?: "[west, south, east, north] in degrees, for a tile layer (default: the view's)", "zoom"?: "0..30, the tiles' zoom (default: the zoom the view shows); at most 1024 tiles and 8192 pixels a side"}"#,
+            r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands), "cog"?: bool (a cloud-optimised GeoTIFF: 512 px tiles, Deflate, overviews; default false, an untiled GeoTIFF), "tiles"?: "a tile layer's name, or its index (0 = top): its raster tiles (XYZ, WMTS, WMS, a raster archive) put together as an RGBA GeoTIFF in Web Mercator; by default the tile layer picked in the Layers pane, when no layer is given or active", "bbox"?: "[west, south, east, north] in degrees, for a tile layer (default: the view's)", "zoom"?: "0..30, the tiles' zoom (default: about the zoom the view shows at one pixel a point, as on a standard-density screen); at most 1024 tiles and 8192 pixels a side"}"#,
         ),
     ]
 }
@@ -598,26 +601,29 @@ pub(crate) fn pdf_page(path: &str, p: &Value) -> Result<Option<String>, String> 
     }
 }
 
-/// Whether a whole file downloaded from `url` is a PDF page to draw off the frame before it is
-/// added (`layer.addDownload` with `p`): its file name, page and whether it is placed by its
-/// coordinates (not `"as": "scan"`). `None` for anything else, or a page that can't be read here,
-/// which `layer.addDownload` reads (or refuses) as it adds it.
+/// Whether a whole file downloaded from `url` is read off the frame before it is added
+/// (`layer.addDownload` with `p`): a PDF's page to draw, or a GRIB file (whose fields can be
+/// many). Its file name, page and whether it is placed by its coordinates (not `"as": "scan"`).
+/// `None` for anything else, or a page that can't be read here, which `layer.addDownload` reads
+/// (or refuses) as it adds it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_page(url: &str, p: &Value, bytes: &[u8]) -> Option<(String, Option<String>, bool)> {
     let plain = ["service", "coverage", "geolibreProject", "geolibreLayer"]
         .iter()
         .all(|k| p.get(k).is_none_or(|v| v.is_null() || v.as_bool() == Some(false)));
-    if !raster::PDF_PAGES || !plain {
+    if !plain {
         return None;
     }
-    let name = super::layer::url_file_name(url, bytes).ok().filter(|n| raster::is_pdf_name(n))?;
+    let name = super::layer::url_file_name(url, bytes)
+        .ok()
+        .filter(|n| (raster::PDF_PAGES && raster::is_pdf_name(n)) || raster::grib::is_grib_name(n))?;
     let page = pdf_page(&name, p).ok()?;
     let scan = wants_scan(p, &name).ok()?;
     Some((name, page, !scan))
 }
 
-/// Draws a downloaded PDF's page off the frame ([`download_page`]), for
-/// [`crate::Session::download_landed_page`].
+/// Draws a downloaded PDF's page, or reads a downloaded GRIB file, off the frame
+/// ([`download_page`]), for [`crate::Session::download_landed_page`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_download_page(name: &str, bytes: &[u8], page: Option<&str>, place: bool) -> Result<Raster, String> {
     raster::read_bytes_page(name, bytes, page, place).map_err(|e| format!("{name}: {e}"))
@@ -710,14 +716,16 @@ pub(crate) fn bytes_is_jpeg2000(p: &Value) -> bool {
     ps(p, "fileName").is_some_and(|raw| raster::is_jpeg2000_name(raw.trim()) || bytes_file_name(raw).is_some_and(raster::is_jpeg2000_name))
 }
 
-fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
+/// Imports base64 file contents, applying the platform's upload cap before decoding.
+fn add_bytes<const LIMIT: usize>(s: &mut Session, p: &Value) -> CmdResult {
     use base64::Engine;
     let raw_name = ps(p, "fileName").ok_or("fileName is required")?;
     let name = bytes_file_name(raw_name).ok_or("fileName is required")?.to_string();
     let data = ps(p, "data").ok_or("data is required")?;
     // Base64 is 4 characters per 3 bytes; refuse files past the upload limit before decoding.
-    if data.len() / 4 * 3 > MAX_UPLOAD_BYTES {
-        return Err(format!("{name} is too large to open"));
+    let padding = if data.ends_with("==") { 2 } else { usize::from(data.ends_with('=')) };
+    if (data.len() / 4 * 3).saturating_sub(padding) > LIMIT {
+        return Err(rustgis_data::io::file_size_error(&name, LIMIT as u64));
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("data: {e}"))?;
     add_named_bytes(s, p, name, bytes, b(p, "zoom"))
@@ -1233,9 +1241,22 @@ fn geotiff_note(r: &Raster, bi: usize, cog: bool, band_hint: &str) -> Result<Str
 
 /// Pixel values of the topmost visible raster under a longitude/latitude point.
 pub fn identify(s: &Session, lon: f64, lat: f64) -> Option<Value> {
+    pixels_at(s, lon, lat, |_| true, true).into_iter().next().map(|(_, v)| v)
+}
+
+/// The pixel values under a longitude/latitude point of each visible raster `keep` takes that has
+/// a value there, with the raster's index in the map's layers, the one drawn on top first (the
+/// map's drawing order, a higher depth priority above whatever the order); with `first`, the
+/// topmost raster's alone. Identify ranks them with the features by that order (#2488).
+pub fn pixels_at(s: &Session, lon: f64, lat: f64, keep: impl Fn(&rustgis_map::Layer) -> bool, first: bool) -> Vec<(usize, Value)> {
     let scale = s.scale();
     let c = rustgis_geom::Coord::new(lon, lat);
-    s.map().layers.iter().filter(|l| s.map().draws_at(l, scale)).find_map(|l| {
+    let map = s.map();
+    let drawn = map.draw_order().into_iter().filter_map(|d| match d {
+        rustgis_map::Drawn::Layer(i) => Some((i, map.layers.get(i)?)),
+        rustgis_map::Drawn::Tile(_) => None,
+    });
+    let pixels = drawn.filter(|(_, l)| l.is_raster() && keep(l) && map.draws_at(l, scale)).filter_map(|(i, l)| {
         let r = l.raster.as_ref()?.data.as_ref()?;
         let (col, row) = r.pixel_at(c)?;
         let vals: Vec<Option<f32>> = (0..r.band_count()).map(|b| r.value(b, col, row)).collect();
@@ -1247,8 +1268,9 @@ pub fn identify(s: &Session, lon: f64, lat: f64) -> Option<Value> {
             attrs.insert(b.name.clone(), json!(v.map(|v| rustgis_map::symbology::fmt_num(v as f64)).unwrap_or_else(|| "NoData".into())));
         }
         attrs.insert("Pixel".into(), json!(format!("{col}, {row}")));
-        Some(json!({"layer": l.name, "layerId": l.id, "raster": true, "attributes": attrs}))
-    })
+        Some((i, json!({"layer": l.name, "layerId": l.id, "raster": true, "attributes": attrs})))
+    });
+    if first { pixels.take(1).collect() } else { pixels.collect() }
 }
 
 /// Binds the primary raster and optional actual like raster without copying pixel data.
@@ -1269,6 +1291,45 @@ fn like_name(p: &Value) -> Result<Option<&str>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The last padded quartet must count only the bytes it will decode into.
+    #[test]
+    fn add_data_bytes_accepts_padded_files_at_the_exact_limit() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        const CSV: &[u8] = b"X,Y\n1,2\n";
+        fn check<const LIMIT: usize>(bytes: &[u8]) {
+            let mut session = Session::new(crate::Project::default());
+            let params = |bytes: &[u8]| json!({"fileName": "points.csv", "data": STANDARD.encode(bytes)});
+            add_bytes::<LIMIT>(&mut session, &params(bytes)).unwrap();
+            let larger = [bytes, b" "].concat();
+            let error = add_bytes::<LIMIT>(&mut session, &params(&larger)).unwrap_err();
+            assert!(error.contains("is too large to open"), "{error}");
+        }
+        check::<{ CSV.len() }>(CSV);
+        check::<{ CSV.len() - 1 }>(&CSV[..CSV.len() - 1]);
+    }
+
+    /// Exercise upload refusals with a reduced cap across formats with different recovery advice.
+    #[test]
+    fn oversized_add_data_bytes_reports_limit_and_advice() {
+        const LIMIT: usize = 1 << 20;
+        let mut session = Session::new(crate::Project::default());
+        let data = "YWJj".repeat(LIMIT / 3 + 1);
+        let split = "Split the data into smaller files and import each one separately.";
+        for (name, advice) in [
+            ("permits.csv", split),
+            ("imagery.tif", split),
+            ("permits.gpkg", split),
+            (
+                "permits.geojson",
+                "Split it into smaller files, or convert vector data to FlatGeobuf or GeoPackage and open it on the desktop.",
+            ),
+        ] {
+            let error = add_bytes::<LIMIT>(&mut session, &json!({"fileName": name, "data": &data})).unwrap_err();
+            assert_eq!(error, format!("{name} is too large to open (limit 1 MiB). {advice}"));
+        }
+        assert!(session.map().layers.is_empty());
+    }
 
     /// Rasters that leave out the same thing are said together; when their numbers differ, each
     /// is said with its own (a few) or the range is said for each of them (many), never a sum.

@@ -10,12 +10,14 @@ pub mod ascii;
 pub mod cog;
 pub mod cogwrite;
 pub mod crs;
-pub(crate) mod epsg_axes;
-mod epsg_gap;
-mod esri;
+pub mod crs_search;
+mod decoded;
+#[cfg(not(target_arch = "wasm32"))]
+mod file_revision;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;
 pub mod geotiff;
+pub mod grib;
 mod image_grid;
 mod lerc;
 mod lzw;
@@ -24,6 +26,7 @@ pub mod pam;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 pub mod planetary;
+pub mod reproject;
 pub mod wkt;
 pub mod world;
 pub mod zarr;
@@ -32,6 +35,7 @@ use std::path::Path;
 
 pub use crs::{Crs, Transformer};
 pub use image_grid::ImageGrid;
+pub use reproject::Reprojection;
 use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 
@@ -90,13 +94,14 @@ pub const SAMPLES_CEILING: usize = 1_000_000_000;
 /// Most samples (pixels × bands) held in memory: on the desktop, as many as a quarter of the
 /// computer's memory holds at 8 bytes each (a sample takes 4, and reading briefly needs about
 /// twice that), from [`SAMPLES_FLOOR`] up to [`SAMPLES_CEILING`] (#1291 step 2, #1318).
+/// Less once RustGIS holds more than half the memory, never below the floor ([`crate::memory::planned`], #2431).
 pub fn max_samples() -> usize {
-    crate::memory::scaled(crate::memory::physical(), SAMPLES_FLOOR, SAMPLES_CEILING, 8)
+    crate::memory::planned(SAMPLES_FLOOR, SAMPLES_CEILING, 8)
 }
 /// Largest ASCII grid file read (1 GiB).
 pub const MAX_ASCII_BYTES: u64 = 1 << 30;
 /// File extensions read as rasters.
-pub const READ_EXTENSIONS: &[&str] = &["tif", "tiff", "asc", "png", "jpg", "jpeg"];
+pub const READ_EXTENSIONS: &[&str] = &["tif", "tiff", "asc", "png", "jpg", "jpeg", "grb", "grib", "grb2", "grib2"];
 
 /// Whether a file name is a raster this module reads: a PDF's page too (refused with
 /// [`PDF_ELSEWHERE`] where [`PDF_PAGES`] is false).
@@ -646,6 +651,9 @@ pub struct Raster {
     pub data_type: String,
     /// Where it was read from, if anywhere.
     pub source: Option<String>,
+    /// The original local GeoTIFF's revision or capture failure, retained with these pixels and never serialized.
+    #[cfg(not(target_arch = "wasm32"))]
+    source_file: Option<std::result::Result<file_revision::FileRevision, String>>,
     /// Whether the pixels come from a reduced-resolution overview.
     pub overview: Option<(u32, u32)>,
     /// With `overview`, whether the pixels are every `step`-th of the file's, from its top-left
@@ -845,6 +853,8 @@ impl Raster {
             color,
             data_type,
             source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            source_file: None,
             overview: None,
             step: 1,
             georeferenced: true,
@@ -982,6 +992,11 @@ impl Raster {
     /// This raster as a scan: its pixels with no coordinates, as `"as": "scan"` opens a picture.
     pub fn into_scan(mut self) -> Result<Raster> {
         if self.georeferenced {
+            // Its pixels no longer follow the file's own grid, so no grid read may pair with them.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.source_file = None;
+            }
             self.crs = Crs::LonLat;
             self.transformer = self.crs.transformer().map_err(DataError::Format)?;
             self.transform = unreferenced(self.width, self.height);
@@ -1236,6 +1251,10 @@ fn read_path_placing(path: &Path, world: bool) -> Result<Raster> {
             let text = crate::provenance::read_to_string(path)?;
             read_ascii(path, &text, &name, sidecar_nodata)?
         }
+        // Read message by message, never whole.
+        "grb" | "grib" | "grb2" | "grib2" => {
+            grib::read_with_nodata(std::io::BufReader::new(crate::provenance::open(path)?), &name, sidecar_nodata)?
+        }
         #[cfg(not(target_arch = "wasm32"))]
         _ if gdal::is_gdal_raster_name(&path.to_string_lossy()) => {
             // Converted once to a GeoTIFF in the cache; the layer still names this file.
@@ -1247,12 +1266,13 @@ fn read_path_placing(path: &Path, world: bool) -> Result<Raster> {
     // left out of the rounded count: it left out the sidecar's no-data for all bands. When the two
     // differ (a record for a band the raster lacks, or one only some bands give), the file is read
     // again with the one applied (none, when the bands it has give none), so the rounded count
-    // leaves out just its pixels. Only an ASCII grid, or a GeoTIFF of a type `f32` can round, is read again.
+    // leaves out just its pixels. Only an ASCII grid, a GRIB file, or a GeoTIFF of a type `f32` can
+    // round, is read again.
     let applied = pam.as_ref().map(|p| p.nodata_within(r.bands.len()));
     if let Some(nd) = applied
         && nd != sidecar_nodata
         && r.nodata.is_none()
-        && (ext == "asc"
+        && (matches!(ext.as_str(), "asc" | "grb" | "grib" | "grb2" | "grib2")
             || (matches!(ext.as_str(), "tif" | "tiff")
                 && matches!(r.data_type.as_str(), "UInt32" | "Int32" | "UInt64" | "Int64" | "Float64")))
     {
@@ -1260,6 +1280,8 @@ fn read_path_placing(path: &Path, world: bool) -> Result<Raster> {
         drop(r);
         r = if ext == "asc" {
             read_ascii(path, &crate::provenance::read_to_string(path)?, &name, nd)?
+        } else if grib::EXTENSIONS.contains(&ext.as_str()) {
+            grib::read_with_nodata(std::io::BufReader::new(crate::provenance::open(path)?), &name, nd)?
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             let again = geotiff::read_file_with_nodata(path, &name, nd)?;
@@ -1378,6 +1400,8 @@ pub fn read_converted(path: &Path, c: &gdal::Converted) -> Result<Raster> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
     crate::provenance::path(path);
     let mut r = crate::provenance::without(|| geotiff::read_file(&c.path, stem))?;
+    // This revision belongs to GDAL's cache copy, not the original source named below.
+    r.source_file = None;
     if let Some(s) = &c.subdataset {
         r.name = format!("{stem} {}", gdal::short_name(s));
     }
@@ -1617,6 +1641,7 @@ fn north_up<B: AsRef<[f32]>>(bands: &[B], w: u32, h: u32, affine: [f64; 6], max:
     Ok((out, ow, oh, GeoTransform { origin_x: min_x, origin_y: max_y, pixel_width: cell, pixel_height: -cell }))
 }
 
+/// Decodes a bounded image and reserves each output band fallibly before converting its pixels.
 fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Raster> {
     let [w, s, e, n] = bbox;
     if !(w < e && s < n) {
@@ -1632,7 +1657,7 @@ fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Rast
     reader.limits(limits);
     let img = reader.decode().map_err(|e| DataError::Format(format!("{name}: {e}")))?.into_rgba8();
     let (width, height) = img.dimensions();
-    let mut bands: Vec<Vec<f32>> = (0..4).map(|_| Vec::with_capacity(width as usize * height as usize)).collect();
+    let mut bands = (0..4).map(|_| grid::<f32>(width as usize, height as usize)).collect::<Result<Vec<_>>>()?;
     for px in img.pixels() {
         for (b, v) in bands.iter_mut().zip(px.0) {
             b.push(f32::from(v));
@@ -1689,6 +1714,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
             let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format("not a text file".into()))?;
             ascii::read(text, &name, None)
         }
+        "grb" | "grib" | "grb2" | "grib2" => grib::read_bytes(bytes, &name),
         other => Err(DataError::Unsupported(format!(".{other}"))),
     }
 }
@@ -2497,6 +2523,22 @@ pub(crate) mod tests {
         assert!(r.lost.is_empty(), "{:?}", r.lost);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn annotation_grid_converted_pixels_do_not_claim_the_cache_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("converted.tif");
+        std::fs::write(&cache, geotiff::write(&small(), 0).unwrap()).unwrap();
+        geotiff::read_file(&cache, "cache").unwrap().check_original_file(&cache).unwrap();
+        let converted = gdal::Converted { path: cache.clone(), subdataset: None, others: Vec::new(), assumed_lonlat: false };
+        let source = dir.path().join("original.nc");
+        let pixels = read_converted(&source, &converted).unwrap();
+        assert_eq!(pixels.source.as_deref(), source.to_str());
+        let error = pixels.check_original_file(&cache).unwrap_err();
+        assert!(error.contains("no verified original file revision"), "{error}");
+        assert!(!error.contains("file changed"), "{error}");
+    }
 }
 
 #[cfg(test)]
@@ -2572,7 +2614,13 @@ mod scan_tests {
         let e = r.extent();
         assert!((e.min_x - 10.0).abs() < 1e-9 && (e.max_y - 41.0).abs() < 1e-9);
         assert!(r.place([1.0, 1.0, 0.0, 2.0]).is_err() && r.place([0.0, f64::NAN, 1.0, 2.0]).is_err());
-        assert!(from_image("o", &encode(picture(4, 4, true), image::ImageFormat::Png), [0.0, 0.0, 1.0, 1.0], 0.0).unwrap().georeferenced);
+        let placed = from_image("o", &encode(picture(4, 4, true), image::ImageFormat::Png), [0.0, 0.0, 1.0, 1.0], 0.0).unwrap();
+        assert!(placed.georeferenced);
+        assert_eq!(placed.color, ColorHint::Rgb { alpha: true });
+        for (band, expected) in placed.bands.iter().zip([3.0, 2.0, 7.0, 200.0]) {
+            assert_eq!(band.data.len(), 16);
+            assert_eq!(band.data.get(11).copied(), Some(expected));
+        }
     }
 
     #[test]

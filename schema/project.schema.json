@@ -745,6 +745,18 @@
         "geometry_type": {
           "$ref": "#/$defs/GeometryType"
         },
+        "held_in": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Crs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The system its features are in, when not longitude/latitude (`Dataset::held_in`)."
+        },
         "id": {
           "default": 0,
           "format": "uint32",
@@ -1068,8 +1080,11 @@
       "items": {
         "enum": [
           "terrain-block",
+          "terrain-block-shape",
+          "terrain-block-polygon",
           "terrain-water",
           "terrain-water-shore",
+          "terrain-block-water",
           "shaded-relief-effects",
           "normalized-legend-urls",
           "field-origin",
@@ -1081,9 +1096,22 @@
           "layout-element-background",
           "classified-point-size",
           "picture-markers",
+          "graticule-mgrs",
+          "graticule-on-top",
+          "graticule-color",
           "layout-element-ink",
+          "layout-element-wrap",
+          "layout-chart-data",
+          "layout-chart-look",
+          "layout-chart-classes",
+          "layout-chart-stack",
           "field-generation",
-          "crs-wkt"
+          "offline-map-area-id",
+          "crs-wkt",
+          "zarr-window",
+          "blank-paper",
+          "layout-frame-border",
+          "native-coordinates"
         ],
         "type": "string"
       },
@@ -1149,8 +1177,11 @@
   "type": "object",
   "x-rustgis-capabilities": [
     "terrain-block",
+    "terrain-block-shape",
+    "terrain-block-polygon",
     "terrain-water",
     "terrain-water-shore",
+    "terrain-block-water",
     "shaded-relief-effects",
     "normalized-legend-urls",
     "field-origin",
@@ -1162,9 +1193,22 @@
     "layout-element-background",
     "classified-point-size",
     "picture-markers",
+    "graticule-mgrs",
+    "graticule-on-top",
+    "graticule-color",
     "layout-element-ink",
+    "layout-element-wrap",
+    "layout-chart-data",
+    "layout-chart-look",
+    "layout-chart-classes",
+    "layout-chart-stack",
     "field-generation",
-    "crs-wkt"
+    "offline-map-area-id",
+    "crs-wkt",
+    "zarr-window",
+    "blank-paper",
+    "layout-frame-border",
+    "native-coordinates"
   ],
   "x-rustgis-reads-format": 2,
   "x-rustgis-writes-format": 2
