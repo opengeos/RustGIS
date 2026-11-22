@@ -1945,7 +1945,9 @@ fn largest_geometry_bytes(ds: &Dataset, rows: &[usize]) -> Result<usize, String>
 /// Peak per-feature overlay storage, estimated from the masks it may actually meet: converted
 /// and dissolved input, the masks' union and output. Overlapping masks can each retain the
 /// entire input as an inside piece, so cuts budget another input copy per candidate mask.
-/// The index's candidate references can exceed the number of zones before deduplication.
+/// Four input copies allow conversion, dissolve, intermediate and output; three mask copies
+/// allow the union, boolean-operation work and output. The index's candidate references can
+/// exceed the number of zones before deduplication.
 /// Like Clip's estimate this sizes coordinate storage, not a worst-case bound on edge crossings.
 fn overlay_scratch(ds: &Dataset, rows: &[usize], zones: &[Zone], near: (&ExtentIndex, &AtPoles), inside: bool) -> Result<usize, String> {
     crate::control::begin(rows.len().saturating_add(zones.len()));
@@ -7297,6 +7299,18 @@ struct Nearby<'a, 'b> {
 }
 
 impl Nearby<'_, '_> {
+    /// Peak distance-search storage beyond geometry: candidate references before deduplication,
+    /// the measured-distance hash table and the retained/sorted distance results. A hash table
+    /// can use nearly four buckets per entry after growth; each includes its control byte.
+    fn scratch_bytes(&self) -> usize {
+        let entry = std::mem::size_of::<(usize, Option<f64>)>().saturating_add(1);
+        let distances = std::mem::size_of::<(usize, f64)>().saturating_mul(3); // Vec capacity and stable-sort work.
+        self.feats
+            .len()
+            .saturating_mul(entry.saturating_mul(4).saturating_add(distances))
+            .saturating_add(self.index.references.max(self.feats.len()).saturating_mul(std::mem::size_of::<usize>()).saturating_mul(2))
+    }
+
     /// The features within `reach` meters of a target (`t`, with its extent, and its geometry in
     /// the analysis plane), in order, with their distances. With `nearest`, only the nearest is
     /// wanted: a feature that can't be as near as the nearest so far isn't measured, so some
@@ -7518,7 +7532,7 @@ fn near_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRes
         Ok(largest_geometry_bytes(ds, &targets)?
             .saturating_mul(3)
             .saturating_add(near_bytes.saturating_mul(2))
-            .saturating_add(index.references.max(feats.len()).saturating_mul(std::mem::size_of::<usize>())))
+            .saturating_add(nearby.scratch_bytes()))
     })?;
     let hits = crate::parallel::try_map_on(
         &targets,
@@ -7573,10 +7587,31 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 }
 
 /// The targets each thread takes per batch in [`spatial_join_on`]: each target's matches are kept
-/// until the batch's rows are made, and a target can match thousands, so batches of `threads` ×
-/// this bound how many lists are held at once (on one thread, this many). Small in tests, so they
-/// cross from one batch to the next.
+/// until the batch's rows are made, and a target can match thousands. Batches hold at most
+/// `threads` × this many lists; [`join_target_batch`] shrinks them when dense matches would
+/// exceed the scratch budget. Small in tests, so they cross from one batch to the next.
 const FEATURE_BATCH: usize = if cfg!(test) { 16 } else { 256 };
+
+/// Match-vector capacity for one target: Closest/Largest Overlap keep one, other modes can
+/// keep every join feature. Vec growth can double capacity, with at least four initial slots.
+fn join_match_bytes(mode: JoinMatch, joins: usize) -> usize {
+    let matches = if joins == 0 {
+        0
+    } else if matches!(mode, JoinMatch::Closest | JoinMatch::LargestOverlap) {
+        1
+    } else {
+        joins
+    };
+    if matches == 0 { 0 } else { matches.saturating_mul(2).max(4).saturating_mul(std::mem::size_of::<(usize, Option<f64>)>()) }
+}
+
+/// Keeps retained match lists within the scratch budget beyond one target's baseline, after
+/// reserving other workers' search storage. Even one worker shrinks a high-cardinality batch;
+/// explicit thread counts skip geometry sizing but still bound the lists retained together.
+fn join_target_batch(threads: usize, worker_bytes: usize, match_bytes: usize, budget: usize) -> usize {
+    let spare = budget.saturating_sub(worker_bytes.saturating_mul(threads.saturating_sub(1)));
+    threads.max(1).saturating_mul(FEATURE_BATCH).min(1usize.saturating_add(spare / match_bytes.max(1)))
+}
 
 /// [`spatial_join`] on `threads` threads (by the number of features in each step when `None`): the
 /// join features are converted, and each target's matches found, on their own (#1252); the rows
@@ -7709,26 +7744,29 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
 
     let mut total_matches = 0usize;
     let mut written_features = 0usize;
-    // Each target's matches, in the order they're joined, with their distances when measured:
-    // found on their own, on several threads when there are many (#1252), in batches of
-    // [`FEATURE_BATCH`] targets a thread, so the lists held at once stay bounded (a target can
-    // match thousands). `None` for a row with no feature. An overlap that can't be measured is
-    // that target's result, raised here in target order, so a threaded run fails at the same
-    // row as one thread does.
-    // Candidate indices (including grid duplicates before deduplication), converted target/work/
-    // output and, for Largest Overlap, temporary
-    // boolean-overlay geometry comparable to the join's conversion scratch. Shared converted
-    // join geometries themselves are not copied per worker.
+    // Each target's matches are found independently and replayed in target order, including
+    // overlap errors. Batches hold at most FEATURE_BATCH targets per thread, fewer when their
+    // retained match lists would use the remaining scratch budget.
+    let match_bytes = join_match_bytes(mode, join_geoms.len());
+    let mut worker_bytes = 0;
     let target_threads = geometry_threads(target_rows.len(), threads, || {
-        Ok(join_geoms
-            .len()
-            .max(index.references)
-            .saturating_mul(std::mem::size_of::<usize>())
+        // Distance searches retain a measured map and sorted distance results; other modes
+        // keep candidate indices. Converted join geometries are shared, never copied per worker.
+        let search = if by_distance {
+            nearby.scratch_bytes()
+        } else {
+            join_geoms.len().max(index.references).saturating_mul(std::mem::size_of::<usize>()).saturating_mul(2)
+        };
+        worker_bytes = search
             .saturating_add(largest_geometry_bytes(target, &target_rows)?.saturating_mul(3))
-            .saturating_add(if mode == JoinMatch::LargestOverlap { join_scratch()? } else { 0 }))
+            .saturating_add(if mode == JoinMatch::LargestOverlap { join_scratch()? } else { 0 });
+        Ok(worker_bytes.saturating_add(match_bytes))
     })?;
-    for batch in target_rows.chunks(target_threads.max(1).saturating_mul(FEATURE_BATCH)) {
-        let found = crate::parallel::try_map_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
+    let batch_size = join_target_batch(target_threads, worker_bytes, match_bytes, crate::parallel::scratch_budget());
+    for batch in target_rows.chunks(batch_size) {
+        // A memory-capped batch can have fewer than BATCH targets per worker. Take one at a
+        // time so its first worker cannot claim the entire batch and leave the others idle.
+        let found = crate::parallel::try_map_each_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
             let Some(tf) = target.features.get(tr) else { return Ok(Ok(None)) };
             let mut matches: Vec<(usize, Option<f64>)> = Vec::new();
             if let Some(tg) = tf.geometry.as_ref() {
@@ -14059,6 +14097,71 @@ mod tests {
         let want = rustgis_geom::wgs84_distance_m(Coord::new(50.0, 50.0), Coord::new(11.0, 11.0));
         assert!((d.unwrap() - want).abs() < 1e-4 * want, "{d:?} vs {want}");
         assert!((x.unwrap() - 11.0).abs() < 1e-7 && (y.unwrap() - 11.0).abs() < 1e-7, "{x:?} {y:?}");
+    }
+
+    /// Explicit/small runs never size geometry, while an automatic estimate larger than the
+    /// entire scratch budget admits only the baseline worker without global test overrides.
+    #[test]
+    fn geometry_threads_skips_unused_estimates_and_limits_scratch() {
+        assert_eq!(geometry_threads(PARALLEL_FEATURES * 2, Some(3), || panic!("explicit count sized geometry")).unwrap(), 3);
+        assert_eq!(geometry_threads(PARALLEL_FEATURES - 1, None, || panic!("small run sized geometry")).unwrap(), 1);
+        let sized = std::cell::Cell::new(false);
+        assert_eq!(
+            geometry_threads(PARALLEL_FEATURES * 2, None, || {
+                sized.set(true);
+                Ok(usize::MAX)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(sized.get(), crate::parallel::threads_for(PARALLEL_FEATURES * 2, PARALLEL_FEATURES) > 1);
+    }
+
+    /// Coincident points retain every measured distance and hit. Compare the allowance with
+    /// those actual container capacities, including the hash table's buckets and control bytes.
+    #[test]
+    fn nearby_scratch_covers_coincident_distance_results() {
+        let point = Geometry::Point(Coord::new(0.0, 0.0));
+        let geo = to_geo(&point);
+        let feats: Vec<_> = (0..4097).map(|row| Located { row, ext: point.extent(), geo: geo.clone(), geom: &point }).collect();
+        let index = ExtentIndex::new(feats.iter().map(|f| f.ext));
+        let nearby = Nearby { feats: &feats, index: &index };
+        let mut measured = HashMap::new();
+        let near = nearby.within(&point, &point.extent(), &geo, 1.0, false, None, &mut measured);
+        assert_eq!(near.len(), feats.len());
+        assert!(near.capacity() > near.len(), "exercise distance-vector growth");
+        assert_eq!(measured.len(), feats.len());
+        let table = measured.capacity() * 2 * (std::mem::size_of::<(usize, Option<f64>)>() + 1);
+        let distances = (near.capacity() + near.len()) * std::mem::size_of::<(usize, f64)>();
+        let candidates = index.references.max(feats.len()) * std::mem::size_of::<usize>();
+        assert!(nearby.scratch_bytes() >= table + distances + candidates);
+    }
+
+    /// Dense joins shrink even a single worker's batch. Actual pushed match vectors from the
+    /// selected batch fit the budget beyond one target, unlike a fixed FEATURE_BATCH per worker.
+    #[test]
+    fn spatial_join_batches_bound_retained_dense_matches() {
+        let joins = 513;
+        let budget = 64 << 10;
+        let worker = 2048;
+        let per_target = join_match_bytes(JoinMatch::Intersects, joins);
+        for threads in [1usize, 4] {
+            let batch = join_target_batch(threads, worker, per_target, budget);
+            assert!(batch < threads * FEATURE_BATCH);
+            let lists: Vec<Vec<(usize, Option<f64>)>> = (0..batch)
+                .map(|_| {
+                    let mut list = Vec::new();
+                    for row in 0..joins {
+                        list.push((row, None));
+                    }
+                    list
+                })
+                .collect();
+            assert!(lists.iter().all(|list| list.capacity() > joins), "exercise match-vector growth");
+            let retained: usize = lists.iter().map(|list| list.capacity() * std::mem::size_of::<(usize, Option<f64>)>()).sum();
+            let baseline = lists[0].capacity() * std::mem::size_of::<(usize, Option<f64>)>();
+            assert!(retained + worker * (threads - 1) <= budget + baseline);
+        }
     }
 
     /// Zones may overlap each other: 64 identical masks retain 64 complete input shapes.
