@@ -2154,12 +2154,25 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             .response
                             .labelled_by(input_label.id);
                         ui.end_row();
-                        // Unticked, the bar prints no unit; ticked again, the unit's abbreviation.
+                        // Unticked, the bar prints no unit; ticked again, the label typed before
+                        // it was hidden (kept for the session), else the unit's abbreviation.
                         let input_label = ui.label(tl!("Show unit label"));
                         let shows_unit = unit_label.as_deref() != Some("");
                         let mut on = shows_unit;
                         if ui.checkbox(&mut on, "").labelled_by(input_label.id).changed() {
-                            update(app, json!({"unitLabel": if on { Value::Null } else { json!("") }}));
+                            let kept = egui::Id::unique(("scale_unit_label_kept", li, id));
+                            // The label being typed is dropped, so the field losing its focus
+                            // doesn't write it back; hidden, it is the text kept.
+                            let draft = app.layout.typing.remove(&(li, id, "unitLabel"));
+                            if on {
+                                let typed = ui.ctx().data_mut(|d| d.remove_temp::<String>(kept)).filter(|t| !t.is_empty());
+                                update(app, json!({"unitLabel": typed.map_or(Value::Null, Value::String)}));
+                            } else {
+                                if let Some(text) = draft.or_else(|| unit_label.clone()).filter(|t| !t.is_empty()) {
+                                    ui.ctx().data_mut(|d| d.insert_temp(kept, text));
+                                }
+                                update(app, json!({"unitLabel": ""}));
+                            }
                         }
                         ui.end_row();
                         if shows_unit {
@@ -3938,6 +3951,33 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.run_steps(3);
         assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        // Hidden and shown again, the typed label comes back, not the abbreviation; one undo
+        // step hides it again.
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some(""));
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some(""));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        // Hidden while it is being typed, the label isn't written back as the field loses its
+        // focus; the typed text is the one kept.
+        h.get_by_label("Unit label").focus();
+        h.run_steps(2);
+        h.get_by_label("Unit label").type_text("Yards");
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some(""));
+        assert!(h.state().layout.typing.is_empty());
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert!(set(&h).1.is_some_and(|t| t.ends_with("Yards")), "{:?}", set(&h).1);
         // One subdivision is none, as the bar already has: no change, no undo step.
         let subdivisions =
             |h: &egui_kittest::Harness<'_, RustGisApp>| match &h.state().session.project.layouts[li].element(bar).unwrap().kind {
