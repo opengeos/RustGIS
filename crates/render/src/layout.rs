@@ -2759,7 +2759,10 @@ fn legend_missing(
         // The last has the rest of the box's width.
         let right = if k + 1 < starts.len() { x + widest(part, at) * ppp * close_up } else { r.right() };
         let Some(column) = Rect::from_ltrb(x, y, right, r.bottom()) else { break };
-        legend_column(pm, column, part, columns > 1, map, &opts, ink, ppp);
+        // The room left of it that holds nothing: none at the box's edge, the gap between columns
+        // as drawn after it.
+        let lead = if k == 0 { 0.0 } else { gap * ppp * close_up };
+        legend_column(pm, column, part, (columns > 1, lead), map, &opts, ink, ppp);
         x = right + gap * ppp * close_up;
     }
     missing
@@ -2780,12 +2783,13 @@ fn legend(
 }
 
 /// A column of a legend: its rows from the top of `r`, as many as fit. With `name_with_class`, a
-/// layer's name only with room for the class under it, as [`flow`] keeps them together.
+/// layer's name only with room for the class under it, as [`flow`] keeps them together. `lead`
+/// pixels left of it hold nothing, which its swatches may reach into.
 fn legend_column(
     pm: &mut Canvas,
     r: Rect,
     rows: &[LegendRow],
-    name_with_class: bool,
+    (name_with_class, lead): (bool, f32),
     map: &Map,
     opts: &LegendOptions,
     dark: Rgba,
@@ -2833,8 +2837,9 @@ fn legend_column(
             LegendRow::Plain(l, name) => {
                 let s = l.renderer.symbol_for(&l.dataset, 0);
                 let sym = (&s, l.line_strokes.as_slice(), l.fill_layers.as_slice());
-                let gap = LEGEND_INDENT * size * ppp;
-                swatch(pm, (r.x(), y, sw, height), l, sym, map.layer_opacity(l), opts.scale, (ppp, across, gap));
+                // Its room: left of the column, and the gap before its name.
+                let room = (lead, LEGEND_INDENT * size * ppp);
+                swatch(pm, (r.x(), y, sw, height), l, sym, map.layer_opacity(l), opts.scale, (ppp, across, room));
                 let (x, pt) = (r.x() + sw + LEGEND_INDENT * size * ppp, LEGEND_NAME_PT * size * 1.33 * ppp);
                 text::text_at(pm, name, x, y + height / 2.0, pt, dark, false, text::Align::Left, false);
             }
@@ -2849,7 +2854,8 @@ fn legend_column(
                     (&en.symbol, row_strokes(l, en), row_fills(l, en)),
                     map.layer_opacity(l),
                     opts.scale,
-                    (ppp, across, (LEGEND_LABEL_INDENT - LEGEND_INDENT) * size * ppp),
+                    // Its room: its indent and what lies left of the column, and the gap before its label.
+                    (ppp, across, (lead + LEGEND_INDENT * size * ppp, (LEGEND_LABEL_INDENT - LEGEND_INDENT) * size * ppp)),
                 );
                 text::text_at(
                     pm,
@@ -3174,8 +3180,9 @@ pub fn frame_plain_under(
 /// `strokes` and `fills` (#2490): a point as [`point_swatch`] draws it, or a line or a filled box a
 /// swatch wide in the middle of the box (`across` pixels: [`LEGEND_SWATCH`] in the legend's size),
 /// by the paths the map draws its features with, its widths at `ppp`. A line or polygon swatch's
-/// ink ([`swatch_ink`]) is held to its row's top and bottom and, at its sides, to `gap` pixels past
-/// its column, the room its row leaves before its text: stacked, see-through (`opacity`), grown
+/// ink ([`swatch_ink`]) is held to its row's top and bottom and, at its sides, to the `room` (left,
+/// right, in pixels) its row leaves empty: left, its indent and what lies left of its column, none
+/// at the legend's edge; right, the gap before its text. Stacked, see-through (`opacity`), grown
 /// with the layer's reference scale at 1:`scale` or reaching past that, it is composited as one and
 /// cut there.
 fn swatch(
@@ -3185,7 +3192,7 @@ fn swatch(
     (s, strokes, fills): (&rustgis_map::Symbol, &[rustgis_map::LineStroke], &[rustgis_map::fills::FillLayer]),
     opacity: f32,
     scale: f64,
-    (ppp, across, gap): (f32, f32, f32),
+    (ppp, across, (lead, gap)): (f32, f32, (f32, f32)),
 ) {
     let gt = l.geometry_type();
     let k = l.size_factor(scale);
@@ -3194,12 +3201,12 @@ fn swatch(
         return;
     }
     // Every line or polygon swatch is cut to its row's top and bottom, so a line wider than its row,
-    // or shifted off it, doesn't paint over the rows beside it (#2518), and at its sides to the gap
-    // before its text, so it doesn't paint over its label; within those it keeps its ink, as wide
-    // as the map draws it (#2581).
+    // or shifted off it, doesn't paint over the rows beside it (#2518), and at its sides to the room
+    // its row leaves empty, so it doesn't paint over its label, the column before or past the
+    // legend's edge; within those it keeps its ink, as wide as the map draws it (#2581).
     let plain = if gt == GeometryType::Polyline { strokes.is_empty() } else { fills.is_empty() };
     let ink = swatch_ink((x, y, w, h), gt, (s, strokes, fills), (across, ppp * k));
-    let (lo, hi) = (x - gap, x + w + gap);
+    let (lo, hi) = (x - lead, x + w + gap);
     let within = ink.is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01 && b.left() >= lo - 0.01 && b.right() <= hi + 0.01);
     if plain && opacity >= 0.999 && k == 1.0 && within {
         // A layer with no stack, within its row: the swatch it always had.
@@ -3222,8 +3229,8 @@ fn swatch(
 /// line's `strokes` the map draws, as it strokes them ([`crate::line_stroke`]), an offset one as
 /// wide as its width and twice its offset, mitred, as its shifted line's corners are
 /// (`offset_polyline`), a marked one as far as [`crate::line_markers::reach`]; a stacked polygon's
-/// box and its outline. `None` for no shape. [`swatch`] keeps it within its row and the gap before
-/// its text.
+/// box and its outline. `None` for no shape. [`swatch`] keeps it within its row and the room its
+/// row leaves empty.
 fn swatch_ink(
     cell: (f32, f32, f32, f32),
     gt: GeometryType,
@@ -8636,9 +8643,8 @@ Elaboração: RustGIS",
         let row = (0.0, 0.0, LEGEND_SWATCH, LEGEND_ROW);
         let b = swatch_ink(row, GeometryType::Polyline, (&thin, &[], &[]), (LEGEND_SWATCH, 1.0)).unwrap();
         assert!(b.top() >= 0.0 && b.bottom() <= LEGEND_ROW, "{b:?}");
-        // A polygon's wide outline is cut at its row's top and bottom only, plain or stacked: its
-        // sides keep their whole width, past the swatch's column on the left as the plain swatch's
-        // outline always reached.
+        // A polygon's wide outline is cut at its row's top and bottom, plain or stacked, and on the
+        // left at the legend's edge, where nothing lies before its column.
         let blue = Rgba::rgb(0, 0, 255);
         let outlined = rustgis_map::Symbol {
             fill: red,
@@ -8656,7 +8662,27 @@ Elaboração: RustGIS",
             });
             let (top, left) = ink(&drawn(&map, (50.0, 50.0), opts), (0, 0, 255));
             assert!(top.is_some_and(|y| y >= 50), "stacked {stacked}: nothing above the legend's box: {top:?}");
-            assert!(left.is_some_and(|x| (44..50).contains(&x)), "stacked {stacked}: its outer half on the left kept: {left:?}");
+            assert_eq!(left, Some(50), "stacked {stacked}: drawn to the legend's edge, not past it");
+        }
+        // Left of a column that has room before it (a class's indent, the gap between columns as
+        // drawn), the outline reaches into that room and no further.
+        let map = shape_legend_map(GeometryType::Polygon, |l| l.renderer = rustgis_map::Renderer::Single(outlined));
+        for lead in [6.0f32, 2.0] {
+            let mut pm = Pixmap::new(100, 60).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            crate::canvas::with_canvas(&mut pm, |c| {
+                swatch(
+                    c,
+                    (50.0, 20.0, LEGEND_SWATCH, LEGEND_ROW),
+                    &map.layers[0],
+                    (&outlined, &[], &[]),
+                    1.0,
+                    1e6,
+                    (1.0, LEGEND_SWATCH, (lead, 6.0)),
+                )
+            });
+            let (_, left) = ink(&pm, (0, 0, 255));
+            assert_eq!(left, Some(50 - lead as u32), "room {lead}: its outer half, 6 points, as far as its room");
         }
         // The title's room follows; a size past the range, or none at all, is brought into it.
         assert!((legend_title_mm(18.0) - 2.0 * legend_title_mm(9.0)).abs() < 1e-12);
