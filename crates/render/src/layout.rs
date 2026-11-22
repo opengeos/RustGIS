@@ -277,6 +277,8 @@ pub struct TextLoss {
     /// Some of them come past the 200 lines a text draws, whatever its box: only splitting the
     /// text draws them.
     pub past_limit: bool,
+    /// Some of its ink crosses the page's edge: a text's drawn lines, or a scale bar's labels.
+    pub off_page: bool,
 }
 
 /// [`clipped_text`], with how many of each text's lines are left out of its box ([`TextLoss`]):
@@ -347,6 +349,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                     at_least: false,
                     below_box: cramped,
                     past_limit: false,
+                    off_page,
                 });
             }
             let (s, size, face, align, spacing, rotation, title, broken) = match &e.kind {
@@ -385,7 +388,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
             // Legend titles are drawn on one line, unlike text elements' explicit line breaks.
             let lines = std::iter::once(s.as_str()).filter(|_| title).chain(s.lines().filter(|_| !title));
-            let (mut cut, mut left_out, mut below_box, mut past_limit) = (false, 0, false, false);
+            let (mut cut, mut left_out, mut below_box, mut past_limit, mut off_page) = (false, 0, false, false, false);
             for (i, line) in lines.enumerate() {
                 let drawn = i < 200 && (title || cy <= r.bottom() + px);
                 // A line not drawn is only looked at for a letter, as a wrapped text tells its
@@ -402,7 +405,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                     continue;
                 }
                 let ink = text::styled_bounds(line, px, face, spacing * 1.33 * ppp);
-                cut |= ink.is_some_and(|ink| {
+                off_page |= ink.is_some_and(|ink| {
                     let left = match align {
                         TextAlign::Left => r.x(),
                         TextAlign::Center => r.x() + (r.width() - ink.width()) / 2.0 - ink.left(),
@@ -421,7 +424,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             }
             // A wrapped text ends at the line past the 200 drawn ([`wrapped`]): it may go on.
             let at_least = broken && s.lines().nth(200).is_some();
-            cut.then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least, below_box, past_limit })
+            (cut || off_page).then(|| TextLoss { id: e.id, name: e.name.clone(), left_out, at_least, below_box, past_limit, off_page })
         })
         .collect()
 }
@@ -465,10 +468,12 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
 
 /// What scale bars whose labels don't fit are told (#2581), from their [`TextLoss`]es: one notice
 /// a kind, with the bars' count and names. Their boxes too small for their labels and bars (a bar
-/// drawn below its box, or an end label past its side), or a label off the page.
+/// drawn below its box, or an end label past its side), and a label off the page, each said of
+/// every bar it is true of.
 pub fn scale_bar_fit_notices(losses: &[TextLoss]) -> Vec<String> {
     let said = |small: bool| {
-        let names: Vec<String> = losses.iter().filter(|l| l.below_box == small).map(|l| format!("\"{}\"", l.name)).collect();
+        let kind = |l: &&TextLoss| if small { l.below_box } else { l.off_page };
+        let names: Vec<String> = losses.iter().filter(kind).map(|l| format!("\"{}\"", l.name)).collect();
         let (n, names) = (names.len(), names.join(", "));
         match (n, small) {
             (0, _) => None,
@@ -2304,8 +2309,8 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
     // bar is below it.
     let half8 = |s: &str| text::measure(s, SCALE_BAR_TEXT_PT as f32 * ppp as f32, false) / 2.0;
     let x8 = r.x() + bar_inset(&first, 1.0, ppp as f32);
-    let right = labels.last().is_some_and(|(x, s)| x + half(s) > r.right().max(x8 + (x - x0) + half8(s)) + 0.01);
-    let cramped = y0 + bar_h > r.bottom() + 0.01 || right;
+    let past_side = labels.last().is_some_and(|(x, s)| x + half(s) > r.right().max(x8 + (x - x0) + half8(s)) + 0.01);
+    let cramped = y0 + bar_h > r.bottom() + 0.01 || past_side;
     Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, cramped })
 }
 
@@ -6611,7 +6616,10 @@ mod tests {
         // Counted as more than the one line seen: the wrapped text was broken no further.
         let (l, id) = page("\nZ");
         let loss = text_losses(&l, &[], 96.0, &info);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true, below_box: false, past_limit: true }]);
+        assert_eq!(
+            loss,
+            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: true, below_box: false, past_limit: true, off_page: false }]
+        );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.starts_with("1 or more lines of the text \"Note\""), "{said}");
         assert!(said.ends_with("aren't drawn: a text draws at most 200 lines; split it into more than one text"), "{said}");
@@ -6628,7 +6636,10 @@ mod tests {
         assert!(losses(&l).is_empty(), "all fit");
         l.element_mut(id).unwrap().h = 2.0;
         let loss = losses(&l);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false, below_box: true, past_limit: false }]);
+        assert_eq!(
+            loss,
+            vec![TextLoss { id, name: "Note".into(), left_out: 3, at_least: false, below_box: true, past_limit: false, off_page: false }]
+        );
         // The element alone is measured the same, and another id finds nothing.
         assert_eq!(text_loss(&l, &[], 96.0, &info, id).as_ref(), loss.first());
         assert_eq!(text_loss(&l, &[], 96.0, &info, id + 1), None);
@@ -6656,7 +6667,10 @@ mod tests {
         let id = l.elements[0].id;
         l.element_mut(id).unwrap().h = 2.0;
         let loss = text_losses(&l, &[], 96.0, &info);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false, below_box: true, past_limit: true }]);
+        assert_eq!(
+            loss,
+            vec![TextLoss { id, name: "Note".into(), left_out: 2999, at_least: false, below_box: true, past_limit: true, off_page: false }]
+        );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert!(said.ends_with("make the box taller or the text smaller, and split it, as a text draws at most 200 lines"), "{said}");
         // A box tall enough for 200 lines: the rest are past the limit, which no box draws (#2346).
@@ -6664,7 +6678,10 @@ mod tests {
         tall.height = 2000.0;
         tall.element_mut(id).unwrap().h = 1900.0;
         let loss = text_losses(&tall, &[], 96.0, &info);
-        assert_eq!(loss, vec![TextLoss { id, name: "Note".into(), left_out: 50, at_least: false, below_box: false, past_limit: true }]);
+        assert_eq!(
+            loss,
+            vec![TextLoss { id, name: "Note".into(), left_out: 50, at_least: false, below_box: false, past_limit: true, off_page: false }]
+        );
         let said = lines_left_out_notice(&loss[0]).unwrap();
         assert_eq!(
             said,
@@ -6675,7 +6692,7 @@ mod tests {
         l.element_mut(id).unwrap().h = 2.0;
         assert_eq!(
             text_losses(&l, &[], 96.0, &info),
-            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false, below_box: false, past_limit: true }]
+            vec![TextLoss { id, name: "Note".into(), left_out: 1, at_least: false, below_box: false, past_limit: true, off_page: false }]
         );
     }
 
@@ -8518,9 +8535,20 @@ Elaboração: RustGIS",
         assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "a tall box holds them");
         l.element_mut(bar).unwrap().x = 60.0;
         let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
-        assert!(!loss.below_box && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("runs off the page"), "{loss:?}");
+        assert!(
+            !loss.below_box && loss.off_page && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("runs off the page"),
+            "{loss:?}"
+        );
+        // Too small and off the page both: each said.
+        l.element_mut(bar).unwrap().h = 12.0;
+        if let Some(ElementKind::ScaleBar { text_size, .. }) = l.element_mut(bar).map(|e| &mut e.kind) {
+            *text_size = 40.0;
+        }
+        let both = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
+        let said = scale_bar_fit_notices(std::slice::from_ref(&both));
+        assert!(both.below_box && both.off_page && said.len() == 2 && said[1].contains("runs off the page"), "{both:?} {said:?}");
         // Several bars are told in one notice a kind, their count and names.
-        let small = TextLoss { below_box: true, ..loss.clone() };
+        let small = TextLoss { below_box: true, off_page: false, ..loss.clone() };
         let two = scale_bar_fit_notices(&[small.clone(), TextLoss { name: "B".into(), ..small.clone() }]);
         assert!(two.len() == 1 && two[0].starts_with("2 scale bars (\"Scale Bar\", \"B\"): their boxes are too small"), "{two:?}");
         assert_eq!(scale_bar_fit_notices(&[small, loss]).len(), 2, "a notice a kind");

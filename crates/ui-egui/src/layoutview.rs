@@ -3669,8 +3669,15 @@ mod tests {
     fn the_format_pane_tells_the_box_from_the_200_line_limit() {
         use crate::layoutview::lines_left_out_label;
         use rustgis_engine::render::layout::TextLoss;
-        let loss =
-            |left_out, below_box, past_limit| TextLoss { id: 1, name: "Note".into(), left_out, at_least: false, below_box, past_limit };
+        let loss = |left_out, below_box, past_limit| TextLoss {
+            id: 1,
+            name: "Note".into(),
+            left_out,
+            at_least: false,
+            below_box,
+            past_limit,
+            off_page: false,
+        };
         assert_eq!(lines_left_out_label(&loss(0, false, false)), None);
         assert_eq!(lines_left_out_label(&loss(3, true, false)).as_deref(), Some("3 lines don't fit the box"));
         assert_eq!(lines_left_out_label(&loss(50, false, true)).as_deref(), Some("50 lines aren't drawn: a text draws 200 at most"));
