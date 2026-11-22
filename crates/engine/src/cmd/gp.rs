@@ -3,6 +3,7 @@
 use rustgis_analysis::{Inputs, Output, OutputLayer, RasterInput};
 use rustgis_data::Dataset;
 use rustgis_data::loss::{LossCode, LossMessage};
+use rustgis_data::raster::Crs;
 use serde_json::{Value, json};
 
 use super::{need_layers, ps};
@@ -710,6 +711,7 @@ impl ToolRun {
                 };
                 let mut result = pin.run(&inputs, &params, control, &|| continuation.check());
                 if let Ok(r) = &mut result {
+                    inputs.hold_results(r);
                     r.messages.extend(inputs.messages.iter().cloned());
                     r.losses.extend(inputs.losses.iter().cloned());
                 }
@@ -1228,8 +1230,14 @@ struct MapInputs<'a> {
     /// environment's extent.
     rows: std::collections::HashMap<String, Vec<usize>>,
     /// Streamed layers the tool reads, loaded whole, and copies of layers in another system than
-    /// longitude/latitude, converted ([`lonlat_inputs`]), by lowercase name.
+    /// the one it works in, converted ([`work_inputs`]), by lowercase name.
     loaded: std::collections::HashMap<String, Dataset>,
+    /// The system the tool works in ([`work_system`]): the one its inputs are given in and its
+    /// outputs are made in.
+    work: Crs,
+    /// The layers (by lowercase name) it reads only the attributes of, read as they are
+    /// ([`attributes_only`]); none when it works in longitude/latitude.
+    unread: std::collections::HashSet<String>,
     /// Import warnings from local file inputs, kept in the tool result and history.
     messages: Vec<String>,
     losses: Vec<LossMessage>,
@@ -1243,6 +1251,32 @@ struct MapInputs<'a> {
 }
 
 impl MapInputs<'_> {
+    /// Marks the layers a tool made as held in the system it worked in ([`MapInputs::work`]),
+    /// where their coordinates are, so they aren't taken for longitude/latitude: a layer it made
+    /// from scratch starts in longitude/latitude ([`Dataset::held_in`]). Nothing for a tool that
+    /// worked in longitude/latitude, or for a table.
+    fn hold_results(&self, result: &mut rustgis_analysis::ToolResult) {
+        if self.work == Crs::LonLat {
+            return;
+        }
+        let hold = |ds: &mut Dataset| {
+            if ds.geometry_type != rustgis_data::GeometryType::None {
+                ds.held_in = self.work;
+            }
+        };
+        match &mut result.output {
+            Output::Layer(ds) | Output::Update { dataset: ds, .. } => hold(ds),
+            Output::Layers(outputs) => {
+                for o in outputs {
+                    if let rustgis_analysis::OutputLayer::Vector(ds) = o {
+                        hold(ds);
+                    }
+                }
+            }
+            Output::Selection { .. } | Output::Table(_) | Output::File { .. } => {}
+        }
+    }
+
     /// The flat map's projection, built on first use.
     fn flat(&self) -> Option<&(String, rustgis_map::projection::Flat, f64)> {
         let map = &self.snap.map;
@@ -1290,10 +1324,21 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
     }
     #[cfg(target_arch = "wasm32")]
     let mut full = full;
-    lonlat_inputs(&snap.map, spec, params, &mut full)?;
+    let work = work_inputs(&snap.map, &snap.tables, spec, params, &mut full, &mut messages)?;
     let mut rows = env_inputs(&snap.map, &full, &snap.env, params)?;
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
-    Ok(MapInputs { snap, rows, loaded: full, messages, losses, flat: std::cell::OnceCell::new(), view: std::cell::OnceCell::new() })
+    let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
+    Ok(MapInputs {
+        snap,
+        rows,
+        loaded: full,
+        work,
+        unread,
+        messages,
+        losses,
+        flat: std::cell::OnceCell::new(),
+        view: std::cell::OnceCell::new(),
+    })
 }
 
 /// Narrows the rows a tool reads of each layer to the features its definition query keeps, as the
@@ -1408,23 +1453,132 @@ fn streamed_inputs(
     Ok((full, said))
 }
 
-/// The layers a tool reads, in longitude/latitude, the space analysis tools work in
-/// ([`Inputs::dataset`]): those read whole (streamed layers, files) converted where they are, and
-/// a converted copy of each other layer it names whose coordinates are in another system. Nothing
-/// is copied for a layer held in longitude/latitude.
-fn lonlat_inputs(
+/// Whether a tool that works in its first input's own system ([`ToolSpec::works_in_own_system`])
+/// works in `crs`: a projected system, whose coordinates are a plane's. Longitude/latitude, Web
+/// Mercator and other geographic or geocentric systems keep the longitude/latitude path, whose
+/// plane and geodesics their coordinates need.
+///
+/// [`ToolSpec::works_in_own_system`]: rustgis_analysis::ToolSpec::works_in_own_system
+fn works_in(crs: Crs) -> bool {
+    crs != Crs::LonLat && crs != Crs::WebMercator && !crs.is_geographic() && !crs.is_geocentric()
+}
+
+/// The system a run works in: its first input's own ([`Dataset::coord_crs`]) when the tool works
+/// in it and it is one tools work in ([`works_in`]), else longitude/latitude.
+fn work_system(
     map: &rustgis_map::Map,
     spec: Option<&rustgis_analysis::ToolSpec>,
     params: &Value,
+    full: &std::collections::HashMap<String, Dataset>,
+) -> Crs {
+    use rustgis_analysis::ParamKind as K;
+    let Some(spec) = spec.filter(|t| t.works_in_own_system()) else { return Crs::LonLat };
+    // The tool's first layer parameter, under its name or one of the names it also accepts
+    // (Join Field's `input`), taken as the tool takes it: the first that isn't blank. A table
+    // given by its number (read unconverted, [`Inputs::table`]) or by name leaves the run in
+    // longitude/latitude, as before: only a map layer decides the system.
+    let Some(kind) =
+        spec.params.iter().find(|p| matches!(p.kind, K::Layer | K::PolygonLayer | K::PointLayer | K::VectorLayer | K::VectorLayers))
+    else {
+        return Crs::LonLat;
+    };
+    let aliases = rustgis_analysis::param_aliases(spec, kind.name);
+    let keys: &[&str] = if aliases.is_empty() { std::slice::from_ref(&kind.name) } else { aliases };
+    let blank = |v: &&Value| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty());
+    let value = keys.iter().filter_map(|k| params.get(*k)).find(|v| !blank(v)).unwrap_or(&Value::Null);
+    let first = if kind.kind == K::VectorLayers {
+        rustgis_analysis::layer_list(value).ok().and_then(|v| v.first().copied())
+    } else {
+        value.as_str()
+    };
+    let Some(first) = first else { return Crs::LonLat };
+    // Files read whole are kept by the name they were given, streamed layers by lowercase name.
+    full.get(first)
+        .or_else(|| full.get(&first.to_ascii_lowercase()))
+        .or_else(|| map.layer_by_name(first).filter(|l| !l.is_raster()).map(|l| &l.dataset))
+        .map(Dataset::coord_crs)
+        .filter(|c| works_in(*c))
+        .unwrap_or(Crs::LonLat)
+}
+
+/// The layers (by lowercase name) whose attributes alone a tool reads, given under a parameter
+/// whose geometry it doesn't read ([`ToolSpec::reads_geometry_of`]) or one of the names it also
+/// accepts for it: they are read as they are, in whatever system, so a place of theirs the system
+/// it works in can't hold doesn't send it to longitude/latitude.
+///
+/// [`ToolSpec::reads_geometry_of`]: rustgis_analysis::ToolSpec::reads_geometry_of
+fn attributes_only(spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> std::collections::HashSet<String> {
+    let Some(spec) = spec else { return std::collections::HashSet::new() };
+    spec.params
+        .iter()
+        .filter(|p| !spec.reads_geometry_of(p.name))
+        .flat_map(|p| {
+            let aliases = rustgis_analysis::param_aliases(spec, p.name);
+            if aliases.is_empty() { vec![p.name] } else { aliases.to_vec() }
+        })
+        .filter_map(|k| params.get(k).and_then(Value::as_str))
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// The layers a tool reads, in the system it works in ([`work_system`], [`Inputs::dataset`]):
+/// its first input's own for a tool that works in it, every other input converted into it; else
+/// longitude/latitude. An input with a place that system can't hold has the run work in
+/// longitude/latitude instead, and a message says so. Returns the system.
+fn work_inputs(
+    map: &rustgis_map::Map,
+    tables: &[crate::project::Table],
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
     full: &mut std::collections::HashMap<String, Dataset>,
-) -> Result<(), String> {
-    for ds in full.values_mut() {
-        if let std::borrow::Cow::Owned(converted) = ds.in_lonlat()? {
-            *ds = converted;
+    messages: &mut Vec<String>,
+) -> Result<Crs, String> {
+    let work = work_system(map, spec, params, full);
+    if work != Crs::LonLat {
+        match inputs_in(map, tables, spec, params, full, work) {
+            Ok(converted) => {
+                full.extend(converted);
+                return Ok(work);
+            }
+            Err(e) => {
+                // A Cancel isn't a place that can't be held.
+                rustgis_data::progress::check().map_err(|e| e.to_string())?;
+                let name = spec.map_or("The tool", |t| t.name);
+                messages.push(format!("{name} worked in longitude/latitude, not {}: {e}", work.label()));
+            }
+        }
+    }
+    let converted = inputs_in(map, tables, spec, params, full, Crs::LonLat)?;
+    full.extend(converted);
+    Ok(Crs::LonLat)
+}
+
+/// Copies of the layers a tool reads converted into `work`, by lowercase name: those read whole
+/// (streamed layers, files) and each other layer or standalone table with geometry it names whose
+/// coordinates are in another system. Nothing is copied for a layer already in `work`.
+fn inputs_in(
+    map: &rustgis_map::Map,
+    tables: &[crate::project::Table],
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
+    full: &std::collections::HashMap<String, Dataset>,
+    work: Crs,
+) -> Result<std::collections::HashMap<String, Dataset>, String> {
+    let mut converted = std::collections::HashMap::new();
+    // Read only for its attributes in a run in its first input's system: as it is. (The first
+    // input, if it is named there too, is in that system already.)
+    let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
+    for (key, ds) in full {
+        if unread.contains(key) {
+            continue;
+        }
+        if let std::borrow::Cow::Owned(c) = ds.in_crs(work)? {
+            converted.insert(key.clone(), c);
         }
     }
     // Every text the parameters hold that names a layer, not only layer parameters: a tool may
-    // name one elsewhere, and a layer it reads must be in longitude/latitude.
+    // name one elsewhere, and a layer it reads must be in the system it works in. Not the name
+    // its output is given, which it doesn't read.
     fn texts<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
         match v {
             Value::String(s) => out.push(s),
@@ -1434,19 +1588,26 @@ fn lonlat_inputs(
         }
     }
     let mut names = layer_names(spec, params);
-    texts(params, &mut names);
+    match params {
+        Value::Object(o) => o.iter().filter(|(k, _)| k.as_str() != "output").for_each(|(_, v)| texts(v, &mut names)),
+        other => texts(other, &mut names),
+    }
     for n in names {
         let key = n.to_ascii_lowercase();
-        if full.contains_key(&key) {
+        if full.contains_key(&key) || converted.contains_key(&key) || unread.contains(&key) {
             continue;
         }
-        if let Some(l) = map.layer_by_name(n).filter(|l| !l.is_raster())
-            && let std::borrow::Cow::Owned(converted) = l.dataset.in_lonlat()?
+        // A layer, or a standalone table with geometry; one without reads alike in any system.
+        if let Some(ds) = project_input(map, tables, n, false)
+            .filter(|i| !matches!(i, ProjectInput::Layer(l) if l.is_raster()))
+            .map(|i| i.dataset())
+            .filter(|d| d.geometry_type != rustgis_data::GeometryType::None)
+            && let std::borrow::Cow::Owned(c) = ds.in_crs(work)?
         {
-            full.insert(key, converted);
+            converted.insert(key, c);
         }
     }
-    Ok(())
+    Ok(converted)
 }
 
 /// The executor's source-read choice, shared with pure permission planning.
@@ -1559,10 +1720,20 @@ impl Inputs for MapInputs<'_> {
         self.loaded
             .get(layer)
             .or_else(|| self.loaded.get(&layer.to_ascii_lowercase()))
-            // A layer read as it is only in longitude/latitude: one in another system is
-            // converted before the run ([`lonlat_inputs`]) when the tool names it, and isn't read
+            // A layer read as it is only in the system the tool works in: one in another system is
+            // converted before the run ([`work_inputs`]) when the tool names it, and isn't read
             // in its own coordinates otherwise.
-            .or_else(|| project_input(&self.snap.map, &self.snap.tables, layer, false).map(|i| i.dataset()).filter(|d| d.edits_in_lonlat()))
+            .or_else(|| {
+                project_input(&self.snap.map, &self.snap.tables, layer, false)
+                    .map(|i| i.dataset())
+                    // A table without geometry reads alike in any system, and so does a layer
+                    // the tool reads only the attributes of.
+                    .filter(|d| {
+                        d.geometry_type == rustgis_data::GeometryType::None
+                            || self.unread.contains(&layer.to_ascii_lowercase())
+                            || d.coord_crs().to(self.work).is_ok_and(|to| to.is_identity())
+                    })
+            })
     }
     fn table(&self, id: u32) -> Option<&Dataset> {
         self.snap.tables.iter().find(|t| t.id == id).map(|t| &t.dataset)
@@ -1939,7 +2110,7 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
     // Each item keeps its output as a layer: a hostile list or folder can't make the batch unbounded.
     if targets.len() > MAX_BATCH_ITEMS {
         return Err(format!(
-            "{} inputs is more than a batch runs (at most {MAX_BATCH_ITEMS}); split it into smaller batches",
+            "{} inputs are more than a batch runs (at most {MAX_BATCH_ITEMS}); split it into smaller batches",
             targets.len()
         ));
     }
@@ -2608,19 +2779,13 @@ pub(crate) fn run_step(s: &mut Session, tool: &str, params: &Value) -> CmdResult
 /// `error` with the keys of `params` that `spec` doesn't read after it — " (given 'unit', which
 /// Buffer doesn't read)" — unless it says them already (a refused parameter's does).
 fn saying_unread(spec: &rustgis_analysis::ToolSpec, params: &Value, error: String) -> String {
-    if error.ends_with("doesn't read)") {
+    // The same text the tool adds to a refused parameter's error, made once: an error that ends
+    // in it says it already.
+    let unread = rustgis_analysis::unread(spec, params);
+    if unread.is_empty() || error.ends_with(&unread) {
         return error;
     }
-    let unknown: Vec<&str> = params
-        .as_object()
-        .into_iter()
-        .flat_map(|m| m.keys().map(String::as_str))
-        .filter(|k| !rustgis_analysis::is_expected_key(spec, params, k))
-        .collect();
-    if unknown.is_empty() {
-        return error;
-    }
-    format!("{error} (given {}, which {} doesn't read)", rustgis_analysis::quoted_keys(unknown), spec.name)
+    format!("{error}{unread}")
 }
 
 /// The control a tool run in the session takes: where a person at a terminal can stop it with
@@ -2716,6 +2881,7 @@ pub(crate) fn execute(
                 pin.run(&inputs, params, control, &|| continuation.check())
             };
             if let Ok(result) = &mut res {
+                inputs.hold_results(result);
                 result.messages.extend(inputs.messages.iter().cloned());
                 result.losses.extend(inputs.losses.iter().cloned());
             }
@@ -2905,7 +3071,7 @@ fn file_delivered(s: &mut Session, p: &Value) -> CmdResult {
     }
     for message in &file.record.messages {
         if file.record.ok {
-            s.notify_written(message.clone(), false);
+            s.notify_written(message.clone());
         } else {
             s.notify(message.clone(), true);
         }
@@ -3127,8 +3293,15 @@ fn apply_with(
         }
         Output::Update { layer, dataset } => {
             let l = s.map_mut().layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer)).ok_or("the input layer disappeared")?;
-            // Made in longitude/latitude, written back in the layer's own coordinates.
-            l.dataset = l.dataset.results_from_lonlat(dataset)?;
+            // Made in the system the tool worked in ([`MapInputs::hold_results`]): taken as made
+            // when that is the layer's own, else written back in its own coordinates from
+            // longitude/latitude.
+            l.dataset = if dataset.coord_crs() == l.dataset.coord_crs() {
+                dataset
+            } else {
+                let lonlat = if dataset.coord_crs() == Crs::LonLat { dataset } else { dataset.in_lonlat()?.into_owned() };
+                l.dataset.results_from_lonlat(lonlat)?
+            };
             // Under the layer's name now: a background run's layer may have been renamed meanwhile.
             l.dataset.name.clone_from(&l.name);
             // A streamed layer updated by a tool holds the whole result in memory from now on.
@@ -3191,7 +3364,7 @@ fn apply_with(
             if let Some(code) = code {
                 publish_tool_loss(s, *code, message, wrote_file);
             } else if wrote_file {
-                s.notify_written(message.clone(), false);
+                s.notify_written(message.clone());
             } else {
                 s.notify(message.clone(), false);
             }
@@ -4400,7 +4573,7 @@ mod batch_tests {
         std::fs::write(&txt, "skip me").unwrap();
 
         let mut s = Session::new(crate::Project::default());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -4413,7 +4586,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["total"], 3);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("1 unsupported files skipped")));
 
         let _ = std::fs::remove_dir_all(root);
@@ -4894,7 +5067,7 @@ mod batch_tests {
     #[test]
     fn batch_run_lossy_inputs_notified() {
         let mut s = test_session();
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         // Lossy input: empty string and non-string in array, plus non-object params
         let res = s
             .run(
@@ -4909,13 +5082,13 @@ mod batch_tests {
 
         assert_eq!(res["total"], 1);
         assert_eq!(res["succeeded"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("3 invalid input(s) skipped")));
         assert!(notices.iter().any(|n| n.text.contains("'params' must be an object")));
 
         // Clean input says nothing
         let mut s2 = test_session();
-        let mark2 = s2.notices.len();
+        let mark2 = s2.notice_mark();
         let _ = s2
             .run(
                 "gp.batch",
@@ -4926,7 +5099,7 @@ mod batch_tests {
                 }),
             )
             .unwrap();
-        let notices2 = &s2.notices[mark2..];
+        let notices2 = s2.notices_since(mark2);
         assert!(
             !notices2.iter().any(|n| n.text.contains("skipped") || n.text.contains("invalid") || n.text.contains("params")),
             "clean input must give no skip notices: {notices2:?}"
@@ -5176,7 +5349,7 @@ mod batch_tests {
         let ds = Dataset::new("L1", rustgis_data::GeometryType::Point, Vec::new());
         s.map_mut().add_layer(rustgis_map::Layer::new(0, ds));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s.run(
             "gp.batch",
             &json!({
@@ -5187,7 +5360,7 @@ mod batch_tests {
         let err = res.unwrap_err();
         assert!(err.contains("Batch 'test:empty_output' failed"));
         assert!(err.contains("custom message from empty tool"));
-        assert!(s.notices[mark..].iter().any(|n| n.text.contains("1 failed (L1)")));
+        assert!(s.notices_since(mark).iter().any(|n| n.text.contains("1 failed (L1)")));
     }
 
     fn empty_output_multi_message_runner(
@@ -5351,7 +5524,7 @@ mod batch_tests {
         std::fs::write(&f1, sample_geojson).unwrap();
 
         let mut s = Session::new(crate::Project::default());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5364,7 +5537,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(!notices.iter().any(|n| n.text.contains("both 'inputs' and 'folder'")));
 
         let _ = std::fs::remove_dir_all(root);
@@ -5378,7 +5551,7 @@ mod batch_tests {
         s.map_mut().add_layer(rustgis_map::Layer::new(10, pre1));
         s.map_mut().add_layer(rustgis_map::Layer::new(11, pre2));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5391,7 +5564,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("1 output name(s) collided and were renamed")));
     }
 
@@ -5525,7 +5698,7 @@ mod batch_tests {
         ds.push_next(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(10.0, 20.0))), vec![rustgis_data::Value::Int(100)]);
         s.map_mut().add_layer(rustgis_map::Layer::new(0, ds));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5538,7 +5711,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(
             !notices.iter().any(|n| n.text.contains("params.output is ignored")),
             "tool without output param must not emit 'params.output is ignored' notice: {notices:?}"
@@ -5583,7 +5756,7 @@ mod batch_tests {
     #[test]
     fn batch_run_aggregates_tool_messages() {
         let mut s = test_session();
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5596,7 +5769,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 2);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("2 item(s) reported messages (Buffer: 1 features at 10 Kilometers (×2))")));
     }
 
@@ -5612,7 +5785,7 @@ mod batch_tests {
         l2.push_next(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(16.0, 26.0))), Vec::new());
         s.map_mut().add_layer(rustgis_map::Layer::new(1, l2));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5625,7 +5798,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 2);
-        let recent: Vec<_> = s.notices[mark..].iter().filter(|n| n.text.contains("reported messages")).collect();
+        let recent: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("reported messages")).collect();
         assert_eq!(recent.len(), 1, "must emit exactly one tool messages notice: {recent:?}");
         assert_eq!(
             recent[0].text,
@@ -5645,7 +5818,7 @@ mod batch_tests {
         l2.push_next(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(16.0, 26.0))), Vec::new());
         s.map_mut().add_layer(rustgis_map::Layer::new(1, l2));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5658,7 +5831,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 2);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         let msg_notice = notices.iter().find(|n| n.text.contains("reported messages")).unwrap();
         assert!(msg_notice.text.contains("Buffer: 1 features at 10 Kilometers"));
         assert!(msg_notice.text.contains("Buffer: 2 features at 10 Kilometers"));
@@ -5667,7 +5840,7 @@ mod batch_tests {
     #[test]
     fn batch_run_null_options_emit_no_spurious_notices() {
         let mut s = test_session();
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5683,7 +5856,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(
             !notices.iter().any(|n| n.text.contains("must be an object")
                 || n.text.contains("both 'inputs' and 'folder'")
@@ -5692,7 +5865,7 @@ mod batch_tests {
             "null options must not emit spurious notices: {notices:?}"
         );
 
-        let mark2 = s.notices.len();
+        let mark2 = s.notice_mark();
         let res2 = s
             .run(
                 "gp.batch",
@@ -5709,7 +5882,7 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res2["succeeded"], 1);
-        let notices2 = &s.notices[mark2..];
+        let notices2 = s.notices_since(mark2);
         assert!(
             !notices2.iter().any(|n| n.text.contains("output is ignored") || n.text.contains("is replaced by the batch inputs")),
             "null param fields must not emit spurious notices: {notices2:?}"
@@ -5773,7 +5946,7 @@ mod batch_tests {
     #[test]
     fn batch_run_unrecognised_option_emits_notice() {
         let mut s = test_session();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5791,7 +5964,7 @@ mod batch_tests {
 
         // Clean call emits no unrecognised option notice
         let mut s_clean = test_session();
-        let mark_clean = s_clean.notices.len() as u64;
+        let mark_clean = s_clean.notice_mark();
         let res_clean = s_clean
             .run(
                 "gp.batch",
@@ -5814,7 +5987,7 @@ mod batch_tests {
     #[test]
     fn batch_run_unrecognised_param_in_params_emits_notice() {
         let mut s = test_session();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -5834,7 +6007,7 @@ mod batch_tests {
 
         // Clean call emits no unrecognised notice
         let mut s_clean = test_session();
-        let mark_clean = s_clean.notices.len() as u64;
+        let mark_clean = s_clean.notice_mark();
         let res_clean = s_clean
             .run(
                 "gp.batch",
@@ -5865,12 +6038,12 @@ mod batch_tests {
         };
         let buffer = "Buffer ignores 'unit' (it reads input, distance, units, dissolve, output)";
         let mut s = test_session();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100, "unit": "Miles"}})).unwrap();
         assert_eq!(said(&s, mark), [buffer]);
         // The run is as before: the default units, which its own message names.
         assert!(s.notices_since(mark).iter().any(|n| n.text.contains("at 100 Kilometers")));
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100, "units": "Miles"}})).unwrap();
         assert!(said(&s, mark).is_empty(), "{:?}", said(&s, mark));
         // The name the tool dialog puts beside a table's id (`input_name`) isn't taken for a stray;
@@ -5890,7 +6063,7 @@ mod batch_tests {
         let stray = ignored_params(buffer_spec, &json!({"input": "Cities", "distance": 1, "distance_name": "x"})).unwrap();
         assert!(stray.starts_with("Buffer ignores 'distance_name'"), "{stray}");
         // Many keys: the first five, sorted, each cut to 40 characters, then how many more.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let long = "x".repeat(60);
         let mut params = json!({"input": "Cities", "distance": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1});
         params[&long] = json!(1);
@@ -5898,11 +6071,11 @@ mod batch_tests {
         let got = said(&s, mark);
         assert_eq!(got.len(), 1, "{got:?}");
         assert!(got[0].starts_with("Buffer ignores 'a', 'b', 'c', 'd', 'e', 2 more"), "{got:?}");
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 1, &long: 1}})).unwrap();
         assert!(said(&s, mark)[0].contains(&format!("'{}…'", "x".repeat(40))), "{:?}", said(&s, mark));
         // A control character in a key reaches no terminal as it is.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 1, "a\n\u{1b}[31mb": 1}})).unwrap();
         assert!(said(&s, mark)[0].starts_with("Buffer ignores 'a??[31mb'"), "{:?}", said(&s, mark));
         // A run refused for want of a parameter that was misspelled says which key it didn't read,
@@ -5925,12 +6098,12 @@ mod batch_tests {
         assert!(e.contains("(given 'clips', which Clip doesn't read)"), "{e}");
         assert_eq!(e.matches("'clips'").count(), 1, "said once: {e}");
         // A command that runs a tool for its own parameters says a stray key once, as a command.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.spatialJoin", &json!({"target": "Cities", "join": "Parks", "prefx": "j_"})).unwrap();
         let got = said(&s, mark);
         assert!(got.len() == 1 && got[0].starts_with("gp.spatialJoin ignores 'prefx'"), "{got:?}");
         // It declares every key its tool reads, so those aren't taken for strays.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let join = json!({"target": "Cities", "join": "Parks", "match": "Within a distance", "distance": 5000, "units": "Miles", "distanceField": "d"});
         s.run("gp.spatialJoin", &join).unwrap();
         assert!(said(&s, mark).is_empty(), "{:?}", said(&s, mark));
@@ -5945,11 +6118,11 @@ mod batch_tests {
         let e = s.run("gp.run", &json!({"tool": "zonalStats", "params": {"layer": "Cities", "polygons": "Parks"}})).unwrap_err();
         assert!(e.ends_with("'Input Raster' is required (given 'layer', which Zonal Statistics doesn't read)"), "{e}");
         // A run started in the background says it too, before its work.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let _run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 100, "unit": "Miles"})).unwrap();
         assert_eq!(said(&s, mark), [buffer]);
         // A batch says it once, its own way, not once per item as well.
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.batch", &json!({"tool": "buffer", "inputs": ["Cities"], "params": {"distance": 10, "unit": "Miles"}})).unwrap();
         assert!(said(&s, mark).is_empty(), "{:?}", said(&s, mark));
         assert!(s.notices_since(mark).iter().any(|n| n.text.contains("unrecognised parameter(s) ignored in 'params' (unit)")));
@@ -5961,7 +6134,7 @@ mod batch_tests {
         let warnings = v["warnings"].as_array().unwrap();
         assert_eq!(warnings.len(), 1, "{v}");
         assert_eq!((warnings[0]["code"].as_str(), warnings[0]["message"].as_str()), (Some("unknown-param"), Some(buffer)), "{v}");
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("model.run", &json!({"name": "Typo"})).unwrap();
         assert_eq!(said(&s, mark), [buffer]);
         s.run("model.new", &json!({"name": "Clean", "steps": [{"tool": "buffer", "params": {"input": "Cities", "distance": 100}}]}))
@@ -5985,7 +6158,7 @@ mod batch_tests {
             {"tool": "buffer", "params": {"input": "%1", "distance": 10, "unit": "Miles"}}
         ]);
         s.run("model.new", &json!({"name": "Twice", "steps": twice})).unwrap();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("model.run", &json!({"name": "Twice"})).unwrap();
         assert_eq!(said(&s, mark), [format!("{buffer} (in 2 steps)")]);
         // A failing step after an ignoring one: the error carries the warning, and no warning
@@ -5995,7 +6168,7 @@ mod batch_tests {
             {"tool": "buffer", "params": {"distance": 10}}
         ]);
         s.run("model.new", &json!({"name": "Stops", "steps": stops})).unwrap();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let e = s.run("model.run", &json!({"name": "Stops"})).unwrap_err();
         assert!(e.starts_with("step 2 (buffer)"), "{e}");
         assert!(e.ends_with(&format!("; {buffer}")), "{e}");
@@ -6005,7 +6178,7 @@ mod batch_tests {
     #[test]
     fn batch_run_params_batch_param_overwritten_notified() {
         let mut s = test_session();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6025,7 +6198,7 @@ mod batch_tests {
 
         // Clean call without batch_param in params gives no replacement notice
         let mut s_clean = test_session();
-        let mark_clean = s_clean.notices.len() as u64;
+        let mark_clean = s_clean.notice_mark();
         let res_clean = s_clean
             .run(
                 "gp.batch",
@@ -6049,7 +6222,7 @@ mod batch_tests {
         let mut s = test_session();
 
         // Both param and batch_param
-        let mark1 = s.notices.len() as u64;
+        let mark1 = s.notice_mark();
         let res1 = s
             .run(
                 "gp.batch",
@@ -6071,7 +6244,7 @@ mod batch_tests {
 
         // Clean call with only param
         let mut s_clean1 = test_session();
-        let mark_clean1 = s_clean1.notices.len() as u64;
+        let mark_clean1 = s_clean1.notice_mark();
         let res_clean1 = s_clean1
             .run(
                 "gp.batch",
@@ -6092,7 +6265,7 @@ mod batch_tests {
 
         // Both outputPattern and output_pattern
         let mut s2 = test_session();
-        let mark2 = s2.notices.len() as u64;
+        let mark2 = s2.notice_mark();
         let res2 = s2
             .run(
                 "gp.batch",
@@ -6114,7 +6287,7 @@ mod batch_tests {
 
         // Clean call with only outputPattern
         let mut s_clean2 = test_session();
-        let mark_clean2 = s_clean2.notices.len() as u64;
+        let mark_clean2 = s_clean2.notice_mark();
         let res_clean2 = s_clean2
             .run(
                 "gp.batch",
@@ -6153,7 +6326,7 @@ mod batch_tests {
         ds_join.push_next(None, vec![rustgis_data::Value::Text("01".into())]);
         s.project.add_table(ds_join);
 
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6326,7 +6499,7 @@ mod batch_tests {
     #[test]
     fn blank_folder_beside_inputs_is_not_reported() {
         let mut s = test_session();
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.batch", &json!({"tool": "buffer", "inputs": ["Cities"], "folder": "  ", "params": {"distance": 1}})).unwrap();
         assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("both 'inputs' and 'folder'")));
     }
@@ -6350,7 +6523,7 @@ mod batch_tests {
         std::fs::write(&f2, r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[1.0,2.0]},"properties":{}}]}"#).unwrap();
 
         let mut s = Session::new(crate::Project::default());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6367,7 +6540,7 @@ mod batch_tests {
         let outputs = res["outputs"].as_array().unwrap();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].as_str().unwrap(), "sample_buffer");
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(!notices.iter().any(|n| n.text.contains("collided and were renamed")));
 
         let _ = std::fs::remove_dir_all(root);
@@ -6384,7 +6557,7 @@ mod batch_tests {
         write_test_shapefile(&root.join("test.shp"));
 
         let mut s = Session::new(crate::Project::default());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6396,7 +6569,7 @@ mod batch_tests {
             )
             .unwrap();
         assert_eq!(res["total"], 1);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(
             !notices.iter().any(|n| n.text.contains("unsupported files skipped")),
             "shapefile companion files must not be reported as unsupported: {notices:?}"
@@ -6404,7 +6577,7 @@ mod batch_tests {
 
         std::fs::write(root.join("notes.txt"), b"some notes").unwrap();
         let mut s2 = Session::new(crate::Project::default());
-        let mark2 = s2.notices.len();
+        let mark2 = s2.notice_mark();
         let res2 = s2
             .run(
                 "gp.batch",
@@ -6416,7 +6589,7 @@ mod batch_tests {
             )
             .unwrap();
         assert_eq!(res2["total"], 1);
-        let notices2 = &s2.notices[mark2..];
+        let notices2 = s2.notices_since(mark2);
         assert!(
             notices2.iter().any(|n| n.text.contains("1 unsupported files skipped")),
             "exactly 1 unsupported file (notes.txt) should be reported: {notices2:?}"
@@ -6467,7 +6640,7 @@ mod batch_tests {
         let mut s = test_session();
         s.map_mut().add_raster("Elevation", rustgis_map::RasterLayer::from_path(raster, "test.tif"));
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6480,11 +6653,11 @@ mod batch_tests {
             .unwrap();
 
         assert_eq!(res["succeeded"], 2);
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("1 raster layer(s) left out of '*' (it runs vector layers)")));
 
         let mut s2 = test_session();
-        let mark2 = s2.notices.len();
+        let mark2 = s2.notice_mark();
         let _ = s2
             .run(
                 "gp.batch",
@@ -6495,7 +6668,7 @@ mod batch_tests {
                 }),
             )
             .unwrap();
-        let notices2 = &s2.notices[mark2..];
+        let notices2 = s2.notices_since(mark2);
         assert!(!notices2.iter().any(|n| n.text.contains("raster layer(s)")));
     }
 
@@ -6651,7 +6824,7 @@ mod batch_tests {
 
         let mut s = Session::new(crate::Project::default());
         let padded = format!("  {}  ", f1.display());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6666,7 +6839,7 @@ mod batch_tests {
         assert_eq!(res["succeeded"], 1);
         let outputs = res["outputs"].as_array().unwrap();
         assert_eq!(outputs[0], "cities_buffer");
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("1 file path(s) trimmed of surrounding whitespace")));
 
         let _ = std::fs::remove_dir_all(root);
@@ -6803,7 +6976,7 @@ mod batch_tests {
             .collect();
 
         let mut s = Session::new(crate::Project::default());
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -6827,7 +7000,7 @@ mod batch_tests {
         }
 
         // Notices aggregated into a single notice per warning kind without truncating later files
-        let notice = s.notices[mark..].iter().find(|n| n.text.contains("Z or M")).unwrap();
+        let notice = s.notices_since(mark).iter().find(|n| n.text.contains("Z or M")).unwrap();
         assert!(notice.text.starts_with("gp.batch: 4 inputs ("));
         assert!(notice.text.contains("file_1.geojson"));
         assert!(notice.text.contains("file_2.geojson"));
@@ -7009,7 +7182,7 @@ mod batch_tests {
         notes_layer.graphics = true;
         s.map_mut().add_layer(notes_layer);
 
-        let mark = s.notices.len();
+        let mark = s.notice_mark();
         let res = s
             .run(
                 "gp.batch",
@@ -7025,7 +7198,7 @@ mod batch_tests {
         let outputs = res["outputs"].as_array().unwrap();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0], "Rivers_buffer");
-        let notices = &s.notices[mark..];
+        let notices = s.notices_since(mark);
         assert!(notices.iter().any(|n| n.text.contains("1 graphics layer(s) left out of '*'")));
 
         let mut s_empty = Session::new(crate::Project::default());

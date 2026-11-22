@@ -1895,8 +1895,7 @@ fn graticule_menu(ui: &mut Ui, app: &mut RustGisApp) {
         }
     }
     ui.separator();
-    // Under the layers, filled ones hide the lines; on top, the lines are drawn over the layers,
-    // and only the labels over them.
+    // Under the layers, filled ones hide the lines; over them, the lines show on every layer.
     let mut on_top = app.session.map().graticule_on_top;
     if ui
         .checkbox(&mut on_top, tl!("Draw on top of layers"))

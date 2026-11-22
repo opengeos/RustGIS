@@ -16,6 +16,7 @@ mod arcgisui;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
+mod assistantpictures;
 mod autosave;
 mod backstage;
 mod bookmarkpane;
@@ -208,6 +209,14 @@ pub const SCRIPT_PICK: &str = "\u{1}script:";
 /// `<id>:`: it goes to the marker whose «Image…» asked for it, and only a file so marked, for the
 /// request still waiting, does.
 pub const MARKER_PICK: &str = "\u{1}marker:";
+
+/// Starts the name of a picture the shell's `"assistantPicture"` picker put in the inbox: it is
+/// attached to the AI Assistant's next message, not opened on the map.
+pub const ASSISTANT_PICK: &str = "\u{1}assistantPicture:";
+
+/// The largest picture file the AI Assistant takes; the browser's and the phone's shells refuse a
+/// larger one before reading it.
+pub const ASSISTANT_FILE_MAX_BYTES: usize = rustgis_assistant::attach::MAX_FILE_BYTES;
 
 /// The largest image file a marker takes: one whose base64 fits the engine's limit
 /// ([`rustgis_engine::map::symbology::MAX_PICTURE_BYTES`]). The browser's and the phone's shells
@@ -1475,7 +1484,10 @@ impl RustGisApp {
             Some(Value::Number(_) | Value::String(_)) => {}
             // Not taken for the active layer: with replaceTable that would overwrite a table.
             Some(other) => {
-                return Err(crate::i18n::fmt("\"layer\" must be a layer's id or name, not {value}", &[("value", &other.to_string())]));
+                return Err(crate::i18n::fmt(
+                    "\"layer\" must be a layer's id or name, not {value}",
+                    &[("value", &crate::theme::clip(&other.to_string()))],
+                ));
             }
         }
         let id = self.session.layer_id(p)?;
@@ -2171,6 +2183,13 @@ impl RustGisApp {
             panes::received_file(self, name, bytes);
             return Ok(Value::Null);
         }
+        if let Some(name) = name.strip_prefix(ASSISTANT_PICK) {
+            // An answer with no name is a cancelled picker.
+            if !name.is_empty() {
+                assistantpictures::received(self, name, bytes.to_vec());
+            }
+            return Ok(Value::Null);
+        }
         if let Some(name) = name.strip_prefix(SHAPEFILE_PICK) {
             if !name.to_ascii_lowercase().ends_with(".zip") {
                 let error = tl!("Choose a zipped Shapefile, or pick its .shp and .dbf together.").to_string();
@@ -2386,8 +2405,8 @@ impl RustGisApp {
             return Err(tl!("this build saves projects with Save As").into());
         }
         let stem: String = stem.chars().take(200).collect();
-        // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
-        // browser takes the file.
+        // Not an undoable edit: saving names the project, as `project.saveAs` does. The name
+        // stays set while the download is offered, and goes back if the download fails.
         let construction_notes = self.session.construction_output_notes()?;
         let old = std::mem::replace(&mut self.session.project.name, stem.clone());
         let (text, report) = match self.session.project.saved_text(None) {
@@ -5187,7 +5206,7 @@ impl RustGisApp {
                     dbf_notes.push(format!("{name}: {} rows couldn't be read and were left out", lost.rows));
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
-                // CSV holds a point a row, GPX a name for each feature and no areas; reading text back trims it or reads blanks as null.
+                // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
                 dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
                 drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {
@@ -6073,7 +6092,7 @@ impl RustGisApp {
         })?;
         // What a task needs to read it again, as the download itself can't be (`record_step`).
         let mut window = json!({});
-        for k in ["bbox", "cellSize", "cog"] {
+        for k in rustgis_engine::policy::WINDOW_KEYS {
             if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
                 window[k] = v.clone();
             }
@@ -8698,7 +8717,7 @@ mod download_service_tests {
         assert!(!app.session.notices.iter().any(|n| n.text.contains("Download offered")));
         assert!(!app.download("archive.pmtiles", vec![1, 2, 3]));
         assert!(app.session.notices.iter().any(|n| n.error && n.text.contains("browser rejected download")));
-        assert!(!app.session.notices.iter().any(|n| n.text.contains("Downloaded")));
+        assert!(!app.session.notices.iter().any(|n| n.text.contains("Download offered")));
     }
 
     /// The web download encodes the filtered rows and reports the count once the bytes are accepted.

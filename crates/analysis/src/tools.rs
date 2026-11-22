@@ -65,7 +65,7 @@ pub static TOOLS: &[ToolSpec] = &[
         id: "featureEnvelopeToPolygon",
         name: "Feature Envelope To Polygon",
         toolbox: "Data Management › Features",
-        summary: "Writes one axis-aligned bounding rectangle per feature in stored longitude/latitude coordinates. Zero-area envelopes are skipped.",
+        summary: "Writes one axis-aligned bounding rectangle per feature in the layer's own coordinates when it is held in a projected system other than Web Mercator, else in longitude/latitude. Zero-area envelopes are skipped.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
@@ -5511,8 +5511,8 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
             for c in &mut ring.0 {
                 let step = c.x - previous;
                 previous = c.x;
-                // Within 1e-4° of a full turn, as `wgs84_ring_perimeter_area_m2` takes it.
-                if step.abs() >= 360.0 - 1e-4 && step.is_finite() {
+                // A full turn as `wgs84_ring_perimeter_area_m2` takes it.
+                if rustgis_geom::is_full_turn_step(step) {
                     longitude += step;
                     full_turn = true;
                 } else {
@@ -6721,6 +6721,9 @@ fn export_features(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         rs.retain(|r| rustgis_data::query::eval(&e, ds, *r));
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Export", ds.name)), ds.geometry_type);
+    // Its features as they are: in the input's system, which exports use by default, with what it
+    // lost on reading.
+    (out.crs, out.crs_incomplete, out.zm_dropped) = (ds.crs, ds.crs_incomplete, ds.zm_dropped);
     for r in rs {
         if let Some(f) = ds.features.get(r) {
             out.push(f.geometry.clone(), f.attrs.clone());
@@ -8171,7 +8174,8 @@ fn split_line_at_vertices(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Stri
     geometry::split(inp, p)
 }
 
-/// Encloses each feature independently in longitude/latitude axes.
+/// Encloses each feature independently in its layer's own axes (longitude/latitude for a layer
+/// not in a projected system).
 fn feature_envelope_to_polygon(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     geometry::convert(inp, p, geometry::Conversion::FeatureEnvelopeToPolygon)
 }

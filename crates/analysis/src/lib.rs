@@ -173,8 +173,9 @@ pub struct ToolResult {
 
 /// Access to the map's layers by name.
 pub trait Inputs {
-    /// A vector layer or table by name, in longitude/latitude: the space every tool reads its
-    /// inputs in and writes its outputs in.
+    /// A vector layer or table by name, in the system the tool works in: longitude/latitude, or
+    /// for a tool that works in its first input's own system ([`ToolSpec::works_in_own_system`]),
+    /// that system when it is a projected one. Its outputs are made in the same system.
     fn dataset(&self, layer: &str) -> Option<&Dataset>;
     /// A standalone table by its id: an input given as a number, which no name is taken for.
     fn table(&self, _id: u32) -> Option<&Dataset> {
@@ -227,6 +228,43 @@ pub struct ToolSpec {
     pub summary: &'static str,
     pub params: &'static [ParamSpec],
     pub run: fn(&dyn Inputs, &Value) -> Result<ToolResult, String>,
+}
+
+/// The built-in tools that work in their first input's own coordinate system when it is a
+/// projected one, rather than in longitude/latitude ([`ToolSpec::works_in_own_system`]): those
+/// whose results don't depend on the system's units or shape beyond what the input's own
+/// coordinates give (attributes, vertices, envelopes, validity).
+const OWN_SYSTEM_TOOLS: &[&str] = &[
+    "summaryStatistics",
+    "pivotTable",
+    "joinField",
+    "selectByAttributes",
+    "exportFeatures",
+    "polygonToLine",
+    "splitLineAtVertices",
+    "featureEnvelopeToPolygon",
+    "unsplitLine",
+    "featureVerticesToPoints",
+    "merge",
+    "checkGeometry",
+    "repairGeometry",
+];
+
+impl ToolSpec {
+    /// Whether the tool works in its first input's own coordinate system when that is a projected
+    /// one: its inputs are given to it in that system ([`Inputs::dataset`]), the others converted
+    /// into it, and its outputs are held there. Every other tool, and every external one, works in
+    /// longitude/latitude.
+    pub fn works_in_own_system(&self) -> bool {
+        OWN_SYSTEM_TOOLS.contains(&self.id) && TOOLS.iter().any(|t| std::ptr::eq(t, self))
+    }
+
+    /// Whether the tool reads the geometry of the layer its parameter `param` names, rather than
+    /// only its attributes (Join Field's join table): one whose geometry it doesn't read needn't
+    /// be converted into the system it works in.
+    pub fn reads_geometry_of(&self, param: &str) -> bool {
+        !(self.id == "joinField" && param == "joinTable")
+    }
 }
 
 /// Runs an external tool (the spec says which).
@@ -460,8 +498,9 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
 /// The keys of `params` that `spec` doesn't read, for an error that a required parameter is
 /// missing (#2307): a misspelled key is the likely reason, and a failed run's warnings are taken
 /// back, so the error says it: " (given 'clips', which Clip doesn't read)". Empty when there are
-/// none. Bounded as [`quoted_keys`] bounds them.
-fn unread(spec: &ToolSpec, params: &Value) -> String {
+/// none. Bounded as [`quoted_keys`] bounds them. A caller adding it to an error the tool gave
+/// checks for this exact text, so it isn't said twice.
+pub fn unread(spec: &ToolSpec, params: &Value) -> String {
     let Some(given) = params.as_object() else { return String::new() };
     let unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !is_expected_key(spec, params, k)).collect();
     if unknown.is_empty() {
