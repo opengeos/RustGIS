@@ -5249,7 +5249,7 @@ impl ToGrid {
         if self.same {
             return Vec::new();
         }
-        [90.0, -90.0].into_iter().filter_map(|lat| self.to.from_lonlat(Coord::new(0.0, lat)).filter(|p| p.is_finite())).collect()
+        [90.0, -90.0].into_iter().filter_map(|lat| in_projected(self.crs, &self.to, Coord::new(0.0, lat))).collect()
     }
 
     /// A polygon's vertex in the grid's system, as the grid's transformer takes a place in
