@@ -296,7 +296,8 @@ pub fn text_loss(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, id: u
 /// Whether a scale bar `e` drawn in `r` puts a label's ink past the page's `size` in pixels, and
 /// whether its box is too small for its labels and bar ([`BarLayout::cramped`]), its labels placed
 /// by [`bar_layout`] as the drawing places them: their line's middle at `label_y`, each centred on
-/// its advance as `text_at` draws it. `None` when it draws no bar.
+/// its advance as `text_at` draws it, and its unit label where it is drawn. `None` when it draws
+/// no bar.
 fn bar_labels_cut(
     layout: &Layout,
     maps: &[Map],
@@ -305,17 +306,19 @@ fn bar_labels_cut(
     ppp: f32,
     size: (f32, f32),
 ) -> Option<(bool, bool)> {
-    let ElementKind::ScaleBar { frame, units, divisions, text_size, .. } = &e.kind else { return None };
+    let ElementKind::ScaleBar { frame, .. } = &e.kind else { return None };
     let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(*frame)?.kind else { return None };
     let m = maps.get(map_index(maps, map)?)?;
     let ground = m.ground_res_at(&frame_camera(m, *center, *scale, *bearing, *pitch));
-    let bar = bar_layout(r, ground, (*units, *divisions, *text_size), f64::from(ppp), layout.decimal_comma)?;
+    let bar = bar_layout(r, ground, &BarOptions::of(&e.kind)?, f64::from(ppp), layout.decimal_comma)?;
     let (w, h) = size;
-    let off_page = bar.labels.iter().any(|(x, s)| {
-        let pen = x - text::measure(s, bar.px / 1.33, false) / 2.0;
-        text::styled_bounds(s, bar.px, text::Face::default(), 0.0).is_some_and(|ink| {
-            pen + ink.left() < 0.0 || bar.label_y + ink.top() < 0.0 || pen + ink.right() > w || bar.label_y + ink.bottom() > h
-        })
+    // Its labels, centred on their divisions, and its unit label where it is drawn.
+    let unit = bar.unit.as_ref().map(|u| (u.x, u.y, u.text.as_str(), matches!(u.align, text::Align::Center)));
+    let drawn = bar.labels.iter().map(|(x, s)| (*x, bar.label_y, s.as_str(), true)).chain(unit);
+    let off_page = drawn.into_iter().any(|(x, y, s, centred)| {
+        let pen = if centred { x - text::measure(s, bar.px / 1.33, false) / 2.0 } else { x };
+        text::styled_bounds(s, bar.px, text::Face::default(), 0.0)
+            .is_some_and(|ink| pen + ink.left() < 0.0 || y + ink.top() < 0.0 || pen + ink.right() > w || y + ink.bottom() > h)
     });
     Some((off_page, bar.cramped))
 }
@@ -2268,73 +2271,6 @@ fn bar_inset(first: &str, k: f32, ppp: f32) -> f32 {
     (BAR_INSET * k).max(half(k) - (half(1.0) - BAR_INSET).max(0.0))
 }
 
-/// Where a scale bar draws its bar and labels, from [`bar_layout`].
-struct BarLayout {
-    /// Where the bar starts, its top, its length and its height, in pixels.
-    x0: f32,
-    y0: f32,
-    len: f32,
-    bar_h: f32,
-    /// Its labels' size in pixels, the middle of their line, and each drawn: its centre across
-    /// and its text. One that would touch its neighbour is left out, never the ends.
-    px: f32,
-    label_y: f32,
-    labels: Vec<(f32, String)>,
-    /// Its box is too small for its labels and bar: too short, the bar drawn below it, or too
-    /// narrow, an end label reaching past its side further than the default size's does.
-    cramped: bool,
-}
-
-/// Where a scale bar in `r` draws, at `ground_per_pt` ground metres a point of paper, in `units`
-/// with `divisions` steps and its labels at `text_size` points: the drawing and the text-cut check
-/// ([`losses`]) take the same, so they agree. `None` when it draws no bar. A label that would
-/// touch its neighbour is left out, as on any map: the ends always show, and the user guide says
-/// each step is labelled where there is room. That is thinning, not a loss to report.
-fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f64, comma: bool) -> Option<BarLayout> {
-    let (units, divisions, text_size) = bar;
-    let k = layout_text_scale(text_size, SCALE_BAR_TEXT_PT) as f32;
-    let divisions = divisions.clamp(1, rustgis_map::layout::MAX_SCALE_DIVISIONS);
-    let BarPlan { total, unit_m, abbr } = bar_plan(ground_per_pt, f64::from(r.width()) / ppp, units)?;
-    let len = (total * unit_m / ground_per_pt * ppp) as f32;
-    let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    // Labels at the divisions, the last with the unit, over the bar; their room follows their size
-    // (#2581). They reach no higher than the box's top, or than the default size's reach when that
-    // is higher (a publication's short box): the bar moves down to give them room, and a box too
-    // short for both has the bar below it ([`BarLayout::cramped`]). At the default size the bar is
-    // where it always was.
-    let px = SCALE_BAR_TEXT_PT as f32 * k * 1.33 * ppp as f32;
-    let rise = |px: f32| px * (0.7 + BAR_LABEL_RISE);
-    let at = r.y() + r.height() * 0.62 - bar_h / 2.0;
-    let top = r.y().min(at - rise(SCALE_BAR_TEXT_PT as f32 * 1.33 * ppp as f32));
-    let first = bar_label(total, divisions, 0, abbr, comma);
-    let (x0, y0) = (r.x() + bar_inset(&first, k, ppp as f32), at.max(top + rise(px)));
-    let seg = len / divisions as f32;
-    let label_y = y0 - px * 0.7;
-    let gap = 3.0 * k * ppp as f32;
-    let all: Vec<(f32, String)> = (0..=divisions).map(|i| (x0 + seg * i as f32, bar_label(total, divisions, i, abbr, comma))).collect();
-    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
-    let last = all.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
-    let mut right = f32::MIN;
-    let mut labels = Vec::new();
-    for (i, (x, s)) in all.into_iter().enumerate() {
-        let end = i == divisions;
-        if !end && (x - half(&s) < right + gap || x + half(&s) + gap > last) && i != 0 {
-            continue;
-        }
-        right = x + half(&s);
-        labels.push((x, s));
-    }
-    // Sideways the bar keeps its length: its first label is kept within its reach by the inset,
-    // and its last reaches no further past the box's right side than the default size's does, or
-    // than the side itself; further out, the box is too narrow for it, as it is too short when the
-    // bar is below it.
-    let half8 = |s: &str| text::measure(s, SCALE_BAR_TEXT_PT as f32 * ppp as f32, false) / 2.0;
-    let x8 = r.x() + bar_inset(&first, 1.0, ppp as f32);
-    let past_side = labels.last().is_some_and(|(x, s)| x + half(s) > r.right().max(x8 + (x - x0) + half8(s)) + 0.01);
-    let cramped = y0 + bar_h > r.bottom() + 0.01 || past_side;
-    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, cramped })
-}
-
 /// A scale bar's look: the fields of [`ElementKind::ScaleBar`] but its frame and colours.
 #[derive(Clone, Copy, Debug)]
 struct BarOptions<'a> {
@@ -2433,26 +2369,70 @@ fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usi
     (total.is_finite() && total > 0.0).then_some(BarFit { total, after })
 }
 
-/// A scale bar filling most of the element's width as `bar` asks: its divisions after zero (and
-/// any before it) labelled, the first after zero split into its subdivisions. `ground_per_pt` is
-/// ground metres per logical point of paper; `colors` are its lines, dark divisions and labels,
-/// then the alternating bar's light divisions.
-fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, colors: (Rgba, Rgba), ppp: f64, comma: bool) {
-    use rustgis_map::layout::{
-        MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS,
-    };
+/// Where a scale bar draws its bar and labels, from [`bar_layout`].
+struct BarLayout {
+    /// Where the bar starts, its top, its length and its height, in pixels.
+    x0: f32,
+    y0: f32,
+    len: f32,
+    bar_h: f32,
+    /// Its labels' size in pixels, the middle of their line, and each drawn: its centre across
+    /// and its text. One that would touch its neighbour is left out, never the ends.
+    px: f32,
+    label_y: f32,
+    labels: Vec<(f32, String)>,
+    /// Its divisions before zero, all its divisions, the parts the first after zero is cut
+    /// into, and its whole length in its unit: what it draws.
+    before: usize,
+    divs: usize,
+    parts: usize,
+    total: f64,
+    /// Its unit label when it isn't the last label's: after the bar or on a line of its own.
+    unit: Option<BarUnit>,
+    /// The furthest right its ink reaches, in pixels: its bar, its last label or its unit label.
+    right: f32,
+    /// Its box is too small for its labels and bar: too short, the bar drawn below it or its
+    /// lines below the bar past its foot, or too narrow, an end label reaching past its side
+    /// further than the default size's does.
+    cramped: bool,
+}
+
+/// A scale bar's unit label on a line of its own or after the bar: the middle of its line, its
+/// place across (its start or its centre, as `align` says) and its text.
+struct BarUnit {
+    x: f32,
+    y: f32,
+    text: String,
+    align: text::Align,
+}
+
+/// Where a scale bar in `r` draws as `bar` asks, at `ground_per_pt` ground metres a point of
+/// paper: the drawing and the text-cut check ([`losses`]) take the same, so they agree. `None`
+/// when it draws no bar. A label that would touch its neighbour is left out, as on any map: the
+/// ends always show, and the user guide says each step is labelled where there is room. That is
+/// thinning, not a loss to report.
+///
+/// Its labels, their room and its unit label follow its text size (#2581). Its lines above the
+/// bar reach no higher than the box's top, or than a plain bar's labels reach at the default size
+/// when that is higher (a publication's short box): the bar moves down to give them room. Its
+/// lines below the bar reach no lower than the box's foot, the bar moving up as far as its lines
+/// above leave it room. A box too short for its lines and bar is [`BarLayout::cramped`], which is
+/// said, rather than any line drawn smaller. A bar with none of the details draws where it always
+/// was at the default size.
+fn bar_layout(r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, ppp: f64, comma: bool) -> Option<BarLayout> {
+    use rustgis_map::layout::{MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS};
     if !(ground_per_pt.is_finite() && ground_per_pt > 0.0 && ppp.is_finite() && ppp > 0.0) {
-        return;
+        return None;
     }
-    let (dark, light) = colors;
+    let p = ppp as f32;
+    let k = layout_text_scale(bar.text_size, SCALE_BAR_TEXT_PT) as f32;
     let after = bar.divisions.clamp(1, MAX_SCALE_DIVISIONS);
     let before = bar.divisions_before_zero.min(MAX_SCALE_BEFORE_ZERO);
     // One part is the division whole.
     let parts = bar.subdivisions.clamp(1, MAX_SCALE_SUBDIVISIONS);
     let width_pt = f64::from(r.width()) / ppp;
-    let Some(BarPlan { unit_m, abbr, .. }) = bar_plan(ground_per_pt, width_pt, bar.units) else { return };
+    let BarPlan { unit_m, abbr, .. } = bar_plan(ground_per_pt, width_pt, bar.units)?;
     let decimals = bar.decimals.map(|d| usize::from(d).min(MAX_SCALE_DECIMALS));
-    let label_pt = rustgis_map::layout::layout_text_in_range(bar.text_size, SCALE_BAR_TEXT_PT);
     // The unit's words: its abbreviation unless the bar names it, on one line.
     let unit: String = match bar.unit_label {
         None => abbr.to_string(),
@@ -2461,52 +2441,45 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let has_unit = !unit.trim().is_empty();
     let unit_at = bar.unit_label_position;
     let rows = bar_rows(bar.label_position, unit_at, has_unit);
-    let bar_h = (r.height() * 0.28).min(6.0 * ppp as f32);
-    // How far `n` lines of text `px` high reach out from the bar: the middle of the last and half
-    // a line past it.
-    let reach = |n: usize, px: f32| if n == 0 { 0.0 } else { (1.3 + 1.25 * (n - 1) as f32) * px };
-    // A bar with a line of its own for its unit or another label size: its lines written smaller
-    // (never under 4 pt) where they and the bar need more than the box's height, and kept inside
-    // it. The plain bar, one line at the default size, draws as it always has.
-    let kept_inside = rows.up + rows.down > 1 || label_pt != SCALE_BAR_TEXT_PT;
-    let full_px = label_pt as f32 * 1.33 * ppp as f32;
-    let per_px = reach(rows.up, 1.0) + reach(rows.down, 1.0);
-    let squeezed = kept_inside && per_px > 0.0 && bar_h + per_px * full_px > r.height();
-    let px = if squeezed {
-        let least = (*rustgis_map::layout::LAYOUT_TEXT_SIZE.start() as f32 * 1.33 * ppp as f32).min(full_px);
-        ((r.height() - bar_h) / per_px).clamp(least, full_px)
-    } else {
-        full_px
-    };
-    let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
-    let gap = 3.0 * ppp as f32;
+    let bar_h = (r.height() * 0.28).min(6.0 * p);
+    // Its labels' size, and the default's, in pixels.
+    let (px, px8) = (SCALE_BAR_TEXT_PT as f32 * k * 1.33 * p, SCALE_BAR_TEXT_PT as f32 * 1.33 * p);
+    let measure_at = |s: &str, px: f32| text::measure(s, px / 1.33, false);
+    let measure = |s: &str| measure_at(s, px);
+    let half = |s: &str| measure(s) / 2.0;
+    let gap = 3.0 * k * p;
     // The pixels a unit after the bar takes from it, at most half the bar's room.
     let beside = if has_unit && unit_at == UnitLabelPosition::AfterBar {
-        (text::measure(&unit, px / 1.33, false) + gap + ppp as f32).min(r.width() * BAR_SHARE as f32 * 0.5)
+        (measure(&unit) + gap + p).min(r.width() * BAR_SHARE as f32 * 0.5)
     } else {
         0.0
     };
     // Division `k` from zero of a bar `total` long in `divs` divisions.
     let number = |total: f64, divs: usize, k: isize| bar_number(total * k as f64 / divs as f64, total / divs as f64, decimals, comma);
     // Left of zero the first label is a negative one, centred on the bar's end: the bar starts far
-    // enough in for it.
-    // It takes at most half the bar's room, as a unit after the bar does: a wider one reaches left
-    // of the box rather than leave the bar a sliver.
+    // enough in for it, at labels `px` high and `k` times the default. It takes at most half the
+    // bar's room, as a unit after the bar does: a wider one reaches left of the box rather than
+    // leave the bar a sliver.
     let most_pad = ((r.width() * BAR_SHARE as f32 - beside) * 0.5).max(0.0);
-    let pad_of = |f: &BarFit| {
-        if before > 0 { (half(&number(f.total, before + f.after, -(before as isize))) - 2.0).clamp(0.0, most_pad) } else { 0.0 }
+    let pad_at = |f: &BarFit, px: f32, k: f32| {
+        if before > 0 {
+            let first = number(f.total, before + f.after, -(before as isize));
+            (measure_at(&first, px) / 2.0 - BAR_INSET * k).clamp(0.0, most_pad)
+        } else {
+            0.0
+        }
     };
+    let pad_of = |f: &BarFit| pad_at(f, px, k);
     // The bar in what's left of its room once `taken` pixels of the box are its labels'.
     let fitted = |taken: f32| {
         let taken_pt = f64::from(taken) / ppp;
         let room_m = ground_per_pt * width_pt * BAR_SHARE - ground_per_pt * taken_pt;
         bar_fit(room_m, unit_m, bar.fit, before, after)
     };
-    let Some(first) = fitted(beside) else { return };
+    let first = fitted(beside)?;
     // The room left of zero follows the bar's length: fitted again with the first label's, and once
-    // more if the shorter bar's first label is wider ("-1.25" for "-1").
-    // Where a refit leaves no room, the fit before it draws, its first label perhaps starting a
-    // little left of the box.
+    // more if the shorter bar's first label is wider ("-1.25" for "-1"). Where a refit leaves no
+    // room, the fit before it draws, its first label perhaps starting a little left of the box.
     let (fit, pad) = if before > 0 {
         let reserved = pad_of(&first);
         match fitted(beside + reserved) {
@@ -2525,10 +2498,13 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let BarFit { total, after } = fit;
     let divs = before + after;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
-    let x0 = r.x() + BAR_INSET + pad;
+    // How far in the bar starts for labels `k` times the default size: past a first label before
+    // zero, or as far as the first label at zero needs ([`bar_inset`]).
+    let zero = number(total, divs, 0);
+    let inset_at = |k: f32, pad: f32| if before > 0 { BAR_INSET * k + pad } else { bar_inset(&zero, k, p) };
+    let x0 = r.x() + inset_at(k, pad);
     // The box less the insets the bar keeps.
     let (inner_left, inner_right) = (r.x() + BAR_INSET, r.right() - BAR_INSET);
-    let measure = |s: &str| text::measure(s, px / 1.33, false);
     // Division `j` counts `j - before` from zero. Its label, the last with the unit when it follows
     // the labels: a unit the bar names shortened so the label, centred on the bar's end, ends
     // inside the box, and left out when not even a letter of it fits. The abbreviation, short,
@@ -2546,14 +2522,86 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     // Each line above the bar moves it down, each below up; labels over it alone leave it where it
     // always was.
     let centre = 0.62 + 0.12 * (rows.up as f32 - 1.0 - rows.down as f32);
-    let mut y0 = r.y() + r.height() * centre - bar_h / 2.0;
-    if kept_inside {
-        // Its lines, smaller or not, inside the box: from its top, if they can't all be.
-        let (top, bottom) = (r.y() + reach(rows.up, px), r.bottom() - reach(rows.down, px) - bar_h);
-        y0 = if top <= bottom { y0.clamp(top, bottom) } else { top };
+    let at = r.y() + r.height() * centre - bar_h / 2.0;
+    // How far `n` lines of labels `px` high reach out from the bar: the middle of the last, and
+    // its digits past it.
+    let reach = |n: usize, px: f32| if n == 0 { 0.0 } else { px * (0.7 + 1.25 * (n - 1) as f32 + BAR_LABEL_RISE) };
+    // The highest its lines may reach: the box's top, or where a plain bar's labels reach at the
+    // default size when that is higher (a publication's short box), as they always have. Below
+    // the bar, the box's foot.
+    let plain_at = r.y() + r.height() * 0.62 - bar_h / 2.0;
+    let (top, foot) = (r.y().min(plain_at - reach(1, px8)), r.bottom());
+    let highest = top + reach(rows.up, px);
+    let mut y0 = at.max(highest);
+    if rows.down > 0 {
+        y0 = y0.min(foot - bar_h - reach(rows.down, px)).max(highest);
     }
     // The middle of text line `n` out from the bar.
     let row = |n: usize| (0.7 + 1.25 * n as f32) * px;
+    let seg = len / divs as f32;
+    let label_y = if bar.label_position == ScaleLabelPosition::Below { y0 + bar_h + row(0) } else { y0 - row(0) };
+    let all: Vec<(f32, String)> = (0..=divs).map(|j| (x0 + seg * j as f32, label(j))).collect();
+    let last = all.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
+    let mut right_label = f32::MIN;
+    let mut labels = Vec::new();
+    for (i, (x, s)) in all.into_iter().enumerate() {
+        let end = i == divs;
+        if !end && (x - half(&s) < right_label + gap || x + half(&s) + gap > last) && i != 0 {
+            continue;
+        }
+        right_label = x + half(&s);
+        labels.push((x, s));
+    }
+    // The unit after the bar, level with its middle, or centred over or under it on a line of its
+    // own: after the bar in the room kept for it; on a line of its own in the box's width, moved
+    // in as far as it must be to stay inside it. Shortened with an ellipsis, or left out when not
+    // even its first character fits.
+    let place_unit = || {
+        let mid = x0 + len / 2.0;
+        let (x, y, align) = match unit_at {
+            UnitLabelPosition::AfterLabels => return None,
+            UnitLabelPosition::AfterBar => (x0 + len + gap + p, y0 + bar_h / 2.0, text::Align::Left),
+            UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
+            UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
+        };
+        let room = if unit_at == UnitLabelPosition::AfterBar { beside - gap - p } else { inner_right - inner_left };
+        let text = shortened(&unit, room, measure)?;
+        let x = if matches!(align, text::Align::Center) {
+            let w = measure(&text) / 2.0;
+            x.min(inner_right - w).max(inner_left + w)
+        } else {
+            x
+        };
+        Some(BarUnit { x, y, text, align })
+    };
+    let unit = if has_unit { place_unit() } else { None };
+    let unit_right = unit.as_ref().map_or(f32::MIN, |u| {
+        if matches!(u.align, text::Align::Left) { u.x + measure(&u.text) } else { u.x + half(&u.text) }
+    });
+    let right = (x0 + len).max(right_label).max(unit_right);
+    // Sideways the bar keeps its length: its first label is kept within its reach by the inset,
+    // and its last reaches no further past the box's right side than the default size's does, or
+    // than the side itself; further out, the box is too narrow for it, as it is too short when the
+    // bar is below it.
+    let half8 = |s: &str| measure_at(s, px8) / 2.0;
+    let x8 = r.x() + inset_at(1.0, pad_at(&fit, px8, 1.0));
+    let past_side = labels.last().is_some_and(|(x, s)| x + half(s) > r.right().max(x8 + (x - x0) + half8(s)) + 0.01);
+    let low = y0 + bar_h + reach(rows.down, px) > foot + 0.01;
+    let cramped = low || past_side;
+    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, before, divs, parts, total, unit, right, cramped })
+}
+
+/// A scale bar filling most of the element's width as `bar` asks, placed by [`bar_layout`]: its
+/// divisions after zero (and any before it) labelled, the first after zero split into its
+/// subdivisions. `ground_per_pt` is ground metres per logical point of paper; `colors` are its
+/// lines, dark divisions and labels, then the alternating bar's light divisions.
+fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, colors: (Rgba, Rgba), ppp: f64, comma: bool) {
+    let Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, before, divs, parts, unit, .. }) =
+        bar_layout(r, ground_per_pt, bar, ppp, comma)
+    else {
+        return;
+    };
+    let (dark, light) = colors;
     let seg = len / divs as f32;
     let zero_x = x0 + seg * before as f32;
     // Where the first division after zero is cut into its subdivisions.
@@ -2622,40 +2670,11 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
             }
         }
     }
-    // Labels at the divisions, over or under the bar; one that would touch its neighbour is left
-    // out (never the ends).
-    let ty = if bar.label_position == ScaleLabelPosition::Below { y0 + bar_h + row(0) } else { y0 - row(0) };
-    let labels: Vec<(f32, String)> = (0..=divs).map(|j| (x0 + seg * j as f32, label(j))).collect();
-    let last = labels.last().map(|(x, s)| x - half(s)).unwrap_or(f32::MAX);
-    let mut right = f32::MIN;
-    for (i, (x, s)) in labels.iter().enumerate() {
-        let end = i == divs;
-        if !end && (x - half(s) < right + gap || x + half(s) + gap > last) && i != 0 {
-            continue;
-        }
-        text::text_at(pm, s, *x, ty, px, dark, false, text::Align::Center, false);
-        right = x + half(s);
+    // Labels at the divisions, over or under the bar, and the unit label where it is asked.
+    for (x, s) in &labels {
+        text::text_at(pm, s, *x, label_y, px, dark, false, text::Align::Center, false);
     }
-    // The unit after the bar, level with its middle, or centred over or under it on a line of its own.
-    if has_unit {
-        let mid = x0 + len / 2.0;
-        let (x, y, align) = match unit_at {
-            UnitLabelPosition::AfterLabels => return,
-            UnitLabelPosition::AfterBar => (x0 + len + gap + ppp as f32, y0 + bar_h / 2.0, text::Align::Left),
-            UnitLabelPosition::Above => (mid, y0 - row(rows.unit_row), text::Align::Center),
-            UnitLabelPosition::Below => (mid, y0 + bar_h + row(rows.unit_row), text::Align::Center),
-        };
-        // After the bar, in the room kept for it; on a line of its own, in the box's width and
-        // moved in as far as it must be to stay inside it. Shortened with an ellipsis, or left out
-        // when not even its first character fits.
-        let room = if unit_at == UnitLabelPosition::AfterBar { beside - gap - ppp as f32 } else { inner_right - inner_left };
-        let Some(shown) = shortened(&unit, room, measure) else { return };
-        let x = if matches!(align, text::Align::Center) {
-            let w = measure(&shown) / 2.0;
-            x.min(inner_right - w).max(inner_left + w)
-        } else {
-            x
-        };
+    if let Some(BarUnit { x, y, text: shown, align }) = unit {
         text::text_at(pm, &shown, x, y, px, dark, false, align, false);
     }
 }
@@ -8849,12 +8868,14 @@ Elaboração: RustGIS",
         // Filled in its colour throughout, so along its middle the bar is one solid run.
         let solid = (DEFAULT_COLORS.0, DEFAULT_COLORS.0);
         crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, solid, 1.0, false));
-        // Moved down so its big labels stay inside the box, the bar is drawn under them.
-        assert!((40..50).any(|y| marked_span(&pm, y).is_some()), "ink drawn");
-        // Its own row, the middle of the 6 px bar under the labels (rows 41 to 47): one solid run,
-        // half the bar's room at least (34 px, the 1 km that fits in 17), not a sliver.
-        assert!(dark_runs(&pm, 44) > 0, "the bar is drawn");
-        let (a, b) = marked_span(&pm, 44).unwrap();
+        // Moved down so its big labels reach no higher than the box's top, the bar is drawn under
+        // them: along its middle row, one solid run, half the bar's room at least (34 px, the 1 km
+        // that fits in 17), not a sliver.
+        let placed = bar_layout(r, 100.0, &bar, 1.0, false).unwrap();
+        let middle = (placed.y0 + placed.bar_h / 2.0) as u32;
+        assert!(placed.y0 > 30.0, "moved down: {}", placed.y0);
+        assert!(dark_runs(&pm, middle) > 0, "the bar is drawn");
+        let (a, b) = marked_span(&pm, middle).unwrap();
         assert!(b - a >= 8, "the bar keeps half its room: {a}..{b}");
     }
 
@@ -8965,8 +8986,9 @@ Elaboração: RustGIS",
     /// as the bar always did; the width a box needs counts its last label at that size.
     #[test]
     fn a_scale_bars_labels_take_its_text_size() {
+        let plain = |divisions: usize, text_size: f64| BarOptions { divisions, text_size, ..BarOptions::default() };
         let r = Rect::from_xywh(0.0, 0.0, 400.0, 80.0).unwrap();
-        let at = |pt: f64| bar_layout(r, 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false).unwrap();
+        let at = |pt: f64| bar_layout(r, 100.0, &plain(4, pt), 1.0, false).unwrap();
         let (small, big) = (at(SCALE_BAR_TEXT_PT), at(16.0));
         assert_eq!((small.len, small.bar_h, small.y0), (big.len, big.bar_h, big.y0), "the bar keeps its size");
         assert!((big.px - 2.0 * small.px).abs() < 1e-3, "{} against {}", big.px, small.px);
@@ -8981,14 +9003,14 @@ Elaboração: RustGIS",
         assert_eq!(at(1e9).px, at(100.0).px);
         assert_eq!(at(f64::NAN).px, small.px);
         // Labels that would touch at the larger size are left out, never the ends.
-        let crowded = bar_layout(Rect::from_xywh(0.0, 0.0, 120.0, 80.0).unwrap(), 100.0, (ScaleUnits::Auto, 10, 40.0), 1.0, false).unwrap();
+        let crowded = bar_layout(Rect::from_xywh(0.0, 0.0, 120.0, 80.0).unwrap(), 100.0, &plain(10, 40.0), 1.0, false).unwrap();
         assert!(crowded.labels.len() < 11, "{} labels", crowded.labels.len());
         assert_eq!(crowded.labels.first().map(|l| l.1.as_str()), Some("0"));
         // In a box 34 pixels tall (9 mm at a point a pixel), the default leaves room over its
         // labels; at 14 points the bar moves down so they reach no higher than the box's top, and
         // at 40 the box is too short for them and the bar, which is drawn below it.
         let in_box = |h: f32, pt: f64| {
-            bar_layout(Rect::from_xywh(0.0, 0.0, 400.0, h).unwrap(), 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false).unwrap()
+            bar_layout(Rect::from_xywh(0.0, 0.0, 400.0, h).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap()
         };
         let rise = |b: &BarLayout| b.label_y - b.px * BAR_LABEL_RISE;
         let (eight, fourteen, forty) = (in_box(34.0, 8.0), in_box(34.0, 14.0), in_box(34.0, 40.0));
@@ -8999,7 +9021,7 @@ Elaboração: RustGIS",
         // Sideways, its last label at 40 points past a narrow box's right side, its bar the same
         // length: too narrow, its box tall enough. At 8 points the same box holds it.
         let narrow =
-            |pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 90.0, 400.0).unwrap(), 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false).unwrap();
+            |pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 90.0, 400.0).unwrap(), 100.0, &plain(4, pt), 1.0, false).unwrap();
         let (n8, n40) = (narrow(8.0), narrow(40.0));
         assert!(!n8.cramped && n40.cramped && n40.y0 + n40.bar_h < 400.0 && n40.len == n8.len, "{} {}", n40.y0, n40.len);
         // A publication's short box (17 pixels): the default reaches over it, as it always did,
@@ -9344,9 +9366,11 @@ Elaboração: RustGIS",
         assert!(!rows.is_empty() && rows.iter().all(|&y| (20..108).contains(&y)), "every line inside the box: {rows:?}");
     }
 
-    /// A bar in a box too short for its lines writes them smaller, all inside the box.
+    /// A bar in a box too short for its lines draws them at their size and is said, as a bar too
+    /// short for its labels at their text size is (#2581): its labels below and its unit above
+    /// count, where a plain bar's labels alone fit. A box tall enough draws them all inside it.
     #[test]
-    fn a_scale_bar_unit_label_row_stays_inside_a_short_box() {
+    fn a_scale_bar_unit_label_row_in_a_short_box_is_said() {
         let bar = BarOptions {
             unit_label: Some("Kilometres"),
             unit_label_position: UnitLabelPosition::Above,
@@ -9354,17 +9378,47 @@ Elaboração: RustGIS",
             units: ScaleUnits::Kilometers,
             ..BarOptions::default()
         };
-        // A 20 px box in the middle of a taller page, so ink outside it would show.
-        let mut pm = Pixmap::new(300, 60).unwrap();
+        let short = Rect::from_xywh(0.0, 20.0, 300.0, 20.0).unwrap();
+        let placed = bar_layout(short, 100.0, &bar, 1.0, false).unwrap();
+        assert!(placed.cramped, "too short for its lines");
+        assert_eq!(placed.px, SCALE_BAR_TEXT_PT as f32 * 1.33, "drawn at its size, not smaller");
+        assert!(!bar_layout(short, 100.0, &BarOptions::default(), 1.0, false).unwrap().cramped, "a plain bar fits");
+        // In a box tall enough, every line inside it: the unit above and the labels under the bar.
+        let mut pm = Pixmap::new(300, 80).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
-        let r = Rect::from_xywh(0.0, 20.0, 300.0, 20.0).unwrap();
+        let r = Rect::from_xywh(0.0, 20.0, 300.0, 40.0).unwrap();
+        assert!(!bar_layout(r, 100.0, &bar, 1.0, false).unwrap().cramped);
         crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
-        // Any mark, the small text's light edges too.
         let marked = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|p| p.red() < 250 || p.green() < 250 || p.blue() < 250);
         let rows: Vec<u32> = (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| marked(x, y))).collect();
-        assert!(!rows.is_empty() && rows.iter().all(|y| (20..40).contains(y)), "inside the box: {rows:?}");
-        // Above the bar and under it: the unit and the labels both drawn.
-        assert!(rows.first().is_some_and(|&y| y < 26) && rows.last().is_some_and(|&y| y > 33), "{rows:?}");
+        assert!(!rows.is_empty() && rows.iter().all(|y| (20..60).contains(y)), "inside the box: {rows:?}");
+        // On a page, the short box is told as the text size's is: too small for its labels.
+        let maps = vec![Map::new("m")];
+        let mut l = Layout::new("Page", 120.0, 90.0);
+        let frame = l.add(
+            "Frame",
+            (10.0, 30.0, 100.0, 50.0),
+            serde_json::from_value(serde_json::json!({"MapFrame":{"map":"m", "center":{"x":0,"y":0}, "scale":1000000}})).unwrap(),
+        );
+        let id = l.add("Scale Bar", (10.0, 0.0, 100.0, 12.0), ElementKind::scale_bar(frame));
+        let info = PageInfo::default();
+        let set = |l: &mut Layout, size: f64, rows: bool| {
+            if let Some(ElementKind::ScaleBar { text_size, label_position, unit_label_position, .. }) = l.element_mut(id).map(|e| &mut e.kind) {
+                *text_size = size;
+                (*label_position, *unit_label_position) = if rows {
+                    (ScaleLabelPosition::Below, UnitLabelPosition::Above)
+                } else {
+                    (ScaleLabelPosition::Above, UnitLabelPosition::AfterLabels)
+                };
+            }
+        };
+        set(&mut l, 20.0, false);
+        assert!(text_loss(&l, &maps, 96.0, &info, id).is_none(), "a plain bar's labels at 20 points fit");
+        set(&mut l, 20.0, true);
+        let loss = text_loss(&l, &maps, 96.0, &info, id).unwrap();
+        assert!(loss.below_box && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("its box is too small"), "{loss:?}");
+        set(&mut l, SCALE_BAR_TEXT_PT, true);
+        assert!(text_loss(&l, &maps, 96.0, &info, id).is_none(), "its rows at 8 points fit");
     }
 
     /// A page draws its scale bar's details through `draw_page`: the unit label in the bar's colour.

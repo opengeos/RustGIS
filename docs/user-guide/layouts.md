@@ -293,8 +293,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   divisions* keeps a round division and adds or drops divisions, at most ten, to fill the width;
   *Adjust width* keeps the divisions and draws the bar only as wide as they need
   (`"subdivisions":4,"divisionsBeforeZero":1,"labelPosition":"below","unitLabel":"Kilometres","unitLabelPosition":"afterBar","decimals":1,"fit":"adjustWidth"`).
-  Their labels and unit label are drawn at its **Text size**. Each change is one undo step, and a
-  value set back to its default is no longer saved. A project that uses them can't be opened by an
+  Their labels and unit label are drawn at its **Text size**, the lines above the bar reaching no
+  higher than its box's top and those below it no lower than its foot, the bar moving to make
+  room; a box too short for them all is said, and reported by an export, as for a larger text size.
+  Each change is one undo step, and a value set back to its default is no longer saved. A project that uses them can't be opened by an
   older RustGIS; an older RustGIS importing a layout file (`.rgislayout`) with them draws a plain
   bar (#2277). A legend's
   parts:
