@@ -4971,7 +4971,13 @@ pub fn export_losses_notes_in(ds: &Dataset, ext: &str, name_field: Option<usize>
     let mut notes = match ext {
         "csv" => {
             // Of the coordinates the file is written in: longitude/latitude, or another system's.
-            let ds = if crs == Crs::LonLat { ds.in_lonlat().map_err(DataError::of_conversion)? } else { std::borrow::Cow::Borrowed(ds) };
+            let ds = if crs == Crs::LonLat {
+                ds.in_lonlat().map_err(DataError::of_conversion)?
+            } else if crs == ds.coord_crs() {
+                std::borrow::Cow::Borrowed(ds)
+            } else {
+                std::borrow::Cow::Owned(project(ds, crs)?)
+            };
             let losses = CsvLosses::of(&ds.features, ds.geometry_type, &ds.fields)?;
             let mut notes = losses.notes(&ds.fields, target);
             notes.extend(losses.coordinates_note_in(&ds.fields, target, crs));

@@ -95,3 +95,42 @@ fn exports_take_the_layers_own_system() {
     // GeoJSON still refuses another system.
     assert!(s.run("share.exportLayer", &json!({"layer": "towns", "path": d.0.join("t.geojson"), "crs": "EPSG:2056"})).is_err());
 }
+
+/// A Shapefile layer in LV95 that a project saved before RustGIS kept a file's own coordinates
+/// holds in longitude/latitude, with a record that has no digest of its own coordinates, is
+/// published: it takes the file's rows in LV95 with the system they're in, and reads in sync.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_older_projects_layer_takes_the_files_own_system_when_published() {
+    let d = dir("older");
+    let geojson = d.0.join("towns.geojson");
+    std::fs::write(&geojson, LV95).unwrap();
+    let mut s = Session::new(crate::Project::default());
+    s.run("layer.addData", &json!({"path": geojson, "name": "source"})).unwrap();
+    let shp = d.0.join("towns.shp");
+    s.run("share.exportLayer", &json!({"layer": "source", "path": shp})).unwrap();
+    let id = s.run("layer.addData", &json!({"path": shp, "name": "towns"})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let lv95 = rustgis_data::raster::Crs::from_epsg(2056).unwrap();
+    // As an older release held it: in longitude/latitude, its record of those rows only.
+    {
+        let l = s.map_mut().layer_mut(id).unwrap();
+        assert_eq!(l.dataset.coord_crs(), lv95);
+        l.dataset = rustgis_data::io::project(&l.dataset, rustgis_data::raster::Crs::LonLat).unwrap();
+        l.touch_geometry();
+        let rows = rustgis_data::sync::rows_digest(&l.dataset).unwrap();
+        let files = l.synced.clone().unwrap().files;
+        l.synced = Some(rustgis_data::sync::Synced { files, rows, native: None });
+    }
+    let state = |s: &mut Session| s.run("source.syncState", &json!({"layer": id})).unwrap()["state"].clone();
+    assert_eq!(state(&mut s), "inSync");
+    s.run("edit.setValue", &json!({"layer": id, "row": 0, "field": "name", "value": "Bärn"})).unwrap();
+    let out = s.run("source.publish", &json!({"layer": id})).unwrap();
+    assert_eq!(out["published"], true, "{out}");
+    let l = s.map().layer(id).unwrap();
+    assert_eq!(l.dataset.coord_crs(), lv95, "the file's rows come with the system they're in");
+    let first = l.dataset.features.iter().next().unwrap().geometry.clone().unwrap();
+    let rustgis_data::Geometry::Point(c) = first else { panic!("{first:?}") };
+    assert!((c.x - 2_600_000.0).abs() < 1e-6 && (c.y - 1_200_000.0).abs() < 1e-6, "{c:?}");
+    assert!(l.synced.as_ref().unwrap().native.is_some());
+    assert_eq!(state(&mut s), "inSync");
+}

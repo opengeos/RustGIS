@@ -62,9 +62,14 @@ pub(crate) fn publish_work(s: &Session, p: &Value) -> Result<super::exports::Wor
         let (synced, path, dataset, instance, name) =
             (synced.clone(), path.to_string(), l.dataset.clone(), l.instance_id(), l.name.clone());
         Ok(Box::new(move || {
-            let rows = synced.digest_of(&dataset).map_err(|e| e.to_string())?;
+            // Both kinds of digest, before anything is written: the record the publish makes may
+            // keep the other kind (an older release's record kept no native one), and Cancel must
+            // not leave a written file without its record.
+            let (lonlat_rows, native_rows) = rustgis_data::sync::digests(&dataset).map_err(|e| e.to_string())?;
+            let of_kind = |native: bool| if native { native_rows } else { Some(lonlat_rows) };
+            let rows = of_kind(synced.native.is_some());
             let features = dataset.features.len();
-            if rows == synced.digest() {
+            if rows == Some(synced.digest()) {
                 let changed = synced.files.changed(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
                 if !changed.is_empty() {
                     return Err(format!(
@@ -105,14 +110,15 @@ pub(crate) fn publish_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                 }
             }
             held.crs = published.read.crs;
+            // In the system the file is read in, which a layer a project saved before RustGIS
+            // kept a file's own coordinates (held in longitude/latitude) takes with them.
+            held.held_in = published.read.coord_crs();
             // Already hashed before the files were placed: Cancel must not leave a successful
             // write without its sync record. Feature ids do not contribute to the digest.
             let new = rustgis_data::sync::Synced { files: published.files, rows: published.rows, native: published.native };
             // Unchanged when the file reads as the layer is: compared by the digest of the kind
-            // the new record keeps (an older release's record kept no native one).
-            let now =
-                if new.native.is_some() == synced.native.is_some() { rows } else { new.digest_of(&dataset).map_err(|e| e.to_string())? };
-            let held = (new.digest() != now).then_some(held);
+            // the new record keeps, hashed above.
+            let held = (of_kind(new.native.is_some()) != Some(new.digest())).then_some(held);
             let (said, written_path) = (path.clone(), Some(path.clone()));
             let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
                 let mark = s.notice_mark();
@@ -130,10 +136,12 @@ pub(crate) fn publish_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                             && l.dataset.features.shares(&dataset.features)
                             && l.dataset.fields == dataset.fields
                             && l.dataset.crs == dataset.crs
+                            && l.dataset.held_in == dataset.held_in
                         {
                             l.dataset.features = held.features;
                             l.dataset.fields = held.fields;
                             l.dataset.crs = held.crs;
+                            l.dataset.held_in = held.held_in;
                             l.touch_geometry();
                             s.revision = s.revision.wrapping_add(1);
                         }

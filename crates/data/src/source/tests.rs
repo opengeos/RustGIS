@@ -3240,6 +3240,17 @@ fn a_csv_export_takes_x_and_y_in_a_system_asked_for() {
     assert!(crate::io::to_csv_in(&every, lv95).unwrap().starts_with("x_1,y_1,"));
     let notes = crate::io::export_losses_notes_in(&every, "csv", None, "xy.csv", lv95).unwrap();
     assert!(notes.iter().any(|n| n.contains("'x_1' and 'y_1'")), "{notes:?}");
+    // Into a geographic system other than WGS 84: longitude and latitude columns, and no note
+    // of unusable positions, which are counted on the coordinates written.
+    // Fields named x and y are a pair reading could take instead, which a note names when rows
+    // lack a usable longitude/latitude: counted on LV95's metres, every row would.
+    let etrs89 = Crs::from_epsg(4258).unwrap();
+    let (bytes, _) = crate::io::write_bytes_in(&ds, "csv", etrs89).unwrap();
+    assert!(String::from_utf8(bytes).unwrap().starts_with("longitude,latitude,name\n7.43"));
+    assert!(crate::io::export_losses_notes_in(&ds, "csv", None, "pts.csv", etrs89).unwrap().is_empty());
+    assert_eq!(xy.coord_crs(), lv95);
+    let notes = crate::io::export_losses_notes_in(&xy, "csv", None, "xy.csv", etrs89).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
 }
 
 /// A catalog index as AlphaEarth's is (a `bbox` struct, a nested `assets.data.href`), and patch
