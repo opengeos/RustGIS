@@ -2371,6 +2371,34 @@ fn rasterize_says_the_vertices_left_out_of_its_extent() {
     assert!(!b.iter().any(|t| t.contains(left_out)), "{b:?}");
 }
 
+/// Clean input says nothing of places left out: points and a polygon held in UTM, all of which the
+/// systems on each side hold, interpolated and smoothed onto Web Mercator and burned onto a grid
+/// in degrees with no extent given.
+#[test]
+fn clean_held_input_says_nothing_left_out() {
+    let mut s = Session::new(Project::default());
+    let at = [(784_000.0, 5_401_300.0), (785_000.0, 5_402_300.0), (786_000.0, 5_401_800.0), (784_500.0, 5_402_900.0)];
+    add_in(&mut s, "Samples", GeometryType::Point, at.iter().map(|(x, y)| Geometry::Point(Coord::new(*x, *y))).collect(), UTM);
+    let square: Vec<Coord> = [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0), (0.0, 500.0), (0.0, 0.0)]
+        .iter()
+        .map(|(x, y)| Coord::new(784_000.0 + x, 5_401_300.0 + y))
+        .collect();
+    add_in(&mut s, "Plot", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square]])], UTM);
+    let mark = s.notice_mark();
+    let mut answers = Vec::new();
+    for (tool, out) in [("idwInterpolation", "Idw"), ("kriging", "Krig")] {
+        let p = json!({"tool": tool, "params": {"input": "Samples", "field": "v", "pixelSize": 100, "crs": "EPSG:3857", "output": out}});
+        answers.push(s.run("gp.run", &p).unwrap().to_string());
+    }
+    let p = json!({"tool": "kernelDensity", "params": {"input": "Samples", "radius": 500, "pixelSize": 50, "crs": "EPSG:3857", "output": "Kde"}});
+    answers.push(s.run("gp.run", &p).unwrap().to_string());
+    s.run("raster.rasterize", &json!({"layer": "Plot", "crs": "EPSG:4326", "cellSize": 0.001, "name": "Burned"})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).chain(answers).collect();
+    for left_out in ["can't give in longitude/latitude", "beyond what", "left out of the grid's extent"] {
+        assert!(!said.iter().any(|t| t.contains(left_out)), "{left_out}: {said:?}");
+    }
+}
+
 /// A point the layer's own system can't give in longitude/latitude is counted apart from one the
 /// grid's system can't hold: IDW from points held in UTM, one far beyond any place UTM holds,
 /// says that UTM can't give it, not that the grid can't hold it.
