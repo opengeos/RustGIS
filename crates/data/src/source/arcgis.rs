@@ -155,9 +155,17 @@ pub fn open_now(remote: Arc<Remote>) -> Result<ArcgisSource> {
     // definition rather than its code) is asked for in longitude/latitude, as before.
     if out_sr.is_some() {
         let native = with(&features_query(&query, out_sr), &[("resultRecordCount", "1")]);
-        let Some(answer) = remote.answer(&native)? else { return Err(remote::need()) };
-        let in_it = answer.is_empty()
-            || crate::esripbf::read_page(&answer, "check").is_ok_and(|p| p.dataset.features.is_empty() || p.dataset.coord_crs() == held);
+        // An answer too large to take is read in longitude/latitude, as the first one was.
+        let answer = match remote.answer(&native) {
+            Ok(Some(answer)) => Some(answer),
+            Ok(None) => return Err(remote::need()),
+            Err(e) if remote::is_too_large(&e) => None,
+            Err(e) => return Err(e),
+        };
+        // In it, empty or not (a page in another system, or saying none, is read in
+        // longitude/latitude), or no bytes at all, which say nothing of it.
+        let in_it =
+            answer.is_some_and(|a| a.is_empty() || crate::esripbf::read_page(&a, "check").is_ok_and(|p| p.dataset.coord_crs() == held));
         if !in_it {
             (held, to_lonlat, out_sr) = (crate::raster::Crs::LonLat, None, None);
         }

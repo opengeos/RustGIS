@@ -701,7 +701,8 @@ enum Placement {
 fn placement(fgb: &Path) -> Placement {
     use crate::raster::Crs;
     crate::provenance::without(|| {
-        let Ok(crs) = super::fgb::header_coord_crs(fgb) else { return Placement::Unreadable };
+        // A header that can't be read says nothing of the system: converted as before, unsaid.
+        let Ok(crs) = super::fgb::header_coord_crs(fgb) else { return Placement::LonLat };
         if crs == Crs::LonLat {
             return if super::fgb::header_says_wgs84(fgb) { Placement::Own } else { Placement::Unreadable };
         }
@@ -718,7 +719,26 @@ fn placement(fgb: &Path) -> Placement {
 
 /// The notice for a layer converted to longitude/latitude because its system can't be read.
 pub fn in_lonlat_note(layer: &str) -> String {
-    format!("GDAL: '{layer}': RustGIS can't read its coordinate system, so GDAL converted it to longitude/latitude (WGS 84)")
+    in_lonlat_notes(&[layer])
+}
+
+/// One notice for the layers of a file converted to longitude/latitude because their systems
+/// can't be read: their count, and their names (the first ten).
+pub fn in_lonlat_notes(layers: &[&str]) -> String {
+    match layers {
+        [one] => format!("GDAL: '{one}': RustGIS can't read its coordinate system, so GDAL converted it to longitude/latitude (WGS 84)"),
+        _ => {
+            let mut named: Vec<String> = layers.iter().take(10).map(|l| format!("'{l}'")).collect();
+            if layers.len() > 10 {
+                named.push(format!("{} more", layers.len() - 10));
+            }
+            format!(
+                "GDAL: {} layers ({}): RustGIS can't read their coordinate systems, so GDAL converted them to longitude/latitude (WGS 84)",
+                layers.len(),
+                named.join(", ")
+            )
+        }
+    }
 }
 
 /// Count only the other supported geometry families, not geometry-less rows. Reuse exactly the
@@ -937,6 +957,14 @@ mod tests {
             assert!(c.x.abs() <= 180.0 && c.y.abs() <= 90.0, "{c:?}");
         }
         assert!(in_lonlat_note("nell").contains("converted it to longitude/latitude"));
+        // Several layers of a file: one notice, with their count and names.
+        let many: Vec<String> = (1..=12).map(|i| format!("l{i}")).collect();
+        let names: Vec<&str> = many.iter().map(String::as_str).collect();
+        let note = in_lonlat_notes(&names);
+        assert!(
+            note.starts_with("GDAL: 12 layers ('l1', 'l2',") && note.contains("'l10', 2 more)") && note.contains("converted them"),
+            "{note}"
+        );
     }
 
     /// A VRT renamed `.tab` isn't opened as a VRT, so the file it names isn't read.

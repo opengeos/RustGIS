@@ -59,6 +59,12 @@ struct Opts {
     /// Its layer is in Web Mercator (its description says so), and it answers in the system
     /// asked for (`outSR`), Web Mercator or longitude/latitude.
     mercator: bool,
+    /// With `mercator`, its first feature asked for in Web Mercator is an answer too large to
+    /// take.
+    probe_too_large: bool,
+    /// With `mercator`, it answers the first feature asked for in Web Mercator with an empty page
+    /// in longitude/latitude.
+    probe_empty_lonlat: bool,
 }
 
 impl Default for Opts {
@@ -79,6 +85,8 @@ impl Default for Opts {
             over: 0,
             empty_body: false,
             mercator: false,
+            probe_too_large: false,
+            probe_empty_lonlat: false,
         }
     }
 }
@@ -109,6 +117,8 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         over,
         empty_body,
         mercator,
+        probe_too_large,
+        probe_empty_lonlat,
     } = opts;
     let layer = format!("https://{host}/arcgis/rest/services/P/FeatureServer/0");
     let asked = Arc::new(Asked::default());
@@ -160,6 +170,13 @@ fn service_with(host: &str, opts: Opts) -> (String, Arc<Asked>) {
         }
         let geometry_too = value("returnGeometry").as_deref() != Some("false");
         let in_mercator = mercator && value("outSR").as_deref() == Some("3857");
+        let probe = in_mercator && value("resultRecordCount").as_deref() == Some("1") && value("resultOffset").is_none();
+        if probe && probe_too_large {
+            return Some(vec![0; usize::try_from(remote::MAX_ANSWER).unwrap() + 1]);
+        }
+        if probe && probe_empty_lonlat {
+            return Some(answer(&[number(7, 0), lonlat(), transform(false, 0.01, 0.0, 0.0), field("OBJECTID", 6)]));
+        }
         let reference = if in_mercator { message(8, &number(1, 3857)) } else { lonlat() };
         let mut parts = vec![number(7, 0), reference, transform(false, 0.01, 0.0, 0.0)];
         if !(sent.is_empty() && empty_without_fields) {
@@ -652,6 +669,17 @@ fn a_layer_is_read_in_its_own_system() {
     .unwrap();
     inside.sort_unstable();
     assert_eq!(inside, want);
+    // A first page in Web Mercator too large to take, or empty and in another system: asked for
+    // in longitude/latitude, as before.
+    for (host, opts) in [
+        ("probe-large.test", Opts { page: 30, mercator: true, probe_too_large: true, ..Opts::default() }),
+        ("probe-empty.test", Opts { page: 30, mercator: true, probe_empty_lonlat: true, ..Opts::default() }),
+    ] {
+        let (query, _) = service_with(host, opts);
+        let src = open_blocking(&query).unwrap();
+        assert_eq!(src.coord_crs(), crate::raster::Crs::LonLat, "{host}");
+        assert_eq!(ids(&read(&src, Request { extent: Some(small_view()), limit: 1000 }).unwrap()), want, "{host}");
+    }
     // A code RustGIS doesn't read: longitude/latitude, as before.
     let description = r#"{"name":"Points","objectIdField":"OBJECTID","maxRecordCount":30,"supportedQueryFormats":"PBF","geometryType":"esriGeometryPoint",
         "useStandardizedQueries":true,"advancedQueryCapabilities":{"supportsPagination":true},"extent":{"spatialReference":{"wkid":999999}}}"#;

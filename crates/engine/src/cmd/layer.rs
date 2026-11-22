@@ -4333,7 +4333,7 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
     let parts = converted.len();
     let single = parts == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
-    let mut converted_lonlat = std::collections::HashSet::new();
+    let mut converted_lonlat: Vec<String> = Vec::new();
     let source_layer = |o: &ConvertedOrigin| match o {
         ConvertedOrigin::Gdal(g) => g.layer.clone(),
         ConvertedOrigin::Duckdb(d) => d.table.clone().unwrap_or_default(),
@@ -4391,9 +4391,12 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             // its coordinate system is unknown.
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
             let outside = !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0);
-            // Once a source layer, not once a part of it.
-            if c.in_lonlat && converted_lonlat.insert(source_layer(&c.origin)) {
-                s.notify(rustgis_data::source::gdal::in_lonlat_note(&source_layer(&c.origin)), false);
+            // Said once for the file below, naming each source layer once, not each part of it.
+            if c.in_lonlat {
+                let layer = source_layer(&c.origin);
+                if !converted_lonlat.contains(&layer) {
+                    converted_lonlat.push(layer);
+                }
             }
             if outside || (c.unprojected && matches!(c.origin, ConvertedOrigin::Gdal(_))) {
                 s.notify(
@@ -4403,6 +4406,10 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             }
             ids.push(id);
         }
+    }
+    if !converted_lonlat.is_empty() {
+        let names: Vec<&str> = converted_lonlat.iter().map(String::as_str).collect();
+        s.notify(rustgis_data::source::gdal::in_lonlat_notes(&names), false);
     }
     if empty_before {
         let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent()));
