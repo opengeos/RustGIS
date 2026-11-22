@@ -2067,14 +2067,12 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::is_source_name(path) {
         return add_source(s, p, Origin::Path(path), None);
     }
-    // A CityJSON model named .json, in the coordinate system given or with a layer picked: as a
-    // .city.json, all its layers (a .city.json is added below, as a file of several layers). It is
-    // read whole to tell, here on the calling thread, so only up to the size every computer reads
-    // (a larger model is named `.city.json` to be read as one).
+    // Only a possible city model is read whole; ordinary GeoJSON keeps its streaming path.
     if path.to_ascii_lowercase().ends_with(".json")
         && !rustgis_data::cityjson::is_cityjson_name(path)
         && ["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
         && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR)
+        && json_city_model_path(path)
     {
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
         if rustgis_data::io::is_cityjson(path, &bytes) {
@@ -2604,9 +2602,8 @@ fn in_place_key(path: &str, crs: Option<&str>) -> String {
 /// The opening of a large Shapefile or GeoJSON file that Add Data reads in place, made ahead on a
 /// thread of its own (#2446): it reads the whole file once, to index a Shapefile's records or
 /// find a GeoJSON file's features, which takes minutes for a file of millions. As [`add_data`]
-/// decides ([`streams_geojson`], [`streams_shapefile`]), but a `.json` of at most 256 MiB given a
-/// coordinate system or a layer, which may be a city model told as it is added, so it is opened
-/// there as before.
+/// decides ([`streams_geojson`], [`streams_shapefile`]); a possible city model is sniffed from
+/// its head and left for the city-model path.
 /// Cancel is looked at every few thousand features or records; reading a GeoJSON file of at most
 /// 256 MiB into memory, before its text is scanned, is one step without a look.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2617,11 +2614,11 @@ fn in_place_ahead(p: &Value, path: &str) -> Option<super::reads::ReadWork> {
     let given = |k: &str| ps(p, k).is_some_and(|v| !v.trim().is_empty());
     if is_geojson(path)
         && !rustgis_data::cityjson::is_cityjson_name(path)
-        // Up to the size every computer reads, add_data reads such a .json whole first to tell a
-        // city model; a larger one it opens in place, as here.
+        // Match add_data's bounded city-model probe before opening GeoJSON in place.
         && !(lower.ends_with(".json")
             && (given("crs") || given("layer"))
-            && std::fs::metadata(path).is_ok_and(|m| m.len() <= rustgis_data::io::BYTES_FLOOR))
+            && std::fs::metadata(path).is_ok_and(|m| m.len() <= rustgis_data::io::BYTES_FLOOR)
+            && json_city_model_path(path))
         && streams_geojson(p, path)
     {
         let (path, may_load) = (path.to_string(), b(p, "stream").is_none());
@@ -2703,7 +2700,7 @@ pub(crate) fn add_data_ahead(p: &Value) -> Option<super::reads::ReadWork> {
     let geojson = is_geojson(&path)
         && !rustgis_data::cityjson::is_cityjson_name(&path)
         && b(p, "stream") != Some(true)
-        && !(lower.ends_with(".json") && (given("crs") || given("layer")))
+        && !(lower.ends_with(".json") && (given("crs") || given("layer")) && json_city_model_path(&path))
         && std::fs::metadata(&path)
             .is_ok_and(|m| m.is_file() && (b(p, "stream") == Some(false) || m.len() <= rustgis_data::source::geojson::IN_PLACE_ABOVE));
     // A ZIP, a city model, a GML or a GPX file: its layers, read whole. A model named `.json` (not
@@ -3132,11 +3129,11 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
         let layers = rustgis_data::dxf::layers(path, &bytes).map_err(err)?;
         return Ok(json!({"count": layers.len(), "layers": layers}));
     }
-    // A CityJSON model named .json: all its layers, as Add Data adds them by name. Read whole to
-    // tell, so only up to the size every computer reads, as Add Data does.
+    // Sniff a plain .json before considering a whole-file city-model read.
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let model_json = path.to_ascii_lowercase().ends_with(".json")
-        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR);
+        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::BYTES_FLOOR)
+        && json_city_model_path(path);
     if rustgis_data::io::is_multi_layer_name(path) || model_json {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         // Listed within the size Add Data takes it at.
@@ -3175,6 +3172,54 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
     }
     let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
     Ok(json!({"count": 1, "layers": [name]}))
+}
+
+/// Reads at most 64 KiB to route a plain .json without allocating the whole file.
+/// An inconclusive head keeps the existing whole-file fallback (within its size cap), so a
+/// CityJSON root type after a large metadata value still works. Root payload keys let us stop
+/// before either a CityObjects object or a GeoJSON features array, even when type comes last.
+fn json_city_model_path(path: &str) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    match rustgis_data::provenance::open(path).and_then(|f| f.take(64 << 10).read_to_end(&mut head)) {
+        Ok(_) => json_city_model_head(&head),
+        Err(_) => true, // The existing reader reports the I/O error.
+    }
+}
+
+/// Inspects root keys only; nested properties and strings cannot identify a city model.
+fn json_city_model_head(head: &[u8]) -> bool {
+    use serde::Deserializer;
+    use serde::de::{IgnoredAny, MapAccess, Visitor};
+    struct Head<'a>(&'a std::cell::Cell<Option<bool>>);
+    impl<'de> Visitor<'de> for Head<'_> {
+        type Value = bool;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON document's root object")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<bool, M::Error> {
+            while let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "type" => self.0.set(Some(map.next_value::<String>()? == "CityJSON")),
+                    "CityObjects" => self.0.set(Some(true)),
+                    "features" => self.0.set(Some(false)),
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                        continue;
+                    }
+                }
+                // Stop without consuming the payload. serde otherwise requires the closing
+                // brace after visit_map; the decision deliberately survives this sentinel error.
+                return Err(serde::de::Error::custom("JSON format decided"));
+            }
+            self.0.set(Some(false));
+            Ok(false)
+        }
+    }
+    let head = head.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(head);
+    let decided = std::cell::Cell::new(None);
+    let _ = serde_json::Deserializer::from_slice(head).deserialize_map(Head(&decided));
+    decided.get().unwrap_or(true)
 }
 
 /// Whether a file name is GeoJSON's (`.geojson` or `.json`).
@@ -3247,6 +3292,14 @@ fn add_source_read(
     let mut skipped: Vec<String> = Vec::new();
     let mut total = None;
     let selected = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty());
+    // A desktop upload is copied once; inspection and opening share its SQLite connection.
+    #[cfg(not(target_arch = "wasm32"))]
+    let upload = match &origin {
+        Origin::Bytes(name, bytes) if name.to_ascii_lowercase().ends_with(".gpkg") && opened.is_none() => {
+            Some(source::gpkg::GpkgUpload::new(bytes.as_slice()).map_err(err)?)
+        }
+        _ => None,
+    };
     // Report unsupported contents for a whole-file add, not a deliberate table selection.
     let contents = match (&origin, selected.is_none()) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -3254,9 +3307,10 @@ fn add_source_read(
             source::gpkg::unsupported_table_counts(Path::new(path)).map_err(err)?
         }
         #[cfg(not(target_arch = "wasm32"))]
-        (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => {
-            source::gpkg::unsupported_table_counts_bytes(bytes.as_slice()).map_err(err)?
-        }
+        (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => match &upload {
+            Some(upload) => upload.unsupported_table_counts().map_err(err)?,
+            None => source::gpkg::unsupported_table_counts_bytes(bytes.as_slice()).map_err(err)?,
+        },
         #[cfg(target_arch = "wasm32")]
         (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => {
             source::gpkg_mem::unsupported_table_counts(source::Shared(bytes.clone())).map_err(err)?
@@ -3276,6 +3330,13 @@ fn add_source_read(
         })
         .collect();
     let attribute_note = (!omitted.is_empty()).then(|| omitted.join("; "));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(upload) = upload {
+        opened = Some(Box::new(upload.open(selected).map_err(|e| match &attribute_note {
+            Some(note) => format!("{}; {note}", err(e)),
+            None => err(e),
+        })?));
+    }
     let tables: Vec<Option<String>> = match (selected, &origin) {
         (Some(t), _) => vec![Some(t.to_string())],
         (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
@@ -7570,6 +7631,42 @@ pub(crate) fn external_dataset_selector(command: &str) -> bool {
 mod tests {
     use crate::Session;
     use serde_json::json;
+
+    /// A payload can start beyond the sniff budget; only root keys decide the route.
+    #[test]
+    fn json_head_stops_before_payloads() {
+        for head in [
+            br#"{"type":"FeatureCollection","features":["#.as_slice(),
+            br#"{"features":["#,
+            br#"{"metadata":{"type":"CityJSON","CityObjects":{}},"type":"FeatureCollection""#,
+        ] {
+            assert!(!super::json_city_model_head(head));
+        }
+        for head in
+            [br#"{"type":"CityJSON","CityObjects":{"#.as_slice(), br#"{"CityObjects":{"#, br#"{"metadata":{"description":"unfinished"#]
+        {
+            assert!(super::json_city_model_head(head));
+        }
+    }
+
+    /// Listing GeoJSON never reads its full payload merely to rule out a city model.
+    #[test]
+    fn listing_json_layers_only_reads_the_head() {
+        let dir = std::env::temp_dir().join(format!("rustgis-json-head-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("points.json");
+        let mut bytes = br#"{"type":"FeatureCollection","features":[]}"#.to_vec();
+        bytes.resize(128 << 10, b' ');
+        std::fs::write(&path, bytes).unwrap();
+        let capture = rustgis_data::provenance::Capture::start();
+        let mut s = crate::Session::new(Default::default());
+        let out = s.run("info.fileLayers", &serde_json::json!({"path":path})).unwrap();
+        assert_eq!(out["layers"], serde_json::json!(["points"]));
+        let inputs = capture.inputs();
+        assert_eq!(inputs.len(), 1);
+        assert!(inputs[0].sha256.is_none(), "a whole-file read was captured");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Overlays left out for their pictures' size are said, with the budget; none, nothing said.
     #[test]
