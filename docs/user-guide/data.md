@@ -822,7 +822,8 @@ column (`Mains:SHAPE`).
 
 `info.databaseTables` lists a geodatabase's tables as `items`: each has `item` (`featureClass`,
 `table` or `other`), `dataset`, `alias`, `versioning` (`none`, `traditional` or `branch`) and
-`display`, the name the tree shows; an `other` table, which the geodatabase doesn't register, has
+`display`, the name the tree shows, and a feature class's `geometry` (`points`, `lines` or
+`polygons`, from its definition, else `null`); an `other` table, which the geodatabase doesn't register, has
 `dataset`, `alias` and `versioning` as `null` and its name with its schema as `display`. A database
 with 10,000 spatial columns or more has only the first 10,000 read, and the listing says so. `connection.browse` lists the tree level by level.
 

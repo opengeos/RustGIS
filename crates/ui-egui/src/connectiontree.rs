@@ -443,6 +443,32 @@ fn what_label(what: &str) -> &'static str {
     }
 }
 
+/// The icon a row of an enterprise geodatabase has: a feature class its kind of geometry's, a
+/// registered table and a feature dataset theirs. Other connections' rows have none.
+fn row_icon(child: &Value) -> Option<&'static str> {
+    if child["what"] == "dataset" {
+        return Some("catalog");
+    }
+    match child["item"].as_str()? {
+        "featureClass" => match child["geometry"].as_str()? {
+            "points" => Some("point_layer"),
+            "lines" => Some("line_layer"),
+            "polygons" => Some("polygon_layer"),
+            _ => None,
+        },
+        "table" => Some("table"),
+        _ => None,
+    }
+}
+
+/// Paints a row's icon ([`row_icon`]) at the start of the row, when it has one.
+fn paint_row_icon(ui: &mut Ui, t: &Tokens, child: &Value) {
+    if let Some(icon) = row_icon(child) {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 16.0), Sense::hover());
+        crate::icons::paint(ui.painter(), r, icon, t.icon, t.accent);
+    }
+}
+
 fn picked(app: &RustGisApp, conn: &str, key: &str) -> bool {
     app.ui.connection_tree.picks.iter().any(|p| p.conn == conn && p.key == key)
 }
@@ -570,6 +596,7 @@ fn level(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, node: &s
 fn branch(
     app: &mut RustGisApp,
     ui: &mut Ui,
+    t: &Tokens,
     c: &Connection,
     child: &Value,
     node: Option<&str>,
@@ -588,6 +615,7 @@ fn branch(
         if !(what == "folder" && node.is_none()) {
             ui.label(RichText::new(what_label(what)).small().weak());
         }
+        paint_row_icon(ui, t, child);
         let r = ui.add(Label::new(child["name"].as_str().unwrap_or("")).sense(Sense::click()));
         clicked = r.clicked();
         if node.is_some() {
@@ -611,11 +639,11 @@ fn branch(
 fn children(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, listing: &Listing, list: &[Value]) {
     for child in list {
         if let Some(node) = child["node"].as_str() {
-            branch(app, ui, c, child, Some(node), |app, ui| level(app, ui, t, c, node));
+            branch(app, ui, t, c, child, Some(node), |app, ui| level(app, ui, t, c, node));
             continue;
         }
         if let Some(inline) = child["children"].as_array() {
-            branch(app, ui, c, child, None, |app, ui| {
+            branch(app, ui, t, c, child, None, |app, ui| {
                 children(app, ui, t, c, listing, inline);
                 if inline.is_empty() {
                     ui.label(RichText::new(tl!("Nothing here")).small().weak());
@@ -623,16 +651,17 @@ fn children(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, listi
             });
             continue;
         }
-        dataset(app, ui, c, listing, child);
+        dataset(app, ui, t, c, listing, child);
     }
 }
 
 /// A dataset: click selects it, double-click adds it, the menu adds it (with options).
-fn dataset(app: &mut RustGisApp, ui: &mut Ui, c: &Connection, listing: &Listing, child: &Value) {
+fn dataset(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, listing: &Listing, child: &Value) {
     let name = child["name"].as_str().unwrap_or("");
     let is_picked = picked(app, &c.id, child["key"].as_str().unwrap_or(""));
     let r = ui
         .horizontal(|ui| {
+            paint_row_icon(ui, t, child);
             let r = ui.selectable_label(is_picked, name);
             ui.label(RichText::new(what_label(child["what"].as_str().unwrap_or(""))).small().weak());
             r
@@ -705,6 +734,21 @@ mod tests {
     use std::io::{Read, Write};
 
     type Harness = egui_kittest::Harness<'static, RustGisApp>;
+
+    /// A geodatabase's rows have icons: a feature class its kind of geometry's, a table and a
+    /// feature dataset theirs. Other rows keep none.
+    #[test]
+    fn geodatabase_rows_have_their_icons() {
+        let icon = |v: Value| row_icon(&v);
+        assert_eq!(icon(json!({"what": "table", "item": "featureClass", "geometry": "points"})), Some("point_layer"));
+        assert_eq!(icon(json!({"what": "table", "item": "featureClass", "geometry": "lines"})), Some("line_layer"));
+        assert_eq!(icon(json!({"what": "table", "item": "featureClass", "geometry": "polygons"})), Some("polygon_layer"));
+        assert_eq!(icon(json!({"what": "table", "item": "featureClass"})), None);
+        assert_eq!(icon(json!({"what": "table", "item": "table"})), Some("table"));
+        assert_eq!(icon(json!({"what": "dataset", "node": "dataset:V2F0ZXI"})), Some("catalog"));
+        assert_eq!(icon(json!({"what": "table", "detail": "MULTIPOLYGON"})), None);
+        assert_eq!(icon(json!({"what": "folder"})), None);
+    }
 
     fn harness() -> Harness {
         egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).with_step_dt(0.05).build_ui_state(
