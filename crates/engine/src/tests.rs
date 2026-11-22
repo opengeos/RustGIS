@@ -13688,16 +13688,32 @@ fn scale_bars_and_grids_take_a_label_size() {
     assert_eq!(said(&s, mark), "", "14 points fit its 12 mm box");
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": bar, "textSize": 40})).unwrap();
-    assert!(said(&s, mark).contains("its box is too short for its labels"), "{}", said(&s, mark));
+    assert!(said(&s, mark).contains("its box is too small for its labels"), "{}", said(&s, mark));
     let mark = s.notice_mark();
-    s.run("layout.update", &json!({"element": bar, "h": 60, "y": 20})).unwrap();
-    assert_eq!(said(&s, mark), "", "a taller box holds them");
+    s.run("layout.update", &json!({"element": bar, "h": 60, "w": 150, "y": 20})).unwrap();
+    assert_eq!(said(&s, mark), "", "a larger box holds them");
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": bar, "h": 12})).unwrap();
-    assert!(said(&s, mark).contains("its box is too short"), "{}", said(&s, mark));
+    assert!(said(&s, mark).contains("its box is too small"), "{}", said(&s, mark));
+    // Its frame drawn at another scale or zoomed changes its labels: a bar that doesn't fit is told
+    // then too, and one that fits isn't.
+    for change in
+        [("layout.update", json!({"element": frame, "scale": 25_000_000.0})), ("layout.frameZoom", json!({"element": frame, "to": "view"}))]
+    {
+        let mark = s.notice_mark();
+        s.run(change.0, &change.1).unwrap();
+        assert!(said(&s, mark).contains("its box is too small"), "{change:?}: {}", said(&s, mark));
+    }
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
     assert_eq!(said(&s, mark), "", "the default fits");
+    for change in
+        [("layout.update", json!({"element": frame, "scale": 30_000_000.0})), ("layout.frameZoom", json!({"element": frame, "to": "view"}))]
+    {
+        let mark = s.notice_mark();
+        s.run(change.0, &change.1).unwrap();
+        assert_eq!(said(&s, mark), "", "{change:?}");
+    }
 
     s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "step": 10})).unwrap();
     assert_eq!(grid_size(&s), GRID_LABEL_PT);

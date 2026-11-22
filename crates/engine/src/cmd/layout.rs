@@ -5508,13 +5508,19 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Its frame drawn at another scale or width, or the text under its bar changed: a
     // publication's scale bar box measured again.
-    if let Some(basis) = basis {
-        let given = |keys: &[&str]| keys.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    let given = |keys: &[&str]| keys.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    let refit = basis.filter(|basis| {
         // A text size given back (`null`) changes the bar's labels too.
         let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || p.get("textSize").is_some());
-        if (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled {
-            refit_scale_box(s, li, &basis);
-        }
+        (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled
+    });
+    // A map frame drawn at another view: its scale bars' lengths and labels change (#2581).
+    let frame_view = given(&["scale", "center", "bearing", "pitch", "map"])
+        && s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| matches!(e.kind, ElementKind::MapFrame { .. }));
+    if frame_view {
+        frame_view_changed(s, li, id, refit.as_ref());
+    } else if let Some(basis) = &refit {
+        refit_scale_box(s, li, basis);
     }
     // After the scale box is refitted: a text is measured in the box it is saved with.
     if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) || BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some()) {
@@ -5629,6 +5635,21 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         size: *size,
         bold: *bold,
     })
+}
+
+/// A map frame `frame` of the layout `li` drawn at another view: a publication's scale bar box of
+/// it measured again from `basis` ([`refit_scale_box`], #1379), then each scale bar of the frame
+/// told whether its labels still fit (#2581), as its length and labels follow the frame's scale.
+fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&BoxBasis>) {
+    if let Some(basis) = basis.filter(|b| b.frame == frame) {
+        refit_scale_box(s, li, basis);
+    }
+    let bars: Vec<u32> = s.project.layouts.get(li).map_or_else(Vec::new, |l| {
+        l.elements.iter().filter(|e| matches!(e.kind, ElementKind::ScaleBar { frame: f, .. } if f == frame)).map(|e| e.id).collect()
+    });
+    for bar in bars {
+        say_text_fit(s, li, bar);
+    }
 }
 
 /// A publication's scale bar box measured again after its frame's scale or width changed (#1379):
@@ -5763,9 +5784,7 @@ fn frame_zoom(s: &mut Session, p: &Value) -> CmdResult {
         }
         o => return Err(format!("unknown zoom '{o}'")),
     }
-    if let Some(basis) = basis.filter(|b| b.frame == frame) {
-        refit_scale_box(s, li, &basis);
-    }
+    frame_view_changed(s, li, frame, basis.as_ref());
     Ok(json!({"element": frame}))
 }
 
