@@ -35,7 +35,7 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: string, "page"?: "letter"|"legal"|"tabloid"|"a5"|"a4"|"a3"|"a2"|"a1"|"a0", "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "template"?: "map" (frame, title, legend, north arrow, scale bar; the default)|"blank"}"#,
         ),
         C::new("layout.publication", "New Publication Layout", "Publish › Layout", publication).inputs(publication_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
-            r#"{"profile"?: "a4" (the default) | "letter"|"legal"|"tabloid"|"a5"|"a3"|"a2"|"a1"|"a0" (a sheet turned to portrait or landscape, whichever the area's map comes out larger on: its extent east to west against north to south, on the map's projection) | a size with its orientation: "a4-portrait"|"a4-landscape"|"letter-portrait"|"tabloid-landscape"|… for each of those sizes (a sheet: frame, title, subtitle, the map, a boxed footer, all scaled to the sheet)|"figure-1col" (90 mm)|"figure-1.5col" (140 mm)|"figure-2col" (190 mm)|"thesis-full" (160 × 225 mm)|"thesis-half" (160 × 110 mm) (a figure: the map edge to edge, its title and sources left to the caption), "extent"?: [west, south, east, north] in degrees that must fit (default: the map view), "name"?: string, "title"?: text, "subtitle"?: text, "sources"?: text | [texts], "reference"?: text | [texts] (default: the projection, datum and graticule), "note"?: text, "author"?: text (default: "Made with RustGIS · {date}"; "" or [] for none), "headings"?: [the sources' heading, the reference's heading, an editorial column's heading], "locator"?: "globe" (a globe with the area outlined; the default on sheets, but for a map on the globe with no extent, the globe seen whole, which has none and no scale bar either, the globe filling its frame) | "inset" (the surrounding region, the area outlined) | "none" (the default on figures), "decimal"?: "." (the default) | "," (graticule, scale bar and colorbar numbers and {scale} with a decimal comma: 0,05 and 1:6.300.000), "colorbar"?: "auto" (the default: the top visible raster with a colour scale, not drawn by classes, gets one, under the legend in its box; a raster drawn by classes has them in the legend's rows instead) | "none" (no colorbar, and the legend's box has no room for one), "veil"?: true (the default: when no shape of the legend fits, a map that runs on past the extent, with a long legend, has what is outside the extent veiled and its surrounds grouped there, at up to half the scale on a sheet) | false (never veiled, and drawn at its scale; the map may still move aside), "contextInLegend"?: false (the default: layers the placement takes as context around the data, polygons only outlined or, beside a layer drawn by classes or a raster, in one colour and running on past the frame, are left out of the legend, which a warning names) | true (the legend lists them), "northArrow"?: "auto" (the default: none when the extent spans 20° or more on its longer side, where the graticule gives north, which a warning says) | "always" | "none", "legendBox"?: "auto" (the default: over the map, the legend has no box where the map shows nothing under it but its light plain paper or water, with no layer, context, basemap shape or graticule line there and no veil; the answer's "legendBox" says whether it has one) | "always", "style"?: "classic" (the default: the title over the map, the footer under it) | "banner" (the title and subtitle in a band of the accent colour across the top) | "panel" (the map at the left, a panel at the right with the title, locator, legend, sources and reference) | "editorial" (the title large in serif, a column at the right with the note, the locator and the legend) | "modular" (cards on a light page: the map, the locator and the legend each in one, the sources and reference in tinted ones) | "poster" (the page in the accent colour, the title in light text, the map in a light card, the footer in darker blocks) (a sheet's arrangement; figures leave it to the caption), "accent"?: a colour as #RRGGBB (the style's colour: its band, panel tint, headings and rules, a poster's page), "arrangement"?: "best" (the default: the favourite, each arrangement by name and each saved with layout.arrangement laid out, the one moving the least area off its corners kept, then the one leaving the least over the data, the favourite on a tie) | "favourite" (layout.arrangement's) | an arrangement by name (built in or saved) or corner by corner, as layout.arrangement takes (the corners the locator, north arrow, legend and scale bar are at home in; one covering what the map draws there still moves), "coverage"?: "*.png" (writes the coverage grid the placement searched, as it settled on it, three pixels a cell: what the map draws dark, the free cells white, both tinted blue in the strips the graticule's labels keep, the surrounds placed over the map outlined in red; the answer gives its path)} → a new layout of the active map at a round scale, its texts wrapped to their boxes; {projection}, {datum} and {grid} in the texts are filled from the map"#,
+            r#"{"profile"?: "a4" (the default) | "letter"|"legal"|"tabloid"|"a5"|"a3"|"a2"|"a1"|"a0" (a sheet turned to portrait or landscape, whichever the area's map comes out larger on: its extent east to west against north to south, on the map's projection) | a size with its orientation: "a4-portrait"|"a4-landscape"|"letter-portrait"|"tabloid-landscape"|… for each of those sizes (a sheet: frame, title, subtitle, the map, a boxed footer, all scaled to the sheet)|"figure-1col" (90 mm)|"figure-1.5col" (140 mm)|"figure-2col" (190 mm)|"thesis-full" (160 × 225 mm)|"thesis-half" (160 × 110 mm) (a figure: the map edge to edge, its title and sources left to the caption), "extent"?: [west, south, east, north] in degrees that must fit (default: the map view), "name"?: string, "title"?: text, "subtitle"?: text, "sources"?: text | [texts], "reference"?: text | [texts] (default: the projection, datum and graticule), "note"?: text, "author"?: text (default: "Made with RustGIS · {date}"; "" or [] for none), "headings"?: [the sources' heading, the reference's heading, an editorial column's heading], "locator"?: "globe" (a globe with the area outlined; the default on sheets, but for a map on the globe with no extent, the globe seen whole, which by default has no locator (one asked for by name is drawn) and no scale bar, the globe filling its frame) | "inset" (the surrounding region, the area outlined) | "none" (the default on figures), "decimal"?: "." (the default) | "," (graticule, scale bar and colorbar numbers and {scale} with a decimal comma: 0,05 and 1:6.300.000), "colorbar"?: "auto" (the default: the top visible raster with a colour scale, not drawn by classes, gets one, under the legend in its box; a raster drawn by classes has them in the legend's rows instead) | "none" (no colorbar, and the legend's box has no room for one), "veil"?: true (the default: when no shape of the legend fits, a map that runs on past the extent, with a long legend, has what is outside the extent veiled and its surrounds grouped there, at up to half the scale on a sheet) | false (never veiled, and drawn at its scale; the map may still move aside), "contextInLegend"?: false (the default: layers the placement takes as context around the data, polygons only outlined or, beside a layer drawn by classes or a raster, in one colour and running on past the frame, are left out of the legend, which a warning names) | true (the legend lists them), "northArrow"?: "auto" (the default: none when the extent spans 20° or more on its longer side, where the graticule gives north, which a warning says) | "always" | "none", "legendBox"?: "auto" (the default: over the map, the legend has no box where the map shows nothing under it but its light plain paper or water, with no layer, context, basemap shape or graticule line there and no veil; the answer's "legendBox" says whether it has one) | "always", "style"?: "classic" (the default: the title over the map, the footer under it) | "banner" (the title and subtitle in a band of the accent colour across the top) | "panel" (the map at the left, a panel at the right with the title, locator, legend, sources and reference) | "editorial" (the title large in serif, a column at the right with the note, the locator and the legend) | "modular" (cards on a light page: the map, the locator and the legend each in one, the sources and reference in tinted ones) | "poster" (the page in the accent colour, the title in light text, the map in a light card, the footer in darker blocks) (a sheet's arrangement; figures leave it to the caption), "accent"?: a colour as #RRGGBB (the style's colour: its band, panel tint, headings and rules, a poster's page), "arrangement"?: "best" (the default: the favourite, each arrangement by name and each saved with layout.arrangement laid out, the one moving the least area off its corners kept, then the one leaving the least over the data, the favourite on a tie) | "favourite" (layout.arrangement's) | an arrangement by name (built in or saved) or corner by corner, as layout.arrangement takes (the corners the locator, north arrow, legend and scale bar are at home in; one covering what the map draws there still moves), "coverage"?: "*.png" (writes the coverage grid the placement searched, as it settled on it, three pixels a cell: what the map draws dark, the free cells white, both tinted blue in the strips the graticule's labels keep, the surrounds placed over the map outlined in red; the answer gives its path)} → a new layout of the active map at a round scale, its texts wrapped to their boxes; {projection}, {datum} and {grid} in the texts are filled from the map"#,
         ),
         C::new("layout.arrangement", "Favourite Arrangement", "Publish › Layout", arrangement).roles(&[]).effects(crate::policy::Effects::NONE).view().params(
             r#"{"favourite"?: "classic" (the locator top left, the north arrow top right, the legend bottom left, the scale bar bottom right) | "mirrored" | "legendRight" | "legendTop" | {"locator", "northArrow", "legend", "scaleBar": "top-left"|"top-right"|"bottom-left"|"bottom-right", each a corner of its own} | a saved arrangement's name, "save"?: a name (1 to 40 characters, not a built-in one nor "best", "favourite", "custom" or "veil"; one saved under it already, case aside, is replaced) to save "arrangement" under (at most 20 saved), "arrangement"?: what "save" saves: an arrangement by name, or a corner for each surround as "favourite" takes them (refused without "save"), "remove"?: a saved arrangement's name (a favourite named after it keeps its corners, unless "favourite" gives another)} → the favourite arrangement of publication layouts and those saved by name (kept with the app's preferences), the favourite's corners, the arrangements by name and the saved ones' corners; a removal, then a save, then the favourite; with none of them given, they are only shown"#,
@@ -73,6 +73,7 @@ pub fn commands() -> Vec<C> {
             if let Some(l) = s.project.layouts.get_mut(i) {
                 l.name = unique.clone();
             }
+            super::say_name_cut(s, "Rename Layout", "the name given", &name, &unique);
             Ok(json!({"name": unique}))
         }).inputs(named_object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName": string}"#),
@@ -80,14 +81,22 @@ pub fn commands() -> Vec<C> {
         // are per layout, so legends and scale bars stay on their frames, which show the same maps.
         C::new("layout.duplicate", "Duplicate Layout", "Browser", |s, p| {
             let i = index(s, &by_name(p))?;
+            // A name given past the limit is refused, as layout.rename refuses it, not cut (#2639).
+            let given = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty());
+            let given = given.map(|n| super::within("newName", "a layout's name", n, super::MAX_NAME)).transpose()?;
             let mut l = s.project.layouts.get(i).ok_or("open a layout first")?.clone();
-            l.name = super::copy_name(ps(p, "newName"), &l.name, |n| s.project.layouts.iter().any(|x| x.name.eq_ignore_ascii_case(n)));
-            let name = l.name.clone();
+            let (name, cut) = super::copy_name("Duplicate Layout", given.as_deref(), &l.name, |n| {
+                s.project.layouts.iter().any(|x| x.name.eq_ignore_ascii_case(n))
+            });
+            l.name = name.clone();
             if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
                 return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
             }
             s.project.layouts.insert(i + 1, l);
             s.active_layout = Some(i + 1);
+            if let Some(cut) = cut {
+                s.notify(cut, false);
+            }
             Ok(json!({"name": name, "layout": i + 1}))
         }).inputs(named_object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName"?: string (default: "<layout> copy")}"#),
@@ -225,10 +234,15 @@ fn unlocked(l: &Layout, id: u32) -> Result<(), String> {
     }
 }
 
-fn unique_name(s: &Session, base: &str) -> String {
+/// `base` (trimmed; "Layout" when blank), numbered when another layout has it, with the notice to
+/// give when that cuts it ([`super::name_cut`]): `command` is the command's title and `whose` says
+/// where the name came from.
+fn unique_name(s: &Session, command: &str, whose: &str, base: &str) -> (String, Option<String>) {
     let base = base.trim();
     let base = if base.is_empty() { "Layout" } else { base };
-    numbered(base, |n| s.project.layouts.iter().any(|l| l.name.eq_ignore_ascii_case(n)))
+    let name = numbered(base, |n| s.project.layouts.iter().any(|l| l.name.eq_ignore_ascii_case(n)));
+    let cut = super::name_cut(command, whose, base, &name);
+    (name, cut)
 }
 
 /// (width, height) in mm from page/orientation/width/height parameters.
@@ -297,7 +311,8 @@ pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
         &json!({"page": ps(p, "page").unwrap_or("letter"), "orientation": ps(p, "orientation").unwrap_or("landscape"), "width": p.get("width"), "height": p.get("height")}),
         None,
     )?;
-    let name = unique_name(s, &super::within("name", "a layout's name", ps(p, "name").unwrap_or("Layout").trim(), super::MAX_NAME)?);
+    let given = super::within("name", "a layout's name", ps(p, "name").unwrap_or("Layout").trim(), super::MAX_NAME)?;
+    let (name, cut) = unique_name(s, "New Layout", "the name given", &given);
     let mut l = Layout::new(name.clone(), w, h);
     match ps(p, "template").unwrap_or("map") {
         "blank" => {}
@@ -343,6 +358,9 @@ pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
+    if let Some(cut) = cut {
+        s.notify(cut, false);
+    }
     Ok(json!({"layout": i, "name": name, "elements": elements}))
 }
 
@@ -1890,7 +1908,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     };
     let scale = round_scale(scale);
     let grid = Grid { step, edges, ..Grid::default() };
-    let name = unique_name(s, ps(p, "name").unwrap_or("Publication"));
+    // A name given past the limit is refused, as layout.new refuses it, not cut (#2639).
+    let given = super::within("name", "a layout's name", ps(p, "name").unwrap_or("Publication").trim(), super::MAX_NAME)?;
+    let (name, name_cut) = unique_name(s, "New Publication Layout", "the name given", &given);
     let mut l = Layout::new(name.clone(), w, h);
     l.decimal_comma = comma;
     let (over, under): (Vec<_>, Vec<_>) = page_wide.into_iter().partition(|e| e.3);
@@ -1947,6 +1967,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         None if sheet => (0.24 * fw.min(fh)).clamp(25.0 * k, 70.0 * k),
         None => (0.3 * fw.min(fh)).clamp(18.0, 45.0),
     };
+    let mut locator_cut = None;
     let locator_map = match locator {
         Locator::None => None,
         Locator::Globe => {
@@ -1958,7 +1979,11 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             let orphan = locator_orphan(s);
             let name = match orphan.and_then(|i| s.project.maps.get(i)) {
                 Some(x) => x.name.clone(),
-                None => numbered(&base, |n| s.project.maps.iter().any(|x| x.name.eq_ignore_ascii_case(n))),
+                None => {
+                    let name = numbered(&base, |n| s.project.maps.iter().any(|x| x.name.eq_ignore_ascii_case(n)));
+                    locator_cut = super::name_cut("New Publication Layout", "the locator map's name", &base, &name);
+                    name
+                }
             };
             // A new map of what the globe draws, not a clone of the whole map (every layer's
             // features): its basemap (the land and borders around the area), graticule and body,
@@ -2497,8 +2522,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                 }
             }
             if let Some(at_scale) = unknown_at {
+                let or_veiled = if may_veil { " or veiled" } else { "" };
                 warnings.push(format!(
-                    "the map isn't moved or veiled at 1:{at_scale:.0} for the legend's room: a layer there is still reading, a legend picture still loading, or a layer's source can't be read through (exporting says why)"
+                    "the map isn't moved{or_veiled} at 1:{at_scale:.0} for the legend's room: a layer there is still reading, a legend picture still loading, or a layer's source can't be read through (exporting says why)"
                 ));
             }
             // A move changes what the frame shows past the extent, so it is said, as the veil and
@@ -2725,7 +2751,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // unveiled map; the map under them stays unveiled, which is said too.
     if let Some((x, y, w, h)) = veiled {
         warnings.push(
-            "what the map draws outside the extent is veiled, for the legend's room, but for the strips under the graticule's labels, and the surrounds sit there: \"veil\": false leaves it unveiled"
+            "what the map draws outside the extent is veiled to make room for the legend (except the strips under the graticule's labels), and the surrounds are grouped there: \"veil\": false leaves it unveiled"
                 .into(),
         );
         let (x0, y0) = (x.max(area.0), y.max(area.1));
@@ -2942,6 +2968,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
+    for cut in [name_cut, locator_cut].into_iter().flatten() {
+        s.notify(cut, false);
+    }
     let locator = locator_map.map(|(map, ..)| map);
     Ok(
         json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend_cols, "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
@@ -3112,6 +3141,7 @@ fn duplicate_element(s: &mut Session, p: &Value) -> CmdResult {
         c.visible = e.visible;
         c.background = e.background;
     }
+    super::say_name_cut(s, "Duplicate Element", "the copy's name", &e.name, &name);
     Ok(json!({"element": copy, "name": name}))
 }
 
@@ -3270,6 +3300,85 @@ fn corner_radius(p: &Value, d: f64) -> Result<f64, String> {
         Some(v) => {
             v.as_f64().filter(|r| r.is_finite() && *r >= 0.0).map(|r| r.min(50.0)).ok_or_else(|| "radius is millimetres, 0 or more".into())
         }
+    }
+}
+
+/// The shape whose outline `width` (and a rectangle's `radius`) a layout command reads, by the
+/// element's kind: what [`held_to_limits`] checks.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    Rectangle,
+    Ellipse,
+    Line,
+}
+
+impl Shape {
+    fn of_kind(kind: &ElementKind) -> Option<Shape> {
+        match kind {
+            ElementKind::Rectangle { .. } => Some(Shape::Rectangle),
+            ElementKind::Ellipse { .. } => Some(Shape::Ellipse),
+            ElementKind::Line { .. } => Some(Shape::Line),
+            _ => None,
+        }
+    }
+
+    fn of_name(kind: &str) -> Option<Shape> {
+        match kind {
+            "rectangle" => Some(Shape::Rectangle),
+            "ellipse" | "circle" => Some(Shape::Ellipse),
+            "line" | "arrow" => Some(Shape::Line),
+            _ => None,
+        }
+    }
+}
+
+/// What a layout command holds to a limit instead of taking as given (#2639): a shape's outline
+/// `width` (0 to 50 points; a line's from 0.1), a rectangle's `radius` (up to 50 mm), and a
+/// background's width, radius and padding, each said with the value asked and the one kept. A
+/// value the command refuses (not a number, negative where that isn't taken) isn't said here.
+fn held_to_limits(p: &Value, shape: Option<Shape>) -> Vec<String> {
+    use rustgis_map::layout::{MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH};
+    let mut said = Vec::new();
+    let mut hold = |key: &str, asked: f64, kept: f64, range: &str| {
+        if asked != kept {
+            said.push(format!("{key} {asked} held to {kept} ({range})"));
+        }
+    };
+    if let Some(shape) = shape {
+        if let Some(w) = f(p, "width") {
+            let least = if shape == Shape::Line { 0.1 } else { 0.0 };
+            hold("width", w, w.clamp(least, 50.0), if shape == Shape::Line { "0.1 to 50 points" } else { "0 to 50 points" });
+        }
+        if shape == Shape::Rectangle
+            && let Some(r) = p.get("radius").and_then(Value::as_f64).filter(|r| r.is_finite() && *r >= 0.0)
+        {
+            hold("radius", r, r.min(50.0), "up to 50 mm");
+        }
+    }
+    if let Some(o) = p.get("background").and_then(Value::as_object) {
+        for (k, max, unit) in
+            [("width", MAX_BACKGROUND_WIDTH, "points"), ("radius", MAX_BACKGROUND_RADIUS, "mm"), ("padding", MAX_BACKGROUND_PADDING, "mm")]
+        {
+            if let Some(v) = o.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0) {
+                hold(&format!("background {k}"), v, v.min(max), &format!("up to {max} {unit}"));
+            }
+        }
+    }
+    said
+}
+
+/// A frame's extent indicator's or border's `width` in `p` (that object) held to `range` points,
+/// said as [`held_to_limits`] says it; `what` names the setting ("extent indicator width").
+fn held_width(p: &Value, what: &str, range: (f64, f64)) -> Option<String> {
+    let w = f(p, "width")?;
+    let kept = w.clamp(range.0, range.1);
+    (w != kept).then(|| format!("{what} {w} held to {kept} ({} to {} points)", range.0, range.1))
+}
+
+/// Says what [`held_to_limits`] found, in one notice for the command `title`.
+fn say_held(s: &mut Session, title: &str, held: Vec<String>) {
+    if !held.is_empty() {
+        s.notify(format!("{title}: {}", held.join("; ")), false);
     }
 }
 
@@ -3499,7 +3608,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     // A grid's "labels" is a bool and a legend's an object (read with it); on any other kind, or as
     // anything else on a grid, it is refused rather than left unread.
     match p.get("labels").filter(|v| !v.is_null()) {
-        Some(v) if kind == "grid" && !v.is_boolean() => return Err("a grid's labels is true or false".into()),
+        Some(v) if kind == "grid" && !v.is_boolean() => return Err("a grid's \"labels\" is true or false".into()),
         Some(_) if kind != "legend" && kind != "grid" => return Err(ONLY_LEGEND_LABELS.into()),
         _ => {}
     }
@@ -3792,6 +3901,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
                 *extent_color = color;
                 *extent_width = width;
             }
+            let range = (rustgis_map::layout::MIN_INDICATOR_WIDTH, rustgis_map::layout::MAX_INDICATOR_WIDTH);
+            say_held(s, "Add Element", held_width(p, "extent indicator width", range).into_iter().collect());
             return Ok(json!({"element": frame}));
         }
         "grid" => {
@@ -3845,6 +3956,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(said) = empty_colorbar {
         s.warn(said);
     }
+    say_held(s, "Add Element", held_to_limits(p, Shape::of_name(kind)));
     let mut out = json!({"element": id});
     if let Some(w) = warning {
         out["warning"] = json!(w);
@@ -4738,7 +4850,7 @@ fn legend_labels(
     let Some(v) = p.get("labels").filter(|v| !v.is_null()) else { return Ok(None) };
     let given = v.as_object().ok_or(LABELS_SHAPE)?;
     if given.len() > MAX_LEGEND_LABELS {
-        return Err(format!("a legend labels at most {MAX_LEGEND_LABELS} layers"));
+        return Err(format!("a legend can label at most {MAX_LEGEND_LABELS} layers"));
     }
     let map = legend_map(input, l, frame)?;
     let mut out: Vec<(String, Option<String>)> = Vec::new();
@@ -4774,7 +4886,7 @@ fn with_labels(labels: &BTreeMap<String, String>, given: Vec<(String, Option<Str
         }
     }
     if out.len() > MAX_LEGEND_LABELS {
-        return Err(format!("a legend labels at most {MAX_LEGEND_LABELS} layers"));
+        return Err(format!("a legend can label at most {MAX_LEGEND_LABELS} layers"));
     }
     Ok(out)
 }
@@ -4918,6 +5030,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     // A north arrow's or scale bar's new look, and a map frame's grid: `"grid": false` removes it,
     // `true` adds the default one, an object changes the options it names, and null (not set)
     // leaves it as it is.
+    let held;
     let (restyled, new_grid, new_indicator, new_border) = {
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         let kind = &l.element(id).ok_or_else(|| format!("no element {id}"))?.kind;
@@ -4955,6 +5068,17 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             (_, Some(_)) => return Err("only map frames have a grid".into()),
             _ => None,
         };
+        let mut said = held_to_limits(p, Shape::of_kind(kind));
+        if let (ElementKind::MapFrame { .. }, Some(Some(_))) = (kind, &indicator)
+            && let Some(v) = p.get("extentIndicator")
+        {
+            let range = (rustgis_map::layout::MIN_INDICATOR_WIDTH, rustgis_map::layout::MAX_INDICATOR_WIDTH);
+            said.extend(held_width(v, "extent indicator width", range));
+        }
+        if let (ElementKind::MapFrame { .. }, Some(v @ Value::Object(_))) = (kind, p.get("border")) {
+            said.extend(held_width(v, "border width", (0.0, rustgis_map::layout::MAX_FRAME_BORDER_WIDTH)));
+        }
+        held = said;
         (restyle(kind, p)?, grid, indicator, border)
     };
     // A line turned to an "angle" or made a "length" long, about its centre: its new box,
@@ -5369,6 +5493,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
         say_text_fit(s, li, id);
     }
+    say_held(s, "Element Properties", held);
     if let Some(w) = font_told {
         return Ok(json!({"warning": w}));
     }
@@ -5477,7 +5602,7 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
 /// or in another font, naming a map series page (which differs from page to page), or of a frame
 /// other than the first (whose map the page fills the text from) is left as it is; so is a text
 /// longer than the widest box a publication gives. Only a box as wide as `before` (what it was
-/// measured from before the change: its frame, bar and text) makes it is measured again: one set
+/// measured from before the change: its frame, bar and text) is measured again: one set
 /// by hand keeps its width. A change to the text under the bar or to the bar's units or divisions
 /// measures it again too. A box that would then cover the legend, locator or north arrow, which
 /// it didn't, stays as it was, which is said.
@@ -5743,6 +5868,48 @@ pub fn layout_bytes_with(
     )?
 }
 
+/// Layout `li`'s current page as a PNG at `dpi`, or only its part in `region` (`[x, y, w, h]` in
+/// millimetres from the page's top left), drawn at that `dpi` rather than cut out of the whole
+/// page: what the assistant's `view_map` shows of a layout. It says what exporting the page says
+/// of it: texts cut off, named fonts still being read, frames drawn without their cast shadows.
+pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>) -> Result<Vec<u8>, String> {
+    let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
+    if let Some(note) = named_fonts_unread(&layout) {
+        s.warn(note);
+    }
+    let page = layout.series.as_ref().map_or(0, |sr| sr.page);
+    let series = series_info(s, li, page);
+    let info = rustgis_render::layout::PageInfo {
+        page: page + 1,
+        pages: series.as_ref().map_or(1, |i| i.0),
+        page_name: series.map(|i| i.1).unwrap_or_default(),
+    };
+    let mut clipped = rustgis_render::layout::clipped_text(&layout, &s.project.maps, dpi, &info);
+    // A region says the texts cut off in it, not those elsewhere on the page it doesn't show.
+    if let Some(r) = region {
+        clipped.retain(|(id, _)| layout.element(*id).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
+    }
+    let img = super::share::saying_shadows(s, "The layout", |s| match region {
+        Some(r) => rustgis_render::layout::render_region(&layout, &mut s.project.maps, dpi, &info, r),
+        None => rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info),
+    })?;
+    if let Some(note) = rustgis_render::layout::clipped_text_notice(&layout, &clipped) {
+        s.warn(note);
+    }
+    img.encode_png().map_err(|e| e.to_string())
+}
+
+/// What `view_map` draws when it is given a `layout`: the layout's frames' maps and their tiles,
+/// as exporting it reads them, rather than the active map's. `None` without a `layout`.
+pub(crate) fn view_inputs(input: &super::InputContext<'_>, p: &Value) -> Option<Result<super::Inputs, String>> {
+    p.get("layout").filter(|v| !v.is_null()).map(|_| layout_inputs(input, p))
+}
+
+/// The layout `p` names (`layout`, a name or an index), as Export Layout finds it.
+pub fn named(s: &Session, p: &Value) -> Result<usize, String> {
+    index(s, p)
+}
+
 fn layout_bytes_inner(
     s: &mut Session,
     li: usize,
@@ -5952,8 +6119,10 @@ pub(crate) fn georeference_notices(
         let n = corners.len();
         s.notify(
             format!(
-                "The PDF georeferences {n} map frame{} by its corners in longitude/latitude, as its coordinate system can't be written as WKT: on a 9 × 9 grid over each, it puts places within 0.5 mm of where they are drawn, not proven between them ({})",
+                "The PDF georeferences {n} map frame{} by {} corners in longitude/latitude, as {} can't be written as WKT: on a 9 × 9 grid over each, it puts places within 0.5 mm of where they are drawn, not proven between them ({})",
                 plural(n),
+                if n == 1 { "its" } else { "their" },
+                if n == 1 { "its coordinate system" } else { "their coordinate systems" },
                 listed(corners)
             ),
             false,
@@ -6105,7 +6274,11 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
             s.notify(notice, false);
         }
     }
-    l.name = unique_name(s, &l.name);
+    let (name, cut) = unique_name(s, "Import Layout", "the layout file's name", &l.name);
+    l.name = name;
+    if let Some(cut) = cut {
+        s.notify(cut, false);
+    }
     // Frames showing maps this project lacks show the active map instead.
     let fallback = s.map().name.clone();
     let names: Vec<String> = s.project.maps.iter().map(|m| m.name.to_ascii_lowercase()).collect();
@@ -6129,9 +6302,6 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
         );
     }
     let name = l.name.clone();
-    if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
-        return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
-    }
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);

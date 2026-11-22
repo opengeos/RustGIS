@@ -287,10 +287,10 @@ fn fetch_registry(s: &mut Session, url: &str) -> Result<Vec<rustgis_plugins::reg
         Err(_) => Ok(Vec::new()),
     };
     match applied {
-        Ok(pulled) if !pulled.is_empty() => s.notify(
-            format!("{} plugin(s) were withdrawn from the plugin registry and turned off: {}", pulled.len(), pulled.join(", ")),
-            true,
-        ),
+        // A warning, not an error: the list was read and the withdrawal applied as asked.
+        Ok(pulled) if !pulled.is_empty() => {
+            s.warn(format!("{} plugin(s) were withdrawn from the plugin registry and turned off: {}", pulled.len(), pulled.join(", ")))
+        }
         Ok(_) => {}
         Err(e) => s.warn(format!("{blocklist}: {e}; the last blocklist read, if any, stays in force")),
     }
@@ -452,7 +452,7 @@ fn layers_of(s: &Session) -> Value {
                     "id": l.id, "name": l.name, "raster": l.is_raster(), "visible": l.visible,
                     "geometry": format!("{:?}", l.dataset.geometry_type), "features": l.dataset.features.len(),
                     "selected": l.selection.len(), "active": Some(l.id) == active,
-                    "extent": super::project::bbox(l.extent()), "transparency": l.transparency,
+                    "extent": super::project::bbox(l.extent()), "transparency": super::project::percent(l.transparency),
                     "crs": layer_crs(l).map(crs_name),
                     "group": s.map().group_of(l.id).map(|g| g.name.as_str()),
                     "fields": l.dataset.fields.iter().map(|f| json!({"name": f.name, "type": format!("{:?}", f.ty)})).collect::<Vec<_>>(),
@@ -497,13 +497,13 @@ fn map_crs(m: &rustgis_map::Map) -> Result<rustgis_data::raster::Crs, String> {
                 .and_then(|n| n.parse::<u32>().ok())
                 .or_else(|| rustgis_data::raster::crs::vn2000_epsg(&label).map(u32::from))
                 .and_then(Crs::from_epsg);
-            epsg.ok_or_else(|| format!("{label} has no EPSG code, so GeoJSON can't name it; use an EPSG code"))
+            epsg.ok_or_else(|| format!("{label} isn't a coordinate system RustGIS can name in GeoJSON; use an EPSG code"))
         }
     }
 }
 
 /// The system `host.features` was asked for with `crs`: `None` for WGS 84 (absent, or named so),
-/// `"layer"` the layer's own, `"map"` the map's, else an EPSG code (`"EPSG:32637"` or `32637`).
+/// `"layer"` the layer's own, `"map"` the map's, else an EPSG code (`"EPSG:32637"` or `"32637"`).
 /// Never WKT or a PROJ string: reading one registers a system in the process-wide table, which
 /// any plugin (the request needs no permission) could fill, and the answer names an EPSG code
 /// anyway. Every refusal starts with `crs:`.
@@ -605,7 +605,7 @@ impl Bridge<'_> {
         }
         // Its geometry is longitude/latitude (above); `crs` stays the layer's, as the system it
         // was read in, which `export_error` reads.
-        let ds = rustgis_data::Dataset {
+        let mut ds = rustgis_data::Dataset {
             name: l.name.clone(),
             geometry_type: l.dataset.geometry_type,
             fields: l.dataset.fields.clone(),
@@ -618,12 +618,11 @@ impl Bridge<'_> {
             held_in: rustgis_data::raster::Crs::LonLat,
             shown_in: None,
         };
-        let mut ds = ds;
         let mut member = None;
         if let Some(crs) = target {
             // Only a system `host.addLayer` can read back is named, so a round trip works.
             if crs.epsg() == 0 {
-                return Err(format!("crs: {} has no EPSG code, so GeoJSON can't name it; use an EPSG code", crs.label()));
+                return Err(format!("crs: {} isn't a coordinate system RustGIS can name in GeoJSON; use an EPSG code", crs.label()));
             }
             if crs.is_geocentric() {
                 return Err(format!(
@@ -760,6 +759,19 @@ impl Bridge<'_> {
     }
 }
 
+/// The most characters of a plugin's notice shown.
+const MAX_PLUGIN_NOTICE: usize = 500;
+
+/// What `host.notify` shows of a plugin's `text`: all of it up to [`MAX_PLUGIN_NOTICE`]
+/// characters, else that much and how long it was, so the cut is said (#2639).
+fn plugin_notice(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= MAX_PLUGIN_NOTICE {
+        return text.to_string();
+    }
+    format!("{}… (cut from {n} characters)", text.chars().take(MAX_PLUGIN_NOTICE).collect::<String>())
+}
+
 impl Host for Bridge<'_> {
     fn call(&mut self, op: &str, params: &Value) -> Result<Value, String> {
         match op {
@@ -769,7 +781,7 @@ impl Host for Bridge<'_> {
             "host.features" => self.features(params),
             "host.view" => Ok(view_of(self.s)),
             "host.notify" => {
-                let text: String = ps(params, "text").unwrap_or_default().chars().take(500).collect();
+                let text = plugin_notice(ps(params, "text").unwrap_or_default());
                 let error = b(params, "error").unwrap_or(false);
                 self.s.notify(format!("{}: {text}", self.plugin.manifest.name), error);
                 Ok(Value::Null)
@@ -1322,6 +1334,17 @@ fn capped_error(error: &str, timeout: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin's notice past 500 characters is cut and says how long it was; a short one is shown
+    /// as it is (#2639).
+    #[test]
+    fn a_long_plugin_notice_says_it_was_cut() {
+        assert_eq!(plugin_notice("done"), "done");
+        let edge = "a".repeat(MAX_PLUGIN_NOTICE);
+        assert_eq!(plugin_notice(&edge), edge);
+        let long = plugin_notice(&"é".repeat(MAX_PLUGIN_NOTICE + 7));
+        assert!(long.starts_with(&"é".repeat(MAX_PLUGIN_NOTICE)) && long.ends_with("… (cut from 507 characters)"), "{long}");
+    }
 
     /// Why a session plugin's program was stopped is said; one that ended by itself says nothing.
     #[cfg(not(target_arch = "wasm32"))]

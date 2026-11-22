@@ -12,7 +12,7 @@
 //! their own test, `never_silent_roundtrip.rs`.
 //!
 //! The table includes text, CityJSON, CityGML, KMZ, GeoPackage, FlatGeobuf, GeoParquet, FileGDB,
-//! Shapefile, XLSX, ODS, XLS, XLSB and OSM PBF. More formats and loss kinds remain to add (ROADMAP.md); one loss
+//! Shapefile, XLSX, ODS, XLS, XLSB, OSM PBF and feature-service PBF. More formats and loss kinds remain to add (ROADMAP.md); one loss
 //! does not certify a reader.
 use rustgis_engine::data::loss::LossCode;
 use rustgis_engine::{Project, Session};
@@ -281,6 +281,21 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             gpx(r#"<trk><trkseg><trkpt lat="1" lon="1"/><trkpt lat="2" lon="2"/></trkseg><trkseg><trkpt lat="3" lon="3"/></trkseg></trk>"#),
             Silent("the segment is left out of the track's line"),
         ),
+        // Feature-service PBF has a distinct sniffed parser from OSM PBF.
+        case(
+            "feature-service PBF: a height",
+            "a.feature.pbf",
+            include_bytes!("../../testdata/reading-losses/feature-xy.pbf"),
+            include_bytes!("../../testdata/reading-losses/feature-xyz.pbf"),
+            Imported("1 feature had Z or M values"),
+        ),
+        case(
+            "feature-service PBF: a measure",
+            "a.feature.pbf",
+            include_bytes!("../../testdata/reading-losses/feature-xy.pbf"),
+            include_bytes!("../../testdata/reading-losses/feature-xym.pbf"),
+            Imported("1 feature had Z or M values"),
+        ),
         // OSM PBF: keep the outer polygon while one inner member is lost.
         case(
             "OSM PBF: a missing inner member way",
@@ -409,7 +424,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.xlsx",
             include_bytes!("../../testdata/reading-losses/book-clean.xlsx"),
             include_bytes!("../../testdata/reading-losses/book-error.xlsx"),
-            Silent("the error-valued note cell is read as Null"),
+            Imported("1 spreadsheet error cell was read as empty, in 'note'"),
         ),
     ]);
 
@@ -670,6 +685,23 @@ fn check_workbook(ds: &rustgis_engine::data::Dataset, short_cells: bool) -> std:
     Ok(())
 }
 
+/// The PBF variants differ only in the discarded dimension; fractional XY and attributes survive.
+fn check_feature_pbf(ds: &rustgis_engine::data::Dataset, lossy: bool) -> std::io::Result<()> {
+    use rustgis_engine::data::{Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_engine::geom::Coord;
+    if ds.geometry_type != GeometryType::Point
+        || ds.fields != [Field::new("id", FieldType::Integer), Field::new("name", FieldType::Text)]
+        || ds.features.len() != 1
+        || ds.features[0].id != 1
+        || ds.features[0].geometry != Some(Geometry::Point(Coord::new(11.5, 17.5)))
+        || ds.features[0].attrs != [Value::Int(7), Value::Text("Place".into())]
+        || ds.zm_dropped != lossy
+    {
+        return Err(std::io::Error::other(format!("feature-service PBF retained unexpected data: {ds:?}")));
+    }
+    Ok(())
+}
+
 /// What `layer.addData` did with a file: the notices it gave and whether it added a layer or table,
 /// or why it refused the file.
 type SaidNotices = Vec<(String, Option<LossCode>)>;
@@ -730,11 +762,29 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
             || content == include_bytes!("../../testdata/reading-losses/book-z.ods")
             || content == include_bytes!("../../testdata/reading-losses/book-z.xls")
             || content == include_bytes!("../../testdata/reading-losses/book-z.xlsb");
+        let errors = content == include_bytes!("../../testdata/reading-losses/book-error.xlsx");
+        if errors && report.messages != ["1 spreadsheet error cell was read as empty, in 'note'"] {
+            return Err(std::io::Error::other(format!("native spreadsheet error notice: {report:?}")));
+        }
         if report.skipped != 0
             || native.zm_dropped != height
-            || if height { report.messages.len() != 1 || !report.messages[0].contains("Z or M") } else { !report.messages.is_empty() }
+            || if height {
+                report.messages.len() != 1 || !report.messages[0].contains("Z or M")
+            } else {
+                !errors && !report.messages.is_empty()
+            }
         {
             return Err(std::io::Error::other(format!("native spreadsheet fixture has the wrong loss report: {report:?}")));
+        }
+    }
+    let feature_pbf = file == "a.feature.pbf";
+    let pbf_lossy = content != include_bytes!("../../testdata/reading-losses/feature-xy.pbf");
+    let pbf_messages = if pbf_lossy { vec![rustgis_engine::data::zm_note(Some(1))] } else { vec![] };
+    if feature_pbf {
+        let (native, report) = rustgis_engine::data::esripbf::read(content, "a").map_err(std::io::Error::other)?;
+        check_feature_pbf(&native, pbf_lossy)?;
+        if report.skipped != 0 || report.messages != pbf_messages {
+            return Err(std::io::Error::other(format!("feature-service PBF has the wrong native report: {report:?}")));
         }
     }
     let mut s = Session::new(Project::default());
@@ -763,6 +813,17 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
             && !s.notices_since(mark).is_empty()
         {
             return Err(std::io::Error::other("clean spreadsheet fixture gave a notice"));
+        }
+    }
+    if feature_pbf {
+        if s.map().layers.len() != 1 || !s.project.tables.is_empty() {
+            return Err(std::io::Error::other("feature-service PBF didn't add exactly one layer"));
+        }
+        check_feature_pbf(&s.map().layers[0].dataset, pbf_lossy)?;
+        let notices = s.notices_since(mark);
+        // Require the exact loss count and subject, and no additional notice.
+        if notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>() != pbf_messages {
+            return Err(std::io::Error::other(format!("feature-service PBF has the wrong command notices: {notices:?}")));
         }
     }
     let said = s.notices_since(mark).iter().map(|n| (n.text.clone(), n.loss())).collect();

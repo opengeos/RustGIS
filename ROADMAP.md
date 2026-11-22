@@ -71,9 +71,9 @@ A result is right, or RustGIS says what it lost or assumed
 ([AGENTS.md](AGENTS.md#never-silent)).
 - Known silent losses: DuckDB queries (`ST_Force2D`) drop Z without a notice; the OSM reader leaves out rings that don't close, rings and member ways with
   nodes or ways the file doesn't hold, and inner rings outside every outer one; and the text
-  readers' losses listed as `Silent` in `crates/engine/tests/never_silent_reading.rs`, among them
+  readers' losses listed as `Silent` in `crates/engine/tests/integration/never_silent_reading.rs`, among them
   each vertex's Z in DXF and unreadable coordinates, holes and parts in KML, GeoRSS, MapInfo and
-  DXF, plus geometry-collection members in XLSX/ODS/XLS/XLSB, error-valued attribute cells in XLSX,
+  DXF, plus geometry-collection members in XLSX/ODS/XLS/XLSB,
   and attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
   workbook retains its point but no attributes, without a notice). A fix makes
   its case `Said` _(open)_.
@@ -83,7 +83,8 @@ A result is right, or RustGIS says what it lost or assumed
   KML, KMZ, GPX, GML, GeoRSS,
   DXF, LandXML and MapInfo, with height-loss cases for CityJSON, CityGML, GeoPackage,
   FlatGeobuf, GeoParquet and FileGDB, Z/M-loss and non-UTF-8 text cases for Shapefile, and
-  ring-loss cases for OSM PBF, WKT height/member losses for XLSX, ODS, XLS and XLSB, and
+  ring-loss cases for OSM PBF, separate Z- and M-loss cases for feature-service PBF, and WKT
+  height/member losses for XLSX, ODS, XLS and XLSB, and
   error-cell losses for XLSX; other loss kinds remain.
   XLSM shares the XLSX parser; macros are untested.
   Exports are checked by `never_silent_roundtrip.rs` _(open)_.

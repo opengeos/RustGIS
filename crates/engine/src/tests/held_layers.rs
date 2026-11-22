@@ -217,7 +217,8 @@ fn a_held_layer_is_exported_alike() {
     assert_close(&read[0], &read[1], "data.convert");
 }
 
-/// Geometry calculations and a buffer give the same measures and places.
+/// Geometry calculations give the same measures, and a buffer the same places to within UTM's
+/// scale there.
 #[test]
 fn a_held_layer_is_analysed_alike() {
     let mut ss = both();
@@ -237,8 +238,22 @@ fn a_held_layer_is_analysed_alike() {
             assert!((p - q).abs() <= 1e-6 * p.abs().max(1.0), "{layer}: {a:?} vs {b:?}");
         }
     }
+    // A buffer of 100 km: on the ground in longitude/latitude, flat in UTM (#2032 C2e-3). UTM's
+    // scale runs from 0.99969 at the buffer's west side (10.14°E) to 1.00059 at its east side
+    // (12.86°E, `proj -S`), so the flat 100 km reach 100,017 m to 99,972 m on the ground.
     run_both(&mut ss, "gp.run", &json!({"tool": "buffer", "params": {"input": "Wells", "distance": 100}}));
-    assert_close(&lonlat(&ss[0], "Wells_Buffer"), &lonlat(&ss[1], "Wells_Buffer"), "buffer");
+    let well = lonlat(&ss[0], "Wells")[0].clone();
+    let Some(Geometry::Point(well)) = well else { panic!("{well:?}") };
+    let held_well = held_coords(&ss[1], "Wells")[0][0];
+    for c in &held_coords(&ss[1], "Wells_Buffer")[0] {
+        assert!(((c.x - held_well.x).hypot(c.y - held_well.y) - 100_000.0).abs() < 1e-6, "flat: {c:?}");
+    }
+    for (session, (low, high)) in [(&ss[0], (99_999.99, 100_000.01)), (&ss[1], (99_970.0, 100_020.0))] {
+        let Some(Geometry::Polygon(rings)) = &lonlat(session, "Wells_Buffer")[0] else { panic!("no buffer") };
+        let d: Vec<f64> = rings[0][0].iter().map(|c| rustgis_geom::wgs84_distance_m(well, *c)).collect();
+        let (min, max) = (d.iter().copied().fold(f64::INFINITY, f64::min), d.iter().copied().fold(0.0, f64::max));
+        assert!(min >= low && max <= high, "{min}..{max} m on the ground");
+    }
 }
 
 /// A geometry set, a move in metres and an undo leave the same places, and a held layer keeps
@@ -1338,5 +1353,695 @@ fn the_held_layer_fixture_opens_held() {
         .collect();
     for (c, (x, y)) in at.iter().zip([(683_944.533_251, 5_397_122.834_867), (683_908.073_487, 5_398_234.294_584)]) {
         assert!((c.x - x).abs() < 1e-6 && (c.y - y).abs() < 1e-6, "{c:?}");
+    }
+}
+
+/// Every coordinate of a layer as it holds it ([`Dataset::coord_crs`]), feature by feature.
+fn held_coords(s: &Session, layer: &str) -> Vec<Vec<Coord>> {
+    let l = s.map().layer_by_name(layer).unwrap_or_else(|| panic!("no layer {layer}"));
+    l.dataset
+        .features
+        .iter()
+        .map(|f| {
+            let mut v = Vec::new();
+            if let Some(g) = &f.geometry {
+                g.for_each_coord(|c| v.push(c));
+            }
+            v
+        })
+        .collect()
+}
+
+/// The coordinates as bits, for comparing them exactly.
+fn bits(v: &[Vec<Coord>]) -> Vec<(u64, u64)> {
+    v.iter().flatten().map(|c| (c.x.to_bits(), c.y.to_bits())).collect()
+}
+
+/// A tool that works in its first input's own system (#2032 C2e) is given a layer held in UTM in
+/// UTM, not a longitude/latitude copy, and its new layer is held in UTM too: what it copies keeps
+/// its stored coordinates bit for bit, and what it makes from them (an envelope) is made along
+/// UTM's axes.
+#[test]
+fn a_tool_works_in_its_held_inputs_own_system() {
+    let mut s = session(UTM);
+    s.map_mut().layers.iter_mut().for_each(|l| l.dataset.crs = Some(UTM));
+    let run = |s: &mut Session, tool: &str, input: &str, out: &str| {
+        s.run("gp.run", &json!({"tool": tool, "params": {"input": input, "output": out}})).unwrap_or_else(|e| panic!("{tool}: {e}"));
+        let l = s.map().layer_by_name(out).unwrap_or_else(|| panic!("{tool}: no output"));
+        assert_eq!(l.dataset.coord_crs(), UTM, "{tool}: held in");
+    };
+    for (tool, input, out) in [
+        ("exportFeatures", "Wells", "Exported"),
+        ("polygonToLine", "Parcels", "Outlines"),
+        ("repairGeometry", "Parcels", "Repaired"),
+        ("featureVerticesToPoints", "Roads", "Vertices"),
+        ("splitLineAtVertices", "Roads", "Segments"),
+        ("unsplitLine", "Roads", "Unsplit"),
+    ] {
+        run(&mut s, tool, input, out);
+        let (copied, from) = (bits(&held_coords(&s, out)), bits(&held_coords(&s, input)));
+        let kept = |c: &(u64, u64)| from.contains(c);
+        assert!(!copied.is_empty() && copied.iter().all(kept), "{tool}: its coordinates are the input's, as held");
+    }
+    // Export Features keeps the input's system as the one exports use (#2032 C2e).
+    assert_eq!(s.map().layer_by_name("Exported").unwrap().dataset.crs, Some(UTM));
+    // Each envelope is the box of the parcel's stored UTM coordinates, which in longitude/latitude
+    // is a turned rectangle, not the box of the parcel's longitudes and latitudes.
+    run(&mut s, "featureEnvelopeToPolygon", "Parcels", "Envelopes");
+    let parcels = held_coords(&s, "Parcels");
+    for (i, envelope) in held_coords(&s, "Envelopes").iter().enumerate() {
+        let parcel = parcels.get(i).unwrap();
+        let (min_x, max_x) = parcel.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
+        let (min_y, max_y) = parcel.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.y), b.max(c.y)));
+        for c in envelope {
+            assert!(c.x == min_x || c.x == max_x, "envelope {i}: x {} of {min_x}..{max_x}", c.x);
+            assert!(c.y == min_y || c.y == max_y, "envelope {i}: y {} of {min_y}..{max_y}", c.y);
+        }
+    }
+    // Check Geometry finds nothing wrong with valid squares, in any system.
+    s.run("gp.run", &json!({"tool": "checkGeometry", "params": {"input": "Parcels", "output": "Problems"}})).unwrap();
+    assert!(held_coords(&s, "Problems").is_empty());
+    // A tool working on attributes alone answers as it does for the layer in longitude/latitude.
+    let mut ss = both();
+    let p = json!({"tool": "selectByAttributes", "params": {"input": "Wells", "where": "n >= 4"}});
+    run_both(&mut ss, "gp.run", &p);
+    assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"));
+    assert_eq!(selected(&ss[1], "Wells"), vec![4, 5, 6, 7, 8]);
+    // Summary Statistics and Pivot Table make the same table as for the layer in longitude/latitude.
+    let table = |s: &Session| {
+        let t = &s.project.tables.last().expect("a table").dataset;
+        let cells = (0..t.features.len()).flat_map(|r| (0..t.fields.len()).map(move |f| (r, f))).map(|(r, f)| t.value(r, f).to_string());
+        (t.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>(), cells.collect::<Vec<_>>())
+    };
+    for p in [
+        json!({"tool": "summaryStatistics", "params": {"input": "Wells", "field": "n"}}),
+        json!({"tool": "pivotTable", "params": {"input": "Wells", "fields": "n", "pivot": "name", "value": "n"}}),
+    ] {
+        run_both(&mut ss, "gp.run", &p);
+        let (a, b) = (table(&ss[0]), table(&ss[1]));
+        assert!(!a.1.is_empty(), "{p}: an empty table");
+        assert_eq!(a, b, "{p}");
+    }
+}
+
+/// Merge's other inputs are converted into its first input's own system, where its result is
+/// held: the first's coordinates kept bit for bit, the others' where PROJ puts them; with a
+/// first input in longitude/latitude, everything stays there as before.
+#[test]
+fn merge_converts_its_other_inputs_into_the_firsts_system() {
+    let mut s = session(UTM);
+    let mut plain = Dataset::new("Plain", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    plain.push(Some(Geometry::Point(Coord::new(11.6, 48.75))), vec![Cell::Text("p".into())]);
+    s.map_mut().add_dataset(plain);
+    let merge = |s: &mut Session, inputs: [&str; 2], out: &str| {
+        let p = json!({"tool": "merge", "params": {"inputs": inputs, "attributes": true, "output": out}});
+        s.run("gp.run", &p).unwrap_or_else(|e| panic!("merge: {e}"))
+    };
+    merge(&mut s, ["Wells", "Plain"], "Merged");
+    let merged = s.map().layer_by_name("Merged").unwrap();
+    assert_eq!(merged.dataset.coord_crs(), UTM);
+    let (out, wells) = (held_coords(&s, "Merged"), held_coords(&s, "Wells"));
+    assert_eq!(bits(out.get(..9).unwrap()), bits(&wells), "the wells as held");
+    // echo 48.75 11.6 | cs2cs -f %.6f EPSG:4326 EPSG:32632 (PROJ 9.9.0): 691112.022414 5402926.247736
+    let c = out.get(9).and_then(|v| v.first()).copied().unwrap();
+    assert!((c.x - 691_112.022_414).abs() < 1e-3 && (c.y - 5_402_926.247_736).abs() < 1e-3, "{c:?}");
+    // The other way round, the run works in longitude/latitude, as every run did before.
+    merge(&mut s, ["Plain", "Wells"], "Merged_LonLat");
+    let lonlat_merge = s.map().layer_by_name("Merged_LonLat").unwrap();
+    assert_eq!(lonlat_merge.dataset.coord_crs(), Crs::LonLat);
+    let first = held_coords(&s, "Merged_LonLat").first().and_then(|v| v.first()).copied().unwrap();
+    assert_eq!((first.x, first.y), (11.6, 48.75));
+}
+
+/// An input with a place the first input's system can't hold (a point a quarter of the way round
+/// the Earth from UTM zone 32N's meridian, which PROJ can't convert either) has the run work in
+/// longitude/latitude, as every run did before, and its message says why.
+#[test]
+fn an_input_the_first_ones_system_cant_hold_is_worked_on_in_lonlat() {
+    let mut s = session(UTM);
+    let mut far = Dataset::new("Far", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    // echo 0 99 | cs2cs EPSG:4326 EPSG:32632 (PROJ 9.9.0): * * inf
+    far.push(Some(Geometry::Point(Coord::new(99.0, 0.0))), vec![Cell::Text("far".into())]);
+    s.map_mut().add_dataset(far);
+    let p = json!({"tool": "merge", "params": {"inputs": ["Wells", "Far"], "attributes": true, "output": "Merged"}});
+    let mark = s.notice_mark();
+    s.run("gp.run", &p).unwrap();
+    let merged = s.map().layer_by_name("Merged").unwrap();
+    assert_eq!(merged.dataset.coord_crs(), Crs::LonLat);
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.starts_with("Merge worked in longitude/latitude, not EPSG:32632: Far: feature")), "{said:?}");
+    let last = held_coords(&s, "Merged").last().and_then(|v| v.first()).copied().unwrap();
+    assert_eq!((last.x, last.y), (99.0, 0.0));
+    // A layer the run only names its output after isn't read, so it doesn't decide the system.
+    let p = json!({"tool": "exportFeatures", "params": {"input": "Wells", "output": "Far"}});
+    let answer = s.run("gp.run", &p).unwrap();
+    let id = answer.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.coord_crs(), UTM);
+}
+
+/// A standalone table without geometry (a spreadsheet's rows) joins onto a layer held in UTM as it
+/// does onto one in longitude/latitude, and the joined layer keeps the parcels' places as held.
+#[test]
+fn a_table_joins_onto_a_held_layer() {
+    let mut owners =
+        Dataset::new("Owners", GeometryType::None, vec![Field::new("n", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+    for n in 0..9 {
+        owners.push(None, vec![Cell::Int(n), Cell::Text(format!("owner {n}"))]);
+    }
+    let mut ss = both();
+    for s in &mut ss {
+        s.project.add_table(owners.clone());
+    }
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": "Owners", "joinField": "n", "output": "Owned"}});
+    run_both(&mut ss, "gp.run", &p);
+    let owner = |s: &Session| {
+        let ds = &s.map().layer_by_name("Owned").unwrap().dataset;
+        let f = ds.field_index("owner").unwrap();
+        (0..ds.features.len()).map(|r| ds.value(r, f).to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(owner(&ss[0]), owner(&ss[1]));
+    assert_eq!(owner(&ss[1]).first().map(String::as_str), Some("owner 0"));
+    assert_eq!(ss[1].map().layer_by_name("Owned").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&ss[1], "Owned")), bits(&held_coords(&ss[1], "Parcels")));
+    // Named under a name Join Field also accepts for its target, the layer decides the system too.
+    let p = json!({"tool": "joinField", "params": {"input": "Parcels", "targetField": "n", "join": "Owners", "joinField": "n", "output": "Owned_2"}});
+    ss[1].run("gp.run", &p).unwrap();
+    assert_eq!(ss[1].map().layer_by_name("Owned_2").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&ss[1], "Owned_2")), bits(&held_coords(&ss[1], "Parcels")));
+}
+
+/// Join Field reads only the attributes of its join table, so a place there that UTM can't hold
+/// (99°E on the equator, see [`an_input_the_first_ones_system_cant_hold_is_worked_on_in_lonlat`])
+/// doesn't send the run to longitude/latitude: the parcels keep their stored coordinates.
+#[test]
+fn a_join_tables_places_dont_decide_the_system() {
+    let mut s = session(UTM);
+    let mut far = Dataset::new("Far", GeometryType::Point, vec![Field::new("n", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+    far.push(Some(Geometry::Point(Coord::new(99.0, 0.0))), vec![Cell::Int(0), Cell::Text("far owner".into())]);
+    s.map_mut().add_dataset(far);
+    let mark = s.notice_mark();
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": "Far", "joinField": "n", "output": "Owned"}});
+    s.run("gp.run", &p).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!said.iter().any(|t| t.contains("worked in longitude/latitude")), "{said:?}");
+    assert_eq!(s.map().layer_by_name("Owned").unwrap().dataset.coord_crs(), UTM);
+    assert_eq!(bits(&held_coords(&s, "Owned")), bits(&held_coords(&s, "Parcels")));
+    let ds = &s.map().layer_by_name("Owned").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("owner").unwrap()).to_string(), "far owner");
+    // The same as a standalone table given by its number: read as it is too.
+    let mut table = s.map().layer_by_name("Far").unwrap().dataset.clone();
+    table.name = "Far table".into();
+    let id = s.project.add_table(table);
+    let mark = s.notice_mark();
+    let p = json!({"tool": "joinField", "params": {"target": "Parcels", "targetField": "n", "joinTable": id, "joinField": "n", "output": "Owned_2"}});
+    s.run("gp.run", &p).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(!said.iter().any(|t| t.contains("worked in longitude/latitude")), "{said:?}");
+    let ds = &s.map().layer_by_name("Owned_2").unwrap().dataset;
+    assert_eq!(ds.coord_crs(), UTM);
+    assert_eq!(ds.value(0, ds.field_index("owner").unwrap()).to_string(), "far owner");
+}
+
+/// A project giving Web Mercator and longitude/latitude as their EPSG codes (`{"Epsg": 3857}`,
+/// `{"Epsg": 4326}`), as one written by hand or by another program may, opens with them as
+/// RustGIS's own Web Mercator and longitude/latitude: the layer held in Web Mercator stays off the
+/// projected path tools take, and the other is in longitude/latitude.
+#[test]
+fn the_epsg_variants_fixture_opens_as_rustgis_own_systems() {
+    let p = Project::from_json(include_str!("../../../../schema/fixtures/held_epsg_variants.rgis")).unwrap();
+    let (mercator, plain) = (&p.maps[0].layers[0].dataset, &p.maps[0].layers[1].dataset);
+    assert_eq!((mercator.coord_crs(), mercator.crs), (Crs::WebMercator, Some(Crs::LonLat)));
+    assert_eq!((plain.coord_crs(), plain.crs), (Crs::LonLat, Some(Crs::WebMercator)));
+    // echo 48.7 11.5 | cs2cs -f %.6f EPSG:4326 EPSG:3857 (PROJ 9.9.0): 1280174.144123 6224110.131660
+    let Some(Geometry::Point(c)) = mercator.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
+    assert!((c.x - 1_280_174.144_123).abs() < 1e-6 && (c.y - 6_224_110.131_660).abs() < 1e-6, "{c:?}");
+    let back = mercator.in_lonlat().unwrap();
+    let Some(Geometry::Point(l)) = back.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
+    assert!((l.x - 11.5).abs() < 1e-9 && (l.y - 48.7).abs() < 1e-9, "{l:?}");
+}
+
+/// How far apart, in degrees, a place an overlay makes may be between a run in UTM and one in
+/// longitude/latitude: an edge straight in UTM and the same edge straight in the analysis plane
+/// (Web Mercator) part by up to about L²·tan φ / 8R at its middle, some 20 cm for the road's 3 km
+/// edge here (21 cm, `Roads` clipped by `Area`, measured), so where it crosses another edge moves
+/// by that much. Half a metre. Straight in UTM is the nearer of the two to the shortest way on the
+/// ground.
+const OVERLAID: f64 = 5e-6;
+
+/// Every place of `a` within `tol` degrees of one of `b`'s and the other way round, feature by
+/// feature, in the same shapes.
+fn assert_near(a: &[Option<Geometry>], b: &[Option<Geometry>], tol: f64, what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: feature count");
+    for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(shape(a), shape(b), "{what}: feature {i}'s shape");
+        let (mut ca, mut cb) = (Vec::new(), Vec::new());
+        a.iter().for_each(|g| g.for_each_coord(|c| ca.push(c)));
+        b.iter().for_each(|g| g.for_each_coord(|c| cb.push(c)));
+        // As places, not in order: the overlay may start a ring at another of its vertices.
+        let near = |p: &Coord, of: &[Coord]| of.iter().any(|q| (p.x - q.x).abs() < tol && (p.y - q.y).abs() < tol);
+        for p in &ca {
+            assert!(near(p, &cb), "{what}: feature {i}: {p:?} not in {cb:?}");
+        }
+        for q in &cb {
+            assert!(near(q, &ca), "{what}: feature {i}: {q:?} not in {ca:?}");
+        }
+    }
+}
+
+/// The overlays and spatial relations (#2032 C2e-2) work in UTM on layers held there, with no
+/// pole or antimeridian check reading UTM's metres as degrees: each gives the features, attributes
+/// and selections it gives for the same layers in longitude/latitude, its new layers are held in
+/// UTM, and where the two planes' straight edges differ, the places they make are within
+/// [`OVERLAID`] of each other.
+#[test]
+fn overlays_work_in_their_held_inputs_own_system() {
+    let mut ss = both();
+    // A box across the parcels' grid, cutting some, covering some and missing others.
+    let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+    let mut area = Dataset::new("Area", GeometryType::Polygon, fields);
+    let ring = [(11.502, 48.702), (11.523, 48.702), (11.523, 48.723), (11.502, 48.723), (11.502, 48.702)];
+    area.push(
+        Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])),
+        vec![Cell::Text("a".into()), Cell::Int(7)],
+    );
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut a = area.clone();
+        a.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(a);
+        // The same box left in longitude/latitude in both sessions: converted into UTM for a run
+        // there, as another layer is.
+        let mut plain = area.clone();
+        plain.name = "Plain_Area".into();
+        s.map_mut().add_dataset(plain);
+    }
+    let ids = |s: &Session| s.map().layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    let attrs = |ds: &Dataset| {
+        (0..ds.features.len()).map(|r| (0..ds.fields.len()).map(|f| ds.value(r, f).to_string()).collect::<Vec<_>>()).collect::<Vec<_>>()
+    };
+    for p in [
+        json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Area"}}),
+        json!({"tool": "clip", "params": {"input": "Roads", "clip": "Area"}}),
+        json!({"tool": "clip", "params": {"input": "Wells", "clip": "Area"}}),
+        json!({"tool": "erase", "params": {"input": "Parcels", "erase": "Area"}}),
+        json!({"tool": "intersect", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "identity", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "union", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "symmetricalDifference", "params": {"input": "Parcels", "overlay": "Area"}}),
+        json!({"tool": "update", "params": {"input": "Parcels", "update": "Area"}}),
+        json!({"tool": "split", "params": {"input": "Parcels", "split": "Area"}}),
+        json!({"tool": "dissolve", "params": {"input": "Parcels", "field": "name"}}),
+        json!({"tool": "featureToPoint", "params": {"input": "Parcels"}}),
+        json!({"tool": "countPoints", "params": {"polygons": "Area", "points": "Wells"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Area", "match": "Intersects"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Area", "match": "Largest overlap", "output": "Largest"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Wells", "join": "Area", "match": "Have their center in", "output": "Centres"}}),
+        json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Plain_Area", "output": "Plain_Clip"}}),
+        json!({"tool": "union", "params": {"input": "Parcels", "overlay": "Plain_Area", "output": "Plain_Union"}}),
+    ] {
+        let before = ids(&ss[0]);
+        let marks = [ss[0].notice_mark(), ss[1].notice_mark()];
+        run_both(&mut ss, "gp.run", &p);
+        // Nothing said in one that isn't in the other: no pole or degree notice for UTM's metres.
+        let [said_a, said_b] = [0, 1].map(|i| ss[i].notices_since(marks[i]).iter().map(|n| n.text.clone()).collect::<Vec<_>>());
+        assert_eq!(said_a, said_b, "{p}");
+        let made: Vec<u32> = ids(&ss[0]).into_iter().filter(|id| !before.contains(id)).collect();
+        assert!(!made.is_empty(), "{p}: no layer");
+        for id in made {
+            let (a, b) = (&ss[0].map().layer(id).unwrap().dataset, &ss[1].map().layer(id).unwrap().dataset);
+            assert_eq!(b.coord_crs(), UTM, "{p}: {} held in", b.name);
+            assert!(!a.features.is_empty(), "{p}: {} is empty", a.name);
+            assert_eq!(attrs(a), attrs(b), "{p}: {}", a.name);
+            let geoms = |d: &Dataset| d.in_lonlat().unwrap().features.iter().map(|f| f.geometry.clone()).collect::<Vec<_>>();
+            assert_near(&geoms(a), &geoms(b), OVERLAID, &format!("{p}: {}", a.name));
+        }
+    }
+    // The wells' hull is made of wells, exactly as held. (Which of them are its corners depends on
+    // the plane: the grid's middle well on two of its edges lies on the edge straight in Web
+    // Mercator, and just outside it in UTM, which turns and shears the grid a little.)
+    run_both(&mut ss, "gp.run", &json!({"tool": "convexHull", "params": {"input": "Wells", "output": "Hull"}}));
+    assert_eq!(ss[1].map().layer_by_name("Hull").unwrap().dataset.coord_crs(), UTM);
+    let wells = bits(&held_coords(&ss[1], "Wells"));
+    let hull = bits(&held_coords(&ss[1], "Hull"));
+    assert!(hull.len() >= 5 && hull.iter().all(|c| wells.contains(c)), "{hull:?}");
+    // Select Layer By Location without a distance, and with one (geodesic, in longitude/latitude).
+    for p in [
+        json!({"tool": "selectByLocation", "params": {"input": "Wells", "select": "Area"}}),
+        json!({"tool": "selectByLocation", "params": {"input": "Wells", "select": "Area", "distance": 0.5, "units": "Kilometers"}}),
+    ] {
+        run_both(&mut ss, "gp.run", &p);
+        assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"), "{p}");
+        assert!(!selected(&ss[1], "Wells").is_empty(), "{p}: nothing selected");
+    }
+}
+
+/// Spatial Join's Largest overlap picks the zone covering most of each parcel in UTM as in
+/// longitude/latitude: the middle column of parcels (11.510° to 11.515°) lies 0.0035° in the
+/// western zone and 0.0015° in the eastern one, so it joins the western one, and the outer columns
+/// their own side's. Measured in UTM's plane, not by reading its metres as degrees.
+#[test]
+fn largest_overlap_ranks_overlaps_in_the_held_system() {
+    let mut ss = both();
+    let fields = vec![Field::new("zone", FieldType::Text)];
+    let mut zones = Dataset::new("Zones", GeometryType::Polygon, fields);
+    for (name, west, east) in [("west", 11.49, 11.5135), ("east", 11.5135, 11.53)] {
+        let ring = [(west, 48.69), (east, 48.69), (east, 48.74), (west, 48.74), (west, 48.69)];
+        zones.push(
+            Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])),
+            vec![Cell::Text(name.into())],
+        );
+    }
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut z = zones.clone();
+        z.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(z);
+    }
+    let p = json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Zones", "match": "Largest overlap", "output": "Zoned"}});
+    run_both(&mut ss, "gp.run", &p);
+    let zone = |s: &Session| {
+        let ds = &s.map().layer_by_name("Zoned").unwrap().dataset;
+        let f = ds.field_index("join_zone").unwrap();
+        (0..ds.features.len()).map(|r| ds.value(r, f).to_string()).collect::<Vec<_>>()
+    };
+    let want: Vec<String> = ["west", "west", "west", "west", "west", "west", "east", "east", "east"].map(String::from).to_vec();
+    assert_eq!(zone(&ss[0]), want);
+    assert_eq!(zone(&ss[1]), want);
+}
+
+/// A run in UTM says when another input's long edges, converted into UTM vertex by vertex, run
+/// far from where a run in longitude/latitude takes them: a degree-wide box's east-west edges
+/// (74 km at 48.7°N) follow their parallels in longitude/latitude, straight in Web Mercator, and
+/// are chords in UTM, which part from them by about L² tan φ / 8R, some 120 m at the middle. Its
+/// north-south edges are meridians, straight in Web Mercator; 2° and 3° east of UTM zone 32N's
+/// central meridian they curve in UTM, by some 8 m over the degree, so they count too. The clip
+/// itself isn't changed by it here: the parcels lie far inside the box.
+#[test]
+fn a_converted_inputs_long_edges_are_said() {
+    let mut s = session(UTM);
+    let mut boxed = Dataset::new("Degree", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+    let ring = [(11.0, 48.2), (12.0, 48.2), (12.0, 49.2), (11.0, 49.2), (11.0, 48.2)];
+    boxed.push(Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])), vec![Cell::Text("d".into())]);
+    s.map_mut().add_dataset(boxed);
+    let mark = s.notice_mark();
+    s.run("gp.run", &json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Degree", "output": "Clipped"}})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    let note = said.iter().find(|t| t.contains("edge(s) of 'Degree' (4), converted into EPSG:32632")).unwrap_or_else(|| panic!("{said:?}"));
+    assert!(note.starts_with("Clip: 4 edge(s)"), "{note}");
+    let far: f64 = note.split("up to ").nth(1).and_then(|t| t.split(' ').next()).and_then(|t| t.parse().ok()).unwrap();
+    // 74.3 km along 48.2°N: 74_300² × tan 48.2° / (8 × 6_371_000) = 121 m.
+    assert!((110.0..130.0).contains(&far), "{note}");
+    assert_eq!(held_coords(&s, "Clipped").len(), 9);
+    // Merge copies the box's vertices and crosses no edges: nothing to say.
+    let mark = s.notice_mark();
+    s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": ["Parcels", "Degree"], "attributes": false, "output": "Both"}})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("taken straight there")));
+}
+
+/// The environment's extent admits the features of a layer held in UTM that it admits of the same
+/// layer in longitude/latitude: the extent's box in UTM, turned some 1.9° with UTM's grid, reaches
+/// past the middle of each of its edges by some 25 m, where a point 5 m out isn't admitted.
+#[test]
+fn the_environments_extent_admits_alike_in_the_held_system() {
+    let mut ss = both();
+    let mut near = Dataset::new("Near", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    let (west, south, east, north) = (11.505, 48.705, 11.525, 48.725);
+    // 5 m out: 0.000_045° of latitude, 0.000_068° of longitude at 48.7°.
+    let (mid_x, mid_y, out_y, out_x) = (11.515, 48.715, 0.000_045, 0.000_068);
+    let outside = [(mid_x, north + out_y), (mid_x, south - out_y), (east + out_x, mid_y), (west - out_x, mid_y)];
+    for (x, y) in outside.into_iter().chain([(mid_x, mid_y)]) {
+        near.push(Some(Geometry::Point(Coord::new(x, y))), vec![Cell::Text(format!("{x},{y}"))]);
+    }
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = near.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        s.project.gp_env.extent = Some(rustgis_geom::Extent { min_x: west, min_y: south, max_x: east, max_y: north });
+    }
+    run_both(&mut ss, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Near", "output": "Inside"}}));
+    let names = |s: &Session| {
+        let ds = &s.map().layer_by_name("Inside").unwrap().dataset;
+        (0..ds.features.len()).map(|r| ds.value(r, 0).to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(names(&ss[0]), vec!["11.515,48.715".to_string()]);
+    assert_eq!(names(&ss[1]), names(&ss[0]));
+}
+
+/// How far a converted edge runs from where a run in longitude/latitude takes it is looked for
+/// beyond its middle, and on a ring's closing edge when the ring doesn't repeat its first vertex.
+#[test]
+fn bent_edges_are_found_beyond_their_middle_and_on_closing_edges() {
+    let bent = |g: Geometry| {
+        let mut ds = Dataset::new("Edges", g.kind(), Vec::new());
+        ds.push(Some(g), Vec::new());
+        let c = ds.in_crs(UTM).unwrap().into_owned();
+        crate::cmd::gp::bent_edges(&ds, &c, UTM).unwrap()
+    };
+    // Across UTM zone 32N's central meridian (9°E) at the equator, point-symmetric about where they
+    // cross: its middle, (9°E, 0°), is on the chord and on the edge in Web Mercator alike, and it
+    // bends away to either side, by metres at its quarters.
+    let (n, far) = bent(Geometry::Line(vec![vec![Coord::new(8.0, -1.0), Coord::new(10.0, 1.0)]]));
+    assert_eq!(n, 1);
+    assert!(far > 1.0, "{far}");
+    // The degree-wide box of `a_converted_inputs_long_edges_are_said`, closed and open: its four edges
+    // either way.
+    let ring = [(11.0, 48.2), (12.0, 48.2), (12.0, 49.2), (11.0, 49.2)].map(|(x, y)| Coord::new(x, y)).to_vec();
+    let mut closed = ring.clone();
+    closed.push(ring[0]);
+    let open = bent(Geometry::Polygon(vec![vec![ring]]));
+    assert_eq!(open.0, 4);
+    assert_eq!(bent(Geometry::Polygon(vec![vec![closed]])).0, 4);
+}
+
+/// A line held in UTM along a northing is tilted in longitude/latitude: an environment's extent
+/// near a corner of its box there, away from the line, admits it, in a run in longitude/latitude
+/// and in the held system alike.
+#[test]
+fn the_environments_extent_admits_a_tilted_line_by_its_box_in_longitude_latitude() {
+    let mut ss = both();
+    let back = UTM.to(Crs::LonLat).unwrap();
+    // From the central meridian 200 km east at northing 5,400 km (48.7°N): its east end some
+    // 3.6 km south of its west end's latitude.
+    let (w, e) = (back.point(Coord::new(500_000.0, 5_400_000.0)).unwrap(), back.point(Coord::new(700_000.0, 5_400_000.0)).unwrap());
+    assert!((w.y - e.y).abs() > 0.02, "{w:?} {e:?}");
+    let mut line = Dataset::new("Tilted", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    line.push(Some(Geometry::Line(vec![vec![w, e]])), vec![Cell::Text("tilted".into())]);
+    // A small box at the corner of the line's box at its west end's longitude and east end's
+    // latitude, inside it: kilometres from the line.
+    let (x, y) = (w.x + 0.002, e.y + 0.002 * (w.y - e.y).signum());
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = line.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        s.project.gp_env.extent = Some(rustgis_geom::Extent { min_x: x - 0.001, min_y: y - 0.001, max_x: x + 0.001, max_y: y + 0.001 });
+    }
+    run_both(&mut ss, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Tilted", "output": "Admitted"}}));
+    for s in &ss {
+        assert_eq!(s.map().layer_by_name("Admitted").unwrap().dataset.features.len(), 1);
+    }
+}
+
+/// A standalone table with geometry given by its number is converted into the system the run
+/// works in, as one given by name is.
+#[test]
+fn a_numbered_table_is_converted_into_the_held_system() {
+    let mut ss = both();
+    let mut wells = Dataset::new("Wells", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for (x, y) in [(11.51, 48.71), (11.6, 48.8)] {
+        wells.push(Some(Geometry::Point(Coord::new(x, y))), vec![Cell::Text(format!("{x},{y}"))]);
+    }
+    let mut area = Dataset::new("Area", GeometryType::Polygon, Vec::new());
+    let ring = [(11.5, 48.7), (11.52, 48.7), (11.52, 48.72), (11.5, 48.72), (11.5, 48.7)];
+    area.push(Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])), Vec::new());
+    let mut ids = Vec::new();
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = wells.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        // In longitude/latitude in both sessions.
+        ids.push(s.project.add_table(area.clone()));
+    }
+    assert_eq!(ids[0], ids[1]);
+    run_both(&mut ss, "gp.run", &json!({"tool": "clip", "params": {"input": "Wells", "clip": ids[0], "output": "Inside"}}));
+    for s in &ss {
+        let ds = &s.map().layer_by_name("Inside").unwrap().dataset;
+        assert_eq!(ds.coord_crs(), if std::ptr::eq(s, &ss[0]) { Crs::LonLat } else { UTM });
+        assert_eq!((0..ds.features.len()).map(|r| ds.value(r, 0).to_string()).collect::<Vec<_>>(), vec!["11.51,48.71"]);
+    }
+}
+
+/// A place given by its UTM zone 32N coordinates, in longitude/latitude.
+fn utm_place(x: f64, y: f64) -> Coord {
+    UTM.to(Crs::LonLat).unwrap().point(Coord::new(x, y)).unwrap()
+}
+
+/// Adds a layer of `geoms` (in longitude/latitude) to `s`, held in `crs`, its features named
+/// `<name>0`, `<name>1`… in their order.
+fn add_held(s: &mut Session, name: &str, kind: GeometryType, geoms: Vec<Geometry>, crs: Crs) {
+    let mut d = Dataset::new(name, kind, vec![Field::new("name", FieldType::Text)]);
+    for (i, g) in geoms.into_iter().enumerate() {
+        d.push(Some(g), vec![Cell::Text(format!("{name}{i}"))]);
+    }
+    d.hold_in(crs).unwrap();
+    s.map_mut().add_dataset(d);
+}
+
+/// A layer's numbers in field `field`, in row order (empty values as NaN).
+fn field_numbers(s: &Session, layer: &str, field: &str) -> Vec<f64> {
+    let ds = &s.map().layer_by_name(layer).unwrap_or_else(|| panic!("no layer {layer}")).dataset;
+    let f = ds.field_index(field).unwrap_or_else(|| panic!("{layer}: no field {field}"));
+    (0..ds.features.len()).map(|r| ds.value(r, f).as_f64().unwrap_or(f64::NAN)).collect()
+}
+
+/// In a run in UTM, distances in metres are measured flat there, as in a projected system tools
+/// measure them: a buffer is a circle of that radius in UTM, Select Layer By Location and Spatial
+/// Join take what lies within it there, Near measures to the nearest point there and gives it in
+/// UTM, Points Along Lines steps along the line there from grid north, and Simplify's tolerance is
+/// a length there. At the origin (12.86°E, 48.70°N, 3.86° east of the central meridian), UTM's
+/// scale is 1.00059 (`proj -S +proj=utm +zone=32 +datum=WGS84`), a UTM metre 0.99941 m on the
+/// ground: a point 1000.3 UTM metres away is 999.71 m away on the ground, within a kilometre for a
+/// run in longitude/latitude and not for one in UTM. The places and lengths checked are UTM's own.
+#[test]
+fn distances_are_measured_flat_in_the_held_system() {
+    let (x0, y0) = (784_000.0, 5_401_300.0);
+    let pt = |x: f64, y: f64| Geometry::Point(utm_place(x, y));
+    let mut s = session(UTM);
+    add_held(&mut s, "Origin", GeometryType::Point, vec![pt(x0, y0)], UTM);
+    add_held(&mut s, "Around", GeometryType::Point, vec![pt(x0 + 999.7, y0), pt(x0 + 1000.3, y0), pt(x0, y0 + 500.0)], UTM);
+    let held = held_coords(&s, "Origin")[0][0];
+    assert!((held.x - x0).abs() < 1e-6 && (held.y - y0).abs() < 1e-6, "{held:?}");
+
+    // A buffer of a kilometre: a circle of 1000 UTM metres.
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Origin", "distance": 1, "units": "Kilometers", "output": "Disc"}}))
+        .unwrap();
+    assert_eq!(s.map().layer_by_name("Disc").unwrap().dataset.coord_crs(), UTM);
+    let disc = &held_coords(&s, "Disc")[0];
+    assert!(disc.len() > 100, "{}", disc.len());
+    for c in disc {
+        assert!(((c.x - x0).hypot(c.y - y0) - 1000.0).abs() < 1e-6, "{c:?}");
+    }
+
+    // Select Layer By Location within a kilometre: the points 999.7 m and 500 m away, not the one
+    // 1000.3 m away (999.71 m on the ground, which a run in longitude/latitude selects).
+    s.run(
+        "gp.run",
+        &json!({"tool": "selectByLocation", "params": {"input": "Around", "select": "Origin", "distance": 1000, "units": "Meters"}}),
+    )
+    .unwrap();
+    assert_eq!(selected(&s, "Around"), vec![0, 2]);
+
+    // Near: the point 500 m north, at 0.5 km, where it is in UTM.
+    s.run("gp.run", &json!({"tool": "near", "params": {"input": "Origin", "near": "Around", "output": "Nearest"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("Nearest").unwrap().dataset.coord_crs(), UTM);
+    assert!((field_numbers(&s, "Nearest", "near_dist")[0] - 0.5).abs() < 1e-9);
+    assert!((field_numbers(&s, "Nearest", "near_x")[0] - x0).abs() < 1e-6);
+    assert!((field_numbers(&s, "Nearest", "near_y")[0] - (y0 + 500.0)).abs() < 1e-6);
+
+    // Spatial Join: the closest, and those within a kilometre, nearest first.
+    let p = json!({"tool": "spatialJoin", "params": {
+        "target": "Origin", "join": "Around", "match": "Closest", "units": "Meters", "distanceField": "dist", "output": "Closest"
+    }});
+    s.run("gp.run", &p).unwrap();
+    assert!((field_numbers(&s, "Closest", "dist")[0] - 500.0).abs() < 1e-6);
+    let p = json!({"tool": "spatialJoin", "params": {
+        "target": "Origin", "join": "Around", "match": "Within a distance", "distance": 1000, "units": "Meters",
+        "distanceField": "dist", "operation": "Join one to many", "output": "Within"
+    }});
+    s.run("gp.run", &p).unwrap();
+    let within = field_numbers(&s, "Within", "dist");
+    assert_eq!(within.len(), 2, "{within:?}");
+    assert!((within[0] - 500.0).abs() < 1e-6 && (within[1] - 999.7).abs() < 1e-6, "{within:?}");
+
+    // Points Along Lines: every kilometre along a 3 km line due east in UTM, heading 90° from grid
+    // north.
+    add_held(&mut s, "East", GeometryType::Polyline, vec![Geometry::Line(vec![vec![utm_place(x0, y0), utm_place(x0 + 3000.0, y0)]])], UTM);
+    s.run(
+        "gp.run",
+        &json!({"tool": "pointsAlongLines", "params": {"input": "East", "distance": 1, "units": "Kilometers", "output": "Steps"}}),
+    )
+    .unwrap();
+    assert_eq!(s.map().layer_by_name("Steps").unwrap().dataset.coord_crs(), UTM);
+    let steps = held_coords(&s, "Steps");
+    assert_eq!(steps.len(), 4, "{steps:?}");
+    for (k, c) in steps.iter().map(|p| p[0]).enumerate() {
+        assert!((c.x - (x0 + 1000.0 * k as f64)).abs() < 1e-6 && (c.y - y0).abs() < 1e-6, "{k}: {c:?}");
+    }
+    let along = field_numbers(&s, "Steps", "distance");
+    assert!(along.iter().zip([0.0, 1.0, 2.0, 3.0]).all(|(d, want)| (d - want).abs() < 1e-9), "{along:?}");
+    assert!(field_numbers(&s, "Steps", "angle").iter().all(|a| (a - 90.0).abs() < 1e-9));
+
+    // Simplify: a bend of 0.4 UTM metres goes at a tolerance of half a metre, and stays at 0.3 m.
+    let bend = vec![utm_place(x0, y0), utm_place(x0 + 500.0, y0 + 0.4), utm_place(x0 + 1000.0, y0)];
+    add_held(&mut s, "Bend", GeometryType::Polyline, vec![Geometry::Line(vec![bend])], UTM);
+    for (km, left, out) in [(0.0005, 2, "Plain"), (0.0003, 3, "Bent")] {
+        s.run("gp.run", &json!({"tool": "simplify", "params": {"input": "Bend", "tolerance": km, "output": out}})).unwrap();
+        assert_eq!(s.map().layer_by_name(out).unwrap().dataset.coord_crs(), UTM);
+        assert_eq!(held_coords(&s, out)[0].len(), left, "{km} km");
+    }
+}
+
+/// In a system in US survey feet, a distance in metres is that many metres' worth of its feet:
+/// a buffer of 1000 m in NAD83 / California zone 3 (ftUS, EPSG:2227) is a circle of
+/// 1000 / 0.304800609601219 = 3280.833 ft.
+#[test]
+fn a_distance_is_in_the_systems_own_unit() {
+    const FEET: Crs = Crs::Epsg(2227);
+    let mut s = Session::new(Project::default());
+    let place = FEET.to(Crs::LonLat).unwrap().point(Coord::new(6_000_000.0, 2_100_000.0)).unwrap();
+    add_held(&mut s, "Spot", GeometryType::Point, vec![Geometry::Point(place)], FEET);
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Spot", "distance": 1000, "units": "Meters", "output": "Disc"}}))
+        .unwrap();
+    let centre = held_coords(&s, "Spot")[0][0];
+    let radius = 1000.0 / 0.304_800_609_601_219;
+    for c in &held_coords(&s, "Disc")[0] {
+        assert!(((c.x - centre.x).hypot(c.y - centre.y) - radius).abs() < 1e-6, "{c:?}");
+    }
+}
+
+/// Points Along Lines' angle is from grid north whichever way a system's axes point: due east is
+/// 90° in Hartebeesthoek94 / Lo27 (EPSG:22275, `+axis=wsu`), whose x grows westward and y
+/// southward.
+#[test]
+fn a_direction_is_from_grid_north_whatever_the_axes() {
+    const LO27: Crs = Crs::Epsg(22275);
+    let mut s = Session::new(Project::default());
+    let back = LO27.to(Crs::LonLat).unwrap();
+    // 1 km due east in the grid: x (westing) down by 1000.
+    let (a, b) = (back.point(Coord::new(10_000.0, 3_000_000.0)).unwrap(), back.point(Coord::new(9_000.0, 3_000_000.0)).unwrap());
+    add_held(&mut s, "East", GeometryType::Polyline, vec![Geometry::Line(vec![vec![a, b]])], LO27);
+    s.run(
+        "gp.run",
+        &json!({"tool": "pointsAlongLines", "params": {"input": "East", "distance": 500, "units": "Meters", "output": "Steps"}}),
+    )
+    .unwrap();
+    assert_eq!(s.map().layer_by_name("Steps").unwrap().dataset.coord_crs(), LO27);
+    let angles = field_numbers(&s, "Steps", "angle");
+    assert_eq!(angles.len(), 3, "{angles:?}");
+    assert!(angles.iter().all(|a| (a - 90.0).abs() < 1e-9), "{angles:?}");
+}
+
+/// The tools that measure flat in a held layer's own system take junk distances and places without
+/// a panic: they refuse, or make what they can.
+#[test]
+fn distance_tools_take_junk_in_the_held_system() {
+    let mut s = session(UTM);
+    let far = UTM.to(Crs::LonLat).unwrap().point(Coord::new(500_000.0, 5_400_000.0)).unwrap();
+    add_held(&mut s, "Junk", GeometryType::Polyline, vec![Geometry::Line(vec![vec![far, far, Coord::new(f64::NAN, 1.0)]])], UTM);
+    for d in [json!(0), json!(-1), json!(1e308), json!(-1e308), json!("x"), json!(null), json!(5e-324)] {
+        for (tool, params) in [
+            ("buffer", json!({"input": "Junk", "distance": d})),
+            ("buffer", json!({"input": "Parcels", "distance": d, "dissolve": "All"})),
+            ("simplify", json!({"input": "Roads", "tolerance": d})),
+            ("pointsAlongLines", json!({"input": "Junk", "distance": d})),
+            ("pointsAlongLines", json!({"input": "Roads", "distance": d, "startOffset": d, "endOffset": d, "includeEnd": "Yes"})),
+            ("near", json!({"input": "Wells", "near": "Junk", "distance": d})),
+            ("selectByLocation", json!({"input": "Wells", "select": "Junk", "distance": d})),
+            ("spatialJoin", json!({"target": "Wells", "join": "Roads", "match": "Closest", "distance": d})),
+            ("spatialJoin", json!({"target": "Wells", "join": "Junk", "match": "Within a distance", "distance": d})),
+        ] {
+            // Refused or done: not a panic, which a tool run gives back as "<Tool> failed
+            // unexpectedly".
+            if let Err(e) = s.run("gp.run", &json!({"tool": tool, "params": params})) {
+                assert!(!e.contains("failed unexpectedly"), "{tool} {params}: {e}");
+            }
+        }
     }
 }

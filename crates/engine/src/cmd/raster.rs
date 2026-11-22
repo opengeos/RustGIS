@@ -698,7 +698,9 @@ fn add_jpeg2000_bytes(s: &mut Session, p: &Value, name: &str, bytes: Vec<u8>, zo
     let c = raster::gdal::convert_jpeg2000(bytes, crs, MAX_UPLOAD_BYTES as u64).map_err(|e| format!("{name}: {e}"))?;
     let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
     let file_name = format!("{stem}.tif");
-    let r = raster::read_bytes(&file_name, &c.tif).map_err(|e| format!("{name}: {e}"))?;
+    let mut r = raster::read_bytes(&file_name, &c.tif).map_err(|e| format!("{name}: {e}"))?;
+    // The GeoTIFF GDAL made names the WGS 84 it assumed, as if the file had.
+    r.crs_assumed |= c.assumed_lonlat;
     if c.assumed_lonlat {
         s.notify(format!("{name} doesn't say its coordinate system; its coordinates look like longitude/latitude, so it's read as WGS 84 (give \"crs\" if not)"), false);
     }
@@ -795,7 +797,7 @@ pub(crate) fn add_named_bytes_read(
     if rustgis_data::sheets::is_sheet_name(&name) {
         return super::layer::add_sheet(s, p, &name, &bytes, zoom);
     }
-    // Files of several layers: zipped Shapefiles, KML/KMZ, GPX, GeoRSS, LandXML, CityJSON.
+    // Files of several layers: zipped Shapefiles, KML/KMZ, GPX, GeoRSS, LandXML, CityJSON, CityGML.
     if rustgis_data::io::is_multi_layer_name(&name) {
         return super::layer::add_layers(s, p, &name, &bytes, zoom, false);
     }
@@ -1194,7 +1196,7 @@ pub(super) fn write_and_report(s: &mut Session, r: &Raster, bi: usize, cog: bool
     let wrote =
         write_geotiff_with_guidance(r, bi, cog, path, "export the resulting layer with share.exportRaster and give \"band\" for another")?;
     for note in wrote.notes {
-        s.notify_written(note, false);
+        s.notify_written(note);
     }
     Ok(wrote.answer)
 }

@@ -1484,7 +1484,10 @@ impl RustGisApp {
             Some(Value::Number(_) | Value::String(_)) => {}
             // Not taken for the active layer: with replaceTable that would overwrite a table.
             Some(other) => {
-                return Err(crate::i18n::fmt("\"layer\" must be a layer's id or name, not {value}", &[("value", &other.to_string())]));
+                return Err(crate::i18n::fmt(
+                    "\"layer\" must be a layer's id or name, not {value}",
+                    &[("value", &crate::theme::clip(&other.to_string()))],
+                ));
             }
         }
         let id = self.session.layer_id(p)?;
@@ -2402,8 +2405,8 @@ impl RustGisApp {
             return Err(tl!("this build saves projects with Save As").into());
         }
         let stem: String = stem.chars().take(200).collect();
-        // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
-        // browser takes the file.
+        // Not an undoable edit: saving names the project, as `project.saveAs` does. The name
+        // stays set while the download is offered, and goes back if the download fails.
         let construction_notes = self.session.construction_output_notes()?;
         let old = std::mem::replace(&mut self.session.project.name, stem.clone());
         let (text, report) = match self.session.project.saved_text(None) {
@@ -2951,6 +2954,8 @@ impl RustGisApp {
         self.map.deleting = None;
         // A spectral profile's points were read on the old project's rasters.
         self.workflow.spectral.clear();
+        crate::analysispane::forget_similar(&mut self.workflow);
+        (self.workflow.result, self.workflow.error) = (None, None);
         self.retire_cog_probes();
         if let Some(steps) = self.ws.recording.take() {
             self.session.notify(
@@ -3028,6 +3033,9 @@ impl RustGisApp {
             // Counting a column goes over every row: the Statistics window shows the landed answer.
             if id == "table.statistics" {
                 return readjob::run_then(self, "table.statistics", params, Some(table::statistics_landed));
+            }
+            if id == "data.similar" {
+                return readjob::run(self, "data.similar", params);
             }
             if id == "layer.sizeBy" {
                 return readjob::run(self, "layer.sizeBy", params);
@@ -3177,6 +3185,8 @@ impl RustGisApp {
             self.map.deleting = None;
             // Nor are a spectral profile's points read on a namesake raster of the new one.
             self.workflow.spectral.clear();
+            crate::analysispane::forget_similar(&mut self.workflow);
+            (self.workflow.result, self.workflow.error) = (None, None);
             // A recording's steps name the old project's layers: it ends here, and says so.
             if let Some(steps) = self.ws.recording.take() {
                 let n = steps.len().to_string();
@@ -3735,9 +3745,14 @@ impl RustGisApp {
                 self.workflow.pick = None;
                 match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
                     Some((id, _)) => {
+                        // Opening the same Similar section preserves its pending/completed result,
+                        // including when the pane was hidden while the worker finished.
+                        if *id != "similar" || self.workflow.section != *id {
+                            analysispane::forget_similar(&mut self.workflow);
+                            self.workflow.result = None;
+                            self.workflow.error = None;
+                        }
                         self.workflow.section = id;
-                        self.workflow.result = None;
-                        self.workflow.error = None;
                         self.ui.open_right(RightPane::Workflows);
                     }
                     None => toggle_right(&mut self.ui, RightPane::Workflows),
@@ -5200,10 +5215,10 @@ impl RustGisApp {
                 dbf_notes.extend(io::dates_as_text_note(&ds.fields, &name));
                 dbf_notes.extend(rustgis_engine::cmd::share::gpkg_dates_note(&ds, &ext, &name));
                 if lost.rows > 0 {
-                    dbf_notes.push(format!("{name}: {} rows couldn't be read and were left out", lost.rows));
+                    dbf_notes.push(rustgis_engine::cmd::whole::unread_notice(&name, lost.rows));
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
-                // CSV holds a point a row, GPX a name for each feature and no areas; reading text back trims it or reads blanks as null.
+                // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
                 dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
                 drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {
@@ -6089,7 +6104,7 @@ impl RustGisApp {
         })?;
         // What a task needs to read it again, as the download itself can't be (`record_step`).
         let mut window = json!({});
-        for k in ["bbox", "cellSize", "cog"] {
+        for k in rustgis_engine::policy::WINDOW_KEYS {
             if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
                 window[k] = v.clone();
             }
@@ -8714,7 +8729,7 @@ mod download_service_tests {
         assert!(!app.session.notices.iter().any(|n| n.text.contains("Download offered")));
         assert!(!app.download("archive.pmtiles", vec![1, 2, 3]));
         assert!(app.session.notices.iter().any(|n| n.error && n.text.contains("browser rejected download")));
-        assert!(!app.session.notices.iter().any(|n| n.text.contains("Downloaded")));
+        assert!(!app.session.notices.iter().any(|n| n.text.contains("Download offered")));
     }
 
     /// The web download encodes the filtered rows and reports the count once the bytes are accepted.
@@ -8927,6 +8942,26 @@ mod download_service_tests {
 #[cfg(test)]
 mod peer_output_tests {
     use super::*;
+
+    /// Completed rankings belong to the replaced project, through User and peer entry points.
+    #[test]
+    fn project_replacement_clears_similar_output() {
+        for peer in [false, true] {
+            let mut app = RustGisApp::new(Session::new(Project::default()));
+            app.workflow.section = "similar";
+            app.workflow.result = Some(json!({"similar":[{"row":1,"distance":0.5}]}));
+            app.workflow.error = Some("old project error".into());
+            assert!(app.open_peer_text("invalid project").is_err());
+            assert!(app.workflow.result.is_some() && app.workflow.error.is_some(), "a refused replacement keeps current output");
+            if peer {
+                let (text, _) = Project::default().saved_text(None).unwrap();
+                app.open_peer_text(&text).unwrap();
+            } else {
+                app.run("project.new", json!({})).unwrap();
+            }
+            assert!(app.workflow.result.is_none() && app.workflow.error.is_none(), "a replacement cannot show old row indices");
+        }
+    }
 
     /// Drives the actual receiving wrapper, including the UI state a direct Session call misses.
     #[test]

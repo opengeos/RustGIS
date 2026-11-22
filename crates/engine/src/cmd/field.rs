@@ -106,8 +106,8 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     progress::check().map_err(|e| e.to_string())?;
     let mut losses = Vec::new();
     let mut archive_errors = Vec::new();
-    // These used to be errors as soon as the sender hit them, even if the write later failed.
-    // Keep a second copy of the text for the recipient's manifest.
+    // Each is notified as an error as soon as it is met, and a copy of its text is kept for the
+    // recipient's manifest.
     let mut archive_error = |s: &mut Session, text: String| {
         s.notify(text.clone(), true);
         archive_errors.push(text);
@@ -328,6 +328,8 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     }
     let mut project = crate::project::Project::new(area.clone());
     project.field_origin = origin;
+    // New layers made in the field are held in the home project's system, as at home.
+    (project.coordinate_system, project.crs_from_first_layer) = (s.project.coordinate_system, s.project.crs_from_first_layer);
     // The package has no home offline areas and carries its association in field_origin.
     map.offline_area_id = None;
     let mut copied = Vec::new();
@@ -468,10 +470,9 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             if outbound && (s.opened != opened || s.state() != state) {
                 return Err("the home project changed during packaging; make a new package before sending it to the field".into());
             }
-            // Only a rename and directory sync run on the window thread. Cancel still
-            // applies until the rename, including when the worker has finished staging.
+            // Only a rename and directory sync run on the window thread. The live authority
+            // check applies until the rename, including when the worker has finished staging.
             {
-                // Cancel and the live authority check both apply until the rename.
                 let _probe = rustgis_analysis::control::install_progress(control);
                 not_the_project(s, file.destination())?;
                 file.commit().map_err(|e| format!("{path}: {e}"))?;

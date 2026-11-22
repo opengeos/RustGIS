@@ -43,6 +43,9 @@ impl Project {
         if !required.contains(&super::NATIVE_COORDINATES) && self.tables.iter().any(|t| held_natively(&t.dataset)) {
             required.push(super::NATIVE_COORDINATES);
         }
+        if self.coordinate_system.is_some() || self.crs_from_first_layer {
+            required.push(super::PROJECT_CRS);
+        }
         // Saved symbology keeps its images too.
         if !required.contains(&"picture-markers") && self.styles.iter().any(|s| s.renderer.has_picture_markers()) {
             required.push("picture-markers");
@@ -529,6 +532,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         mut water,
         mut shore,
         mut block_water,
+        mut walls_layer,
         mut relief,
         mut light,
         mut legends,
@@ -538,7 +542,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         mut mgrs,
         mut on_top,
         mut grid_color,
-    ) = (false, false, false, false, false, false, false, false, false, false, false, false, false, false);
+    ) = (false, false, false, false, false, false, false, false, false, false, false, false, false, false, false);
     let mut polygon = false;
     let (mut offline_area_id, mut paper, mut native, mut guided) = (false, false, false, false);
     for map in maps {
@@ -563,6 +567,8 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
             shore |= t.water.as_ref().is_some_and(|w| w.shore != rustgis_map::view::WATER_SHORE);
             // The water in a block's walls (#2317), which an older reader would save away.
             block_water |= t.block.as_ref().is_some_and(|b| b.water.is_some());
+            // The layer a block's walls are coloured by (#2173), which an older reader would save away.
+            walls_layer |= t.block.as_ref().is_some_and(|b| b.walls_layer.is_some());
         }
         relief |= map.layers.iter().any(relief_effects);
         light |= map.layers.iter().any(relief_light);
@@ -581,6 +587,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (water, "terrain-water"),
         (shore, "terrain-water-shore"),
         (block_water, "terrain-block-water"),
+        (walls_layer, "terrain-block-walls-layer"),
         (relief, "shaded-relief-effects"),
         (light, "shaded-relief-light"),
         (legends, "normalized-legend-urls"),
@@ -696,6 +703,22 @@ mod tests {
         map.graticule_on_top = false;
         map.graticule_color = None;
         assert!(serde_json::to_value(&plain).unwrap().get("requires").is_none());
+    }
+
+    /// A block diagram's walls layer reads back as it was and saving names it in `requires`; a
+    /// block without one doesn't (#2173).
+    #[test]
+    fn terrain_block_walls_layer_fixture_requires_it() {
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/terrain_block_walls_layer_v2.rgis")).unwrap();
+        let block = fixture.maps[0].view.terrain.as_ref().and_then(|t| t.block.as_ref());
+        assert_eq!(block.and_then(|b| b.walls_layer.as_deref()), Some("geologia"));
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["terrain-block", "terrain-block-walls-layer"]));
+        let mut plain = fixture;
+        if let Some(b) = plain.maps[0].view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            b.walls_layer = None;
+        }
+        assert_eq!(serde_json::to_value(&plain).unwrap()["requires"], json!(["terrain-block"]));
     }
 
     /// A saved image marker reads back as the image it was, and saving names it again.
@@ -1376,6 +1399,27 @@ mod tests {
         let mut unknown = saved;
         unknown["requires"] = json!(["zarr-window", "future-zarr"]);
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-zarr"));
+    }
+
+    /// A project's coordinate system and its first-layer option (#2032 C3a) are required by name:
+    /// an older reader would save the project again without them. A project with neither needs
+    /// nothing, and one listing a capability this release lacks is still refused by name.
+    #[test]
+    fn a_project_coordinate_system_is_required_where_it_is_saved() {
+        let text = include_str!("../../../schema/fixtures/project_crs.rgis");
+        let mut p = Project::from_json(text).unwrap();
+        assert_eq!(p.coordinate_system, Some(rustgis_data::raster::Crs::Epsg(2056)));
+        assert!(p.crs_from_first_layer);
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["requires"], json!(["project-crs"]));
+        assert_eq!(saved["coordinate_system"], json!({"Epsg": 2056}));
+        p.coordinate_system = None;
+        p.crs_from_first_layer = false;
+        let clean = serde_json::to_value(&p).unwrap();
+        assert!(clean.get("requires").is_none() && clean.get("coordinate_system").is_none() && clean.get("crs_from_first_layer").is_none());
+        let mut newer: Value = serde_json::from_str(text).unwrap();
+        newer["requires"] = json!(["project-crs", "future-crs"]);
+        assert!(Project::from_json(&newer.to_string()).unwrap_err().contains("future-crs"));
     }
 
     /// A blank basemap's paper colour (#2532) is required by name in a project and a map file: an

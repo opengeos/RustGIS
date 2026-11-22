@@ -394,6 +394,13 @@ fn clip(s: &str, n: usize) -> String {
 /// stays well within what a notice keeps.
 const NAMES_SAID: usize = 5;
 
+/// The first ten of `v` for a notice, separated by `; `, then how many more.
+pub(crate) fn listed(v: &[String]) -> String {
+    let more = v.len().saturating_sub(10);
+    let shown = v.iter().take(10).cloned().collect::<Vec<_>>().join("; ");
+    if more > 0 { format!("{shown}; and {more} more") } else { shown }
+}
+
 /// Layer names for a notice: the first [`NAMES_SAID`], each clipped, and how many more.
 fn names_said(names: &[String]) -> String {
     let shown: Vec<String> = names.iter().take(NAMES_SAID).map(|n| clip(n, 80)).collect();
@@ -829,6 +836,16 @@ pub struct Session {
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
+    /// The latest external selection admission, including changes on other layers. Mutations
+    /// conservatively record intent too; an older replay cannot advance it past newer intent.
+    pub(crate) selection_intent: u64,
+    /// External selection intent and Similar requests share one admission sequence.
+    pub(crate) selection_sequence: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// A prepared script/model's admission and its inner Similar request sequence.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) selection_admission: Option<(u64, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
+    /// The last Similar request that applied selection here, independently of external intent.
+    pub(crate) similar_selected: (u64, u64),
     /// Bumped each time another project replaces this one (new, open, sample, template), however
     /// the command came (the app, an agent, a script): the interface drops what it kept for the
     /// old one.
@@ -1323,6 +1340,16 @@ pub(crate) fn edits_features(id: &str) -> bool {
 }
 
 impl Session {
+    /// Attributes replayed selection effects to their initiating script/model. Ordinary
+    /// synchronous actions take a fresh admission, so later user intent wins over queued work.
+    pub(crate) fn selection_epoch(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((epoch, _)) = &self.selection_admission {
+            return *epoch;
+        }
+        self.selection_sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1)
+    }
+
     /// Marks this thread as the desktop window owner for column statistics and shape fitting. Adapters with a
     /// window use the prepared read queue; headless adapters leave this disabled.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1330,6 +1357,8 @@ impl Session {
         self.statistics_window_thread = enabled.then(|| std::thread::current().id());
     }
 
+    /// Starts an independent session with fresh runtime selection intent and request order.
+    /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {
         // The engine's tests never add Shapefile indexes to the user's cache (#1230).
         #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1369,6 +1398,11 @@ impl Session {
             layout_arrangements: serde_json::Map::new(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
+            selection_intent: 0,
+            selection_sequence: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            selection_admission: None,
+            similar_selected: (0, 0),
             opened: 0,
             exchange: None,
             tool: Tool::Explore,
@@ -2700,7 +2734,7 @@ impl Session {
                 }
                 if let Some(note) = layer.source.as_mut().and_then(|source| source.take_not_utf8()) {
                     not_utf8.push(notice_text::NoticeText::format(
-                        "{name}: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}",
+                        "{name}: so far, {note} (Load All Features counts them all)",
                         [("name", layer.name.clone().into()), ("note", note.into())],
                     ));
                 }
@@ -2839,9 +2873,8 @@ impl Session {
     /// Says once a session that native HTTPS trusts the bundled Mozilla roots, as a Linux or BSD
     /// system with no CA certificates and no `SSL_CERT_FILE` or `SSL_CERT_DIR` makes it
     /// ([`rustgis_data::http::bundled_roots`]): the trust source was assumed, not the system's.
-    /// Checked after each command and each frame, as the clients are first made when a request is.
-    /// Says, once a session, that native HTTPS fell back to the bundled CA roots, if it did. Run
-    /// with [`Session::notice_landed_rasters`]; a reader of the notices that runs no command (the
+    /// Checked after each command and each frame (with [`Session::notice_landed_rasters`]), as the
+    /// clients are first made when a request is; a reader of the notices that runs no command (the
     /// Python package) calls it first, as a client made on a background thread chooses the trust.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn notice_trust(&mut self) {
@@ -2943,9 +2976,9 @@ impl Session {
     /// A notice about a file or database write that has committed, not a pending delivery or
     /// an in-memory edit. It follows the ordinary redaction, bounds and diagnostics path, but
     /// survives a later enclosing command's rollback.
-    pub(crate) fn notify_written(&mut self, text: impl Into<String>, error: bool) {
+    pub(crate) fn notify_written(&mut self, text: impl Into<String>) {
         let mark = self.notice_mark();
-        self.notify(text, error);
+        self.notify(text, false);
         self.retain_written_notices(mark);
     }
 
@@ -3229,11 +3262,6 @@ impl Session {
         }
         // Layers gone are forgotten, so the map stays as small as the project.
         self.unplaced_checked.retain(|id, _| seen.contains(id));
-        let listed = |v: &[String]| {
-            let more = v.len().saturating_sub(10);
-            let shown = v.iter().take(10).cloned().collect::<Vec<_>>().join("; ");
-            if more > 0 { format!("{shown}; and {more} more") } else { shown }
-        };
         if features > 0 {
             let text = format!(
                 "{features} feature(s) have a place that can't be given in longitude/latitude: the map and the globe draw them without it, and labels' lines, block diagrams and terrain water leave them out ({})",
