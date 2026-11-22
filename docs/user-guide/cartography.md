@@ -107,7 +107,8 @@ read. What an SVG costs to draw is what it
 paints, not its size: a few kilobytes of dashes finer than a pixel, or of see-through shapes piled
 up, can take minutes. So one with more to draw than a 2048 × 2048 image isn't taken either, nor
 one past 10,000 elements or 200,000 points of its shapes once each `<use>` is counted where it
-repeats. An arc is counted as the curves it is drawn with, more the larger its radius: one of more
+repeats, nor one with a marker on a shape inside another marker (drawn on each of its vertices
+wherever it is). An arc is counted as the curves it is drawn with, more the larger its radius: one of more
 than a thousand curves isn't taken, nor is a circle, an ellipse or a rounded corner whose radius
 is in em, ex or %, which may come to any size. Each image is decoded
 once until RustGIS restarts, and kept decoded, at most 700 pixels a side: in all at most

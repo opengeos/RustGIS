@@ -71,7 +71,7 @@ pub(super) fn read(text: &str) -> Result<usvg::Tree, Refusal> {
     if doc.descendants().any(undrawn) {
         return Err(Refusal::Undrawn);
     }
-    if elements(&doc).is_none() {
+    if elements(&doc).is_none() || nested_markers(&doc) {
         return Err(Refusal::TooMuch);
     }
     let opt = usvg::Options {
@@ -120,6 +120,28 @@ fn undrawn(n: roxmltree::Node) -> bool {
         // A link's address is where it leads, not something it draws.
         (a.name() == "href" && !n.has_tag_name("a") && !v.is_empty() && !v.starts_with('#')) || elsewhere(v)
     })
+}
+
+/// Whether a marker may be drawn on a shape inside another marker: usvg draws it on each of that
+/// marker's vertices wherever that marker is (its `convert_children` of a marker), which
+/// [`elements`] doesn't count. A shape takes one by its own or an ancestor's attribute or `style`,
+/// or from a style sheet, whose reach isn't read here, so any sheet naming markers counts. One
+/// marker can only nest itself, a cycle usvg drops.
+fn nested_markers(doc: &roxmltree::Document) -> bool {
+    let markers: Vec<_> = doc.descendants().filter(|n| n.has_tag_name("marker")).collect();
+    if markers.len() < 2 {
+        return false;
+    }
+    let sheet = doc.descendants().filter(|n| n.has_tag_name("style")).any(|n| sheet_of(n).to_ascii_lowercase().contains("marker"));
+    let carries = |n: roxmltree::Node| {
+        n.attributes().any(|a| {
+            matches!(a.name(), "marker" | "marker-start" | "marker-mid" | "marker-end")
+                || (a.name() == "style" && a.value().to_ascii_lowercase().contains("marker"))
+        })
+    };
+    let shape =
+        |n: &roxmltree::Node| matches!(n.tag_name().name(), "path" | "line" | "polyline" | "polygon" | "rect" | "circle" | "ellipse");
+    markers.iter().any(|m| m.descendants().filter(shape).any(|s| sheet || s.ancestors().any(carries)))
 }
 
 /// Style element `n`'s sheet: its text, comments left out, as usvg reads it (`style_texts`).
@@ -174,7 +196,9 @@ fn count<'a>(
         None => {}
     }
     seen.insert(n.id(), None);
-    let href = n.attribute(("http://www.w3.org/1999/xlink", "href")).or_else(|| n.attribute("href"));
+    // A plain `href` before an XLink one, as usvg takes them (SVG 2).
+    let named = |ns: Option<&str>| n.attributes().find(|a| a.name() == "href" && a.namespace() == ns).map(|a| a.value());
+    let href = named(None).or_else(|| named(Some("http://www.w3.org/1999/xlink")));
     // What a `<use>` repeats counts as if it were under it.
     let used = n.has_tag_name("use").then(|| href.and_then(|h| h.strip_prefix('#')).and_then(|id| ids.get(id))).flatten();
     let mut total = (1u64, points_of(n));
@@ -518,6 +542,9 @@ mod tests {
     fn an_svg_counts_its_elements_where_they_repeat() {
         let doc = |body: &str| roxmltree::Document::parse(&svg(body)).map(|d| elements(&d)).unwrap();
         assert_eq!(doc(r#"<rect width="1" height="1"/>"#), Some(2));
+        // With both, a `<use>` repeats what its plain `href` names, as usvg takes it (SVG 2).
+        let both = r##"<g id="c"/><g id="b"><rect/><rect/><rect/></g><use xlink:href="#c" href="#b"/>"##;
+        assert_eq!(doc(both), doc(r##"<g id="c"/><g id="b"><rect/><rect/><rect/></g><use href="#b"/>"##));
         // A rect used ten times by a group used ten times: the svg, the defs, the rect, the group
         // with its ten uses each with the rect (21), and ten uses of that (220).
         let nested = r##"<defs><rect id="r" width="1" height="1"/><g id="g">{uses}</g></defs>{top}"##
@@ -611,6 +638,30 @@ mod tests {
         assert_eq!(read(&svg(&"<!-- -->".repeat(XML_NODES as usize))).err(), Some(Refusal::TooMuch));
         let deep = format!("{}{}", "<g>".repeat(2000), "</g>".repeat(2000));
         assert_eq!(read(&svg(&deep)).err(), Some(Refusal::TooMuch));
+        // A marker on a shape inside another marker is drawn on each of that marker's vertices
+        // too, which isn't counted: refused, by attribute, inherited or from a style sheet.
+        let zigzag = "M0 0L1 1L2 0L3 1";
+        for nested in [
+            format!(r#"<marker id="b"><circle r="1"/></marker><marker id="a"><path d="{zigzag}" marker-mid="url(#b)"/></marker>"#),
+            format!(
+                r#"<marker id="b"><circle r="1"/></marker><marker id="a"><g style="marker-mid: url(#b)"><path d="{zigzag}"/></g></marker>"#
+            ),
+            format!(
+                r#"<style>path {{ marker-mid: url(#b) }}</style><marker id="b"><circle r="1"/></marker><marker id="a"><path d="{zigzag}"/></marker>"#
+            ),
+        ] {
+            let body = format!(r#"{nested}<path d="{zigzag}" marker-mid="url(#a)"/>"#);
+            assert_eq!(read(&svg(&body)).err(), Some(Refusal::TooMuch), "{body}");
+        }
+        // Two markers side by side, or one with a style sheet (it can only nest itself, which
+        // usvg drops), are read.
+        let side = format!(
+            r#"<marker id="a"><circle r="1"/></marker><marker id="b"><circle r="1"/></marker><path d="{zigzag}" marker-start="url(#a)" marker-end="url(#b)"/>"#
+        );
+        assert!(read(&svg(&side)).is_ok());
+        let one =
+            format!(r#"<style>path {{ marker-mid: url(#a) }}</style><marker id="a"><path d="M0 0L1 1"/></marker><path d="{zigzag}"/>"#);
+        assert!(read(&svg(&one)).is_ok());
     }
 
     /// Filters are refused, wherever the group with them is.
