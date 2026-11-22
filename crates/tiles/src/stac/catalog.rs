@@ -56,12 +56,15 @@ pub fn label_of(url: &str) -> String {
 }
 
 /// The children (`child` links) of a catalog's document fetched from `from`: web addresses only,
-/// sorted by title.
+/// sorted by title. For tests: it drops the counts of the links left out, which code that shows
+/// a listing reports ([`parse_children_noted`]).
+#[cfg(test)]
 pub fn parse_children(bytes: &[u8], from: &str) -> Result<Vec<Child>, String> {
     parse_children_from_origin(bytes, &crate::address::Origin::named(from))
 }
 
 /// Like [`parse_children`], carrying the observed post-redirect [`crate::address::Origin`] and reach.
+#[cfg(test)]
 pub fn parse_children_from_origin(bytes: &[u8], origin: &crate::address::Origin) -> Result<Vec<Child>, String> {
     parse_children_noted(bytes, origin).map(|listing| listing.links)
 }
@@ -87,7 +90,8 @@ pub fn parse_children_noted(bytes: &[u8], origin: &crate::address::Origin) -> Re
 }
 
 /// The items (`item` links) of a catalog's or collection's document fetched from `from`: web
-/// addresses only, in the order the document gives them.
+/// addresses only, in the order the document gives them. For tests, as [`parse_children`].
+#[cfg(test)]
 pub fn parse_item_links(bytes: &[u8], from: &str) -> Result<Vec<Child>, String> {
     parse_item_links_noted(bytes, &crate::address::Origin::named(from)).map(|listing| listing.links)
 }
@@ -253,13 +257,7 @@ pub fn instant(s: &str) -> Option<i64> {
         return None;
     }
     let (y, m, d) = (num(0, 4)?, num(5, 2)?, num(8, 2)?);
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let month_days = match m {
-        2 if leap => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    };
+    let month_days = rustgis_data::date::days_in_month(y, m);
     if !(1..=12).contains(&m) || !(1..=month_days).contains(&d) {
         return None;
     }

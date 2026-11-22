@@ -339,7 +339,10 @@ impl FeatureSource for ShpSource {
             null_text,
             // A sampled read visits only some of the matches, so its count is of those; a late one
             // visits the whole layer, so its count is of the layer.
-            notes: boxed_off_note(boxed_off, !late && !complete, late).into_iter().chain(deleted_note(deleted, !late && !complete)).collect(),
+            notes: boxed_off_note(boxed_off, !late && !complete, late)
+                .into_iter()
+                .chain(deleted_note(deleted, !late && !complete))
+                .collect(),
             not_utf8,
         })
     }
@@ -829,7 +832,9 @@ fn value(c: &Column, b: &[u8], encoding: &dyn shapefile::dbase::Encoding) -> Val
             Some(b'0' | b'F' | b'f' | b'N' | b'n') => Value::Bool(false),
             _ => Value::Null,
         },
-        b'D' => crate::dbf::date(b).ok().flatten().map_or(Value::Null, Value::Date),
+        // Dates are read, and those that aren't ones counted, by `Table::values`, which never
+        // passes a date column here.
+        b'D' => Value::Null,
         // Memos (in a `.dbt` beside the file), date-times and binary fields aren't read.
         b'M' | b'T' | b'@' | b'B' | b'G' | b'P' => Value::Null,
         _ => {
