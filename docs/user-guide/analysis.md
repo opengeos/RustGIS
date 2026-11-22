@@ -1470,10 +1470,15 @@ you located yourself, and one on your `PATH` are left alone; RustGIS looks for a
 You can install the tools again at any time. In the browser,
 **Remove** unloads the tools and stops loading them when RustGIS starts.
 
-An existing desktop runner is kept when RustGIS updates. To update a runner installed by RustGIS,
-uninstall the tools and install them again; for a runner you located yourself, download the new
-release and use **Locate…**. Runner 1.8.3 corrects the OSGB36 datum conversion that offset stream
-vectors from their raster: rerun **Raster Streams to Vector** to replace an older output.
+An existing desktop runner is kept when RustGIS updates. To update a runner installed by RustGIS
+in place, run `gp.installGeolibre` from the command line in the updated RustGIS build. It downloads
+and checks the replacement before changing the installed program, so a download or verification
+failure leaves the installed runner in place. Restart the desktop app afterwards to reload its
+tools. For a runner you located yourself, download the new release and use **Locate…**.
+
+Runner 1.8.3 corrects the OSGB36 datum conversion that offset stream vectors from their raster.
+Rerun **Raster Streams to Vector** to create a corrected layer, then remove the old offset layer
+after checking the result. Save the project or export the corrected layer as needed.
 
 **In your language.** The tools' names, descriptions, parameters and toolboxes come in English.
 GeoLibre translates them into some twenty languages, in
