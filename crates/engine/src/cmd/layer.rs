@@ -641,7 +641,7 @@ pub fn commands() -> Vec<C> {
             })
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "haloColor"?: "#RRGGBB"|"#RRGGBBAA"|"" (""/null: white or dark, whichever stands out from the text), "haloWidth"?: points 0-10|null (null: the thin halo), "spacing"?: points between letters (-5 to 50), "stretch"?: share of a line's room, 0.1 to 1, a label placed curved with "fit": "auto" spreads its letters over when the line has room to spare (null: 0.6), "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font), "background"?: false|null (none) | true (white, a thin dark outline) | {"fill"?: "#RRGGBB"|"#RRGGBBAA"|"" ("": none), "stroke"?: colour|"" (the outline; "": none), "strokeWidth"?: points 0-10, "padding"?: [across, up and down] points 0-50, "radius"?: corner radius in points 0-50} (a rectangle behind the text; what isn't given is kept, or the default's), "wrapChar"?: text (a line break wherever it occurs, left out; a space puts each word on its own line; "" for none), "wrapLength"?: characters (a longest line, broken between words; 0 for none; at most 500), "lineAlign"?: "left"|"center"|"right" (how a label's lines line up)}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "haloColor"?: "#RRGGBB"|"#RRGGBBAA"|"" (""/null: white or dark, whichever stands out from the text), "haloWidth"?: points 0-10|null (null: the thin halo), "spacing"?: points between letters (-5 to 50), "stretch"?: share of a line's room, 0.1 to 1: a label placed curved with "fit": "auto" spreads its letters over it when the line has room to spare (null: 0.6); any other curved label (along a line, a polygon's centre line or a guide line) is letter-spaced to cover it, within spacing's range (null: its spacing), "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font), "background"?: false|null (none) | true (white, a thin dark outline) | {"fill"?: "#RRGGBB"|"#RRGGBBAA"|"" ("": none), "stroke"?: colour|"" (the outline; "": none), "strokeWidth"?: points 0-10, "padding"?: [across, up and down] points 0-50, "radius"?: corner radius in points 0-50} (a rectangle behind the text; what isn't given is kept, or the default's), "wrapChar"?: text (a line break wherever it occurs, left out; a space puts each word on its own line; "" for none), "wrapLength"?: characters (a longest line, broken between words; 0 for none; at most 500), "lineAlign"?: "left"|"center"|"right" (how a label's lines line up)}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;
@@ -3581,6 +3581,7 @@ pub(crate) fn gdal_parts(mut converted: Vec<rustgis_data::source::gdal::Converte
             path: c.path,
             name: c.name,
             unprojected: c.unprojected,
+            in_lonlat: c.in_lonlat,
             zm_dropped: false,
             origin: ConvertedOrigin::Gdal(rustgis_map::source::GdalOrigin {
                 path: original.to_string(),
@@ -4356,6 +4357,7 @@ pub(crate) fn duckdb_parts(
             // A geometry that says no coordinate system is usually longitude/latitude: only
             // coordinates past it are pointed out (in add_converted).
             unprojected: false,
+            in_lonlat: false,
             zm_dropped: part.zm_dropped > 0,
             origin: ConvertedOrigin::Duckdb(origin(part.family)),
         })
@@ -4369,6 +4371,8 @@ pub(crate) struct Converted {
     name: String,
     /// Its coordinates are the source's own, in a coordinate system it doesn't say.
     unprojected: bool,
+    /// Its coordinate system is one RustGIS can't read, so it was converted to longitude/latitude.
+    in_lonlat: bool,
     /// The conversion dropped Z or M values (said as it ran), kept with the layer so an export
     /// says so too.
     zm_dropped: bool,
@@ -4390,6 +4394,11 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
     let parts = converted.len();
     let single = parts == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
+    let mut converted_lonlat: Vec<String> = Vec::new();
+    let source_layer = |o: &ConvertedOrigin| match o {
+        ConvertedOrigin::Gdal(g) => g.layer.clone(),
+        ConvertedOrigin::Duckdb(d) => d.table.clone().unwrap_or_default(),
+    };
     for c in converted {
         let mut q = json!({"name": c.name});
         if let Some(n) = ps(p, "name").filter(|_| single) {
@@ -4443,6 +4452,13 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             // its coordinate system is unknown.
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
             let outside = !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0);
+            // Said once for the file below, naming each source layer once, not each part of it.
+            if c.in_lonlat {
+                let layer = source_layer(&c.origin);
+                if !converted_lonlat.contains(&layer) {
+                    converted_lonlat.push(layer);
+                }
+            }
             if outside || (c.unprojected && matches!(c.origin, ConvertedOrigin::Gdal(_))) {
                 s.notify(
                     format!("{}: the data doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
@@ -4451,6 +4467,10 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             }
             ids.push(id);
         }
+    }
+    if !converted_lonlat.is_empty() {
+        let names: Vec<&str> = converted_lonlat.iter().map(String::as_str).collect();
+        s.notify(rustgis_data::source::gdal::in_lonlat_notes(&names), false);
     }
     if empty_before {
         let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent()));

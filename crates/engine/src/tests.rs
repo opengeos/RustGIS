@@ -10,6 +10,9 @@ mod held_databases;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/sources_own.rs"]
+mod sources_own;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/said_not_silent.rs"]
@@ -641,6 +644,26 @@ fn scoped_table_writes_need_prepared_worker_results() {
     assert_eq!(s.undo_depth(), depth + 1);
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(serde_json::to_value(&s.project.tables).unwrap(), before);
+}
+
+#[test]
+fn losses_given_counts_what_the_notice_queue_no_longer_keeps() {
+    use rustgis_data::loss::LossCode;
+    let mut s = Session::new(Project::default());
+    s.notify_loss(LossCode::DroppedRing, String::from("a ring").into());
+    for i in 0..300 {
+        s.notify(format!("notice {i}"), false);
+    }
+    assert!(s.notices_since(0).iter().all(|n| n.loss().is_none()), "the loss notice left the queue");
+    assert_eq!(s.losses_given(), &[(LossCode::DroppedRing, 1)]);
+    // A loss a failed command reported is withdrawn with what it changed.
+    let failed = s.guarded("Lose then fail", true, |s| {
+        s.notify_loss(LossCode::DroppedRing, String::from("another ring").into());
+        s.notify_loss(LossCode::DroppedValue, String::from("a value").into());
+        Err("failed after the loss".into())
+    });
+    assert!(failed.is_err());
+    assert_eq!(s.losses_given(), &[(LossCode::DroppedRing, 1), (LossCode::DroppedValue, 0)]);
 }
 
 #[test]
@@ -9319,6 +9342,7 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
+        conflicts: Default::default(),
         data: project.maps[0].clone(),
     });
     let clean = serde_json::to_string(&project).unwrap();
@@ -14672,6 +14696,67 @@ fn a_publications_colorbar_title_stays_in_the_legends_box() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A layout frame centred on a pole keeps that centre through `layout.import` and
+/// `layout.update`, and says nothing on a polar map, where it's drawn there; on Web Mercator,
+/// which can't show a pole, it says the frame is drawn at 85° (#2684).
+#[test]
+fn a_layout_frame_centred_on_a_pole_is_kept_and_said_where_it_cant_be_shown() {
+    use rustgis_map::layout::ElementKind;
+    // The issue's layout: one round frame on the South Pole.
+    let layout = r#"{"name":"Polo","width":150,"height":150,"elements":[{"id":1,"name":"Mapa","x":5,"y":5,"w":140,"h":140,"visible":true,
+ "kind":{"MapFrame":{"map":"Mapa","center":{"x":0.0,"y":-90.0},"scale":60000000.0,"shape":"Circle",
+ "grid":{"step":10.0,"color":[0,0,0,255],"labels":false,"kind":"graticule","short":false},"extent_of":null}}}],
+ "series":null,"next_id":2}"#;
+    for (projection, said) in [(Some("EPSG:3031"), false), (None, true)] {
+        let mut s = Session::new(Project::default());
+        s.run("map.new", &json!({"name": "Mapa"})).unwrap();
+        if let Some(p) = projection {
+            s.run("map.projection", &json!({"type": p})).unwrap();
+        }
+        let center = |s: &Session| match s.project.layouts.last().map(|l| &l.elements[0].kind) {
+            Some(ElementKind::MapFrame { center, .. }) => center.y,
+            _ => panic!("no frame"),
+        };
+        let told = |s: &Session, mark| {
+            s.notices_since(mark).iter().filter(|n| n.text.contains("can't show") && n.text.contains("'Mapa' at latitude -85")).count() == 1
+        };
+        let mark = s.notice_mark();
+        s.run("layout.import", &json!({"text": layout})).unwrap();
+        assert_eq!(center(&s), -90.0, "{projection:?}: imported");
+        assert_eq!(told(&s, mark), said, "{projection:?}: {:?}", s.notices_since(mark));
+        // Moved away, then back onto the pole by its properties: each command says only its own.
+        let mark = s.notice_mark();
+        s.run("layout.update", &json!({"element": 1, "center": [0, -60]})).unwrap();
+        assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("can't show")), "{:?}", s.notices_since(mark));
+        let mark = s.notice_mark();
+        s.run("layout.update", &json!({"element": 1, "center": [0, -90]})).unwrap();
+        assert_eq!(center(&s), -90.0, "{projection:?}: updated");
+        assert_eq!(told(&s, mark), said, "{projection:?}: {:?}", s.notices_since(mark));
+        // A longitude past ±180° isn't a centre the projection can't show.
+        let mark = s.notice_mark();
+        s.run("layout.update", &json!({"element": 1, "center": [300, -60]})).unwrap();
+        assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("can't show")), "{:?}", s.notices_since(mark));
+    }
+    // Two pole frames in one layout on Web Mercator: one notice, counting both.
+    let mut s = Session::new(Project::default());
+    s.run("map.new", &json!({"name": "Mapa"})).unwrap();
+    let mut two: Value = serde_json::from_str(layout).unwrap();
+    let mut second = two["elements"][0].clone();
+    second["id"] = json!(2);
+    second["name"] = json!("Norte");
+    second["kind"]["MapFrame"]["center"]["y"] = json!(90.0);
+    two["elements"].as_array_mut().unwrap().push(second);
+    two["next_id"] = json!(3);
+    let mark = s.notice_mark();
+    s.run("layout.import", &json!({"text": two.to_string()})).unwrap();
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("can't show")).map(|n| n.text.clone()).collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("2 map frame(s)") && said[0].contains("'Mapa' at latitude -85") && said[0].contains("'Norte' at latitude 85"),
+        "{said:?}"
+    );
+}
+
 /// Series page labels and dynamic text share the row-number fallback for null and blank names.
 #[test]
 fn map_series_empty_names_use_row_numbers() {
@@ -18200,6 +18285,92 @@ fn offline_sync_field_added_on_both_sides_is_compared() {
     assert_eq!(done["conflicts"].as_u64(), Some(1), "{done}");
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(said.iter().any(|t| t.contains("replaced the map's changes") && t.contains("Assets #")), "{said:?}");
+    // The office's value, which the crew's replaced, is kept on the area.
+    let listed = s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    let list = listed["conflicts"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{listed}");
+    assert_eq!(
+        (&list[0]["kind"], &list[0]["values"], &list[0]["package"]),
+        (&json!("replaced"), &json!({"notes": "office"}), &json!("")),
+        "{listed}"
+    );
+    assert!(list[0].get("geometry").is_none(), "the shape didn't change: {listed}");
+}
+
+/// An offline edit to a feature deleted from the source meanwhile is dropped, and the area keeps
+/// what the edit changed as the version that lost.
+#[test]
+fn offline_sync_keeps_an_edit_dropped_for_a_deletion() {
+    let mut s = offline_field_session(&["Assets"], false);
+    s.run("edit.setValue", &json!({"layer": "Assets", "row": 0, "field": "name", "value": "crew"})).unwrap();
+    s.run("map.activate", &json!({"name": "Map"})).unwrap();
+    s.run("select.rows", &json!({"layer": "Assets", "rows": [0]})).unwrap();
+    s.run("edit.delete", &Value::Null).unwrap();
+    let done = s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(done["skipped"].as_u64(), Some(1), "{done}");
+    let listed = s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    let list = listed["conflicts"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{listed}");
+    assert_eq!(list[0]["kind"], "dropped", "{listed}");
+    // Only what the area changed: its name, not its other values or its unmoved shape.
+    assert_eq!(list[0]["values"], json!({"name": "crew"}), "{listed}");
+    assert!(list[0].get("geometry").is_none(), "{listed}");
+    // A sync with nothing in conflict keeps nothing more.
+    s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(s.project.offline_areas[0].conflicts.len(), 1);
+}
+
+/// A kept conflict's value that isn't a finite number is saved as null and counted, as a layer's
+/// is; a shape that lost with such a coordinate refuses the save, naming the conflict, and a clean
+/// list says nothing.
+#[test]
+fn saving_kept_conflicts_counts_numbers_written_as_null_and_refuses_bad_shapes() {
+    use crate::project::ConflictKind;
+    let dir = std::env::temp_dir().join(format!("rustgis-conflict-save-{}-{}", std::process::id(), crate::project::field_id().unwrap()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("p.rgis");
+    let mut s = offline_field_session(&["Assets"], false);
+    let kept = |values, geometry| {
+        let mut c = crate::cmd::workspace::conflict("", 1, "Assets", 1, ConflictKind::Dropped, values, Some(geometry));
+        c.at = 1.0;
+        c
+    };
+    let said = |s: &mut Session| {
+        let mark = s.notice_mark();
+        let done = s.run("project.saveAs", &json!({"path": path}));
+        (done, s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>())
+    };
+    let point = |x: f64| Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(x, 1.0)));
+    s.project.offline_areas[0].conflicts = vec![kept(vec![("population".into(), rustgis_data::Value::Int(10))], point(1.0)).into()];
+    let (done, notices) = said(&mut s);
+    assert!(done.is_ok() && notices.iter().all(|n| !n.contains("written as null")), "{notices:?}");
+    let mark = s.notice_mark();
+    s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("listed as null")), "a clean list says nothing");
+    s.project.offline_areas[0].conflicts.push(kept(vec![("population".into(), rustgis_data::Value::Float(f64::NAN))], point(1.0)).into());
+    let (done, notices) = said(&mut s);
+    assert!(done.is_ok(), "{done:?}");
+    assert!(
+        notices.iter().any(|n| n.contains("1 attribute value(s)") && n.contains("offline area 'Fieldwork''s conflicts")),
+        "{notices:?}"
+    );
+    let before = std::fs::read(&path).unwrap();
+    s.project.offline_areas[0].conflicts.push(kept(Vec::new(), point(f64::NAN)).into());
+    // Listed, the value and the shape are null, and said.
+    let mark = s.notice_mark();
+    let listed = s.run("offline.conflicts", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(
+        (&listed["conflicts"][1]["values"]["population"], &listed["conflicts"][2]["geometry"]),
+        (&Value::Null, &Value::Null),
+        "{listed}"
+    );
+    let listing: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(listing.iter().any(|n| n.contains("Offline area 'Fieldwork': 2 kept value(s) or shape(s)")), "{listing:?}");
+    let (done, _) = said(&mut s);
+    let e = done.unwrap_err();
+    assert!(e.contains("offline area 'Fieldwork'") && e.contains("Assets #1") && e.contains("dismiss it first"), "{e}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the file is kept as it was");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -22109,6 +22280,7 @@ fn split_sources_keep_their_points_on_top() {
             layer: layer.to_string(),
             family: Some(f),
             unprojected: false,
+            in_lonlat: false,
         })
         .collect();
     let original = dir.join("file.gpx").display().to_string();
@@ -53998,6 +54170,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
+        conflicts: Default::default(),
         data: snapshot,
     });
     let mut reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());
