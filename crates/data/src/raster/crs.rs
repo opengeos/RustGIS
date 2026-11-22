@@ -612,6 +612,7 @@ impl Crs {
     pub fn is_world_projection(self) -> bool {
         const WORLD: &[&str] = &[
             "merc",
+            "webmerc",
             "eqc",
             "cea",
             "mill",
@@ -2561,6 +2562,8 @@ mod tests {
             assert!(!Crs::from_epsg(c).unwrap().is_world_projection(), "{c}");
         }
         assert!(Crs::WebMercator.is_world_projection() && !Crs::LonLat.is_world_projection());
+        // PROJ's own spelling of Web Mercator, as a file may give it.
+        assert!(Crs::parse("+proj=webmerc +datum=WGS84 +units=m +no_defs").unwrap().is_world_projection());
     }
 
     /// A saved code another variant stands for reads as that variant, so Web Mercator saved as

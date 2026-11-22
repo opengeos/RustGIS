@@ -1717,7 +1717,7 @@ fn a_converted_inputs_long_edges_are_said() {
     let mark = s.notice_mark();
     s.run("gp.run", &json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Degree", "output": "Clipped"}})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-    let note = said.iter().find(|t| t.contains("edge(s) of 'Degree', converted into EPSG:32632")).unwrap_or_else(|| panic!("{said:?}"));
+    let note = said.iter().find(|t| t.contains("edge(s) of 'Degree' (4), converted into EPSG:32632")).unwrap_or_else(|| panic!("{said:?}"));
     assert!(note.starts_with("Clip: 4 edge(s)"), "{note}");
     let far: f64 = note.split("up to ").nth(1).and_then(|t| t.split(' ').next()).and_then(|t| t.parse().ok()).unwrap();
     // 74.3 km along 48.2°N: 74_300² × tan 48.2° / (8 × 6_371_000) = 121 m.
@@ -1727,4 +1727,59 @@ fn a_converted_inputs_long_edges_are_said() {
     let mark = s.notice_mark();
     s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": ["Parcels", "Degree"], "attributes": false, "output": "Both"}})).unwrap();
     assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("taken straight there")));
+}
+
+/// The environment's extent admits the features of a layer held in UTM that it admits of the same
+/// layer in longitude/latitude: the extent's box in UTM, turned some 1.9° with UTM's grid, reaches
+/// past the middle of each of its edges by some 25 m, where a point 5 m out isn't admitted.
+#[test]
+fn the_environments_extent_admits_alike_in_the_held_system() {
+    let mut ss = both();
+    let mut near = Dataset::new("Near", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    let (west, south, east, north) = (11.505, 48.705, 11.525, 48.725);
+    // 5 m out: 0.000_045° of latitude, 0.000_068° of longitude at 48.7°.
+    let (mid_x, mid_y, out_y, out_x) = (11.515, 48.715, 0.000_045, 0.000_068);
+    let outside = [(mid_x, north + out_y), (mid_x, south - out_y), (east + out_x, mid_y), (west - out_x, mid_y)];
+    for (x, y) in outside.into_iter().chain([(mid_x, mid_y)]) {
+        near.push(Some(Geometry::Point(Coord::new(x, y))), vec![Cell::Text(format!("{x},{y}"))]);
+    }
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = near.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        s.project.gp_env.extent = Some(rustgis_geom::Extent { min_x: west, min_y: south, max_x: east, max_y: north });
+    }
+    run_both(&mut ss, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Near", "output": "Inside"}}));
+    let names = |s: &Session| {
+        let ds = &s.map().layer_by_name("Inside").unwrap().dataset;
+        (0..ds.features.len()).map(|r| ds.value(r, 0).to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(names(&ss[0]), vec!["11.515,48.715".to_string()]);
+    assert_eq!(names(&ss[1]), names(&ss[0]));
+}
+
+/// How far a converted edge runs from where a run in longitude/latitude takes it is looked for
+/// beyond its middle, and on a ring's closing edge when the ring doesn't repeat its first vertex.
+#[test]
+fn bent_edges_are_found_beyond_their_middle_and_on_closing_edges() {
+    let bent = |g: Geometry| {
+        let mut ds = Dataset::new("Edges", g.kind(), Vec::new());
+        ds.push(Some(g), Vec::new());
+        let c = ds.in_crs(UTM).unwrap().into_owned();
+        crate::cmd::gp::bent_edges(&ds, &c, UTM).unwrap()
+    };
+    // Across UTM zone 32N's central meridian (9°E) at the equator, point-symmetric about where they
+    // cross: its middle, (9°E, 0°), is on the chord and on the edge in Web Mercator alike, and it
+    // bends away to either side, by metres at its quarters (CodeRabbit's example, on #2659).
+    let (n, far) = bent(Geometry::Line(vec![vec![Coord::new(8.0, -1.0), Coord::new(10.0, 1.0)]]));
+    assert_eq!(n, 1);
+    assert!(far > 1.0, "{far}");
+    // The degree-wide box of `a_converted_inputs_long_edges_are_said`, closed and open: its four edges
+    // either way.
+    let ring = [(11.0, 48.2), (12.0, 48.2), (12.0, 49.2), (11.0, 49.2)].map(|(x, y)| Coord::new(x, y)).to_vec();
+    let mut closed = ring.clone();
+    closed.push(ring[0]);
+    let open = bent(Geometry::Polygon(vec![vec![ring]]));
+    assert_eq!(open.0, 4);
+    assert_eq!(bent(Geometry::Polygon(vec![vec![closed]])).0, 4);
 }

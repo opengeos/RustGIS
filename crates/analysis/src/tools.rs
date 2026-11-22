@@ -65,7 +65,7 @@ pub static TOOLS: &[ToolSpec] = &[
         id: "featureEnvelopeToPolygon",
         name: "Feature Envelope To Polygon",
         toolbox: "Data Management › Features",
-        summary: "Writes one axis-aligned bounding rectangle per feature in the layer's own coordinates when it is held in a projected system other than Web Mercator, else in longitude/latitude. Zero-area envelopes are skipped.",
+        summary: "Writes one axis-aligned bounding rectangle per feature in the layer's own coordinates when it is held in a projected system other than Web Mercator and the other world projections (Robinson, Plate Carrée and the like), else in longitude/latitude. Zero-area envelopes are skipped.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
@@ -1785,10 +1785,9 @@ fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
 /// `None` when nothing is left, or only a shared edge or corner.
 ///
 /// The mask's polygons are in the run's plane ([`crate::convert::plane`]), oriented as `union_all`
-/// leaves them. The
-/// feature's may wind either way (the reference corpus has a clockwise parcel), but must not
-/// overlap each other: pass a feature of several polygons through [`dissolved`] first, once for all
-/// its masks.
+/// leaves them. The feature's may wind either way (the reference corpus has a clockwise parcel),
+/// but must not overlap each other: pass a feature of several polygons through [`dissolved`] first,
+/// once for all its masks.
 fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry> {
     match g {
         Geometry::Polygon(_) => {

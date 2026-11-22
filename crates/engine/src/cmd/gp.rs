@@ -700,6 +700,10 @@ impl ToolRun {
                 full_ids: FullIds::new(),
             };
         }
+        // Reading and converting the inputs stops on Cancel too, as the tool does: the
+        // conversions look at the run's control (`rustgis_data::progress`), and a conversion's
+        // refusal isn't taken for a place that can't be held when it is a Cancel.
+        let _probe = rustgis_analysis::control::install_progress(Some(control.clone()));
         let current = continuation.clone();
         let still = std::sync::Arc::new(move || current.check().is_ok()) as crate::render::rustgis_tiles::cache::Still;
         // A bug in reading the inputs, like one in a tool, must not take the app down.
@@ -1568,18 +1572,14 @@ fn inputs_in(
 ) -> Result<(std::collections::HashMap<String, Dataset>, Vec<String>), String> {
     let mut converted = std::collections::HashMap::new();
     // What a run that crosses edges is told of an input's converted edges ([`bent_edges`]).
-    let mut said = Vec::new();
+    // The converted inputs with edges that bend ([`bent_edges`]): name, how many, how far.
+    let mut bent: Vec<(String, usize, f64)> = Vec::new();
     let reads_edges = work != Crs::LonLat && spec.is_some_and(rustgis_analysis::ToolSpec::reads_edges);
     let mut say = |original: &Dataset, c: &Dataset| -> Result<(), String> {
         if reads_edges {
             let (n, far) = bent_edges(original, c, work)?;
             if n > 0 {
-                let name = spec.map_or("The tool", |t| t.name);
-                said.push(format!(
-                    "{name}: {n} edge(s) of '{}', converted into {}, are taken straight there, up to {far:.0} m from where a run in longitude/latitude takes them (straight on a Web Mercator map); their vertices are where they were",
-                    original.name,
-                    work.label()
-                ));
+                bent.push((original.name.clone(), n, far));
             }
         }
         Ok(())
@@ -1588,7 +1588,7 @@ fn inputs_in(
     // input, if it is named there too, is in that system already.)
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
     for (key, ds) in full {
-        if unread.contains(key) {
+        if unread.contains(&key.to_ascii_lowercase()) {
             continue;
         }
         if let std::borrow::Cow::Owned(c) = ds.in_crs(work)? {
@@ -1628,6 +1628,18 @@ fn inputs_in(
             converted.insert(key, c);
         }
     }
+    // One notice for them all, naming each layer.
+    let mut said = Vec::new();
+    if !bent.is_empty() {
+        let name = spec.map_or("The tool", |t| t.name);
+        let n: usize = bent.iter().map(|(_, n, _)| n).sum();
+        let far = bent.iter().map(|(.., far)| *far).fold(0.0, f64::max);
+        let layers = bent.iter().map(|(layer, n, _)| format!("'{layer}' ({n})")).collect::<Vec<_>>().join(", ");
+        said.push(format!(
+            "{name}: {n} edge(s) of {layers}, converted into {}, are taken straight there, up to {far:.0} m from where a run in longitude/latitude takes them (straight on a Web Mercator map); their vertices are where they were",
+            work.label()
+        ));
+    }
     Ok((converted, said))
 }
 
@@ -1638,47 +1650,57 @@ const BENT_M: f64 = 1.0;
 /// The edges of `original` that `converted`, its geometry converted vertex by vertex into `work`,
 /// takes more than [`BENT_M`] from where a run in longitude/latitude takes them: straight in the
 /// analysis plane there (Web Mercator, along a parallel for an edge running east), straight in
-/// `work` here. Their count, and how far the farthest moved, in metres: measured at each edge's
-/// middle, where the two part most, across the chord. An edge under
-/// a kilometre in the analysis plane is passed over: its two readings part by under a metre short
-/// of 88.9° from the equator (about L² tan φ / 8R).
-fn bent_edges(original: &Dataset, converted: &Dataset, work: Crs) -> Result<(usize, f64), String> {
+/// `work` here. A polygon ring's closing edge counts too, when the ring doesn't repeat its first
+/// vertex. Their count, and how far the farthest moved, in metres: measured across the chord at a
+/// quarter, half and three quarters of the edge (an edge across a transverse Mercator's central
+/// meridian bends both ways, its middle staying on the chord), in ground metres whatever `work`'s
+/// units. An edge under a kilometre in the analysis plane is skipped: its two readings part by
+/// under a metre short of 88.9° from the equator (about L² tan φ / 8R).
+pub(crate) fn bent_edges(original: &Dataset, converted: &Dataset, work: Crs) -> Result<(usize, f64), String> {
     use rustgis_geom::{Coord, lonlat_to_plane, plane_to_lonlat};
-    fn parts(g: &rustgis_data::Geometry) -> Vec<&[Coord]> {
+    /// Its parts' vertices, each with whether it is a polygon's ring, whose closing edge counts.
+    fn parts(g: &rustgis_data::Geometry) -> Vec<(&[Coord], bool)> {
         match g {
-            rustgis_data::Geometry::Line(parts) => parts.iter().map(Vec::as_slice).collect(),
-            rustgis_data::Geometry::Polygon(polys) => polys.iter().flatten().map(Vec::as_slice).collect(),
+            rustgis_data::Geometry::Line(parts) => parts.iter().map(|p| (p.as_slice(), false)).collect(),
+            rustgis_data::Geometry::Polygon(polys) => polys.iter().flatten().map(|r| (r.as_slice(), true)).collect(),
             rustgis_data::Geometry::Point(_) | rustgis_data::Geometry::MultiPoint(_) => Vec::new(),
         }
     }
+    /// The edges of a part: each pair of neighbours, and a ring's closing pair when it isn't
+    /// closed already.
+    fn edges(part: &[Coord], ring: bool) -> impl Iterator<Item = (Coord, Coord)> + '_ {
+        let closing = ring.then(|| part.first().zip(part.last())).flatten().filter(|(a, b)| a != b).map(|(a, b)| (*b, *a));
+        part.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).chain(closing)
+    }
     let (to_lonlat, into, back) = (original.lonlat_conversion()?, Crs::LonLat.to(work)?, work.to(Crs::LonLat)?);
     let (mut n, mut far) = (0usize, 0.0f64);
-    for (i, (f, c)) in original.features.iter().zip(converted.features.iter()).enumerate() {
+    for (i, (f, c)) in original.features.rows().zip(converted.features.rows()).enumerate() {
         if i.is_multiple_of(256) {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
         }
-        let (Some(g), Some(h)) = (&f.geometry, &c.geometry) else { continue };
-        for (part, held) in parts(g).into_iter().zip(parts(h)) {
-            for (ab, cd) in part.windows(2).zip(held.windows(2)) {
-                let ([a, b], [c0, c1]) = (ab, cd) else { continue };
-                let (Some(a), Some(b)) = (to_lonlat.point(*a), to_lonlat.point(*b)) else { continue };
+        let (Some(g), Some(h)) = (f.geometry(), c.geometry()) else { continue };
+        for ((part, ring), (held, _)) in parts(g).into_iter().zip(parts(h)) {
+            for ((a, b), (c0, c1)) in edges(part, ring).zip(edges(held, ring)) {
+                let (Some(a), Some(b)) = (to_lonlat.point(a), to_lonlat.point(b)) else { continue };
                 let (pa, pb) = (lonlat_to_plane(a), lonlat_to_plane(b));
-                // (Also passed over: a length that is no number, a coordinate being missing.)
+                // (Also skipped: a length that is no number, a coordinate being missing.)
                 let length = (pb.x - pa.x).hypot(pb.y - pa.y);
                 if length.is_nan() || length < 1000.0 {
                     continue;
                 }
-                // The middle of the edge as a run in longitude/latitude takes it, in `work`, and how
-                // far it is from the chord there, across it (not along: where an edge's middle is
-                // along it differs between the planes, a meridian's by some 280 m over a degree).
-                let middle = plane_to_lonlat(Coord::new((pa.x + pb.x) / 2.0, (pa.y + pb.y) / 2.0));
-                let Some(m) = into.point(middle) else { continue };
                 let (dx, dy) = (c1.x - c0.x, c1.y - c0.y);
                 let chord = dx.hypot(dy);
-                let across = ((m.x - c0.x) * dy - (m.y - c0.y) * dx).abs() / chord;
                 // In metres: the chord's ground length over its length in `work`'s units.
-                let (Some(e0), Some(e1)) = (back.point(*c0), back.point(*c1)) else { continue };
-                let d = across * rustgis_geom::wgs84_inverse(e0, e1).0 / chord;
+                let (Some(e0), Some(e1)) = (back.point(c0), back.point(c1)) else { continue };
+                let per_unit = rustgis_geom::wgs84_inverse(e0, e1).0 / chord;
+                // How far the edge as a run in longitude/latitude takes it lies across the chord
+                // (not along it: where a point is along an edge differs between the planes, a
+                // meridian's middle by some 280 m over a degree).
+                let across = |t: f64| {
+                    let on = plane_to_lonlat(Coord::new(pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y)));
+                    into.point(on).map(|m| ((m.x - c0.x) * dy - (m.y - c0.y) * dx).abs() / chord * per_unit)
+                };
+                let d = [0.25, 0.5, 0.75].into_iter().filter_map(across).fold(0.0, f64::max);
                 if d > BENT_M {
                     n += 1;
                     far = far.max(d);
@@ -1762,15 +1784,20 @@ fn env_rows(
         .filter(|l| !l.is_raster() && l.selection.is_empty())
         .map(|l| {
             let ds = full.get(&l.name.to_ascii_lowercase()).unwrap_or(&l.dataset);
-            // The extent in the layer's own coordinates, as its features' boxes are.
+            // The extent in the layer's own coordinates, as its features' boxes are: a box there
+            // around the longitude/latitude one, which can reach past its edges, so a feature it
+            // reaches is admitted only when its box in longitude/latitude meets the extent, as in a
+            // run in longitude/latitude.
             let own = ds.extent_from_lonlat(&e);
-            let rows: Vec<usize> = ds
-                .features
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&own)))
-                .map(|(i, _)| i)
-                .collect();
+            let to_lonlat = ds.lonlat_conversion().ok();
+            let meets = |g: &rustgis_data::Geometry| {
+                g.extent().intersects(&own)
+                    && to_lonlat.as_ref().is_some_and(|to| {
+                        to.is_identity() || Dataset::geometry_to_lonlat_by(to, g).is_ok_and(|g| g.extent().intersects(&e))
+                    })
+            };
+            let rows: Vec<usize> =
+                ds.features.rows().enumerate().filter(|(_, r)| r.geometry().is_some_and(meets)).map(|(i, _)| i).collect();
             (l.name.to_ascii_lowercase(), rows)
         })
         .collect()

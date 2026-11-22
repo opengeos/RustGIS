@@ -187,8 +187,8 @@ Within a distance). Their other inputs are converted into that system for the ru
 layers are kept in it, so the coordinates of what they copy stay exactly as they were. An overlay
 there takes each edge as straight in that system, not in Web Mercator as it does in
 longitude/latitude, so where an edge crosses another can differ from the same tool's result in
-longitude/latitude. For a layer's own edges, a few decimetres at most (about 20 cm for a 3 km
-edge at 48°N). An input in another system is converted vertex by vertex, as the map draws it in
+longitude/latitude, by up to about L² tan φ / 8R for an edge L long at latitude φ: some 20 cm for
+a 3 km edge at 48°N, 2 m for a 10 km one, 220 m for a 100 km one. An input in another system is converted vertex by vertex, as the map draws it in
 that system, and its long edges can run much farther from where they run in longitude/latitude: a
 degree-wide box's east-west edges, which follow their parallels there, are chords in UTM up to
 120 m away. The tool then says how many edges of which layer run more than a metre away, and how
@@ -1241,7 +1241,7 @@ CRS metadata. Coordinates are used directly, without projection or snapping.
   memory returns an error.
 - **Feature Envelope To Polygon** (`featureEnvelopeToPolygon`) writes one axis-aligned rectangle
   around all coordinates of each feature, along the axes of the layer's own system when it is a
-  projected one, and of longitude/latitude otherwise. Point features and
+  projected one other than a world projection (see above), and of longitude/latitude otherwise. Point features and
   horizontal or vertical lines have zero-area envelopes and are skipped with a count. Longitude
   bounds are literal, including for features spanning the antimeridian.
 - **Unsplit Line** (`unsplitLine`) joins line parts at exactly equal endpoints where precisely
