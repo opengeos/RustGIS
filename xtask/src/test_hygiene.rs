@@ -30,24 +30,37 @@ fn line_of(newlines: &[usize], at: usize) -> usize {
 
 /// The first two top-level arguments of a macro call, from the token after its opening delimiter
 /// (`index`) to the comma or closing delimiter that ends each. `None` when it has fewer than two.
-/// The commas of a turbofish (`get::<u8, u8>()`) don't split an argument.
+/// The commas of a turbofish (`get::<u8, u8>()`) don't split an argument. Each delimiter pair
+/// keeps its own count of open `<`, so a comparison inside a const block (`::<{ 1 < 2 }>`)
+/// doesn't disturb the turbofish around it.
 fn first_two_arguments<'a, 'b>(tokens: &'b [Token<'a>], index: usize) -> Option<(&'b [Token<'a>], &'b [Token<'a>])> {
-    let mut depth = 0usize;
-    let mut angles = 0usize;
+    // Open `<` of a turbofish, for the macro's own arguments and each delimiter pair inside them.
+    let mut angles = vec![0usize];
     let mut starts = vec![index];
     let mut end = None;
     for (at, t) in tokens.iter().enumerate().skip(index) {
         let before = |n: usize| at.checked_sub(n).and_then(|i| tokens.get(i)).map_or("", |t| t.text);
+        let open = angles.last().copied().unwrap_or(0);
         match t.text {
-            "<" if angles > 0 || (before(1) == ":" && before(2) == ":") => angles += 1,
-            ">" if angles > 0 && !matches!(before(1), "-" | "=") => angles -= 1,
-            "(" | "[" | "{" => depth += 1,
-            ")" | "]" | "}" if depth == 0 => {
+            "<" if open > 0 || (before(1) == ":" && before(2) == ":") => {
+                if let Some(a) = angles.last_mut() {
+                    *a += 1;
+                }
+            }
+            ">" if open > 0 && !matches!(before(1), "-" | "=") => {
+                if let Some(a) = angles.last_mut() {
+                    *a -= 1;
+                }
+            }
+            "(" | "[" | "{" => angles.push(0),
+            ")" | "]" | "}" if angles.len() == 1 => {
                 end = Some(at);
                 break;
             }
-            ")" | "]" | "}" => depth -= 1,
-            "," if depth == 0 && angles == 0 => starts.push(at + 1),
+            ")" | "]" | "}" => {
+                angles.pop();
+            }
+            "," if angles.len() == 1 && open == 0 => starts.push(at + 1),
             _ => {}
         }
         if starts.len() > 2 {
@@ -448,6 +461,7 @@ mod tests {
             "#[test] fn t() { assert_eq!(get::<u8, Vec<u8>>(1), get::<u8, Vec<u8>>(1)); }",
             "#[test] fn t() { assert_eq!(f::<(u8, u8)>(), f::<(u8, u8)>(), \"m\"); }",
             "#[test] fn t() { assert_eq!(f::<u8, u16>(), f::<u8, u16>()); }",
+            "#[test] fn t() { assert_eq!(flag::<{ 1 < 2 }>(), flag::<{ 1 < 2 }>()); }",
             "#[test] fn t() { assert_eq!(1, 1); }",
         ] {
             let errors = scan(Path::new("src/lib.rs"), text, false).0;
@@ -467,6 +481,9 @@ mod tests {
             // Commas inside nested generic arguments don't end a side.
             "#[test] fn t() { assert_eq!(HashMap::<u8, HashMap::<u8, u16>>::new(), expected); }",
             "#[test] fn t() { assert_eq!(f::<u8, u16>(), f::<u8, i16>()); }",
+            // A comparison inside a const block is not a generic delimiter.
+            "#[test] fn t() { assert_eq!(Flag::<{ 2 > 1 }, Flag::<{ 2 > 1 }, u8>>(Flag(0)), expected); }",
+            "#[test] fn t() { assert_eq!(flag::<{ 1 < 2 }>(), flag::<{ 1 < 3 }>()); }",
             // A message that repeats the first side is not a second side.
             "#[test] fn t() { assert_eq!(a, b, a); }",
             "#[test] fn t() { assert!(a == a); assert_eq!(a); }",
