@@ -20,6 +20,11 @@ pub struct Fingerprint {
     pub modified_ns: Option<String>,
     pub sha256: Option<String>,
     pub hash_unavailable: Option<String>,
+    /// Set when the inputs behind `path` can't all be listed (a folder too large to walk, a
+    /// header that couldn't be read for the files it names): the reason, so a reader of the log
+    /// knows the list is incomplete there. Absent in older exported logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<String>,
 }
 
 thread_local! {
@@ -78,7 +83,11 @@ pub fn current() -> Vec<Fingerprint> {
         for input in inputs {
             if input.sha256.is_some()
                 && kept.last().is_some_and(|last| {
-                    last.path == input.path && last.size == input.size && last.modified_ns == input.modified_ns && last.sha256.is_none()
+                    last.path == input.path
+                        && last.size == input.size
+                        && last.modified_ns == input.modified_ns
+                        && last.sha256.is_none()
+                        && last.incomplete.is_none()
                 })
             {
                 kept.pop();
@@ -94,14 +103,134 @@ pub(crate) fn active() -> bool {
     INPUTS.with(|v| v.borrow().is_some())
 }
 
-/// Records a path opened by a library or external reader without opening it again.
+/// Records a path opened by a library or external reader without opening it again. A folder
+/// (a File Geodatabase read through GDAL) records the files inside it, up to
+/// [`MAX_FOLDER_FILES`] at most [`MAX_FOLDER_DEPTH`] folders down, and an
+/// [`incomplete`](Fingerprint::incomplete) mark when it can't list them all.
 pub fn path(path: &Path) {
     if active() {
         let metadata = std::fs::metadata(path).ok();
-        if metadata.as_ref().is_none_or(Metadata::is_file) {
+        if metadata.as_ref().is_some_and(Metadata::is_dir) {
+            folder(path);
+        } else if metadata.as_ref().is_none_or(Metadata::is_file) {
             observe(path, metadata.as_ref(), None);
         }
     }
+}
+
+/// Most files a folder input lists before it is marked incomplete.
+pub const MAX_FOLDER_FILES: usize = 1000;
+/// Most folders down a folder input is walked before it is marked incomplete.
+pub const MAX_FOLDER_DEPTH: usize = 8;
+
+/// Records the regular files inside `root` by metadata alone, in name order, bounded by
+/// [`MAX_FOLDER_FILES`] and [`MAX_FOLDER_DEPTH`]. Linked folders aren't followed (they could
+/// loop). Whatever can't be listed leaves one mark on `root` saying why.
+fn folder(root: &Path) {
+    let mut gap: Option<String> = None;
+    let mut files = 0usize;
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    'walk: while let Some((dir, depth)) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                gap.get_or_insert_with(|| format!("a folder inside couldn't be listed ({e}); its files aren't named"));
+                continue;
+            }
+        };
+        // One more than may be kept, so a folder of millions isn't listed whole to be cut.
+        let mut paths = Vec::new();
+        for entry in entries.take(MAX_FOLDER_FILES.saturating_add(1)) {
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(e) => {
+                    gap.get_or_insert_with(|| format!("a folder inside couldn't be listed in full ({e})"));
+                }
+            }
+        }
+        paths.sort();
+        let mut folders = Vec::new();
+        for p in paths {
+            let linked = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink());
+            let Ok(metadata) = std::fs::metadata(&p) else { continue };
+            if metadata.is_dir() {
+                if linked {
+                    gap.get_or_insert_with(|| "a linked folder inside isn't followed; its files aren't named".into());
+                } else if depth >= MAX_FOLDER_DEPTH {
+                    gap.get_or_insert_with(|| format!("folders more than {MAX_FOLDER_DEPTH} deep aren't listed"));
+                } else {
+                    folders.push((p, depth + 1));
+                }
+            } else if metadata.is_file() {
+                if files >= MAX_FOLDER_FILES {
+                    gap = Some(format!("more than {MAX_FOLDER_FILES} files; only the first {MAX_FOLDER_FILES} are named"));
+                    break 'walk;
+                }
+                files += 1;
+                observe(&p, Some(&metadata), None);
+            }
+        }
+        // Popped in name order.
+        stack.extend(folders.into_iter().rev());
+    }
+    if let Some(why) = gap {
+        incomplete(root, &why);
+    }
+}
+
+/// Marks the inputs behind `path` as not all listed, saying why ([`Fingerprint::incomplete`]).
+pub fn incomplete(path: &Path, why: &str) {
+    if active() {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string();
+        record([Fingerprint {
+            path,
+            size: None,
+            modified_ns: None,
+            sha256: None,
+            hash_unavailable: None,
+            incomplete: Some(why.to_string()),
+        }]);
+    }
+}
+
+/// A DuckDB database DuckDB opens itself: the file, and its write-ahead log (`<file>.wal`) when
+/// one is present, which holds changes not yet checkpointed into it.
+pub fn duckdb(path: &Path) {
+    if !active() {
+        return;
+    }
+    self::path(path);
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push(".wal");
+    let wal = std::path::PathBuf::from(wal);
+    if let Ok(metadata) = std::fs::metadata(&wal)
+        && metadata.is_file()
+    {
+        observe(&wal, Some(&metadata), None);
+    }
+}
+
+/// What `observe` records, captured on its own and not added to the enclosing command's inputs:
+/// a converted file's original as it was when converted, recorded with each later read of the
+/// conversion ([`record`]) in place of the original as it is by then. Captured whether or not a
+/// command is capturing, as the conversion may be opened while none is. Gives what `observe`
+/// returned too.
+pub fn snapshot<T>(observe: impl FnOnce() -> T) -> (T, Vec<Fingerprint>) {
+    let previous = INPUTS.with(|v| v.replace(Some(BTreeSet::new())));
+    // Restored even if `observe` unwinds.
+    struct Restore(Option<Option<BTreeSet<Fingerprint>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                INPUTS.with(|v| v.replace(previous));
+            }
+        }
+    }
+    let restore = Restore(Some(previous));
+    let out = observe();
+    let seen = current();
+    drop(restore);
+    (out, seen)
 }
 
 /// SQLite opens its own handles; present companions may contain uncheckpointed input data.
@@ -171,6 +300,7 @@ fn observe(path: &Path, metadata: Option<&Metadata>, bytes: Option<&[u8]>) {
         modified_ns: modified_ns(metadata),
         sha256,
         hash_unavailable,
+        incomplete: None,
     }]);
 }
 
@@ -194,6 +324,7 @@ pub(crate) fn hashed(path: &Path, metadata: Option<&Metadata>, sha256: String) {
             modified_ns: modified_ns(metadata),
             sha256: Some(sha256),
             hash_unavailable: None,
+            incomplete: None,
         }]);
     }
 }
@@ -315,5 +446,94 @@ mod tests {
         assert!(current().is_empty());
         let other = Capture::start();
         assert!(other.inputs().is_empty());
+    }
+
+    /// A folder another program opens lists the files inside it, in name order and without a
+    /// mark; one past the limits keeps what it lists and says why the rest aren't (#2639).
+    #[test]
+    fn a_folder_input_lists_its_files_and_marks_what_it_cannot() {
+        let dir = tempfile::tempdir().unwrap();
+        let gdb = dir.path().join("roads.gdb");
+        std::fs::create_dir_all(gdb.join("inner")).unwrap();
+        std::fs::write(gdb.join("a00000001.gdbtable"), b"table").unwrap();
+        std::fs::write(gdb.join("a00000001.gdbtablx"), b"index").unwrap();
+        std::fs::write(gdb.join("inner").join("deep.dat"), b"deep").unwrap();
+        let scope = Capture::start();
+        path(&gdb);
+        let inputs = scope.inputs();
+        let names: Vec<&str> = inputs.iter().map(|i| i.path.rsplit(['/', '\\']).next().unwrap()).collect();
+        assert_eq!(names, ["a00000001.gdbtable", "a00000001.gdbtablx", "deep.dat"]);
+        assert!(inputs.iter().all(|i| i.incomplete.is_none() && i.size.is_some()), "{inputs:?}");
+        drop(scope);
+        // Past the file limit: the first files, and one mark on the folder.
+        let big = dir.path().join("big.gdb");
+        std::fs::create_dir(&big).unwrap();
+        for i in 0..=MAX_FOLDER_FILES {
+            std::fs::write(big.join(format!("{i:05}.gdbtable")), b"t").unwrap();
+        }
+        let scope = Capture::start();
+        path(&big);
+        let inputs = scope.inputs();
+        let marks: Vec<&Fingerprint> = inputs.iter().filter(|i| i.incomplete.is_some()).collect();
+        assert_eq!(inputs.len() - marks.len(), MAX_FOLDER_FILES);
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].path, std::path::absolute(&big).unwrap().display().to_string());
+        assert!(marks[0].incomplete.as_deref().is_some_and(|w| w.contains("more than 1000 files")), "{marks:?}");
+        assert!(marks[0].size.is_none() && marks[0].sha256.is_none());
+        // A mark is written out only when there is one.
+        let json = serde_json::to_value(marks[0]).unwrap();
+        assert!(json.get("incomplete").is_some());
+        assert!(serde_json::to_value(inputs.last().unwrap()).unwrap().get("incomplete").is_none());
+        drop(scope);
+        // A linked folder inside isn't followed (it could loop back), and says so.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&gdb, gdb.join("loop")).unwrap();
+            let scope = Capture::start();
+            path(&gdb);
+            let inputs = scope.inputs();
+            assert_eq!(inputs.iter().filter(|i| i.incomplete.is_none()).count(), 3);
+            assert!(inputs.iter().any(|i| i.incomplete.as_deref().is_some_and(|w| w.contains("linked folder"))), "{inputs:?}");
+        }
+    }
+
+    /// A DuckDB database's write-ahead log is an input when it is there, and only then.
+    #[test]
+    fn a_duckdb_database_names_its_write_ahead_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("places.duckdb");
+        std::fs::write(&db, b"db").unwrap();
+        let scope = Capture::start();
+        duckdb(&db);
+        assert_eq!(scope.inputs().len(), 1);
+        drop(scope);
+        std::fs::write(dir.path().join("places.duckdb.wal"), b"changes").unwrap();
+        let scope = Capture::start();
+        duckdb(&db);
+        let inputs = scope.inputs();
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs.iter().any(|i| i.path.ends_with("places.duckdb.wal") && i.size == Some(7)), "{inputs:?}");
+        assert!(inputs.iter().all(|i| i.incomplete.is_none()));
+    }
+
+    /// A snapshot captures what it observes whether or not a command is capturing, and adds
+    /// nothing to the enclosing capture by itself.
+    #[test]
+    fn a_snapshot_is_taken_apart_from_the_enclosing_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("source.csv");
+        std::fs::write(&file, b"a,b").unwrap();
+        let ((), seen) = snapshot(|| path(&file));
+        assert_eq!(seen.len(), 1);
+        assert!(!active());
+        let scope = Capture::start();
+        let (answer, again) = snapshot(|| {
+            path(&file);
+            42
+        });
+        assert_eq!((answer, again), (42, seen.clone()));
+        assert!(scope.inputs().is_empty());
+        record(seen.clone());
+        assert_eq!(scope.inputs(), seen);
     }
 }
