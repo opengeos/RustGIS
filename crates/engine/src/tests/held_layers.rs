@@ -2355,7 +2355,7 @@ fn rasterize_says_the_vertices_left_out_of_its_extent() {
     let far = vec![Coord::new(x0, y0), Coord::new(1e12, 1e12), Coord::new(x0, y0 + 500.0), Coord::new(x0, y0)];
     let mut s = Session::new(Project::default());
     add_in(&mut s, "Plots", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square]]), Geometry::Polygon(vec![vec![far]])], UTM);
-    let left_out = "vertex that can't be placed in longitude/latitude was left out of the grid's extent: give an extent to take it in";
+    let left_out = "vertex that can't be placed in longitude/latitude was left out of the grid's extent: check its coordinates and the layer's coordinate system";
     let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
     let mark = s.notice_mark();
     s.run("raster.rasterize", &json!({"layer": "Plots", "crs": "EPSG:4326", "cellSize": 0.001, "name": "A"})).unwrap();

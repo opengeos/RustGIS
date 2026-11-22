@@ -607,10 +607,10 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
     if unsized_by > 0 && p.get("extent").is_none_or(Value::is_null) {
         s.notify(
             format!(
-                "{ln}: {unsized_by} {} that can't be placed in longitude/latitude {} left out of the grid's extent: give an extent to take {} in",
+                "{ln}: {unsized_by} {} that can't be placed in longitude/latitude {} left out of the grid's extent: check {} coordinates and the layer's coordinate system",
                 if unsized_by == 1 { "vertex" } else { "vertices" },
                 if unsized_by == 1 { "was" } else { "were" },
-                if unsized_by == 1 { "it" } else { "them" }
+                if unsized_by == 1 { "its" } else { "their" }
             ),
             false,
         );
