@@ -901,7 +901,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent and pixel size; when empty, the one the layer was read in if projected, else degrees; EPSG:4326 for degrees.",
+                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent and pixel size; when empty, the projected one the layer is held in, or else was read in, else degrees; EPSG:4326 for degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -1067,7 +1067,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent, pixel size and range; when empty, the one the layer was read in if projected, else degrees; EPSG:4326 for degrees.",
+                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent, pixel size and range; when empty, the projected one the layer is held in, or else was read in, else degrees; EPSG:4326 for degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -5051,17 +5051,21 @@ pub fn layer_raster_crs(crs: Option<Crs>) -> Option<Result<Crs, String>> {
 /// run used where that could surprise: the system it took from the layer, or the compatibility note
 /// on the one given.
 pub fn raster_crs(ds: &Dataset, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
-    raster_crs_of(ds.crs, &ds.name, p, tool)
+    raster_crs_of(ds.crs, "was read in", &ds.name, p, tool)
 }
 
 /// [`raster_crs`] for a run in `work` ([`Inputs::work_crs`]): a layer held in its own projected
 /// system makes its grid there unless `p` names another.
 fn raster_crs_in(ds: &Dataset, work: Crs, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
-    raster_crs_of(if work == Crs::LonLat { ds.crs } else { Some(work) }, &ds.name, p, tool)
+    if work == Crs::LonLat {
+        raster_crs_of(ds.crs, "was read in", &ds.name, p, tool)
+    } else {
+        raster_crs_of(Some(work), "is held in", &ds.name, p, tool)
+    }
 }
 
-/// [`raster_crs`] for a layer named `name` read in `layer_crs`.
-fn raster_crs_of(layer_crs: Option<Crs>, name: &str, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
+/// [`raster_crs`] for a layer named `name` that `how` ("was read in", "is held in") `layer_crs`.
+fn raster_crs_of(layer_crs: Option<Crs>, how: &str, name: &str, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
     if p.get("crs").is_some_and(|v| !v.is_null() && !v.is_string()) {
         return Err("crs must be text".into());
     }
@@ -5072,16 +5076,14 @@ fn raster_crs_of(layer_crs: Option<Crs>, name: &str, p: &Json, tool: &str) -> Re
             Some(Err(why)) => (
                 Crs::LonLat,
                 Some(format!(
-                    "{tool}: made in degrees of longitude and latitude, though {} was read in {why}; give a projected crs to make it in metres or feet",
-                    name
+                    "{tool}: made in degrees of longitude and latitude, though {name} {how} {why}; give a projected crs to make it in metres or feet"
                 )),
             ),
             Some(Ok(c)) => (
                 c,
                 Some(format!(
-                    "{tool}: made in {}, the coordinate system {} was read in, with its units for the extent and sizes; set crs to EPSG:4326 to make it in degrees",
-                    c.label(),
-                    name
+                    "{tool}: made in {}, the coordinate system {name} {how}, with its units for the extent and sizes; set crs to EPSG:4326 to make it in degrees",
+                    c.label()
                 )),
             ),
             None => (Crs::LonLat, None),
@@ -5292,7 +5294,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     let crs_text = s(p, "crs").trim();
     let (crs, crs_note) = if !crs_text.is_empty() {
         crs_with_compatibility_note(crs_text)?
-    } else if let Some(c) = Some(inp.work_crs()).filter(|c| *c != Crs::LonLat).or(ds.crs) {
+    } else if let Some(c) = if inp.work_crs() == Crs::LonLat { ds.crs } else { Some(inp.work_crs()) } {
         (c, None)
     } else {
         return Err(format!(

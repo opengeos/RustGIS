@@ -1290,6 +1290,8 @@ pub fn transform_polygon_to_lonlat(rings: &[Vec<Coord>], tr: Option<&Transformer
 }
 
 /// Transforms and validates all polygon parts of a (multi-)polygon feature to WGS 84 lon/lat coordinates.
+/// With no transformer (`tr` `None`), it only checks the parts and takes them apart into rings,
+/// in whatever system they are in.
 pub fn transform_feature_polygons_to_lonlat(
     polys: &[Vec<Vec<Coord>>],
     tr: Option<&Transformer>,

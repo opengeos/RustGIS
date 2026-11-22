@@ -183,16 +183,16 @@ Points, Check Geometry and Repair Geometry; the overlays Clip, Erase, Intersect,
 Symmetrical Difference, Update, Split and Dissolve; Minimum Bounding Geometry (convex hull),
 Feature To Point and Summarize Within; Select Layer By Location and Spatial Join; Buffer,
 Simplify, Points Along Lines and Near; and IDW Interpolation, Kriging, Kernel Density, Zonal
-Statistics and Tabulate Area. Their other inputs are converted into that system for the
-run, and their new layers are kept in it, so the coordinates of what they copy stay exactly as they
-were. An overlay there takes each edge as straight in that system, not in Web Mercator as it does in
-longitude/latitude, so where an edge crosses another can differ from the same tool's result in
-longitude/latitude, by up to about L² tan φ / 8R for an edge L long at latitude φ: some 20 cm for a
-3 km edge at 48°N, 2 m for a 10 km one, 220 m for a 100 km one. An input in another system is
-converted vertex by vertex, as the map draws it in that system, and its long edges can run much
-farther from where they run in longitude/latitude: a degree-wide box's east-west edges, which follow
-their parallels there, are chords in UTM up to 120 m away. The tool then says how many edges of
-which layer run more than a metre away, and how far the farthest does. A world projection (World
+Statistics and Tabulate Area (the last five as said below). Their other inputs are converted into
+that system for the run, and their new layers are kept in it, so the coordinates of what they copy
+stay exactly as they were. An overlay there takes each edge as straight in that system, not in Web
+Mercator as it does in longitude/latitude, so where an edge crosses another can differ from the same
+tool's result in longitude/latitude, by up to about L² tan φ / 8R for an edge L long at latitude φ:
+some 20 cm for a 3 km edge at 48°N, 2 m for a 10 km one, 220 m for a 100 km one. An input in another
+system is converted vertex by vertex, as the map draws it in that system, and its long edges can run
+much farther from where they run in longitude/latitude: a degree-wide box's east-west edges, which
+follow their parallels there, are chords in UTM up to 120 m away. The tool then says how many edges
+of which layer run more than a metre away, and how far the farthest does. A world projection (World
 Mercator, Plate Carrée, Robinson, Equal Earth and the like), whose plane has the antimeridian as a
 seam and the poles as lines, is worked on in longitude/latitude, as Web Mercator is. If another
 input has a place that system can't hold, the tool works in longitude/latitude instead, and its
@@ -205,11 +205,13 @@ metre is not quite a metre on the ground: in a UTM zone, from 1.0004 m on its ce
 about 0.999 m at its edges on the equator (0.9998 m at 48.7°N), so a buffer of 100 km around a point
 2.5° east of the central meridian at 48.7°N reaches 100,017 m on the ground on its west side and
 99,972 m on its east side. Near's nearest point is that system's x and y, and Points Along Lines'
-angle is from grid north. An interpolation or density surface is made in that system unless
-another is given, from its points' own coordinates; one given another system, and Zonal Statistics
-and Tabulate Area on a raster in another system, convert the points or zones straight into it, with
-the transformation between the two datums where they differ. Area, length and perimeter fields
-stay on the ellipsoid.
+angle is from grid north. IDW Interpolation, Kriging and Kernel Density make their surface in that
+system, from its points' own coordinates, unless another system is given; Zonal Statistics and
+Tabulate Area place their zones on a raster in that system as they are. A surface given another
+projected system, or a raster in one, gets the points or zones converted straight into it, by the
+transformation between the two datums where they differ; a raster in longitude/latitude or Web
+Mercator gets them through WGS 84. Their rasters aren't converted, and they don't count bent edges.
+Area, length and perimeter fields stay on the ellipsoid.
 
 In the desktop app a tool runs in the background, so the map and the rest of the window stay in
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
