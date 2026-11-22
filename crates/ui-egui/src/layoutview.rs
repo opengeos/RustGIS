@@ -1344,10 +1344,13 @@ pub(crate) fn save_drafts(app: &mut RustGisApp) {
             ("text", ElementKind::Text { text, .. }) => Some(text.clone()),
             ("title", ElementKind::Legend { title, .. } | ElementKind::Colorbar { title, .. }) => Some(title.clone()),
             ("title", ElementKind::Chart { title, .. }) => title.clone(),
+            ("unitLabel", ElementKind::ScaleBar { unit_label, .. }) => Some(unit_label.clone().unwrap_or_default()),
             _ => None,
         });
         if current.is_some_and(|c| c != text) {
-            let _ = app.run("layout.update", json!({"layout": l, "element": id, field: text}));
+            // An emptied unit label gives the unit's abbreviation back, as the field does.
+            let value = if field == "unitLabel" && text.is_empty() { Value::Null } else { json!(text) };
+            let _ = app.run("layout.update", json!({"layout": l, "element": id, field: value}));
         }
     }
 }
@@ -3993,6 +3996,17 @@ mod tests {
             h.run_steps(3);
             assert_eq!(subdivisions(&h), expected, "{typed}");
             assert_eq!(h.state().session.undo_depth(), depth + steps, "{typed}");
+        }
+        // A unit label being typed when the bar is no longer shown is saved, and an emptied one
+        // gives the abbreviation back.
+        for (draft, expected) in [("Miles", Some("Miles")), ("", None)] {
+            h.state_mut().layout.selected = Some(bar);
+            h.run_steps(2);
+            h.state_mut().layout.typing.insert((li, bar, "unitLabel"), draft.into());
+            h.state_mut().layout.selected = None;
+            h.run_steps(3);
+            assert!(h.state().layout.typing.is_empty(), "{draft:?}");
+            assert_eq!(set(&h).1.as_deref(), expected, "{draft:?}");
         }
     }
 
