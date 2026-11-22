@@ -1377,6 +1377,9 @@ mod tests {
         let layout = &saved["layouts"][0];
         let mut position_only = base["layouts"][0].clone();
         position_only["elements"][1]["kind"]["ScaleBar"]["unit_label_position"] = json!("afterBar");
+        // One subdivision clamps to none, so a text whose only detail it is needs nothing.
+        let mut one_subdivision = base["layouts"][0].clone();
+        one_subdivision["elements"][1]["kind"]["ScaleBar"]["subdivisions"] = json!(1);
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "scaleBar", "subdivisions": 4}), true),
             ("layout.update", json!({"element": 2, "labelPosition": "below"}), true),
@@ -1404,6 +1407,7 @@ mod tests {
             ("layout.import", json!({"text": layout.to_string()}), true),
             ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
             ("layout.import", json!({"text": position_only.to_string()}), true),
+            ("layout.import", json!({"text": one_subdivision.to_string()}), false),
             ("layout.import", json!({"path": "bars.rgislayout"}), false),
         ] {
             let script = format!("{id}= {params}");

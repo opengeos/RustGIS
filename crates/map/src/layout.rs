@@ -1625,7 +1625,9 @@ impl ElementKind {
         else {
             return false;
         };
-        (*subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *fit)
+        // One subdivision is none: it clamps to 0, and an imported text is checked before that.
+        let subdivisions = if *subdivisions == 1 { 0 } else { *subdivisions };
+        (subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *fit)
             != (s0, z0, lp0, &u0, up0, d0, f0)
     }
 
