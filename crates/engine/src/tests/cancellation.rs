@@ -353,6 +353,9 @@ pub(super) fn long_commands(boundaries: bool) {
         ("tabulateIntersection", json!({"zones": "Countries", "classes": "Squares", "includeEmptyZones": true})),
         ("serviceArea", json!({"network": "Rivers", "facilities": "Cities", "breaks": "50", "snapDistance": 100000})),
         ("odCostMatrix", json!({"network": "Rivers", "origins": "Cities", "destinations": "Cities", "count": 1, "snapDistance": 100000})),
+        ("dggsGrid", json!({"system": "S2", "resolution": 4, "area": "Input Layer", "input": "Countries"})),
+        ("dggsGrid", json!({"system": "Hexagon", "resolution": 3, "area": "Input Layer", "input": "Countries"})),
+        ("dggsAggregate", json!({"system": "H3", "input": "Cities", "resolution": 3})),
     ];
     for (tool, params) in &tools {
         exercise(&s, tool, params, Kind::Tool, &dir.0, boundaries);

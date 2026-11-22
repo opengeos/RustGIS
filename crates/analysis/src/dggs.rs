@@ -24,6 +24,7 @@ use rustgis_geom::{Coord, Extent};
 use s2::region::Region;
 use serde_json::Value as Json;
 
+use crate::control::{self, Pace};
 use crate::{Inputs, Output, ToolResult};
 
 /// The most cells one run makes.
@@ -33,9 +34,10 @@ pub const MAX_RESOLUTION: i32 = 30;
 /// How far over [`MAX_CELLS`] an area's [`estimate`] may go before it's refused without being
 /// covered: the estimate is rough, and the exact count still applies after.
 const ESTIMATE_MARGIN: f64 = 2.0;
-/// The most cells a covering looks at before keeping those in the area (S2's descent, the
-/// hexagon grid's rows): past it the run is refused, as one over the cap.
-const MAX_CANDIDATES: u64 = 4 * MAX_CELLS;
+/// The most cells (and rows) a run's coverings look at before keeping those in the area (S2's
+/// descent, the hexagon grid's rows), over all its polygons ([`Work`]): past it the run is
+/// refused, as one over the cap.
+const MAX_WORK: u64 = 4 * MAX_CELLS;
 
 /// A grid system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,8 +81,9 @@ impl System {
         }
     }
 
-    /// The finest resolution. The hexagon grid stops at 24 (cells of about 1.5 m²): finer, the
-    /// plane's metres far from its origin are coarser than a cell.
+    /// The finest resolution. The hexagon grid stops at 24 (cells of about 0.15 m², sides of
+    /// 24 cm), which keeps a cell's axial coordinates anywhere on a world-wide plane well within
+    /// the 32 bits each has in its id ([`pack`]).
     fn finest(self) -> i32 {
         match self {
             System::A5 | System::S2 => 30,
@@ -243,12 +246,11 @@ pub fn parts(cell: u64) -> Option<Vec<Vec<Vec<Coord>>>> {
 /// whose ring runs on past ±180°, its two sides of the meridian, the far one moved back a turn.
 /// Every ring comes back closed. H3's tiler, S2's descent and the hexagon grid's plane take
 /// longitudes on the globe only.
-fn on_the_globe_sides(shape: &[Vec<Coord>]) -> Vec<Vec<Vec<Coord>>> {
+fn on_the_globe_sides(shape: Vec<Vec<Coord>>) -> Vec<Vec<Vec<Coord>>> {
     let rings: Vec<Vec<Coord>> = shape
-        .iter()
-        .filter_map(|r| {
+        .into_iter()
+        .filter_map(|mut r| {
             let first = *r.first()?;
-            let mut r = r.clone();
             if r.last() != Some(&first) {
                 r.push(first);
             }
@@ -423,13 +425,16 @@ fn left_out(n: usize, what: &str, lacking: &str) -> String {
 /// Cells left out because their outline couldn't be drawn: for the hexagon grid, corners the
 /// map's projection can't take back to longitudes and latitudes.
 fn undrawable(n: usize, g: &Grid<'_>) -> String {
-    let why = match g.system {
-        System::Hexagon => format!("its corners are outside what {} reaches", g.plane.name()),
-        _ => "its outline couldn't be worked out".into(),
+    let (one, many) = match g.system {
+        System::Hexagon => {
+            let plane = g.plane.name();
+            (format!("its corners are outside what {plane} reaches"), format!("their corners are outside what {plane} reaches"))
+        }
+        _ => ("its outline couldn't be worked out".to_string(), "their outlines couldn't be worked out".to_string()),
     };
     match n {
-        1 => format!("1 cell was left out: {why}"),
-        n => format!("{n} cells were left out: {}", why.replacen("its", "their", 1)),
+        1 => format!("1 cell was left out: {one}"),
+        n => format!("{n} cells were left out: {many}"),
     }
 }
 
@@ -627,8 +632,11 @@ impl<'a> Grid<'a> {
     /// The fields every layer of the grid starts with: the cell's id, resolution and area, and
     /// for the hexagon grid, the plane its ids are in.
     fn fields(&self) -> Vec<Field> {
-        let mut f =
-            vec![Field::new(self.system.field(), FieldType::Text), Field::new("resolution", FieldType::Integer), Field::new("area_km2", FieldType::Double)];
+        let mut f = vec![
+            Field::new(self.system.field(), FieldType::Text),
+            Field::new("resolution", FieldType::Integer),
+            Field::new("area_km2", FieldType::Double),
+        ];
         if self.system == System::Hexagon {
             f.push(Field::new("plane", FieldType::Text));
         }
@@ -678,7 +686,7 @@ impl<'a> Grid<'a> {
                 Ok(cells)
             }
             System::Hexagon => {
-                self.cover(&[vec![extent_ring(Extent::new(-180.0, -rustgis_geom::MAX_LAT, 180.0, rustgis_geom::MAX_LAT))]], center)
+                self.cover(vec![vec![extent_ring(Extent::new(-180.0, -rustgis_geom::MAX_LAT, 180.0, rustgis_geom::MAX_LAT))]], center)
             }
         }
     }
@@ -686,30 +694,33 @@ impl<'a> Grid<'a> {
     /// The cells covering polygons of longitudes and latitudes (each its outer ring, then its
     /// holes), each once and in id order: those that overlap them, or with `center`, those whose
     /// centre is in them. Polygons can overlap; a cell they share counts once.
-    fn cover(&self, shapes: &[Vec<Vec<Coord>>], center: bool) -> Result<Vec<u64>, String> {
+    fn cover(&self, shapes: Vec<Vec<Vec<Coord>>>, center: bool) -> Result<Vec<u64>, String> {
+        control::check()?;
         let res = self.res;
         if self.system == System::A5 {
-            let options = a5::PolygonToCellsOptions {
-                containment: if center { a5::Containment::Center } else { a5::Containment::Overlapping },
-            };
+            let options =
+                a5::PolygonToCellsOptions { containment: if center { a5::Containment::Center } else { a5::Containment::Overlapping } };
             let lonlat = |s: &Vec<Vec<Coord>>| -> Vec<Vec<a5::LonLat>> {
                 s.iter().map(|r| r.iter().map(|c| a5::LonLat::new(c.x, c.y)).collect()).collect()
             };
             return cells_of(shapes.iter().map(|s| a5::polygon_to_cells(&lonlat(s), res, Some(options))), res);
         }
-        let sides: Vec<Vec<Vec<Coord>>> = shapes.iter().flat_map(|s| on_the_globe_sides(s)).collect();
         let mut cells: HashSet<u64> = HashSet::new();
-        for side in &sides {
+        let mut work = Work::default();
+        for side in shapes.into_iter().flat_map(on_the_globe_sides) {
+            work.spend(0, side.iter().map(Vec::len).sum(), res)?;
             match self.system {
-                System::H3 => self.h3_cover(side, center, &mut cells)?,
-                System::S2 => self.s2_cover(side, center, &mut cells)?,
-                System::Hexagon => self.hex_cover(side, center, &mut cells)?,
+                System::H3 => self.h3_cover(&side, center, &mut cells)?,
+                System::S2 => self.s2_cover(&side, center, &mut cells, &mut work)?,
+                System::Hexagon => self.hex_cover(&side, center, &mut cells, &mut work)?,
                 System::A5 => {}
             }
         }
+        control::check()?;
         Ok(sorted(cells))
     }
 
+    /// H3's own tiler, in one step: it's bounded by the [`estimate`] made before.
     fn h3_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
         use h3o::geom::{ContainmentMode, TilerBuilder};
         let r = h3_res(self.res).ok_or("No such H3 resolution")?;
@@ -724,39 +735,39 @@ impl<'a> Grid<'a> {
         gather(cells, tiler.into_coverage().map(u64::from), self.res)
     }
 
-    fn s2_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
+    /// S2 has no polygons: the cells of the level that meet the polygon's bounding box, found
+    /// down from the cube's faces, then those that overlap the polygon (or hold its centre).
+    fn s2_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>, work: &mut Work) -> Result<(), String> {
         let level = u8::try_from(self.res).map_err(|_| "No such S2 level".to_string())?;
         let Some(polygon) = geo_polygon(side) else { return Ok(()) };
         let Some(outer) = side.first() else { return Ok(()) };
         let e = outer.iter().fold(Extent::EMPTY, |e, c| e.union(&Extent::new(c.x, c.y, c.x, c.y)));
-        // The descent looks at every cell of the polygon's bounding box: its count, first.
-        let looked = estimate(&[extent_ring(e)], self.system.mean_area_m2(self.res));
-        if looked > ESTIMATE_MARGIN * MAX_CELLS as f64 {
-            return Err(too_many(if looked.is_finite() { format!("About {looked:.0}") } else { "Too many".into() }, self.res));
+        // The descent looks at every cell of the bounding box, which for a thin, slanted polygon
+        // can be many more than it covers: counted first, and refused as work, not as cells.
+        let boxed = estimate(&[extent_ring(e)], self.system.mean_area_m2(self.res));
+        if boxed > ESTIMATE_MARGIN * MAX_CELLS as f64 {
+            return Err(too_much_work(self.res));
         }
         let rect = s2::rect::Rect::from_degrees(e.min_y.max(-90.0), e.min_x, e.max_y.min(90.0), e.max_x);
         let prepared = PreparedGeometry::from(polygon);
         let mut stack: Vec<s2::cell::Cell> = (0..6).map(|f| s2::cell::Cell::from(s2::cellid::CellID::from_face(f))).collect();
-        let mut seen = 0u64;
         while let Some(cell) = stack.pop() {
             if !rect.intersects_cell(&cell) {
                 continue;
             }
             if cell.level() < level {
+                work.spend(0, 16, self.res)?;
                 stack.extend(cell.children().into_iter().flatten());
                 continue;
             }
-            seen += 1;
-            if seen > MAX_CANDIDATES {
-                return Err(too_many("Too many", self.res));
-            }
+            work.spend(1, 64, self.res)?;
             let keep = if center {
                 let c = s2::latlng::LatLng::from(cell.center());
                 prepared.relate(&geo::Point::new(c.lng.deg(), c.lat.deg())).is_intersects()
             } else {
-                let Some(r) = self.ring(cell.id.0) else { continue };
-                let Some(p) = split(r) else { continue };
-                prepared.relate(&geo_multi(&p)).is_intersects()
+                // A cell whose outline can't be worked out is kept: it's counted as left out
+                // when the layer is made, never dropped here unsaid.
+                self.ring(cell.id.0).and_then(split).is_none_or(|p| prepared.relate(&geo_multi(&p)).is_intersects())
             };
             if keep {
                 gather(cells, [cell.id.0], self.res)?;
@@ -767,42 +778,43 @@ impl<'a> Grid<'a> {
 
     /// The hexagons over a polygon, on the plane: each row's from the polygon's leftmost to its
     /// rightmost point within the row, then those that overlap it (or hold their centre in it).
-    fn hex_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>) -> Result<(), String> {
+    /// The polygon's edges are taken as straight on the plane, between its vertices.
+    fn hex_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>, work: &mut Work) -> Result<(), String> {
         let res = self.res;
         let reach = || format!("The map's projection ({}) doesn't reach the whole area: choose a smaller area", self.plane.name());
-        let rings: Vec<Vec<Coord>> =
-            side.iter().map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>()).collect::<Option<_>>().ok_or_else(reach)?;
+        let rings: Vec<Vec<Coord>> = side
+            .iter()
+            .map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>())
+            .collect::<Option<_>>()
+            .ok_or_else(reach)?;
         let Some(outer) = rings.first() else { return Ok(()) };
         let size = self.hex.size;
         let (row_h, width) = (1.5 * size, SQRT3 * size);
         let (ymin, ymax) = outer.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.y), hi.max(c.y)));
         let (r0, r1) = (((ymin - size) / row_h).floor(), ((ymax + size) / row_h).ceil());
-        if !(r1 - r0).is_finite() || r1 - r0 > MAX_CANDIDATES as f64 {
-            return Err(too_many("Too many", res));
+        if !(r1 - r0).is_finite() || r1 - r0 > MAX_WORK as f64 {
+            return Err(too_much_work(res));
         }
         let first_row = r0 as i64;
         // Row j's hexagons reach from j·row_h − size to j·row_h + size: the outer ring's
         // leftmost and rightmost point there (a hole is inside it).
         let mut span = vec![(f64::INFINITY, f64::NEG_INFINITY); (r1 - r0) as usize + 1];
-        let mut steps = 0u64;
         for w in outer.windows(2) {
             let (a, b) = (w[0], w[1]);
             let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
             let (j0, j1) = (((lo - size) / row_h).ceil() as i64, ((hi + size) / row_h).floor() as i64);
-            steps += u64::try_from(j1 - j0 + 1).unwrap_or(0);
-            if steps > MAX_CANDIDATES {
-                return Err(too_many("Too many", res));
-            }
+            work.spend(u64::try_from(j1 - j0 + 1).unwrap_or(0), 4, res)?;
             for j in j0..=j1 {
                 let (b0, b1) = (j as f64 * row_h - size, j as f64 * row_h + size);
-                let at = |y: f64| if b.y == a.y { a.x } else { a.x + (y.clamp(lo, hi) - a.y) / (b.y - a.y) * (b.x - a.x) };
+                let at = |y: f64| a.x + (y.clamp(lo, hi) - a.y) / (b.y - a.y) * (b.x - a.x);
                 let (x0, x1) = if b.y == a.y { (a.x.min(b.x), a.x.max(b.x)) } else { (at(b0).min(at(b1)), at(b0).max(at(b1))) };
                 if let Some(s) = usize::try_from(j - first_row).ok().and_then(|i| span.get_mut(i)) {
                     *s = (s.0.min(x0), s.1.max(x1));
                 }
             }
         }
-        // The hexagons of each row within its span, counted before any is tested.
+        // The hexagons of each row within its span, counted before any is tested: that many is
+        // the most the polygon can take, so past the margin it's refused as cells.
         let range = |j: i64, (x0, x1): (f64, f64)| {
             let half = j as f64 / 2.0;
             (((x0 - width / 2.0) / width - half).ceil() as i64, ((x1 + width / 2.0) / width - half).floor() as i64)
@@ -829,12 +841,13 @@ impl<'a> Grid<'a> {
                 if !fits(q) || !fits(j) {
                     return Err(reach());
                 }
+                work.spend(1, 64, res)?;
                 let keep = if center {
                     let c = self.hex.centre(q, j);
                     prepared.relate(&geo::Point::new(c.x, c.y)).is_intersects()
                 } else {
-                    let corners = self.hex.corners(q, j, 1);
-                    prepared.relate(&geo::Polygon::new(corners.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>().into(), vec![])).is_intersects()
+                    let corners: Vec<(f64, f64)> = self.hex.corners(q, j, 1).iter().map(|c| (c.x, c.y)).collect();
+                    prepared.relate(&geo::Polygon::new(corners.into(), vec![])).is_intersects()
                 };
                 if keep {
                     gather(cells, [pack(q, j)], res)?;
@@ -843,6 +856,33 @@ impl<'a> Grid<'a> {
         }
         Ok(())
     }
+}
+
+/// What a run's coverings look at, over all its polygons: the cells tested (S2's and the hexagon
+/// grid's) and the rows crossed, capped at [`MAX_WORK`] so many polygons that each stay under
+/// the cap don't add up to hours; and its pace, so Cancel stops it soon.
+#[derive(Default)]
+struct Work {
+    looked: u64,
+    pace: Pace,
+}
+
+impl Work {
+    /// Counts `looked` more cells or rows, and `units` of work for the pace.
+    fn spend(&mut self, looked: u64, units: usize, res: i32) -> Result<(), String> {
+        self.looked = self.looked.saturating_add(looked);
+        if self.looked > MAX_WORK {
+            return Err(too_much_work(res));
+        }
+        if self.pace.stop(units) {
+            return Err(control::Cancelled.into());
+        }
+        Ok(())
+    }
+}
+
+fn too_much_work(res: i32) -> String {
+    format!("Covering the area at resolution {res} means looking at more than {MAX_WORK} cells: use a coarser resolution or a smaller area")
 }
 
 /// The A5 Grid tool: [`tessellate`] in A5.
@@ -918,7 +958,7 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
                 return Err(too_many(if guess.is_finite() { format!("About {guess:.0}") } else { "Too many".into() }, res));
             }
         }
-        let cells = g.cover(&shapes, center)?;
+        let cells = g.cover(shapes, center)?;
         if cells.is_empty() {
             return Err(format!("No cell at resolution {res} has its centre in the area: choose Cells: Overlapping or a finer resolution"));
         }
@@ -926,7 +966,11 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
     };
     let mut out = Dataset::new(output_name(p, &format!("{} r{res}", system.name())), GeometryType::Polygon, g.fields());
     let (mut total, mut undrawn) = (0.0, 0usize);
+    let mut pace = Pace::default();
     for c in &cells {
+        if pace.stop(64) {
+            return Err(control::Cancelled.into());
+        }
         match g.feature(*c) {
             Some((polygon, attrs, area)) => {
                 total += area;
@@ -984,7 +1028,12 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
     // once in each cell, however many of a multipoint's points fall in it).
     let mut by: HashMap<u64, (u64, f64, u64)> = HashMap::new();
     let mut outside = 0usize;
+    control::check()?;
+    let mut pace = Pace::default();
     for r in rows {
+        if pace.stop(16) {
+            return Err(control::Cancelled.into());
+        }
         let Some(f) = ds.features.get(r) else { continue };
         let pts: Vec<Coord> = match &f.geometry {
             Some(Geometry::Point(c)) => vec![*c],
@@ -1028,7 +1077,11 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
     let mut cells: Vec<(&u64, &(u64, f64, u64))> = by.iter().collect();
     cells.sort_unstable_by_key(|(c, _)| **c);
     let (mut total, mut undrawn, mut unplaced) = (0.0, 0usize, 0u64);
+    control::check()?;
     for (c, (n, sum, nv)) in cells {
+        if pace.stop(64) {
+            return Err(control::Cancelled.into());
+        }
         let Some((polygon, mut attrs, area)) = g.feature(*c) else {
             undrawn += 1;
             unplaced += n;
@@ -1308,11 +1361,12 @@ mod tests {
         fn projection_name(&self) -> Option<String> {
             Some("Plate Carrée".into())
         }
+        // It reaches 175° east and west, as a projection of part of the world does.
         fn project(&self, c: Coord) -> Option<Coord> {
-            (c.x.abs() <= 180.0).then(|| Coord::new(c.x * M, c.y * M))
+            (c.x.abs() <= 175.0).then(|| Coord::new(c.x * M, c.y * M))
         }
         fn unproject(&self, m: Coord) -> Option<Coord> {
-            Some(Coord::new(m.x / M, m.y / M))
+            (m.x.abs() <= 175.0 * M).then(|| Coord::new(m.x / M, m.y / M))
         }
     }
 
@@ -1344,7 +1398,9 @@ mod tests {
                 assert!(p.iter().all(|part| part[0].first() == part[0].last()), "{system}");
             }
             assert!((0..d.features.len()).all(|r| d.value(r, 2).as_f64().is_some_and(|a| a > 0.0)), "{system}: areas");
-            let by = layer(aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts", "field": "v"})).unwrap());
+            let by = layer(
+                aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts", "field": "v"})).unwrap(),
+            );
             let count = by.field_index("count").unwrap();
             let total: i64 = (0..by.features.len()).map(|r| by.value(r, count).as_f64().unwrap() as i64).sum();
             assert_eq!(total, 4, "{system}");
@@ -1361,7 +1417,8 @@ mod tests {
     /// round the poles (the hexagon grid's Web Mercator stops at 85.05°).
     #[test]
     fn a_point_falls_in_the_cell_holding_it() {
-        let places: [(f64, f64); 7] = [(179.9999, 10.0), (-179.9999, -40.0), (10.75, 59.91), (-74.08, 4.6), (0.0, 0.0), (120.0, -89.99), (30.0, 89.99)];
+        let places: [(f64, f64); 7] =
+            [(179.9999, 10.0), (-179.9999, -40.0), (10.75, 59.91), (-74.08, 4.6), (0.0, 0.0), (120.0, -89.99), (30.0, 89.99)];
         for (system, res) in SYSTEMS {
             for (x, y) in places {
                 let polar = y.abs() > 85.0;
@@ -1381,11 +1438,15 @@ mod tests {
     #[test]
     fn cells_across_the_antimeridian() {
         let mut across = Dataset::new("pts", GeometryType::Polygon, vec![]);
-        let wide = vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 10.0), Coord::new(170.0, 10.0), Coord::new(170.0, 0.0)];
+        let wide =
+            vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 10.0), Coord::new(170.0, 10.0), Coord::new(170.0, 0.0)];
         across.push(Some(Geometry::Polygon(vec![vec![wide]])), vec![]);
         for (system, res) in [("H3", 3), ("S2", 6), ("Hexagon", 5)] {
             let inp = One(across.clone(), None);
-            let d = layer(tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"})).unwrap());
+            let d = layer(
+                tessellation(&inp, &serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"}))
+                    .unwrap(),
+            );
             for lon in [175.0, -175.0] {
                 assert!((0..d.features.len()).any(|r| holds(&d, r, Coord::new(lon, 5.0))), "{system} {lon}");
             }
@@ -1417,10 +1478,32 @@ mod tests {
         for (system, res) in [("H3", 6), ("S2", 9), ("Hexagon", 9)] {
             assert!(world(system, res).unwrap_err().contains("too many"), "{system}");
         }
-        // Refused before any covering: far too many for the view.
+        // Refused before any covering: far too many for the view, as cells, or (S2's descent, the
+        // hexagon grid's rows) as cells to look at.
         for (system, res) in [("H3", 15), ("S2", 30), ("Hexagon", 24)] {
             let e = tessellation(&inp, &serde_json::json!({"system": system, "resolution": res})).unwrap_err();
-            assert!(e.contains("too many"), "{system}: {e}");
+            assert!(e.contains("too many") || e.contains(&format!("looking at more than {MAX_WORK} cells")), "{system}: {e}");
+        }
+        // What a run looks at is counted over all its polygons: one block is covered, but many
+        // copies of it, each under the cap, add up past it and are refused.
+        let block =
+            vec![Coord::new(-74.5, 4.0), Coord::new(-73.5, 4.0), Coord::new(-73.5, 5.0), Coord::new(-74.5, 5.0), Coord::new(-74.5, 4.0)];
+        for (system, res) in [("Hexagon", 13), ("S2", 14)] {
+            let copies = |n: usize| {
+                let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+                for _ in 0..n {
+                    d.push(Some(Geometry::Polygon(vec![vec![block.clone()]])), vec![]);
+                }
+                One(d, None)
+            };
+            let p = serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"});
+            let one = layer(tessellation(&copies(1), &p).unwrap()).features.len() as u64;
+            let n = (MAX_WORK / one + 2) as usize;
+            let e = tessellation(&copies(n), &p).unwrap_err();
+            // S2's polygons are summed by the estimate made before any is covered, so its run is
+            // refused there; the hexagon grid's, by what its rows look at.
+            let expected = if system == "S2" { "too many" } else { "looking at more than" };
+            assert!(e.contains(expected), "{system}: {one} cells, {n} copies: {e}");
         }
         for bad in [
             serde_json::json!({"system": "H3", "resolution": 16}),
@@ -1484,12 +1567,34 @@ mod tests {
         let centre = ring.iter().take(ring.len() - 1).fold(Coord::new(0.0, 0.0), |s, c| Coord::new(s.x + c.x / n, s.y + c.y / n));
         let size = Hex::at(12).size;
         assert!(ring.iter().all(|c| ((c.x - centre.x).hypot(c.y - centre.y) / size - 1.0).abs() < 1e-6), "{ring:?}");
-        // A place the plane doesn't reach is said to be.
+        // An area the plane doesn't reach is refused, and said to be; a cell whose corners it
+        // can't take back is left out, and counted.
         let mut far = Dataset::new("pts", GeometryType::Polygon, vec![]);
-        let wide = vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 1.0), Coord::new(170.0, 1.0), Coord::new(170.0, 0.0)];
+        let wide =
+            vec![Coord::new(170.0, 0.0), Coord::new(190.0, 0.0), Coord::new(190.0, 1.0), Coord::new(170.0, 1.0), Coord::new(170.0, 0.0)];
         far.push(Some(Geometry::Polygon(vec![vec![wide]])), vec![]);
-        let r = tessellation(&Flat(far, None), &serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"}));
-        assert!(r.is_ok(), "{r:?}");
+        let e = tessellation(
+            &Flat(far, None),
+            &serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"}),
+        )
+        .unwrap_err();
+        assert!(e.contains("(Plate Carrée) doesn't reach the whole area"), "{e}");
+        let edge = tessellation(
+            &Flat(points(&[]), Some(Extent::new(172.0, 0.0, 174.99, 2.0))),
+            &serde_json::json!({"system": "Hexagon", "resolution": 9}),
+        )
+        .unwrap();
+        assert!(
+            edge.messages[0].contains("cells were left out: their corners are outside what Plate Carrée reaches"),
+            "{:?}",
+            edge.messages
+        );
+        let kept = layer(edge);
+        assert!(!kept.features.is_empty());
+        assert!(kept.features.iter().all(|f| match &f.geometry {
+            Some(Geometry::Polygon(p)) => p.iter().flatten().flatten().all(|c| c.x <= 175.0),
+            _ => false,
+        }));
     }
 
     /// Generate Tessellation in A5 is A5 Grid, and Aggregate Points to Grid in A5 is Aggregate
