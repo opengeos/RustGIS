@@ -2771,8 +2771,9 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         }
         ScaleBarStyle::Stepped => {
             let mut pts = vec![(x0, y0 + bar_h)];
+            // Its upper steps are an alternating bar's dark divisions; the cut division is upper.
             for j in 0..divs {
-                let y = if dark_at(j) { y0 } else { y0 + bar_h };
+                let y = if j == before || filled_dark(j) { y0 } else { y0 + bar_h };
                 let (a, b) = (x0 + seg * j as f32, x0 + seg * (j + 1) as f32);
                 pts.extend([(a, y), (b, y)]);
             }
@@ -9003,6 +9004,24 @@ Elaboração: RustGIS",
         // divisions after going on from them: parts 0 and 2, then divisions 1 and 3.
         assert_eq!(runs(&with(&|b| b.subdivisions = 4)), 4);
         assert_eq!(with(&|b| b.subdivisions = 1).data(), with(&|_| {}).data(), "one part is the division whole");
+        // A stepped bar's upper steps are the alternating bar's dark divisions, after the cut one too:
+        // its thin line, drawn soft, marks the bar's top row.
+        let cut4 = |style| {
+            let bar = BarOptions { style, subdivisions: 4, ..BarOptions::default() };
+            let placed = bar_layout(Rect::from_xywh(0.0, 0.0, 300.0, 60.0).unwrap(), 100.0, &bar, 1.0, false).unwrap();
+            (draw_bar(&bar, 300), placed)
+        };
+        let (alternating, placed) = cut4(ScaleBarStyle::Alternating);
+        let (stepped, _) = cut4(ScaleBarStyle::Stepped);
+        let seg = placed.len / placed.divs as f32;
+        let top = placed.y0.round() as u32;
+        let mid = |j: usize| (placed.x0 + seg * (j as f32 + 0.5)) as u32;
+        let dark: Vec<bool> = (placed.before + 1..placed.divs).map(|j| alternating.pixel(mid(j), 37).is_some_and(ink)).collect();
+        let upper: Vec<bool> = (placed.before + 1..placed.divs)
+            .map(|j| (top - 1..=top + 1).any(|y| stepped.pixel(mid(j), y).is_some_and(|p| p.red() < 200)))
+            .collect();
+        assert_eq!(dark, [true, false, true], "divisions 1 and 3 dark");
+        assert_eq!(upper, dark, "the stepped bar's upper steps");
         // Two whole divisions before zero: six divisions, three dark.
         assert_eq!(runs(&with(&|b| b.divisions_before_zero = 2)), 3);
         assert_eq!(bar_ink_rows(&with(&|b| b.divisions_before_zero = 2)), bar_ink_rows(&with(&|_| {})), "the same rows, bar and labels");
