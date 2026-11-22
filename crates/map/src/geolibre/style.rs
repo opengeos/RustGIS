@@ -120,7 +120,7 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
                 layer.renderer = Renderer::Proportional { field: field.into(), base: symbol, min, max, min_size, max_size };
                 sized = true;
                 if max <= min {
-                    report.approximated(&name, "proportional size range is empty (its largest value isn't above its smallest); every point with a value is drawn at the middle size, one without at the base symbol's");
+                    report.approximated(&name, "proportional size range is empty (its largest value isn't above its smallest); every point with a value is drawn at the size for the middle value, scaled by area (not MapLibre's linear radius), one without at the base symbol's");
                 } else {
                     report.approximated(&name, "proportional sizes use area scaling instead of MapLibre linear radius scaling");
                 }

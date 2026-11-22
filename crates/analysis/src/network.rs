@@ -426,6 +426,7 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
     let mut dist = vec![f64::INFINITY; n];
     let mut prev: Vec<Option<(usize, f64, usize)>> = vec![None; n];
     let mut heap = BinaryHeap::new();
+    let mut summed_past = false;
     if let Some(d) = dist.get_mut(s) {
         *d = 0.0;
     }
@@ -448,6 +449,9 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
                 return Err(crate::control::Cancelled.into());
             }
             let nd = d + c;
+            // Each edge's cost is finite, but a path's sum of them can pass the largest number:
+            // never taken, and said if the route then has none.
+            summed_past |= c.is_finite() && !nd.is_finite();
             if nd < dist.get(v).copied().unwrap_or(f64::INFINITY) {
                 if let Some(x) = dist.get_mut(v) {
                     *x = nd;
@@ -460,6 +464,12 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
         }
     }
     let cost = dist.get(t).copied().unwrap_or(f64::INFINITY);
+    if !cost.is_finite() && summed_past {
+        return Err(route_error(
+            "no route costs less than the largest number: the costs along the network add up past it (give the lines smaller costs)".into(),
+            skipped_segments,
+        ));
+    }
     if !cost.is_finite() {
         return Err(route_error("the two points aren't connected by the network".into(), skipped_segments));
     }
@@ -1573,6 +1583,12 @@ mod tests {
         let around =
             shortest_route(&huge, &rows, Coord::new(0.0, 0.0), Coord::new(1.0, 1.0), Some(0), 1000.0).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!((around.rows, around.overflowing), (vec![0, 1], 1));
+        // Each edge finite, their sum past the largest number: said, not "not connected".
+        let mut summed = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("cost", FieldType::Double)]);
+        let two = vec![Coord::new(0.0, 0.0), Coord::new(0.00001, 0.0), Coord::new(0.00002, 0.0)];
+        summed.push(Some(Geometry::Line(vec![two])), vec![Value::Float(1e308)]);
+        let e = shortest_route(&summed, &[0], Coord::new(0.0, 0.0), Coord::new(0.00002, 0.0), Some(0), 1000.0).unwrap_err();
+        assert!(e.contains("add up past it"), "{e}");
         assert!(shortest_route(&ds, &rows, Coord::new(5.0, 5.0), Coord::new(1.0, 1.0), None, 1000.0).is_err());
         let mut poly = Dataset::new("p", GeometryType::Polygon, vec![]);
         poly.push(

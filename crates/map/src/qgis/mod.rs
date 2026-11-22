@@ -56,9 +56,10 @@ pub struct Report {
     /// thousands of different notes, and a repeat is found without going through them all.
     #[serde(skip)]
     index: HashMap<(String, NoteKind, String), usize>,
-    /// Different notes past [`MAX_NOTES`], not kept but counted in a last note.
+    /// Different notes past [`MAX_NOTES`], not kept but counted in a closing note of their kind:
+    /// approximated, then skipped.
     #[serde(skip)]
-    more: usize,
+    more: [usize; 2],
     /// Raster image markers' images by their `imageFile`, read before the symbols showing them
     /// (`symbol::read_images`): each kept picture with its height over its width, or why it isn't
     /// drawn. Carried here because every symbol reader already takes the report; passing them
@@ -104,17 +105,28 @@ impl Report {
             let (layer, kind, text) = key;
             self.notes.push(Note { layer, kind, text, count: 1 });
         } else {
-            // Past the cap, a new note is counted in one closing note, never listed itself. The
-            // closing note stays last: nothing is added after it.
-            let text = format!("{} more note(s) not listed", self.more.saturating_add(1));
-            match self.notes.last_mut().filter(|_| self.more > 0) {
+            // Past the cap, a new note is counted in a closing note of its kind, never listed
+            // itself. The closing notes are the last two at most: nothing else is added after them.
+            let (_, kind, _) = key;
+            let k = usize::from(kind == NoteKind::Skipped);
+            let more = self.more.get(k).copied().unwrap_or(0).saturating_add(1);
+            let text = format!("{more} more note(s) not listed");
+            let closing = self
+                .notes
+                .iter_mut()
+                .rev()
+                .take(2)
+                .find(|n| n.kind == kind && n.layer.is_empty() && more > 1 && n.text.ends_with(" more note(s) not listed"));
+            match closing {
                 Some(last) => {
                     last.text = text;
                     last.count = last.count.saturating_add(1);
                 }
-                None => self.notes.push(Note { layer: String::new(), kind: NoteKind::Skipped, text, count: 1 }),
+                None => self.notes.push(Note { layer: String::new(), kind, text, count: 1 }),
             }
-            self.more = self.more.saturating_add(1);
+            if let Some(m) = self.more.get_mut(k) {
+                *m = more;
+            }
         }
     }
 
