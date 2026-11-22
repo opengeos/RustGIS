@@ -150,7 +150,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         show_feature(app, &map, layer, feature);
     }
     if let Some(i) = dismiss {
-        let _ = app.run("offline.dismissConflicts", json!({"name": form.name, "conflicts": [i]}));
+        // The indexes are those of the list as it was drawn, in this state of the project.
+        let state = app.session.state();
+        let _ = app.run("offline.dismissConflicts", json!({"name": form.name, "conflicts": [i], "state": state}));
     } else if all {
         let _ = app.run("offline.dismissConflicts", json!({"name": form.name}));
     }

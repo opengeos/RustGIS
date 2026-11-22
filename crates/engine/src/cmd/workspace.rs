@@ -313,7 +313,7 @@ pub fn commands() -> Vec<C> {
         C::new("offline.conflicts", "Conflicts", "Data › Offline", |s, p| {
             let ai = area_index(s, p)?;
             let a = s.project.offline_areas.get(ai).ok_or("no such area")?;
-            let listed = json!({"area": a.name, "map": a.map, "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()});
+            let listed = json!({"area": a.name, "map": a.map, "state": s.state(), "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()});
             // JSON has no NaN or infinity: such a kept value, or a shape with such a coordinate, is
             // listed as null, and said.
             let nulled = a.conflicts.iter().flat_map(|c| &c.values).filter(|(_, v)| v.is_non_finite()).count()
@@ -339,6 +339,15 @@ pub fn commands() -> Vec<C> {
                 Some(Value::Array(a)) => Some(a.iter().map(|v| v.as_u64().ok_or("conflicts must be a list of conflict indexes")).collect::<Result<_, _>>()?),
                 Some(_) => return Err("conflicts must be a list of conflict indexes".into()),
             };
+            // Indexes name the list as it was read: a request sent again after the project changed
+            // (one whose reply was lost) would dismiss another conflict, so it is refused.
+            let read = p.get("state").filter(|v| !v.is_null());
+            if picked.is_some() || read.is_some() {
+                let read = read.ok_or("state is required with conflicts: pass the state offline.conflicts returned")?;
+                if read.as_u64() != Some(s.state()) {
+                    return Err("the project has changed since its conflicts were listed, so nothing was dismissed: list them again with offline.conflicts".into());
+                }
+            }
             let a = s.project.offline_areas.get_mut(ai).ok_or("no such area")?;
             let held = a.conflicts.len();
             if let Some(unknown) = picked.as_ref().and_then(|p| p.iter().copied().filter(|i| usize::try_from(*i).map_or(true, |i| i >= held)).min()) {
@@ -357,7 +366,7 @@ pub fn commands() -> Vec<C> {
             }
             Ok(json!({"dismissed": held - a.conflicts.len(), "left": a.conflicts.len()}))
         }).roles(&[]).effects(crate::policy::Effects::NONE)
-        .params(r#"{"name": offline area, "conflicts"?: [number] (indexes from offline.conflicts; every one when omitted)}"#),
+        .params(r#"{"name": offline area, "conflicts"?: [number] (indexes from offline.conflicts; every one when omitted), "state"?: number (the state offline.conflicts returned; required with conflicts, and refused once the project has changed)}"#),
         C::new("offline.open", "Open Offline Map", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;

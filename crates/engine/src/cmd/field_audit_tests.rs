@@ -497,10 +497,20 @@ fn the_versions_that_lost_a_bring_back_are_kept_until_dismissed() {
     assert_eq!(home.project.offline_areas[0].conflicts.len(), 3);
     // Dismissed one at a time, or all.
     let kept_index = found("kept", ids[1])["index"].clone();
-    assert!(home.run("offline.dismissConflicts", &json!({"name": "Day", "conflicts": [7]})).unwrap_err().contains("no conflict 7"));
-    let left = home.run("offline.dismissConflicts", &json!({"name": "Day", "conflicts": [kept_index]})).unwrap();
+    let state = home.run("offline.conflicts", &json!({"name": "Day"})).unwrap()["state"].clone();
+    assert!(
+        home.run("offline.dismissConflicts", &json!({"name": "Day", "conflicts": [7], "state": state}))
+            .unwrap_err()
+            .contains("no conflict 7")
+    );
+    assert!(home.run("offline.dismissConflicts", &json!({"name": "Day", "conflicts": [0]})).unwrap_err().contains("state is required"));
+    let dismiss = json!({"name": "Day", "conflicts": [kept_index], "state": state});
+    let left = home.run("offline.dismissConflicts", &dismiss).unwrap();
     assert_eq!((left["dismissed"].as_u64(), left["left"].as_u64()), (Some(1), Some(2)), "{left}");
     assert!(home.project.offline_areas[0].conflicts.iter().all(|c| c.kind != crate::project::ConflictKind::Kept));
+    // The same request sent again (its reply lost) dismisses nothing more.
+    assert!(home.run("offline.dismissConflicts", &dismiss).unwrap_err().contains("has changed since"));
+    assert_eq!(home.project.offline_areas[0].conflicts.len(), 2);
     home.run("offline.dismissConflicts", &json!({"name": "Day"})).unwrap();
     assert!(home.project.offline_areas[0].conflicts.is_empty());
     let saved = serde_json::to_value(&home.project).unwrap();
