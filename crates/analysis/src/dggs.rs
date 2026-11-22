@@ -59,7 +59,7 @@ impl System {
             "h3" => Ok(System::H3),
             "s2" => Ok(System::S2),
             "hexagon" | "hex" => Ok(System::Hexagon),
-            other => Err(System::unknown(other)),
+            _ => Err(System::unknown(s)),
         }
     }
 

@@ -793,6 +793,9 @@ mod tests {
             }
             assert!(!command_uses_dggs_system("buffer", &params));
         }
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/dggs_system.rgis")).unwrap();
+        assert_eq!(fixture.models[0].steps[0].params["system"], "H3");
+        assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["dggs-system"]));
     }
 
     /// All replayable project containers require non-default options only when requested.
