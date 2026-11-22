@@ -1094,11 +1094,10 @@ fn zone_rings(s: &Session, z: &str) -> Result<(Crs, Vec<Vec<Vec<Coord>>>), Strin
     Ok((l.dataset.coord_crs(), polys.clone()))
 }
 
-/// A zone's means, every band's, over all its parts (which don't overlap, so each pixel counts
-/// once): those a script's copy of the session read, when of this raster
-/// and this polygon; read here otherwise (and recorded, on that copy, for the script's run here to
-/// take). A raster a tool made earlier in the script is decoded apart on each side, so its zones
-/// are read again here.
+/// A zone's means, every band's, over all its parts (a pixel in two parts counted once): those a
+/// script's copy of the session read, when of this raster and this polygon; read here otherwise
+/// (and recorded, on that copy, for the script's run here to take). A raster a tool made earlier in
+/// the script is decoded apart on each side, so its zones are read again here.
 #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "zones are read ahead on the desktop only"))]
 fn zone_means(s: &mut Session, r: &Arc<Raster>, crs: Crs, rings: Vec<Vec<Vec<Coord>>>) -> Result<Option<(Vec<f64>, usize)>, String> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1118,16 +1117,7 @@ fn zone_means(s: &mut Session, r: &Arc<Raster>, crs: Crs, rings: Vec<Vec<Vec<Coo
     }
     let all: Vec<usize> = (0..r.band_count()).collect();
     // The cells are tested in the zone's own system: none of it converted when it is the raster's.
-    let means = (|| {
-        let (mut sums, mut n) = (vec![0.0; all.len()], 0usize);
-        for part in &rings {
-            if let Some((m, k)) = rasterops::zonal_means_in(r, crs, &all, part)? {
-                sums.iter_mut().zip(&m).for_each(|(s, v)| *s += v * k as f64);
-                n += k;
-            }
-        }
-        Ok((n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n)))
-    })();
+    let means = rasterops::zonal_means_in(r, crs, &all, &rings);
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(ZonesAhead::Recording(zones)) = &mut s.zones_ahead {
         zones.push(ZoneMeans { raster: r.clone(), crs, rings, means: means.clone() });

@@ -2307,7 +2307,7 @@ fn a_held_layer_is_burned_in_its_own_system() {
 
 /// A spectral zone of two parts reads both: two 100 m squares of one feature, held in UTM, each
 /// holding 10 × 10 centres of 10 m cells (none on an edge), burned and then read as the zone, give
-/// 200 pixels.
+/// 200 pixels; a part over another's pixels doesn't count them twice.
 #[test]
 fn a_spectral_zone_reads_every_part() {
     let square = |x0: f64, y0: f64| -> Vec<Coord> {
@@ -2320,6 +2320,12 @@ fn a_spectral_zone_reads_every_part() {
     assert_eq!(burned["cells"], 200, "{burned}");
     let read = s.run("raster.spectral", &json!({"layer": "Burned", "zone": "Two"})).unwrap();
     assert_eq!((read["pixels"].clone(), read["values"].clone()), (json!(200), json!([3.0])), "{read}");
+    // A third part over half of the first: its 50 shared pixels count once.
+    let parts =
+        vec![vec![square(2_000_002.0, 5_401_302.0)], vec![square(2_000_502.0, 5_401_302.0)], vec![square(2_000_052.0, 5_401_302.0)]];
+    add_in(&mut s, "Three", GeometryType::Polygon, vec![Geometry::Polygon(parts)], UTM);
+    let read = s.run("raster.spectral", &json!({"layer": "Burned", "zone": "Three"})).unwrap();
+    assert_eq!(read["pixels"], 200, "{read}");
 }
 
 /// Rasterize's default grid in another system takes in the polygons as they are burned, by the

@@ -1012,20 +1012,22 @@ pub fn classify_min_distance(r: &Raster, bands: &[usize], means: &[(f32, Vec<f64
 /// means are the same on every machine.
 pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Result<Option<(Vec<f64>, usize)>, crate::control::Cancelled> {
     crate::control::begin(r.height as usize);
-    means_under(r, &ZoneIn::LonLat, bands, rings, |rows| {
+    means_under(r, &ZoneIn::LonLat, bands, &[rings], |rows| {
         crate::control::check()?;
         crate::control::advance(rows);
         Ok(())
     })
 }
 
-/// [`zonal_means`] of a polygon whose rings are in `from`: longitude/latitude, or the system its
-/// layer holds its coordinates in. A cell's centre is converted into that system to be tested
-/// (none of it when it is the raster's own), by the direct operation between two datums.
-pub fn zonal_means_in(r: &Raster, from: Crs, bands: &[usize], rings: &[Vec<Coord>]) -> Result<Option<(Vec<f64>, usize)>, String> {
+/// [`zonal_means`] of a polygon's `parts` (each its rings, a pixel in two parts counted once) in
+/// `from`: longitude/latitude, or the system its layer holds its coordinates in. A cell's centre is
+/// converted into that system to be tested (none of it when it is the raster's own), by the direct
+/// operation between two datums. Each part's rows count toward the progress.
+pub fn zonal_means_in(r: &Raster, from: Crs, bands: &[usize], parts: &[Vec<Vec<Coord>>]) -> Result<Option<(Vec<f64>, usize)>, String> {
     let zone = ZoneIn::new(r, from)?;
-    crate::control::begin(r.height as usize);
-    Ok(means_under(r, &zone, bands, rings, |rows| {
+    crate::control::begin(parts.len().saturating_mul(r.height as usize));
+    let parts: Vec<&[Vec<Coord>]> = parts.iter().map(Vec::as_slice).collect();
+    Ok(means_under(r, &zone, bands, &parts, |rows| {
         crate::control::check()?;
         crate::control::advance(rows);
         Ok(())
@@ -1090,46 +1092,55 @@ pub fn polygon_mask_in(
     polygon_mask_on(ToWorld::Own(&to), &r.transform, (r.width, r.height), polygons, failed_parts)
 }
 
-/// [`zonal_means`], `each_rows(n)` asked as the raster's rows go by, `n` at a time (each row
-/// once, all of them): an error stops it.
+/// [`zonal_means`] over a zone's `parts` (each its rings), `each_rows(n)` asked as the raster's
+/// rows go by, `n` at a time (each row once a part, all of them): an error stops it.
 ///
-/// A cell counts when its centre, in the zone's system (`zone`), lies in the zone (inside the
-/// outer ring and in no hole). Only the cells in the zone's window are tested ([`zone_window`]),
-/// not every cell of the raster, in the same row-major order, so the sums are those of testing
-/// them all.
+/// A cell counts when its centre, in the zone's system (`zone`), lies in a part (inside its outer
+/// ring and in none of its holes), once however many parts hold it. Each part's cells are tested in
+/// its window ([`zone_window`]), not every cell of the raster, in the same row-major order, so for
+/// one part the sums are those of testing them all.
 fn means_under(
     r: &Raster,
     zone: &ZoneIn,
     bands: &[usize],
-    rings: &[Vec<Coord>],
+    parts: &[&[Vec<Coord>]],
     mut each_rows: impl FnMut(usize) -> Result<(), crate::control::Cancelled>,
 ) -> Result<Option<(Vec<f64>, usize)>, crate::control::Cancelled> {
-    let mut e = Extent::EMPTY;
-    for c in rings.iter().flatten() {
-        e.expand(*c);
-    }
+    let boxes: Vec<Extent> = parts
+        .iter()
+        .map(|rings| {
+            rings.iter().flatten().fold(Extent::EMPTY, |mut e, c| {
+                e.expand(*c);
+                e
+            })
+        })
+        .collect();
+    let in_part = |k: usize, ll: Coord| boxes[k].contains(ll) && rustgis_data::geometry::polygon_contains(parts[k], ll);
     let mut sums = vec![0.0; bands.len()];
     let mut n = 0usize;
-    // A pole inside the zone's box, in a system other than the raster's: the outline bounds nothing
-    // there (on a Web Mercator raster it lands south of the cells near the pole).
-    let (cols, rows) = match zone {
-        ZoneIn::Own { to_zone, .. } if to_zone.poles().iter().any(|p| e.contains(*p)) => (0..r.width, 0..r.height),
-        ZoneIn::Own { .. } => zone_window(r, &e, true, |c| zone.grid(r, c)),
-        ZoneIn::LonLat => zone_window(r, &e, false, |c| zone.grid(r, c)),
-    };
-    each_rows((r.height - (rows.end - rows.start)) as usize)?;
-    for row in rows {
-        each_rows(1)?;
-        for col in cols.clone() {
-            let w = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
-            let Some(ll) = zone.zone(r, w) else { continue };
-            if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(rings, ll) {
-                continue;
-            }
-            let vals: Option<Vec<f64>> = bands.iter().map(|b| r.value(*b, i64::from(col), i64::from(row)).map(f64::from)).collect();
-            if let Some(v) = vals {
-                sums.iter_mut().zip(&v).for_each(|(s, x)| *s += x);
-                n += 1;
+    for (k, e) in boxes.iter().enumerate() {
+        // A pole inside the zone's box, in a system other than the raster's: the outline bounds
+        // nothing there (on a Web Mercator raster it lands south of the cells near the pole).
+        let (cols, rows) = match zone {
+            ZoneIn::Own { to_zone, .. } if to_zone.poles().iter().any(|p| e.contains(*p)) => (0..r.width, 0..r.height),
+            ZoneIn::Own { .. } => zone_window(r, e, true, |c| zone.grid(r, c)),
+            ZoneIn::LonLat => zone_window(r, e, false, |c| zone.grid(r, c)),
+        };
+        each_rows((r.height - (rows.end - rows.start)) as usize)?;
+        for row in rows {
+            each_rows(1)?;
+            for col in cols.clone() {
+                let w = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
+                let Some(ll) = zone.zone(r, w) else { continue };
+                // Counted for the first part that holds it, so parts that overlap count it once.
+                if !in_part(k, ll) || (0..k).any(|j| in_part(j, ll)) {
+                    continue;
+                }
+                let vals: Option<Vec<f64>> = bands.iter().map(|b| r.value(*b, i64::from(col), i64::from(row)).map(f64::from)).collect();
+                if let Some(v) = vals {
+                    sums.iter_mut().zip(&v).for_each(|(s, x)| *s += x);
+                    n += 1;
+                }
             }
         }
     }
@@ -1230,7 +1241,7 @@ pub fn class_means(r: &Raster, bands: &[usize], polygons: &[(String, Vec<Vec<Coo
             crate::control::advance(rows);
             Ok(())
         };
-        let Some((m, n)) = means_under(r, &ZoneIn::LonLat, bands, rings, counted)? else { continue };
+        let Some((m, n)) = means_under(r, &ZoneIn::LonLat, bands, &[rings.as_slice()], counted)? else { continue };
         match classes.iter_mut().find(|c| c.0 == *key) {
             Some(c) => {
                 let total = c.2 + n;
@@ -3198,7 +3209,7 @@ mod tests {
                 }
             }
             assert!(inside > 1000, "{inside} cells are in the zone");
-            let got = zonal_means_in(&r, polar, &[0], &[ring]).unwrap_or_else(|e| panic!("{e}"));
+            let got = zonal_means_in(&r, polar, &[0], &[vec![ring]]).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(got, Some((vec![1.0], inside)), "{x0} {x1} {y0} {y1}");
         }
     }
