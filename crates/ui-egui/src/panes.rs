@@ -3461,7 +3461,11 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                     ui.add_space(2.0);
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new(tl!("Or")).size(11.0).color(t.text_dim));
+                        // "Or" only when something follows it: the browser has no download link
+                        // and no Locate….
+                        if download.is_some() || cfg!(not(target_arch = "wasm32")) {
+                            ui.label(egui::RichText::new(tl!("Or")).size(11.0).color(t.text_dim));
+                        }
                         if let Some(download) = &download {
                             ui.add(
                                 egui::Hyperlink::from_label_and_url(tl!("Download the GeoLibre runner"), download).open_in_new_tab(true),

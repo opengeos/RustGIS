@@ -333,7 +333,7 @@ fn header(bytes: &[u8]) -> Result<image::ImageReader<std::io::Cursor<&[u8]>>, Fa
 const SHOWN: [image::ImageFormat; 4] =
     [image::ImageFormat::Png, image::ImageFormat::Jpeg, image::ImageFormat::WebP, image::ImageFormat::Gif];
 
-/// A HEIC or AVIF picture (common from phones), by the brand of its ISO-BMFF `ftyp` box, which
+/// A HEIC, HEIF or AVIF picture (common from phones), by the brand of its ISO-BMFF `ftyp` box, which
 /// `image` doesn't recognise without those decoders: such a picture says its format rather than
 /// that it isn't a picture.
 fn heif_brand(bytes: &[u8]) -> Option<&'static str> {
@@ -341,7 +341,9 @@ fn heif_brand(bytes: &[u8]) -> Option<&'static str> {
         return None;
     }
     match bytes.get(8..12)? {
-        b"heic" | b"heix" | b"mif1" | b"msf1" => Some("HEIC"),
+        b"heic" | b"heix" => Some("HEIC"),
+        // The generic HEIF brands, whose pictures need not be HEVC-coded.
+        b"mif1" | b"msf1" => Some("HEIF"),
         b"avif" | b"avis" => Some("AVIF"),
         _ => None,
     }
@@ -584,7 +586,7 @@ mod tests {
             box_
         };
         assert_eq!(decode(&ftyp(b"heic")), Err(Failure::Unsupported("HEIC".into())));
-        assert_eq!(decode(&ftyp(b"mif1")), Err(Failure::Unsupported("HEIC".into())));
+        assert_eq!(decode(&ftyp(b"mif1")), Err(Failure::Unsupported("HEIF".into())));
         assert_eq!(decode(&ftyp(b"avif")), Err(Failure::Unsupported("AVIF".into())));
         assert_eq!(decode(&ftyp(b"isom")), Err(Failure::NotPicture));
         // A GIF is shown (a 1 × 1 one).
