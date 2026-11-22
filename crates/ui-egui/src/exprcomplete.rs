@@ -74,6 +74,16 @@ pub(crate) struct Offer {
     quote: Option<char>,
     items: Vec<String>,
     of: Vec<Item>,
+    /// The fields it was worked out over, as their rows say them (`fields_key`): the same items
+    /// over a field whose type or alias changed are another offer, whose rows say something else.
+    fields: u64,
+}
+
+/// What a dataset's fields say in a list's rows and help: each one's name, type and alias. An
+/// offer worked out over them is kept while it's the same (`Worked`), and its rows' descriptions
+/// while the offer is (`completion::List`).
+pub(crate) fn fields_key(ds: &Dataset) -> u64 {
+    egui::util::hash(ds.fields.iter().map(|f| (f.name.as_str(), f.ty.label(), f.alias.as_deref())).collect::<Vec<_>>())
 }
 
 impl Offered for Offer {
@@ -151,7 +161,7 @@ pub(crate) fn offer_from(c: &Completion, text: &str, ds: &Dataset, asked: bool) 
     }
     let items = of.iter().map(shown).collect();
     let quote = (c.place != Place::Code).then(|| text.chars().nth(c.word.start)).flatten();
-    Some(Offer { start: c.word.start, end: c.word.end, quote, items, of })
+    Some(Offer { start: c.word.start, end: c.word.end, quote, items, of, fields: fields_key(ds) })
 }
 
 /// The values of the field a value typed at `c` is compared with (`name = '▮`, `pop IN (▮`),
@@ -312,7 +322,7 @@ pub(crate) fn expr_edit_lines(
         state.worked = None;
     }
     state.rows = rows;
-    let source = ds.map_or(0, |d| egui::util::hash(d.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()));
+    let source = ds.map_or(0, fields_key);
     let worked = &mut state.worked;
     let asked = &mut state.asked;
     let accepted = &mut state.accepted;
@@ -1323,6 +1333,38 @@ mod tests {
     /// descendant, with what its help says: a screen reader reads the entry the highlight is on,
     /// and follows it (#2619). A function says its signature and what it gives, a field its type.
     /// Closed, the box names no row.
+    /// A field's type changed while its list is open: the row says the new one, as its help does
+    /// (CodeRabbit on #2654), the same items over other fields being another offer.
+    #[test]
+    fn a_row_says_a_field_s_new_type_while_its_list_is_open() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let id = Id::unique("expr");
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, (text, data): &mut (String, Dataset)| {
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&*data), |e| e).labelled_by(label.id);
+            },
+            (String::new(), ds()),
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        h.event(egui::Event::Text("po".into()));
+        h.run();
+        let said = |h: &egui_kittest::Harness<'_, (String, Dataset)>| {
+            let node = h.get_by_label("Expression");
+            node.accesskit_node().active_descendant().and_then(|row| row.description())
+        };
+        assert_eq!(said(&h).as_deref(), Some(tl!(FieldType::Integer.label())));
+        if let Some(f) = h.state_mut().1.fields.iter_mut().find(|f| f.name == "pop") {
+            f.ty = FieldType::Text;
+            f.alias = Some("People".into());
+        }
+        h.run();
+        let now = said(&h).unwrap_or_default();
+        assert_eq!(now, format!("{}\nPeople", tl!(FieldType::Text.label())), "the new type and alias");
+    }
+
     #[test]
     fn a_screen_reader_reads_the_highlighted_entry() {
         use egui_kittest::kittest::{NodeT, Queryable};

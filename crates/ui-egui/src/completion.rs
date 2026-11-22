@@ -773,12 +773,16 @@ fn rows(
                 ui.data_mut(|d| d.remove::<egui::scroll_area::State>(id));
                 scroll.help_for = Some(shown);
             }
-            let mut area = egui::ScrollArea::vertical().id_salt(HELP_SCROLL).max_height(size.y).auto_shrink([false, false]);
-            // A page from the keyboard: the box's height less a line, kept in the help (as far as
-            // it scrolled last frame: on the frame another item's help comes, it waits a frame).
+            // The help scrolls in the part of its box that shows: the popup, held to its `room`,
+            // may cut the box's bottom off (a short window), and the help's end must still come
+            // into view, a page never passing lines that weren't shown.
+            let seen = (ui.clip_rect().bottom() - ui.max_rect().top()).clamp(row.min(size.y), size.y);
+            let mut area = egui::ScrollArea::vertical().id_salt(HELP_SCROLL).max_height(seen).auto_shrink([false, false]);
+            // A page from the keyboard: what shows less a line, kept in the help (as far as it
+            // scrolled last frame: on the frame another item's help comes, it waits a frame).
             if scroll.page != 0 && !changed {
                 let at = egui::scroll_area::State::load(ui.ctx(), id).map_or(0.0, |s| s.clamped_offset().y);
-                let page = (size.y - row).max(row);
+                let page = (seen - row).max(row);
                 area = area.vertical_scroll_offset((at + scroll.page as f32 * page).clamp(0.0, scroll.help_max));
                 scroll.page = 0;
             }
@@ -1679,10 +1683,19 @@ mod tests {
         };
         fn check<S>(h: &mut egui_kittest::Harness<'_, S>, long: &str, what: &str) {
             let top = h.get_by_label(long).rect().top();
+            // The popup, held to its room: the part of the help that shows ends at its bottom.
+            let row = h.get_by_label("one").rect().center();
+            let popup = |h: &egui_kittest::Harness<'_, S>| {
+                h.ctx.memory(|m| {
+                    m.layer_ids().filter(|l| l.order == egui::Order::Foreground).filter_map(|l| m.area_rect(l.id)).find(|r| r.contains(row))
+                })
+            };
+            let shown = popup(h).map_or(0.0, |p| p.bottom() - top);
             h.key_press(egui::Key::PageDown);
             h.run();
             let down = h.get_by_label(long).rect().top();
             assert!(down < top - 50.0, "{what}: a page down: {down} from {top}");
+            assert!(top - down < shown, "{what}: no line passed unseen: a page of {} with {shown} shown", top - down);
             h.key_press(egui::Key::PageDown);
             h.run();
             let further = h.get_by_label(long).rect().top();
@@ -1692,8 +1705,7 @@ mod tests {
                 h.run();
             }
             // At the help's end: its last line inside the popup.
-            let row = h.get_by_label("one").rect().center();
-            let popup = h.ctx.memory(|m| m.layer_ids().filter_map(|l| m.area_rect(l.id)).find(|r| r.contains(row)));
+            let popup = popup(h);
             let end = h.get_by_label("the end").rect();
             assert!(
                 popup.is_some_and(|p| p.top() <= end.top() && end.bottom() <= p.bottom()),
@@ -1710,33 +1722,35 @@ mod tests {
             let back = h.get_by_label(long).rect().top();
             assert!((back - top).abs() < 0.5, "{what}: back to the top: {back} for {top}");
         }
-        // A box's list.
-        let shown = help(long.clone());
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
-            move |ui, (text, list): &mut (String, super::List<Words>)| {
-                let id = egui::Id::unique("box");
-                let _ = list.keys(ui, id);
-                let label = ui.label("Expression");
-                let out = egui::TextEdit::singleline(text).id(id).show(ui);
-                let _ = out.response.response.clone().labelled_by(label.id);
-                out.response.response.request_focus();
-                let visible = ui.clip_rect();
-                let offer = Words(vec!["one".into(), "two".into()]);
-                list.show(
-                    ui,
-                    egui::Id::unique("list"),
-                    &out,
-                    visible,
-                    |_| Some(offer),
-                    |_, _| None,
-                    |_, _| None,
-                    |ui, _, item, width| shown(ui, item, width),
-                );
-            },
-            (String::new(), super::List::default()),
-        );
-        h.run_steps(3);
-        check(&mut h, &long, "a box's list");
+        // A box's list, in a tall window and in one too short for the help's box.
+        for height in [700.0, 200.0] {
+            let shown = help(long.clone());
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, height)).build_ui_state(
+                move |ui, (text, list): &mut (String, super::List<Words>)| {
+                    let id = egui::Id::unique("box");
+                    let _ = list.keys(ui, id);
+                    let label = ui.label("Expression");
+                    let out = egui::TextEdit::singleline(text).id(id).show(ui);
+                    let _ = out.response.response.clone().labelled_by(label.id);
+                    out.response.response.request_focus();
+                    let visible = ui.clip_rect();
+                    let offer = Words(vec!["one".into(), "two".into()]);
+                    list.show(
+                        ui,
+                        egui::Id::unique("list"),
+                        &out,
+                        visible,
+                        |_| Some(offer),
+                        |_, _| None,
+                        |_, _| None,
+                        |ui, _, item, width| shown(ui, item, width),
+                    );
+                },
+                (String::new(), super::List::default()),
+            );
+            h.run_steps(3);
+            check(&mut h, &long, &format!("a box's list, {height} high"));
+        }
         // A button's list.
         let shown = help(long.clone());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui(move |ui| {
