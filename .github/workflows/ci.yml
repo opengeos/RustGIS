@@ -177,7 +177,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if grep -qE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|xtask/src/(main|notices)\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/(check-cargo-sources|test_[^/]+)\.py|\.github/workflows/ci\.yml|crates/map/src/color/(scientific|matplotlib)\.rs|crates/tiles/src/(symbols|style)\.rs|crates/data/src/(raster/crs|esripbf)\.rs)$|^(third-party/|\.cargo/)' <<<"$changed"; then
+          if grep -qE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|xtask/src/(main|notices)\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/(check-cargo-sources|review-deferrals|test_[^/]+)\.py|\.github/workflows/ci\.yml|crates/map/src/color/(scientific|matplotlib)\.rs|crates/tiles/src/(symbols|style)\.rs|crates/data/src/(raster/crs|esripbf)\.rs)$|^(third-party/|\.cargo/)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No dependency, licence or notice files changed; skipping."
