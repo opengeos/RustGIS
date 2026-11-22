@@ -836,13 +836,14 @@ as the attribute table shows it (`near_fid`), the distance to it (`near_dist`, i
 Kilometers by default) and the point on it nearest the input feature (`near_x` and `near_y`, in
 longitude from −180° up to 180° and latitude; for an input in a projected system, its x and y,
 measured flat there, see above). Distances are measured as Spatial Join's **Closest** measures them:
-on the ground, between the features' nearest points, and zero for features that
-intersect, whose point is one they share. The point is found as the distance is, in a plane centred
-between the features, so on a long edge it can sit off the geodesic by up to about 0.01 % of the
-distance (5 m at 50 km). A `distance` limits how far it looks; features with nothing that near, or
-without geometry, get empty values. Of equally near features, the first in the near layer wins.
-With the same layer as both, each feature's nearest is another feature, not itself. A field name
-the input already has gets a suffix (`near_dist_2`). Selections in both layers are honoured:
+on the ground (flat, for an input in a projected system), between the features' nearest points, and
+zero for features that intersect, whose point is one they share. The point is found as the distance
+is, in a plane centred between the features, so on a long edge it can sit off the geodesic by up to
+about 0.01 % of the distance (5 m at 50 km). A `distance` limits how far it looks; features with
+nothing that near, or without geometry, get empty values. Of equally near features, the first in the
+near layer wins. With the same layer as both, each feature's nearest is another feature, not itself.
+A field name the input already has gets a suffix (`near_dist_2`). Selections in both layers are
+honoured:
 
 ```text
 gp.run={"tool":"near","params":{"input":"addresses","near":"hydrants","units":"Feet"}}

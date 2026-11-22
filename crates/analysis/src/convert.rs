@@ -124,6 +124,8 @@ pub(crate) fn reaches_poles(south: f64, north: f64) -> (bool, bool) {
     (north >= 90.0 - rustgis_geom::POLE_TOLERANCE, south <= -90.0 + rustgis_geom::POLE_TOLERANCE)
 }
 
+/// A run of coordinates as a `LineString` in the run's plane: a ring's (closed when its coordinates
+/// close it) or a line's, which it doesn't close.
 pub fn ring(r: &[Coord]) -> LineString<f64> {
     LineString::new(r.iter().map(|c| gc(*c)).collect())
 }

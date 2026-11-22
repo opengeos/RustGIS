@@ -558,7 +558,14 @@ pub static TOOLS: &[ToolSpec] = &[
         summary: "Removes vertices that deviate less than a tolerance (Douglas–Peucker).",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
-            P { name: "tolerance", label: "Tolerance (km)", kind: K::Number, required: true, default: "25", help: "" },
+            P {
+                name: "tolerance",
+                label: "Tolerance (km)",
+                kind: K::Number,
+                required: true,
+                default: "25",
+                help: "How far a vertex may move, on the ground, or flat for a layer in a projected system.",
+            },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
         run: simplify,
@@ -646,7 +653,14 @@ pub static TOOLS: &[ToolSpec] = &[
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
             P { name: "select", label: "Selecting Features", kind: K::Layer, required: true, default: "", help: "" },
-            P { name: "distance", label: "Search Distance", kind: K::Number, required: false, default: "0", help: "" },
+            P {
+                name: "distance",
+                label: "Search Distance",
+                kind: K::Number,
+                required: false,
+                default: "0",
+                help: "Measured on the ground, or flat for a layer in a projected system.",
+            },
             P { name: "units", label: "Units", kind: K::Choice(UNITS), required: false, default: "\"Kilometers\"", help: "" },
             P { name: "invert", label: "Invert", kind: K::Choice(&["No", "Yes"]), required: false, default: "\"No\"", help: "" },
         ],
@@ -3756,12 +3770,14 @@ fn length_bound(line: &[Vec<Coord>], ring: bool) -> f64 {
     if let Some(unit) = crate::convert::own_unit_m() {
         let mut verts = line.iter().flatten().filter(|c| c.is_finite());
         let Some(first) = verts.next() else { return 0.0 };
+        // Each edge's metres, as `segments` makes them and the walk adds them up, and a hair more
+        // for the rounding of the sums (a vertex `segments` passes over only shortens the line).
         let (mut prev, mut sum) = (first, 0.0);
         for c in verts.chain(ring.then_some(first)) {
-            sum += (c.x - prev.x).hypot(c.y - prev.y);
+            sum += (c.x - prev.x).hypot(c.y - prev.y) * unit;
             prev = c;
         }
-        return sum * unit;
+        return sum * (1.0 + 1e-9);
     }
     let fold = |c: &Coord| Coord::new(rustgis_geom::fold_lon(c.x), c.y.clamp(-90.0, 90.0));
     let mut verts = line.iter().flatten().filter(|c| c.is_finite()).map(fold);
@@ -4354,16 +4370,16 @@ pub fn simplify_geometry(g: &Geometry, tol_m: f64) -> (Geometry, SimplifyNotes) 
         let mut beyond = false;
         g.for_each_coord(|c| beyond |= !own && !c.y.is_nan() && c.y.abs() > rustgis_geom::MAX_LAT);
         notes.polar = usize::from(beyond);
-        let past_pole = |coords: &mut dyn Iterator<Item = &Coord>| if own { 0 } else { past_pole(coords) };
+        let count_past_pole = |coords: &mut dyn Iterator<Item = &Coord>| if own { 0 } else { past_pole(coords) };
         // The vertices taken to a pole are those in what's kept: a line's parts of 2 vertices or
         // more, a polygon's rings. A line whose parts are all that short is kept as it was
         // (`from_line` has none to give), so only the short parts beside a longer one go.
         (notes.past_pole, notes.short) = match g {
             Geometry::Line(parts) if parts.iter().any(|p| p.len() >= 2) => {
-                (past_pole(&mut parts.iter().filter(|p| p.len() >= 2).flatten()), parts.iter().filter(|p| p.len() < 2).count())
+                (count_past_pole(&mut parts.iter().filter(|p| p.len() >= 2).flatten()), parts.iter().filter(|p| p.len() < 2).count())
             }
             Geometry::Line(_) => (0, 0),
-            Geometry::Polygon(polygons) => (past_pole(&mut polygons.iter().flatten().flatten()), 0),
+            Geometry::Polygon(polygons) => (count_past_pole(&mut polygons.iter().flatten().flatten()), 0),
             _ => (0, 0),
         };
         // A geometry given back as it was (nothing to keep in the plane, or canceled) moved nothing
@@ -10110,6 +10126,20 @@ mod tests {
         let merge = crate::tool("merge").unwrap();
         let p = crate::resolve_params(merge, &serde_json::json!({"inputs": ["a"], "attributes": null})).unwrap();
         assert_eq!(p["attributes"], serde_json::json!(true));
+    }
+
+    /// In a projected system's own plane, the bound covers the walk's sum of each segment's metres:
+    /// ten one-foot segments walk 3.0480000000000005 m, where 10 ft × 0.3048 is 3.048, and a start
+    /// offset between the two would find no room for the point the walk makes there.
+    #[test]
+    fn length_bound_covers_the_walk_in_a_projected_plane() {
+        use crate::convert::{EAST_NORTH, Plane, RunPlane, install};
+        let _feet = install(RunPlane { plane: Plane::Own, unit_m: 0.3048, axes: EAST_NORTH });
+        let line = [(0..=10).map(|k| Coord::new(f64::from(k), 0.0)).collect::<Vec<_>>()];
+        let walked: f64 = segments(&line, false).map(|s| s.len).sum();
+        assert!(walked > 10.0 * 0.3048, "{walked}");
+        let bound = length_bound(&line, false);
+        assert!(bound >= walked && bound <= walked * (1.0 + 1e-8), "{walked} {bound}");
     }
 
     #[test]
