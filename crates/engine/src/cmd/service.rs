@@ -946,12 +946,18 @@ pub(crate) fn listing_ahead(s: &mut Session, p: &Value) -> Result<Option<super::
 }
 
 /// Prepares supplied or URL-only discovery for an add under its initiating login. Only
-/// discovery runs on the worker; the admitted command installs on the original session.
+/// discovery runs on the worker; the admitted command installs on the original session. A call
+/// `add` would refuse for its address or missing layer is refused here, before any fetch.
+/// Cancel is looked at between documents: one document's download, up to
+/// [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT), is a long step
+/// without a check.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn adding_ahead(s: &mut Session, p: &Value) -> Result<Option<super::reads::ReadWork>, String> {
     let owned = without_token(p)?;
     let p = owned.as_ref().unwrap_or(p);
     let p = crate::service_logins::request_params(s, p)?.into_owned();
+    url_of(&p)?;
+    ps(&p, "layer").map(str::trim).filter(|l| !l.is_empty()).ok_or("layer is required")?;
     Ok(Some(super::reads::ahead("Add Service Layer", "service.add".into(), move || {
         let explicit_map = ps(&p, "tiles").filter(|_| ps(&p, "layer").map(str::trim) == Some("map")).map(|t| (t, ps(&p, "source_url")));
         discovery_read(|s| discover(s, &p, false, explicit_map))

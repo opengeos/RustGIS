@@ -738,6 +738,7 @@ mod tests {
 
     #[test]
     fn ogc_dataset_url_only_add_runs_off_frame_and_keeps_its_connection_name() {
+        let _turn = crate::fetching::turn();
         let base = serve(|request| {
             let body = if request.starts_with("GET /tiles?") {
                 json!({"tileMatrixSetId":"WebMercatorQuad","links":[
@@ -751,6 +752,8 @@ mod tests {
             let mut h = harness();
             h.state_mut().reads_off_frame = true;
             let before = h.state().session.map().tiles.len();
+            let bare = h.state_mut().run("service.add", json!({"url":format!("{base}/dataset"),"type":"ogcapi"}));
+            assert_eq!(bare.unwrap_err(), "layer is required", "a call the command refuses is not started");
             let params = json!({"url":format!("{base}/dataset"),"type":"ogcapi","layer":"map"});
             let reply = if named {
                 run_named(h.state_mut(), "service.add", params, Some("Fixture connection"))

@@ -114,21 +114,23 @@ impl DatasetDiscovery {
         self.omissions.iter().map(|(reason, count)| format!("{count} {reason}")).collect()
     }
 
-    /// Adds counts for known work abandoned by a terminal discovery error or budget.
-    /// Waiting for supplied bytes is not terminal; callers use `notes` for that snapshot.
+    /// Adds counts for known work abandoned by a terminal discovery error or budget. A document
+    /// queued twice (a shared list and metadata pair) or left unread by the failure itself is
+    /// counted per queue entry. Waiting for supplied bytes is not terminal; callers use `notes`
+    /// for that snapshot.
     pub fn stopped_notes(&self) -> Vec<String> {
         let mut notes = self.notes();
-        let mut pending = BTreeMap::<&str, usize>::new();
+        let mut left = BTreeMap::<&str, usize>::new();
         for doc in &self.pending {
             let (kind, count) = match &doc.kind {
                 Kind::Tiles(_) => ("tileset documents", 1),
                 Kind::Styles => ("style catalogues", 1),
                 Kind::Style { .. } => ("stylesheets", 1),
-                Kind::Source(candidate) => ("TileJSON source checks", 1 + candidate.remaining.len()),
+                Kind::Source(candidate) => ("TileJSON source checks", candidate.remaining.len()),
             };
-            *pending.entry(kind).or_default() += count;
+            *left.entry(kind).or_default() += count;
         }
-        notes.extend(pending.into_iter().map(|(kind, count)| format!("{count} {kind} were left out: dataset discovery stopped")));
+        notes.extend(left.into_iter().map(|(kind, count)| format!("{count} {kind} were left out: dataset discovery stopped")));
         notes
     }
 
