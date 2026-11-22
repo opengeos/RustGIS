@@ -557,11 +557,15 @@ fn read_index(path: &Path, rows: usize) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-/// Reads row `e` of a rows file.
-fn read_row(file: &mut std::fs::File, e: &Entry) -> Result<BaseRow, String> {
+/// Reads row `e` of a rows file, refusing one without a value for each of the copy's `fields`.
+fn read_row(file: &mut std::fs::File, e: &Entry, fields: usize) -> Result<BaseRow, String> {
     let mut bytes = vec![0; e.len as usize];
     file.seek(SeekFrom::Start(e.offset)).and_then(|_| file.read_exact(&mut bytes)).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("a kept row is damaged: {e}"))
+    let row: BaseRow = serde_json::from_slice(&bytes).map_err(|e| format!("a kept row is damaged: {e}"))?;
+    if row.values.len() != fields {
+        return Err(format!("a kept row is damaged: feature {} has {} values for {fields} fields", e.id, row.values.len()));
+    }
+    Ok(row)
 }
 
 // Making the list, on the phone.
@@ -614,7 +618,7 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
         for (k, row) in changed {
             progress::check().map_err(|e| e.to_string())?;
             let Some(e) = index.get(k) else { continue };
-            let base = read_row(&mut rows, e)?;
+            let base = read_row(&mut rows, e, g.fields.len())?;
             let mut values = Vec::new();
             for ((name, j), was) in g.fields.iter().zip(&fields).zip(&base.values) {
                 // A field removed in the field is listed as removed, not by value.
@@ -636,7 +640,7 @@ pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Chang
         let mut deleted = Vec::new();
         for (e, _) in index.iter().zip(&seen).filter(|(_, seen)| !**seen) {
             progress::check().map_err(|e| e.to_string())?;
-            let base = read_row(&mut rows, e)?;
+            let base = read_row(&mut rows, e, g.fields.len())?;
             let values = g.fields.iter().cloned().zip(base.values).collect();
             deleted.push(Given { id: e.id, values, geometry: Some(base.geometry) });
         }
@@ -722,7 +726,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
     // The field's values in a field it removed aren't known, so none can be brought back.
     if !removed.is_empty() {
         return Err(format!(
-            "cannot bring back the field's changes: the field package removed field(s) the map '{source}' still has, in layer(s) {}, so their values in the field aren't known. Nothing was changed; remove those fields from the map here too, then Bring Back again",
+            "cannot bring back the field's changes: the field package removed field(s) the map '{source}' still has, in layer(s) {}, so their values in the field aren't known. Nothing was changed; if the field renamed one, rename it here too, or restore it on the phone and send the package again, then Bring Back again",
             removed.join("; ")
         ));
     }
@@ -1085,6 +1089,20 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A kept row with fewer values than the copy has fields is damaged, not read short.
+    #[test]
+    fn a_kept_row_missing_a_value_is_refused_as_damaged() {
+        let path = test_bases::root().unwrap().join("short.rows");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let line = serde_json::to_vec(&json!({"geometry": null, "values": [Value::Null]})).unwrap();
+        std::fs::write(&path, &line).unwrap();
+        let e = Entry { id: 7, offset: 0, len: line.len() as u32, print: [0; 16] };
+        let mut file = std::fs::File::open(&path).unwrap();
+        assert!(read_row(&mut file, &e, 1).is_ok());
+        let refused = read_row(&mut file, &e, 2).err().unwrap();
+        assert!(refused.contains("damaged") && refused.contains("feature 7"), "{refused}");
     }
 
     /// A folder a racing send removed first is gone, not a failure to remove it.

@@ -199,6 +199,8 @@ fn bring_back_refreshes_a_renamed_home_offline_map() {
     home.run("offline.open", &json!({"name": "Crew"})).unwrap();
     assert_eq!(home.map().name, "Renamed at home");
     add_point(&mut home, cities, &name, "Edited at home", [11.0, 5.0]);
+    // Packaged once its edit is synced: an offline map with edits not synced is refused.
+    home.run("offline.sync", &json!({"name": "Crew"})).unwrap();
     let (area, bytes) = package(&mut home, &Value::Null).unwrap();
     assert_eq!(area, "Crew");
     assert_eq!(home.project.offline_areas.len(), 1);
@@ -1256,6 +1258,40 @@ fn a_projection_defined_on_the_offline_map_counts_as_unsynced() {
     home.run("layer.defineProjection", &json!({"layer": cities, "crs": "EPSG:3857"})).unwrap();
     let (refused, _) = try_bring_back(&temp, &mut a, &mut home, "a");
     assert!(refused.unwrap_err().contains("aren't synced yet"));
+}
+
+/// The office adds a city to the map and sketches another in the area's offline map, both taking
+/// the next id, then makes a package from the offline map without syncing. Sent out, the crew's
+/// edit to the sketch would come home to the office's city once Bring Back made them sync, and the
+/// sketch renumbered: the package is refused until the area is synced, and the edit then comes home
+/// to the sketch.
+#[test]
+fn a_package_from_an_offline_map_with_unsynced_edits_is_refused_until_synced() {
+    let temp = Temp::new("unsynced-out");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let hc = layer(&home, "Cities");
+    let name = text_field(&home, hc);
+    let office = add_point(&mut home, hc, &name, "Office", [10.0, 5.0]);
+    home.run("offline.open", &json!({"name": "Day"})).unwrap();
+    let oc = layer(&home, "Cities");
+    add_point(&mut home, oc, &name, "Sketch", [11.0, 5.0]);
+    let refused = package(&mut home, &json!({"name": "Day"})).unwrap_err();
+    assert!(refused.contains("aren't synced yet"), "{refused}");
+    home.run("offline.sync", &json!({"name": "Day"})).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day"})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let ac = layer(&a, "Cities");
+    let ds = &a.map().layer(ac).unwrap().dataset;
+    let j = ds.field_index(&name).unwrap();
+    let row = (0..ds.features.len()).find(|r| ds.value(*r, j).to_string() == "Sketch").unwrap();
+    a.run("edit.setValue", &json!({"layer": ac, "row": row, "field": name, "value": "Crew edit"})).unwrap();
+    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    let hc = layer(&home, "Cities");
+    assert_eq!(value_of(&home, hc, office, &name).as_deref(), Some("Office"), "{done}");
+    assert_eq!(with_label(&home, hc, &name, "Crew edit"), 1, "{done}");
 }
 
 /// The package gave the highest id a floor can be, so the phone's new point takes `i64::MAX`, which

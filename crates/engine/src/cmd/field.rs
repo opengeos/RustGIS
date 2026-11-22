@@ -142,6 +142,17 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
     // Only a map coming back from the field carries its photos. Its persisted provenance
     // survives an ordinary Save As; going out, the photos named are at home.
     let coming_back = returning.is_some() && opened_field;
+    // Going out from an area's offline map with edits not synced yet, a feature sketched there and
+    // one added to the area's map since can share an id, so the crew's edits would come home to the
+    // wrong one: refused, as Bring Back refuses it, with nothing changed.
+    if let Some(ai) = home_area.filter(|_| returning.is_some())
+        && super::workspace::area_unsynced(&s.project, ai)
+    {
+        let area = s.project.offline_areas.get(ai).map(|a| a.name.clone()).unwrap_or_default();
+        return Err(format!(
+            "offline area '{area}' has edits in its offline map that aren't synced yet, and a package made from it could give the field ids the map uses for other features. Nothing was changed. Sync the area first (Data › Offline › Sync), then make the package again"
+        ));
+    }
     let (area, mut map) = match returning {
         Some(area) => {
             // Its raster layers stay behind, as an offline area's do going out: said.

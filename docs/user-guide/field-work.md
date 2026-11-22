@@ -160,7 +160,9 @@ A field package (`.rgisfield`) carries a map to the phone and its edits back.
    reads it and applies what changed on the phone: features added there are added, features
    deleted there are removed, and the attributes and shapes changed there are changed. The photos
    go in a folder beside the project. Nothing else is compared, so a field added on the computer
-   meanwhile, or another phone's edits, are left as they are.
+   meanwhile, or another phone's edits, are left as they are. When one phone deletes a feature
+   another phone edited, the order the packages come back in decides: the edit first keeps the
+   feature, the deletion first drops the edit, and either way the notice names the feature.
 
 When a phone opens a package made on the computer, it keeps a copy of the rows the package gave it
 in the app's own folder (`field bases`), found by the package's identity, so it is still found after
@@ -169,8 +171,10 @@ the map is open, with progress and **Cancel** in the status bar; cancelled, no c
 opening the package again starts a fresh one. A returned package opened on another device keeps no
 copy. Once **Send Field Package** has written the return, the copy is removed and the package is
 marked as sent in that folder: a package comes back once, so opening it again, even after a restart,
-keeps no copy and says so; make a new one for more edits. The copy of a package opened but never sent stays in that
-folder until it is removed by hand. **Send Field Package** compares the map with that copy and sends
+keeps no copy and says so; make a new one for more edits. If the return file is lost after **Send
+Field Package**, sending again goes back as a whole map, which the computer may refuse once another
+package of the area has come back, so keep the return file until the computer has it. The copy of a
+package opened but never sent stays in that folder until it is removed by hand. **Send Field Package** compares the map with that copy and sends
 the list of changes with the map. A package opened on a device that doesn't keep its rows (the
 browser, or a field project copied to another device) goes back as a whole map, and the phone says
 so: Bring Back then compares the map with the area as it was last synced, and refuses it if the area
