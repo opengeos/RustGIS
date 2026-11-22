@@ -4727,15 +4727,16 @@ const MAX_URL_FILE_NAME: usize = 120;
 pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value, bytes: &[u8]) -> Option<String> {
     let full = url_last_segment(url);
     let shp = Path::new(&full).extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"));
-    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || (is_zip(bytes) && !shp) {
+    let n = full.chars().count();
+    // A short name first, so the common case doesn't read the download again.
+    if n <= MAX_URL_FILE_NAME || ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || (is_zip(bytes) && !shp) {
         return None;
     }
     // Decided by the stem the layer is named from: a long extension that isn't one (`a.xxx…`)
     // is dropped, not cut.
     let kept = url_file_name(url, bytes).ok()?;
     let stem = |name: &str| Path::new(name).file_stem().and_then(|s| s.to_str()).map_or(0, |s| s.chars().count());
-    let n = full.chars().count();
-    (stem(&kept) < stem(&full) && n > MAX_URL_FILE_NAME).then(|| {
+    (stem(&kept) < stem(&full)).then(|| {
         format!(
             "{command}: the address's file name is {n} characters, so the file name the layer is named from is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
         )
