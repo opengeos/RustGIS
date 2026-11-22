@@ -496,7 +496,7 @@ fn tool_list() -> Vec<Value> {
         .collect();
     out.push(json!({
         "name": "run",
-        "description": "Run several RustGIS commands in one call, as one undo step (none when its lines only read the project, moved the view, exported, left a request, or changed nothing): a script with one `command-id {json}` per line (# starts a comment), e.g. `map.basemap {\"name\": \"ocean\"}`. A failing line stops the script, nothing it did to the project is kept (a file an earlier line wrote stays written), and the error names the line. Returns {success, result (the last command's), lines, layersAdded, notices, error, duration_s}. Each line follows the same rules as run_command.",
+        "description": "Run several RustGIS commands in one call, as one undo step (none when its lines only read the project, moved the view, exported, left a request, or ran a command that reports it changed nothing, such as a move to where the layers already are; a line that sets a value to the one it has still counts): a script with one `command-id {json}` per line (# starts a comment), e.g. `map.basemap {\"name\": \"ocean\"}`. A failing line stops the script, nothing it did to the project is kept (a file an earlier line wrote stays written), and the error names the line. Returns {success, result (the last command's), lines, layersAdded, notices, error, duration_s}. Each line follows the same rules as run_command.",
         "inputSchema": {
             "type": "object",
             "properties": {"script": {"type": "string", "description": "One command per line: id {json}"}},

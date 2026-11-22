@@ -328,11 +328,12 @@ fn script_keeps_its_undo_step_when_a_line_changes_nothing() {
 /// Whether a script's line edited is measured, not inferred from what it may reach (#2621): an
 /// export writes a file, the command log reaches app state, yet neither changes what undo
 /// restores. Saving as another file does, and the script's step brings the first file back.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_step_follows_what_its_lines_change_not_what_they_reach() {
     let mut s = world();
-    let dir = std::env::temp_dir().join(format!("rustgis-2621-{}-{}", std::process::id(), crate::project_log::now_ms()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let files = write_notices::Files::new();
+    let dir = files.path();
     let first = dir.join("first.rgis");
     s.run("project.saveAs", &json!({"path": first})).unwrap();
     let depth = s.undo_depth();
@@ -349,7 +350,6 @@ fn script_step_follows_what_its_lines_change_not_what_they_reach() {
     assert_eq!((s.undo_depth(), s.path.as_deref()), (depth + 1, Some(second.as_path())));
     assert!(s.undo());
     assert_eq!(s.path.as_deref(), Some(first.as_path()));
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A task's steps are counted as a script's lines: an undo step only when one edited (#2621).
