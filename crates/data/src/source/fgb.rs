@@ -61,11 +61,13 @@ fn header_reproject(header_crs: Option<flatgeobuf::Crs<'_>>, notes: &mut Vec<Str
     })
 }
 
-/// The system RustGIS reads a FlatGeobuf in, from its header alone (no feature is read).
+/// The system RustGIS reads a FlatGeobuf in, from its header alone (no feature is read): the
+/// outer error when the header can't be read, the inner one when the system it says is refused
+/// (another body's that can't be placed).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn header_coord_crs(path: &Path) -> Result<Crs> {
+pub(crate) fn header_coord_crs(path: &Path) -> Result<Result<Crs>> {
     let reader = open_reader(BufReader::new(std::fs::File::open(path)?))?;
-    Ok(header_reproject(reader.header().crs(), &mut Vec::new())?.crs())
+    Ok(header_reproject(reader.header().crs(), &mut Vec::new()).map(|r| r.crs()))
 }
 
 /// Whether a FlatGeobuf's header says WGS 84 longitude/latitude or no system: EPSG:4326 (or no

@@ -601,6 +601,11 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionReques
     let mut in_lonlat = false;
     if res.status.success() && !unprojected && tmp.exists() {
         let placement = placement(&tmp);
+        // Another body's system RustGIS refuses can't go to WGS 84 either (GDAL won't convert
+        // between bodies): refused, saying why, rather than left out as empty.
+        if let Placement::Refused(why) = &placement {
+            return Err(DataError::Format(format!("GDAL: '{layer}': {why}")));
+        }
         if placement != Placement::Own {
             crate::progress::check()?;
             // GDAL can't write over a FlatGeobuf: the first conversion goes first.
@@ -682,7 +687,7 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionReques
 }
 
 /// How RustGIS reads a FlatGeobuf GDAL wrote in the source's own system.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Placement {
     /// In that system, which it reads and converts itself (WGS 84 longitude/latitude among them).
     Own,
@@ -692,6 +697,8 @@ enum Placement {
     LonLat,
     /// A system it can't read, which it would take for longitude/latitude: converted to it.
     Unreadable,
+    /// Another body's system it refuses, and why: not converted at all.
+    Refused(String),
 }
 
 /// How RustGIS reads `fgb` ([`Placement`]), from its header alone. One it reads as
@@ -701,8 +708,13 @@ enum Placement {
 fn placement(fgb: &Path) -> Placement {
     use crate::raster::Crs;
     crate::provenance::without(|| {
-        // A header that can't be read says nothing of the system: converted as before, unsaid.
-        let Ok(crs) = super::fgb::header_coord_crs(fgb) else { return Placement::LonLat };
+        // A header that can't be read says nothing of the system: converted as before, unsaid. A
+        // system it says that RustGIS refuses can't be read, and is said.
+        let crs = match super::fgb::header_coord_crs(fgb) {
+            Err(_) => return Placement::LonLat,
+            Ok(Err(e)) => return Placement::Refused(e.to_string()),
+            Ok(Ok(crs)) => crs,
+        };
         if crs == Crs::LonLat {
             return if super::fgb::header_says_wgs84(fgb) { Placement::Own } else { Placement::Unreadable };
         }
@@ -957,6 +969,24 @@ mod tests {
             assert!(c.x.abs() <= 180.0 && c.y.abs() <= 90.0, "{c:?}");
         }
         assert!(in_lonlat_note("nell").contains("converted it to longitude/latitude"));
+        // A system RustGIS refuses (another body's, in a projection it doesn't convert) is refused,
+        // saying why, not converted; a header that can't be read says nothing, so is converted.
+        let mars = dir.path().join("mars.fgb");
+        let out = Command::new(program("ogr2ogr").unwrap())
+            .args(["-f", "FlatGeobuf", "-a_srs", "+proj=nell +R=3396190 +units=m +no_defs +type=crs"])
+            .arg(&mars)
+            .arg(dir.path().join("lv95.csv"))
+            .output()
+            .unwrap();
+        if out.status.success() {
+            assert!(matches!(placement(&mars), Placement::Refused(why) if why.contains("another body")));
+            let gmt = made("mars", ("GMT", "gmt"), "+proj=nell +R=3396190 +units=m +no_defs +type=crs");
+            let e = convert_in(&cache, &gmt, None, None).unwrap_err().to_string();
+            assert!(e.contains("another body") && e.contains("nell"), "{e}");
+        }
+        let broken = dir.path().join("broken.fgb");
+        std::fs::write(&broken, b"not a flatgeobuf").unwrap();
+        assert_eq!(placement(&broken), Placement::LonLat);
         // Several layers of a file: one notice, with their count and names.
         let many: Vec<String> = (1..=12).map(|i| format!("l{i}")).collect();
         let names: Vec<&str> = many.iter().map(String::as_str).collect();
