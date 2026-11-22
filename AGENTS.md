@@ -177,7 +177,7 @@ immediately; label-gated build jobs in `ci.yml` start from the next push.
 - The Claude review ends each inline finding with its category (a last line such as `Category: bug`).
   CI's `Review deferrals` job fails, on each push and in the merge queue, when the marker answers
   a `bug`, `security` or `agents-md` finding, or one edited since it was posted. A maintainer
-  overrides it for one finding by replying `<!-- deferral-approved -->` in its thread.
+  overrides it for one finding by ending a reply in its thread with `<!-- deferral-approved -->`.
 
 ## Looking at the app
 - `cargo run --release -p rustgis` (opens the World Atlas sample).

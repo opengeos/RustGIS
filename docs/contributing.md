@@ -43,7 +43,7 @@ The Claude review ends each inline comment with its category (`Category: bug`, s
 performance, quality or agents-md). CI's **Review deferrals** check, which runs on each push and again in the
 merge queue, fails when a reply leaves a bug, security or AGENTS.md finding for the release quality
 pass. A maintainer can override it for one finding, because the review misclassified it or because
-it can wait all the same, by replying in its thread with `<!-- deferral-approved -->` and running
+it can wait all the same, by ending a reply in its thread with `<!-- deferral-approved -->` and running
 the check again. A maintainer here is the repository's owner, a member of its organization or a
 collaborator, and the pull request's author may be that maintainer. Comments from
 other reviewers carry no category, so the check lets them through: those reviewers answer the

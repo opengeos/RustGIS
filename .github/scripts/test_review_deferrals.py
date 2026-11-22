@@ -70,7 +70,8 @@ class ReviewDeferrals(unittest.TestCase):
         by_contributor = reply("Misclassified. <!-- deferral-approved -->", association="CONTRIBUTOR")
         by_bot = comment(CODERABBIT, "<!-- deferral-approved -->", "MEMBER")
         by_maintainer_author = reply("An extra test for working code. <!-- deferral-approved -->")
-        self.assertEqual(len(self.check(thread(rule, DEFER, by_contributor, by_bot))[0]), 1)
+        mention = reply("I won't reply `<!-- deferral-approved -->` to this one.")
+        self.assertEqual(len(self.check(thread(rule, DEFER, by_contributor, by_bot, mention))[0]), 1)
         self.assertEqual(self.check(thread(rule, DEFER, by_maintainer_author)), ([], []))
 
     def test_an_edited_finding_counts_as_must_fix(self):

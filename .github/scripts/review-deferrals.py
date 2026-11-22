@@ -78,10 +78,10 @@ def category(opening):
     return (serious or found or [None])[0]
 
 
-def defers(reply):
-    """Whether a reply ends with the deferral marker; only other hidden comments (a tool's bookkeeping) may follow it."""
-    _, marker, after = (reply.get("body") or "").rpartition(DEFER)
-    return bool(marker) and not HIDDEN.sub("", after).strip()
+def ends_with(reply, marker):
+    """Whether a reply ends with a marker; only other hidden comments (a tool's bookkeeping) may follow it."""
+    _, found, after = (reply.get("body") or "").rpartition(marker)
+    return bool(found) and not HIDDEN.sub("", after).strip()
 
 
 def edited_by_someone_else(opening):
@@ -96,7 +96,7 @@ def approved(replies):
     for reply in replies:
         author = reply.get("author") or {}
         if (
-            APPROVE in (reply.get("body") or "")
+            ends_with(reply, APPROVE)
             and author.get("__typename") != "Bot"
             and reply.get("authorAssociation") in MAINTAINERS
         ):
@@ -112,7 +112,7 @@ def check(threads):
         if not comments:
             continue
         opening, replies = comments[0], comments[1:]
-        deferral = next((r for r in replies if defers(r)), None)
+        deferral = next((r for r in replies if ends_with(r, DEFER)), None)
         if deferral is None:
             continue
         where = f"{thread.get('path')}:{thread.get('line') or thread.get('originalLine') or '?'}"
