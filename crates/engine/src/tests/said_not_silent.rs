@@ -114,6 +114,11 @@ fn a_downloaded_layer_named_from_a_long_address_says_the_cut() {
     // A .shp address's zip is made of its parts and named from the address: said.
     let long_shp = format!("https://example.org/{}.shp", "s".repeat(150));
     assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_shp, &json!({}), b"PK\x03\x04rest").is_some());
+    // A CityJSON model's added ".city" doesn't hide a cut.
+    let city = format!("https://example.org/{}.json", "c".repeat(120));
+    let model = br#"{"type":"CityJSON","version":"2.0","CityObjects":{},"vertices":[],"transform":{"scale":[1,1,1],"translate":[0,0,0]}}"#;
+    assert!(crate::cmd::layer::url_file_name(&city, model).unwrap().ends_with(".city.json"));
+    assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &city, &json!({}), model).is_some());
     // A long "extension" that isn't one is dropped, the short stem kept whole: nothing cut.
     let odd = format!("https://example.org/a.{}", "x".repeat(121));
     assert_eq!(

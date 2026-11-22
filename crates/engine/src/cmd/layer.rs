@@ -4736,7 +4736,10 @@ pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value, bytes: &[u8]) ->
     // is dropped, not cut.
     let kept = url_file_name(url, bytes).ok()?;
     let stem = |name: &str| Path::new(name).file_stem().and_then(|s| s.to_str()).map_or(0, |s| s.chars().count());
-    (stem(&kept) < stem(&full)).then(|| {
+    // A CityJSON model's ".city" is added, not kept from the address.
+    let kept_stem = Path::new(&kept).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let kept_stem = kept_stem.strip_suffix(".city").filter(|_| !full.to_ascii_lowercase().contains(".city.")).unwrap_or(kept_stem);
+    (kept_stem.chars().count() < stem(&full)).then(|| {
         format!(
             "{command}: the address's file name is {n} characters, so the file name the layer is named from is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
         )
@@ -5160,10 +5163,14 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
         if super::b(p, "service").unwrap_or(false) && !tiff {
             let label = ps(p, "name").map(str::to_string).unwrap_or_else(|| crate::sources::address_in_message(url));
             let bounds = super::service::bounds_of(p.get("bounds"))?;
-            let file = |bytes: &[u8]| url_file_name(url, bytes);
+            // The cut judged from the bytes the layer is named from, as they are named.
+            let mut cut = None;
+            let file = |bytes: &[u8]| {
+                cut = url_name_cut("Add Data From URL", url, p, bytes);
+                url_file_name(url, bytes)
+            };
             let r = super::service::add_service_layer(s, p, &label, url, bounds, public, b(p, "zoom"), file).map_err(named)?;
-            // (Its pages aren't kept here: the name is judged from the address alone.)
-            if let Some(cut) = url_name_cut("Add Data From URL", url, p, &[]) {
+            if let Some(cut) = cut {
                 s.notify(cut, false);
             }
             return Ok(r);
