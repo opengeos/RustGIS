@@ -409,16 +409,23 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     let key = |kv: &str| kv.split('=').next().unwrap_or("").to_ascii_lowercase().replace('_', "-");
     let param =
         |name: &str| query.split('&').filter_map(|kv| kv.split_once('=')).find(|(k, _)| key(k) == name).map(|(_, v)| percent_decode(v));
-    // What the form has fields for; everything else is kept as written.
-    let options = query
-        .split('&')
-        .filter(|kv| !kv.is_empty() && !matches!(key(kv).as_str(), "instance" | "trust-server-certificate" | "trustservercertificate"))
-        .collect::<Vec<_>>()
-        .join("&");
+    // The certificate choice, read as the engine reads it: `Some` for a value it takes.
+    let trust = |kv: &str| match key(kv).as_str() {
+        "trust-server-certificate" | "trustservercertificate" => {
+            match percent_decode(kv.split_once('=').map_or("", |(_, v)| v)).to_ascii_lowercase().as_str() {
+                "true" | "yes" | "1" => Some(true),
+                "false" | "no" | "0" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    // What the form has fields for; everything else (a certificate value the engine refuses too,
+    // for Test to say why) is kept as written.
+    let options =
+        query.split('&').filter(|kv| !kv.is_empty() && key(kv) != "instance" && trust(kv).is_none()).collect::<Vec<_>>().join("&");
     let instance = param("instance").filter(|v| !v.is_empty());
-    let trust_cert = param("trust-server-certificate")
-        .or_else(|| param("trustservercertificate"))
-        .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "yes"));
+    let trust_cert = query.split('&').filter_map(trust).next_back().unwrap_or(false);
     let mut server = percent_decode(host);
     if let Some(instance) = instance {
         server.push('\\');
@@ -2288,6 +2295,13 @@ mod tests {
         assert_eq!(back.server, r"gis-db\GIS");
         assert!(parse_mssql("mssql://h/d?TrustServerCertificate=yes").unwrap().trust_cert);
         assert!(!parse_mssql("mssql://h/d?trust-server-certificate=false").unwrap().trust_cert);
+        // Every value the engine reads is read the same way; one it refuses stays in the options,
+        // as written, for Test to say why, and isn't dropped.
+        let read = |a: &str| parse_mssql(a).map(|m| (m.trust_cert, m.options)).unwrap();
+        assert_eq!(read("mssql://h/d?trust-server-certificate=1"), (true, String::new()));
+        assert_eq!(read("mssql://h/d?trust_server_certificate=0"), (false, String::new()));
+        assert_eq!(read("mssql://h/d?trust-server-certificate=maybe"), (false, "trust-server-certificate=maybe".into()));
+        assert_eq!(read("mssql://h/d?trust-server-certificate"), (false, "trust-server-certificate".into()));
     }
 
     #[test]
