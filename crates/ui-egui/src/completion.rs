@@ -330,7 +330,8 @@ impl Asked {
 pub(crate) struct List<O> {
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(O, usize)>,
-    /// The offer Escape closed: not shown again until what's typed changes.
+    /// The offer Escape closed: not shown again until what's typed, or what it offers (a field's
+    /// type read again), changes.
     dismissed: Option<O>,
     /// Where the list was drawn last frame: a press on it takes the focus from the box (a click
     /// elsewhere), so the list stays while the pointer is on it, for the press to reach it. And
@@ -375,8 +376,8 @@ impl<O: Offered> List<O> {
         self.dismissed = None;
     }
 
-    /// Closes the list as Escape does: not shown again until what's typed changes. Whether one
-    /// was open.
+    /// Closes the list as Escape does: not shown again until what's typed, or what it offers,
+    /// changes. Whether one was open.
     pub fn close(&mut self) -> bool {
         let Some((offer, _)) = self.open.take() else { return false };
         self.dismissed = Some(offer);
@@ -773,17 +774,13 @@ fn rows(
                 ui.data_mut(|d| d.remove::<egui::scroll_area::State>(id));
                 scroll.help_for = Some(shown);
             }
-            // The help scrolls in the part of its box that shows: the popup, held to its `room`,
-            // may cut the box's bottom off (a short window), and the help's end must still come
-            // into view, a page never passing lines that weren't shown.
-            let seen = (ui.clip_rect().bottom() - ui.max_rect().top()).clamp(row.min(size.y), size.y);
+            let (seen, step) = help_view(ui.max_rect(), ui.clip_rect(), row);
             let mut area = egui::ScrollArea::vertical().id_salt(HELP_SCROLL).max_height(seen).auto_shrink([false, false]);
             // A page from the keyboard: what shows less a line, kept in the help (as far as it
             // scrolled last frame: on the frame another item's help comes, it waits a frame).
             if scroll.page != 0 && !changed {
                 let at = egui::scroll_area::State::load(ui.ctx(), id).map_or(0.0, |s| s.clamped_offset().y);
-                let page = (seen - row).max(row);
-                area = area.vertical_scroll_offset((at + scroll.page as f32 * page).clamp(0.0, scroll.help_max));
+                area = area.vertical_scroll_offset((at + scroll.page as f32 * step).clamp(0.0, scroll.help_max));
                 scroll.page = 0;
             }
             let shown_area = area.show(ui, |ui| {
@@ -796,6 +793,17 @@ fn rows(
         scroll.help_at = Some(boxed.response.rect.expand(GAP));
     });
     out
+}
+
+/// How the help scrolls in its box `boxed`, of which the popup, held to its room and maybe
+/// scrolled, shows what's inside `clip`: the height its scroll area takes, from the box's top to
+/// the shown part's bottom (so the help's end comes into view there), and a page, the shown part
+/// less a line (so no line passes unseen). A row at least of each.
+fn help_view(boxed: egui::Rect, clip: egui::Rect, row: f32) -> (f32, f32) {
+    let floor = row.min(boxed.height());
+    let seen = (clip.bottom() - boxed.top()).clamp(floor, boxed.height());
+    let shown = (clip.bottom().min(boxed.bottom()) - clip.top().max(boxed.top())).max(0.0);
+    (seen, (shown - row).max(row))
 }
 
 /// What a list's row says to a screen reader: its `head`, then its `detail` on a line of its own
@@ -1760,6 +1768,23 @@ mod tests {
         h.get_by_label("Open").click();
         h.run();
         check(&mut h, &long, "a button's list");
+    }
+
+    /// The help's view in its box: all of it shown, its bottom cut off by a short popup, or its
+    /// top scrolled out of a popup scrolled down; a page never more than what shows.
+    #[test]
+    fn the_help_pages_through_what_shows() {
+        let boxed = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(300.0, 300.0));
+        let at = |top: f32, bottom: f32| egui::Rect::from_x_y_ranges(0.0..=600.0, top..=bottom);
+        // All shown.
+        assert_eq!(super::help_view(boxed, at(0.0, 600.0), 20.0), (300.0, 280.0));
+        // The bottom cut off: the area ends where the popup does, a page is what shows.
+        assert_eq!(super::help_view(boxed, at(0.0, 250.0), 20.0), (150.0, 130.0));
+        // The top scrolled out (the popup scrolled down): the area keeps the box's top, a page is
+        // only the 100 that show.
+        assert_eq!(super::help_view(boxed, at(250.0, 350.0), 20.0), (250.0, 80.0));
+        // Under the list with hardly any of it shown: a row, not nothing.
+        assert_eq!(super::help_view(boxed, at(0.0, 105.0), 20.0), (20.0, 20.0));
     }
 
     /// What the rows say to a screen reader is worked out once and shared, not copied, frame

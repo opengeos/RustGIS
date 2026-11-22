@@ -1329,10 +1329,6 @@ mod tests {
         h.run();
     }
 
-    /// While a list is open the box keeps the focus, and its highlighted row is the box's active
-    /// descendant, with what its help says: a screen reader reads the entry the highlight is on,
-    /// and follows it (#2619). A function says its signature and what it gives, a field its type.
-    /// Closed, the box names no row.
     /// A field's type changed while its list is open: the row says the new one, as its help does
     /// (CodeRabbit on #2654), the same items over other fields being another offer.
     #[test]
@@ -1365,6 +1361,10 @@ mod tests {
         assert_eq!(now, format!("{}\nPeople", tl!(FieldType::Text.label())), "the new type and alias");
     }
 
+    /// While a list is open the box keeps the focus, and its highlighted row is the box's active
+    /// descendant, with what its help says: a screen reader reads the entry the highlight is on,
+    /// and follows it (#2619). A function says its signature and what it gives, a field its type.
+    /// Closed, the box names no row.
     #[test]
     fn a_screen_reader_reads_the_highlighted_entry() {
         use egui_kittest::kittest::{NodeT, Queryable};
