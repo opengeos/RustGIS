@@ -461,6 +461,7 @@ fn png_or_jpeg(b64: &str) -> bool {
     matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg))
 }
 
+#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 mod tests {
     use super::*;

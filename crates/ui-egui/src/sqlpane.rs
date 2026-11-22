@@ -200,7 +200,7 @@ fn run(app: &mut RustGisApp) {
     let slot: Answer<Value> = Slot::default();
     let land = slot.clone();
     let db2 = db.clone();
-    std::thread::spawn(move || {
+    crate::work_off_frame("rustgis-sql-preview", &slot, move || {
         let r = duckdb::preview(&duckdb::Query { sql: &sql, database: db2.as_ref(), crs: None }, PREVIEW_ROWS)
             .map(|p| rustgis_engine::cmd::sql::preview_json(&p))
             .map_err(|e| e.to_string());
@@ -215,7 +215,7 @@ fn run(app: &mut RustGisApp) {
         st.names_for = db_text;
         let slot: Answer<Vec<(String, String)>> = Slot::default();
         let land = slot.clone();
-        std::thread::spawn(move || {
+        crate::work_off_frame("rustgis-sql-names", &slot, move || {
             *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(duckdb::schema_of(&db).map_err(|e| e.to_string()));
         });
         st.names_job = Some(slot);
@@ -242,7 +242,7 @@ fn add_to_map(app: &mut RustGisApp) {
     let slot: Answer<duckdb::Output> = Slot::default();
     let land = slot.clone();
     let sql2 = sql.clone();
-    std::thread::spawn(move || {
+    crate::work_off_frame("rustgis-sql-run", &slot, move || {
         let r = duckdb::run(&duckdb::Query { sql: &sql2, database: db.as_ref(), crs: None }).map_err(|e| e.to_string());
         *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
     });

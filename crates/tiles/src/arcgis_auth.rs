@@ -939,7 +939,7 @@ mod native {
             f.cancel = Some(cancel.clone());
         }
         let pending = Pending { portal, client_id: client_id.to_string(), redirect, verifier, state };
-        std::thread::spawn(move || {
+        let spawned = std::thread::Builder::new().name("rustgis-portal-sign-in".into()).spawn(move || {
             let result = serve(&listener, &cancel, &pending);
             let mut f = flow();
             // A newer sign-in replaced this one: its outcome isn't this one's to tell.
@@ -951,6 +951,13 @@ mod native {
                 f.cancel = None;
             }
         });
+        if let Err(e) = spawned {
+            let why = format!("the system refused a thread to wait for the sign-in on ({e})");
+            let mut f = flow();
+            f.progress = Progress::Failed(why.clone());
+            f.cancel = None;
+            return Err(why);
+        }
         Ok(url)
     }
 
@@ -1116,7 +1123,8 @@ mod native {
         if revocations.is_empty() {
             return;
         }
-        std::thread::spawn(move || {
+        // A thread the system refuses leaves them unsent, as a failed request does.
+        let _ = std::thread::Builder::new().name("rustgis-portal-revoke".into()).spawn(move || {
             for r in revocations {
                 let _ = post_form(&r.endpoint, &r.body);
             }
@@ -1172,6 +1180,7 @@ mod native {
         )
     }
 
+    #[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
     #[cfg(test)]
     mod renewal_tests {
         use super::*;

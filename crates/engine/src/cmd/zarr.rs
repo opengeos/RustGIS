@@ -186,6 +186,7 @@ fn fetch_items(root: &str, keys: &[(String, String)]) -> Result<(HashMap<String,
     Ok((out, forbidden.into_inner()))
 }
 
+#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod transport_tests {
     /// Drive the real chunk-fetch scoped thread and its blocking native sender. The listening

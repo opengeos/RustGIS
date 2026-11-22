@@ -245,6 +245,17 @@ const LAYOUT_ARRANGEMENTS_PREF: &str = "layout_saved_arrangements";
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
+/// Runs `work` on a thread of its own named `name`, off the frame. When the system refuses one,
+/// `slot` gets the refusal as its error instead and `work` is dropped unrun, so the job ends with
+/// an error rather than the app (AGENTS.md › Use the threads). In the browser, which has no
+/// threads, that is every time.
+pub(crate) fn work_off_frame<T, E: From<String>>(name: &str, slot: &Slot<Result<T, E>>, work: impl FnOnce() + Send + 'static) {
+    if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(work) {
+        let why = i18n::fmt("The system refused a thread to do this on ({error}); try again", &[("error", &e.to_string())]);
+        *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Err(E::from(why)));
+    }
+}
+
 /// One window is read off the frame at a time, however many have started: each may hold 256 MB
 /// and more. A read keeps its turn until the frame has taken what it read, so a frame that stalls
 /// holds one window, not all of them. Those that wait for their command on the frame don't wait
@@ -7340,6 +7351,7 @@ pub(crate) fn isolate_account_test(name: &str) -> bool {
 /// and a test that replaces it (`set_fetcher`) would answer another's downloads. So do tests that
 /// log in to a connection, as a login replaced or ended empties the cache (`cache::clear`), and
 /// tests that wait for what it reads (tiles, an archive's header), which that would drop.
+#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 pub(crate) mod fetching {
     use std::io::{Read, Write};
@@ -7535,6 +7547,7 @@ const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
     "cube.reduce",
 ];
 
+#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 mod record_tests {
     use super::{DEFAULTS_TO_ACTIVE_LAYER, RustGisApp};
