@@ -1140,7 +1140,7 @@ fn means_under(
 /// projection's smooth image of a parallel or meridian doesn't. The whole raster when a point can't
 /// be placed; none when `e` is empty.
 ///
-/// With `interior` (a zone in a system of its own), places inside `e` are placed too, a sixteenth
+/// With `interior` (a zone held in a system other than longitude/latitude), places inside `e` are placed too, a sixteenth
 /// of it apart: when one can't be, or lands outside the outline's window, the zone's box holds a
 /// place the raster's grid can't take in one piece (a polar zone on a Web Mercator raster, whose
 /// outline lands south of the cells near the pole), and the whole raster is read.
@@ -3174,22 +3174,24 @@ mod tests {
         let gt = GeoTransform { origin_x: sw.x, origin_y: ne.y, pixel_width: cell, pixel_height: -cell };
         let r = Raster::new("polar", w, h, vec![vec![1.0; (w * h) as usize]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32")
             .unwrap_or_else(|e| panic!("{e}"));
-        // NSIDC Sea Ice Polar Stereographic North: a square of 1,000 km each way about the pole,
-        // its sides near 77°N to 81°N.
+        // NSIDC Sea Ice Polar Stereographic North: squares of 1,000 km each way about the pole,
+        // their sides near 77°N to 81°N.
         let polar = Crs::Epsg(3413);
-        let d = 1_000_000.0;
-        let ring = vec![Coord::new(-d, -d), Coord::new(d, -d), Coord::new(d, d), Coord::new(-d, d), Coord::new(-d, -d)];
+        // Centred on the pole, and off it.
         let to_polar = polar.transformer().unwrap_or_else(|e| panic!("{e}"));
-        let mut inside = 0;
-        for row in 0..h {
-            for col in 0..w {
-                let c = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
-                let p = merc.to_lonlat(c).and_then(|ll| to_polar.from_lonlat(ll)).unwrap_or_else(|| panic!("{c:?} is in EPSG:3413"));
-                inside += usize::from(p.x.abs() < d && p.y.abs() < d);
+        for (x0, x1, y0, y1) in [(-1e6, 1e6, -1e6, 1e6), (-0.9e6, 1.1e6, -1.05e6, 0.95e6)] {
+            let ring = vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)];
+            let mut inside = 0;
+            for row in 0..h {
+                for col in 0..w {
+                    let c = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
+                    let p = merc.to_lonlat(c).and_then(|ll| to_polar.from_lonlat(ll)).unwrap_or_else(|| panic!("{c:?} is in EPSG:3413"));
+                    inside += usize::from(p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1);
+                }
             }
+            assert!(inside > 1000, "{inside} cells are in the zone");
+            let got = zonal_means_in(&r, polar, &[0], &[ring]).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(got, Some((vec![1.0], inside)), "{x0} {x1} {y0} {y1}");
         }
-        assert!(inside > 1000, "{inside} cells are in the zone");
-        let (means, n) = zonal_means_in(&r, polar, &[0], &[ring]).unwrap_or_else(|e| panic!("{e}")).unwrap_or_else(|| panic!("no cell"));
-        assert_eq!((means, n), (vec![1.0], inside));
     }
 }
