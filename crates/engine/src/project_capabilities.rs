@@ -1554,6 +1554,13 @@ mod tests {
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-border"));
     }
 
+    /// The capabilities a saved project requires, in order; none when it requires none.
+    fn requires(saved: &Value) -> Vec<&str> {
+        let mut r: Vec<&str> = saved["requires"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        r.sort_unstable();
+        r
+    }
+
     /// A legend's text size other than the default (#2581) is required where it is saved, so an
     /// older reader refuses the project instead of drawing the legend at 9 points and saving it so.
     /// The default size is not written and needs nothing.
@@ -1575,15 +1582,18 @@ mod tests {
         }
         let base = serde_json::to_value(&clean).unwrap();
         assert!(base.get("requires").is_none(), "default sizes need nothing");
-        // A saved command that sizes a legend's text needs it; null or 9 only give the default.
+        // A saved command that sizes a legend's text needs it; null or 9 only give the default. A
+        // saved update isn't told which element it sizes, so a size other than a scale bar's 8
+        // requires that one too (`layout-scale-grid-text`), 9 included.
+        let (legend, bar): (&[&str], &[&str]) = (&["layout-legend-text"], &["layout-scale-grid-text"]);
         for (id, params, required) in [
-            ("layout.update", json!({"element": 2, "textSize": 18}), true),
-            ("layout.update", json!({"element": 2, "textSize": null}), false),
-            ("layout.update", json!({"element": 2, "textSize": 9}), false),
-            ("layout.update", json!({"element": 2, "title": "Key"}), false),
-            ("layout.addElement", json!({"kind": "legend", "textSize": 6}), true),
-            ("layout.addElement", json!({"kind": "legend"}), false),
-            ("layout.addElement", json!({"kind": "text", "text": "textSize", "size": 18}), false),
+            ("layout.update", json!({"element": 2, "textSize": 18}), &["layout-legend-text", "layout-scale-grid-text"][..]),
+            ("layout.update", json!({"element": 2, "textSize": null}), &[]),
+            ("layout.update", json!({"element": 2, "textSize": 9}), bar),
+            ("layout.update", json!({"element": 2, "title": "Key"}), &[]),
+            ("layout.addElement", json!({"kind": "legend", "textSize": 6}), legend),
+            ("layout.addElement", json!({"kind": "legend"}), &[]),
+            ("layout.addElement", json!({"kind": "text", "text": "textSize", "size": 18}), &[]),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -1593,10 +1603,7 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                // A saved update isn't told which element it sizes, so a scale bar's capability
-                // may come with it (`layout-scale-grid-text`): only this one is looked at here.
-                let needs = saved["requires"].as_array().is_some_and(|r| r.contains(&json!("layout-legend-text")));
-                assert_eq!(needs, required, "{id} {params}");
+                assert_eq!(requires(&saved), required, "{id} {params}");
             }
         }
         // An imported layout's text with a sized legend needs it; with the default, none.
@@ -1645,20 +1652,22 @@ mod tests {
         assert_eq!(clean_with(false, true)["requires"], json!(["layout-scale-grid-text"]), "a scale bar's size alone");
         let base = clean_with(false, false);
         assert!(base.get("requires").is_none(), "default sizes need nothing");
-        // A saved command that sizes them needs it; null or 8 only give the default.
+        // A saved command that sizes them needs it; null or 8 only give the default. A saved
+        // update's text size other than a legend's 9 requires the legend's too, 8 included.
+        let (legend, bar): (&[&str], &[&str]) = (&["layout-legend-text"], &["layout-scale-grid-text"]);
         for (id, params, required) in [
-            ("layout.update", json!({"element": 3, "textSize": 16}), true),
-            ("layout.update", json!({"element": 3, "textSize": null}), false),
-            ("layout.update", json!({"element": 3, "textSize": 8}), false),
-            ("layout.update", json!({"element": 1, "grid": {"labelSize": 12}}), true),
-            ("layout.update", json!({"element": 1, "grid": {"labelSize": 8}}), false),
-            ("layout.update", json!({"element": 1, "grid": {"labelSize": null}}), false),
-            ("layout.update", json!({"element": 1, "grid": false}), false),
-            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 12}), true),
-            ("layout.addElement", json!({"kind": "scaleBar"}), false),
-            ("layout.addElement", json!({"kind": "grid", "labelSize": 12}), true),
-            ("layout.addElement", json!({"kind": "grid", "labelSize": null}), false),
-            ("layout.addElement", json!({"kind": "text", "text": "labelSize", "size": 18}), false),
+            ("layout.update", json!({"element": 3, "textSize": 16}), &["layout-legend-text", "layout-scale-grid-text"][..]),
+            ("layout.update", json!({"element": 3, "textSize": null}), &[]),
+            ("layout.update", json!({"element": 3, "textSize": 8}), legend),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 12}}), bar),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 8}}), &[]),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": null}}), &[]),
+            ("layout.update", json!({"element": 1, "grid": false}), &[]),
+            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 12}), bar),
+            ("layout.addElement", json!({"kind": "scaleBar"}), &[]),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": 12}), bar),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": null}), &[]),
+            ("layout.addElement", json!({"kind": "text", "text": "labelSize", "size": 18}), &[]),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -1668,8 +1677,7 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                let needs = saved["requires"].as_array().is_some_and(|r| r.contains(&json!("layout-scale-grid-text")));
-                assert_eq!(needs, required, "{id} {params}");
+                assert_eq!(requires(&saved), required, "{id} {params}");
             }
         }
         // An imported layout's text with a sized bar or grid needs it; with the defaults, none.

@@ -230,7 +230,10 @@ scale bar, `label_size` on a frame's grid) require `layout-scale-grid-text`, so 
 refuses them instead of drawing those labels at 8 points and saving them again without their size
 (#2581). A saved `layout.addElement` for a scale bar with `textSize` or a grid with `labelSize`
 of another size, a `layout.update` with such a `textSize` or `"grid": {"labelSize": …}`, and a
-`layout.import` whose `text` has such an element require it too; `null` or 8 need nothing.
+`layout.import` whose `text` has such an element require it too; `null` or 8 need nothing. A
+saved `layout.update` isn't told which element it changes, so its `textSize` requires both this
+and `layout-legend-text` unless it is the other's default: 9 requires this one only, and 8 the
+legend's only.
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,

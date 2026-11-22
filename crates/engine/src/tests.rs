@@ -11516,6 +11516,8 @@ fn publication_layouts_fit_their_pages() {
     for change in [
         json!({"element": frame, "scale": 20_000_000.0}),
         json!({"element": bar, "units": "miles"}),
+        json!({"element": bar, "textSize": 40}),
+        json!({"element": bar, "textSize": null}),
         json!({"element": frame, "scale": 7_000_000.0}),
     ] {
         let mut change = change;
@@ -11526,6 +11528,8 @@ fn publication_layouts_fit_their_pages() {
         widths.push(width(&s));
     }
     assert!(widths.iter().any(|w| (w - first).abs() > 0.5), "the box changed: {first} mm, then {widths:?}");
+    // Its bar's labels at 40 points need a wider box for the last one, and 8 gives the width back.
+    assert!(widths[2] > widths[1] + 0.5 && (widths[3] - widths[1]).abs() < 1e-9, "{widths:?}");
     // A long title wraps within the frame, and pushes the map down; the result names every
     // element for layout.update.
     let r = s.run("layout.publication", &json!({"extent": piaui, "title": long})).unwrap();

@@ -2188,9 +2188,7 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
     Some(if w < width_pt && bar_plan(ground_per_pt, w, units) == Some(plan) { w } else { width_pt })
 }
 
-/// Where a scale bar in `r` draws, at `ground_per_pt` ground metres a point of paper, in `units`
-/// with `divisions` steps and its labels at `text_size` points: the drawing and the text-cut check
-/// ([`losses`]) take the same, so they agree. `None` when it draws no bar.
+/// Where a scale bar draws its bar and labels, from [`bar_layout`].
 struct BarLayout {
     divisions: usize,
     /// Where the bar starts, its top, its length and a division's, and its height, in pixels.
@@ -2205,6 +2203,9 @@ struct BarLayout {
     labels: Vec<(f32, f32, String)>,
 }
 
+/// Where a scale bar in `r` draws, at `ground_per_pt` ground metres a point of paper, in `units`
+/// with `divisions` steps and its labels at `text_size` points: the drawing and the text-cut check
+/// ([`losses`]) take the same, so they agree. `None` when it draws no bar.
 fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f64, comma: bool) -> Option<BarLayout> {
     let (units, divisions, text_size) = bar;
     let k = bar_text_k(text_size) as f32;

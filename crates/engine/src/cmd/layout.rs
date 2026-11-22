@@ -2154,7 +2154,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // bar: the renderer gives a bar at most 85 % of its box, so the box is at least the bar's length
     // over 0.85.
     let bar_kind = match ElementKind::scale_bar(frame) {
-        ElementKind::ScaleBar { units, divisions, .. } => Some((units, divisions)),
+        ElementKind::ScaleBar { units, divisions, text_size, .. } => Some((units, divisions, text_size)),
         _ => None,
     };
     let scale_box = |ground_per_pt: f64, scale: f64| {
@@ -5501,7 +5501,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     // publication's scale bar box measured again.
     if let Some(basis) = basis {
         let given = |keys: &[&str]| keys.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
-        let restyled = id == basis.bar_id && given(&["units", "divisions"]);
+        // A text size given back (`null`) changes the bar's labels too.
+        let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || p.get("textSize").is_some());
         if (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled {
             refit_scale_box(s, li, &basis);
         }
@@ -5521,13 +5522,18 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
 /// `scale` and `ground_per_pt` ground metres a point: the bar a box 30 % of the frame's width (25
 /// mm at least) would draw sets its length and divisions, and the box is the narrowest that draws
 /// that same bar (at least its length over the 85 % of a box the renderer gives a bar), its last
-/// label included, and holds the text written under it: `text` (its `{scale}` filled), in
-/// `text_pt` points, bold or not.
-fn scale_box_width(ground_per_pt: f64, scale: f64, frame_w_mm: f64, bar: (ScaleUnits, usize), comma: bool, text: (&str, f64, bool)) -> f64 {
+/// label included at the bar's text size, and holds the text written under it: `text` (its
+/// `{scale}` filled), in `text_pt` points, bold or not.
+fn scale_box_width(
+    ground_per_pt: f64,
+    scale: f64,
+    frame_w_mm: f64,
+    bar: (ScaleUnits, usize, f64),
+    comma: bool,
+    text: (&str, f64, bool),
+) -> f64 {
     let (text, text_pt, bold) = text;
     let (widest, pt_per_mm) = ((frame_w_mm * 0.3).max(25.0), rustgis_map::layout::PT_PER_MM);
-    // At the labels' default size, as a publication draws them.
-    let bar = (bar.0, bar.1, SCALE_BAR_TEXT_PT);
     let bar_w = crate::render::layout::scale_bar_width_pt(ground_per_pt, widest * pt_per_mm, bar, comma, 1.5 * pt_per_mm)
         .map_or(widest, |w| w / pt_per_mm);
     let written = text.replace("{scale}", &crate::render::layout::scale_ratio_text(scale, comma));
@@ -5554,6 +5560,7 @@ struct BoxBasis {
     bar_id: u32,
     units: ScaleUnits,
     divisions: usize,
+    text_size: f64,
     text_id: u32,
     text: String,
     size: f64,
@@ -5574,7 +5581,7 @@ fn basis_text(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> String {
 fn basis_width(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> f64 {
     let ground_per_pt = m.ground_res_at(&rustgis_map::layout::frame_camera(m, b.center, b.scale, 0.0, 0.0));
     let filled = basis_text(l, m, b);
-    scale_box_width(ground_per_pt, b.scale, b.frame_w, (b.units, b.divisions), l.decimal_comma, (&filled, b.size, b.bold))
+    scale_box_width(ground_per_pt, b.scale, b.frame_w, (b.units, b.divisions, b.text_size), l.decimal_comma, (&filled, b.size, b.bold))
 }
 
 /// The automatic width (mm) of layout `li`'s publication scale bar box as things are now.
@@ -5592,7 +5599,8 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
     let l = s.project.layouts.get(li)?;
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (bar, written) = (named("Scale Bar")?, named("Scale")?);
-    let (ElementKind::ScaleBar { frame, units, divisions, .. }, ElementKind::Text { text, size, bold, .. }) = (&bar.kind, &written.kind)
+    let (ElementKind::ScaleBar { frame, units, divisions, text_size, .. }, ElementKind::Text { text, size, bold, .. }) =
+        (&bar.kind, &written.kind)
     else {
         return None;
     };
@@ -5606,6 +5614,7 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         bar_id: bar.id,
         units: *units,
         divisions: *divisions,
+        text_size: *text_size,
         text_id: written.id,
         text: text.clone(),
         size: *size,
@@ -5622,8 +5631,8 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
 /// other than the first (whose map the page fills the text from) is left as it is; so is a text
 /// longer than the widest box a publication gives. Only a box as wide as `before` (what it was
 /// measured from before the change: its frame, bar and text) is measured again: one set
-/// by hand keeps its width. A change to the text under the bar or to the bar's units or divisions
-/// measures it again too. A box that would then cover the legend, locator or north arrow, which
+/// by hand keeps its width. A change to the text under the bar or to the bar's units, divisions or
+/// text size measures it again too. A box that would then cover the legend, locator or north arrow, which
 /// it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
