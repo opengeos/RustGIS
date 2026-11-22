@@ -137,7 +137,8 @@ the same however their wording changes. `run --strict` stops after the first com
 loss with a code that no `--allow` accepts, and exits with status 3, before the commands after it
 and before `--save`. That command, including a failed one, has already run: a file it wrote, or the
 project `--save` wrote when the save itself reported the loss, is already there. Standard error
-lists each loss by code, with how many notices reported it and what to do about it. Other failures
+lists each loss by code, with how many notices reported it (each notice says how much it lost)
+and what to do about it. Other failures
 still exit with status 1.
 
 Repeat `--allow` to accept the losses a job expects, by kind (`dropped`, `changed`, `approximated`

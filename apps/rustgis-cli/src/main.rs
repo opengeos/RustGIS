@@ -182,6 +182,7 @@ impl Strict {
         let mut said = format!("--strict: stopped after {id}, which reported a loss no --allow accepts:");
         for (code, n) in lost {
             let spec = code.spec();
+            // A counted notice says how many it lost in its text; this counts the notices.
             let notices = if n == 1 { "1 notice".to_string() } else { format!("{n} notices") };
             said.push_str(&format!("\n  {} ({notices}): {}", spec.id, spec.action));
         }

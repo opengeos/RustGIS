@@ -896,7 +896,9 @@ pub struct Session {
     /// Counted losses await the outermost guard's cleanup, including failed nested commands.
     /// Runtime-only: never in Project, undo or PutAside, so replacement cannot erase them.
     loss_notices: Vec<LossNotice>,
-    loss_notice_overflow: u32,
+    /// Occurrences past [`MAX_LOSS_NOTICE_KINDS`], by cause (`None` for unclassified advisories),
+    /// so a strict run still sees the code: at most one entry per code.
+    loss_notice_overflow: Vec<(Option<rustgis_data::loss::LossCode>, u32)>,
     /// Whether this session has said that native HTTPS trusts the bundled CA roots (#1591).
     bundled_roots_said: bool,
     /// Troubleshooting history, independent of the active pane, project files and undo.
@@ -1457,7 +1459,7 @@ impl Session {
             on_window_thread: false,
             notices: Vec::new(),
             loss_notices: Vec::new(),
-            loss_notice_overflow: 0,
+            loss_notice_overflow: Vec::new(),
             bundled_roots_said: false,
             diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
@@ -3420,8 +3422,10 @@ impl Session {
             loss.text = text(loss.count);
         } else if self.loss_notices.len() < MAX_LOSS_NOTICE_KINDS {
             self.loss_notices.push(LossNotice { code, template, count, text: text(count), source: self.diagnostic_source });
+        } else if let Some(over) = self.loss_notice_overflow.iter_mut().find(|(c, _)| *c == code) {
+            over.1 = over.1.saturating_add(count);
         } else {
-            self.loss_notice_overflow = self.loss_notice_overflow.saturating_add(count);
+            self.loss_notice_overflow.push((code, count));
         }
     }
 
@@ -3430,10 +3434,14 @@ impl Session {
         for loss in std::mem::take(&mut self.loss_notices) {
             self.publish_counted(loss.text, loss.code, loss.source);
         }
-        let overflow = std::mem::take(&mut self.loss_notice_overflow);
-        if overflow > 0 {
-            // The overflow count may combine several causes and unclassified advisories.
-            self.warn(format!("{overflow} further counted notice occurrence(s) could not be described"));
+        for (code, n) in std::mem::take(&mut self.loss_notice_overflow) {
+            match code {
+                Some(code) => {
+                    let text = Self::redacted(&format!("{n} further {} occurrence(s) could not be described", code.spec().id));
+                    self.publish_counted(text, Some(code), self.diagnostic_source);
+                }
+                None => self.warn(format!("{n} further counted notice occurrence(s) could not be described")),
+            }
         }
     }
 
@@ -3510,9 +3518,10 @@ impl Session {
 
     /// How many loss notices this session has given for each code, including those the notice
     /// queue no longer keeps: compare two of these to learn what a run lost, however much it said.
-    /// A failed command's losses are taken back with its changes, except one whose notice the
-    /// queue had already let go: which of those described a committed write isn't kept, so it
-    /// stays counted, erring towards a loss.
+    /// A failed command's losses are taken back with its changes, except counted losses
+    /// ([`Session::notify_counted`]), which outlive its rollback, and one whose notice the queue
+    /// had already let go: which of those described a committed write isn't kept, so it stays
+    /// counted, erring towards a loss.
     pub fn losses_given(&self) -> &[(rustgis_data::loss::LossCode, u64)] {
         &self.losses_given
     }
