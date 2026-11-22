@@ -186,9 +186,15 @@ Spatial Join when they measure no distance (no search distance, a match other th
 Within a distance). Their other inputs are converted into that system for the run, and their new
 layers are kept in it, so the coordinates of what they copy stay exactly as they were. An overlay
 there takes each edge as straight in that system, not in Web Mercator as it does in
-longitude/latitude: where a long edge crosses another, the place it makes can lie a few
-decimetres from where the same tool puts it in longitude/latitude (about 20 cm for a 3 km edge at
-48°N), nearer the shortest way on the ground. If another input has a place that system can't hold, the tool works in
+longitude/latitude, so where an edge crosses another can differ from the same tool's result in
+longitude/latitude. For a layer's own edges, a few decimetres at most (about 20 cm for a 3 km
+edge at 48°N). An input in another system is converted vertex by vertex, as the map draws it in
+that system, and its long edges can run much farther from where they run in longitude/latitude: a
+degree-wide box's east-west edges, which follow their parallels there, are chords in UTM up to
+120 m away. The tool then says how many edges of which layer run more than a metre away, and how
+far the farthest does. A world projection (World Mercator, Plate Carrée, Robinson, Equal Earth and
+the like), whose plane has the antimeridian as a seam and the poles as lines, is worked on in
+longitude/latitude, as Web Mercator is. If another input has a place that system can't hold, the tool works in
 longitude/latitude instead, and its message says so. A layer in longitude/latitude, Web Mercator or
 another geographic system is worked on in longitude/latitude, as before.
 

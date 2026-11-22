@@ -1601,6 +1601,11 @@ fn overlays_work_in_their_held_inputs_own_system() {
         let mut a = area.clone();
         a.hold_in(crs).unwrap();
         s.map_mut().add_dataset(a);
+        // The same box left in longitude/latitude in both sessions: converted into UTM for a run
+        // there, as another layer is.
+        let mut plain = area.clone();
+        plain.name = "Plain_Area".into();
+        s.map_mut().add_dataset(plain);
     }
     let ids = |s: &Session| s.map().layers.iter().map(|l| l.id).collect::<Vec<_>>();
     let attrs = |ds: &Dataset| {
@@ -1621,9 +1626,17 @@ fn overlays_work_in_their_held_inputs_own_system() {
         json!({"tool": "featureToPoint", "params": {"input": "Parcels"}}),
         json!({"tool": "countPoints", "params": {"polygons": "Area", "points": "Wells"}}),
         json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Area", "match": "Intersects"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Area", "match": "Largest overlap", "output": "Largest"}}),
+        json!({"tool": "spatialJoin", "params": {"target": "Wells", "join": "Area", "match": "Have their center in", "output": "Centres"}}),
+        json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Plain_Area", "output": "Plain_Clip"}}),
+        json!({"tool": "union", "params": {"input": "Parcels", "overlay": "Plain_Area", "output": "Plain_Union"}}),
     ] {
         let before = ids(&ss[0]);
+        let marks = [ss[0].notice_mark(), ss[1].notice_mark()];
         run_both(&mut ss, "gp.run", &p);
+        // Nothing said in one that isn't in the other: no pole or degree notice for UTM's metres.
+        let [said_a, said_b] = [0, 1].map(|i| ss[i].notices_since(marks[i]).iter().map(|n| n.text.clone()).collect::<Vec<_>>());
+        assert_eq!(said_a, said_b, "{p}");
         let made: Vec<u32> = ids(&ss[0]).into_iter().filter(|id| !before.contains(id)).collect();
         assert!(!made.is_empty(), "{p}: no layer");
         for id in made {
@@ -1652,4 +1665,66 @@ fn overlays_work_in_their_held_inputs_own_system() {
         assert_eq!(selected(&ss[0], "Wells"), selected(&ss[1], "Wells"), "{p}");
         assert!(!selected(&ss[1], "Wells").is_empty(), "{p}: nothing selected");
     }
+}
+
+/// Spatial Join's Largest overlap picks the zone covering most of each parcel in UTM as in
+/// longitude/latitude: the middle column of parcels (11.510° to 11.515°) lies 0.0035° in the
+/// western zone and 0.0015° in the eastern one, so it joins the western one, and the outer columns
+/// their own side's. Measured in UTM's plane, not by reading its metres as degrees.
+#[test]
+fn largest_overlap_ranks_overlaps_in_the_held_system() {
+    let mut ss = both();
+    let fields = vec![Field::new("zone", FieldType::Text)];
+    let mut zones = Dataset::new("Zones", GeometryType::Polygon, fields);
+    for (name, west, east) in [("west", 11.49, 11.5135), ("east", 11.5135, 11.53)] {
+        let ring = [(west, 48.69), (east, 48.69), (east, 48.74), (west, 48.74), (west, 48.69)];
+        zones.push(
+            Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])),
+            vec![Cell::Text(name.into())],
+        );
+    }
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut z = zones.clone();
+        z.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(z);
+    }
+    let p = json!({"tool": "spatialJoin", "params": {"target": "Parcels", "join": "Zones", "match": "Largest overlap", "output": "Zoned"}});
+    run_both(&mut ss, "gp.run", &p);
+    let zone = |s: &Session| {
+        let ds = &s.map().layer_by_name("Zoned").unwrap().dataset;
+        let f = ds.field_index("join_zone").unwrap();
+        (0..ds.features.len()).map(|r| ds.value(r, f).to_string()).collect::<Vec<_>>()
+    };
+    let want: Vec<String> = ["west", "west", "west", "west", "west", "west", "east", "east", "east"].map(String::from).to_vec();
+    assert_eq!(zone(&ss[0]), want);
+    assert_eq!(zone(&ss[1]), want);
+}
+
+/// A run in UTM says when another input's long edges, converted into UTM vertex by vertex, run
+/// far from where a run in longitude/latitude takes them: a degree-wide box's east-west edges
+/// (74 km at 48.7°N) follow their parallels in longitude/latitude, straight in Web Mercator, and
+/// are chords in UTM, which part from them by about L² tan φ / 8R, some 120 m at the middle. Its
+/// north-south edges are meridians, straight in Web Mercator; 2° and 3° east of UTM zone 32N's
+/// central meridian they curve in UTM, by some 8 m over the degree, so they count too. The clip
+/// itself isn't changed by it here: the parcels lie far inside the box.
+#[test]
+fn a_converted_inputs_long_edges_are_said() {
+    let mut s = session(UTM);
+    let mut boxed = Dataset::new("Degree", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+    let ring = [(11.0, 48.2), (12.0, 48.2), (12.0, 49.2), (11.0, 49.2), (11.0, 48.2)];
+    boxed.push(Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])), vec![Cell::Text("d".into())]);
+    s.map_mut().add_dataset(boxed);
+    let mark = s.notice_mark();
+    s.run("gp.run", &json!({"tool": "clip", "params": {"input": "Parcels", "clip": "Degree", "output": "Clipped"}})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    let note = said.iter().find(|t| t.contains("edge(s) of 'Degree', converted into EPSG:32632")).unwrap_or_else(|| panic!("{said:?}"));
+    assert!(note.starts_with("Clip: 4 edge(s)"), "{note}");
+    let far: f64 = note.split("up to ").nth(1).and_then(|t| t.split(' ').next()).and_then(|t| t.parse().ok()).unwrap();
+    // 74.3 km along 48.2°N: 74_300² × tan 48.2° / (8 × 6_371_000) = 121 m.
+    assert!((110.0..130.0).contains(&far), "{note}");
+    assert_eq!(held_coords(&s, "Clipped").len(), 9);
+    // Merge copies the box's vertices and crosses no edges: nothing to say.
+    let mark = s.notice_mark();
+    s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": ["Parcels", "Degree"], "attributes": false, "output": "Both"}})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("taken straight there")));
 }

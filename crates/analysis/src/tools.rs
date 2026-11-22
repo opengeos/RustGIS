@@ -1784,7 +1784,8 @@ fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
 /// overlap with it, a line's stretches in it, the points in it or on its edge; outside, the rest.
 /// `None` when nothing is left, or only a shared edge or corner.
 ///
-/// The mask's polygons are in the analysis plane, oriented as `union_all` leaves them. The
+/// The mask's polygons are in the run's plane ([`crate::convert::plane`]), oriented as `union_all`
+/// leaves them. The
 /// feature's may wind either way (the reference corpus has a clockwise parcel), but must not
 /// overlap each other: pass a feature of several polygons through [`dissolved`] first, once for all
 /// its masks.
@@ -3204,8 +3205,12 @@ fn convex_hull(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         out.geometry_type = first;
     }
     let out_kind = out.geometry_type;
+    // How far out a coordinate is too far, in the units the run works in.
+    let own = crate::convert::plane() == crate::convert::Plane::Own;
+    let too_far =
+        if own { format!("past {HULL_LIMIT_M:.0e} in the layer's own units") } else { "past about 9 million degrees".to_string() };
     let gaps_note = (gaps > 0).then(|| {
-        format!("{gaps} vertex(es) passed over: a coordinate missing or infinite, or so far out that the hull can't take it (past about 9 million degrees)")
+        format!("{gaps} vertex(es) passed over: a coordinate missing or infinite, or so far out that the hull can't take it ({too_far})")
     });
     let poles_note = (poles > 0).then(|| format!("{poles} vertex(es) with a latitude past a pole found (taken as that pole)"));
     // Nothing hulled, every feature skipped: an unusable result, so an error saying why, with the
@@ -3233,8 +3238,14 @@ fn convex_hull(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 n.saturating_sub(flat)
             ),
         };
+        // On one straight line in the plane the run works in: in longitude/latitude, the map's.
+        let line = if own {
+            "points in one place or on one straight line in the layer's coordinate system".to_string()
+        } else {
+            "points in one place or on one straight line on the map (on one meridian or parallel, say; beyond 85.05° that includes points around a pole, which enclose a cap on the ground)".to_string()
+        };
         r.messages.push(format!(
-            "Minimum Bounding Geometry: {flat} of {n} hulls have no area, so they are written as a point or a line: a single point, or points in one place or on one straight line on the map (on one meridian or parallel, say; beyond 85.05° that includes points around a pole, which enclose a cap on the ground); {layer}"
+            "Minimum Bounding Geometry: {flat} of {n} hulls have no area, so they are written as a point or a line: a single point, or {line}; {layer}"
         ));
     }
     Ok(r)
@@ -6884,9 +6895,21 @@ fn ground_distance(t: &Geometry, t_geo: &geo::Geometry<f64>, j: &Geometry, j_geo
 }
 
 /// How much of a target lies in a join polygon: the ground area of a polygon's overlap, the ground
-/// length of a line's. The geometries are in the analysis plane, polygons oriented for the overlay;
-/// the overlap found is measured on the ground, in longitude/latitude.
+/// length of a line's. The geometries are in the run's plane ([`crate::convert::plane`]), polygons
+/// oriented for the overlay; in the analysis plane the overlap found is measured on the ground, in
+/// longitude/latitude, and in a projected system's own plane by its area or length there, which
+/// ranks overlaps of one target as the ground does.
 fn overlap(t_geo: &geo::Geometry<f64>, j_geo: &geo::Geometry<f64>) -> f64 {
+    if crate::convert::plane() == crate::convert::Plane::Own {
+        use geo::{Area, Euclidean, Length};
+        return match (t_geo, j_geo) {
+            (geo::Geometry::MultiPolygon(t), geo::Geometry::MultiPolygon(j)) => t.intersection(j).unsigned_area(),
+            (geo::Geometry::MultiLineString(t), geo::Geometry::MultiPolygon(j)) => {
+                j.clip(t, false).0.iter().map(|l| Euclidean.length(l)).sum()
+            }
+            _ => 0.0,
+        };
+    }
     match (t_geo, j_geo) {
         (geo::Geometry::MultiPolygon(t), geo::Geometry::MultiPolygon(j)) => {
             from_multipolygon(&t.intersection(j)).map_or(0.0, |g| crate::join::area_m2(&g))
@@ -6898,7 +6921,7 @@ fn overlap(t_geo: &geo::Geometry<f64>, j_geo: &geo::Geometry<f64>) -> f64 {
     }
 }
 
-/// A geometry in the analysis plane, polygons oriented as the overlay needs.
+/// A geometry in the run's plane ([`crate::convert::plane`]), polygons oriented as the overlay needs.
 fn oriented(g: &Geometry) -> geo::Geometry<f64> {
     match to_geo(g) {
         geo::Geometry::MultiPolygon(m) => geo::Geometry::MultiPolygon(m.orient(Direction::Default)),

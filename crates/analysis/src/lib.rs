@@ -285,6 +285,27 @@ impl ToolSpec {
         OWN_SYSTEM_TOOLS.contains(&self.id) && TOOLS.iter().any(|t| std::ptr::eq(t, self)) && !tools::measures_distance(self.id, params)
     }
 
+    /// Whether the tool crosses its inputs' edges with each other's (overlays and spatial
+    /// relations), where how an edge runs between its vertices decides the result, not only where
+    /// they are: a run in its first input's own system then says when another input's edges,
+    /// converted into it, run far from where a run in longitude/latitude takes them.
+    pub fn reads_edges(&self) -> bool {
+        matches!(
+            self.id,
+            "clip"
+                | "erase"
+                | "intersect"
+                | "identity"
+                | "union"
+                | "symmetricalDifference"
+                | "update"
+                | "split"
+                | "countPoints"
+                | "selectByLocation"
+                | "spatialJoin"
+        )
+    }
+
     /// Whether the tool reads the geometry of the layer its parameter `param` names, rather than
     /// only its attributes (Join Field's join table): one whose geometry it doesn't read needn't
     /// be converted into the system it works in.
@@ -776,6 +797,7 @@ const READ_AREAS_IN_THE_PLANE: &[&str] = &[
     "selectByLocation",
     "featureToPoint",
     "dissolve",
+    "tabulateIntersection",
 ];
 
 /// Whether a tool reads every row of an input whatever is selected in it.
