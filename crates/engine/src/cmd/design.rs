@@ -2300,6 +2300,8 @@ struct TopologyInput {
     data: rustgis_data::Dataset,
     rows: Vec<usize>,
     by: Option<rustgis_data::Dataset>,
+    /// The covering layer's name on the map, which its data's own name may not be.
+    by_layer: String,
 }
 
 /// The rules as the map has them now, each with what it reads; a rule whose layer is gone is left
@@ -2311,11 +2313,11 @@ fn topology_checks(s: &Session) -> Vec<TopologyInput> {
         let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
         // A covering layer that is gone leaves the rule with nothing to check (its layer's
         // latitudes are still checked).
-        let by = match &rule {
-            TopologyRule::MustBeCoveredBy { by, .. } => s.map().layer_by_name(by).map(|b| b.dataset.clone()),
-            _ => None,
+        let (by, by_layer) = match &rule {
+            TopologyRule::MustBeCoveredBy { by, .. } => (s.map().layer_by_name(by).map(|b| b.dataset.clone()), by.clone()),
+            _ => (None, String::new()),
         };
-        inputs.push(TopologyInput { rule, layer: l.name.clone(), data: l.dataset.clone(), rows, by });
+        inputs.push(TopologyInput { rule, layer: l.name.clone(), data: l.dataset.clone(), rows, by, by_layer });
     }
     inputs
 }
@@ -2368,7 +2370,7 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
             }
         };
         let data = i.data.in_lonlat().map_err(|e| named(&i.layer, e))?;
-        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(|e| named(&b.name, e))).transpose()?;
+        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(|e| named(&i.by_layer, e))).transpose()?;
         rustgis_analysis::validate_latitudes(&data, i.rows.iter().copied())?;
         found.push(match (&i.rule, &by) {
             (TopologyRule::MustNotOverlap { .. }, _) => t::overlaps(&data, &i.rows),
@@ -2672,6 +2674,13 @@ mod tests {
         s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
         let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
         assert!(e.starts_with("Countries: feature"), "{e}");
+        assert!(!e.contains("Cities"), "{e}");
+        // A covering layer whose map name isn't its data's (a name taken on a clash) is named as
+        // the map has it.
+        s.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().name = "Borders".into();
+        s.map_mut().editing.topology = vec![TopologyRule::MustBeCoveredBy { layer: "Cities".into(), by: "Borders".into() }];
+        let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
+        assert!(e.starts_with("Borders: "), "{e}");
         assert!(!e.contains("Cities"), "{e}");
     }
 
