@@ -5605,7 +5605,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     // publication's scale bar box measured again.
     if let Some(basis) = basis {
         let given = |keys: &[&str]| keys.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
-        let restyled = id == basis.bar_id && given(&["units", "divisions"]);
+        // Made plain again, the box kept for its details is measured for the plain bar.
+        let plain_again =
+            basis.detailed && !s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| e.kind.scale_bar_uses_details());
+        let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || plain_again);
         if (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled {
             refit_scale_box(s, li, &basis);
         }
@@ -5660,6 +5663,9 @@ struct BoxBasis {
     text: String,
     size: f64,
     bold: bool,
+    /// The bar has details ([`ElementKind::scale_bar_uses_details`]): measured as a plain bar,
+    /// the box would cut it, so it keeps its width while this holds.
+    detailed: bool,
 }
 
 /// The text under a publication's scale bar as the page draws it from `b`: `{scale}` filled as
@@ -5682,7 +5688,7 @@ fn basis_width(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> f64 {
 /// The automatic width (mm) of layout `li`'s publication scale bar box as things are now.
 #[cfg(test)]
 pub(crate) fn scale_box_auto(s: &Session, li: usize) -> Option<f64> {
-    let b = scale_box_basis(s, li)?;
+    let b = scale_box_basis(s, li).filter(|b| !b.detailed)?;
     let l = s.project.layouts.get(li)?;
     let ElementKind::MapFrame { map, .. } = &l.element(b.frame)?.kind else { return None };
     let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
@@ -5690,14 +5696,12 @@ pub(crate) fn scale_box_auto(s: &Session, li: usize) -> Option<f64> {
 }
 
 /// The basis of a layout's publication scale bar box as it is now (#1379); `None` without one.
+/// A bar with details has one too, marked `detailed`: [`refit_scale_box`] decides from the bar
+/// as it is then.
 fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
     let l = s.project.layouts.get(li)?;
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (bar, written) = (named("Scale Bar")?, named("Scale")?);
-    // Measured as a plain bar, the box would cut a bar with details: it keeps its width.
-    if bar.kind.scale_bar_uses_details() {
-        return None;
-    }
     let (ElementKind::ScaleBar { frame, units, divisions, .. }, ElementKind::Text { text, size, bold, .. }) = (&bar.kind, &written.kind)
     else {
         return None;
@@ -5716,6 +5720,7 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         text: text.clone(),
         size: *size,
         bold: *bold,
+        detailed: bar.kind.scale_bar_uses_details(),
     })
 }
 
@@ -5729,11 +5734,13 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
 /// longer than the widest box a publication gives. Only a box as wide as `before` (what it was
 /// measured from before the change: its frame, bar and text) is measured again: one set
 /// by hand keeps its width. A change to the text under the bar or to the bar's units or divisions
-/// measures it again too. A box that would then cover the legend, locator or north arrow, which
+/// measures it again too. A bar with details keeps its box: measured as a plain bar, the box
+/// would cut it. Made plain again, its box (kept while it had details, so not comparable with a
+/// measured width) is measured for the plain bar. A box that would then cover the legend, locator or north arrow, which
 /// it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
-    let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame) else { return };
+    let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame && !b.detailed) else { return };
     let Some(l) = s.project.layouts.get(li) else { return };
     let Some(fr) = l.element(frame) else { return };
     let ElementKind::MapFrame { map, .. } = &fr.kind else { return };
@@ -5763,8 +5770,9 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     if scale_text_mm(&filled, now.size, now.bold) > (fr.w * 0.3).max(25.0) {
         return;
     }
-    // The width the box had from its basis before the change: another one was set by hand.
-    if (boxed.w - basis_width(l, m, before)).abs() > 0.01 {
+    // The width the box had from its basis before the change: another one was set by hand. A
+    // box kept for a bar with details wasn't measured from it, so it is measured now.
+    if !before.detailed && (boxed.w - basis_width(l, m, before)).abs() > 0.01 {
         return;
     }
     let w = basis_width(l, m, &now);

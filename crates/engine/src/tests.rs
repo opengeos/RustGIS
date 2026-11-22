@@ -11502,7 +11502,8 @@ fn layout_scale_bars_take_their_details() {
 }
 
 /// A publication's scale bar box isn't measured again for a bar with details: it would be sized
-/// for a plain bar and cut this one (#1379).
+/// for a plain bar and cut this one (#1379). Plain again, it is measured again, and refitted
+/// when its frame's scale changes.
 #[test]
 fn a_publication_scale_box_keeps_a_detailed_bar() {
     use rustgis_map::layout::ElementKind;
@@ -11523,7 +11524,12 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
     assert!((named(&s, "Scale Box").w - w).abs() < 1e-9, "kept, not measured for a plain bar");
     s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 8, "unitLabelPosition": "afterLabels"})).unwrap();
-    assert!(crate::cmd::layout::scale_box_auto(&s, li).is_some(), "plain again, measured again");
+    let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("plain again, an automatic box");
+    assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "plain again, measured again: {} vs {auto}", named(&s, "Scale Box").w);
+    // Its frame drawn at another scale once more: the plain bar's box is refitted.
+    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 4.0})).unwrap();
+    let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("an automatic box");
+    assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "refitted: {} vs {auto}", named(&s, "Scale Box").w);
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything
