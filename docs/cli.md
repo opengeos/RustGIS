@@ -132,8 +132,8 @@ rustgis-cli run --data dem.tif \
 
 ### Strict runs
 
-A notice that says a command lost data carries a loss code, such as `dropped.ring`, that stays the
-same however its wording changes. `run --strict` stops after the first command that reports a
+Some notices that say a command lost data carry a loss code, such as `dropped.ring`, that stays
+the same however their wording changes. `run --strict` stops after the first command that reports a
 loss with a code that no `--allow` accepts, and exits with status 3, before the commands after it
 and before `--save`. That command, including a failed one, has already run: a file it wrote, or the
 project `--save` wrote when the save itself reported the loss, is already there. Standard error

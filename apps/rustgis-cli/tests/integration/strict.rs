@@ -96,6 +96,7 @@ fn a_strict_run_reports_the_losses_of_a_command_that_failed() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(3), "{err}");
     assert!(err.contains("stopped after script.run") && err.contains("dropped.legend (1 notice)"), "{err}");
+    assert!(err.contains("line 2: layer.addDataText"), "the failure is said too: {err}");
 }
 
 #[test]
