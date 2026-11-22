@@ -3543,12 +3543,27 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
 /// wrapped text is broken. For a scale bar `id`, whether its box is too short for its labels or
 /// one runs off the page (#2581).
 fn say_text_fit(s: &mut Session, li: usize, id: u32) {
-    let Some(l) = s.project.layouts.get(li) else { return };
-    let bar = match l.element(id).map(|e| &e.kind) {
+    let bar = match s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind) {
         Some(ElementKind::Text { .. }) => false,
         Some(ElementKind::ScaleBar { .. }) => true,
         _ => return,
     };
+    let Some(loss) = text_fit_loss(s, li, id) else { return };
+    // A scale bar's labels (#2581): its box too small for them, or one off the page.
+    let said = if bar {
+        rustgis_render::layout::scale_bar_fit_notices(&[loss])
+    } else {
+        rustgis_render::layout::lines_left_out_notice(&loss).into_iter().collect()
+    };
+    for said in said {
+        s.warn(said);
+    }
+}
+
+/// What the element `id` of the layout `li` loses of its text on the page its series shows, as
+/// an export at 300 dpi measures it ([`rustgis_render::layout::text_loss`]).
+fn text_fit_loss(s: &Session, li: usize, id: u32) -> Option<rustgis_render::layout::TextLoss> {
+    let l = s.project.layouts.get(li)?;
     let page = l.series.as_ref().map_or(0, |sr| sr.page);
     let series = series_info(s, li, page);
     let info = rustgis_render::layout::PageInfo {
@@ -3556,15 +3571,7 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
         pages: series.as_ref().map_or(1, |i| i.0),
         page_name: series.map(|i| i.1).unwrap_or_default(),
     };
-    let loss = rustgis_render::layout::text_loss(l, &s.project.maps, 300.0, &info, id);
-    let said = match &loss {
-        // A scale bar's labels (#2581): its box too short for them, or one off the page.
-        Some(loss) if bar => Some(rustgis_render::layout::scale_bar_fit_notice(loss)),
-        loss => loss.as_ref().and_then(rustgis_render::layout::lines_left_out_notice),
-    };
-    if let Some(said) = said {
-        s.warn(said);
-    }
+    rustgis_render::layout::text_loss(l, &s.project.maps, 300.0, &info, id)
 }
 
 /// What a text is given that changes the lines it breaks into or the room they have, or shows it
@@ -5263,8 +5270,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     let l = active(s, p)?;
     let e = l.element_mut(id).ok_or_else(|| format!("no element {id}"))?;
-    // A text with no ink isn't measured: given a colour that shows it, it is told (#2346).
-    let shown = col.is_some_and(|c| c.a() > 0) && matches!(&e.kind, ElementKind::Text { color, .. } if color.a() == 0);
+    // A text or scale bar with no ink isn't measured: given a colour that shows it, it is told
+    // (#2346, #2581).
+    let shown = col.is_some_and(|c| c.a() > 0)
+        && matches!(&e.kind, ElementKind::Text { color, .. } | ElementKind::ScaleBar { color, .. } if color.a() == 0);
     let num = |k: &str, lo: f64, hi: f64| f(p, k).map(|v| v.clamp(lo, hi));
     if let Some(v) = num("x", -5000.0, 5000.0) {
         e.x = v;
@@ -5638,8 +5647,9 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
 }
 
 /// A map frame `frame` of the layout `li` drawn at another view: a publication's scale bar box of
-/// it measured again from `basis` ([`refit_scale_box`], #1379), then each scale bar of the frame
-/// told whether its labels still fit (#2581), as its length and labels follow the frame's scale.
+/// it measured again from `basis` ([`refit_scale_box`], #1379), then the scale bars of the frame
+/// whose labels no longer fit told, one notice a kind (#2581), as their lengths and labels follow
+/// the frame's scale.
 fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&BoxBasis>) {
     if let Some(basis) = basis.filter(|b| b.frame == frame) {
         refit_scale_box(s, li, basis);
@@ -5647,8 +5657,9 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
     let bars: Vec<u32> = s.project.layouts.get(li).map_or_else(Vec::new, |l| {
         l.elements.iter().filter(|e| matches!(e.kind, ElementKind::ScaleBar { frame: f, .. } if f == frame)).map(|e| e.id).collect()
     });
-    for bar in bars {
-        say_text_fit(s, li, bar);
+    let losses: Vec<_> = bars.into_iter().filter_map(|bar| text_fit_loss(s, li, bar)).collect();
+    for said in rustgis_render::layout::scale_bar_fit_notices(&losses) {
+        s.warn(said);
     }
 }
 

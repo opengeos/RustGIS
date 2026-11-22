@@ -13714,6 +13714,21 @@ fn scale_bars_and_grids_take_a_label_size() {
         s.run(change.0, &change.1).unwrap();
         assert_eq!(said(&s, mark), "", "{change:?}");
     }
+    // Two bars that don't fit are told in one notice, with their count and names.
+    s.run("layout.update", &json!({"element": big, "textSize": 40, "h": 12})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "textSize": 40})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": frame, "scale": 25_000_000.0})).unwrap();
+    assert!(said(&s, mark).starts_with("2 scale bars (") && !said(&s, mark).contains(" | "), "{}", said(&s, mark));
+    // A bar without ink draws no labels and isn't measured; a colour that shows it is told.
+    s.run("layout.update", &json!({"element": big, "textSize": 16})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "color": "#22222200"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": frame, "scale": 30_000_000.0})).unwrap();
+    assert_eq!(said(&s, mark), "", "a bar without ink");
+    s.run("layout.update", &json!({"element": bar, "color": "#222222"})).unwrap();
+    assert!(said(&s, mark).contains("its box is too small"), "{}", said(&s, mark));
+    s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
 
     s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "step": 10})).unwrap();
     assert_eq!(grid_size(&s), GRID_LABEL_PT);

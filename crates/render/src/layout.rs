@@ -333,8 +333,12 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
         .filter_map(|e| {
             // At least a pixel each way, as the page draws it.
             let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, ((e.w * k) as f32).max(1.0), ((e.h * k) as f32).max(1.0))?;
-            // A scale bar's labels where it draws them, at their size (#2581).
-            if matches!(e.kind, ElementKind::ScaleBar { .. }) {
+            // A scale bar's labels where it draws them, at their size (#2581); a bar drawn without
+            // ink draws none, as a text without ink.
+            if let ElementKind::ScaleBar { color, .. } = &e.kind {
+                if color.a() == 0 {
+                    return None;
+                }
                 let (off_page, cramped) = bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32))?;
                 return (off_page || cramped).then(|| TextLoss {
                     id: e.id,
@@ -459,18 +463,28 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
     Some(format!("Text is cut off in {} layout element(s): {names}; {advice}", clipped.len()))
 }
 
-/// What a scale bar whose labels don't fit is told (#2581), from its [`TextLoss`]: its box too
-/// small for its labels and bar (the bar drawn below it, or an end label past its side), or a
-/// label off the page.
-pub fn scale_bar_fit_notice(loss: &TextLoss) -> String {
-    let name = &loss.name;
-    if loss.below_box {
-        format!(
-            "Scale bar \"{name}\": its box is too small for its labels at their size, so they or its bar run past it; make it larger or reduce its text size"
-        )
-    } else {
-        format!("Scale bar \"{name}\": a label runs off the page; move it inside the page or reduce its text size")
-    }
+/// What scale bars whose labels don't fit are told (#2581), from their [`TextLoss`]es: one notice
+/// a kind, with the bars' count and names. Their boxes too small for their labels and bars (a bar
+/// drawn below its box, or an end label past its side), or a label off the page.
+pub fn scale_bar_fit_notices(losses: &[TextLoss]) -> Vec<String> {
+    let said = |small: bool| {
+        let names: Vec<String> = losses.iter().filter(|l| l.below_box == small).map(|l| format!("\"{}\"", l.name)).collect();
+        let (n, names) = (names.len(), names.join(", "));
+        match (n, small) {
+            (0, _) => None,
+            (1, true) => Some(format!(
+                "Scale bar {names}: its box is too small for its labels at their size, so they or its bar run past it; make it larger or reduce its text size"
+            )),
+            (1, false) => Some(format!("Scale bar {names}: a label runs off the page; move it inside the page or reduce its text size")),
+            (_, true) => Some(format!(
+                "{n} scale bars ({names}): their boxes are too small for their labels at their size, so they or their bars run past them; make them larger or reduce their text size"
+            )),
+            (_, false) => {
+                Some(format!("{n} scale bars ({names}): a label runs off the page; move them inside the page or reduce their text size"))
+            }
+        }
+    };
+    [said(true), said(false)].into_iter().flatten().collect()
 }
 
 /// What a text that loses lines is told (#2346), from its [`TextLoss`]: `None` when none of its
@@ -8495,7 +8509,7 @@ Elaboração: RustGIS",
         let note = clipped_text_notice(&l, &clipped_text(&l, &maps, 96.0, &info)).unwrap();
         assert!(note.contains("make the scale bar larger"), "{note}");
         let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
-        assert!(loss.below_box && scale_bar_fit_notice(&loss).contains("its box is too small"), "{loss:?}");
+        assert!(loss.below_box && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("its box is too small"), "{loss:?}");
         // A tall box holds them at 20 points; off the page's right edge, its last label is cut.
         l.element_mut(bar).unwrap().h = 60.0;
         if let Some(ElementKind::ScaleBar { text_size, .. }) = l.element_mut(bar).map(|e| &mut e.kind) {
@@ -8504,7 +8518,17 @@ Elaboração: RustGIS",
         assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "a tall box holds them");
         l.element_mut(bar).unwrap().x = 60.0;
         let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
-        assert!(!loss.below_box && scale_bar_fit_notice(&loss).contains("runs off the page"), "{loss:?}");
+        assert!(!loss.below_box && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("runs off the page"), "{loss:?}");
+        // Several bars are told in one notice a kind, their count and names.
+        let small = TextLoss { below_box: true, ..loss.clone() };
+        let two = scale_bar_fit_notices(&[small.clone(), TextLoss { name: "B".into(), ..small.clone() }]);
+        assert!(two.len() == 1 && two[0].starts_with("2 scale bars (\"Scale Bar\", \"B\"): their boxes are too small"), "{two:?}");
+        assert_eq!(scale_bar_fit_notices(&[small, loss]).len(), 2, "a notice a kind");
+        // Drawn without ink, its labels show nothing and aren't measured, as a text's.
+        if let Some(ElementKind::ScaleBar { color, .. }) = l.element_mut(bar).map(|e| &mut e.kind) {
+            *color = Rgba::new(0, 0, 0, 0);
+        }
+        assert!(text_loss(&l, &maps, 96.0, &info, bar).is_none(), "a bar without ink");
         l.element_mut(bar).unwrap().visible = false;
         assert!(clipped_text(&l, &maps, 96.0, &info).is_empty(), "a hidden bar draws nothing");
     }
