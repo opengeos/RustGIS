@@ -63,8 +63,9 @@ fn layers() -> Result<(), String> {
 }
 
 /// Each package under `crates/` as (its directory name, the packages it depends on). A dependency
-/// counts whatever its target (`[target.'cfg(…)'.dependencies]`) and whether or not it is optional;
-/// dev- and build-dependencies don't, as AGENTS.md's rule is about what a crate is built from.
+/// counts whatever its target (`[target.'cfg(…)'.dependencies]`) and whether or not it is optional.
+/// Dev- and build-dependencies don't: neither is in what the crate ships, and AGENTS.md's rule
+/// ("nothing below L6 depends on egui/eframe/rfd") doesn't clearly cover them.
 fn crate_deps(meta: &Value) -> Vec<(String, Vec<String>)> {
     let workspace = std::path::Path::new(meta["workspace_root"].as_str().unwrap_or_default());
     let mut out = Vec::new();
