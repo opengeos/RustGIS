@@ -707,10 +707,11 @@ fn esri_57_remains_windows_1252_rather_than_iso_8859_1() {
     check_ldid_readers(0x57, b"\x80\x96\x9f", "€–Ÿ", None, &[]);
 }
 
+/// Malformed bytes in a declared multibyte code page are replaced with no notice yet (#2614).
 #[test]
 fn malformed_multibyte_fields_replace_bytes_without_dropping_records() {
-    // Known gap, deferred from #2325: these four code pages' malformed bytes are replaced with no
-    // notice yet, so the empty notes below pin that behaviour rather than endorse it.
+    // Known gap (#2614): these four code pages' malformed bytes are replaced with no notice yet, so
+    // the empty notes below pin that behaviour rather than endorse it.
     for (ldid, text) in [(0x13, b"X\x82".as_slice()), (0x4D, b"X\x81"), (0x4E, b"X\x81"), (0x4F, b"X\xa4")] {
         check_ldid_readers(ldid, text, "X�", None, &[]);
     }
