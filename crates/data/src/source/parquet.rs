@@ -36,11 +36,23 @@ const MAX_GROUP_ROWS: usize = if cfg!(target_arch = "wasm32") { 1 << 21 } else {
 /// Conservative decoded-column budget for one group scanned without native view bounds.
 const MAX_SCAN_BYTES: u64 = if cfg!(target_arch = "wasm32") { 64 << 20 } else { 256 << 20 };
 
+/// What a GeoParquet source's reads are attributed to ([`ParquetSource::attribute`]).
+#[derive(Clone, Debug)]
+enum Attributed {
+    /// The file read, observed as it is at each read.
+    File(std::path::PathBuf),
+    /// A conversion's original, as it was when the conversion was opened. Conversions run only
+    /// on the desktop.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Original(Arc<Vec<crate::provenance::Fingerprint>>),
+}
+
 /// A GeoParquet file.
 pub struct ParquetSource {
-    /// The local input attributed to reads, as it was when opened: a conversion names its source,
-    /// never its cache, and a source changed since isn't what the reader holds.
-    path: Option<Arc<Vec<crate::provenance::Fingerprint>>>,
+    /// The local input attributed to reads: the file itself, observed again at each read, or a
+    /// conversion's source (never its cache) as it was when the conversion was opened, since a
+    /// source changed since isn't what the conversion holds.
+    path: Option<Attributed>,
     info: SourceInfo,
     reader: Arc<dyn FileReader>,
     /// Leaf column index of the geometry.
@@ -68,18 +80,18 @@ pub struct ParquetSource {
 
 impl ParquetSource {
     pub fn open_path(path: &Path, name: &str) -> Result<Self> {
-        let (file, seen) = crate::provenance::snapshot(|| crate::provenance::open(path));
-        let file = file?;
-        crate::provenance::record(seen.iter().cloned());
+        let file = crate::provenance::open(path)?;
         let mut source = Self::new(Arc::new(SerializedFileReader::new(file).map_err(err)?), name, None)?;
-        source.path = Some(Arc::new(seen));
+        source.path = Some(Attributed::File(path.to_path_buf()));
         Ok(source)
     }
 
-    /// Records the input this reads, as it was when opened.
+    /// Records the input this reads: the file as it is now, or a conversion's original as it was.
     fn attribute(&self) {
-        if let Some(seen) = &self.path {
-            crate::provenance::record(seen.iter().cloned());
+        match &self.path {
+            Some(Attributed::File(path)) => crate::provenance::path(path),
+            Some(Attributed::Original(seen)) => crate::provenance::record(seen.iter().cloned()),
+            None => {}
         }
     }
 
@@ -93,7 +105,8 @@ impl ParquetSource {
         workspace: Option<Arc<super::duckdb::ReloadWorkspace>>,
     ) -> Result<Self> {
         let mut source = crate::provenance::without(|| Self::open_path(path, name))?;
-        source.path = original.map(|original| Arc::new(crate::provenance::snapshot(|| crate::provenance::duckdb(original)).1));
+        source.path =
+            original.map(|original| Attributed::Original(Arc::new(crate::provenance::snapshot(|| crate::provenance::duckdb(original)).1)));
         source.attribute();
         source._workspace = workspace;
         Ok(source)
