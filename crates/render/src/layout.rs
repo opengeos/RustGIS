@@ -8505,6 +8505,7 @@ Elaboração: RustGIS",
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
             return;
         }
         let mut drawn = Vec::new();
