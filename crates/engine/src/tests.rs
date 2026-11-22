@@ -11803,6 +11803,7 @@ fn layout_scale_bars_take_their_details() {
         json!({"kind": "scaleBar", "decimals": 9}),
         json!({"kind": "northArrow", "decimals": 2}),
         json!({"kind": "legend", "unitLabel": "m"}),
+        json!({"kind": "legend", "unitLabel": null}),
         json!({"kind": "text", "text": "T", "subdivisions": 2}),
         json!({"kind": "colorbar", "fit": "adjustWidth"}),
     ] {

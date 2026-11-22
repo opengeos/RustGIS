@@ -3665,7 +3665,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     if kind != "chart" && gives_chart_options_to(p, kind == "scaleBar") {
         return Err(ONLY_CHART_OPTIONS.into());
     }
-    if kind != "scaleBar" && gives_scale_bar_details(p) {
+    // "unitLabel": null too, as layout.update refuses it, since it means something on a scale bar.
+    if kind != "scaleBar" && (gives_scale_bar_details(p) || p.get("unitLabel").is_some()) {
         return Err(ONLY_SCALE_BAR_DETAILS.into());
     }
     if !matches!(
