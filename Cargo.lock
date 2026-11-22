@@ -5064,7 +5064,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui",
@@ -5085,7 +5085,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-analysis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "a5",
  "geo",
@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-assistant"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -5118,7 +5118,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rustgis-assistant",
  "rustgis-engine",
@@ -5128,7 +5128,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-data"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -5185,7 +5185,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -5216,7 +5216,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-geolibre"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "flate2",
  "log",
@@ -5233,7 +5233,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-geom"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "geographiclib-rs",
  "proptest",
@@ -5243,7 +5243,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-keychain"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
@@ -5254,7 +5254,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-map"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "roxmltree",
@@ -5268,7 +5268,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-mobile"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "android_logger",
  "block2 0.6.2",
@@ -5292,7 +5292,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-plugins"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -5311,7 +5311,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-python"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5322,7 +5322,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-render"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ab_glyph",
  "base64 0.23.1",
@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-tiles"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "brotli 9.0.0",
@@ -5370,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-ui-egui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "bytemuck",
@@ -5397,7 +5397,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-ui-touch"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "egui",
  "rustgis-ui-egui",
@@ -5407,7 +5407,7 @@ dependencies = [
 
 [[package]]
 name = "rustgis-web"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui",
@@ -8016,7 +8016,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde_json",
 ]
