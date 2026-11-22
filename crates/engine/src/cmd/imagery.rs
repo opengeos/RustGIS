@@ -63,7 +63,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"before": raster, "after": raster, "band"?: 1-based, "method"?: "difference"|"ratio"|"percent", "name"?, "ran"?: (internal: a raster the app has worked out)}"#),
         C::new("raster.spectral", "Spectral Analysis", "Imagery › Image Analysis", spectral).inputs(spectral_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
             .view()
-            .params(r#"{"layer": raster, "lon"?, "lat"?, "points"?: [[lon, lat], …] (up to 1000: a profile each, in "profiles"; one off the raster has a null pixel and values, and is said), "zone"?: polygon layer (the mean of its selected or first polygon's pixels, every part of it)}"#),
+            .params(r#"{"layer": raster, "lon"?, "lat"?, "points"?: [[lon, lat], …] (up to 1000: a profile each, in "profiles"; one off the raster has a null pixel and values, and is said), "zone"?: polygon layer (the mean of the pixels in every part of its selected or first polygon)}"#),
         C::new("raster.classify", "Classification Wizard", "Imagery › Image Classification", |s, p| {
             super::workflows::made_or_ran(s, p, "raster.classify")
         }).inputs(raster_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -606,7 +606,12 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
     })?;
     if unsized_by > 0 && p.get("extent").is_none_or(Value::is_null) {
         s.notify(
-            format!("{ln}: {unsized_by} vertices that can't be placed in longitude/latitude were left out of the grid's extent: give an extent to take them in"),
+            format!(
+                "{ln}: {unsized_by} {} that can't be placed in longitude/latitude {} left out of the grid's extent: give an extent to take {} in",
+                if unsized_by == 1 { "vertex" } else { "vertices" },
+                if unsized_by == 1 { "was" } else { "were" },
+                if unsized_by == 1 { "it" } else { "them" }
+            ),
             false,
         );
     }

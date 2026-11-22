@@ -1093,7 +1093,7 @@ pub fn polygon_mask_in(
 }
 
 /// [`zonal_means`] over a zone's `parts` (each its rings), `each_rows(n)` asked as the raster's
-/// rows go by, `n` at a time (each row once a part, all of them): an error stops it.
+/// rows go by, `n` at a time (each row once per part, all of them): an error stops it.
 ///
 /// A cell counts when its centre, in the zone's system (`zone`), lies in a part (inside its outer
 /// ring and in none of its holes), once however many parts hold it. Each part's cells are tested in
@@ -1116,9 +1116,13 @@ fn means_under(
         })
         .collect();
     let in_part = |k: usize, ll: Coord| boxes[k].contains(ll) && rustgis_data::geometry::polygon_contains(parts[k], ll);
+    // The earlier parts a cell of a part may also lie in are found by their boxes: a part whose box
+    // meets no earlier one's tests none of them.
+    let index = (parts.len() > 1).then(|| crate::tools::ExtentIndex::new(boxes.iter().copied()));
     let mut sums = vec![0.0; bands.len()];
     let mut n = 0usize;
     for (k, e) in boxes.iter().enumerate() {
+        let earlier = index.as_ref().filter(|ix| ix.any_candidate(e, |j| j < k && boxes[j].intersects(e)));
         // A pole inside the zone's box, in a system other than the raster's: the outline bounds
         // nothing there (on a Web Mercator raster it lands south of the cells near the pole).
         let (cols, rows) = match zone {
@@ -1133,7 +1137,9 @@ fn means_under(
                 let w = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
                 let Some(ll) = zone.zone(r, w) else { continue };
                 // Counted for the first part that holds it, so parts that overlap count it once.
-                if !in_part(k, ll) || (0..k).any(|j| in_part(j, ll)) {
+                if !in_part(k, ll)
+                    || earlier.is_some_and(|ix| ix.any_candidate(&Extent::new(ll.x, ll.y, ll.x, ll.y), |j| j < k && in_part(j, ll)))
+                {
                     continue;
                 }
                 let vals: Option<Vec<f64>> = bands.iter().map(|b| r.value(*b, i64::from(col), i64::from(row)).map(f64::from)).collect();
