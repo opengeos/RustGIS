@@ -55,8 +55,8 @@ fn height_unread(p: &Json) -> bool {
     p.as_array().and_then(|a| a.get(2)).is_some_and(|z| !z.is_number() && !z.is_null())
 }
 
-/// The positions of a geometry's points (Point, MultiPoint, at most four collections deep) whose
-/// height [`height_unread`].
+/// The positions of a geometry's points (Point, MultiPoint, and those of a GeometryCollection's
+/// members, at most four collections deep) whose height [`height_unread`].
 fn point_heights_unread(g: &Json, depth: usize) -> usize {
     let coords = g.get("coordinates");
     let own = match g.get("type").and_then(Json::as_str) {
@@ -64,7 +64,8 @@ fn point_heights_unread(g: &Json, depth: usize) -> usize {
         Some("MultiPoint") => coords.and_then(Json::as_array).map_or(0, |a| a.iter().filter(|p| height_unread(p)).count()),
         _ => 0,
     };
-    let nested = if depth < 4 {
+    let collection = g.get("type").and_then(Json::as_str) == Some("GeometryCollection");
+    let nested = if collection && depth < 4 {
         g.get("geometries").and_then(Json::as_array).into_iter().flatten().map(|m| point_heights_unread(m, depth + 1)).sum()
     } else {
         0
@@ -399,7 +400,12 @@ fn read_with(file_name: &str, text: &str, budget: usize) -> Result<Vec<(Dataset,
             (Some(p), None) => positions.len() - p.len(),
             _ => 0,
         });
-        arcs_heights_unread.push(if pts.is_some() { positions.iter().filter(|p| height_unread(p)).count() } else { 0 });
+        // Only the positions the arc keeps: one left out is counted as left out, not as read.
+        arcs_heights_unread.push(if pts.is_some() {
+            positions.iter().filter(|p| position(p).is_some() && height_unread(p)).count()
+        } else {
+            0
+        });
         arcs.push(pts);
     }
     let mut topo = Topology { arcs, arcs_lost, arcs_heights_unread, transform, budget };
@@ -672,6 +678,14 @@ mod tests {
 {"type":"Point","coordinates":[1,2,10]},{"type":"Point","coordinates":[1,2,null]},{"type":"LineString","arcs":[0]}]}},
 "arcs":[[[0,0,1],[1,1]]]}"#;
         assert!(said(clean).is_empty());
+        // A position left out of its arc isn't also read without a height; a member of a Point
+        // (not a collection) isn't read, so isn't counted either.
+        let left_out = r#"{"type":"Topology","objects":{"o":{"type":"Point","coordinates":[0,0],
+"geometries":[{"type":"Point","coordinates":[3,4,"bad"]}]},"p":{"type":"LineString","arcs":[0]}},
+"arcs":[[[0,0],[null,1,"bad"],[2,2]]]}"#;
+        for (_, rep) in read("h.topojson", left_out).unwrap() {
+            assert!(!rep.messages.iter().any(|m| m.contains("read without a height")), "{:?}", rep.messages);
+        }
     }
 
     #[test]
