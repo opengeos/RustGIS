@@ -32,6 +32,28 @@ fn ogc_dataset_supplied_listing_reads_off_frame_with_its_login() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn ogc_dataset_url_only_add_prepares_discovery_on_the_worker() {
+    use crate::analysis::control::Control;
+    use crate::cmd::reads::{read_ahead, read_land};
+    let landing = json!({"links":[{"rel":"tilesets-map","href":"/tiles?f=json"}]});
+    let metadata = json!({"tileMatrixSetId":"WebMercatorQuad","links":[
+        {"rel":"item","type":"image/png","href":"/map/{tileMatrix}/{tileRow}/{tileCol}.png"}]});
+    let server = Server::new(vec![Route::new("/dataset", &landing.to_string()), Route::new("/tiles", &metadata.to_string())]);
+    let mut session = Session::new(Project::default());
+    let read =
+        read_ahead(&mut session, "service.add", &json!({"url":format!("{}/dataset", server.base),"type":"ogcapi","layer":"map"})).unwrap();
+    assert!(read.reads(), "a URL-only add must prepare its discovery for a worker");
+    assert!(server.requests().is_empty(), "preparing the read cannot fetch on the frame");
+    let done = read.run(&Control::new()).unwrap();
+    assert_eq!(server.requests().len(), 2);
+    assert!(session.map().tiles.is_empty());
+    read_land(&mut session, done).unwrap();
+    assert_eq!(session.map().tiles.len(), 1);
+    assert_eq!(server.requests().len(), 2, "landing consumes the prepared discovery without fetching it again");
+}
+
 #[test]
 fn ogc_dataset_rejected_landing_links_never_guess_a_template() {
     let mut session = Session::new(Project::default());
@@ -804,7 +826,7 @@ fn ogc_dataset_failed_discovery_keeps_prior_omission_counts() {
             sets.insert(0, json!({"tileMatrixSetId":"Unsupported"}));
         }
         let params = json!({"url":"https://maps.example.org/dataset","type":"ogcapi","layer":"map",
-        "text":json!({"links":[{"rel":"tilesets-map","href":"/tiles?f=json"}]}).to_string(),
+        "text":json!({"links":[{"rel":"tilesets-map","href":"/tiles?f=json"},{"rel":"styles","href":"/styles"}]}).to_string(),
         "documents":[
             {"url":"https://maps.example.org/tiles?f=json","text":json!({"tilesets":sets}).to_string()},
             {"url":"https://maps.example.org/metadata?f=json","text":" ".repeat(crate::cmd::service::MAX_DATASET_BYTES)}
@@ -813,6 +835,8 @@ fn ogc_dataset_failed_discovery_keeps_prior_omission_counts() {
         for command in ["service.layers", "service.add"] {
             let error = session.run(command, &params).unwrap_err();
             assert!(error.contains("metadata budget"), "{error}");
+            assert!(error.contains("1 tileset documents were left out: dataset discovery stopped"), "{error}");
+            assert!(error.contains("1 style catalogues were left out: dataset discovery stopped"), "{error}");
             assert_eq!(error.contains("1 tilesets were left out"), omitted, "{error}");
             #[cfg(not(target_arch = "wasm32"))]
             {
