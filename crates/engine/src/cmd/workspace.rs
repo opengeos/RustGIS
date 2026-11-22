@@ -8,7 +8,7 @@ use rustgis_map::view::Keyframe;
 use serde_json::{Value, json};
 
 use super::{b, f, ps};
-use crate::project::{Job, OfflineArea, Project};
+use crate::project::{AreaConflict, ConflictKind, Job, OfflineArea, Project};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Removes every Shapefile index not in use and says what it freed, what stayed and why, and which
@@ -310,6 +310,34 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": offline area}"#),
+        C::new("offline.conflicts", "Conflicts", "Data › Offline", |s, p| {
+            let ai = area_index(s, p)?;
+            let a = s.project.offline_areas.get(ai).ok_or("no such area")?;
+            Ok(json!({"area": a.name, "map": a.map, "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()}))
+        }).roles(&[]).effects(crate::policy::Effects::NONE)
+        .view()
+        .params(r#"{"name": offline area}"#),
+        C::new("offline.dismissConflicts", "Dismiss Conflicts", "Data › Offline", |s, p| {
+            let ai = area_index(s, p)?;
+            let picked: Option<std::collections::HashSet<u64>> = match p.get("conflicts") {
+                None | Some(Value::Null) => None,
+                Some(Value::Array(a)) => Some(a.iter().map(|v| v.as_u64().ok_or("conflicts must be a list of conflict indexes")).collect::<Result<_, _>>()?),
+                Some(_) => return Err("conflicts must be a list of conflict indexes".into()),
+            };
+            let a = s.project.offline_areas.get_mut(ai).ok_or("no such area")?;
+            let held = a.conflicts.len();
+            if let Some(unknown) = picked.as_ref().and_then(|p| p.iter().copied().filter(|i| usize::try_from(*i).map_or(true, |i| i >= held)).min()) {
+                return Err(format!("offline area '{}' has no conflict {unknown}: it has {held}", a.name));
+            }
+            let mut i = 0u64;
+            a.conflicts.retain(|_| {
+                let keep = picked.as_ref().is_some_and(|p| !p.contains(&i));
+                i += 1;
+                keep
+            });
+            Ok(json!({"dismissed": held - a.conflicts.len(), "left": a.conflicts.len()}))
+        }).roles(&[]).effects(crate::policy::Effects::NONE)
+        .params(r#"{"name": offline area, "conflicts"?: [number] (indexes from offline.conflicts; every one when omitted)}"#),
         C::new("offline.open", "Open Offline Map", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
@@ -837,6 +865,7 @@ pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
+        conflicts: Vec::new(),
         data,
     });
     note_unbound(s, bound, &format!("the offline area '{name}'"));
@@ -871,7 +900,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
     let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
     let area = s.project.offline_areas.get(ai).cloned().ok_or("no such area")?;
     let edited = offline_map_index(&s.project, &area).and_then(|i| s.project.maps.get(i)).cloned().unwrap_or_else(|| area.data.clone());
-    sync_area(s, ai, &edited)
+    sync_area(s, ai, &edited, "")
 }
 
 /// A layer's conversion error in a sync, named by the layer; a cancel stays a cancel, as the
@@ -890,7 +919,10 @@ pub(crate) fn sync_error(layer: &str, e: String) -> String {
 /// of a copy that kept the old id finds it under it, so the source's copy is deleted and the
 /// area's added again (no feature twice, but a new id, and a change made to it here meanwhile is
 /// said as a conflict).
-pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -> CmdResult {
+///
+/// Each conflict's losing version is kept on the area ([`keep_conflicts`]), named by `package`, the
+/// field package that brought `edited` (empty for a sync).
+pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map, package: &str) -> CmdResult {
     let area = s.project.offline_areas.get(ai).cloned().ok_or("no such area")?;
     let offline_map = offline_map_index(&s.project, &area);
     let si = s
@@ -911,13 +943,15 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
     // deletion) replaced, and features changed offline whose edits a deletion in the source
     // dropped, as "layer #id".
     let (mut conflicts, mut dropped) = (Vec::new(), Vec::new());
+    // The versions that lost, kept on the area.
+    let mut lost = Vec::new();
     let tag = |layer: &str, id: u64| format!("{layer} #{id}");
     if let Some(src) = s.project.maps.get_mut(si) {
         for ol in &edited.layers {
             // Layers are matched by id (the snapshot keeps them), so same-named layers don't mix.
             // Layers removed from either side since the download are left alone.
             let Some(sl) = src.layers.iter_mut().find(|l| l.id == ol.id && !l.is_raster()) else { continue };
-            let lname = sl.name.clone();
+            let (lname, sl_id) = (sl.name.clone(), sl.id);
             // Compared and merged in longitude/latitude, as a package returns its features, whatever
             // system the source, its last synced copy or the package hold them in; the source is
             // written back in its own, its unchanged places as stored (`results_from_lonlat`).
@@ -1017,12 +1051,24 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             let home_top = sl.dataset.features.highest_id();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.
             let before = sl.dataset.features.len();
+            let home_fields = &sl.dataset.fields;
             sl.dataset.features.retain_rows(|x| {
                 let keep = !had.contains(&x.id()) || now_ids.contains(&x.id());
                 // Deleted offline but changed in the source meanwhile, a value in a field only the
                 // source has included.
                 if !keep && (changed_at_home(x) || source_only.iter().any(|&j| *x.value(j) != rustgis_data::Value::Null)) {
                     conflicts.push(tag(&lname, x.id()));
+                    // The map's feature lost: every value it held, and its shape.
+                    let values = home_fields.iter().zip(x.values()).filter(|(_, v)| !v.is_null()).map(|(f, v)| (f.name.clone(), v.clone()));
+                    lost.push(conflict(
+                        package,
+                        sl_id,
+                        &lname,
+                        x.id(),
+                        ConflictKind::Deleted,
+                        values.collect(),
+                        Some(x.geometry().cloned()),
+                    ));
                 }
                 keep
             });
@@ -1047,8 +1093,19 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                     let differs = row.and_then(|r| sl.dataset.features.row(r)).map(|x| !same_on(f, x, &to_source, false));
                     match (row, differs) {
                         (Some(r), Some(true)) if changed_offline => {
-                            if sl.dataset.features.row(r).is_some_and(changed_at_home) {
+                            if let Some(x) = sl.dataset.features.row(r).filter(|x| changed_at_home(*x)) {
                                 conflicts.push(tag(&lname, fid));
+                                // The map's values the area's version replaces, and its shape when that
+                                // changes too.
+                                let values = to_source
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, j)| j.map(|j| (j, f.value(i))))
+                                    .filter(|(j, new)| x.value(*j) != *new)
+                                    .filter_map(|(j, _)| sl.dataset.fields.get(j).map(|h| (h.name.clone(), x.value(j).clone())))
+                                    .collect();
+                                let shape = (x.geometry() != f.geometry()).then(|| x.geometry().cloned());
+                                lost.push(conflict(package, sl_id, &lname, fid, ConflictKind::Replaced, values, shape));
                             }
                             sl.dataset.features.set_geometry(r, f.geometry().cloned());
                             for (i, j) in to_source.iter().enumerate() {
@@ -1064,6 +1121,22 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                         (None, _) if changed_offline => {
                             skipped += 1;
                             dropped.push(tag(&lname, fid));
+                            // The area's edits lost: the values and shape it changed since the last
+                            // sync, compared in longitude/latitude.
+                            let was = base.get(&fid);
+                            let values = ol_ds
+                                .fields
+                                .iter()
+                                .zip(f.values())
+                                .enumerate()
+                                .filter(|(i, (_, v))| {
+                                    let old = was.and_then(|b| to_base.get(*i).copied().flatten().map(|k| b.value(k)));
+                                    old.unwrap_or(&rustgis_data::Value::Null) != *v
+                                })
+                                .map(|(_, (h, v))| (h.name.clone(), v.clone()))
+                                .collect();
+                            let shape = was.is_none_or(|b| b.geometry() != f.geometry()).then(|| f.geometry().cloned());
+                            lost.push(conflict(package, sl_id, &lname, fid, ConflictKind::Dropped, values, shape));
                         }
                         _ => {}
                     }
@@ -1097,8 +1170,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
         }
     }
     renew_area(s, ai, si, offline_map, next_generation)?;
+    keep_conflicts(s, ai, lost);
     // Never silent: say which features lost an edit, so they can be checked (Undo puts the
-    // source's versions back).
+    // source's versions back, and Data › Offline › Conflicts shows the versions that lost).
     let listed = |ids: &[String]| {
         let mut said: Vec<String> = ids.iter().take(20).cloned().collect();
         if ids.len() > 20 {
@@ -1109,7 +1183,7 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
     if !conflicts.is_empty() {
         s.notify(
             format!(
-                "Offline area '{}': {} feature(s) were changed in the map '{}' since the last sync and also edited or deleted in the area, so the area's version replaced the map's changes: {}. Undo restores the map's versions",
+                "Offline area '{}': {} feature(s) were changed in the map '{}' since the last sync and also edited or deleted in the area, so the area's version replaced the map's changes: {}. Undo restores the map's versions, and Data › Offline › Conflicts keeps the versions that lost",
                 area.name,
                 conflicts.len(),
                 area.map,
@@ -1121,7 +1195,7 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
     if !dropped.is_empty() {
         s.notify(
             format!(
-                "Offline area '{}': {} feature(s) edited in the area were deleted from the map '{}' meanwhile, so those edits were dropped: {}",
+                "Offline area '{}': {} feature(s) edited in the area were deleted from the map '{}' meanwhile, so those edits were dropped: {}. Data › Offline › Conflicts keeps the versions that lost",
                 area.name,
                 dropped.len(),
                 area.map,
@@ -1133,6 +1207,68 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
     Ok(
         json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped, "conflicts": conflicts.len(), "renumbered": renumbered}),
     )
+}
+
+/// The offline area `p` names (`name`).
+fn area_index(s: &Session, p: &Value) -> Result<usize, String> {
+    let n = ps(p, "name").ok_or("name is required")?;
+    s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))
+}
+
+/// Conflict `c`, the `i`th of its area, as `offline.conflicts` lists it: its values as JSON, and
+/// the shape that lost as GeoJSON (null for none) when the shape lost.
+fn conflict_json(i: usize, c: &AreaConflict) -> Value {
+    let values: serde_json::Map<String, Value> = c.values.iter().map(|(n, v)| (n.clone(), v.to_json())).collect();
+    let mut out = json!({
+        "index": i,
+        "at": c.at,
+        "package": c.package,
+        "layer": c.layer,
+        "layerName": c.layer_name,
+        "feature": c.feature,
+        "kind": c.kind,
+        "values": values,
+    });
+    if c.shape
+        && let Some(o) = out.as_object_mut()
+    {
+        o.insert("geometry".into(), c.geometry.as_ref().map_or(Value::Null, rustgis_data::io::geometry_to_geojson));
+    }
+    out
+}
+
+/// A conflict found now in layer `layer` (`layer_name`) of an offline area's map, for feature
+/// `feature`, keeping `values` and, when given, `shape` (in longitude/latitude) as the version that
+/// lost.
+pub(crate) fn conflict(
+    package: &str,
+    layer: u32,
+    layer_name: &str,
+    feature: u64,
+    kind: ConflictKind,
+    values: Vec<(String, rustgis_data::Value)>,
+    shape: Option<Option<rustgis_data::Geometry>>,
+) -> AreaConflict {
+    AreaConflict {
+        at: now(),
+        package: package.to_string(),
+        layer,
+        layer_name: layer_name.to_string(),
+        feature,
+        kind,
+        values,
+        shape: shape.is_some(),
+        geometry: shape.flatten(),
+    }
+}
+
+/// Keeps `found`, the versions a sync or a Bring Back of offline area `ai` replaced or left out,
+/// on the area after those kept before, so they can be looked at after the notice has gone (the
+/// command's Undo takes them away again, with its changes).
+pub(crate) fn keep_conflicts(s: &mut Session, ai: usize, found: Vec<AreaConflict>) {
+    if let Some(a) = s.project.offline_areas.get_mut(ai) {
+        a.conflicts.extend(found);
+    }
 }
 
 /// Renews offline area `ai` from its source map `si` once edits have come back to it: its snapshot,
