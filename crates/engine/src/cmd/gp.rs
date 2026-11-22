@@ -711,6 +711,11 @@ impl ToolRun {
             crate::render::rustgis_tiles::cache::with_still(still, || {
                 let inputs = match inputs_of(snap, Some(spec), &params) {
                     Ok(inputs) => inputs,
+                    // A Cancel while the inputs are read names the tool, as one while it runs does.
+                    Err(_) if control.is_cancelled() => {
+                        let result = Err(format!("{name} was cancelled while it read its inputs"));
+                        return ToolDone { inputs: Vec::new(), result, full_ids: FullIds::new() };
+                    }
                     Err(e) => return ToolDone { inputs: Vec::new(), result: Err(e), full_ids: FullIds::new() },
                 };
                 let mut result = pin.run(&inputs, &params, control, &|| continuation.check());
@@ -1693,6 +1698,10 @@ pub(crate) fn bent_edges(original: &Dataset, converted: &Dataset, work: Crs) -> 
                 // In metres: the chord's ground length over its length in `work`'s units.
                 let (Some(e0), Some(e1)) = (back.point(c0), back.point(c1)) else { continue };
                 let per_unit = rustgis_geom::wgs84_inverse(e0, e1).0 / chord;
+                // (Ends that meet in `work` give no chord to measure across.)
+                if !per_unit.is_finite() {
+                    continue;
+                }
                 // How far the edge as a run in longitude/latitude takes it lies across the chord
                 // (not along it: where a point is along an edge differs between the planes, a
                 // meridian's middle by some 280 m over a degree).
@@ -1793,7 +1802,9 @@ fn env_rows(
             let meets = |g: &rustgis_data::Geometry| {
                 g.extent().intersects(&own)
                     && to_lonlat.as_ref().is_some_and(|to| {
-                        to.is_identity() || Dataset::geometry_to_lonlat_by(to, g).is_ok_and(|g| g.extent().intersects(&e))
+                        // (A feature with a place that can't be read in longitude/latitude is
+                        // admitted by its box alone, as before.)
+                        to.is_identity() || Dataset::geometry_to_lonlat_by(to, g).map_or(true, |g| g.extent().intersects(&e))
                     })
             };
             let rows: Vec<usize> =
