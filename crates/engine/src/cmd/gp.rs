@@ -1635,19 +1635,24 @@ fn inputs_in(
             converted.insert(key, c);
         }
     }
-    // A standalone table given by its number ([`Inputs::table`]), as one given by name.
-    fn numbers(v: &Value, out: &mut Vec<u64>) {
-        match v {
-            Value::Number(n) => out.extend(n.as_u64()),
-            Value::Array(a) => a.iter().for_each(|x| numbers(x, out)),
-            Value::Object(o) => o.values().for_each(|x| numbers(x, out)),
-            _ => {}
-        }
-    }
+    // A standalone table given by its number ([`Inputs::table`]), as one given by name: under a
+    // layer parameter (or a name it also accepts), the only place a number is a table's; not one
+    // the tool reads only the attributes of, in a run in its first input's system.
     let mut ids = Vec::new();
-    match params {
-        Value::Object(o) => o.iter().filter(|(k, _)| k.as_str() != "output").for_each(|(_, v)| numbers(v, &mut ids)),
-        other => numbers(other, &mut ids),
+    if let Some(spec) = spec {
+        use rustgis_analysis::ParamKind as K;
+        let layers = spec.params.iter().filter(|p| {
+            matches!(p.kind, K::Layer | K::PolygonLayer | K::PointLayer | K::VectorLayer | K::VectorLayers)
+                && (work == Crs::LonLat || spec.reads_geometry_of(p.name))
+        });
+        for p in layers {
+            let aliases = rustgis_analysis::param_aliases(spec, p.name);
+            let keys: &[&str] = if aliases.is_empty() { std::slice::from_ref(&p.name) } else { aliases };
+            for v in keys.iter().filter_map(|k| params.get(*k)) {
+                let one = std::slice::from_ref(v);
+                ids.extend(v.as_array().map_or(one, Vec::as_slice).iter().filter_map(Value::as_u64));
+            }
+        }
     }
     for t in tables.iter().filter(|t| ids.contains(&u64::from(t.id))) {
         if t.dataset.geometry_type == rustgis_data::GeometryType::None {
@@ -1828,15 +1833,16 @@ fn env_rows(
             // run in longitude/latitude (which reads the whole layer converted too): no box in the
             // layer's own system tests that, a box there around the extent missing a feature whose
             // box in longitude/latitude meets it. One with a place that can't be read in
-            // longitude/latitude, or a layer that can't be, is admitted by its own box meeting the
-            // extent's there, as before.
+            // longitude/latitude is admitted by its own box meeting the extent's there, as before;
+            // a layer that can't be read in longitude/latitude at all admits none, as before (and
+            // the run says none is inside).
             let own = std::cell::OnceCell::new();
             let by_own = |g: &rustgis_data::Geometry| g.extent().intersects(own.get_or_init(|| ds.extent_from_lonlat(&e)));
             let to_lonlat = ds.lonlat_conversion().ok();
             let meets = |g: &rustgis_data::Geometry| match &to_lonlat {
                 Some(to) if to.is_identity() => g.extent().intersects(&e),
                 Some(to) => Dataset::geometry_to_lonlat_by(to, g).map_or_else(|_| by_own(g), |g| g.extent().intersects(&e)),
-                None => by_own(g),
+                None => false,
             };
             let rows: Vec<usize> =
                 ds.features.rows().enumerate().filter(|(_, r)| r.geometry().is_some_and(meets)).map(|(i, _)| i).collect();
@@ -1865,6 +1871,10 @@ impl Inputs for MapInputs<'_> {
         crate::render::raster_export::export(raster, min_zoom, max_zoom, opacity)
     }
     fn dataset(&self, layer: &str) -> Option<&Dataset> {
+        // (A standalone table converted for the run is had by its number, [`table_key`].)
+        if layer.starts_with('\0') {
+            return None;
+        }
         self.loaded
             .get(layer)
             .or_else(|| self.loaded.get(&layer.to_ascii_lowercase()))
