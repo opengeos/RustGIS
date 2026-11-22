@@ -734,7 +734,9 @@ mod tests {
             };
             add_layer_from(&mut app, &src, layer, "", None, false, None, None).unwrap();
             // The features are read off the frame, page by page, within what their address records.
-            assert_eq!(cache::ceiling_for(items) == Reach::Public, observed == Reach::Public, "observed {observed:?}");
+            let asked = layer["offer"]["url"].as_str().unwrap();
+            assert!(asked.starts_with(items), "{asked}");
+            assert_eq!(cache::ceiling_for(asked) == Reach::Public, observed == Reach::Public, "observed {observed:?}");
         }
     }
 
