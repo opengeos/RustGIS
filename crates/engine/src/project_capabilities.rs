@@ -39,6 +39,13 @@ impl Project {
         {
             required.push("field-generation");
         }
+        // A package's identity and the packages already brought back: an older reader would drop
+        // them on saving, and then apply a package's changes twice.
+        if self.field_origin.as_ref().is_some_and(|origin| !origin.package.is_empty() || !origin.ids.is_empty())
+            || self.offline_areas.iter().any(|area| !area.returned.is_empty() || !area.ids.is_empty())
+        {
+            required.push("field-package");
+        }
         // A table saved in a coordinate system of its own, as a layer's is (map_capabilities).
         if !required.contains(&super::NATIVE_COORDINATES) && self.tables.iter().any(|t| held_natively(&t.dataset)) {
             required.push(super::NATIVE_COORDINATES);
@@ -96,10 +103,9 @@ impl Project {
         {
             required.push("layout-frame-border");
         }
-        if !required.contains(&"layout-legend-text")
-            && self.layouts.iter().any(|l| l.elements.iter().any(|e| e.kind.has_custom_legend_text()))
+        if !required.contains(&"layout-text-size") && self.layouts.iter().any(|l| l.elements.iter().any(|e| e.kind.has_custom_text_size()))
         {
-            required.push("layout-legend-text");
+            required.push("layout-text-size");
         }
         if !required.contains(&"layout-scale-bar-details") && self.layouts.iter().any(|l| l.elements.iter().any(bar_details)) {
             required.push("layout-scale-bar-details");
@@ -152,7 +158,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-chart-stack", command_uses_chart_stack),
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
-    ("layout-legend-text", command_uses_legend_text),
+    ("layout-text-size", command_uses_text_size),
     ("layout-scale-bar-details", command_uses_scale_bar_details),
 ];
 
@@ -192,20 +198,29 @@ fn command_colors_graticule(id: &str, params: &Value) -> bool {
     }
 }
 
-/// A layout command that gives a legend a text size other than the default (#2581): an older
-/// reader warns that it ignores `textSize` and draws the legend at 9 points. `null` or 9 only give
-/// the default, which an older reader's legends always have. A saved `layout.update` isn't told
-/// which element it changes, so one this release refuses (on another kind) requires it too, as for
-/// the other layout keys.
-fn command_uses_legend_text(id: &str, params: &Value) -> bool {
-    let sized = || params.get("textSize").is_some_and(|v| !v.is_null() && v.as_f64() != Some(rustgis_map::layout::LEGEND_TEXT_PT));
+/// A layout command that sizes a legend's text, a scale bar's labels or a grid's labels other
+/// than their default (#2581): an older reader warns that it ignores `textSize` or `labelSize`
+/// and draws them at the default. `null` or the element's default (a legend's 9 points, a scale
+/// bar's or a grid's 8) need nothing. A saved `layout.update` isn't told which element it
+/// changes, so any `textSize` but `null` requires it there, as for the other layout keys; a
+/// grid's size is one of its `"grid"` options there.
+fn command_uses_text_size(id: &str, params: &Value) -> bool {
+    use rustgis_map::layout::{GRID_LABEL_PT, LEGEND_TEXT_PT, SCALE_BAR_TEXT_PT};
+    let sized = |p: &Value, key: &str, default: f64| p.get(key).is_some_and(|v| !v.is_null() && v.as_f64() != Some(default));
+    let kind = |k: &str| params.get("kind").and_then(Value::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case(k));
     match id {
         "layout.addElement" => {
-            params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("legend")) && sized()
+            (kind("legend") && sized(params, "textSize", LEGEND_TEXT_PT))
+                || (kind("scaleBar") && sized(params, "textSize", SCALE_BAR_TEXT_PT))
+                || (kind("grid") && sized(params, "labelSize", GRID_LABEL_PT))
         }
-        "layout.update" => sized(),
-        "layout.import" => imported_layout_uses(params, "\"text_size\"", |e| e.kind.has_custom_legend_text()),
-        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_legend_text)),
+        "layout.update" => {
+            params.get("textSize").is_some_and(|v| !v.is_null()) || params.get("grid").is_some_and(|g| sized(g, "labelSize", GRID_LABEL_PT))
+        }
+        "layout.import" => {
+            ["\"text_size\"", "\"label_size\""].iter().any(|key| imported_layout_uses(params, key, |e| e.kind.has_custom_text_size()))
+        }
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_size)),
         _ => false,
     }
 }
@@ -1445,6 +1460,8 @@ mod tests {
             created: 0.0,
             synced: 0.0,
             generation: String::new(),
+            returned: Vec::new(),
+            ids: Default::default(),
             data: with_area.map().clone(),
         });
         assert_eq!(serde_json::to_value(&with_area).unwrap()["requires"], json!(["field-origin"]));
@@ -1453,6 +1470,70 @@ mod tests {
         assert_eq!(saved["requires"], json!(["field-origin", "field-generation"]));
         let mut invalid = saved;
         invalid["offline_areas"][0]["generation"] = json!("nope");
+        assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
+    }
+
+    /// A package's identity, and an area's list of packages brought back, are kept on saving and
+    /// require their own capability; an invalid one is refused.
+    #[test]
+    fn field_package_ids_are_preserved_and_required_and_must_be_identities() {
+        let project = Project::from_json(include_str!("../../../schema/fixtures/field_package.rgis")).unwrap();
+        let saved = serde_json::to_value(&project).unwrap();
+        assert_eq!(saved["requires"], json!(["field-origin", "field-generation", "field-package"]));
+        let reopened = Project::from_json(&saved.to_string()).unwrap();
+        assert_eq!(reopened.field_origin.as_ref().map(|o| o.package.as_str()), Some("a1b2c3d4e5f60718293a4b5c6d7e8f90"));
+        assert_eq!(reopened.field_origin.as_ref().map(|o| o.ids.clone()), Some([(1, 120)].into()));
+        let mut invalid = saved.clone();
+        invalid["field_origin"]["package"] = json!("not-an-id");
+        assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
+        // Hostile highest ids, whose next id no GeoPackage or PostGIS table could hold, are refused
+        // too, from the largest such a feature can have (`i64::MAX`) up; the one below it is kept.
+        for bad in [json!(u64::MAX), json!(u64::MAX - 1), json!(i64::MAX.unsigned_abs() + 1), json!(i64::MAX.unsigned_abs())] {
+            let mut invalid = saved.clone();
+            invalid["field_origin"]["ids"] = json!({"1": bad});
+            assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"), "{bad}");
+        }
+        // Floors on their own, with no package identity, require the capability too, and are kept.
+        let mut floors = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
+        floors.field_origin.as_mut().unwrap().ids = [(1, 7)].into();
+        let kept = serde_json::to_value(&floors).unwrap();
+        assert!(kept["requires"].as_array().unwrap().contains(&json!("field-package")), "{}", kept["requires"]);
+        assert_eq!(Project::from_json(&kept.to_string()).unwrap().field_origin.unwrap().ids, floors.field_origin.as_ref().unwrap().ids);
+        let mut largest = saved.clone();
+        largest["field_origin"]["ids"] = json!({"1": i64::MAX.unsigned_abs() - 1});
+        assert!(Project::from_json(&largest.to_string()).is_ok());
+        let mut with_area = Project::from_json(include_str!("../../../schema/fixtures/field_origin.rgis")).unwrap();
+        with_area.offline_areas.push(super::super::OfflineArea {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "Field".into(),
+            map: "Map".into(),
+            extent: rustgis_geom::Extent::new(0.0, 0.0, 1.0, 1.0),
+            created: 0.0,
+            synced: 0.0,
+            generation: String::new(),
+            returned: vec!["a1b2c3d4e5f60718293a4b5c6d7e8f90".into()],
+            ids: Default::default(),
+            data: with_area.map().clone(),
+        });
+        let saved = serde_json::to_value(&with_area).unwrap();
+        assert_eq!(saved["requires"], json!(["field-origin", "field-package"]));
+        assert_eq!(Project::from_json(&saved.to_string()).unwrap().offline_areas[0].returned, with_area.offline_areas[0].returned);
+        // The ids an area's packages gave require it too, on their own.
+        let mut only_ids = with_area.clone();
+        only_ids.offline_areas[0].returned.clear();
+        only_ids.offline_areas[0].ids = [(1, 120)].into();
+        assert_eq!(serde_json::to_value(&only_ids).unwrap()["requires"], json!(["field-origin", "field-package"]));
+        // The same bound for an area's: refused from `i64::MAX` up, the one below it kept.
+        for bad in [json!(u64::MAX), json!(i64::MAX.unsigned_abs())] {
+            let mut hostile = saved.clone();
+            hostile["offline_areas"][0]["ids"] = json!({"1": bad});
+            assert!(Project::from_json(&hostile.to_string()).unwrap_err().contains("identity"), "{bad}");
+        }
+        let mut largest = saved.clone();
+        largest["offline_areas"][0]["ids"] = json!({"1": i64::MAX.unsigned_abs() - 1});
+        assert!(Project::from_json(&largest.to_string()).is_ok());
+        let mut invalid = saved;
+        invalid["offline_areas"][0]["returned"] = json!(["nope"]);
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
     }
 
@@ -1473,6 +1554,8 @@ mod tests {
             created: 0.0,
             synced: 0.0,
             generation: String::new(),
+            returned: Vec::new(),
+            ids: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].tiles.clear();
@@ -1499,6 +1582,8 @@ mod tests {
             created: 0.0,
             synced: 0.0,
             generation: String::new(),
+            returned: Vec::new(),
+            ids: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].view.terrain = None;
@@ -1671,35 +1756,70 @@ mod tests {
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-border"));
     }
 
-    /// A legend's text size other than the default (#2581) is required where it is saved, so an
-    /// older reader refuses the project instead of drawing the legend at 9 points and saving it so.
-    /// The default size is not written and needs nothing.
+    /// A legend's, scale bar's or grid's text size other than its default (#2581) is required
+    /// where it is saved, so an older reader refuses the project instead of drawing it at the
+    /// default and saving it so. Default sizes are not written and need nothing.
     #[test]
-    fn legend_text_capability_follows_saved_layouts_and_commands() {
-        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_legend_text.rgis")).unwrap();
-        let saved = serde_json::to_value(&fixture).unwrap();
-        assert_eq!(saved["requires"], json!(["layout-legend-text"]));
-        let elements = &saved["layouts"][0]["elements"];
+    fn text_size_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::{ElementKind, GRID_LABEL_PT, LEGEND_TEXT_PT, SCALE_BAR_TEXT_PT};
+        let legends = Project::from_json(include_str!("../../../schema/fixtures/layout_legend_text.rgis")).unwrap();
+        let bars = Project::from_json(include_str!("../../../schema/fixtures/layout_scale_grid_text.rgis")).unwrap();
+        for fixture in [&legends, &bars] {
+            let saved = serde_json::to_value(fixture).unwrap();
+            assert_eq!(saved["requires"], json!(["layout-text-size"]));
+            assert_eq!(Project::from_json(&saved.to_string()).unwrap().layouts, fixture.layouts);
+        }
+        let elements = &serde_json::to_value(&legends).unwrap()["layouts"][0]["elements"];
         assert!(elements[1]["kind"]["Legend"].get("text_size").is_none());
         assert_eq!(elements[2]["kind"]["Legend"]["text_size"], json!(18.0));
-        let reopened = Project::from_json(&saved.to_string()).unwrap();
-        assert_eq!(reopened.layouts, fixture.layouts);
-        let mut clean = fixture;
+        let elements = &serde_json::to_value(&bars).unwrap()["layouts"][0]["elements"];
+        assert_eq!(elements[0]["kind"]["MapFrame"]["grid"]["label_size"], json!(14.0));
+        assert!(elements[1]["kind"]["ScaleBar"].get("text_size").is_none());
+        assert_eq!(elements[2]["kind"]["ScaleBar"]["text_size"], json!(16.0));
+        // Each size alone needs it; all at their defaults, nothing.
+        let sized = |grid: bool, bar: bool| {
+            let mut p = bars.clone();
+            for e in &mut p.layouts[0].elements {
+                match &mut e.kind {
+                    ElementKind::MapFrame { grid: Some(g), .. } if !grid => g.label_size = GRID_LABEL_PT,
+                    ElementKind::ScaleBar { text_size, .. } if !bar => *text_size = SCALE_BAR_TEXT_PT,
+                    _ => {}
+                }
+            }
+            serde_json::to_value(&p).unwrap()
+        };
+        assert_eq!(sized(true, false)["requires"], json!(["layout-text-size"]), "a grid's size alone");
+        assert_eq!(sized(false, true)["requires"], json!(["layout-text-size"]), "a scale bar's size alone");
+        let mut clean = legends;
         for e in &mut clean.layouts[0].elements {
-            if let rustgis_map::layout::ElementKind::Legend { text_size, .. } = &mut e.kind {
-                *text_size = rustgis_map::layout::LEGEND_TEXT_PT;
+            if let ElementKind::Legend { text_size, .. } = &mut e.kind {
+                *text_size = LEGEND_TEXT_PT;
             }
         }
-        let base = serde_json::to_value(&clean).unwrap();
+        assert!(serde_json::to_value(&clean).unwrap().get("requires").is_none(), "a legend at its default");
+        let base = sized(false, false);
         assert!(base.get("requires").is_none(), "default sizes need nothing");
-        // A saved command that sizes a legend's text needs it; null or 9 only give the default.
+        // A saved command that sizes one needs it; null or the element's default only give the
+        // default. An update isn't told which element it sizes: any textSize but null needs it.
         for (id, params, required) in [
             ("layout.update", json!({"element": 2, "textSize": 18}), true),
+            ("layout.update", json!({"element": 2, "textSize": 9}), true),
+            ("layout.update", json!({"element": 3, "textSize": 8}), true),
             ("layout.update", json!({"element": 2, "textSize": null}), false),
-            ("layout.update", json!({"element": 2, "textSize": 9}), false),
             ("layout.update", json!({"element": 2, "title": "Key"}), false),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 12}}), true),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 8}}), false),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": null}}), false),
+            ("layout.update", json!({"element": 1, "grid": false}), false),
             ("layout.addElement", json!({"kind": "legend", "textSize": 6}), true),
+            ("layout.addElement", json!({"kind": "legend", "textSize": 9}), false),
+            ("layout.addElement", json!({"kind": "legend", "textSize": 8}), true),
             ("layout.addElement", json!({"kind": "legend"}), false),
+            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 12}), true),
+            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 8}), false),
+            ("layout.addElement", json!({"kind": "scaleBar"}), false),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": 12}), true),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": null}), false),
             ("layout.addElement", json!({"kind": "text", "text": "textSize", "size": 18}), false),
         ] {
             let script = format!("{id} {params}");
@@ -1710,23 +1830,30 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                if required {
-                    assert_eq!(saved["requires"], json!(["layout-legend-text"]), "{id} {params}");
-                } else {
-                    assert!(saved.get("requires").is_none(), "{id} {params}");
-                }
+                let expected = if required { json!(["layout-text-size"]) } else { Value::Null };
+                assert_eq!(saved["requires"], expected, "{id} {params}");
             }
         }
-        // An imported layout's text with a sized legend needs it; with the default, none.
-        for (layout, required) in [(&saved["layouts"][0], true), (&base["layouts"][0], false)] {
+        // An imported layout's text with a sized element needs it; with the defaults, none.
+        let legend_layout = serde_json::to_value(
+            Project::from_json(include_str!("../../../schema/fixtures/layout_legend_text.rgis")).unwrap(),
+        )
+        .unwrap()["layouts"][0]
+            .clone();
+        for (layout, required) in [
+            (legend_layout, true),
+            (sized(true, false)["layouts"][0].clone(), true),
+            (sized(false, true)["layouts"][0].clone(), true),
+            (base["layouts"][0].clone(), false),
+        ] {
             let params = json!({"text": layout.to_string()});
             let mut document = base.clone();
             document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Import", "command": "layout.import", "params": params}]}]);
             let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
             assert_eq!(saved.get("requires").is_some(), required, "{layout}");
         }
-        let mut unknown = saved;
-        unknown["requires"] = json!(["layout-legend-text", "future-legend"]);
+        let mut unknown = serde_json::to_value(&bars).unwrap();
+        unknown["requires"] = json!(["layout-text-size", "future-legend"]);
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-legend"));
     }
 

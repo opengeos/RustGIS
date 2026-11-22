@@ -377,6 +377,78 @@ fn script_step_follows_what_its_lines_change_not_what_they_reach() {
     assert_eq!(s.path.as_deref(), Some(first.as_path()));
 }
 
+/// A plugin's command can't run as a step of another command (#2645): it would be a transaction
+/// of its own inside the caller's.
+#[test]
+fn invoke_refuses_a_plugin_command_as_a_step() {
+    let mut s = world();
+    plugin("step-plugin", &["edit"]);
+    let err = s.run("script.run", &json!({"script": "plugin:step-plugin/h {}"})).unwrap_err();
+    assert!(err.contains("unknown command"), "{err}");
+    let op = s.authorize("plugin:step-plugin/h", &json!({})).unwrap();
+    let err = s.invoke(op, crate::policy::Txn::Shared).unwrap_err();
+    assert!(err.contains("runs only by itself"), "{err}");
+}
+
+/// A step that changed the project and then failed is undone whole by its savepoint, so it isn't
+/// an edit; without one, nothing undoes it part way, so it counts (#2645).
+#[test]
+fn a_failed_step_counts_unless_its_savepoint_undid_it() {
+    let mut s = world();
+    let rename = *s.registry.get("map.rename").unwrap();
+    let name = s.map().name.clone();
+    let half_done = |s: &mut Session| -> crate::CmdResult {
+        s.map_mut().name = "Half done".into();
+        Err("failed part way".into())
+    };
+    for savepoint in [true, false] {
+        s.shared_steps = crate::StepTally::default();
+        let spec = crate::CommandSpec { atomic: savepoint, ..rename };
+        assert!(s.shared_step(&spec, half_done).is_err());
+        assert_eq!((s.map().name == name, s.shared_steps.edited), (savepoint, !savepoint), "savepoint: {savepoint}");
+        s.map_mut().name = name.clone();
+    }
+}
+
+/// A step that doesn't mutate but changes the layers is still an edit (#2645): they are measured
+/// in every build, not inferred from the command's declaration.
+#[test]
+fn shared_step_measures_the_layers_a_step_changes() {
+    let mut s = world();
+    let spec = *s.registry.get("map.zoomFull").unwrap();
+    let (count, ds) = (s.map().layers.len(), s.map().layers[0].dataset.clone());
+    let quiet_layer = |s: &mut Session| -> crate::CmdResult {
+        crate::cmd::layer::add_dataset(s, ds);
+        Ok(Value::Null)
+    };
+    s.shared_step(&spec, quiet_layer).unwrap();
+    assert_eq!((s.shared_steps.edited, s.map().layers.len()), (true, count + 1));
+}
+
+/// A command declared as not mutating that adds, removes or reorders layers fails the tests
+/// (#2645), by itself or as a script's line; an edit it makes on the way, marking the project
+/// unsaved or failing afterwards doesn't excuse it. A layer's name, look or features aren't
+/// measured.
+#[test]
+#[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
+fn a_command_that_changes_layers_must_say_it_mutates() {
+    let mut s = world();
+    s.registry.commands.push(
+        crate::CommandSpec::new("test.quietLayer", "Quiet layer", "Test", |s, _| {
+            let ds = s.map().layers[0].dataset.clone();
+            crate::cmd::layer::add_dataset(s, ds);
+            s.mark_unsaved();
+            s.guarded("Rename", true, |s| {
+                s.map_mut().name = "Renamed on the way".into();
+                Ok(Value::Null)
+            })?;
+            Err("failed after adding it".into())
+        })
+        .view(),
+    );
+    let _ = s.run("test.quietLayer", &Value::Null);
+}
+
 /// A task's steps are counted as a script's lines: an undo step only when one edited (#2621).
 #[test]
 fn task_takes_an_undo_step_only_when_a_step_edits() {
@@ -1750,20 +1822,33 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
     let dir = Dir(std::env::temp_dir().join(format!("rustgis-streamed-not-utf8-{}-{nanos}", std::process::id())));
     std::fs::create_dir_all(&dir.0).unwrap();
     // What the notice must carry: the count, the field and the replacement, not its wording.
-    let says = |t: &str| ["1 text value", "'NAME'", "U+FFFD", ".cpg"].iter().all(|k| t.contains(k));
-    // 臺北101 in Big5, and as many bytes of ASCII.
-    for (name, second, said) in [("big5", &b"\xbb\x4f\xa5\x5f101"[..], true), ("clean", &b"Tainan1"[..], false)] {
+    // `encoding` is what the text was read in, and the end of the note says why: no `.cpg` named
+    // another encoding for UTF-8, or that the file declares the code page.
+    let says = |t: &str, encoding: &str| {
+        let why = if encoding == "UTF-8" { "no .cpg file names another encoding".to_string() } else { format!("declares {encoding}") };
+        ["1 text value", "'NAME'", "U+FFFD", ".cpg", &format!("isn't valid {encoding}"), &why].iter().all(|k| t.contains(k))
+    };
+    // 臺北101 in Big5, and as many bytes of ASCII. The last value is named Big5 by its language
+    // driver (0x4F) and ends in a lead byte; the one before it is valid Big5 and says nothing.
+    let cases: [(&str, &[u8], u8, Option<&str>); 4] = [
+        ("big5", b"\xbb\x4f\xa5\x5f101", 0, Some("UTF-8")),
+        ("clean", b"Tainan1", 0, None),
+        ("declared", b"Taipei\xa4", 0x4F, Some("Big5")),
+        ("validbig5", b"\xbb\x4f\xa5\x5f101", 0x4F, None),
+    ];
+    for (name, second, ldid, encoding) in cases {
+        let said = encoding.is_some();
         let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("NAME", FieldType::Text)]);
         for (i, text) in ["Taipei", "AAAAAAA"].into_iter().enumerate() {
             ds.push(Some(Geometry::Point(rustgis_geom::Coord::new(i as f64, 1.0))), vec![V::Text(text.into())]);
         }
         let shp = dir.0.join(format!("{name}.shp"));
         rustgis_data::io::write_path(&ds, &shp).unwrap();
-        // No encoding named: no `.cpg`, and no language driver in the `.dbf`.
+        // No `.cpg`; the language driver in the `.dbf` names the encoding, or none (0).
         std::fs::remove_file(shp.with_extension("cpg")).unwrap();
         let dbf = shp.with_extension("dbf");
         let mut table = std::fs::read(&dbf).unwrap();
-        table[29] = 0;
+        table[29] = ldid;
         let at = table.windows(7).position(|w| w == b"AAAAAAA").unwrap();
         table[at..at + 7].copy_from_slice(second);
         std::fs::write(&dbf, table).unwrap();
@@ -1772,7 +1857,7 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
         let id = added["layer"].as_u64().unwrap() as u32;
         assert!(s.map().layer(id).unwrap().is_streamed(), "{name} is read in place");
         let not_utf8 = |s: &Session, mark| -> Vec<String> {
-            s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("valid UTF-8")).collect()
+            s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("valid UTF-8") || t.contains("valid Big5")).collect()
         };
         let mark = s.notice_mark();
         let view = rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0);
@@ -1787,8 +1872,9 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
         assert!(!s.map().layer(id).unwrap().dataset.features.is_empty(), "{name}: the second read lands");
         let notes = not_utf8(&s, mark);
         assert_eq!(notes.len(), usize::from(said), "{name}: view reads: {notes:?}");
-        if said {
-            assert!(notes[0].starts_with("big5: ") && notes[0].contains("Load All Features") && says(&notes[0]), "{}", notes[0]);
+        if let Some(encoding) = encoding {
+            let note = &notes[0];
+            assert!(note.starts_with(&format!("{name}: ")) && note.contains("Load All Features") && says(note, encoding), "{note}");
         }
         // An export a chunk at a time, and a Data Interop conversion of the source, say it.
         s.map_mut().layer_mut(id).unwrap().dataset.features.clear();
@@ -1800,8 +1886,8 @@ fn a_streamed_shapefile_says_text_that_isnt_utf8_once_and_in_its_exports() {
             s.run(command, &params).unwrap();
             let notes = not_utf8(&s, mark);
             assert_eq!(notes.len(), usize::from(said), "{name} {command}: {:?}", s.notices_since(mark));
-            if said {
-                assert!(notes[0].contains("big5: ") && says(&notes[0]), "{}", notes[0]);
+            if let Some(encoding) = encoding {
+                assert!(notes[0].contains(&format!("{name}: ")) && says(&notes[0], encoding), "{command}: {}", notes[0]);
             }
         }
     }
@@ -7338,15 +7424,189 @@ fn hostile_params_never_panic_7() {
     hostile_params_never_panic(7);
 }
 
-/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
-/// Runs the commands of one shard: those whose place in the registry is `shard` modulo
-/// [`HOSTILE_SHARDS`].
-fn hostile_params_never_panic(shard: usize) {
+#[test]
+fn field_floors_hold_for_every_command_0() {
+    field_floors_hold_for_every_command(0);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_1() {
+    field_floors_hold_for_every_command(1);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_2() {
+    field_floors_hold_for_every_command(2);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_3() {
+    field_floors_hold_for_every_command(3);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_4() {
+    field_floors_hold_for_every_command(4);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_5() {
+    field_floors_hold_for_every_command(5);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_6() {
+    field_floors_hold_for_every_command(6);
+}
+
+#[test]
+fn field_floors_hold_for_every_command_7() {
+    field_floors_hold_for_every_command(7);
+}
+
+/// The ids a field package out holds are never given out again, by any command, nor after its
+/// Undo and Redo: every command of one shard runs with [`hostile_junk`] on a home project whose
+/// offline area has a package out, its offline map open, and floors above each layer's highest
+/// id. After the command, its Undo and its Redo: no area's recorded floor drops, no layer of the
+/// area's source map or offline map keeps a lower floor, and no feature the command made has an
+/// id at or below the floor. This is what catches a path that replaces a layer's rows (a reload,
+/// a restore) and then adds features, whichever command it is.
+fn field_floors_hold_for_every_command(shard: usize) {
+    use std::collections::{BTreeMap, HashSet};
     #[cfg(not(target_arch = "wasm32"))]
-    if isolate_process_test(&format!("tests::hostile_params_never_panic_{shard}")) {
+    if isolate_process_test(&format!("tests::field_floors_hold_for_every_command_{shard}")) {
         return;
     }
-    let junk = [
+    let mut home = world();
+    crate::cmd::field::package(&mut home, &json!({"name": "Floor", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    home.run("offline.open", &json!({"name": "Floor"})).unwrap();
+    let source = home.project.offline_areas[0].map.clone();
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    // Floors above every layer's highest id, as when the office deleted features a package holds.
+    let raised: BTreeMap<u32, u64> = home.project.offline_areas[0].ids.iter().map(|(l, id)| (*l, id + 1000)).collect();
+    assert!(!raised.is_empty());
+    home.project.offline_areas[0].ids = raised;
+    let fixture = Session::new(home.project.clone());
+    // The area's maps: its source, and its offline map.
+    fn area_maps<'a>(s: &'a Session, area: &'a crate::project::OfflineArea) -> impl Iterator<Item = &'a rustgis_map::Map> + 'a {
+        s.project
+            .maps
+            .iter()
+            .filter(move |m| m.name.eq_ignore_ascii_case(&area.map) || m.offline_area_id.as_deref() == Some(area.id.as_str()))
+    }
+    // The floors held, by area id, and every id the area's maps hold, by layer.
+    type Held = (BTreeMap<String, BTreeMap<u32, u64>>, BTreeMap<u32, HashSet<u64>>);
+    let held = |s: &Session| -> Held {
+        let floors = s.project.offline_areas.iter().map(|a| (a.id.clone(), a.ids.clone())).collect();
+        let mut ids: BTreeMap<u32, HashSet<u64>> = BTreeMap::new();
+        for a in &s.project.offline_areas {
+            for m in area_maps(s, a) {
+                for l in m.layers.iter().filter(|l| !l.is_raster()) {
+                    ids.entry(l.id).or_default().extend(l.dataset.features.rows().map(|r| r.id()));
+                }
+            }
+        }
+        (floors, ids)
+    };
+    let check = |s: &Session, before: &Held, what: &str| {
+        for a in &s.project.offline_areas {
+            let Some(was) = before.0.get(&a.id) else { continue };
+            for (layer, floor) in was {
+                let now = a.ids.get(layer).copied().unwrap_or(0);
+                assert!(now >= *floor, "{what}: area '{}' layer {layer}: its floor went from {floor} to {now}", a.name);
+                for m in area_maps(s, a) {
+                    let Some(l) = m.layers.iter().find(|l| l.id == *layer && !l.is_raster()) else { continue };
+                    assert!(l.dataset.features.id_floor() >= *floor, "{what}: map '{}' layer {layer} keeps a floor below {floor}", m.name);
+                    let had = before.1.get(layer);
+                    for id in l.dataset.features.rows().map(|r| r.id()).filter(|id| had.is_none_or(|h| !h.contains(id))) {
+                        assert!(id > *floor, "{what}: map '{}' layer {layer} gave a new feature id {id}, at or below {floor}", m.name);
+                    }
+                }
+            }
+        }
+    };
+    let ids: Vec<&str> =
+        fixture.registry.commands.iter().enumerate().filter(|(i, _)| i % HOSTILE_SHARDS == shard).map(|(_, c)| c.id).collect();
+    // With the junk, parameters that let commands which make features make them: a place in a
+    // point layer, features to paste, rows to copy from, so a path that adds is reached.
+    let cities = fixture.map().layer_by_name("Cities").map(|l| l.id).unwrap_or_default();
+    let point =
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[10,5]}}]}"#;
+    let mut params = hostile_junk();
+    params.extend([
+        json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10, 5]}, "attributes": {}}),
+        json!({"layer": cities, "text": point}),
+        json!({"layer": cities, "rows": [0, 1], "row": 0, "dx": 0.5, "dy": 0.5}),
+    ]);
+    for id in ids {
+        if hostile_skips(id) || id == "map.route" {
+            continue;
+        }
+        for p in &params {
+            let mut s = Session::new(fixture.project.clone());
+            let before = held(&s);
+            let _ = s.run(id, p);
+            check(&s, &before, &format!("{id} {p}"));
+            let _ = s.run("edit.undo", &Value::Null);
+            check(&s, &before, &format!("{id} {p}, then Undo"));
+            let _ = s.run("edit.redo", &Value::Null);
+            check(&s, &before, &format!("{id} {p}, then Redo"));
+            // The same command landed from a read made ahead (Reload Data, Load All…), as the app
+            // runs those: a landed read replaces rows too.
+            let mut s = Session::new(fixture.project.clone());
+            let before = held(&s);
+            if let Ok(read) = crate::cmd::reads::read_ahead(&mut s, id, p)
+                && read.reads()
+                && let Ok(done) = read.run(&rustgis_analysis::control::Control::new())
+            {
+                let _ = crate::cmd::reads::read_land(&mut s, done);
+                check(&s, &before, &format!("{id} {p}, landed from a read"));
+            }
+        }
+    }
+}
+
+/// A read made ahead lands through the same end as any command: a layer whose rows it replaced
+/// keeps the floor of the ids a package holds, so the next feature added is above it.
+#[test]
+fn a_landed_read_keeps_the_floor_of_the_ids_a_package_holds() {
+    let mut home = world();
+    crate::cmd::field::package(&mut home, &json!({"name": "Floor", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let cities = home.map().layer_by_name("Cities").unwrap().id;
+    let floor = home.project.offline_areas[0].ids[&cities] + 1000;
+    home.project.offline_areas[0].ids.insert(cities, floor);
+    let mut s = Session::new(home.project.clone());
+    // As a reload replaces the layer's rows: the floor they carried is gone.
+    let rows = s.map().layer(cities).unwrap().dataset.features.to_rows();
+    s.map_mut().layer_mut(cities).unwrap().dataset.features = rows.into();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.id_floor(), 0);
+    let read = crate::cmd::reads::read_ahead(&mut s, "table.statistics", &json!({"layer": cities, "field": "pop_max"})).unwrap();
+    let done = read.run(&rustgis_analysis::control::Control::new()).unwrap();
+    crate::cmd::reads::read_land(&mut s, done).unwrap();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.id_floor(), floor);
+    s.run("edit.addFeature", &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10, 5]}, "attributes": {}})).unwrap();
+    assert_eq!(s.map().layer(cities).unwrap().dataset.features.last().unwrap().id, floor + 1);
+}
+
+/// [`field_floors_hold_for_every_command`] reaches a command that makes a feature: Add Feature with
+/// its parameters gives one above the floor, so the invariant isn't vacuous.
+#[test]
+fn field_floors_are_checked_on_a_command_that_adds() {
+    let mut home = world();
+    crate::cmd::field::package(&mut home, &json!({"name": "Floor", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let cities = home.map().layer_by_name("Cities").unwrap().id;
+    let floor = home.project.offline_areas[0].ids[&cities] + 1000;
+    home.project.offline_areas[0].ids.insert(cities, floor);
+    let mut s = Session::new(home.project.clone());
+    s.run("edit.addFeature", &json!({"layer": cities, "geometry": {"type": "Point", "coordinates": [10, 5]}, "attributes": {}})).unwrap();
+    let added = s.map().layer(cities).unwrap().dataset.features.last().unwrap().id;
+    assert_eq!(added, floor + 1);
+}
+
+/// The junk parameters every command is run with by [`hostile_params_never_panic`] and
+/// [`field_floors_hold_for_every_command`].
+fn hostile_junk() -> Vec<Value> {
+    vec![
         Value::Null,
         json!({}),
         // Shared vertex moves: valid row/destination, hostile node addresses and coordinate types.
@@ -7431,7 +7691,57 @@ fn hostile_params_never_panic(shard: usize) {
         // A sign-in past its username: a password of the wrong type is refused before any request.
         json!({"username": "junk@example.invalid", "password": 7, "totp": []}),
         json!({"username": "junk@example.invalid", "password": "", "totp": "x"}),
-    ];
+    ]
+}
+
+/// The commands the hostile runs leave out: they write files, reach the network or change state the
+/// process's other tests share.
+fn hostile_skips(id: &str) -> bool {
+    matches!(
+        id,
+        "project.save"
+                    | "project.saveAs"
+                    | "project.exportLog"
+                    | "share.exportMap"
+                    | "time.export"
+                    | "map.exportOrbit"
+                    | "map.exportBlock"
+                    | "share.exportLayer"
+                    | "share.exportTable"
+                    | "share.exportRaster"
+                    // Download from the network.
+                    | "gp.installGeolibre"
+                    // Deletes the installed GeoLibre runner.
+                    | "gp.uninstallGeolibre"
+                    // Downloads GeoLibre's tool translations, and deletes the kept ones.
+                    | "gp.installGeolibreLanguage"
+                    | "gp.uninstallGeolibreLanguage"
+                    | "plugin.registry"
+                    | "plugin.installFromRegistry"
+                    // Ask Earth Search when no API is given.
+                    | "stac.collections"
+                    | "stac.search"
+                    // Asks geoBoundaries for its list.
+                    | "boundaries.countries"
+                    // Asks Source Cooperative for its featured products.
+                    | "sourcecoop.products"
+                    // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
+                    | "arcgis.signIn"
+                    // Signs every session out, which the process's other tests use (its junk is
+                    // covered by an_arcgis_token_in_a_service_address_reaches_its_layers).
+                    | "arcgis.signOut"
+    )
+}
+
+/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
+/// Runs the commands of one shard: those whose place in the registry is `shard` modulo
+/// [`HOSTILE_SHARDS`].
+fn hostile_params_never_panic(shard: usize) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if isolate_process_test(&format!("tests::hostile_params_never_panic_{shard}")) {
+        return;
+    }
+    let junk = hostile_junk();
     let ids: Vec<&str> = Session::new(Project::default())
         .registry
         .commands
@@ -7476,40 +7786,7 @@ fn hostile_params_never_panic(shard: usize) {
         (s.states, s.unsaved_marks, s.opened, s.active_layer, s.tool, s.project.maps.len(), cam, layers)
     };
     for id in ids {
-        if matches!(
-            id,
-            "project.save"
-                | "project.saveAs"
-                | "project.exportLog"
-                | "share.exportMap"
-                | "time.export"
-                | "map.exportOrbit"
-                | "map.exportBlock"
-                | "share.exportLayer"
-                | "share.exportTable"
-                | "share.exportRaster"
-                // Download from the network.
-                | "gp.installGeolibre"
-                // Deletes the installed GeoLibre runner.
-                | "gp.uninstallGeolibre"
-                // Downloads GeoLibre's tool translations, and deletes the kept ones.
-                | "gp.installGeolibreLanguage"
-                | "gp.uninstallGeolibreLanguage"
-                | "plugin.registry"
-                | "plugin.installFromRegistry"
-                // Ask Earth Search when no API is given.
-                | "stac.collections"
-                | "stac.search"
-                // Asks geoBoundaries for its list.
-                | "boundaries.countries"
-                // Asks Source Cooperative for its featured products.
-                | "sourcecoop.products"
-                // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
-                | "arcgis.signIn"
-                // Signs every session out, which the process's other tests use (its junk is
-                // covered by an_arcgis_token_in_a_service_address_reaches_its_layers).
-                | "arcgis.signOut"
-        ) {
+        if hostile_skips(id) {
             continue;
         }
         let mut s_world = world();
@@ -9000,6 +9277,8 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
         created: 0.0,
         synced: 0.0,
         generation: String::new(),
+        returned: Vec::new(),
+        ids: Default::default(),
         data: project.maps[0].clone(),
     });
     let clean = serde_json::to_string(&project).unwrap();
@@ -11985,6 +12264,8 @@ fn publication_layouts_fit_their_pages() {
     for change in [
         json!({"element": frame, "scale": 20_000_000.0}),
         json!({"element": bar, "units": "miles"}),
+        json!({"element": bar, "textSize": 40}),
+        json!({"element": bar, "textSize": null}),
         json!({"element": frame, "scale": 7_000_000.0}),
     ] {
         let mut change = change;
@@ -11995,6 +12276,8 @@ fn publication_layouts_fit_their_pages() {
         widths.push(width(&s));
     }
     assert!(widths.iter().any(|w| (w - first).abs() > 0.5), "the box changed: {first} mm, then {widths:?}");
+    // Its bar's labels at 40 points need a wider box for the last one, and 8 gives the width back.
+    assert!(widths[2] > widths[1] + 0.5 && (widths[3] - widths[1]).abs() < 1e-9, "{widths:?}");
     // A long title wraps within the frame, and pushes the map down; the result names every
     // element for layout.update.
     let r = s.run("layout.publication", &json!({"extent": piaui, "title": long})).unwrap();
@@ -14113,6 +14396,138 @@ fn a_legend_takes_columns_from_one_to_three() {
     }
 }
 
+/// A scale bar's `textSize` and a grid's `labelSize` (#2581): 8 points unless given, the edges 4
+/// and 100 taken, `null` giving 8 back, refused out of range or as anything but a number with the
+/// element keeping its own, refused on other elements (where `null` is let through), undone as any
+/// change; other options leave them as they are.
+#[test]
+fn scale_bars_and_grids_take_a_label_size() {
+    use rustgis_map::layout::{ElementKind, GRID_LABEL_PT, SCALE_BAR_TEXT_PT};
+    let mut s = Session::new(Project::default());
+    s.run("layout.new", &json!({"template": "map"})).unwrap();
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let bar_size = |s: &Session, id: u64| match s.project.layouts[0].element(id as u32).map(|e| &e.kind) {
+        Some(ElementKind::ScaleBar { text_size, .. }) => *text_size,
+        other => panic!("{other:?}"),
+    };
+    let grid_size = |s: &Session| match s.project.layouts[0].element(frame).map(|e| &e.kind) {
+        Some(ElementKind::MapFrame { grid: Some(g), .. }) => g.label_size,
+        other => panic!("{other:?}"),
+    };
+    let bar = s.run("layout.addElement", &json!({"kind": "scaleBar"})).unwrap()["element"].as_u64().unwrap();
+    assert_eq!(bar_size(&s, bar), SCALE_BAR_TEXT_PT);
+    let big = s.run("layout.addElement", &json!({"kind": "scaleBar", "textSize": 16})).unwrap()["element"].as_u64().unwrap();
+    assert_eq!(bar_size(&s, big), 16.0);
+    s.run("layout.update", &json!({"element": bar, "textSize": 12.5})).unwrap();
+    assert_eq!(bar_size(&s, bar), 12.5);
+    s.run("layout.update", &json!({"element": bar, "divisions": 2, "units": "miles"})).unwrap();
+    assert_eq!(bar_size(&s, bar), 12.5, "other options leave it");
+    for edge in [4.0, 100.0] {
+        s.run("layout.update", &json!({"element": bar, "textSize": edge})).unwrap();
+        assert_eq!(bar_size(&s, bar), edge);
+    }
+    s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
+    assert_eq!(bar_size(&s, bar), SCALE_BAR_TEXT_PT, "null gives the default back");
+    // Its labels' room (#2581): a box too short for them at 40 points is said, on the size and on
+    // a resize; one that holds them, or the default, says nothing.
+    let said = |s: &Session, mark: u64| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join(" | ");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": 14})).unwrap();
+    assert_eq!(said(&s, mark), "", "14 points fit its 12 mm box");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": 40})).unwrap();
+    assert!(said(&s, mark).contains("its box is too small for its labels"), "{}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "h": 60, "w": 150, "y": 20})).unwrap();
+    assert_eq!(said(&s, mark), "", "a larger box holds them");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "h": 12})).unwrap();
+    assert!(said(&s, mark).contains("its box is too small"), "{}", said(&s, mark));
+    // Its frame drawn at another scale or zoomed changes its labels: a bar that doesn't fit is told
+    // then too, and one that fits isn't.
+    for change in
+        [("layout.update", json!({"element": frame, "scale": 25_000_000.0})), ("layout.frameZoom", json!({"element": frame, "to": "view"}))]
+    {
+        let mark = s.notice_mark();
+        s.run(change.0, &change.1).unwrap();
+        assert!(said(&s, mark).contains("its box is too small"), "{change:?}: {}", said(&s, mark));
+    }
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
+    assert_eq!(said(&s, mark), "", "the default fits");
+    for change in
+        [("layout.update", json!({"element": frame, "scale": 30_000_000.0})), ("layout.frameZoom", json!({"element": frame, "to": "view"}))]
+    {
+        let mark = s.notice_mark();
+        s.run(change.0, &change.1).unwrap();
+        assert_eq!(said(&s, mark), "", "{change:?}");
+    }
+    // Two bars that don't fit are told in one notice, with their count and names.
+    s.run("layout.update", &json!({"element": big, "textSize": 40, "h": 12})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "textSize": 40})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": frame, "scale": 25_000_000.0})).unwrap();
+    assert!(said(&s, mark).starts_with("2 scale bars (") && !said(&s, mark).contains(" | "), "{}", said(&s, mark));
+    // A bar without ink draws no labels and isn't measured; a colour that shows it is told.
+    s.run("layout.update", &json!({"element": big, "textSize": 16})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "color": "#22222200"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": frame, "scale": 30_000_000.0})).unwrap();
+    assert_eq!(said(&s, mark), "", "a bar without ink");
+    s.run("layout.update", &json!({"element": bar, "color": "#222222"})).unwrap();
+    assert!(said(&s, mark).contains("its box is too small"), "{}", said(&s, mark));
+    s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
+
+    s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "step": 10})).unwrap();
+    assert_eq!(grid_size(&s), GRID_LABEL_PT);
+    s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "labelSize": 14})).unwrap();
+    assert_eq!(grid_size(&s), 14.0);
+    s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "style": "ticks"})).unwrap();
+    assert_eq!(grid_size(&s), 14.0, "options not given keep the grid's");
+    s.run("layout.update", &json!({"element": frame, "grid": {"labelSize": 4}})).unwrap();
+    assert_eq!(grid_size(&s), 4.0);
+    s.run("layout.update", &json!({"element": frame, "grid": {"labelSize": 100}})).unwrap();
+    assert_eq!(grid_size(&s), 100.0);
+    s.run("layout.update", &json!({"element": frame, "grid": {"labelSize": null}})).unwrap();
+    assert_eq!(grid_size(&s), GRID_LABEL_PT, "null gives the default back");
+
+    for bad in [json!(3.9), json!(100.5), json!(1e6), json!("12"), json!(true), json!([8])] {
+        let err = s.run("layout.update", &json!({"element": big, "textSize": bad})).unwrap_err();
+        assert!(err.contains("textSize is a number of points, 4 to 100"), "{bad}: {err}");
+        assert_eq!(bar_size(&s, big), 16.0, "{bad}");
+        let err = s.run("layout.addElement", &json!({"kind": "scaleBar", "textSize": bad})).unwrap_err();
+        assert!(err.contains("textSize is a number of points, 4 to 100"), "{bad}: {err}");
+        let err = s.run("layout.update", &json!({"element": frame, "grid": {"labelSize": bad}})).unwrap_err();
+        assert!(err.contains("labelSize is a number of points, 4 to 100"), "{bad}: {err}");
+        let err = s.run("layout.addElement", &json!({"kind": "grid", "frame": frame, "labelSize": bad})).unwrap_err();
+        assert!(err.contains("labelSize is a number of points, 4 to 100"), "{bad}: {err}");
+        assert_eq!(grid_size(&s), GRID_LABEL_PT, "{bad}");
+    }
+
+    s.run("layout.update", &json!({"element": bar, "textSize": 20})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(bar_size(&s, bar), SCALE_BAR_TEXT_PT, "undone");
+    s.run("layout.update", &json!({"element": frame, "grid": {"labelSize": 20}})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(grid_size(&s), GRID_LABEL_PT, "undone");
+
+    // labelSize belongs to a grid's options: refused elsewhere unless null.
+    let arrow = s.run("layout.addElement", &json!({"kind": "northArrow"})).unwrap();
+    for (cmd, p) in [
+        ("layout.addElement", json!({"kind": "scaleBar", "labelSize": 12})),
+        ("layout.addElement", json!({"kind": "northArrow", "textSize": 12})),
+        ("layout.update", json!({"element": arrow["element"], "textSize": 12})),
+        ("layout.update", json!({"element": bar, "labelSize": 12})),
+        ("layout.update", json!({"element": frame, "labelSize": 12})),
+    ] {
+        let err = s.run(cmd, &p).unwrap_err();
+        assert!(err.contains("only legends and scale bars take textSize") || err.contains("only grids take labelSize"), "{p}: {err}");
+    }
+    s.run("layout.addElement", &json!({"kind": "northArrow", "textSize": null, "labelSize": null})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "labelSize": null})).unwrap();
+    assert_eq!(bar_size(&s, bar), SCALE_BAR_TEXT_PT);
+}
+
 /// `"textSize"` on a legend (#2581): given and changed, 4 to 100 points, null giving the default
 /// back, refused out of that range, as anything but a number and on any other element (where
 /// null is let through, as for `showNoData`); undone as any change; a size its box no longer
@@ -14169,9 +14584,9 @@ fn a_legend_takes_a_text_size() {
     assert_eq!(size(&s, id), LEGEND_TEXT_PT, "undone");
     let arrow = s.run("layout.addElement", &json!({"kind": "northArrow"})).unwrap();
     let err = s.run("layout.addElement", &json!({"kind": "northArrow", "textSize": 12})).unwrap_err();
-    assert!(err.contains("only legends take textSize"), "{err}");
+    assert!(err.contains("only legends and scale bars take textSize"), "{err}");
     let err = s.run("layout.update", &json!({"element": arrow["element"], "textSize": 12})).unwrap_err();
-    assert!(err.contains("only legends take textSize"), "{err}");
+    assert!(err.contains("only legends and scale bars take textSize"), "{err}");
     // A null there is let through, as for showNoData: it asks for nothing.
     s.run("layout.addElement", &json!({"kind": "northArrow", "textSize": null})).unwrap();
     s.run("layout.update", &json!({"element": arrow["element"], "textSize": null})).unwrap();
@@ -49385,6 +49800,125 @@ fn a_grib_download_is_read_off_the_frame() {
     assert!(download_page("https://example.org/a.tif", &asked, message).is_none());
 }
 
+/// A GRIB1 message of 88 octets: a 2 × 1 grid of 1° cells from 60° N, 10° E, its two values 16
+/// bits each (R = 0, E = 0, D = 0).
+#[cfg(not(target_arch = "wasm32"))]
+fn grib1_message(a: u16, b: u16) -> Vec<u8> {
+    let mut m = b"GRIB\0\0\x58\x01".to_vec();
+    // Product definition (28 octets): a grid description follows, parameter 11 at the surface.
+    m.extend([0, 0, 28, 2, 7, 96, 255, 0x80, 11, 105, 0, 2, 26, 11, 18, 6, 0, 1, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0]);
+    // Grid description (32 octets): latitude/longitude, 2 × 1, 60° N 10° E to 60° N 11° E, 1°.
+    m.extend([0, 0, 32, 0, 255, 0, 0, 2, 0, 1, 0, 0xea, 0x60, 0, 0x27, 0x10, 0x80, 0, 0xea, 0x60, 0, 0x2a, 0xf8]);
+    m.extend([0x03, 0xe8, 0x03, 0xe8, 0, 0, 0, 0, 0]);
+    // Binary data (16 octets): 8 unused bits, 16 bits a value, one octet of padding.
+    m.extend([0, 0, 16, 8, 0, 0, 0, 0, 0, 0, 16]);
+    m.extend(a.to_be_bytes());
+    m.extend(b.to_be_bytes());
+    m.push(0);
+    m.extend(b"7777");
+    m
+}
+
+/// `layer.addUrl` with `"bytes"` asks for that range of a GRIB file only and reads it as the file
+/// (#2428): the second of two records, by its name or by `"format"`. A server that ignores the
+/// range, an answer shorter than the range, and a range of another format are refused.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_grib_files_byte_range_is_added_as_the_file() {
+    let mut file = grib1_message(1, 2);
+    file.extend(grib1_message(3, 4));
+    assert_eq!(file.len(), 176);
+    let (base, sent) = serve_ranges(file.clone());
+    let mut s = Session::new(Project::default());
+    for p in [
+        json!({"url": format!("{base}/run/PREC.grb"), "bytes": [88, 175]}),
+        json!({"url": format!("{base}/record?id=2"), "bytes": [88, 175], "format": "grib"}),
+    ] {
+        let r = s.run("layer.addUrl", &p).unwrap();
+        let layer = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+        let raster = layer.raster.as_ref().unwrap().data.as_ref().unwrap();
+        assert_eq!(raster.bands[0].data, vec![3.0, 4.0], "{p}");
+    }
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), 176, "the range alone, twice");
+    // A range past the file's end: the 88 octets there aren't the 100 asked for.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/PREC.grb"), "bytes": [88, 187]})).unwrap_err();
+    assert!(e.contains("answered 88 octets of the 100 asked for"), "{e}");
+    // A server that answers the whole file to a range.
+    let (whole, _) = serve_file(file.clone(), false);
+    let e = s.run("layer.addUrl", &json!({"url": format!("{whole}/PREC.grb"), "bytes": [88, 175]})).unwrap_err();
+    assert!(e.contains(crate::render::rustgis_tiles::cache::NO_RANGES), "{e}");
+    // From octet 0, refused once its answer is longer than the range, and said so.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{whole}/PREC.grb"), "bytes": [0, 87]})).unwrap_err();
+    assert!(e.contains("more than the range asked for") && e.contains(crate::render::rustgis_tiles::cache::NO_RANGES), "{e}");
+    // A server answering other octets of the same length (the first record, `Content-Range:
+    // bytes 0-87/176`) for the second record asked for: refused, never read as it.
+    let first = file[..88].to_vec();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let wrong = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for mut c in listener.incoming().flatten() {
+            let _ = c.read(&mut [0u8; 4096]);
+            let head = "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-87/176\r\nContent-Length: 88\r\nConnection: close\r\n\r\n";
+            let _ = c.write_all(head.as_bytes()).and_then(|()| c.write_all(&first));
+        }
+    });
+    let e = s.run("layer.addUrl", &json!({"url": format!("{wrong}/PREC.grb"), "bytes": [88, 175]})).unwrap_err();
+    assert!(e.contains("the server answered octets 0-87, not the 88-175 asked for"), "{e}");
+    // Without a range, "format" is left as it was before ranges: not refused.
+    let text = br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}}]}"#;
+    let (plain, _) = serve_ranges(text.to_vec());
+    s.run("layer.addUrl", &json!({"url": format!("{plain}/points.geojson"), "format": "geojson"})).unwrap();
+    // A range that isn't a GRIB message is refused, whatever its octets read as.
+    let text = br#"{"type": "FeatureCollection", "features": []}"#.to_vec();
+    let last = text.len() as u64 - 1;
+    let (other, _) = serve_ranges(text);
+    let e = s.run("layer.addUrl", &json!({"url": format!("{other}/record"), "bytes": [0, last], "format": "grib"})).unwrap_err();
+    assert!(e.contains("the range doesn't start a GRIB message"), "{e}");
+    // Asked wrongly, or of another format: refused before anything is fetched.
+    let grb = format!("{base}/PREC.grb");
+    for (p, said) in [
+        (json!({"url": format!("{base}/a.tif"), "bytes": [0, 9]}), "a range of another format isn't a file"),
+        (json!({"url": format!("{base}/a.tif"), "bytes": [0, 9], "format": "grib"}), "the address names a.tif"),
+        (json!({"url": grb, "bytes": [9, 0]}), "comes after the last"),
+        (json!({"url": grb, "bytes": [0, 64 << 20]}), "more than a range may have (64 MB)"),
+        (json!({"url": grb, "bytes": [0, u64::MAX]}), "more than a range may have (64 MB)"),
+        (json!({"url": grb, "bytes": "0-9"}), "two octet offsets"),
+        (json!({"url": grb, "bytes": [0, 9], "format": "tiff"}), "the one format a byte range is read as"),
+        (json!({"url": grb, "format": "grib"}), "\"format\" goes with \"bytes\""),
+        (json!({"url": grb, "bytes": [0, 9], "as": "scan"}), "doesn't go with \"as\""),
+    ] {
+        let before = sent.load(std::sync::atomic::Ordering::Relaxed);
+        let e = s.run("layer.addUrl", &p).unwrap_err();
+        assert!(e.contains(said), "{p}: {e}");
+        assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), before, "{p}");
+    }
+}
+
+/// A plugin's command asking for a GRIB file's range leaves it to the app, which completes the
+/// download with the range's address (the claim's own address with its range): it is added.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_plugin_commands_grib_range_is_added_when_the_app_completes_it() {
+    let mut file = grib1_message(1, 2);
+    file.extend(grib1_message(3, 4));
+    let (base, _) = serve_ranges(file.clone());
+    let mut s = world();
+    plugin("eng-grib-range", &["edit", "network"]);
+    let url = format!("{base}/run/PREC.grb");
+    let p = json!({"op": "layer.addUrl", "params": {"url": url, "bytes": [88, 175], "name": "Rain"}});
+    s.run_leaving_downloads("plugin:eng-grib-range/f", &p).unwrap();
+    let asked = s.take_url_requests();
+    assert_eq!(asked.len(), 1);
+    let id = s.download_started_for(&asked[0]).unwrap();
+    assert!(s.download_landed(id, file[88..].to_vec()));
+    // As the app completes it: the address it downloaded, with the request's name.
+    let add = json!({"id": id, "url": crate::cmd::layer::ranged_address(&url, (88, 175)), "name": "Rain"});
+    s.complete_download(id, &add).unwrap();
+    let layer = s.map().layer_by_name("Rain").filter(|l| l.is_raster()).unwrap();
+    assert_eq!(layer.raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].data, vec![3.0, 4.0]);
+}
+
 /// Each page of a map series is georeferenced with its own view, not the first page's (#1191).
 #[test]
 fn a_map_series_pdf_georeferences_each_page_with_its_view() {
@@ -53589,6 +54123,8 @@ fn opening_a_diagram_that_wont_show_says_why() {
         created: 0.0,
         synced: 0.0,
         generation: String::new(),
+        returned: Vec::new(),
+        ids: Default::default(),
         data: snapshot,
     });
     let mut reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());

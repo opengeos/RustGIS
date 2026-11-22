@@ -109,6 +109,9 @@ pub struct CommandSpec {
     /// Pure executor-owned resolution for commands whose inputs exceed the common layer selector.
     pub(crate) transition: Option<fn(&cmd::InputContext<'_>, &Value) -> Result<Option<cmd::Selection>, String>>,
     pub(crate) inputs: Option<fn(&cmd::InputContext<'_>, &Value) -> Result<cmd::Inputs, String>>,
+    /// As a step of another command, it is atomic: it runs in a [`Session::savepoint`], undone
+    /// whole when it fails, since a plugin may handle the error and go on.
+    pub(crate) atomic: bool,
 }
 
 fn always(_: &Session) -> Option<&'static str> {
@@ -147,7 +150,13 @@ impl CommandSpec {
             roles: None,
             inputs: None,
             transition: None,
+            atomic: false,
         }
+    }
+    /// See [`CommandSpec::atomic`].
+    pub(crate) const fn atomic(mut self) -> Self {
+        self.atomic = true;
+        self
     }
     /// Declares the effects reviewed for this command; omitted declarations fail closed.
     pub const fn effects(mut self, effects: policy::Effects) -> Self {
@@ -760,18 +769,21 @@ pub(crate) struct StepTally {
     pub(crate) edited: bool,
 }
 
-/// What a command that doesn't mutate can move of what undo restores: the history state
-/// (`edit.undo`), the project replaced (`project.new`), its file (`project.saveAs`), and the
-/// unsaved mark a write that changed layers leaves (Publish to Source). Measured before and after
-/// a shared step ([`Session::shared_step`]), not inferred from what the command may reach. The
-/// project's contents change only by commands that mutate, except its history log, where an
-/// export records itself as a log entry, not an edit, as when it runs by itself.
+/// What a step can move of what undo restores without saying so: the history state
+/// (`edit.undo`), the project replaced (`project.new`), its file (`project.saveAs`), the unsaved
+/// mark a write that changed layers leaves (Publish to Source), and which layers each map has,
+/// in what order, with the id its next layer takes. Measured before and after a shared step
+/// ([`Session::shared_step`]), not inferred from what the command may reach. The project's other
+/// contents (a layer's name, look or features) change only by commands that mutate, except its
+/// history log, where an export records itself as a log entry, not an edit, as when it runs by
+/// itself.
 #[derive(PartialEq, Eq)]
 struct Restored {
     state: u64,
     opened: u64,
     files: ProjectFiles,
     unsaved_marks: u64,
+    layers: Vec<rustgis_map::LayerMark>,
 }
 
 pub struct Session {
@@ -1357,6 +1369,27 @@ impl Session {
         self.statistics_window_thread = enabled.then(|| std::thread::current().id());
     }
 
+    /// Keeps the ids new features are given above those field packages hold, in every layer they
+    /// apply to ([`Project::keep_field_floors`]). Run when a project is opened, after every command
+    /// wherever it runs (`invoke`: run, landed from a copy or a read, or a line of a script or task),
+    /// after an export lands, and after Undo and Redo: a floor lives with a layer's rows, which a
+    /// reload, a renewal or a restored snapshot replaces.
+    pub(crate) fn keep_field_floors(&mut self) {
+        self.project.keep_field_floors();
+    }
+
+    /// Whether the open field package's rows are waiting to be kept on this device
+    /// (`offline.keepRows`), as opening a package from home asks.
+    pub fn field_rows_waiting(&self) -> bool {
+        self.project.given.is_some()
+    }
+
+    /// Lets go of the open field package's rows waiting to be kept, when they can't be: the rows
+    /// they share with the project are then no longer held for them.
+    pub fn forget_field_rows(&mut self) {
+        self.project.given = None;
+    }
+
     /// Starts an independent session with fresh runtime selection intent and request order.
     /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {
@@ -1547,6 +1580,8 @@ impl Session {
         for text in label_notices {
             session.notify_text(text, false);
         }
+        // A project opened: its layers keep new ids above those field packages hold.
+        session.keep_field_floors();
         session
     }
 
@@ -2237,35 +2272,36 @@ impl Session {
         self.guarded_inner(label, true, false, f)
     }
 
-    /// Runs `run`, the command `spec`, as a step of the command running now, in its transaction
-    /// (a script's line, a task's step, a plugin's call): it takes no undo step of its own, and
-    /// what it did goes into [`Session::shared_steps`]. Whether it left a request or changed
-    /// nothing ([`Session::request_only`]) is its own, never the enclosing command's. It edited
-    /// when it mutated and didn't say it changed nothing, or when [`Restored`] moved: a failed
-    /// step that kept a record (a failure note, a source file written) moved the history state.
+    /// Runs `run`, the command `spec`, as a step of the command running now (a script's line, a
+    /// task's step, a plugin's call), in its transaction or, for an [atomic](CommandSpec::atomic)
+    /// command, in a [`Session::savepoint`] of it. It takes no undo step of its own, and what it
+    /// did goes into [`Session::shared_steps`].
+    /// Whether it left a request or changed nothing ([`Session::request_only`]) is its own, never
+    /// the enclosing command's. It edited when it mutates and didn't say it changed nothing, or
+    /// when [`Restored`] moved. A failed step that mutates counts too unless a savepoint undid it:
+    /// telling what it changed would cost a copy of each layer it touched.
     pub(crate) fn shared_step(&mut self, spec: &CommandSpec, run: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let outer = std::mem::take(&mut self.request_only);
-        let before = self.restored();
-        #[cfg(debug_assertions)]
-        let layers = (!spec.mutates).then(|| self.project.maps.iter().map(Map::layer_mark).collect::<Vec<_>>());
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        // Once the account holds an edit, nothing a step does changes it: no need to measure.
+        let before = (!self.shared_steps.edited).then(|| self.restored());
+        let step = |s: &mut Session| if spec.atomic { s.savepoint(spec.label, run) } else { run(s) };
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(self)));
         let unchanged = std::mem::replace(&mut self.request_only, outer);
-        let moved = self.restored() != before;
-        // A command that doesn't mutate leaves the layers alone, or the measure above misses it.
-        #[cfg(debug_assertions)]
-        debug_assert!(
-            moved || res.is_err() || layers.is_none_or(|layers| self.project.maps.iter().map(Map::layer_mark).eq(layers)),
-            "{} doesn't mutate but changed the layers",
-            spec.id
-        );
-        // A failed step counts too: in a shared transaction nothing undoes what it did part way.
+        let moved = before.is_some_and(|before| self.restored() != before);
+        let kept = !spec.atomic || matches!(res, Ok(Ok(_)));
         self.shared_steps.requested |= unchanged;
-        self.shared_steps.edited |= moved || (spec.mutates && !unchanged);
+        self.shared_steps.edited |= moved || (spec.mutates && kept && !unchanged);
         res.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
     fn restored(&self) -> Restored {
-        Restored { state: self.state, opened: self.opened, files: self.project_files(), unsaved_marks: self.unsaved_marks }
+        Restored {
+            state: self.state,
+            opened: self.opened,
+            files: self.project_files(),
+            unsaved_marks: self.unsaved_marks,
+            layers: self.project.maps.iter().map(Map::layer_mark).collect(),
+        }
     }
 
     fn project_files(&self) -> ProjectFiles {
@@ -3578,6 +3614,8 @@ impl Session {
             std::mem::swap(&mut self.opened_package, &mut files.opened_package);
         }
         self.project.keep_table_ids(&cur);
+        self.project.keep_field_ids(&cur);
+        self.keep_field_floors();
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
         self.keep_tile_pick(&cur);
@@ -3618,6 +3656,8 @@ impl Session {
             std::mem::swap(&mut self.opened_package, &mut files.opened_package);
         }
         self.project.keep_table_ids(&cur);
+        self.project.keep_field_ids(&cur);
+        self.keep_field_floors();
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
         self.keep_tile_pick(&cur);
