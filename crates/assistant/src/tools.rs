@@ -631,7 +631,7 @@ fn with_new_layers(r: Value, s: &Session, before: &[(String, Vec<u32>)]) -> Valu
 }
 
 /// Runs a script (`script.run`'s format: one `command-id {json}` per line, `#` comments) in one
-/// call and one undo step. A failing line stops the script and nothing it did to the project is
+/// call and one undo step, none when no line changed the project. A failing line stops the script and nothing it did to the project is
 /// kept (files it wrote stay). The answer is `{success, result, lines, layersAdded, notices,
 /// error, duration_s}`, where `result`
 /// is the last command's; a failure is an `Err` holding the same JSON.

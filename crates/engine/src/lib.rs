@@ -128,16 +128,6 @@ impl CommandSpec {
         self.mutates || self.effects.contains(policy::Effect::Edits)
     }
 
-    /// Whether, run as a step of another command ([`Session::shared_step`]), it counts as an edit
-    /// of that command's transaction unless it says it changed nothing. Only a reviewed read is
-    /// left out: a view command that declares no effect at all. Anything else may change what
-    /// the transaction restores even without an undo step of its own (`project.new` replaces the
-    /// project, `project.saveAs` moves its file, `edit.undo` takes a step back), and an unreviewed
-    /// command counts as an edit.
-    pub fn edits_in_a_step(&self) -> bool {
-        self.mutates || self.effects != policy::Effects::NONE
-    }
-
     /// Whether the parameter description includes a required top-level input.
     pub fn needs_input(&self) -> bool {
         needs_input(self.params)
@@ -744,8 +734,27 @@ struct PutAside {
 pub(crate) struct StepTally {
     /// A step left a request or changed nothing ([`Session::request_only`]).
     pub(crate) requested: bool,
-    /// A step edited the project, or may have ([`CommandSpec::edits_in_a_step`]).
+    /// A step changed what an undo step restores: it edited the project, or moved the history,
+    /// replaced the project, rebound its file or marked it unsaved ([`Restored`]).
     pub(crate) edited: bool,
+}
+
+/// What a command that doesn't mutate can change that an undo step restores, or that tells it
+/// changed the project: the history state (`edit.undo`), the project replaced (`project.new`),
+/// its file (`project.saveAs`), and the unsaved mark a write leaves when it changed layers
+/// (Publish to Source), which undo doesn't restore. The project's contents change only by
+/// commands that mutate, save its history log: an export records itself there, as a log entry
+/// and not an edit, as when it runs by itself. Compared before and after a shared step
+/// ([`Session::shared_step`]), so whether it edited is measured, not inferred from what it may
+/// reach: a read over the network or an export moves none of these.
+#[derive(PartialEq, Eq)]
+struct Restored {
+    state: u64,
+    opened: u64,
+    file_identity: u64,
+    path: Option<PathBuf>,
+    opened_package: Option<PathBuf>,
+    unsaved_marks: u64,
 }
 
 pub struct Session {
@@ -2189,15 +2198,40 @@ impl Session {
     /// Runs `run`, the command `spec`, as a step of the command running now, in its transaction
     /// (a script's line, a task's step, a plugin's call): it takes no undo step of its own, and
     /// what it did goes into [`Session::shared_steps`]. Whether it left a request or changed
-    /// nothing ([`Session::request_only`]) is its own, never the enclosing command's.
+    /// nothing ([`Session::request_only`]) is its own, never the enclosing command's. It edited
+    /// when it mutates and didn't say it changed nothing, or when it changed what an undo step
+    /// restores besides the project's contents ([`Restored`]). A failed step that kept a record
+    /// (a failure note, a source file written) moved the history state, so it counts too.
     pub(crate) fn shared_step(&mut self, spec: &CommandSpec, run: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let outer = std::mem::take(&mut self.request_only);
+        let before = self.restored();
+        #[cfg(debug_assertions)]
+        let layers: Vec<_> = self.project.maps.iter().map(Map::layer_mark).collect();
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
         let unchanged = std::mem::replace(&mut self.request_only, outer);
+        let moved = self.restored() != before;
+        // A command that doesn't mutate leaves the layers alone, or the measure above misses it.
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            spec.mutates || moved || res.is_err() || self.project.maps.iter().map(Map::layer_mark).eq(layers),
+            "{} doesn't mutate but changed the layers",
+            spec.id
+        );
         // A failed step counts too: in a shared transaction nothing undoes what it did part way.
         self.shared_steps.requested |= unchanged;
-        self.shared_steps.edited |= spec.edits_in_a_step() && !unchanged;
+        self.shared_steps.edited |= moved || (spec.mutates && !unchanged);
         res.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
+    fn restored(&self) -> Restored {
+        Restored {
+            state: self.state,
+            opened: self.opened,
+            file_identity: self.file_identity,
+            path: self.path.clone(),
+            opened_package: self.opened_package.clone(),
+            unsaved_marks: self.unsaved_marks,
+        }
     }
 
     /// Commits the snapshot to history only for commands that own an Undo step. Nested guards
