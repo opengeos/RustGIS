@@ -5130,7 +5130,7 @@ pub fn raster_crs(ds: &Dataset, p: &Json, tool: &str) -> Result<(Crs, Option<Str
 
 /// [`raster_crs`] for a run in `work` ([`Inputs::work_crs`]): a layer held in its own projected
 /// system makes its grid there unless `p` names another.
-fn raster_crs_in(ds: &Dataset, work: Crs, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
+pub fn raster_crs_in(ds: &Dataset, work: Crs, p: &Json, tool: &str) -> Result<(Crs, Option<String>), String> {
     if work == Crs::LonLat {
         raster_crs_of(ds.crs, "was read in", &ds.name, p, tool)
     } else {
@@ -5196,7 +5196,7 @@ pub fn points_in(crs: Crs, pts: Vec<(Coord, f64)>) -> Result<(Vec<(Coord, f64)>,
 
 /// [`points_in`] for points in `from`, a run's own system ([`Inputs::work_crs`]): as they are
 /// when the grid is in it too, else through [`ToGrid`].
-fn points_from(from: Crs, crs: Crs, pts: Vec<(Coord, f64)>) -> Result<(Vec<(Coord, f64)>, Option<String>), String> {
+pub fn points_from(from: Crs, crs: Crs, pts: Vec<(Coord, f64)>) -> Result<(Vec<(Coord, f64)>, Option<String>), String> {
     if from == crs {
         return Ok((pts, None));
     }

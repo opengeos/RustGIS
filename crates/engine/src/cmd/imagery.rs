@@ -1182,8 +1182,8 @@ pub(crate) fn supervised_work(s: &Session, p: &Value) -> Result<super::workflows
             let key = ds.value(row, fi).to_string();
             polygons.extend(polys.iter().map(|rings| (key.clone(), rings.clone())));
         }
-        // Mean of each class's training pixels.
-        let classes = rasterops::class_means(&r, &bands, &polygons).map_err(explain)?;
+        // Mean of each class's training pixels, tested in the system the polygons are held in.
+        let classes = rasterops::class_means_in(&r, ds.coord_crs(), &bands, &polygons).map_err(explain)?;
         if classes.len() < 2 {
             return Err(explain("the training polygons need at least two classes with pixels under them".into()));
         }

@@ -136,12 +136,27 @@ pub fn training_samples(
     classes: usize,
     max_per_class: usize,
 ) -> Result<(Vec<(Vec<f32>, usize)>, Vec<usize>), String> {
+    training_samples_in(r, rustgis_data::raster::Crs::LonLat, bands, polygons, classes, max_per_class)
+}
+
+/// [`training_samples`] of polygons whose rings are in `from`: longitude/latitude, or the system
+/// their layer holds its coordinates in, a pixel's centre tested there (none of it converted
+/// when that is the raster's own).
+pub fn training_samples_in(
+    r: &Raster,
+    from: rustgis_data::raster::Crs,
+    bands: &[usize],
+    polygons: &[(Vec<Vec<Coord>>, usize, usize)],
+    classes: usize,
+    max_per_class: usize,
+) -> Result<(Vec<(Vec<f32>, usize)>, Vec<usize>), String> {
+    let zone = crate::rasterops::ZoneIn::new(r, from)?;
     crate::control::begin(polygons.len());
     let mut samples: Vec<(Vec<f32>, usize)> = Vec::new();
     let mut per_class = vec![0usize; classes];
     for (rings, ci, share) in polygons {
         let room = max_per_class.saturating_sub(per_class.get(*ci).copied().unwrap_or(0)).min(*share);
-        let got = polygon_samples(r, bands, rings, room);
+        let got = samples_under(r, &zone, bands, rings, room);
         // Stopped part of the way through the polygon: what it got isn't its share.
         crate::control::check()?;
         if let Some(n) = per_class.get_mut(*ci) {
@@ -159,13 +174,28 @@ pub fn training_samples(
 /// stops between rows, with the pixels found so far. If an outline vertex can't be placed,
 /// search the whole raster instead of bounding the polygon by only its surviving vertices.
 pub fn polygon_samples(r: &Raster, bands: &[usize], rings: &[Vec<Coord>], max: usize) -> Vec<Vec<f32>> {
+    samples_under(r, &crate::rasterops::ZoneIn::LonLat, bands, rings, max)
+}
+
+/// [`polygon_samples`] of rings in the zone's system (`zone`): the outline's vertices placed on the
+/// raster's grid for the window, the whole raster when the polygon's box holds a pole
+/// ([`crate::rasterops::ZoneIn::holds_a_pole`]), and each pixel's centre tested in that system.
+fn samples_under(r: &Raster, zone: &crate::rasterops::ZoneIn, bands: &[usize], rings: &[Vec<Coord>], max: usize) -> Vec<Vec<f32>> {
     let mut out = Vec::new();
-    let tr = r.transformer();
     // The pixel window under the outline (its vertices, projected into the raster).
     let (mut c0, mut r0, mut c1, mut r1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for v in rings.iter().flatten().take(1_000_000) {
-        let Some(w) = tr.from_lonlat(*v) else {
-            (c0, r0, c1, r1) = (0.0, 0.0, f64::from(r.width), f64::from(r.height));
+    let mut e = rustgis_geom::Extent::EMPTY;
+    rings.iter().flatten().for_each(|c| e.expand(*c));
+    let whole = (0.0, 0.0, f64::from(r.width), f64::from(r.height));
+    let vertices = if zone.holds_a_pole(&e) {
+        (c0, r0, c1, r1) = whole;
+        0
+    } else {
+        1_000_000
+    };
+    for v in rings.iter().flatten().take(vertices) {
+        let Some(w) = zone.grid(r, *v) else {
+            (c0, r0, c1, r1) = whole;
             break;
         };
         let (c, rw) = r.transform.to_pixel(w);
@@ -198,7 +228,7 @@ pub fn polygon_samples(r: &Raster, bands: &[usize], rings: &[Vec<Coord>], max: u
                     break 'scan;
                 }
                 let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
-                if let Some(ll) = tr.to_lonlat(w)
+                if let Some(ll) = zone.zone(r, w)
                     && rustgis_data::geometry::polygon_contains(rings, ll)
                     && let Some(v) = bands.iter().map(|b| r.value(*b, col, row)).collect::<Option<Vec<f32>>>()
                 {
