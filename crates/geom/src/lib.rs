@@ -735,6 +735,7 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
 /// [`ring_lon_steps`]), which is its whole parallel. The sphere's counterpart of
 /// [`wgs84_ring_perimeter_area_m2`]'s perimeter; [`geodesic_length_m`] of the closed ring counts
 /// a full turn as nothing, the distance between its two ends.
+#[expect(clippy::disallowed_methods, reason = "the sphere's own perimeter, for other bodies scaled by `Body`")]
 pub fn geodesic_ring_perimeter_m(ring: &[Coord]) -> f64 {
     if ring.len() < 2 {
         return 0.0;
@@ -1015,6 +1016,7 @@ pub fn format_dms(c: Coord) -> String {
     format!("{} {ew}  {} {ns}", dms(c.x), dms(c.y))
 }
 
+#[expect(clippy::disallowed_methods, reason = "tests check the sphere's formulas, against the ellipsoid's among others")]
 #[cfg(test)]
 mod tests {
     use super::*;
