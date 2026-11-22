@@ -3520,6 +3520,7 @@ pub(crate) fn gdal_parts(mut converted: Vec<rustgis_data::source::gdal::Converte
             path: c.path,
             name: c.name,
             unprojected: c.unprojected,
+            in_lonlat: c.in_lonlat,
             zm_dropped: false,
             origin: ConvertedOrigin::Gdal(rustgis_map::source::GdalOrigin {
                 path: original.to_string(),
@@ -4295,6 +4296,7 @@ pub(crate) fn duckdb_parts(
             // A geometry that says no coordinate system is usually longitude/latitude: only
             // coordinates past it are pointed out (in add_converted).
             unprojected: false,
+            in_lonlat: false,
             zm_dropped: part.zm_dropped > 0,
             origin: ConvertedOrigin::Duckdb(origin(part.family)),
         })
@@ -4308,6 +4310,8 @@ pub(crate) struct Converted {
     name: String,
     /// Its coordinates are the source's own, in a coordinate system it doesn't say.
     unprojected: bool,
+    /// Its coordinate system is one RustGIS can't read, so it was converted to longitude/latitude.
+    in_lonlat: bool,
     /// The conversion dropped Z or M values (said as it ran), kept with the layer so an export
     /// says so too.
     zm_dropped: bool,
@@ -4329,6 +4333,11 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
     let parts = converted.len();
     let single = parts == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
+    let mut converted_lonlat = std::collections::HashSet::new();
+    let source_layer = |o: &ConvertedOrigin| match o {
+        ConvertedOrigin::Gdal(g) => g.layer.clone(),
+        ConvertedOrigin::Duckdb(d) => d.table.clone().unwrap_or_default(),
+    };
     for c in converted {
         let mut q = json!({"name": c.name});
         if let Some(n) = ps(p, "name").filter(|_| single) {
@@ -4382,6 +4391,10 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             // its coordinate system is unknown.
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
             let outside = !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0);
+            // Once a source layer, not once a part of it.
+            if c.in_lonlat && converted_lonlat.insert(source_layer(&c.origin)) {
+                s.notify(rustgis_data::source::gdal::in_lonlat_note(&source_layer(&c.origin)), false);
+            }
             if outside || (c.unprojected && matches!(c.origin, ConvertedOrigin::Gdal(_))) {
                 s.notify(
                     format!("{}: the data doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
