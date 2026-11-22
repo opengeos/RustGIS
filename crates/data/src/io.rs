@@ -838,7 +838,9 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
             crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let parts: Vec<(std::path::PathBuf, Vec<u8>)> = parts.into_iter().map(|(e, bytes)| (shapefile_part(path, e), bytes)).collect();
-            place_shapefile(path, &stage_shapefile(&parts)?)?;
+            // Not said yet: an export returns no notes, so old parts it couldn't remove (hidden
+            // copies beside the file) go unreported here, unlike a publish.
+            let _kept = place_shapefile(path, &stage_shapefile(&parts)?)?;
             Ok((left_out, None))
         }
         _ if crs != Crs::LonLat && !PROJECTED_FORMATS.contains(&ext.as_str()) => {
@@ -891,7 +893,11 @@ pub(crate) fn unstage(staged: &[(std::path::PathBuf, std::path::PathBuf)]) {
 /// first and put back if any new part fails to land, and a Cancel before the last part lands
 /// rolls back the same way. Once all have landed, the old parts and the spatial indexes that
 /// would no longer match (`.qix`, `.sbn`, `.sbx`) are removed.
-pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<()> {
+///
+/// Returns the old parts that landed but couldn't be removed afterwards, each as the hidden copy
+/// that holds it ([`kept_backups_note`] says them). When a part fails to land and every old part is
+/// put back, the error names `path` and says nothing changed.
+pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<Vec<std::path::PathBuf>> {
     let mut written: Vec<&(std::path::PathBuf, std::path::PathBuf)> = staged.iter().collect();
     written.sort_by_key(|(_, target)| target == path);
     let mut backups: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
@@ -947,13 +953,19 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
         sync_folder(path);
         let e = DataError::from(e);
         if kept.is_empty() {
-            return Err(e);
+            // Its kind kept, for a caller that tells failures apart by it.
+            return Err(match e {
+                DataError::Io(e) => DataError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}; the old file was put back, nothing changed", path.display()),
+                )),
+                e => e,
+            });
         }
         return Err(DataError::Format(format!("{e}; putting the old file back failed: {}", kept.join(", "))));
     }
-    for (bak, _) in &backups {
-        let _ = std::fs::remove_file(bak);
-    }
+    // A copy that can't be removed is returned, to be said: it holds an old part beside the file.
+    let left: Vec<std::path::PathBuf> = backups.into_iter().filter(|(bak, _)| remove_backup(bak).is_err()).map(|(bak, _)| bak).collect();
     // A spatial index left from an older file of the same name would no longer match.
     for stale in ["qix", "sbn", "sbx"] {
         // Sidecars may use any letter case, even beside a lowercase `.shp`.
@@ -968,7 +980,37 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
     }
     // Every part is renamed within `path`'s folder.
     sync_folder(path);
-    Ok(())
+    Ok(left)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes [`remove_backup`] fail on this thread, for the tests of a copy that can't be removed
+    /// (no permission does that alone: the folder must still take the renames).
+    static KEEP_BACKUPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Removes an old part's copy once the new parts have landed ([`place_shapefile`]).
+fn remove_backup(bak: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if KEEP_BACKUPS.get() {
+        return Err(std::io::Error::other("kept for the test"));
+    }
+    std::fs::remove_file(bak)
+}
+
+/// What is said of the old parts of the Shapefile at `path` that [`place_shapefile`] couldn't
+/// remove once the new ones landed; `None` when there are none.
+pub(crate) fn kept_backups_note(path: &Path, kept: &[std::path::PathBuf]) -> Option<String> {
+    (!kept.is_empty()).then(|| {
+        let copies: Vec<String> = kept.iter().map(|k| k.display().to_string()).collect();
+        format!(
+            "{}: {} old part(s) couldn't be removed after the new ones landed; they are kept as {} and can be deleted",
+            path.display(),
+            kept.len(),
+            copies.join(", ")
+        )
+    })
 }
 
 /// Makes a rename into `path`'s folder survive a power cut: on Linux and macOS a synced file can
@@ -3774,7 +3816,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // In longitude/latitude, as the file's places come out there (beyond it: a `.prj` that
     // doesn't match the coordinates), or as they are without a system to convert from.
     let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
-    if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
+    if e.beyond_lonlat() {
         report.messages.push(if to_lonlat.is_some() {
             "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place".into()
         } else {
@@ -5428,6 +5470,54 @@ mod tests {
         let mut areas = mixed.clone();
         areas.features.truncate(1);
         assert_eq!(write_path(&areas, &dir.path().join("areas.shp"))?, 0);
+        Ok(())
+    }
+
+    /// Placing a Shapefile's parts: old parts whose copies can't be removed once the new ones land
+    /// are returned and said; a clean placement leaves and says nothing; a placement rolled back
+    /// whole names the file and says nothing changed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn placing_a_shapefile_says_old_parts_it_keeps_and_a_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let shp = dir.path().join("parcels.shp");
+        let dbf = dir.path().join("parcels.dbf");
+        let entries = || -> std::io::Result<usize> { Ok(std::fs::read_dir(dir.path())?.count()) };
+        std::fs::write(&shp, b"old shp")?;
+        std::fs::write(&dbf, b"old dbf")?;
+        let parts = |tag: &str| vec![(shp.clone(), format!("{tag} shp").into_bytes()), (dbf.clone(), format!("{tag} dbf").into_bytes())];
+
+        KEEP_BACKUPS.set(true);
+        let kept = place_shapefile(&shp, &stage_shapefile(&parts("new"))?);
+        KEEP_BACKUPS.set(false);
+        let kept = kept?;
+        assert_eq!(std::fs::read(&shp)?, b"new shp");
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|k| k.exists()));
+        let note = kept_backups_note(&shp, &kept).unwrap_or_default();
+        assert!(note.contains("2 old part(s) couldn't be removed") && note.contains("can be deleted"), "{note}");
+        assert!(kept.iter().all(|k| note.contains(&k.display().to_string())), "{note}");
+        for k in &kept {
+            std::fs::remove_file(k)?;
+        }
+
+        // Clean: nothing kept, nothing said, nothing left beside the file.
+        let kept = place_shapefile(&shp, &stage_shapefile(&parts("newer"))?)?;
+        assert!(kept.is_empty() && kept_backups_note(&shp, &kept).is_none());
+        assert_eq!(entries()?, 2);
+
+        // A part that fails to land (its staged copy gone): every old part is put back.
+        let staged = stage_shapefile(&parts("newest"))?;
+        let (gone, _) = staged.iter().find(|(_, target)| *target == dbf).ok_or("no staged .dbf")?;
+        std::fs::remove_file(gone)?;
+        let error = place_shapefile(&shp, &staged).err().ok_or("placed")?.to_string();
+        assert!(
+            error.contains(&format!("{}: ", shp.display())) && error.ends_with("the old file was put back, nothing changed"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&shp)?, b"newer shp");
+        assert_eq!(std::fs::read(&dbf)?, b"newer dbf");
+        assert_eq!(entries()?, 2);
         Ok(())
     }
 

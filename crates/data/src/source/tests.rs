@@ -4051,7 +4051,14 @@ fn native_file_dates_preserve_zone_policy_and_fractional_seconds() {
     let path = temp.path().join("stream.parquet");
     let summary = crate::export::write_source_in(source.as_ref(), &ds, &path, Crs::LonLat).unwrap();
     assert_eq!(summary.written, 2);
-    assert_eq!(summary.date_messages.len(), 2);
+    // Without a label of their own: the export adds its path once.
+    assert_eq!(
+        summary.date_messages,
+        [
+            "2 date-times were written in UTC without their original offsets, in 'instant'",
+            "2 date-times were written as ISO text because their column mixes zoned and unzoned values, in 'mixed'"
+        ]
+    );
     let (streamed, _) = crate::io::read_path(&path).unwrap();
     assert_eq!(streamed.fields, back.fields);
     ds.features[0].attrs[0] = Value::Text("2026-02-30".into());

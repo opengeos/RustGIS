@@ -54,7 +54,9 @@ impl Drop for Capture {
 }
 
 /// Reads generated files or reloads outputs without adding them to the enclosing command's inputs.
-/// Restores capture on every return and unwind; nested ordinary commands may still capture their own inputs.
+/// Restores capture on every return and unwind. Commands run inside it (nested ordinary ones too)
+/// record nothing either: their reads are dropped, as a command's own are captured only at the
+/// outermost level.
 pub fn without<T>(read: impl FnOnce() -> T) -> T {
     let _restore = Capture { previous: INPUTS.with(|v| v.replace(None)), _thread_bound: PhantomData };
     read()
