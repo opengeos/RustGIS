@@ -475,7 +475,8 @@ fn environments(s: &mut Session, p: &Value) -> CmdResult {
             format!("Environments: the cell size {cell} in {}'s units was dropped with that system", crs.label()),
             false,
         ),
-        (Some((crs, cell, false)), None) => s.notify(
+        // (`cellSize: null` gives the new one none, so it is said too.)
+        (Some((crs, cell, false)), None | Some(None)) => s.notify(
             format!(
                 "Environments: the cell size {cell} was in {}'s units, so it was dropped with that system: give cellSize for the new one, or each run picks its own",
                 crs.label()

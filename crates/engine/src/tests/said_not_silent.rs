@@ -267,6 +267,11 @@ fn gp_env_says_a_cell_size_dropped_with_its_system() {
     s.run("gp.env", &json!({"crs": "EPSG:3857"})).unwrap();
     assert!(says(&s, mark, "the cell size 50 was in"), "{:?}", said(&s, mark));
     assert_eq!(s.project.gp_env.projected.and_then(|g| g.cell_size), None);
+    // A change with cellSize null gives the new system none: said too.
+    s.run("gp.env", &json!({"crs": "EPSG:32616", "cellSize": 100})).unwrap();
+    let mark = s.notice_mark();
+    s.run("gp.env", &json!({"crs": "EPSG:32617", "cellSize": null})).unwrap();
+    assert!(says(&s, mark, "the cell size 100 was in"), "{:?}", said(&s, mark));
     // The system cleared, with null or blank text: said; cleared with no cell size: nothing.
     for clear in [json!(null), json!(" ")] {
         s.run("gp.env", &json!({"crs": "EPSG:32616", "cellSize": 100})).unwrap();
