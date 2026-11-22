@@ -2773,6 +2773,13 @@ mod tests {
         let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
         assert!(e.starts_with("Parcels: feature"), "{e}");
         assert_eq!(e.matches("Parcels").count(), 1, "{e}");
+        // A checked layer whose map name isn't its data's (a name taken on a clash) is named as
+        // the map has it, once.
+        s.map_mut().layers.iter_mut().find(|l| l.name == "Parcels").unwrap().name = "Parcels (2)".into();
+        s.map_mut().editing.topology = vec![TopologyRule::MustNotHaveDangles { layer: "Parcels (2)".into() }];
+        let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
+        assert!(e.starts_with("Parcels (2): feature"), "{e}");
+        assert_eq!(e.matches("Parcels").count(), 1, "{e}");
 
         let mut s = Session::new(crate::Project::default());
         s.map_mut().add_dataset(held("Cities", GeometryType::Point, false));

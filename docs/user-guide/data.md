@@ -1782,8 +1782,8 @@ levels up) that gives one, taken with that group's `spatial:shape`, which must b
 dimensions are those `spatial:dimensions` names. `proj:code`, `proj:wkt2` or `proj:epsg` give
 the coordinate system. The first of these that gives one is used: the variable's own attributes
 (its own `proj:` keys among them), then its grid mapping's, then the `proj:wkt2`, `proj:code` or
-`proj:epsg` of the nearest group above it that sets any of them (a value there that can't be read
-isn't passed over for a group further up), then a `spatial_ref` or `crs` array beside it. A variable opened by its own address doesn't see its
+`proj:epsg` of the nearest group above it that sets any of them (only when the variable sets none:
+a value that can't be read, on the variable or a group, isn't passed over for one further up), then a `spatial_ref` or `crs` array beside it. A variable opened by its own address doesn't see its
 groups' attributes: open the store's address with `"variable"` instead.
 A web store whose root lists no arrays (a Zarr 3 root `zarr.json` with no consolidated metadata,
 or a Zarr 2 `.zgroup` with no `.zmetadata`) needs `"variable"`: its array, the groups above it,
