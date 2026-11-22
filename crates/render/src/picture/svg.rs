@@ -478,7 +478,7 @@ impl Shape {
                 let next = both(p);
                 s.length += at.1.distance(next.1);
                 s.user_length += at.0.distance(next.0);
-                s.rows = s.rows.saturating_add((next.1.y - at.1.y).abs().ceil() as u64 + 1);
+                s.rows = s.rows.saturating_add(((next.1.y - at.1.y).abs().ceil() as u64).saturating_add(1));
                 at = next;
             }
             s.segments += 1;
@@ -658,6 +658,13 @@ mod tests {
         let tree = read(&svg(&r##"<rect width="100" height="100" fill="#a00" fill-opacity="0.5"/>"##.repeat(100))).unwrap();
         assert!(work(&tree, (100, 100), tiny_skia::Transform::identity(), u64::MAX).is_ok_and(|u| u > 100 * 10_000));
         assert_eq!(work(&tree, (100, 100), tiny_skia::Transform::identity(), 50_000), Err(Refusal::TooMuch));
+        // An edge past what a count of rows holds (10²⁰ down, drawn 256 times larger) counts as
+        // all of them, refused rather than overflowing.
+        let tall = read(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0 L0 1e20"/></svg>"#).unwrap();
+        assert_eq!(
+            work(&tall, (256, 256), tiny_skia::Transform::from_scale(256.0, 256.0), crate::picture::MARKER_PIXELS),
+            Err(Refusal::TooMuch)
+        );
     }
 
     /// Text, images and what an SVG takes from other files aren't drawn, so an SVG with them is
