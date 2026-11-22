@@ -3729,23 +3729,45 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // Each shape is read with its record, a shape that can't be read too: `shapefile`'s own pairing
     // returns a shape's error before reading its record, which shifts every later record. Shapes
     // past the last record, and records past the last shape, are counted.
+    // Without a `.shx`, a shape that can't be read leaves the reader inside it: the shapes after it
+    // can't be found, so the pairing stops there, and the records after it are said.
     let records = dbf.header().num_records as usize;
+    let indexed = shapes.shape_count().is_ok();
     let (mut shape_iter, mut record_iter) = (shapes.iter_shapes(), dbf.iter_records());
-    let (mut pairs, mut extra_shapes) = (0usize, 0usize);
+    let (mut pairs, mut extra_shapes, mut extra_unreadable, mut lost_track) = (0usize, 0usize, false, false);
     while let Some(shape) = shape_iter.next() {
         let Some(record) = record_iter.next() else {
-            // Up to the first that can't be read: past it, the file can't be followed.
-            extra_shapes = 1 + shape_iter.by_ref().take_while(std::result::Result::is_ok).count();
+            // Counted up to the first that can't be read (counted too): past it, the file can't
+            // be followed.
+            extra_shapes = 1;
+            if shape.is_ok() {
+                for s in shape_iter.by_ref() {
+                    extra_shapes += 1;
+                    if s.is_err() {
+                        extra_unreadable = true;
+                        break;
+                    }
+                }
+            } else {
+                extra_unreadable = true;
+            }
             break;
         };
         let k = pairs;
         pairs += 1;
+        lost_track = shape.is_err() && !indexed;
         if is_deleted(k) {
             left_out += 1;
+            if lost_track {
+                break;
+            }
             continue;
         }
         let (Ok(shape), Ok(record)) = (shape, record) else {
             report.skipped += 1;
+            if lost_track {
+                break;
+            }
             continue;
         };
         zm_shapes += usize::from(!matches!(
@@ -3811,9 +3833,17 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     ds.drop_zm(&mut report, zm_shapes);
     report.messages.extend(deleted_records_note(name, left_out, true));
     if extra_shapes > 0 {
-        report.messages.push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out"));
+        let unreadable = if extra_unreadable { " (the last of them can't be read, and the .shp isn't followed past it)" } else { "" };
+        report
+            .messages
+            .push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out{unreadable}"));
     }
-    if records > pairs && extra_shapes == 0 {
+    if lost_track {
+        report.messages.push(format!(
+            "{name}: shape {pairs} can't be read and the Shapefile has no .shx to find the next one by: the {} record(s) after it were left out",
+            records.saturating_sub(pairs)
+        ));
+    } else if records > pairs && extra_shapes == 0 {
         report
             .messages
             .push(format!("{name}: {} dBASE record(s) past the .shp's last shape have no shape and were left out", records - pairs));
@@ -8904,6 +8934,35 @@ mod tests {
             let names: Vec<_> = ds.features.iter().map(|f| f.attrs[0].clone()).collect();
             assert_eq!(names, [Value::Text("b".into()), Value::Text("c".into())], "deleted: {deleted}");
             assert_eq!(report.skipped, usize::from(!deleted), "{:?}", report.messages);
+        }
+    }
+
+    /// Without a `.shx`, a shape that can't be read ends the pairing: the shapes after it can't be
+    /// found, so the records after it are left out and said rather than paired with what is read
+    /// from inside the broken shape.
+    #[test]
+    fn without_an_shx_an_unreadable_shape_ends_the_pairing() {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = three_named_points(dir.path());
+            std::fs::remove_file(path.with_extension("shx")).unwrap();
+            let mut shp = std::fs::read(&path).unwrap();
+            shp[108..112].copy_from_slice(&99i32.to_le_bytes());
+            std::fs::write(&path, &shp).unwrap();
+            if deleted {
+                let dbf_path = path.with_extension("dbf");
+                let mut dbf = std::fs::read(&dbf_path).unwrap();
+                let at = dbf_record_at(&dbf, 0);
+                dbf[at] = b'*';
+                std::fs::write(&dbf_path, &dbf).unwrap();
+            }
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            assert!(ds.features.is_empty(), "deleted: {deleted}");
+            assert!(
+                report.messages.iter().any(|m| m.contains("no .shx to find the next one by: the 2 record(s) after it were left out")),
+                "{:?}",
+                report.messages
+            );
         }
     }
 
