@@ -111,6 +111,12 @@ fn a_downloaded_layer_named_from_a_long_address_says_the_cut() {
     let long_zip = format!("https://example.org/{}.zip", "z".repeat(150));
     assert_eq!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"PK\x03\x04rest"), None);
     assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"not a zip").is_some());
+    // A long "extension" that isn't one is dropped, the short stem kept whole: nothing cut.
+    let odd = format!("https://example.org/a.{}", "x".repeat(121));
+    assert_eq!(
+        crate::cmd::layer::url_name_cut("Add Downloaded Data", &odd, &json!({}), br#"{"type":"FeatureCollection","features":[]}"#),
+        None
+    );
     // Named, or a short address: nothing to say.
     for (url, name) in [(long.as_str(), Some("Named")), ("https://example.org/short.csv", None)] {
         let id = s.download_started();

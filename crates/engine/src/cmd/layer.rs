@@ -4727,8 +4727,13 @@ pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value, bytes: &[u8]) ->
     if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || is_zip(bytes) {
         return None;
     }
-    let n = url_last_segment(url).chars().count();
-    (n > MAX_URL_FILE_NAME).then(|| {
+    // Decided by the stem the layer is named from: a long extension that isn't one (`a.xxx…`)
+    // is dropped, not cut.
+    let full = url_last_segment(url);
+    let kept = url_file_name(url, bytes).ok()?;
+    let stem = |name: &str| Path::new(name).file_stem().and_then(|s| s.to_str()).map_or(0, |s| s.chars().count());
+    let n = full.chars().count();
+    (stem(&kept) < stem(&full) && n > MAX_URL_FILE_NAME).then(|| {
         format!(
             "{command}: the address's file name is {n} characters, so the file name the layer is named from is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
         )

@@ -583,7 +583,7 @@ fn an_export_that_changes_a_layer_says_so() {
                 let left = ds.features.len() - held.features.len();
                 // Said with how many: "2 features without geometry left out".
                 let says_left =
-                    |n: &String| n.contains("left out") && n.split(|c: char| !c.is_ascii_digit()).any(|w| w == left.to_string());
+                    |n: &String| n.contains("left out") && prose(n).split(|c: char| !c.is_ascii_digit()).any(|w| w == left.to_string());
                 if left > 0 {
                     if !said.export.iter().any(says_left) {
                         return Err(TestCaseError::fail(format!(
