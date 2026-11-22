@@ -2320,8 +2320,10 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
         let reserved = pad_of(&first);
         match fitted(beside + reserved) {
             Some(f) if pad_of(&f) > reserved => match fitted(beside + pad_of(&f)) {
-                Some(g) => (g, pad_of(&g)),
-                None => (f, reserved),
+                // A refit whose own first label is wider still would start past the room it was
+                // fitted to: the fit before it draws instead.
+                Some(g) if pad_of(&g) <= pad_of(&f) => (g, pad_of(&g)),
+                _ => (f, reserved),
             },
             Some(f) => (f, pad_of(&f)),
             None => (first, 0.0),

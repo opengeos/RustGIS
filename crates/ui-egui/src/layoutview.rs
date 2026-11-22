@@ -2085,10 +2085,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.end_row();
                         // Each division split into parts, and divisions left of zero.
                         for (label, key, current, max) in [
-                            ("Subdivisions", "subdivisions", *subdivisions, MAX_SCALE_SUBDIVISIONS),
-                            ("Divisions before zero", "divisionsBeforeZero", *divisions_before_zero, MAX_SCALE_BEFORE_ZERO),
+                            (tl!("Subdivisions"), "subdivisions", *subdivisions, MAX_SCALE_SUBDIVISIONS),
+                            (tl!("Divisions before zero"), "divisionsBeforeZero", *divisions_before_zero, MAX_SCALE_BEFORE_ZERO),
                         ] {
-                            let input_label = ui.label(tl!(label));
+                            let input_label = ui.label(label);
                             let mut n = current as u64;
                             let drag = Dragged::lend(ui, drag_key(key), &mut n);
                             let r = ui
@@ -2163,16 +2163,26 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let shows_unit = unit_label.as_deref() != Some("");
                         let mut on = shows_unit;
                         if ui.checkbox(&mut on, "").labelled_by(input_label.id).changed() {
-                            let kept = egui::Id::unique(("scale_unit_label_kept", li, id));
+                            // Kept per project too, so another project's bar with the same ids
+                            // never gets this one's text.
+                            let kept = egui::Id::unique(("scale_unit_label_kept", app.session.opened, li, id));
                             // The label being typed is dropped, so the field losing its focus
                             // doesn't write it back; hidden, it is the text kept.
                             let draft = app.layout.typing.remove(&(li, id, "unitLabel"));
                             if on {
-                                let typed = ui.ctx().data_mut(|d| d.remove_temp::<String>(kept)).filter(|t| !t.is_empty());
+                                // Read, not taken: a show that is undone can be shown again.
+                                let typed = ui.ctx().data(|d| d.get_temp::<String>(kept)).filter(|t| !t.is_empty());
                                 update(app, json!({"unitLabel": typed.map_or(Value::Null, Value::String)}));
                             } else {
-                                if let Some(text) = draft.or_else(|| unit_label.clone()).filter(|t| !t.is_empty()) {
-                                    ui.ctx().data_mut(|d| d.insert_temp(kept, text));
+                                // Every hide keeps the text hidden now, and forgets an older one
+                                // once the label is back to the abbreviation.
+                                match draft.or_else(|| unit_label.clone()).filter(|t| !t.is_empty()) {
+                                    Some(text) => {
+                                        ui.ctx().data_mut(|d| d.insert_temp(kept, text));
+                                    }
+                                    None => {
+                                        ui.ctx().data_mut(|d| d.remove_temp::<String>(kept));
+                                    }
                                 }
                                 update(app, json!({"unitLabel": ""}));
                             }
@@ -3965,9 +3975,26 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.run_steps(3);
         assert_eq!(set(&h).1.as_deref(), Some(""));
+        // A show that was undone can be shown again: the kept text is read, not taken.
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some(""));
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.run_steps(3);
         assert_eq!(set(&h).1.as_deref(), Some("Feet"));
+        // Back to the abbreviation, then hidden and shown: the old "Feet" is forgotten.
+        h.state_mut().run("layout.update", json!({"layout": li, "element": bar, "unitLabel": null})).unwrap();
+        h.run_steps(3);
+        assert_eq!(set(&h).1, None);
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1.as_deref(), Some(""));
+        h.get_by_role_and_label(Role::CheckBox, "Show unit label").click();
+        h.run_steps(3);
+        assert_eq!(set(&h).1, None);
         // Hidden while it is being typed, the label isn't written back as the field loses its
         // focus; the typed text is the one kept.
         h.get_by_label("Unit label").focus();
