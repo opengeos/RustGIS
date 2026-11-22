@@ -84,6 +84,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
         rows: Vec::new(),
         keys: Vec::new(),
         skipped: 0,
+        geometry_losses: [0; 4],
     };
     r.collect_styles(doc.root());
     r.walk(doc.root(), &mut Vec::new(), 0);
@@ -215,6 +216,7 @@ struct Reader {
     duplicate_entries: usize,
     duplicate_placemarks: usize,
     skipped: usize,
+    geometry_losses: [usize; 4],
 }
 
 fn local<'a>(n: &Node<'a, '_>) -> &'a str {
@@ -270,21 +272,26 @@ fn style_of(n: &Node) -> Style {
 }
 
 /// Coordinates: `lon,lat[,alt]` tuples separated by white space; malformed ones are dropped.
-/// `zm` is set when a tuple kept had an altitude other than 0 (KML's default), which is dropped.
-fn coords(s: &str, zm: &Cell<bool>) -> Vec<Coord> {
+/// `unreadable` counts rejected tuples. `zm` is set when a tuple kept had an altitude other than 0 (KML's default), which is dropped.
+fn coords(s: &str, zm: &Cell<bool>, unreadable: &Cell<usize>) -> Vec<Coord> {
     s.split_whitespace()
         .filter_map(|t| {
-            let mut it = t.split(',');
-            let x = it.next()?.trim().parse::<f64>().ok()?;
-            let y = it.next()?.trim().parse::<f64>().ok()?;
-            // Longitude/latitude, as KML always is.
-            if !crate::io::lon_lat_in_range(x, y) {
-                return None;
+            let parsed = (|| {
+                let mut it = t.split(',');
+                let x = it.next()?.trim().parse::<f64>().ok()?;
+                let y = it.next()?.trim().parse::<f64>().ok()?;
+                if !crate::io::lon_lat_in_range(x, y) {
+                    return None;
+                }
+                if it.next().and_then(|z| z.trim().parse::<f64>().ok()).is_some_and(|z| z != 0.0) {
+                    zm.set(true);
+                }
+                Some(Coord::new(x, y))
+            })();
+            if parsed.is_none() {
+                unreadable.set(unreadable.get() + 1);
             }
-            if it.next().and_then(|z| z.trim().parse::<f64>().ok()).is_some_and(|z| z != 0.0) {
-                zm.set(true);
-            }
-            Some(Coord::new(x, y))
+            parsed
         })
         .collect()
 }
@@ -334,10 +341,14 @@ struct Parts {
     polygons: Vec<Vec<Vec<Coord>>>,
     /// An altitude other than 0 was dropped from the points, lines or polygons.
     zm: [Cell<bool>; 3],
+    unreadable: Cell<usize>,
+    holes: usize,
+    short_lines: usize,
+    excess_points: usize,
 }
 
 /// Adds a geometry element's parts to `out` (MultiGeometry flattened, to `MAX_DEPTH`), marking
-/// altitudes dropped.
+/// altitudes and counting discarded coordinate tuples, holes and line parts.
 fn geometry(n: &Node, out: &mut Parts, depth: usize) {
     if depth > MAX_DEPTH {
         return;
@@ -345,13 +356,20 @@ fn geometry(n: &Node, out: &mut Parts, depth: usize) {
     match local(n) {
         // Altitudes count only for the parts kept.
         "Point" => {
-            // The first tuple that reads is the point; only its altitude counts.
-            let first = child_text(n, "coordinates").and_then(|c| {
-                c.split_whitespace().find_map(|t| {
+            // Keep the first usable tuple and its altitude; count each tuple discarded.
+            let mut first = None;
+            if let Some(c) = child_text(n, "coordinates") {
+                for t in c.split_whitespace() {
                     let alt = Cell::new(false);
-                    coords(t, &alt).into_iter().next().map(|p| (p, alt.get()))
-                })
-            });
+                    if let Some(p) = coords(t, &alt, &out.unreadable).into_iter().next() {
+                        if first.is_none() {
+                            first = Some((p, alt.get()));
+                        } else {
+                            out.excess_points += 1;
+                        }
+                    }
+                }
+            }
             if let Some((p, alt)) = first {
                 out.zm[0].set(out.zm[0].get() || alt);
                 out.points.push(p);
@@ -359,23 +377,30 @@ fn geometry(n: &Node, out: &mut Parts, depth: usize) {
         }
         "LineString" | "LinearRing" => {
             let alt = Cell::new(false);
-            let c = child_text(n, "coordinates").map(|c| coords(&c, &alt)).unwrap_or_default();
+            let text = child_text(n, "coordinates");
+            let c = text.as_deref().map(|c| coords(c, &alt, &out.unreadable)).unwrap_or_default();
             if c.len() >= 2 {
                 out.zm[1].set(out.zm[1].get() || alt.get());
                 out.lines.push(c);
+            } else if text.is_some() {
+                out.short_lines += 1;
             }
         }
         "Polygon" => {
             let ring = |b: Node| {
                 let alt = Cell::new(false);
-                let r = child(&b, "LinearRing").and_then(|r| child_text(&r, "coordinates")).map(|c| coords(&c, &alt));
+                let r = child(&b, "LinearRing").and_then(|r| child_text(&r, "coordinates")).map(|c| coords(&c, &alt, &out.unreadable));
                 r.filter(|c| c.len() >= 3).map(|c| (c, alt.get()))
             };
             if let Some((outer, mut alt)) = child(n, "outerBoundaryIs").and_then(ring) {
                 let mut rings = vec![outer];
-                for (r, a) in n.children().filter(|c| c.is_element() && local(c) == "innerBoundaryIs").filter_map(ring) {
-                    alt |= a;
-                    rings.push(r);
+                for inner in n.children().filter(|c| c.is_element() && local(c) == "innerBoundaryIs") {
+                    if let Some((r, a)) = ring(inner) {
+                        alt |= a;
+                        rings.push(r);
+                    } else if child(&inner, "LinearRing").and_then(|r| child_text(&r, "coordinates")).is_some() {
+                        out.holes += 1;
+                    }
                 }
                 out.zm[2].set(out.zm[2].get() || alt);
                 out.polygons.push(rings);
@@ -499,6 +524,11 @@ impl Reader {
         let mut parts = Parts::default();
         for g in pm.children().filter(|c| c.is_element()) {
             geometry(&g, &mut parts, 0);
+        }
+        for (total, count) in
+            self.geometry_losses.iter_mut().zip([parts.unreadable.get(), parts.holes, parts.short_lines, parts.excess_points])
+        {
+            *total += count;
         }
         let mut data = Vec::new();
         let mut seen = HashSet::new();
@@ -640,6 +670,17 @@ impl Reader {
             let mut report = ReadReport::default();
             // The notes go with the first layer only.
             if i == 0 {
+                for (count, (one, many)) in self.geometry_losses.iter().zip([
+                    ("unreadable KML coordinate tuple", "unreadable KML coordinate tuples"),
+                    ("unreadable KML polygon hole", "unreadable KML polygon holes"),
+                    ("KML line part with fewer than two usable coordinates", "KML line parts with fewer than two usable coordinates"),
+                    ("excess KML Point coordinate tuple", "excess KML Point coordinate tuples"),
+                ]) {
+                    if *count > 0 {
+                        let (subject, verb) = if *count == 1 { (one, "was") } else { (many, "were") };
+                        report.messages.push(format!("{name}: {count} {subject} {verb} left out"));
+                    }
+                }
                 report.skipped = self.skipped;
                 if self.skipped > 0 {
                     report.messages.push(format!("{name}: {} placemarks without a geometry RustGIS draws were skipped", self.skipped));
@@ -685,6 +726,49 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xml_loss_partial_geometry_losses_are_counted() {
+        let xml = br#"<kml><Placemark><name>kept</name><MultiGeometry>
+<Point><coordinates>1,2 3,4 5,6</coordinates></Point>
+<LineString><coordinates>0,0 bad 2,2</coordinates></LineString>
+<LineString><coordinates>8,8</coordinates></LineString>
+<Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 4,0 4,4 0,0</coordinates></LinearRing></outerBoundaryIs>
+<innerBoundaryIs><LinearRing><coordinates>1,1 x,y</coordinates></LinearRing></innerBoundaryIs>
+</Polygon></MultiGeometry></Placemark></kml>"#;
+        for ext in ["kml", "kmz"] {
+            let bytes = if ext == "kmz" { crate::zip::write(&[("doc.kml".into(), xml.to_vec())]).unwrap() } else { xml.to_vec() };
+            let layers = read(&format!("a.{ext}"), &bytes).unwrap();
+            assert_eq!(layers.len(), 3);
+            assert_eq!(layers[0].dataset.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
+            assert_eq!(
+                layers[1].dataset.features[0].geometry,
+                Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(2.0, 2.0)]]))
+            );
+            assert_eq!(
+                layers[2].dataset.features[0].geometry,
+                Some(Geometry::Polygon(vec![vec![vec![
+                    Coord::new(0.0, 0.0),
+                    Coord::new(4.0, 0.0),
+                    Coord::new(4.0, 4.0),
+                    Coord::new(0.0, 0.0)
+                ]]]))
+            );
+            assert!(layers.iter().all(|l| l.dataset.features[0].attrs[0] == Value::Text("kept".into())));
+            let messages: Vec<_> = layers.iter().flat_map(|l| l.report.messages.iter().map(String::as_str)).collect();
+            assert_eq!(
+                messages,
+                [
+                    "a: 2 unreadable KML coordinate tuples were left out",
+                    "a: 1 unreadable KML polygon hole was left out",
+                    "a: 1 KML line part with fewer than two usable coordinates was left out",
+                    "a: 2 excess KML Point coordinate tuples were left out"
+                ]
+            );
+        }
+        let clean = read("a.kml", br#"<kml><Placemark><MultiGeometry><Point><coordinates>1,2</coordinates></Point><LineString/><LineString><coordinates> </coordinates></LineString><Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 4,0 4,4 0,0</coordinates></LinearRing></outerBoundaryIs><innerBoundaryIs/><innerBoundaryIs><LinearRing><coordinates> </coordinates></LinearRing></innerBoundaryIs></Polygon></MultiGeometry></Placemark></kml>"#).unwrap();
+        assert!(clean[0].report.messages.is_empty());
+    }
 
     /// A KMZ's overlays of one picture are copied within the archive's budget; those past it are
     /// left out and counted apart from those that can't be drawn.
