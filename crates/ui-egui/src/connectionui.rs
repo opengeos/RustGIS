@@ -466,11 +466,20 @@ fn form_address(st: &State) -> Result<String, String> {
     })
     .map_err(|e| e.to_string())?;
     let options = st.form_options.trim().trim_matches(|c| c == '&' || c == '?');
+    // The instance has its place in Server, where the form reads it back from.
+    if options.split('&').any(|kv| kv.split('=').next().unwrap_or("").trim().eq_ignore_ascii_case("instance")) {
+        return Err(tl!("Put the instance in Server, not in Options").into());
+    }
     for option in [options, if st.trust_cert { "trust-server-certificate=true" } else { "" }] {
         if !option.is_empty() {
             address.push(if address.contains('?') { '&' } else { '?' });
             address.push_str(option);
         }
+    }
+    // A password, token or key typed in Options would be shown and then left out on Save: it
+    // belongs in the Password box.
+    if rustgis_engine::data::source::msconn::split_password(&address).is_some_and(|(public, _)| public != address) {
+        return Err(tl!("Type the password in the Password box, not in Options").into());
     }
     Ok(address)
 }
@@ -2264,6 +2273,14 @@ mod tests {
         assert_eq!(definition(&no_user)["address"], "");
         let windows = State { user: String::new(), ..gdb_form("windows") };
         assert!(form_error(&windows).is_none());
+        // A password, token or key typed in Options belongs in the Password box, and an
+        // instance in Server: the form says so rather than compose them.
+        for typed in ["pwd=hunter2", "encrypt=strict&PASSWORD=x", "token=abc", "instance=OTHER", "encrypt=strict&Instance=X"] {
+            let refused = State { form_options: typed.into(), ..gdb_form("sql") };
+            assert!(form_error(&refused).is_some(), "{typed}");
+        }
+        let fine = State { form_options: "encrypt=strict&connect-timeout=30".into(), ..gdb_form("sql") };
+        assert!(form_error(&fine).is_none());
         // Address mode is never checked against the form.
         st.form = false;
         assert!(form_error(&st).is_none());
