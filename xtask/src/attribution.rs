@@ -4,13 +4,15 @@
 //! AGENTS.md says every asset file has a row. The table also lists test data and fixtures, but
 //! not by any rule that a program could apply to every file, so this checks the classes the rule
 //! names: images, icons and fonts. A file is covered when a backticked path in `ATTRIBUTION.md`
-//! names it, names a directory above it, matches it as a pattern (`*` stands for any characters,
-//! `/` included), or, with no `/`, names it or matches it by its file name alone.
+//! (one with a `/`) names it, names a directory above it (a trailing `/` is optional), or matches
+//! it as a pattern, in which `*` stands for any characters, `/` included. A bare file name covers
+//! nothing, so a row can't cover a same-named file somewhere else.
 
 use std::path::Path;
 
 /// The extensions of image, icon and font files.
-const ASSET_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "icns", "svg", "ttf", "otf", "ttc", "woff", "woff2"];
+const ASSET_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "icns", "svg", "ttf", "otf", "ttc", "woff", "woff2", "eot"];
 
 /// Whether `text` matches `pattern`, in which `*` stands for any run of characters.
 fn wildcard(pattern: &str, text: &str) -> bool {
@@ -22,18 +24,19 @@ fn wildcard(pattern: &str, text: &str) -> bool {
         let Some(found) = at.find(part) else { return false };
         at = &at[found + part.len()..];
     }
-    at.ends_with(last) && at.len() >= last.len()
+    at.ends_with(last)
 }
 
-/// The paths and patterns `ATTRIBUTION.md` names: everything in backticks that looks like a file
-/// or a directory, with a trailing `/` taken off.
-fn named(attribution: &str) -> Vec<&str> {
+/// The paths and patterns `ATTRIBUTION.md` names: everything in backticks with a `/` in it (the
+/// path of a file may hold spaces), and whether it ends in `/`, which marks a directory.
+fn named(attribution: &str) -> Vec<(&str, bool)> {
     attribution
         .split('`')
         .skip(1)
         .step_by(2)
-        .filter(|t| !t.is_empty() && !t.contains(char::is_whitespace) && (t.contains('/') || t.contains('.')))
-        .map(|t| t.trim_end_matches('/'))
+        .filter(|t| t.contains('/') && !t.starts_with('/') && !t.contains(['\n', '\t']))
+        .map(|t| (t.trim_end_matches('/'), t.ends_with('/')))
+        .filter(|(t, _)| !t.is_empty())
         .collect()
 }
 
@@ -44,10 +47,7 @@ fn uncovered<'a>(files: &[&'a str], attribution: &str) -> Vec<&'a str> {
         .iter()
         .copied()
         .filter(|f| f.rsplit_once('.').is_some_and(|(_, ext)| ASSET_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())))
-        .filter(|f| {
-            let name = f.rsplit('/').next().unwrap_or(f);
-            !named.iter().any(|n| if n.contains('/') { f.starts_with(&format!("{n}/")) || wildcard(n, f) } else { wildcard(n, name) })
-        })
+        .filter(|f| !named.iter().any(|(n, _)| *f == *n || f.starts_with(&format!("{n}/")) || wildcard(n, f)))
         .collect()
 }
 
@@ -76,17 +76,22 @@ mod tests {
 
     const TABLE: &str = "| Icon (`assets/logo.png`) | us | MIT |\n\
         | Fonts (`assets/fonts/*.otf`) | a foundry | OFL |\n\
+        | Spaced (`assets/fonts/My Font.ttf`) | a foundry | OFL |\n\
+        | Top level (`icons/`) | us | MIT |\n\
         | Test corpus (`crates/map/testdata/generated/`: styles and sample data) | us | MIT |\n\
-        | Test images (`crates/x/tests/a.png`, `b.png`) | us | MIT |\n";
+        | Test images (`crates/x/tests/a.png`, `b.png`) | us | MIT |\n\
+        | Prose (`cargo xtask notices`, `tl!(\"x\")`, `/etc/hosts`) | n/a | n/a |\n";
 
     #[test]
     fn a_file_a_row_names_is_covered() {
         let files = [
             "assets/logo.png",
             "assets/fonts/hack.otf",
+            "assets/fonts/My Font.ttf",
+            "icons/a.svg",
+            "icons/deep/b.png",
             "crates/map/testdata/generated/data/marker.png",
             "crates/x/tests/a.png",
-            "crates/y/tests/b.png",
         ];
         assert_eq!(uncovered(&files, TABLE), Vec::<&str>::new());
     }
@@ -99,9 +104,21 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_file_name_covers_nothing() {
+        // `b.png` is named in a row, but only its directory's row can cover `crates/y/tests/b.png`.
+        assert_eq!(uncovered(&["crates/y/tests/b.png", "b.png"], TABLE), vec!["crates/y/tests/b.png", "b.png"]);
+    }
+
+    #[test]
     fn other_files_and_lookalike_directories_are_not_asset_files() {
-        let files = ["crates/data/src/lib.rs", "crates/data/tests/data.geojson", "README.md", "crates/map/testdata/generated-more/x.png"];
-        assert_eq!(uncovered(&files, TABLE), vec!["crates/map/testdata/generated-more/x.png"]);
+        let files = [
+            "crates/data/src/lib.rs",
+            "crates/data/tests/data.geojson",
+            "README.md",
+            "crates/map/testdata/generated-more/x.png",
+            "iconsx/a.png",
+        ];
+        assert_eq!(uncovered(&files, TABLE), vec!["crates/map/testdata/generated-more/x.png", "iconsx/a.png"]);
     }
 
     #[test]

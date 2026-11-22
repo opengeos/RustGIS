@@ -71,7 +71,8 @@ fn crate_deps(meta: &Value) -> Vec<(String, Vec<String>)> {
     for package in meta["packages"].as_array().into_iter().flatten() {
         let manifest = std::path::Path::new(package["manifest_path"].as_str().unwrap_or_default());
         let dir = manifest.parent().and_then(|d| d.strip_prefix(workspace).ok()).and_then(|d| d.strip_prefix("crates").ok());
-        let Some(dir) = dir.and_then(|d| d.to_str()).filter(|d| !d.is_empty() && !d.contains(['/', '\\'])) else { continue };
+        // A package nested below a crate's directory is kept, with its path: it has no layer.
+        let Some(dir) = dir.and_then(|d| d.to_str()).filter(|d| !d.is_empty()) else { continue };
         let deps = package["dependencies"]
             .as_array()
             .into_iter()
@@ -79,7 +80,7 @@ fn crate_deps(meta: &Value) -> Vec<(String, Vec<String>)> {
             .filter(|d| d["kind"].is_null())
             .filter_map(|d| d["name"].as_str().map(str::to_string))
             .collect();
-        out.push((dir.to_string(), deps));
+        out.push((dir.replace('\\', "/"), deps));
     }
     out
 }
@@ -120,8 +121,8 @@ fn cargo(args: &[&str]) -> Result<(), String> {
     if st.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
-/// `cargo xtask ci`: test hygiene, fmt, clippy with warnings as errors, tests, layering, attribution rows, direct row
-/// uses and the project schema check, on the whole workspace.
+/// `cargo xtask ci`: test hygiene, fmt, clippy with warnings as errors, tests, layering, attribution
+/// rows, direct row uses and the project schema check, on the whole workspace.
 fn ci() -> Result<(), String> {
     test_hygiene::run(&root())?;
     cargo(&["fmt", "--all", "--check"])
@@ -403,6 +404,16 @@ mod tests {
         assert_eq!(errs.len(), 2, "{errs:?}");
         assert!(errs.iter().any(|e| e.starts_with("crates/newcomer has no layer")));
         assert!(errs.iter().any(|e| e.starts_with("LAYERS has keychain, but there is no crates/keychain")));
+    }
+
+    #[test]
+    fn layers_sees_a_package_nested_below_a_crate() {
+        let mut crates: Vec<(&str, &[Dep])> = LAYERS.iter().map(|(k, _)| (*k, &[][..])).collect();
+        crates.push(("data/inner", &[]));
+        assert_eq!(
+            layer_errors(&crate_deps(&metadata(&crates))),
+            vec!["crates/data/inner has no layer: add it to LAYERS in xtask/src/main.rs".to_string()]
+        );
     }
 
     #[test]

@@ -337,7 +337,8 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
         }
         Selection::NoPackages => {
             println!("changed: only non-code files changed; no Rust packages need checking");
-            Ok(())
+            // ATTRIBUTION.md is one of them: dropping a row must not pass here.
+            super::attribution::run(root)
         }
         Selection::All(_) if list => {
             println!("all");

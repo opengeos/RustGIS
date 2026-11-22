@@ -169,8 +169,8 @@ removes a limit against its base (a new memory scenario is fine). A maintainer a
 raise by commenting on the pull request with the line the failure prints for it, on a line of its
 own (`<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`), then re-runs the job.
 While you work, `cargo xtask changed` runs the same checks on only the packages your branch changes
-and those that depend on them (and `test-hygiene` on the whole workspace, and formatting, `layers` and
-`rows` when packages are checked), or everything when a
+and those that depend on them (and `test-hygiene` on the whole workspace, and formatting, `layers`,
+`attribution` and `rows` when packages are checked), or everything when a
 changed file such as `Cargo.lock` is outside every package and nothing includes it.
 A new dependency must have a licence `deny.toml` allows (CI runs `cargo deny check licenses`); after
 changing dependencies, run `cargo xtask notices` to refresh the `THIRD-PARTY-LICENSES.txt` files the
