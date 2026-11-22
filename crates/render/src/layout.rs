@@ -2449,14 +2449,15 @@ struct BarFit {
 /// A scale bar of `before` divisions before zero and `after` after it, counting in a unit `unit_m`
 /// metres long, fitted to `room_m` ground metres by `fit`: the roundest length divided as asked
 /// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit, at most
-/// ten (`AdjustDivision`), or the asked divisions each a round length (`AdjustWidth`). `None` when it
-/// draws none.
+/// ten in all, the divisions before zero included (`AdjustDivision`), or the asked divisions each a
+/// round length (`AdjustWidth`). `None` when it draws none.
 fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usize) -> Option<BarFit> {
     let count = (before + after) as f64;
     let (total, after) = match fit {
         ScaleBarFit::AdjustDivisionValue => (rustgis_geom::nice_distance(room_m / unit_m), after),
         ScaleBarFit::AdjustDivision => {
-            let most = rustgis_map::layout::MAX_SCALE_DIVISIONS as f64;
+            // Ten in all, the divisions before zero among them, and at least one after zero.
+            let most = rustgis_map::layout::MAX_SCALE_DIVISIONS.saturating_sub(before).max(1) as f64;
             let fits = |value: f64| (room_m / unit_m / value + 1e-9).floor() - before as f64;
             // More than ten would fit: the next round division (1, 2, 5, 10 …) until ten do, so
             // the bar fills its room as far as a round value allows rather than stopping short.
@@ -9079,6 +9080,26 @@ Elaboração: RustGIS",
                 }
             }
         }
+        // Two divisions before zero count toward the ten: in a wide room, ten in all, never twelve.
+        let bar = BarOptions {
+            units: ScaleUnits::Kilometers,
+            fit: ScaleBarFit::AdjustDivision,
+            divisions_before_zero: 2,
+            ..BarOptions::default()
+        };
+        let mut most = 0;
+        for w in (300..1400).step_by(23) {
+            let b = bar_layout(Rect::from_xywh(0.0, 0.0, w as f32, 60.0).unwrap(), 100.0, &bar, 1.0, false).unwrap();
+            assert!(b.divs <= rustgis_map::layout::MAX_SCALE_DIVISIONS && b.before == 2, "{w} px: {} divisions", b.divs);
+            let pm = draw_bar(&bar, w);
+            let middle = (b.y0 + b.bar_h / 2.0) as u32;
+            // An alternating bar's dark divisions: half of them, the first before zero dark.
+            assert_eq!(dark_runs(&pm, middle), b.divs.div_ceil(2), "{w} px");
+            let (a, z) = marked_span(&pm, middle).unwrap();
+            assert!(((z - a) as f32 - b.len).abs() <= 2.0, "{w} px: {a}..{z} for {}", b.len);
+            most = most.max(b.divs);
+        }
+        assert_eq!(most, rustgis_map::layout::MAX_SCALE_DIVISIONS, "a wide room reaches ten");
     }
 
     /// The narrowest element keeps its bar where an export rebuilds it from an f32 rectangle: near

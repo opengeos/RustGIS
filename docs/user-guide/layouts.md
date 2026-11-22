@@ -292,7 +292,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   the decimals it needs, as before; the layout's decimal comma applies; `"auto"` or a number, as a
   chart's) and a **Fit** for when round divisions don't fill the box: *Adjust division value* (the
   default) divides the roundest length that fits, so a division may not be round; *Adjust number of
-  divisions* keeps a round division and adds or drops divisions, at most ten, to fill the width;
+  divisions* keeps a round division and adds or drops divisions, at most ten in all, the divisions
+  before zero included, to fill the width;
   *Adjust width* keeps the divisions and draws the bar only as wide as they need
   (`"subdivisions":4,"divisionsBeforeZero":1,"labelPosition":"below","unitLabel":"Kilometres","unitLabelPosition":"afterBar","decimals":1,"fit":"adjustWidth"`).
   Their labels and unit label are drawn at its **Text size**, the lines above the bar reaching no
