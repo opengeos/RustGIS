@@ -4,8 +4,8 @@
 //! point at this computer or the local network: a self-hosted tile server. Addresses that come
 //! from somewhere else (inside a style or TileJSON document, or a redirect) may not reach into
 //! the local network unless the document itself came from there, so a style found on the web
-//! can't make the app probe local services. Link-local addresses, where cloud metadata services
-//! answer, are never fetched.
+//! can't make the app probe local services. Link-local addresses and the other addresses cloud
+//! metadata services answer at are never fetched.
 //!
 //! These spelling checks also run after template expansion. Native fetchers additionally
 //! filter the resolved IPs before connecting: a public document cannot select a local
@@ -119,8 +119,17 @@ fn host(url: &str) -> Option<String> {
     Some(host.trim_end_matches('.').to_ascii_lowercase())
 }
 
+/// Cloud instance metadata services answering outside the link-local ranges, which are forbidden
+/// already: one unique-local IPv6 and one carrier-grade NAT address. Only these two: the ranges
+/// around them stay local, for self-hosted servers there.
+const METADATA: [IpAddr; 2] =
+    [IpAddr::V6(Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)), IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))];
+
 /// How far an IP address reaches.
 pub fn ip_reach(ip: IpAddr) -> Reach {
+    if METADATA.contains(&ip) {
+        return Reach::Forbidden;
+    }
     match ip {
         IpAddr::V4(v4) => v4_reach(v4),
         IpAddr::V6(v6) => {
@@ -145,7 +154,7 @@ pub fn ip_reach(ip: IpAddr) -> Reach {
 }
 
 fn v4_reach(v4: Ipv4Addr) -> Reach {
-    if v4.is_unspecified() || v4.is_link_local() || v4.is_broadcast() {
+    if v4.is_unspecified() || v4.is_link_local() || v4.is_broadcast() || METADATA.contains(&IpAddr::V4(v4)) {
         Reach::Forbidden
     } else if v4.is_loopback() || v4.is_private() || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64) {
         // 100.64.0.0/10 (carrier-grade NAT) counts as local too.
@@ -337,6 +346,29 @@ mod tests {
         assert_eq!(reach("http://1.2.3.4.5/"), Reach::Forbidden);
         assert_eq!(reach("http://999.1/"), Reach::Forbidden);
         assert_eq!(reach("http://tiles.example.com/"), Reach::Public);
+    }
+
+    /// The two metadata addresses outside the link-local ranges are never fetched, however they
+    /// are spelled; their neighbours stay local (self-hosted servers on those ranges keep working).
+    #[test]
+    fn cloud_metadata_addresses_are_forbidden_and_their_ranges_stay_local() {
+        for url in [
+            "http://[fd00:ec2::254]/latest/meta-data/",
+            "http://[::ffff:100.100.100.200]/",
+            "http://100.100.100.200/latest/meta-data/",
+            "http://[64:ff9b::6464:64c8]/",
+            "http://1684301000/",
+        ] {
+            assert_eq!(reach(url), Reach::Forbidden, "{url}");
+            assert!(check(url, None).is_err(), "{url}");
+        }
+        for peer in ["fd00:ec2::254", "100.100.100.200"] {
+            assert!(Origin::connected("https://selected.example/", peer.parse().unwrap()).is_err(), "{peer}");
+        }
+        for url in ["http://[fd00:ec2::253]/", "http://[fd12:3456::1]/", "http://100.100.100.201/", "http://100.64.0.1/"] {
+            assert_eq!(reach(url), Reach::Local, "{url}");
+            assert!(check(url, None).is_ok(), "{url}");
+        }
     }
 
     #[test]

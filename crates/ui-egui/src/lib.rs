@@ -659,14 +659,37 @@ pub(crate) fn fetch_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
     fetch_into_limited(url, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD)
 }
 
-/// Like [`fetch_into`], with what is known of a failure (#509).
+/// Fetches a service's document as [`fetch_into`] does, with what is known of a failure (#509).
+/// One that came from the internet, wherever its name pointed, is recorded so
+/// ([`restrict_to_public`](rustgis_engine::render::rustgis_tiles::cache::restrict_to_public)):
+/// the documents it links to and the layers it lists are then fetched only from there.
 pub(crate) fn fetch_detailed_into(url: &str) -> Slot<Result<Vec<u8>, Failure>> {
-    let slot: Slot<Result<Vec<u8>, Failure>> = Slot::default();
+    fetch_document_as(url, |failure| failure)
+}
+
+/// [`fetch_detailed_into`], with a failure's message alone.
+pub(crate) fn fetch_document_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
+    fetch_document_as(url, |failure| failure.message)
+}
+
+/// [`fetch_detailed_into`], its failure told as `told` gives it.
+fn fetch_document_as<E: Send + 'static>(url: &str, told: fn(Failure) -> E) -> Slot<Result<Vec<u8>, E>> {
+    use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
+    let slot: Slot<Result<Vec<u8>, E>> = Slot::default();
     let land = slot.clone();
-    rustgis_engine::render::rustgis_tiles::cache::download_detailed(
+    let asked = url.to_string();
+    cache::download_detailed_with_origin(
         url,
-        rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD,
-        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+        cache::MAX_DOWNLOAD,
+        Box::new(move |r| {
+            let r = r.map_err(told).map(|fetched| {
+                if fetched.origin.reach() == Reach::Public {
+                    cache::restrict_to_public(&asked);
+                }
+                fetched.bytes
+            });
+            *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+        }),
     );
     slot
 }
@@ -6427,6 +6450,11 @@ impl RustGisApp {
                                 Ok(()) => {
                                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
                                         != rustgis_engine::render::rustgis_tiles::logins::origin(&next);
+                                    // A tile set document read from the internet leads only there.
+                                    use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
+                                    if cache::ceiling_for(&resolve.doc) == Reach::Public {
+                                        cache::restrict_to_public(&next);
+                                    }
                                     resolve.doc = next;
                                     resolve.slot = fetch_into(&resolve.doc);
                                 }
@@ -6484,6 +6512,11 @@ impl RustGisApp {
                         let connection = params.as_object_mut().and_then(|p| p.remove("connection"));
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
                         let mut p = json!({"url": get, "name": title, "coverage": true});
+                        // Its service's document came from the internet: so does the coverage.
+                        use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
+                        if cache::ceiling_for(&get) == Reach::Public {
+                            p["fromDocument"] = json!(true);
+                        }
                         if params.get("anonymous").and_then(Value::as_bool) == Some(true)
                             || c.get("anonymous").and_then(Value::as_bool) == Some(true)
                         {

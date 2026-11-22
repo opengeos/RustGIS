@@ -1751,6 +1751,13 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     download_detailed_within(url, max, DOWNLOAD_TIMEOUT, &[], done);
 }
 
+/// Like [`download_detailed`], preserving the final post-redirect [`crate::address::Origin`] and
+/// observed network reach alongside the bytes: for a service's document, whose links reach only as
+/// far as it did.
+pub fn download_detailed_with_origin(url: &str, max: usize, done: DoneFetchedDetailed) {
+    download_fetched_reaching(url, max, DOWNLOAD_TIMEOUT, &[], Reaching::Any, done);
+}
+
 /// Like [`download`], preserving the final post-redirect [`crate::address::Origin`] and observed
 /// network reach alongside the downloaded bytes.
 pub fn download_with_origin(url: &str, done: FetchedDone) {
@@ -1799,7 +1806,8 @@ enum Reaching {
     Public,
 }
 
-type DoneFetchedDetailed = Box<dyn FnOnce(Result<Fetched, Failure>) + Send>;
+/// Called once with a download's bytes and where they came from, or what is known of its failure.
+pub type DoneFetchedDetailed = Box<dyn FnOnce(Result<Fetched, Failure>) + Send>;
 
 /// Like [`download_detailed`], giving up after `timeout` natively; a status in `omit` isn't
 /// recorded as a failure.

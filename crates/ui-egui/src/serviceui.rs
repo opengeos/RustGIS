@@ -2,8 +2,9 @@
 //! engine commands; this state machine supplies their downloaded documents and preserves the
 //! saved connection or anonymous provenance through every deferred add.
 
-use crate::{RustGisApp, Slot, fetch_into, fetch_into_limited, i18n};
+use crate::{RustGisApp, Slot, fetch_document_into, fetch_into_limited, i18n};
 use rustgis_engine::data::ogc::{self, Pages, Step};
+use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
@@ -79,7 +80,9 @@ pub struct Import {
     slot: Slot<Result<Vec<u8>, String>>,
     document: Option<String>,
     current: Option<String>,
-    remaining: VecDeque<String>,
+    /// The collections still to fetch, each with whether the document listing it was read from
+    /// the internet ([`from_public`]).
+    remaining: VecDeque<(String, bool)>,
     responses: Vec<Value>,
     bytes: usize,
 }
@@ -174,6 +177,7 @@ pub(crate) fn add_layer_from(
     connection: Option<&str>,
 ) -> Result<String, String> {
     let anonymous = l.get("anonymous").and_then(Value::as_bool) == Some(true);
+    let public = from_public(l);
     let connection = connection_for(app, connection, &src.url).filter(|_| !anonymous);
     let name = l.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let title = l.get("title").and_then(Value::as_str).unwrap_or(&name).to_string();
@@ -206,6 +210,9 @@ pub(crate) fn add_layer_from(
         if asked.is_some() {
             params["zoom"] = json!(false);
         }
+        if public {
+            params["fromDocument"] = json!(true);
+        }
         return crate::connectiontree::run_add_url(app, params, origin).map(|_| downloading(&title));
     }
     let origin = origin.map(str::to_string);
@@ -226,6 +233,9 @@ pub(crate) fn add_layer_from(
         } else {
             request_from(app, connection, &src.url, &describe)?
         };
+        if public {
+            cache::restrict_to_public(&describe);
+        }
         let slot = crate::fetch_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin, opened: app.session.opened });
         return Ok(describing(&title));
@@ -256,6 +266,9 @@ pub(crate) fn add_layer_from(
             } else {
                 request_from(app, connection, &src.url, list)?
             };
+            if public {
+                cache::restrict_to_public(&list);
+            }
             let slot = crate::fetch_into(&list);
             let resolve = crate::TilesResolve {
                 params: p,
@@ -281,6 +294,13 @@ pub(crate) fn add_layer_from(
             crate::connectiontree::run_named(app, "service.add", p, origin.as_deref()).map(|_| added(&title))
         }
     }
+}
+
+/// Whether the document a listed layer `l` comes from (its `source_url`) was read from the
+/// internet, as the app's fetch or the service's discovery recorded it: what the layer needs is
+/// then fetched only from there, wherever its names point.
+pub(crate) fn from_public(l: &Value) -> bool {
+    l.get("source_url").and_then(Value::as_str).is_some_and(|source| cache::ceiling_for(source) == Reach::Public)
 }
 
 /// Starts grouped discovery under its original request, retaining the import target and byte budget.
@@ -341,7 +361,7 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
                 return Err(e);
             }
         };
-        task.slot = fetch_into(&caps);
+        task.slot = fetch_document_into(&caps);
         task.document = Some(caps);
     }
     app.dialogs.error = None;
@@ -374,7 +394,7 @@ impl Import {
         }
         if let Some(next) = listing.get("next").and_then(Value::as_str) {
             let next = self.request(next)?;
-            self.slot = fetch_into(&next);
+            self.slot = fetch_document_into(&next);
             self.document = Some(next);
         } else {
             self.remaining = listing
@@ -382,7 +402,7 @@ impl Import {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|l| l.get("offer").and_then(|o| o.get("url")).and_then(Value::as_str).map(str::to_string))
+                .filter_map(|l| l.get("offer").and_then(|o| o.get("url")).and_then(Value::as_str).map(|u| (u.to_string(), from_public(l))))
                 .collect();
             self.next()?;
         }
@@ -391,11 +411,21 @@ impl Import {
 
     /// Fetches one exact planned collection within the remaining shared byte budget.
     fn next(&mut self) -> Result<(), String> {
-        self.current = self.remaining.pop_front();
-        if let Some(url) = &self.current {
-            let url = self.request(url)?;
-            self.slot = fetch_into_limited(&url, rustgis_engine::cmd::service::MAX_GROUP_BYTES.saturating_sub(self.bytes));
-        }
+        let Some((url, public)) = self.remaining.pop_front() else {
+            self.current = None;
+            return Ok(());
+        };
+        let asked = self.request(&url)?;
+        let max = rustgis_engine::cmd::service::MAX_GROUP_BYTES.saturating_sub(self.bytes);
+        self.slot = if public {
+            let slot = Slot::default();
+            let land = slot.clone();
+            cache::download_public_limited(&asked, max, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            slot
+        } else {
+            fetch_into_limited(&asked, max)
+        };
+        self.current = Some(url);
         Ok(())
     }
 
@@ -588,6 +618,10 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
 /// back at the first page's origin.
 fn next_request(app: &mut RustGisApp, params: &Value, pages: &Pages) -> Result<String, String> {
     rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer()))?;
+    // A page that may reach only the internet leads only there.
+    if cache::ceiling_for(pages.referrer()) == Reach::Public {
+        cache::restrict_to_public(pages.next_url());
+    }
     if params.get("anonymous").and_then(Value::as_bool) == Some(true) {
         return Ok(rustgis_engine::data::login_address::inner(pages.next_url()).to_string());
     }
@@ -653,6 +687,56 @@ fn noted(app: &mut RustGisApp, landed: &Landed, note: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Add From Service records a document it read from the internet: the document it links to
+    /// is fetched only from there, and a layer listed there is added restricted to it, however
+    /// their names resolve. A service read from the local network links to its own documents as
+    /// before.
+    #[test]
+    fn documents_read_from_the_internet_hold_what_they_link_to() {
+        use rustgis_engine::render::rustgis_tiles::address::{Origin, Reach};
+        let items = "https://dialog-links.example/collections/parcels/items";
+        let landing = json!({"links":[{"rel":"data","type":"application/json","href":"https://dialog-links.example/collections"}]});
+        let collections = json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
+        for observed in [Reach::Public, Reach::Local] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            let (landing, collections) = (landing.to_string(), collections.to_string());
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let body = if clean.contains("dialog-links.example") { &collections } else { &landing };
+                // A fetch connects no wider than its ceiling.
+                let origin = Origin::with_observed_reach(&clean, observed.min(ceiling)).unwrap();
+                done(Ok(cache::Fetched { bytes: body.clone().into_bytes(), origin }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            app.run("ui.addService", json!({"url": "https://dialog-root.example/ogc", "type": "ogcapi"})).unwrap();
+            app.poll_service();
+            app.poll_service();
+            let conn = app.ui.service.as_ref().unwrap();
+            let listing = conn.listing.clone().expect("both documents were read");
+            {
+                let asked = asked.lock().unwrap();
+                assert_eq!(asked.len(), 2, "{asked:?}");
+                assert_eq!(asked[0].1, Reach::Local, "the service's own address is the user's choice");
+                assert!(asked[1].0.starts_with("https://dialog-links.example/collections"), "{asked:?}");
+                assert_eq!(asked[1].1, observed, "the linked document's reach, observed {observed:?}");
+            }
+            let layer = &listing["layers"][0];
+            assert_eq!(from_public(layer), observed == Reach::Public, "{listing}");
+            let src = ServiceSource {
+                url: conn.url.clone(),
+                kind: "ogcapi",
+                text: conn.text.clone().unwrap(),
+                documents: conn.documents.clone(),
+            };
+            add_layer_from(&mut app, &src, layer, "", None, false, None, None).unwrap();
+            // The features are read off the frame, page by page, within what their address records.
+            assert_eq!(cache::ceiling_for(items) == Reach::Public, observed == Reach::Public, "observed {observed:?}");
+        }
+    }
 
     /// Discovery's anonymous provenance survives both deferred protocols and their final params.
     #[test]
