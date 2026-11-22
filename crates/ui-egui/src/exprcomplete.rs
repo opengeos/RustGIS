@@ -518,20 +518,23 @@ pub(crate) fn draw_item(ui: &mut Ui, offer: &Offer, item: &str, ds: Option<&Data
 /// What the help of `item` of `offer` says, for a screen reader (`describe`): the expression
 /// box's list and the Script's say the same.
 pub(crate) fn describe_item(offer: &Offer, item: &str, ds: Option<&Dataset>) -> Option<String> {
-    find(offer, item).map(|of| spoken(of, ds))
+    find(offer, item).map(|of| spoken_item(of, ds))
 }
 
 /// What the help beside the list says about `item` (`draw_help`), as text for a screen reader:
 /// the signature and what a function gives (the example left out, as code to read); a field's
 /// type and alias; what a variable reads or a keyword does; whose value a value is.
-fn spoken(item: &Item, ds: Option<&Dataset>) -> String {
+fn spoken_item(item: &Item, ds: Option<&Dataset>) -> String {
     match item {
         Item::Function(f) => crate::completion::spoken(f.signature, Some(tl!(f.description))),
         Item::Field(name) => {
             let f = ds.and_then(|d| d.fields.iter().find(|f| f.name == *name));
             let ty = f.map(|f| tl!(f.ty.label()).to_string());
             let alias = f.and_then(|f| f.alias.clone()).filter(|a| !a.is_empty());
-            ty.map_or_else(|| alias.clone().unwrap_or_default(), |ty| crate::completion::spoken(&ty, alias.as_deref()))
+            match (ty, alias) {
+                (Some(ty), alias) => crate::completion::spoken(&ty, alias.as_deref()),
+                (None, alias) => alias.unwrap_or_default(),
+            }
         }
         Item::Variable(i, _) => VARS.get(*i).map(|v| tl!(v.description).to_string()).unwrap_or_default(),
         Item::Keyword(k) => tl!(k.description()).to_string(),
@@ -623,7 +626,7 @@ pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) 
             draw_help(ui, of, None, width);
         }
     };
-    let describe = |i: usize| catalog.get(i).map(|(_, item)| spoken(item, None));
+    let describe = |i: usize| catalog.get(i).map(|(_, item)| spoken_item(item, None));
     let items = || catalog.iter().map(|(s, _)| s.clone()).collect();
     let (_, accepted) = crate::completion::menu(ui, label, items, |_| None, describe, true, help);
     find(&accepted?).map(|item| match item {

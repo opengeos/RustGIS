@@ -11,6 +11,7 @@
 use egui::text::CCursor;
 use egui::widgets::text_edit::{TextEditOutput, TextEditState};
 use egui::{Id, Key, Modifiers, Ui};
+use std::collections::HashMap;
 
 /// The list's narrowest width.
 const MIN_WIDTH: f32 = 220.0;
@@ -446,9 +447,9 @@ impl<O: Offered> List<O> {
         describe: impl Fn(&O, &str) -> Option<String>,
         help: impl FnOnce(&mut Ui, &O, &str, f32),
     ) -> Option<(O, String)> {
-        // A page pressed this frame (`keys`) is for the list drawn this frame: taken now and given
-        // back only once it's drawn, so a frame that draws none (closed, the cursor out of view)
-        // drops it.
+        // A page pressed (`keys`), or waiting for a help that changed (`rows`), is for the list it
+        // was pressed for, while that list stays open with a help: taken now and handed back below
+        // only then.
         let page = std::mem::take(&mut self.scroll.page);
         // The window left (another app took the focus, the box keeps its own): the list closes, as a
         // code editor's does, and comes back only once what's typed or the cursor changes.
@@ -507,7 +508,8 @@ impl<O: Offered> List<O> {
         }
         let pointer_leads = self.pointer_leads;
         // A new list starts from its top: its scroll is the old list's otherwise.
-        if self.open.as_ref().is_none_or(|(o, _)| o.items() != offer.items()) {
+        let same = self.open.as_ref().is_some_and(|(o, _)| o.items() == offer.items());
+        if !same {
             self.scroll = Scroll::default();
         } else if self.open.as_ref().is_some_and(|(o, _)| *o != offer) {
             // The same items, but what they say may not be (a field's type, read again).
@@ -525,7 +527,7 @@ impl<O: Offered> List<O> {
         let mut clicked = None;
         let mut highlighted = None;
         let has_help = offer.has_help();
-        self.scroll.page = page;
+        self.scroll.page = if same && has_help { page } else { 0 };
         let scroll = &mut self.scroll;
         let items = offer.items();
         let (area, drawn) = popup(ui, id, corner, room, |ui| {
@@ -557,6 +559,8 @@ impl<O: Offered> List<O> {
         if clicked.is_some() {
             self.open = None;
             self.drawn = None;
+            // Closed: a page still waiting (the help changed this frame) goes with the list.
+            self.scroll.page = 0;
         } else {
             self.open = Some((offer, selected));
             // Placed by a guess (its first frame) or by another list's size: place it again by
@@ -591,7 +595,7 @@ struct Scroll {
     /// stays the one shown (the item the pointer left, to read or scroll its help).
     help_at: Option<egui::Rect>,
     /// What each row says to a screen reader, worked out once (`rows`).
-    described: std::collections::HashMap<usize, Option<String>>,
+    described: HashMap<usize, Option<String>>,
     /// Page Up (-1) or Page Down (1) pressed for the help, not yet applied (`rows`).
     page: i32,
     /// How far the help's box scrolled at most last frame: a page down stops there.
@@ -1720,13 +1724,14 @@ mod tests {
         check(&mut h, &long, "a button's list");
     }
 
-    /// A page pressed on the frame a list closes (Escape, Enter) is dropped with it: the next
-    /// list's help opens at its top.
+    /// A page pressed on the frame a list closes (Escape, Enter, a click on a row with another
+    /// help) is dropped with it: the next list's help opens at its top.
     #[test]
     fn a_page_pressed_as_a_list_closes_is_dropped() {
         use egui_kittest::kittest::Queryable;
         let long = format!("first line {}", "a long help that wraps over several lines ".repeat(60));
-        for close in [egui::Key::Escape, egui::Key::Enter] {
+        // A click on "two" changes the help on the frame it closes the list: the page waits then.
+        for close in [Some(egui::Key::Escape), Some(egui::Key::Enter), None] {
             let shown = long.clone();
             let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
                 move |ui, (text, list): &mut (String, super::List<Words>)| {
@@ -1747,7 +1752,7 @@ mod tests {
                     let visible = ui.clip_rect();
                     // Another list for each text: a new one opens once something's typed.
                     let offer = Words(vec![format!("one{}", text.len()), "two".into()]);
-                    list.show(
+                    let clicked = list.show(
                         ui,
                         egui::Id::unique("list"),
                         &out,
@@ -1755,29 +1760,55 @@ mod tests {
                         |_| Some(offer),
                         |_, _| None,
                         |_, _| None,
-                        |ui, _, _, width| {
+                        |ui, _, item, width| {
                             ui.set_max_width(width);
-                            ui.label(&shown);
+                            if item == "two" {
+                                ui.label(format!("second {shown}"));
+                            } else {
+                                ui.label(&shown);
+                            }
                         },
                     );
+                    if let Some((_, item)) = clicked {
+                        text.push_str(&item);
+                    }
                 },
                 (String::new(), super::List::default()),
             );
             h.run_steps(3);
             let top = h.get_by_label(&long).rect().top();
-            // Both keys in one frame (kittest's `key_press` gives each its own).
-            for key in [egui::Key::PageDown, close] {
-                let event = egui::Event::Key { key, pressed: true, modifiers: egui::Modifiers::NONE, repeat: false, physical_key: None };
-                h.input_mut().events.push(event);
+            // All in one frame (kittest's `key_press` and `click` give each event its own).
+            let key = |key| egui::Event::Key { key, pressed: true, modifiers: egui::Modifiers::NONE, repeat: false, physical_key: None };
+            let mut events = vec![key(egui::Key::PageDown)];
+            match close {
+                Some(close) => events.push(key(close)),
+                None => {
+                    // The pointer on the first row, then on "two" as it clicks: the help follows it.
+                    h.hover_at(h.get_by_label("one0").rect().center());
+                    h.run();
+                    let pos = h.get_by_label("two").rect().center();
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    events.splice(0..0, [egui::Event::PointerMoved(pos), button(true), button(false)]);
+                }
             }
+            h.input_mut().events.extend(events);
             h.run();
-            // Enter opened the next list (more to offer after the item); Escape needs a key typed.
-            if close == egui::Key::Escape {
+            // Enter and a click opened the next list (more to offer after the item); Escape needs
+            // a key typed.
+            if close == Some(egui::Key::Escape) {
                 h.event(egui::Event::Text("x".into()));
                 h.run();
             }
             h.run_steps(4);
-            let at = h.get_by_label(&long).rect().top();
+            // The first item's help, or the one under the pointer left on "two".
+            let second = format!("second {long}");
+            let at = h.query_by_label(&long).or_else(|| h.query_by_label(&second)).map(|n| n.rect().top());
+            let Some(at) = at else { panic!("{close:?}: no help shown") };
             assert!((at - top).abs() < 0.5, "{close:?}: the next list's help at its top: {at} for {top}");
         }
     }
