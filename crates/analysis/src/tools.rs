@@ -2554,7 +2554,6 @@ fn overlay_on(inp: &dyn Inputs, p: &Json, op: Overlay, threads: Option<usize>) -
         }
     }
     if op.keeps_overlay_rest() {
-        crate::control::begin(zones.len());
         let pairs: Vec<(&Zone, &Vec<usize>)> = zones.iter().zip(&covering).collect();
         // A remainder worker collects all covering input polygons, unions them, then subtracts
         // them from its zone. Estimate the largest such collection before starting workers.
@@ -7660,7 +7659,6 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     };
     let join_threads = geometry_threads(join_rows.len(), threads, &mut join_scratch)?;
     // The join features converted: Cancel looked at, and progress counted, feature by feature.
-    crate::control::begin(join_rows.len());
     let join_geoms: Vec<Located<'_>> = crate::parallel::try_map_on(
         &join_rows,
         join_threads,
@@ -7717,13 +7715,14 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     // match thousands). `None` for a row with no feature. An overlap that can't be measured is
     // that target's result, raised here in target order, so a threaded run fails at the same
     // row as one thread does.
-    crate::control::begin(target_rows.len());
-    // Candidate indices, converted target/work/output and, for Largest Overlap, temporary
+    // Candidate indices (including grid duplicates before deduplication), converted target/work/
+    // output and, for Largest Overlap, temporary
     // boolean-overlay geometry comparable to the join's conversion scratch. Shared converted
     // join geometries themselves are not copied per worker.
     let target_threads = geometry_threads(target_rows.len(), threads, || {
         Ok(join_geoms
             .len()
+            .max(index.references)
             .saturating_mul(std::mem::size_of::<usize>())
             .saturating_add(largest_geometry_bytes(target, &target_rows)?.saturating_mul(3))
             .saturating_add(if mode == JoinMatch::LargestOverlap { join_scratch()? } else { 0 }))
@@ -14469,16 +14468,16 @@ mod tests {
             assert!(!one_messages.iter().any(|m| m.contains("(0 matches)")), "{name}: {one_messages:?}");
             let one = layer(one);
             assert!(one.features.len() > 50, "{name}: {}", one.features.len());
-            for threads in [2, 7, 16] {
-                let many = run(&m, &p, Some(threads)).unwrap();
-                assert_eq!(many.messages, one_messages, "{name}, {threads} threads");
+            for threads in [None, Some(2), Some(7), Some(16)] {
+                let many = run(&m, &p, threads).unwrap();
+                assert_eq!(many.messages, one_messages, "{name}, {threads:?} threads");
                 let many = layer(many);
-                assert_eq!(many.features.len(), one.features.len(), "{name}, {threads} threads");
+                assert_eq!(many.features.len(), one.features.len(), "{name}, {threads:?} threads");
                 for (a, b) in one.features.iter().zip(&many.features) {
                     assert_eq!(
                         format!("{:?}", (&a.geometry, &a.attrs)),
                         format!("{:?}", (&b.geometry, &b.attrs)),
-                        "{name}, {threads} threads"
+                        "{name}, {threads:?} threads"
                     );
                 }
             }
