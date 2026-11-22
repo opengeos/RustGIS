@@ -264,7 +264,8 @@ fn gp_env_says_a_cell_size_dropped_with_its_system() {
     assert!(!says(&s, mark, "cell size"), "{:?}", said(&s, mark));
 }
 
-/// Every project fixture, of each format and capability, opens with only keys this version reads.
+/// Every project fixture, of each format and capability, opens with only keys this version reads,
+/// but `unknown_keys.rgis`, whose key another program wrote is said (#2639).
 #[test]
 fn the_schema_fixtures_have_no_keys_left_out() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures");
@@ -277,6 +278,10 @@ fn the_schema_fixtures_have_no_keys_left_out() {
         let text = std::fs::read_to_string(&path).unwrap();
         let mut p = Project::from_json(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let notes = format!("{:?}", p.take_read_notices(&crate::project::ALL_PARTS));
+        if path.file_name().is_some_and(|n| n == "unknown_keys.rgis") {
+            assert!(notes.contains("doesn't read") && notes.contains("future_setting"), "{notes}");
+            continue;
+        }
         assert!(!notes.contains("doesn't read"), "{}: {notes}", path.display());
         read += 1;
     }
