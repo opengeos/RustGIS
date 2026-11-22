@@ -1,9 +1,7 @@
 # el interface catalog: English<TAB>translation
  by 	 ανά
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	Το "instance" πρέπει να είναι ο αριθμός παρουσίας ενός επιπέδου, όχι {value}
 "layer" must be a layer's id or name, not {value}	Το "layer" πρέπει να είναι το αναγνωριστικό ή το όνομα ενός επιπέδου, όχι {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	Το '{b}' δεν είναι όνομα bucket
 '{date}' isn't a date: write it as YYYY-MM-DD	Το «{date}» δεν είναι ημερομηνία: γράψτε την ως YYYY-MM-DD
 '{size}' isn't a cell size: give a number	Το «{size}» δεν είναι μέγεθος κελιού: δώστε έναν αριθμό
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 εισαγόμενες αποθήκες Zarr βρίσκονται ήδη στην ουρά
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D mesh
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Κανένα>
 <null>	<null>
 A .geolibre project as a map	Ένα έργο .geolibre ως χάρτης
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Ένα έργο .qgs ή .qgz ως χάρτης
 A 3D globe seen from space.	Μια τρισδιάστατη υδρόγειος όπως φαίνεται από το διάστημα.
 A blank map with a basemap	Ένας κενός χάρτης με basemap
 A box behind the element, which moves with it.	Ένα πλαίσιο πίσω από το στοιχείο, που μετακινείται μαζί του.
-a browser's sign-in isn't remembered	η σύνδεση ενός προγράμματος περιήγησης δεν απομνημονεύεται
 A call for the rustgis Python package	Μια κλήση για το πακέτο Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Η διεύθυνση ενός καταλόγου (CSW 2.0.2): αναζητήστε τις εγγραφές του με λέξεις και, αν θέλετε, με την περιοχή του χάρτη, και έπειτα προσθέστε τις υπηρεσίες και τα αρχεία στα οποία παραπέμπουν.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Συμπληρώθηκε το όριο χρήσης της συνδρομής ChatGPT ή της εφαρμογής. Ελέγξτε την Εβδομαδιαία χρήση πριν δοκιμάσετε ξανά.
@@ -106,7 +101,6 @@ A projected coordinate system.	Ένα προβολικό σύστημα συντ
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Ένα προβολικό σύστημα όπως το EPSG:32616 ή το EPSG:4326 για μοίρες
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	ένα επίπεδο raster δεν έχει ερώτημα ορισμού ούτε σύνδεση με τον χρόνο: οι καρτέλες Ερώτημα και Χρόνος ανήκουν σε επίπεδο οντοτήτων
 A rectangle behind the text.	Ένα ορθογώνιο πίσω από το κείμενο.
-a refused password is emptied too	ένας κωδικός πρόσβασης που απορρίφθηκε επίσης διαγράφεται
 A report listing the selected layer's records, page after page.	Μια αναφορά που παραθέτει τις εγγραφές του επιλεγμένου επιπέδου, σελίδα προς σελίδα.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Ένα αποτέλεσμα που απλώς τροφοδοτεί άλλα εργαλεία αφαιρείται μόλις εκτελεστεί το μοντέλο· προσθέστε μια έξοδο για να το διατηρήσετε.
 A result the model keeps, under a name	Ένα αποτέλεσμα που διατηρεί το μοντέλο, με ένα όνομα
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Μια περι�
 A service import or refresh is already running.	Εκτελείται ήδη μια εισαγωγή ή ανανέωση υπηρεσίας.
 A service's layers stay in their service group.	Τα επίπεδα μιας υπηρεσίας παραμένουν στην ομάδα της υπηρεσίας τους.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Μια σύνδεση απομνημονεύεται σε αυτόν τον υπολογιστή: συνδέεται όταν τη χρειάζεται ένα αρχείο.
-a sign-out asks nothing	η αποσύνδεση δεν ρωτά τίποτα
-a signed-in pane keeps no password for after Sign out	ένα συνδεδεμένο πλαίσιο δεν κρατά κωδικό πρόσβασης μετά την Αποσύνδεση
 A small chart of several numeric fields, drawn on each feature over its symbol	Ένα μικρό γράφημα πολλών αριθμητικών πεδίων, σχεδιασμένο σε κάθε οντότητα πάνω από το σύμβολό της
 A streamed layer needs Load All Features first	Ένα επίπεδο ροής χρειάζεται πρώτα «Φόρτωση όλων των οντοτήτων»
 A table replaced in a GeoPackage	Ένας πίνακας αντικαταστάθηκε σε GeoPackage
@@ -299,7 +291,6 @@ Add {language}	Προσθήκη {language}
 Add {n}	Προσθήκη {n}
 Add ▾	Προσθήκη ▾
 Added	Προστέθηκε
-Added Fixture	Προστέθηκε εξάρτημα
 Added from {start} to {end}: the time slider steps through it	Προστέθηκε από {start} έως {end}: το ρυθμιστικό χρόνου το διατρέχει βήμα βήμα
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Προστέθηκε το {theme} του Overture ως tiles χάρτη ({release}· ορισμένα θέματα εμφανίζονται μόνο σε μεγέθυνση): {attribution}
 Added {name}	Προστέθηκε: {name}
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Ένα κλειδί
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Η διεύθυνση ενός οργανισμού ArcGIS Online ή μιας πύλης ArcGIS Enterprise· ArcGIS Online αν μείνει κενό
 an ArcGIS sign-in	μια σύνδεση στο ArcGIS
 An AWS profile	Ένα προφίλ AWS
-an enqueued add is not a success	μια ουρά προσθήκης δεν είναι επιτυχία
 An image picked for an earlier Image… was dropped: pick it again for that marker	Μια εικόνα που επιλέχθηκε για προηγούμενο «Εικόνα…» απορρίφθηκε: επιλέξτε την ξανά για εκείνον τον δείκτη
 Analysis	Ανάλυση
 Analyze	Ανάλυση
@@ -950,7 +940,6 @@ Coordinate systems	Συστήματα συντεταγμένων
 Coordinate System…	Σύστημα συντεταγμένων…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Συντεταγμένες σε {format}. Κάντε κλικ για εναλλαγή: δεκαδικές μοίρες, DMS, UTM, MGRS. Τα UTM και MGRS είναι πλέγματα της Γης, που διαβάζονται σε UPS βόρεια των 84° Β και νότια των 80° Ν.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Το Copernicus Data Space απέρριψε τη σύνδεση: μη έγκυρα διαπιστευτήρια χρήστη
 Copernicus Data Space Status	Κατάσταση Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Η εντολή αντιγράφηκε.
@@ -1687,7 +1676,6 @@ Fix the problems listed below first	Διορθώστε πρώτα τα προβ�
 Fixed	Σταθερό
 Fixed Zoom In	Σταθερή μεγέθυνση
 Fixed Zoom Out	Σταθερή σμίκρυνση
-Fixture	Εξάρτημα
 Flat	Επίπεδη
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Το επίπεδο έδαφος κρατά το χρώμα της κλίμακας και οι πλαγιές που βλέπουν προς τον ήλιο φωτίζονται
 FlatGeobuf	FlatGeobuf
@@ -2082,7 +2070,6 @@ Invalid selection outline · draw a smaller area	Μη έγκυρο περίγρ�
 Invalid selection outline · draw a smaller radius	Μη έγκυρο περίγραμμα επιλογής · σχεδιάστε μικρότερη ακτίνα
 Invalid shortcut binding.	Μη έγκυρη σύνδεση συντόμευσης.
 Invalid shortcut key.	Μη έγκυρο πλήκτρο συντόμευσης.
-Invalid user credentials	Μη έγκυρα διαπιστευτήρια χρήστη
 Invalid: {error}	Μη έγκυρο: {error}
 Invert	Αντιστροφή
 Invert Color Ramp	Αντιστροφή χρωματικής διαβάθμισης
@@ -2703,7 +2690,6 @@ No models are available for this account.	Δεν υπάρχουν διαθέσι
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Δεν υπάρχουν ακόμη σημειωματάρια. Η εντολή Ανάλυση › Νέο σημειωματάριο δημιουργεί ένα και η «Προσθήκη και άνοιγμα σημειωματαρίου» ανοίγει ένα υπάρχον.
 No offline areas	Δεν υπάρχουν περιοχές εκτός σύνδεσης
 No other reports	Δεν υπάρχουν άλλες αναφορές
-no password yet	ακόμη χωρίς κωδικό πρόσβασης
 No place at this grid reference: {reason}	Καμία τοποθεσία σε αυτή την αναφορά πλέγματος: {reason}
 No place found	Δεν βρέθηκε τοποθεσία
 No place matches that address.	Καμία τοποθεσία δεν αντιστοιχεί σε αυτή τη διεύθυνση.
@@ -2738,7 +2724,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	δεν υπάρχει γραφικό κειμένου εκεί
 No theme is named {name}.	Δεν υπάρχει θέμα με όνομα {name}.
 No tools match your search.	Κανένα εργαλείο δεν ταιριάζει με την αναζήτησή σας.
-no typing while it waits	καμία πληκτρολόγηση όσο περιμένει
 no yearly series	καμία ετήσια σειρά
 No {format} here	Δεν υπάρχει {format} εδώ
 NoData	NoData
@@ -2786,9 +2771,6 @@ Nothing ran: the script has no commands.	Δεν εκτελέστηκε τίπο�
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Δεν έχει γίνει ακόμη κοινή χρήση. Η εντολή Δημοσίευση › Κοινή χρήση ως δημιουργεί χάρτες web, επίπεδα, στυλ, σκηνές και άλλα.
 Nothing to add here	Δεν υπάρχει κάτι για προσθήκη εδώ
 Nothing to test	Δεν υπάρχει κάτι για έλεγχο
-nothing typed is kept in the pane	τίποτα από όσα πληκτρολογήθηκαν δεν μένει στο πλαίσιο
-nothing typed while it waited is kept	τίποτα από όσα πληκτρολογήθηκαν όσο περίμενε δεν διατηρείται
-nothing typed, Sign in is off	δεν πληκτρολογήθηκε τίποτα, η Σύνδεση είναι ανενεργή
 Nothing was found at this address.	Δεν βρέθηκε τίποτα σε αυτή τη διεύθυνση.
 Nothing was recorded, so no task was made.	Δεν καταγράφηκε τίποτα, οπότε δεν δημιουργήθηκε εργασία.
 Now	Τώρα
@@ -2836,10 +2818,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	Μία σελίδα ανά οντότητα ενός επιπέδου ευρετηρίου.
 One per line: code=name	Ένα ανά γραμμή: κωδικός=όνομα
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Μία εικόνα της προβολής: τα σύμβολα και οι ετικέτες δεν κόβονται στα άκρα των tiles και η υπηρεσία ερωτάται μία φορά ανά προβολή. Σχεδιάζεται σε tiles στην υδρόγειο, σε κεκλιμένο χάρτη ή σε προβολή που η υπηρεσία δεν προσφέρει.
-one sign-in at a time	μία σύνδεση τη φορά
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Μία πινελιά, από το σύμβολο. Προσθέστε πινελιές για περιβλήματα, παράλληλες γραμμές και μετατοπίσεις.
 One-time code	Κωδικός μίας χρήσης
-only a discovered list can invalidate the saved table	μόνο μια λίστα που ανακαλύφθηκε μπορεί να ακυρώσει τον αποθηκευμένο πίνακα
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Μόνο ένα αρχείο tiles που διαβάστηκε από αρχείο (PMTiles ή MBTiles) μπορεί να επιδιορθωθεί.
 Only cubes with data where the map is	Μόνο κύβοι με δεδομένα στην περιοχή του χάρτη
 Only selected polygons will be included in the output.	Στο αποτέλεσμα θα συμπεριληφθούν μόνο τα επιλεγμένα πολύγωνα.
@@ -3329,7 +3309,6 @@ Reload Themes	Επαναφόρτωση θεμάτων
 Reload Tile Archive	Επαναφόρτωση αρχείου tile
 Reload Web Layers	Επαναφόρτωση επιπέδων web
 Reload {name} and discard its pending edits?	Επαναφόρτωση του {name} και απόρριψη των εκκρεμών αλλαγών του;
-Remember follows: nothing is remembered now	Η Απομνημόνευση ακολουθεί: τίποτα δεν απομνημονεύεται τώρα
 Remember on this computer	Απομνημόνευση σε αυτόν τον υπολογιστή
 Remember the key on this computer	Απομνημόνευση του κλειδιού σε αυτόν τον υπολογιστή
 Remove	Κατάργηση
@@ -3384,7 +3363,6 @@ Repair\nSource	Επιδιόρθωση\nπηγής
 Repair Data Source	Επιδιόρθωση πηγής δεδομένων
 Repair Data Source…	Επιδιόρθωση πηγής δεδομένων…
 Repair Geometry	Επιδιόρθωση γεωμετρίας
-Repair is disabled while discovery is in flight	Η επιδιόρθωση είναι απενεργοποιημένη όσο βρίσκεται σε εξέλιξη η ανακάλυψη
 Repair Tile Archive	Επιδιόρθωση αρχείου tiles
 Repaired {name}	Επιδιορθώθηκε το {name}
 Repeat	Επανάληψη
@@ -3924,15 +3902,12 @@ Sign in to choose a model.	Συνδεθείτε για να επιλέξετε �
 Sign In to Copernicus Data Space	Σύνδεση στο Copernicus Data Space
 Sign in with your ChatGPT account.	Συνδεθείτε με τον λογαριασμό σας ChatGPT.
 Sign out	Αποσύνδεση
-Sign out deletes it	Η Αποσύνδεση τη διαγράφει
-Sign out deletes the remembered sign-in	Η Αποσύνδεση διαγράφει την απομνημονευμένη σύνδεση
 Sign Out of ArcGIS	Αποσύνδεση από το ArcGIS
 Sign Out of Copernicus Data Space	Αποσύνδεση από το Copernicus Data Space
 Sign-in	Σύνδεση
 Sign-in cancelled.	Η σύνδεση ακυρώθηκε.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Έληξε το χρονικό όριο σύνδεσης. Ξεκινήστε ξανά και επιτρέψτε στο πρόγραμμα περιήγησης να έχει πρόσβαση στη διεύθυνση loopback αυτού του υπολογιστή.
 signed in	σε σύνδεση
-Signed in as synthetic.user@example.invalid.	Συνδεθήκατε ως synthetic.user@example.invalid.
 Signed in as {name}.	Συνδεθήκατε ως {name}.
 Signed in to {portal}	Συνδεθήκατε στο {portal}
 Signed in to {portal} as {user}	Συνδεθήκατε στο {portal} ως {user}
@@ -4237,7 +4212,6 @@ The background worker could not start ({error}). Retry the command.	Ο εργά�
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Ο χάρτης βάσης εμφανίζει τώρα την οπτική {view}· το επίπεδο Countries του έργου διατηρεί τα σύνορά του
 The basemap's grid color	Το χρώμα πλέγματος του basemap
 The Basemaps plugin's tab of public basemaps.	Η καρτέλα δημόσιων basemaps του πρόσθετου Basemaps.
-the box shows it is remembered	το πλαίσιο ελέγχου δείχνει ότι έχει απομνημονευτεί
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Το πρόγραμμα περιήγησης δεν έδωσε στο RustGIS το πρόχειρο ({why}): επικολλήστε με {keys}.
 the browser kept neither a copy of it nor where to download it	το πρόγραμμα περιήγησης δεν διατήρησε ούτε αντίγραφο ούτε τη θέση λήψης του
 the browser runs everything on one thread	το πρόγραμμα περιήγησης τρέχει τα πάντα σε ένα νήμα
@@ -4261,14 +4235,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	το token του Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	Το περιβάλλον (AWS_ACCESS_KEY_ID…)
 The features where the map is	Οι οντότητες στην περιοχή του χάρτη
-the fields are off while it waits	τα πεδία είναι ανενεργά όσο περιμένει
 The first 1,000 entries; narrow it down a folder at a time.	Οι πρώτες 1.000 καταχωρίσεις. Περιορίστε την αναζήτηση έναν φάκελο τη φορά.
 The first {n} are listed.	Εμφανίζονται τα πρώτα {n}.
 The first {n} are shown: search to narrow them.	Εμφανίζονται τα πρώτα {n}: κάντε αναζήτηση για να τα περιορίσετε.
 The first {n} of them are listed; the filter searches all of them.	Παρατίθενται οι πρώτοι {n}· το φίλτρο αναζητά σε όλους.
 The first {n} rows	Οι πρώτες {n} γραμμές
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Το flowtrace δεν απάντησε: εμφανίζεται ολόκληρη η γραμμή ροής που βρίσκεται πλησιέστερα στο σημείο.
-the form is back for another try	η φόρμα επιστρέφει για νέα προσπάθεια
 The grid already has the basemap's color	Το πλέγμα έχει ήδη το χρώμα του basemap
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	τα ψηφία πλέγματος πρέπει να είναι άρτιο πλήθος από 0 έως 10, τα μισά για το easting και τα μισά για το northing
 The grid's color and opacity	Το χρώμα και η αδιαφάνεια του πλέγματος
@@ -4335,7 +4307,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	η απάντηση του NLDI δεν είναι κείμενο UTF-8
 the northing doesn't fall in the latitude band given	το northing δεν βρίσκεται μέσα στη δοσμένη ζώνη πλάτους
 The notes are cut here: the release page has all of them.	Οι σημειώσεις κόβονται εδώ: η σελίδα της έκδοσης τις έχει όλες.
-the old file's list must disappear immediately	η λίστα του παλιού αρχείου πρέπει να εξαφανιστεί αμέσως
 The one waiting after it was left too	Εγκαταλείφθηκε και αυτό που περίμενε μετά από αυτό
 the open project has unsaved changes: save them before recovering other work	το ανοιχτό έργο έχει μη αποθηκευμένες αλλαγές: αποθηκεύστε τις πριν ανακτήσετε άλλη εργασία
 The open project has unsaved changes: save them, then recover this copy.	Το ανοιχτό έργο έχει μη αποθηκευμένες αλλαγές: αποθηκεύστε τις και μετά ανακτήστε αυτό το αντίγραφο.
@@ -4345,7 +4316,6 @@ The page in colour, the title in light text and the map in a light card.	Η σε
 the page is too large to copy to the clipboard: export it instead	η σελίδα είναι πολύ μεγάλη για αντιγραφή στο πρόχειρο: εξαγάγετέ την
 the page is too large to draw	η σελίδα είναι πολύ μεγάλη για σχεδίαση
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Ο κωδικός πρόσβασης αποστέλλεται μόνο στον διακομιστή σύνδεσης του Copernicus Data Space και δεν αποθηκεύεται ποτέ στο έργο. Το token που δίνει αποστέλλεται μόνο στους διακομιστές δεδομένων του.
-the password isn't kept in the pane	ο κωδικός πρόσβασης δεν μένει στο πλαίσιο
 The password must be at most 4096 bytes, without control characters.	Ο κωδικός πρόσβασης πρέπει να έχει το πολύ 4096 byte, χωρίς χαρακτήρες ελέγχου.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Ο κωδικός πρόσβασης ή το κλειδί πρέπει να χωρά σε κεφαλίδα HTTP 4096 byte, χωρίς χαρακτήρες ελέγχου.
 The password was refused. Type a password to try again.	Ο κωδικός πρόσβασης απορρίφθηκε. Πληκτρολογήστε κωδικό πρόσβασης για να δοκιμάσετε ξανά.
@@ -4440,7 +4410,6 @@ The start-up project {path} isn't a RustGIS project file.	Το έργο εκκί
 The step's layer {name} isn't in the map.	Το επίπεδο {name} του βήματος δεν υπάρχει στον χάρτη.
 The store has no variables with two or more dimensions.	Η αποθήκη δεν έχει μεταβλητές με δύο ή περισσότερες διαστάσεις.
 the store is gone	η αποθήκη δεν υπάρχει πλέον
-the store keeps the password, never a token	η αποθήκη κρατά τον κωδικό πρόσβασης, ποτέ token
 The summary couldn't start: {error}	Δεν ήταν δυνατή η έναρξη της σύνοψης: {error}
 The summary failed unexpectedly	Η σύνοψη απέτυχε απρόσμενα
 The summary finished after another project was opened, so it wasn't added	Η σύνοψη ολοκληρώθηκε αφού άνοιξε άλλο έργο, οπότε δεν προστέθηκε
@@ -4471,7 +4440,6 @@ The tools run on this project: saved with it, and each can run again	Τα εργ
 The trend couldn't start: {error}	Δεν ήταν δυνατή η έναρξη της ανάλυσης τάσης: {error}
 The trend failed unexpectedly	Η ανάλυση τάσης απέτυχε απρόσμενα
 The trend finished after another project was opened, so it wasn't added	Η ανάλυση τάσης ολοκληρώθηκε αφού άνοιξε άλλο έργο, οπότε δεν προστέθηκε
-the username stays for another try	το όνομα χρήστη μένει για νέα προσπάθεια
 the UTM zone must be 1 to 60	η ζώνη UTM πρέπει να είναι από 1 έως 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Οι τιμές που εμφανίζονται από μαύρο έως λευκό, ίδιες για κάθε ημερομηνία και tile (στις μονάδες του καναλιού). Κενό: η διάταση κάθε αρχείου.
 the view has no extent	η προβολή δεν έχει έκταση
@@ -4677,7 +4645,6 @@ Type the password, then Save. Remember on this computer is optional.	Πληκτ�
 Type the token this expiry is for.	Πληκτρολογήστε το token στο οποίο αντιστοιχεί αυτή η λήξη.
 Type the token, or the password to generate one, to remember it on this computer.	Πληκτρολογήστε το token, ή τον κωδικό πρόσβασης για να δημιουργηθεί ένα, ώστε να απομνημονευτεί σε αυτόν τον υπολογιστή.
 Typed below	Πληκτρολόγηση παρακάτω
-typing must not start another lookup	η πληκτρολόγηση δεν πρέπει να ξεκινά άλλη αναζήτηση
 U.S. Census (addresses)	Census ΗΠΑ (διευθύνσεις)
 Ukraine	Ουκρανία
 UM	UM

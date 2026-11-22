@@ -1,9 +1,7 @@
 # ru interface catalog: English<TAB>translation
  by 	 по
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" должен быть номером экземпляра слоя, а не {value}
 "layer" must be a layer's id or name, not {value}	"layer" должен быть id или именем слоя, а не {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	«{b}» — не имя бакета
 '{date}' isn't a date: write it as YYYY-MM-DD	«{date}» — не дата: запишите её как YYYY-MM-DD
 '{size}' isn't a cell size: give a number	«{size}» — не размер ячейки: укажите число
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 импортированных хранилищ Zarr уже в очереди
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D-сетка
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Нет>
 <null>	<null>
 A .geolibre project as a map	Проект .geolibre как карта
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Проект .qgs или .qgz как карта
 A 3D globe seen from space.	Трёхмерный глобус, вид из космоса.
 A blank map with a basemap	Пустая карта с базовой картой
 A box behind the element, which moves with it.	Прямоугольник за элементом, который перемещается вместе с ним.
-a browser's sign-in isn't remembered	вход в браузере не запоминается
 A call for the rustgis Python package	Вызов для Python-пакета rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Адрес каталога (CSW 2.0.2): ищите его записи по словам и, при желании, по области карты, затем добавляйте сервисы и файлы, на которые они ссылаются.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Достигнут лимит использования тарифа ChatGPT или приложения. Проверьте использование за неделю перед повторной попыткой.
@@ -106,7 +101,6 @@ A projected coordinate system.	Система координат проекци�
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Проекционная система, например EPSG:32616, или EPSG:4326 для градусов
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	у растрового слоя нет запроса определения и привязки ко времени: вкладки «Запрос» и «Время» относятся к векторному слою
 A rectangle behind the text.	Прямоугольник за текстом.
-a refused password is emptied too	отклонённый пароль тоже очищается
 A report listing the selected layer's records, page after page.	Отчёт со списком записей выбранного слоя, страница за страницей.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Результат, который только передаётся другим инструментам, удаляется после запуска модели; добавьте выход, чтобы сохранить его.
 A result the model keeps, under a name	Результат, который модель сохраняет под именем
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Область �
 A service import or refresh is already running.	Импорт или обновление сервиса уже выполняется.
 A service's layers stay in their service group.	Слои сервиса остаются в группе своего сервиса.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Вход запомнен на этом компьютере: он выполняется, когда он нужен файлу.
-a sign-out asks nothing	выход ничего не спрашивает
-a signed-in pane keeps no password for after Sign out	панель с выполненным входом не хранит пароль после выхода
 A small chart of several numeric fields, drawn on each feature over its symbol	Небольшая диаграмма нескольких числовых полей, рисуемая на каждом объекте поверх его символа
 A streamed layer needs Load All Features first	Для потокового слоя сначала нужно «Загрузить все объекты»
 A table replaced in a GeoPackage	Таблица, заменённая в GeoPackage
@@ -299,7 +291,6 @@ Add {language}	Добавить {language}
 Add {n}	Добавить {n}
 Add ▾	Добавить ▾
 Added	Добавлено
-Added Fixture	Добавленный объект
 Added from {start} to {end}: the time slider steps through it	Добавлено с {start} по {end}: ползунок времени проходит по этому периоду
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Тема Overture «{theme}» добавлена как тайлы карты ({release}; некоторые темы видны только при приближении): {attribution}
 Added {name}	Добавлено: {name}
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Ключ API, пе�
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Адрес организации ArcGIS Online или портала ArcGIS Enterprise; если пусто — ArcGIS Online
 an ArcGIS sign-in	вход в ArcGIS
 An AWS profile	Профиль AWS
-an enqueued add is not a success	поставленное в очередь добавление не является успехом
 An image picked for an earlier Image… was dropped: pick it again for that marker	Изображение, выбранное ранее через «Изображение…», отброшено: выберите его снова для этого маркера
 Analysis	Анализ
 Analyze	Анализ
@@ -950,7 +940,6 @@ Coordinate systems	Системы координат
 Coordinate System…	Система координат…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Координаты в формате {format}. Щёлкните для переключения: десятичные градусы, DMS, UTM, MGRS. UTM и MGRS — сетки Земли; севернее 84° с. ш. и южнее 80° ю. ш. они читаются в UPS.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space отклонил вход: неверные учётные данные пользователя
 Copernicus Data Space Status	Состояние Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Команда скопирована.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Сначала исправьте переч
 Fixed	Фиксированный
 Fixed Zoom In	Фиксированное приближение
 Fixed Zoom Out	Фиксированное отдаление
-Fixture	Объект
 Flat	Плоское
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Ровная поверхность сохраняет цвет шкалы, а склоны, обращённые к солнцу, светлеют
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Недопустимый кон
 Invalid selection outline · draw a smaller radius	Недопустимый контур выборки · нарисуйте меньший радиус
 Invalid shortcut binding.	Недопустимое назначение сочетания клавиш.
 Invalid shortcut key.	Недопустимое сочетание клавиш.
-Invalid user credentials	Неверные учётные данные пользователя
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
 Invert Color Ramp	Инвертировать цветовую шкалу
@@ -2704,7 +2691,6 @@ No models are available for this account.	Для этой учётной зап�
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Блокнотов пока нет. Анализ › Новый блокнот создаёт блокнот, а «Добавить и открыть блокнот» открывает существующий.
 No offline areas	Нет автономных областей
 No other reports	Других отчётов нет
-no password yet	пароля пока нет
 No place at this grid reference: {reason}	Нет места по этой ссылке сетки: {reason}
 No place found	Место не найдено
 No place matches that address.	Нет места, соответствующего этому адресу.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	там нет текстовой графики
 No theme is named {name}.	Нет темы с именем {name}.
 No tools match your search.	Нет инструментов, соответствующих поиску.
-no typing while it waits	ввод недоступен во время ожидания
 no yearly series	нет годового ряда
 No {format} here	Здесь нет {format}
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Ничего не выполнено: �
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Пока ничего не опубликовано. Публикация › Поделиться как создаёт веб-карты, слои, стили, сцены и другое.
 Nothing to add here	Здесь нечего добавить
 Nothing to test	Нечего проверять
-nothing typed is kept in the pane	ничего введённого не остаётся в панели
-nothing typed while it waited is kept	ничего введённого во время ожидания не сохраняется
-nothing typed, Sign in is off	ничего не введено, «Войти» недоступно
 Nothing was found at this address.	По этому адресу ничего не найдено.
 Nothing was recorded, so no task was made.	Ничего не записано, поэтому задача не создана.
 Now	Сейчас
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	По одной странице на каждый объект индексного слоя.
 One per line: code=name	По одному в строке: код=имя
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Одно изображение вида: символы и подписи не обрезаются по границам тайлов, а сервис запрашивается один раз на вид. На глобусе, наклонной карте или в проекции, которую сервис не предлагает, отрисовывается тайлами.
-one sign-in at a time	один вход за раз
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Одна обводка из символа. Добавьте обводки для окантовки, параллельных линий и смещений.
 One-time code	Одноразовый код
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Исправить можно только архив тайлов, прочитанный из файла (PMTiles или MBTiles).
 Only cubes with data where the map is	Только кубы с данными в области карты
 Only selected polygons will be included in the output.	В результат будут включены только выбранные полигоны.
@@ -3330,7 +3310,6 @@ Reload Themes	Перезагрузить темы
 Reload Tile Archive	Обновить архив тайлов
 Reload Web Layers	Обновить веб-слои
 Reload {name} and discard its pending edits?	Обновить {name} и отбросить его несохранённые правки?
-Remember follows: nothing is remembered now	«Запомнить» следует за этим: сейчас ничего не запоминается
 Remember on this computer	Запомнить на этом компьютере
 Remember the key on this computer	Запомнить ключ на этом компьютере
 Remove	Удалить
@@ -3385,7 +3364,6 @@ Repair\nSource	Исправить\nисточник
 Repair Data Source	Исправить источник данных
 Repair Data Source…	Исправить источник данных…
 Repair Geometry	Исправить геометрию
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Исправить архив тайлов
 Repaired {name}	Исправлено: {name}
 Repeat	Повторение
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Войдите, чтобы выбрать модел�
 Sign In to Copernicus Data Space	Войти в Copernicus Data Space
 Sign in with your ChatGPT account.	Войдите с учётной записью ChatGPT.
 Sign out	Выйти
-Sign out deletes it	Выход удаляет его
-Sign out deletes the remembered sign-in	Выход удаляет запомненный вход
 Sign Out of ArcGIS	Выйти из ArcGIS
 Sign Out of Copernicus Data Space	Выйти из Copernicus Data Space
 Sign-in	Вход
 Sign-in cancelled.	Вход отменён.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Время ожидания входа истекло. Начните заново и разрешите браузеру доступ к адресу обратной петли этого компьютера.
 signed in	вход выполнен
-Signed in as synthetic.user@example.invalid.	Вход выполнен как synthetic.user@example.invalid.
 Signed in as {name}.	Вход выполнен как {name}.
 Signed in to {portal}	Вход выполнен: {portal}
 Signed in to {portal} as {user}	Вход выполнен: {portal}, пользователь {user}
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	Фоновы
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Базовая карта теперь показывает версию границ «{view}»; слой «Страны» проекта сохраняет свои границы
 The basemap's grid color	Цвет сетки базовой карты
 The Basemaps plugin's tab of public basemaps.	Вкладка модуля «Базовые карты» с публичными базовыми картами.
-the box shows it is remembered	флажок показывает, что вход запомнен
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Браузер не предоставил RustGIS буфер обмена ({why}): вставьте с помощью {keys}.
 the browser kept neither a copy of it nor where to download it	браузер не сохранил ни его копию, ни адрес для скачивания
 the browser runs everything on one thread	браузер выполняет всё в одном потоке
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	токен Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	Окружение (AWS_ACCESS_KEY_ID…)
 The features where the map is	Объекты в области карты
-the fields are off while it waits	поля недоступны во время ожидания
 The first 1,000 entries; narrow it down a folder at a time.	Первые 1 000 записей; сужайте поиск по одной папке за раз.
 The first {n} are listed.	Показаны первые {n}.
 The first {n} are shown: search to narrow them.	Показаны первые {n}: используйте поиск, чтобы сузить список.
 The first {n} of them are listed; the filter searches all of them.	Показаны первые {n} из них; фильтр ищет по всем.
 The first {n} rows	Первые {n} строк
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace не ответил: показана вся ближайшая к точке линия стока.
-the form is back for another try	форма снова доступна для новой попытки
 The grid already has the basemap's color	Сетка уже имеет цвет базовой карты
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	цифр сетки должно быть чётное количество от 0 до 10: половина для восточного смещения и половина для северного
 The grid's color and opacity	Цвет и непрозрачность сетки
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	ответ NLDI не является текстом UTF-8
 the northing doesn't fall in the latitude band given	северное смещение не попадает в указанный широтный пояс
 The notes are cut here: the release page has all of them.	Примечания здесь обрезаны: полностью они на странице выпуска.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Ожидавшая после него задача тоже отменена
 the open project has unsaved changes: save them before recovering other work	в открытом проекте есть несохранённые изменения: сохраните их перед восстановлением другой работы
 The open project has unsaved changes: save them, then recover this copy.	В открытом проекте есть несохранённые изменения: сохраните их, затем восстановите эту копию.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	Стр�
 the page is too large to copy to the clipboard: export it instead	страница слишком велика для копирования в буфер обмена: экспортируйте её
 the page is too large to draw	страница слишком велика для отрисовки
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Пароль отправляется только на сервер входа Copernicus Data Space и никогда не хранится в проекте. Выданный им токен отправляется только на его серверы данных.
-the password isn't kept in the pane	пароль не хранится в панели
 The password must be at most 4096 bytes, without control characters.	Пароль должен быть не длиннее 4096 байт и без управляющих символов.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Пароль или ключ должен помещаться в HTTP-заголовок размером 4096 байт и не содержать управляющих символов.
 The password was refused. Type a password to try again.	Пароль отклонён. Введите пароль, чтобы попробовать снова.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Стартовый п�
 The step's layer {name} isn't in the map.	Слоя {name} из этого шага нет на карте.
 The store has no variables with two or more dimensions.	В хранилище нет переменных с двумя и более измерениями.
 the store is gone	хранилище больше недоступно
-the store keeps the password, never a token	хранилище хранит пароль, но никогда не токен
 The summary couldn't start: {error}	Не удалось запустить обобщение: {error}
 The summary failed unexpectedly	Обобщение неожиданно завершилось ошибкой
 The summary finished after another project was opened, so it wasn't added	Обобщение завершилось после открытия другого проекта, поэтому не было добавлено
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	Инстр�
 The trend couldn't start: {error}	Не удалось запустить анализ тренда: {error}
 The trend failed unexpectedly	Анализ тренда неожиданно завершился ошибкой
 The trend finished after another project was opened, so it wasn't added	Анализ тренда завершился после открытия другого проекта, поэтому не был добавлен
-the username stays for another try	имя пользователя остаётся для новой попытки
 the UTM zone must be 1 to 60	зона UTM должна быть от 1 до 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Значения, отображаемые от чёрного к белому, одинаковые для всех дат и тайлов (в единицах канала). Пусто: собственная растяжка каждого файла.
 the view has no extent	у вида нет экстента
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Введи�
 Type the token this expiry is for.	Введите токен, к которому относится этот срок действия.
 Type the token, or the password to generate one, to remember it on this computer.	Введите токен или пароль для его создания, чтобы запомнить его на этом компьютере.
 Typed below	Ввод ниже
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	Census США (адреса)
 Ukraine	Украина
 UM	UM

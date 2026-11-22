@@ -1,9 +1,7 @@
 # az interface catalog: English<TAB>translation
  by 	 ×
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" {value} deyil, layın nüsxə nömrəsi olmalıdır
 "layer" must be a layer's id or name, not {value}	"layer" {value} deyil, layın id-si və ya adı olmalıdır
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}' bucket adı deyil
 '{date}' isn't a date: write it as YYYY-MM-DD	«{date}» tarix deyil: onu YYYY-MM-DD kimi yazın
 '{size}' isn't a cell size: give a number	«{size}» xana ölçüsü deyil: ədəd daxil edin
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 idxal edilmiş Zarr anbarı artıq növbədədir
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D şəbəkə
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Heç biri>
 <null>	<null>
 A .geolibre project as a map	Xəritə kimi .geolibre layihəsi
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Xəritə kimi .qgs və ya .qgz layihəsi
 A 3D globe seen from space.	Kosmosdan görünən 3D qlobus.
 A blank map with a basemap	Əsas xəritəli boş xəritə
 A box behind the element, which moves with it.	Elementin arxasında, onunla birlikdə hərəkət edən qutu.
-a browser's sign-in isn't remembered	brauzerdəki giriş yadda saxlanmır
 A call for the rustgis Python package	rustgis Python paketi üçün çağırış
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Kataloqun (CSW 2.0.2) ünvanı: onun qeydlərini sözlərlə və istəsəniz xəritənin ərazisi ilə axtarın, sonra istinad etdikləri xidmətləri və faylları əlavə edin.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT planı və ya tətbiq üzrə istifadə həddinə çatılıb. Yenidən cəhd etməzdən əvvəl həftəlik istifadəyə baxın.
@@ -106,7 +101,6 @@ A projected coordinate system.	Proyeksiyalı koordinat sistemi.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	EPSG:32616 kimi proyeksiyalı sistem və ya dərəcələr üçün EPSG:4326
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	rastr layın təyinat sorğusu və ya zaman bağlaması yoxdur: «Sorğu» və «Zaman» vərəqləri obyekt layına aiddir
 A rectangle behind the text.	Mətnin arxasında düzbucaqlı.
-a refused password is emptied too	rədd edilən parol da silinir
 A report listing the selected layer's records, page after page.	Seçilmiş layın qeydlərini səhifə-səhifə sadalayan hesabat.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Yalnız digər alətlərə ötürülən nəticə model işlədikdən sonra silinir; onu saxlamaq üçün çıxış əlavə edin.
 A result the model keeps, under a name	Modelin ad altında saxladığı nəticə
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Axtarış ərazi
 A service import or refresh is already running.	Xidmətin idxalı və ya yenilənməsi artıq davam edir.
 A service's layers stay in their service group.	Xidmətin layları öz xidmət qrupunda qalır.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Bu kompüterdə giriş yadda saxlanıb: fayl tələb etdikdə daxil olur.
-a sign-out asks nothing	çıxış heç nə soruşmur
-a signed-in pane keeps no password for after Sign out	daxil olunmuş panel Çıxışdan sonrası üçün parol saxlamır
 A small chart of several numeric fields, drawn on each feature over its symbol	Bir neçə ədədi sahənin kiçik diaqramı, hər obyektin üzərində simvolunun üstündə çəkilir
 A streamed layer needs Load All Features first	Axınla yüklənən lay üçün əvvəlcə «Bütün obyektləri yüklə» lazımdır
 A table replaced in a GeoPackage	GeoPackage-də əvəz edilmiş cədvəl
@@ -299,7 +291,6 @@ Add {language}	{language} əlavə et
 Add {n}	{n} əlavə et
 Add ▾	Əlavə et ▾
 Added	Əlavə edildi
-Added Fixture	Əlavə edilmiş armatur
 Added from {start} to {end}: the time slider steps through it	{start} ilə {end} arasında əlavə edildi: zaman sürgüsü onun üzrə addımlayır
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overture-un {theme} mövzusu xəritə kafelləri kimi əlavə edildi ({release}; bəzi mövzular yalnız yaxınlaşdırdıqda görünür): {attribution}
 Added {name}	{name} əlavə edildi
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Başlıqda göndər
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	ArcGIS Online təşkilatının və ya ArcGIS Enterprise portalının ünvanı; boşdursa ArcGIS Online
 an ArcGIS sign-in	ArcGIS girişi
 An AWS profile	AWS profili
-an enqueued add is not a success	növbəyə qoyulmuş əlavə uğur deyil
 An image picked for an earlier Image… was dropped: pick it again for that marker	Əvvəlki Təsvir… üçün seçilmiş təsvir atıldı: həmin marker üçün onu yenidən seçin
 Analysis	Analiz
 Analyze	Analiz
@@ -950,7 +940,6 @@ Coordinate systems	Koordinat sistemləri
 Coordinate System…	Koordinat sistemi…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Koordinatlar {format} formatında. Dəyişmək üçün klikləyin: onluq dərəcələr, DMS, UTM, MGRS. UTM və MGRS Yer kürəsinin torlarıdır, 84° Ş-dən şimalda və 80° C-dən cənubda UPS kimi oxunur.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space girişi rədd etdi: İstifadəçi etimadnamələri yanlışdır
 Copernicus Data Space Status	Copernicus Data Space vəziyyəti
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Əmr kopyalandı.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Əvvəlcə aşağıda sadalanan problemləri
 Fixed	Sabit
 Fixed Zoom In	Sabit yaxınlaşdırma
 Fixed Zoom Out	Sabit uzaqlaşdırma
-Fixture	Armatur
 Flat	Düz
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Düz səth şkalanın rəngini saxlayır, günəşə baxan yamaclar isə parlaqlaşır
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Etibarsız seçim konturu · da
 Invalid selection outline · draw a smaller radius	Etibarsız seçim konturu · daha kiçik radius çəkin
 Invalid shortcut binding.	Yanlış qısayol təyinatı.
 Invalid shortcut key.	Yanlış qısayol düyməsi.
-Invalid user credentials	İstifadəçi etimadnamələri yanlışdır
 Invalid: {error}	Yanlışdır: {error}
 Invert	Tərsinə çevir
 Invert Color Ramp	Rəng şkalasını tərsinə çevir
@@ -2704,7 +2691,6 @@ No models are available for this account.	Bu hesab üçün əlçatan model yoxdu
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Hələ bloknot yoxdur. Analiz › Yeni bloknot birini başladır, Bloknotu əlavə et və aç isə birini açır.
 No offline areas	Oflayn ərazi yoxdur
 No other reports	Başqa hesabat yoxdur
-no password yet	hələ parol yoxdur
 No place at this grid reference: {reason}	Bu şəbəkə istinadında yer yoxdur: {reason}
 No place found	Yer tapılmadı
 No place matches that address.	Bu ünvana uyğun yer yoxdur.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	orada mətn qrafikası yoxdur
 No theme is named {name}.	{name} adlı mövzu yoxdur.
 No tools match your search.	Axtarışınıza uyğun alət yoxdur.
-no typing while it waits	gözləyərkən yazmaq olmur
 no yearly series	illik sıra yoxdur
 No {format} here	Burada {format} yoxdur
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Heç nə icra edilmədi: skriptdə əmr
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Hələ heç nə paylaşılmayıb. Nəşr › Fərqli paylaş veb xəritələr, laylar, üslublar, səhnələr və s. yaradır.
 Nothing to add here	Burada əlavə ediləcək heç nə yoxdur
 Nothing to test	Yoxlanılacaq heç nə yoxdur
-nothing typed is kept in the pane	yazılan heç nə paneldə saxlanmır
-nothing typed while it waited is kept	gözləyərkən yazılan heç nə saxlanmır
-nothing typed, Sign in is off	heç nə yazılmayıb, Daxil ol söndürülüb
 Nothing was found at this address.	Bu ünvanda heç nə tapılmadı.
 Nothing was recorded, so no task was made.	Heç nə yazılmadı, buna görə tapşırıq yaradılmadı.
 Now	İndi
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	İndeks layının hər obyekti üçün bir səhifə.
 One per line: code=name	Hər sətirdə bir: kod=ad
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Görünüşün bir şəkli: simvollar və etiketlər kafel kənarlarında kəsilmir, xidmətdən görünüş başına bir dəfə soruşulur. Qlobusda, əyilmiş xəritədə və ya xidmətin təklif etmədiyi proyeksiyada kafellərlə çəkilir.
-one sign-in at a time	eyni anda bir giriş
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Simvoldan bir cizgi. Haşiyələr, paralel xətlər və sürüşmələr üçün cizgilər əlavə edin.
 One-time code	Birdəfəlik kod
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Yalnız fayldan oxunan kafel arxivi (PMTiles və ya MBTiles) düzəldilə bilər.
 Only cubes with data where the map is	Yalnız xəritənin olduğu yerdə məlumatı olan kublar
 Only selected polygons will be included in the output.	Nəticəyə yalnız seçilmiş poliqonlar daxil ediləcək.
@@ -3330,7 +3310,6 @@ Reload Themes	Mövzuları yenidən yüklə
 Reload Tile Archive	Kafel arxivini yenidən yüklə
 Reload Web Layers	Veb layları yenidən yüklə
 Reload {name} and discard its pending edits?	{name} yenidən yüklənsin və gözləyən dəyişiklikləri ləğv edilsin?
-Remember follows: nothing is remembered now	«Yadda saxla» buna uyğundur: indi heç nə yadda saxlanmır
 Remember on this computer	Bu kompüterdə yadda saxla
 Remember the key on this computer	Açarı bu kompüterdə yadda saxla
 Remove	Sil
@@ -3385,7 +3364,6 @@ Repair\nSource	Mənbəni\ndüzəlt
 Repair Data Source	Məlumat mənbəyini düzəlt
 Repair Data Source…	Məlumat mənbəyini düzəlt…
 Repair Geometry	Həndəsəni düzəlt
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Kafel arxivini düzəlt
 Repaired {name}	{name} düzəldildi
 Repeat	Təkrarla
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Model seçmək üçün daxil olun.
 Sign In to Copernicus Data Space	Copernicus Data Space-ə daxil ol
 Sign in with your ChatGPT account.	ChatGPT hesabınızla daxil olun.
 Sign out	Çıxış
-Sign out deletes it	Çıxış onu silir
-Sign out deletes the remembered sign-in	Çıxış yadda saxlanmış girişi silir
 Sign Out of ArcGIS	ArcGIS-dən çıxış
 Sign Out of Copernicus Data Space	Copernicus Data Space-dən çıxış
 Sign-in	Giriş
 Sign-in cancelled.	Giriş ləğv edildi.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Giriş üçün vaxt bitdi. Yenidən başlayın və brauzerin bu kompüterin geri döngə ünvanına çatmasına icazə verin.
 signed in	daxil olunub
-Signed in as synthetic.user@example.invalid.	synthetic.user@example.invalid kimi daxil olunub.
 Signed in as {name}.	{name} kimi daxil olunub.
 Signed in to {portal}	{portal} portalına daxil olunub
 Signed in to {portal} as {user}	{portal} portalına {user} kimi daxil olunub
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	Fon işçisi
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Əsas xəritə indi {view} dünyagörüşünü göstərir; layihənin Countries layı öz sərhədlərini saxlayır
 The basemap's grid color	Əsas xəritənin tor rəngi
 The Basemaps plugin's tab of public basemaps.	Əsas xəritələr plagininin ictimai əsas xəritələr tabı.
-the box shows it is remembered	qutu onun yadda saxlandığını göstərir
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Brauzer RustGIS-ə mübadilə buferini vermədi ({why}): {keys} ilə yapışdırın.
 the browser kept neither a copy of it nor where to download it	brauzer nə onun nüsxəsini, nə də haradan endiriləcəyini saxlamayıb
 the browser runs everything on one thread	brauzer hər şeyi bir axında işlədir
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	Earthdata Login tokeni
 The environment (AWS_ACCESS_KEY_ID…)	Mühit (AWS_ACCESS_KEY_ID…)
 The features where the map is	Xəritənin olduğu yerdəki obyektlər
-the fields are off while it waits	gözləyərkən sahələr söndürülür
 The first 1,000 entries; narrow it down a folder at a time.	İlk 1000 element; hər dəfə bir qovluq daraldın.
 The first {n} are listed.	İlk {n} göstərilir.
 The first {n} are shown: search to narrow them.	İlk {n} göstərilir: daraltmaq üçün axtarın.
 The first {n} of them are listed; the filter searches all of them.	Onlardan ilk {n} göstərilir; filtr hamısında axtarır.
 The first {n} rows	İlk {n} sətir
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace cavab vermədi: nöqtəyə ən yaxın axın xəttinin tamamı göstərilir.
-the form is back for another try	forma yeni cəhd üçün geri qayıdır
 The grid already has the basemap's color	Tor artıq əsas xəritənin rəngindədir
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	şəbəkə rəqəmlərinin sayı 0-dan 10-a qədər cüt olmalıdır: yarısı şərq koordinatı, yarısı şimal koordinatı üçün
 The grid's color and opacity	Torun rəngi və qeyri-şəffaflığı
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	NLDI-nin cavabı UTF-8 mətni deyil
 the northing doesn't fall in the latitude band given	şimal koordinatı verilmiş en qurşağına düşmür
 The notes are cut here: the release page has all of them.	Qeydlər burada kəsilir: hamısı buraxılış səhifəsindədir.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Ondan sonra gözləyən də buraxıldı
 the open project has unsaved changes: save them before recovering other work	açıq layihədə saxlanmamış dəyişikliklər var: başqa işi bərpa etməzdən əvvəl onları saxlayın
 The open project has unsaved changes: save them, then recover this copy.	Açıq layihədə saxlanmamış dəyişikliklər var: onları saxlayın, sonra bu surəti bərpa edin.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	Səhif�
 the page is too large to copy to the clipboard: export it instead	səhifə mübadilə buferinə kopyalamaq üçün çox böyükdür: onu ixrac edin
 the page is too large to draw	səhifə çəkmək üçün çox böyükdür
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Parol yalnız Copernicus Data Space-in giriş serverinə göndərilir və heç vaxt layihədə saxlanmır. Onun verdiyi token yalnız onun məlumat serverlərinə göndərilir.
-the password isn't kept in the pane	parol paneldə saxlanmır
 The password must be at most 4096 bytes, without control characters.	Parol idarəetmə simvolları olmadan ən çoxu 4096 bayt olmalıdır.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Parol və ya açar idarəetmə simvolları olmadan 4096 baytlıq HTTP başlığına sığmalıdır.
 The password was refused. Type a password to try again.	Parol rədd edildi. Yenidən cəhd etmək üçün parol yazın.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	{path} başlanğıc la
 The step's layer {name} isn't in the map.	Addımın layı {name} xəritədə yoxdur.
 The store has no variables with two or more dimensions.	Anbarda iki və ya daha çox ölçülü dəyişən yoxdur.
 the store is gone	anbar artıq yoxdur
-the store keeps the password, never a token	anbar parolu saxlayır, heç vaxt tokeni yox
 The summary couldn't start: {error}	Yekunlaşdırma başlaya bilmədi: {error}
 The summary failed unexpectedly	Yekunlaşdırma gözlənilmədən uğursuz oldu
 The summary finished after another project was opened, so it wasn't added	Yekunlaşdırma başqa layihə açıldıqdan sonra başa çatdığı üçün əlavə edilmədi
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	Bu layihəd
 The trend couldn't start: {error}	Trend analizi başlaya bilmədi: {error}
 The trend failed unexpectedly	Trend analizi gözlənilmədən uğursuz oldu
 The trend finished after another project was opened, so it wasn't added	Trend analizi başqa layihə açıldıqdan sonra başa çatdığı üçün əlavə edilmədi
-the username stays for another try	istifadəçi adı yeni cəhd üçün qalır
 the UTM zone must be 1 to 60	UTM zonası 1-dən 60-a qədər olmalıdır
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Qaradan ağa göstərilən qiymətlər, hər tarix və kafel üçün eynidir (kanalın öz vahidlərində). Boş: hər faylın öz genişləndirməsi.
 the view has no extent	görünüşün hüdudu yoxdur
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Parolu yaz�
 Type the token this expiry is for.	Bu bitmə vaxtının aid olduğu tokeni yazın.
 Type the token, or the password to generate one, to remember it on this computer.	Bu kompüterdə yadda saxlamaq üçün tokeni və ya token yaratmaq üçün parolu yazın.
 Typed below	Aşağıda yazılan
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	ABŞ siyahıyaalması (ünvanlar)
 Ukraine	Ukrayna
 UM	UM

@@ -1,9 +1,7 @@
 # id interface catalog: English<TAB>translation
  by 	 oleh
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" harus berupa nomor instans layer, bukan {value}
 "layer" must be a layer's id or name, not {value}	"layer" harus berupa ID atau nama layer, bukan {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}' bukan nama bucket
 '{date}' isn't a date: write it as YYYY-MM-DD	'{date}' bukan tanggal: tulis dengan format YYYY-MM-DD
 '{size}' isn't a cell size: give a number	'{size}' bukan ukuran sel: berikan sebuah angka
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 penyimpanan Zarr yang diimpor sudah masuk antrean
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	Mesh 3D
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Tidak ada>
 <null>	<null>
 A .geolibre project as a map	Proyek .geolibre sebagai peta
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Proyek .qgs atau .qgz sebagai peta
 A 3D globe seen from space.	Globe 3D yang terlihat dari luar angkasa.
 A blank map with a basemap	Peta kosong dengan peta dasar
 A box behind the element, which moves with it.	Kotak di belakang elemen, yang ikut bergerak bersamanya.
-a browser's sign-in isn't remembered	proses masuk di peramban tidak diingat
 A call for the rustgis Python package	Panggilan untuk paket Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Alamat katalog (CSW 2.0.2): cari rekamannya berdasarkan kata dan, jika mau, area peta, lalu tambahkan layanan dan file yang ditautkannya.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Batas penggunaan paket ChatGPT atau aplikasi telah tercapai. Tinjau penggunaan mingguan sebelum mencoba lagi.
@@ -106,7 +101,6 @@ A projected coordinate system.	Sistem koordinat terproyeksi.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Sistem terproyeksi seperti EPSG:32616, atau EPSG:4326 untuk derajat
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	layer raster tidak memiliki kueri definisi atau pengikatan waktu: tab Kueri dan Waktu milik layer fitur
 A rectangle behind the text.	Persegi panjang di belakang teks.
-a refused password is emptied too	kata sandi yang ditolak juga dikosongkan
 A report listing the selected layer's records, page after page.	Laporan yang mencantumkan rekaman layer terpilih, halaman demi halaman.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Hasil yang hanya menjadi masukan alat lain dihapus setelah model dijalankan; tambahkan keluaran untuk menyimpannya.
 A result the model keeps, under a name	Hasil yang disimpan model, dengan sebuah nama
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Area pencarian m
 A service import or refresh is already running.	Impor atau penyegaran layanan sedang berjalan.
 A service's layers stay in their service group.	Layer suatu layanan tetap berada di grup layanannya.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Proses masuk diingat di komputer ini: otomatis masuk saat sebuah file membutuhkannya.
-a sign-out asks nothing	keluar tidak menanyakan apa pun
-a signed-in pane keeps no password for after Sign out	panel yang sudah masuk tidak menyimpan kata sandi untuk setelah Keluar
 A small chart of several numeric fields, drawn on each feature over its symbol	Diagram kecil dari beberapa kolom numerik, digambar pada setiap fitur di atas simbolnya
 A streamed layer needs Load All Features first	Layer yang dialirkan perlu Muat semua fitur terlebih dahulu
 A table replaced in a GeoPackage	Tabel yang diganti dalam GeoPackage
@@ -299,7 +291,6 @@ Add {language}	Tambah {language}
 Add {n}	Tambah {n}
 Add ▾	Tambah ▾
 Added	Ditambahkan
-Added Fixture	Fixture Ditambahkan
 Added from {start} to {end}: the time slider steps through it	Ditambahkan dari {start} hingga {end}: penggeser waktu melangkah melaluinya
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	{theme} dari Overture ditambahkan sebagai ubin peta ({release}; beberapa tema hanya tampil saat diperbesar): {attribution}
 Added {name}	{name} ditambahkan
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Kunci API yang diki
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Alamat organisasi ArcGIS Online atau portal ArcGIS Enterprise; ArcGIS Online jika kosong
 an ArcGIS sign-in	proses masuk ArcGIS
 An AWS profile	Profil AWS
-an enqueued add is not a success	penambahan yang masuk antrean bukan keberhasilan
 An image picked for an earlier Image… was dropped: pick it again for that marker	Gambar yang dipilih untuk Gambar… sebelumnya telah dibuang: pilih lagi untuk marker tersebut
 Analysis	Analisis
 Analyze	Analisis
@@ -950,7 +940,6 @@ Coordinate systems	Sistem koordinat
 Coordinate System…	Sistem Koordinat…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Koordinat dalam {format}. Klik untuk beralih: derajat desimal, DMS, UTM, MGRS. UTM dan MGRS adalah grid Bumi, dibaca dalam UPS di utara 84° LU dan di selatan 80° LS.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space menolak proses masuk: Kredensial pengguna tidak valid
 Copernicus Data Space Status	Status Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Perintah disalin.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Perbaiki dulu masalah yang tercantum di bawa
 Fixed	Tetap
 Fixed Zoom In	Perbesar Tetap
 Fixed Zoom Out	Perkecil Tetap
-Fixture	Fixture
 Flat	Datar
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Tanah datar mempertahankan warna gradasi dan lereng yang menghadap matahari menjadi lebih terang
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Garis tepi pilihan tidak valid 
 Invalid selection outline · draw a smaller radius	Garis tepi pilihan tidak valid · gambar radius yang lebih kecil
 Invalid shortcut binding.	Penetapan pintasan tidak valid.
 Invalid shortcut key.	Tombol pintasan tidak valid.
-Invalid user credentials	Kredensial pengguna tidak valid
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik
 Invert Color Ramp	Balik Ramp Warna
@@ -2704,7 +2691,6 @@ No models are available for this account.	Tidak ada model yang tersedia untuk ak
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Belum ada notebook. Analisis › Notebook Baru memulai notebook, atau Tambah dan Buka Notebook membukanya.
 No offline areas	Tidak ada area offline
 No other reports	Tidak ada laporan lain
-no password yet	belum ada kata sandi
 No place at this grid reference: {reason}	Tidak ada tempat pada referensi grid ini: {reason}
 No place found	Tempat tidak ditemukan
 No place matches that address.	Tidak ada tempat yang cocok dengan alamat itu.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	tidak ada grafik teks di sana
 No theme is named {name}.	Tidak ada tema bernama {name}.
 No tools match your search.	Tidak ada alat yang cocok dengan pencarian Anda.
-no typing while it waits	tidak bisa mengetik selama menunggu
 no yearly series	tidak ada seri tahunan
 No {format} here	Tidak ada {format} di sini
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Tidak ada yang dijalankan: skrip tidak 
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Belum ada yang dibagikan. Publikasi › Bagikan Sebagai membuat peta web, layer, gaya, scene, dan lainnya.
 Nothing to add here	Tidak ada yang bisa ditambahkan di sini
 Nothing to test	Tidak ada yang bisa diuji
-nothing typed is kept in the pane	tidak ada ketikan yang disimpan di panel
-nothing typed while it waited is kept	tidak ada ketikan selama menunggu yang disimpan
-nothing typed, Sign in is off	belum ada ketikan, Masuk nonaktif
 Nothing was found at this address.	Tidak ada yang ditemukan di alamat ini.
 Nothing was recorded, so no task was made.	Tidak ada yang direkam, jadi tidak ada tugas yang dibuat.
 Now	Sekarang
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	Satu halaman per fitur dari layer indeks.
 One per line: code=name	Satu per baris: kode=nama
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Satu gambar tampilan: simbol dan label tidak terpotong di tepi ubin, dan layanan ditanya sekali per tampilan. Digambar dalam ubin di globe, pada peta miring, atau dalam proyeksi yang tidak ditawarkan layanan.
-one sign-in at a time	satu proses masuk dalam satu waktu
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Satu goresan, dari simbol. Tambahkan goresan untuk casing, garis paralel, dan offset.
 One-time code	Kode sekali pakai
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Hanya arsip ubin yang dibaca dari file (PMTiles atau MBTiles) yang dapat diperbaiki.
 Only cubes with data where the map is	Hanya kubus dengan data di area peta
 Only selected polygons will be included in the output.	Hanya poligon terpilih yang akan disertakan dalam keluaran.
@@ -3330,7 +3310,6 @@ Reload Themes	Muat Ulang Tema
 Reload Tile Archive	Muat Ulang Arsip Ubin
 Reload Web Layers	Muat Ulang Layer Web
 Reload {name} and discard its pending edits?	Muat ulang {name} dan buang editan yang tertunda?
-Remember follows: nothing is remembered now	Ingat mengikuti pengaturan: saat ini tidak ada yang diingat
 Remember on this computer	Ingat di komputer ini
 Remember the key on this computer	Ingat kunci di komputer ini
 Remove	Hapus
@@ -3385,7 +3364,6 @@ Repair\nSource	Perbaiki\nSumber
 Repair Data Source	Perbaiki Sumber Data
 Repair Data Source…	Perbaiki Sumber Data…
 Repair Geometry	Perbaiki Geometri
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Perbaiki Arsip Ubin
 Repaired {name}	{name} diperbaiki
 Repeat	Ulangi
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Masuk untuk memilih model.
 Sign In to Copernicus Data Space	Masuk ke Copernicus Data Space
 Sign in with your ChatGPT account.	Masuk dengan akun ChatGPT Anda.
 Sign out	Keluar
-Sign out deletes it	Keluar akan menghapusnya
-Sign out deletes the remembered sign-in	Keluar akan menghapus proses masuk yang diingat
 Sign Out of ArcGIS	Keluar dari ArcGIS
 Sign Out of Copernicus Data Space	Keluar dari Copernicus Data Space
 Sign-in	Masuk
 Sign-in cancelled.	Proses masuk dibatalkan.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Waktu masuk habis. Mulai lagi dan izinkan browser mengakses alamat loopback komputer ini.
 signed in	sudah masuk
-Signed in as synthetic.user@example.invalid.	Masuk sebagai synthetic.user@example.invalid.
 Signed in as {name}.	Masuk sebagai {name}.
 Signed in to {portal}	Sudah masuk ke {portal}
 Signed in to {portal} as {user}	Sudah masuk ke {portal} sebagai {user}
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	Pekerja lata
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Peta dasar kini menampilkan sudut pandang {view}; layer Countries proyek tetap memakai batas wilayahnya
 The basemap's grid color	Warna grid peta dasar
 The Basemaps plugin's tab of public basemaps.	Tab peta dasar publik dari plugin Peta dasar.
-the box shows it is remembered	kotak menunjukkan bahwa ia diingat
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Peramban tidak memberikan papan klip kepada RustGIS ({why}): tempel dengan {keys}.
 the browser kept neither a copy of it nor where to download it	browser tidak menyimpan salinannya maupun lokasi untuk mengunduhnya
 the browser runs everything on one thread	peramban menjalankan semuanya dalam satu utas
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	token Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	Lingkungan (AWS_ACCESS_KEY_ID…)
 The features where the map is	Fitur di area peta
-the fields are off while it waits	kolom nonaktif selama menunggu
 The first 1,000 entries; narrow it down a folder at a time.	1.000 entri pertama; persempit satu folder demi satu folder.
 The first {n} are listed.	{n} yang pertama dicantumkan.
 The first {n} are shown: search to narrow them.	{n} yang pertama ditampilkan: cari untuk mempersempitnya.
 The first {n} of them are listed; the filter searches all of them.	{n} pertama dari semuanya ditampilkan; filter mencari di semuanya.
 The first {n} rows	{n} baris pertama
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace tidak menjawab: seluruh garis aliran terdekat dengan titik ditampilkan.
-the form is back for another try	formulir kembali untuk mencoba lagi
 The grid already has the basemap's color	Grid sudah memiliki warna peta dasar
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	digit grid harus berjumlah genap dari 0 hingga 10, separuh untuk easting dan separuh untuk northing
 The grid's color and opacity	Warna dan opasitas grid
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	jawaban NLDI bukan teks UTF-8
 the northing doesn't fall in the latitude band given	northing tidak berada dalam pita lintang yang diberikan
 The notes are cut here: the release page has all of them.	Catatan dipotong di sini: halaman rilis memuat semuanya.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Yang menunggu setelahnya juga ditinggalkan
 the open project has unsaved changes: save them before recovering other work	proyek yang terbuka memiliki perubahan belum disimpan: simpan sebelum memulihkan pekerjaan lain
 The open project has unsaved changes: save them, then recover this copy.	Proyek yang terbuka memiliki perubahan belum disimpan: simpan, lalu pulihkan salinan ini.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	Halaman
 the page is too large to copy to the clipboard: export it instead	halaman terlalu besar untuk disalin ke papan klip: ekspor saja
 the page is too large to draw	halaman terlalu besar untuk digambar
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Kata sandi hanya dikirim ke server masuk Copernicus Data Space dan tidak pernah disimpan di proyek. Token yang diberikannya hanya dikirim ke server datanya.
-the password isn't kept in the pane	kata sandi tidak disimpan di panel
 The password must be at most 4096 bytes, without control characters.	Kata sandi harus paling banyak 4096 byte, tanpa karakter kontrol.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Kata sandi atau kunci harus muat dalam header HTTP 4096 byte, tanpa karakter kontrol.
 The password was refused. Type a password to try again.	Kata sandi ditolak. Ketik kata sandi untuk mencoba lagi.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Proyek awal {path} buk
 The step's layer {name} isn't in the map.	Layer langkah ini, {name}, tidak ada di peta.
 The store has no variables with two or more dimensions.	Penyimpanan tidak memiliki variabel dengan dua dimensi atau lebih.
 the store is gone	penyimpanan sudah tidak ada
-the store keeps the password, never a token	penyimpanan menyimpan kata sandi, tidak pernah token
 The summary couldn't start: {error}	Ringkasan tidak dapat dimulai: {error}
 The summary failed unexpectedly	Ringkasan gagal secara tak terduga
 The summary finished after another project was opened, so it wasn't added	Ringkasan selesai setelah proyek lain dibuka, sehingga tidak ditambahkan
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	Alat yang d
 The trend couldn't start: {error}	Tren tidak dapat dimulai: {error}
 The trend failed unexpectedly	Tren gagal secara tak terduga
 The trend finished after another project was opened, so it wasn't added	Tren selesai setelah proyek lain dibuka, sehingga tidak ditambahkan
-the username stays for another try	nama pengguna tetap ada untuk mencoba lagi
 the UTM zone must be 1 to 60	zona UTM harus 1 hingga 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Nilai yang ditampilkan dari hitam ke putih, sama untuk setiap tanggal dan ubin (dalam satuan band itu sendiri). Kosong: peregangan masing-masing file.
 the view has no extent	tampilan tidak memiliki cakupan
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Ketik kata 
 Type the token this expiry is for.	Ketik token yang berlaku untuk waktu kedaluwarsa ini.
 Type the token, or the password to generate one, to remember it on this computer.	Ketik token, atau kata sandi untuk membuatnya, agar diingat di komputer ini.
 Typed below	Diketik di bawah
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	Census AS (alamat)
 Ukraine	Ukraina
 UM	UM

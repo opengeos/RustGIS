@@ -1,9 +1,7 @@
 # bn interface catalog: English<TAB>translation
  by 	 দ্বারা 
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" অবশ্যই একটি layer-এর instance নম্বর হতে হবে, {value} নয়
 "layer" must be a layer's id or name, not {value}	"layer" অবশ্যই একটি layer-এর id বা নাম হতে হবে, {value} নয়
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}' কোনো bucket-এর নাম নয়
 '{date}' isn't a date: write it as YYYY-MM-DD	'{date}' কোনো তারিখ নয়: YYYY-MM-DD আকারে লিখুন
 '{size}' isn't a cell size: give a number	'{size}' কোনো সেলের আকার নয়: একটি সংখ্যা দিন
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16টি ইমপোর্ট করা Zarr store ইতিমধ্যে সারিতে আছে
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D মেশ
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	কোনোটিই নয়
 <null>	<null>
 A .geolibre project as a map	একটি .geolibre প্রজেক্ট মানচিত্র হিসেবে
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	একটি .qgs বা .qgz প্রজেক
 A 3D globe seen from space.	মহাকাশ থেকে দেখা একটি 3D পৃথিবী-গোলক।
 A blank map with a basemap	বেসম্যাপসহ একটি ফাঁকা মানচিত্র
 A box behind the element, which moves with it.	element-এর পেছনে একটি বাক্স, যা এর সঙ্গে সরে।
-a browser's sign-in isn't remembered	ব্রাউজারের সাইন ইন মনে রাখা হয় না
 A call for the rustgis Python package	rustgis Python প্যাকেজের জন্য একটি কল
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	একটি ক্যাটালগের (CSW 2.0.2) ঠিকানা: শব্দ দিয়ে এর রেকর্ড খুঁজুন, চাইলে মানচিত্রের এলাকার ভিত্তিতেও খুঁজুন, তারপর লিঙ্ক করা সার্ভিস ও ফাইল যোগ করুন।
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT প্ল্যান বা অ্যাপ ব্যবহারের সীমা পূর্ণ হয়েছে। আবার চেষ্টা করার আগে Weekly usage দেখুন।
@@ -106,7 +101,6 @@ A projected coordinate system.	একটি projected coordinate system।
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	EPSG:32616-এর মতো একটি projected ব্যবস্থা, বা ডিগ্রির জন্য EPSG:4326
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	রাস্টার লেয়ারের কোনো ডেফিনিশন কোয়েরি বা সময় বন্ধন নেই: কোয়েরি ও সময় ট্যাব ফিচার লেয়ারের
 A rectangle behind the text.	টেক্সটের পেছনে একটি আয়তক্ষেত্র।
-a refused password is emptied too	প্রত্যাখ্যাত পাসওয়ার্ডও মুছে ফেলা হয়
 A report listing the selected layer's records, page after page.	নির্বাচিত layer-এর রেকর্ড পৃষ্ঠা ধরে তালিকাভুক্ত করা একটি প্রতিবেদন।
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	শুধু অন্য টুলে ইনপুট হিসেবে ব্যবহৃত ফলাফল মডেল চালানোর পর সরিয়ে ফেলা হয়; রাখতে চাইলে একটি output যোগ করুন।
 A result the model keeps, under a name	একটি নামের অধীনে মডেল যে ফলাফল সংরক্ষণ করে
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	একটি অ
 A service import or refresh is already running.	একটি service import বা refresh ইতিমধ্যেই চলছে।
 A service's layers stay in their service group.	একটি service-এর layer-গুলো সেই service-এর group-এই থাকে।
 A sign-in is remembered on this computer: it signs in when a file needs it.	এই কম্পিউটারে একটি সাইন ইন মনে রাখা আছে: কোনো ফাইলের দরকার হলে এটি সাইন ইন করে।
-a sign-out asks nothing	সাইন আউট কিছু জিজ্ঞেস করে না
-a signed-in pane keeps no password for after Sign out	সাইন ইন করা প্যানে সাইন আউটের পরের জন্য কোনো পাসওয়ার্ড থাকে না
 A small chart of several numeric fields, drawn on each feature over its symbol	কয়েকটি সংখ্যাসূচক ফিল্ডের একটি ছোট চার্ট, প্রতিটি ফিচারের প্রতীকের উপরে আঁকা
 A streamed layer needs Load All Features first	স্ট্রিম করা লেয়ারের জন্য আগে “সব feature লোড করুন” প্রয়োজন
 A table replaced in a GeoPackage	একটি GeoPackage-এ প্রতিস্থাপিত টেবিল
@@ -299,7 +291,6 @@ Add {language}	{language} যোগ করুন
 Add {n}	{n} যোগ করুন
 Add ▾	যোগ করুন ▾
 Added	যোগ করা হয়েছে
-Added Fixture	যোগ করা ফিক্সচার
 Added from {start} to {end}: the time slider steps through it	{start} থেকে {end} পর্যন্ত যোগ করা হয়েছে: time slider এর মধ্য দিয়ে ধাপে ধাপে চলে
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overture-এর {theme} map tile হিসেবে যোগ করা হয়েছে ({release}; কিছু theme শুধু zoom করলে দেখা যায়): {attribution}
 Added {name}	{name} যোগ করা হয়েছে
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	হেডারে 
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	একটি ArcGIS Online organization বা ArcGIS Enterprise পোর্টালের ঠিকানা; ফাঁকা থাকলে ArcGIS Online
 an ArcGIS sign-in	একটি ArcGIS সাইন ইন
 An AWS profile	একটি AWS profile
-an enqueued add is not a success	একটি এনকিউ করা যোগ সফলতা নয়
 An image picked for an earlier Image… was dropped: pick it again for that marker	আগের একটি ছবি…-এর জন্য বাছা ছবি বাদ পড়েছে: সেই মার্কারের জন্য আবার বেছে নিন
 Analysis	বিশ্লেষণ
 Analyze	বিশ্লেষণ করুন
@@ -950,7 +940,6 @@ Coordinate systems	স্থানাঙ্ক ব্যবস্থা
 Coordinate System…	স্থানাঙ্ক ব্যবস্থা…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	{format}-এ স্থানাঙ্ক। বদলাতে ক্লিক করুন: দশমিক ডিগ্রি, DMS, UTM, MGRS। UTM ও MGRS হলো পৃথিবীর গ্রিড, 84° N-এর উত্তরে ও 80° S-এর দক্ষিণে UPS-এ পড়া হয়।
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space সাইন ইন প্রত্যাখ্যান করেছে: ব্যবহারকারীর তথ্য অবৈধ
 Copernicus Data Space Status	Copernicus Data Space-এর অবস্থা
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	কমান্ড কপি করা হয়েছে।
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	আগে নিচের তালিকা
 Fixed	স্থির
 Fixed Zoom In	নির্দিষ্ট zoom in
 Fixed Zoom Out	নির্দিষ্ট zoom out
-Fixture	ফিক্সচার
 Flat	সমতল
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	সমতল ভূমি র‍্যাম্পের রং রাখে এবং সূর্যমুখী ঢাল উজ্জ্বল হয়
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	নির্বাচনের 
 Invalid selection outline · draw a smaller radius	নির্বাচনের সীমানা অবৈধ · আরও ছোট ব্যাসার্ধ আঁকুন
 Invalid shortcut binding.	শর্টকাট বাইন্ডিং অবৈধ।
 Invalid shortcut key.	শর্টকাট কী অবৈধ।
-Invalid user credentials	ব্যবহারকারীর তথ্য অবৈধ
 Invalid: {error}	অবৈধ: {error}
 Invert	উল্টান
 Invert Color Ramp	কালার র‍্যাম্প উল্টে দিন
@@ -2704,7 +2691,6 @@ No models are available for this account.	এই account-এর জন্য ক
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	এখনও কোনো notebook নেই। Analyze › New Notebook দিয়ে শুরু করুন, অথবা Add and Open Notebook দিয়ে একটি খুলুন।
 No offline areas	কোনো offline area নেই
 No other reports	অন্য কোনো report নেই
-no password yet	এখনো কোনো পাসওয়ার্ড নেই
 No place at this grid reference: {reason}	এই গ্রিড রেফারেন্সে কোনো স্থান নেই: {reason}
 No place found	কোনো স্থান পাওয়া যায়নি
 No place matches that address.	ওই ঠিকানার সঙ্গে মেলে এমন কোনো স্থান নেই।
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	সেখানে কোনো text graphic নেই
 No theme is named {name}.	{name} নামে কোনো থিম নেই।
 No tools match your search.	আপনার অনুসন্ধানের সঙ্গে কোনো tool মেলেনি।
-no typing while it waits	অপেক্ষার সময় টাইপ করা যায় না
 no yearly series	কোনো বার্ষিক series নেই
 No {format} here	এখানে কোনো {format} নেই
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	কিছুই চলেনি: স্
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	এখনও কিছু শেয়ার করা হয়নি। Publish › Share As দিয়ে web map, layer, style, scene এবং আরও অনেক কিছু তৈরি হয়।
 Nothing to add here	এখানে যোগ করার কিছু নেই
 Nothing to test	পরীক্ষা করার কিছু নেই
-nothing typed is kept in the pane	টাইপ করা কিছুই প্যানে রাখা হয় না
-nothing typed while it waited is kept	অপেক্ষার সময় টাইপ করা কিছুই রাখা হয় না
-nothing typed, Sign in is off	কিছু টাইপ করা হয়নি, সাইন ইন বন্ধ
 Nothing was found at this address.	এই ঠিকানায় কিছু পাওয়া যায়নি।
 Nothing was recorded, so no task was made.	কিছুই রেকর্ড হয়নি, তাই কোনো task তৈরি হয়নি।
 Now	এখন
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	একটি index layer-এর প্রতিটি feature-এর জন্য একটি পৃষ্ঠা।
 One per line: code=name	প্রতি লাইনে একটি: code=name
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	View-এর একটি ছবি: প্রতীক ও লেবেল tile-এর ধারে কাটা পড়ে না, এবং প্রতিটি view-এ service-কে একবার জিজ্ঞাসা করা হয়। গ্লোবে, হেলানো মানচিত্রে, বা service যে অভিক্ষেপ দেয় না তাতে tile হিসেবে আঁকা হয়।
-one sign-in at a time	একবারে একটি সাইন ইন
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	প্রতীক থেকে একটি stroke। casing, parallel line ও offset-এর জন্য stroke যোগ করুন।
 One-time code	এককালীন কোড
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	শুধু ফাইল থেকে পড়া tile archive (PMTiles বা MBTiles) মেরামত করা যায়।
 Only cubes with data where the map is	শুধু মানচিত্র যেখানে আছে সেখানে ডেটা থাকা cube
 Only selected polygons will be included in the output.	Output-এ শুধু নির্বাচিত polygon অন্তর্ভুক্ত হবে।
@@ -3330,7 +3310,6 @@ Reload Themes	থিম পুনরায় লোড করুন
 Reload Tile Archive	টাইল আর্কাইভ পুনরায় লোড
 Reload Web Layers	Web layer পুনরায় লোড করুন
 Reload {name} and discard its pending edits?	{name} পুনরায় লোড করে এর পেন্ডিং সম্পাদনা বাদ দেবেন?
-Remember follows: nothing is remembered now	মনে রাখুন অনুসরণ করে: এখন কিছুই মনে রাখা হয় না
 Remember on this computer	এই কম্পিউটারে মনে রাখুন
 Remember the key on this computer	এই কম্পিউটারে key মনে রাখুন
 Remove	সরান
@@ -3385,7 +3364,6 @@ Repair\nSource	উৎস\nমেরামত
 Repair Data Source	Data source মেরামত
 Repair Data Source…	Data source মেরামত…
 Repair Geometry	জ্যামিতি মেরামত করুন
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	টাইল আর্কাইভ মেরামত
 Repaired {name}	{name} মেরামত হয়েছে
 Repeat	পুনরাবৃত্তি
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Model বেছে নিতে সাইন ইন �
 Sign In to Copernicus Data Space	Copernicus Data Space-এ সাইন ইন
 Sign in with your ChatGPT account.	আপনার ChatGPT account দিয়ে সাইন ইন করুন।
 Sign out	সাইন আউট
-Sign out deletes it	সাইন আউট এটি মুছে দেয়
-Sign out deletes the remembered sign-in	সাইন আউট মনে রাখা সাইন ইন মুছে দেয়
 Sign Out of ArcGIS	ArcGIS থেকে সাইন আউট
 Sign Out of Copernicus Data Space	Copernicus Data Space থেকে সাইন আউট
 Sign-in	সাইন ইন
 Sign-in cancelled.	সাইন-ইন বাতিল হয়েছে।
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	সাইন-ইনের সময় শেষ। আবার শুরু করুন এবং browser-কে এই কম্পিউটারের loopback address-এ পৌঁছাতে দিন।
 signed in	সাইন ইন করা
-Signed in as synthetic.user@example.invalid.	synthetic.user@example.invalid হিসেবে সাইন ইন করা।
 Signed in as {name}.	{name} হিসেবে সাইন ইন করা।
 Signed in to {portal}	{portal}-এ সাইন ইন করা
 Signed in to {portal} as {user}	{portal}-এ {user} হিসেবে সাইন ইন করা
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	ব্যা
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	বেসম্যাপ এখন {view} ওয়ার্ল্ডভিউ দেখাচ্ছে; প্রজেক্টের দেশ লেয়ার তার সীমানা রাখছে
 The basemap's grid color	বেসম্যাপের গ্রিডের রং
 The Basemaps plugin's tab of public basemaps.	Basemaps plugin-এর public basemap tab।
-the box shows it is remembered	বাক্সটি দেখায় যে এটি মনে রাখা আছে
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Browser RustGIS-কে ক্লিপবোর্ড দেয়নি ({why}): {keys} দিয়ে পেস্ট করুন।
 the browser kept neither a copy of it nor where to download it	ব্রাউজার এর কোনো কপিও রাখেনি, কোথা থেকে ডাউনলোড করতে হবে তাও রাখেনি
 the browser runs everything on one thread	ব্রাউজার সবকিছু একটি থ্রেডে চালায়
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	Earthdata Login টোকেন
 The environment (AWS_ACCESS_KEY_ID…)	এনভায়রনমেন্ট (AWS_ACCESS_KEY_ID…)
 The features where the map is	মানচিত্র যেখানে আছে, সেখানকার feature
-the fields are off while it waits	অপেক্ষার সময় ঘরগুলো বন্ধ থাকে
 The first 1,000 entries; narrow it down a folder at a time.	প্রথম ১,০০০টি entry; একবারে একটি folder ধরে অনুসন্ধান সীমিত করুন।
 The first {n} are listed.	প্রথম {n}টি তালিকাভুক্ত।
 The first {n} are shown: search to narrow them.	প্রথম {n}টি দেখানো হয়েছে: তালিকা সীমিত করতে অনুসন্ধান করুন।
 The first {n} of them are listed; the filter searches all of them.	এর প্রথম {n}টি তালিকাভুক্ত; ফিল্টার সবগুলোতে খোঁজে।
 The first {n} rows	প্রথম {n}টি সারি
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	flowtrace উত্তর দেয়নি: বিন্দুর সবচেয়ে কাছের সম্পূর্ণ flowline দেখানো হচ্ছে।
-the form is back for another try	আবার চেষ্টার জন্য ফর্মটি ফিরে আসে
 The grid already has the basemap's color	গ্রিডে ইতিমধ্যে বেসম্যাপের রং আছে
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	গ্রিড অঙ্কের সংখ্যা 0 থেকে 10-এর মধ্যে জোড় হতে হবে, অর্ধেক easting-এর জন্য, অর্ধেক northing-এর জন্য
 The grid's color and opacity	গ্রিডের রং ও অস্বচ্ছতা
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	NLDI-এর উত্তর UTF-8 text নয়
 the northing doesn't fall in the latitude band given	প্রদত্ত অক্ষাংশ ব্যান্ডে northing পড়ে না
 The notes are cut here: the release page has all of them.	নোট এখানে কাটা হয়েছে: release page-এ সবগুলো আছে।
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	এর পরে অপেক্ষমাণটিও বাদ দেওয়া হয়েছে
 the open project has unsaved changes: save them before recovering other work	খোলা প্রজেক্টে অসংরক্ষিত পরিবর্তন আছে: অন্য কাজ পুনরুদ্ধারের আগে সেগুলো সংরক্ষণ করুন
 The open project has unsaved changes: save them, then recover this copy.	খোলা প্রজেক্টে অসংরক্ষিত পরিবর্তন আছে: সেগুলো সংরক্ষণ করুন, তারপর এই কপি পুনরুদ্ধার করুন।
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	পৃ�
 the page is too large to copy to the clipboard: export it instead	পৃষ্ঠাটি ক্লিপবোর্ডে কপি করার জন্য খুব বড়: বরং রপ্তানি করুন
 the page is too large to draw	পৃষ্ঠা আঁকার জন্য খুব বড়
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	পাসওয়ার্ড কেবল Copernicus Data Space-এর সাইন ইন সার্ভারে পাঠানো হয় এবং কখনো প্রজেক্টে রাখা হয় না। এর দেওয়া টোকেন কেবল এর ডেটা সার্ভারে পাঠানো হয়।
-the password isn't kept in the pane	পাসওয়ার্ড প্যানে রাখা হয় না
 The password must be at most 4096 bytes, without control characters.	পাসওয়ার্ড সর্বোচ্চ 4096 বাইটের হতে পারে, কন্ট্রোল অক্ষর ছাড়া।
 The password or key must fit a 4096-byte HTTP header, without control characters.	পাসওয়ার্ড বা key-কে 4096-বাইটের একটি HTTP হেডারে আঁটতে হবে, কোনো কন্ট্রোল অক্ষর ছাড়া।
 The password was refused. Type a password to try again.	পাসওয়ার্ড প্রত্যাখ্যাত হয়েছে। আবার চেষ্টা করতে একটি পাসওয়ার্ড লিখুন।
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Startup project {path}
 The step's layer {name} isn't in the map.	ধাপের layer {name} মানচিত্রে নেই।
 The store has no variables with two or more dimensions.	Store-এ দুই বা তার বেশি dimension-যুক্ত কোনো variable নেই।
 the store is gone	Store আর নেই
-the store keeps the password, never a token	store পাসওয়ার্ড রাখে, কখনো টোকেন নয়
 The summary couldn't start: {error}	Summary শুরু করা যায়নি: {error}
 The summary failed unexpectedly	Summary অপ্রত্যাশিতভাবে ব্যর্থ হয়েছে
 The summary finished after another project was opened, so it wasn't added	অন্য project খোলার পর summary শেষ হয়েছে, তাই এটি যোগ করা হয়নি
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	এই প�
 The trend couldn't start: {error}	Trend শুরু করা যায়নি: {error}
 The trend failed unexpectedly	Trend অপ্রত্যাশিতভাবে ব্যর্থ হয়েছে
 The trend finished after another project was opened, so it wasn't added	অন্য project খোলার পর trend শেষ হয়েছে, তাই এটি যোগ করা হয়নি
-the username stays for another try	আবার চেষ্টার জন্য ব্যবহারকারীর নাম থেকে যায়
 the UTM zone must be 1 to 60	UTM জোন অবশ্যই 1 থেকে 60 হতে হবে
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	কালো থেকে সাদা পর্যন্ত প্রদর্শিত মান, সব তারিখ ও tile-এর জন্য একই (band-এর নিজস্ব একক)। ফাঁকা: প্রতিটি file-এর নিজস্ব stretch।
 the view has no extent	view-এর extent নেই
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	পাস�
 Type the token this expiry is for.	এই মেয়াদ যে টোকেনের জন্য তা লিখুন।
 Type the token, or the password to generate one, to remember it on this computer.	এই কম্পিউটারে মনে রাখতে টোকেন, অথবা একটি তৈরি করতে পাসওয়ার্ড লিখুন।
 Typed below	নিচে টাইপ করা হয়েছে
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	U.S. Census (ঠিকানা)
 Ukraine	ইউক্রেন
 UM	UM

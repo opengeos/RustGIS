@@ -1,9 +1,7 @@
 # nl interface catalog: English<TAB>translation
  by 	 door
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" moet het instantienummer van een laag zijn, niet {value}
 "layer" must be a layer's id or name, not {value}	"layer" moet de id of naam van een laag zijn, niet {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	‘{b}’ is geen bucketnaam
 '{date}' isn't a date: write it as YYYY-MM-DD	‘{date}’ is geen datum: schrijf het als YYYY-MM-DD
 '{size}' isn't a cell size: give a number	‘{size}’ is geen celgrootte: geef een getal op
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 geïmporteerde Zarr-stores staan al in de wachtrij
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D-mesh
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Geen>
 <null>	<null>
 A .geolibre project as a map	Een .geolibre-project als kaart
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Een .qgs- of .qgz-project als kaart
 A 3D globe seen from space.	Een 3D-globe, gezien vanuit de ruimte.
 A blank map with a basemap	Een lege kaart met een basiskaart
 A box behind the element, which moves with it.	Een kader achter het element, dat ermee meebeweegt.
-a browser's sign-in isn't remembered	de aanmelding van een browser wordt niet onthouden
 A call for the rustgis Python package	Een aanroep voor het Python-pakket rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Het adres van een catalogus (CSW 2.0.2): doorzoek de records op woorden en, als je wilt, op het kaartgebied, en voeg dan de gekoppelde diensten en bestanden toe.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Een gebruikslimiet van het ChatGPT-abonnement of de app is bereikt. Bekijk het wekelijkse gebruik voordat je het opnieuw probeert.
@@ -106,7 +101,6 @@ A projected coordinate system.	Een geprojecteerd coördinatensysteem.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Een geprojecteerd stelsel zoals EPSG:32616, of EPSG:4326 voor graden
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	een rasterlaag heeft geen definitiequery of tijdkoppeling: de tabbladen Query en Tijd horen bij een objectlaag
 A rectangle behind the text.	Een rechthoek achter de tekst.
-a refused password is emptied too	een geweigerd wachtwoord wordt ook gewist
 A report listing the selected layer's records, page after page.	Een rapport met de records van de geselecteerde laag, pagina na pagina.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Een resultaat dat alleen andere gereedschappen voedt, wordt verwijderd zodra het model gedraaid heeft; voeg een uitvoer toe om het te bewaren.
 A result the model keeps, under a name	Een resultaat dat het model onder een naam bewaart
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Een zoekgebied b
 A service import or refresh is already running.	Er wordt al een service geïmporteerd of vernieuwd.
 A service's layers stay in their service group.	De lagen van een service blijven in hun servicegroep.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Er is een aanmelding onthouden op deze computer: die meldt aan wanneer een bestand dat nodig heeft.
-a sign-out asks nothing	afmelden vraagt niets
-a signed-in pane keeps no password for after Sign out	een aangemeld venster bewaart geen wachtwoord voor na Afmelden
 A small chart of several numeric fields, drawn on each feature over its symbol	Een kleine grafiek van meerdere numerieke velden, op elk object boven het symbool getekend
 A streamed layer needs Load All Features first	Een gestreamde laag heeft eerst ‘Alle objecten laden’ nodig
 A table replaced in a GeoPackage	Een vervangen tabel in een GeoPackage
@@ -299,7 +291,6 @@ Add {language}	{language} toevoegen
 Add {n}	{n} toevoegen
 Add ▾	Toevoegen ▾
 Added	Toegevoegd
-Added Fixture	Toegevoegde fixture
 Added from {start} to {end}: the time slider steps through it	Toegevoegd van {start} tot {end}: de tijdschuifregelaar loopt er stap voor stap doorheen
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	{theme} van Overture toegevoegd als kaarttegels ({release}; sommige thema's verschijnen pas ingezoomd): {attribution}
 Added {name}	{name} toegevoegd
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Een API-sleutel die
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Het adres van een ArcGIS Online-organisatie of een ArcGIS Enterprise-portal; ArcGIS Online als het leeg is
 an ArcGIS sign-in	een ArcGIS-aanmelding
 An AWS profile	Een AWS-profiel
-an enqueued add is not a success	een in de wachtrij gezette toevoeging is geen succes
 An image picked for an earlier Image… was dropped: pick it again for that marker	Een afbeelding die voor een eerdere Afbeelding… was gekozen, is weggelaten: kies die opnieuw voor die markering
 Analysis	Analyse
 Analyze	Analyseren
@@ -950,7 +940,6 @@ Coordinate systems	Coördinatenstelsels
 Coordinate System…	Coördinatenstelsel…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Coördinaten in {format}. Klik om te wisselen: decimale graden, DMS, UTM, MGRS. UTM en MGRS zijn rasters van de aarde, ten noorden van 84° N en ten zuiden van 80° Z gelezen in UPS.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space heeft de aanmelding geweigerd: Ongeldige aanmeldgegevens
 Copernicus Data Space Status	Status Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Opdracht gekopieerd.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Los eerst de onderstaande problemen op
 Fixed	Vast
 Fixed Zoom In	Vast inzoomen
 Fixed Zoom Out	Vast uitzoomen
-Fixture	Fixture
 Flat	Plat
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Vlak terrein houdt de kleur van het kleurverloop en hellingen naar de zon worden lichter
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Ongeldige selectieomtrek · tek
 Invalid selection outline · draw a smaller radius	Ongeldige selectieomtrek · teken een kleinere straal
 Invalid shortcut binding.	Ongeldige sneltoetstoewijzing.
 Invalid shortcut key.	Ongeldige sneltoets.
-Invalid user credentials	Ongeldige aanmeldgegevens
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
 Invert Color Ramp	Kleurverloop omkeren
@@ -2704,7 +2691,6 @@ No models are available for this account.	Er zijn geen modellen beschikbaar voor
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Nog geen notebooks. Analyseren › Nieuw notebook start er een, of Notebook toevoegen en openen opent er een.
 No offline areas	Geen offline gebieden
 No other reports	Geen andere rapporten
-no password yet	nog geen wachtwoord
 No place at this grid reference: {reason}	Geen plaats bij deze rasterreferentie: {reason}
 No place found	Geen plaats gevonden
 No place matches that address.	Geen plaats komt overeen met dat adres.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	daar is geen tekstelement
 No theme is named {name}.	Er is geen thema met de naam {name}.
 No tools match your search.	Geen gereedschappen gevonden voor je zoekopdracht.
-no typing while it waits	niet typen terwijl het wacht
 no yearly series	geen jaarlijkse reeks
 No {format} here	Hier geen {format}
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Niets uitgevoerd: het script bevat geen
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Nog niets gedeeld. Publiceren › Delen als maakt webkaarten, lagen, stijlen, scènes en meer.
 Nothing to add here	Hier valt niets toe te voegen
 Nothing to test	Niets om te testen
-nothing typed is kept in the pane	niets wat getypt is, blijft in het venster
-nothing typed while it waited is kept	niets wat tijdens het wachten getypt is, blijft bewaard
-nothing typed, Sign in is off	niets getypt, Aanmelden staat uit
 Nothing was found at this address.	Op dit adres is niets gevonden.
 Nothing was recorded, so no task was made.	Er is niets opgenomen, dus er is geen taak gemaakt.
 Now	Nu
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	Eén pagina per object van een indexlaag.
 One per line: code=name	Eén per regel: code=naam
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Eén afbeelding van het beeld: symbolen en labels worden niet afgesneden aan tegelranden, en de dienst wordt één keer per beeld bevraagd. In tegels getekend op de wereldbol, op een gekantelde kaart of in een projectie die de dienst niet aanbiedt.
-one sign-in at a time	één aanmelding tegelijk
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Eén streek, uit het symbool. Voeg streken toe voor omlijningen, parallelle lijnen en verschuivingen.
 One-time code	Eenmalige code
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Alleen een uit een bestand gelezen tegelarchief (PMTiles of MBTiles) kan worden gerepareerd.
 Only cubes with data where the map is	Alleen kubussen met gegevens waar de kaart is
 Only selected polygons will be included in the output.	Alleen geselecteerde polygonen worden in de uitvoer opgenomen.
@@ -3330,7 +3310,6 @@ Reload Themes	Thema’s opnieuw laden
 Reload Tile Archive	Tegelarchief opnieuw laden
 Reload Web Layers	Weblagen opnieuw laden
 Reload {name} and discard its pending edits?	{name} opnieuw laden en de openstaande bewerkingen verwerpen?
-Remember follows: nothing is remembered now	GeoLibre-gereedschapsvertalingen verwijderen
 Remember on this computer	Op deze computer onthouden
 Remember the key on this computer	Sleutel op deze computer onthouden
 Remove	Verwijderen
@@ -3385,7 +3364,6 @@ Repair\nSource	Bron\nrepareren
 Repair Data Source	Gegevensbron repareren
 Repair Data Source…	Gegevensbron repareren…
 Repair Geometry	Geometrie repareren
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Tegelarchief repareren
 Repaired {name}	{name} gerepareerd
 Repeat	Herhalen
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Meld je aan om een model te kiezen.
 Sign In to Copernicus Data Space	Aanmelden bij Copernicus Data Space
 Sign in with your ChatGPT account.	Meld u aan met uw ChatGPT-account.
 Sign out	Afmelden
-Sign out deletes it	Afmelden verwijdert die
-Sign out deletes the remembered sign-in	Afmelden verwijdert de onthouden aanmelding
 Sign Out of ArcGIS	Afmelden bij ArcGIS
 Sign Out of Copernicus Data Space	Afmelden bij Copernicus Data Space
 Sign-in	Aanmelding
 Sign-in cancelled.	Aanmelding geannuleerd.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	De aanmeldtijd is verstreken. Begin opnieuw en geef de browser toegang tot het loopback-adres van deze computer.
 signed in	aangemeld
-Signed in as synthetic.user@example.invalid.	Aangemeld als synthetic.user@example.invalid.
 Signed in as {name}.	Aangemeld als {name}.
 Signed in to {portal}	Aangemeld bij {portal}
 Signed in to {portal} as {user}	Aangemeld bij {portal} als {user}
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	De achtergro
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	De basiskaart toont nu de {view}-weergave; de laag Landen van het project behoudt zijn grenzen
 The basemap's grid color	De rasterkleur van de basiskaart
 The Basemaps plugin's tab of public basemaps.	Het tabblad van de plugin Basiskaarten met openbare basiskaarten.
-the box shows it is remembered	het vakje toont dat het onthouden is
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	De browser heeft RustGIS het klembord niet gegeven ({why}): plak met {keys}.
 the browser kept neither a copy of it nor where to download it	de browser heeft geen kopie bewaard en ook niet waar het te downloaden is
 the browser runs everything on one thread	de browser draait alles op één thread
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	het Earthdata Login-token
 The environment (AWS_ACCESS_KEY_ID…)	De omgeving (AWS_ACCESS_KEY_ID…)
 The features where the map is	De objecten waar de kaart is
-the fields are off while it waits	de velden staan uit terwijl het wacht
 The first 1,000 entries; narrow it down a folder at a time.	De eerste 1.000 items; verfijn map voor map.
 The first {n} are listed.	De eerste {n} worden weergegeven.
 The first {n} are shown: search to narrow them.	De eerste {n} worden weergegeven: zoek om ze te beperken.
 The first {n} of them are listed; the filter searches all of them.	De eerste {n} staan in de lijst; het filter doorzoekt ze allemaal.
 The first {n} rows	De eerste {n} rijen
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	De stroomtracering gaf geen antwoord: de hele stroomlijn die het dichtst bij het punt ligt, wordt weergegeven.
-the form is back for another try	het formulier is terug voor een nieuwe poging
 The grid already has the basemap's color	Het raster heeft al de kleur van de basiskaart
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	het aantal rastercijfers moet even zijn, van 0 tot 10, de helft voor de easting en de helft voor de northing
 The grid's color and opacity	De kleur en dekking van het raster
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	het antwoord van de NLDI is geen UTF-8-tekst
 the northing doesn't fall in the latitude band given	de northing valt niet in de opgegeven breedteband
 The notes are cut here: the release page has all of them.	De notities worden hier afgebroken: de releasepagina bevat ze allemaal.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Ook de ene die erna wachtte, is overgeslagen
 the open project has unsaved changes: save them before recovering other work	het geopende project heeft niet-opgeslagen wijzigingen: sla ze op voordat u ander werk terughaalt
 The open project has unsaved changes: save them, then recover this copy.	Het geopende project heeft niet-opgeslagen wijzigingen: sla ze op en haal daarna deze kopie terug.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	De pagi
 the page is too large to copy to the clipboard: export it instead	de pagina is te groot om naar het klembord te kopiëren: exporteer hem in plaats daarvan
 the page is too large to draw	de pagina is te groot om te tekenen
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Het wachtwoord wordt alleen naar de aanmeldserver van Copernicus Data Space gestuurd en nooit in het project bewaard. Het token dat die geeft, wordt alleen naar de dataservers gestuurd.
-the password isn't kept in the pane	het wachtwoord blijft niet in het venster
 The password must be at most 4096 bytes, without control characters.	Het wachtwoord mag hoogstens 4096 bytes zijn, zonder stuurtekens.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Het wachtwoord of de sleutel moet in een HTTP-header van 4096 bytes passen, zonder besturingstekens.
 The password was refused. Type a password to try again.	Het wachtwoord is geweigerd. Typ een wachtwoord om het opnieuw te proberen.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Het startproject {path
 The step's layer {name} isn't in the map.	De laag {name} van de stap staat niet in de kaart.
 The store has no variables with two or more dimensions.	De opslag heeft geen variabelen met twee of meer dimensies.
 the store is gone	de opslag is verdwenen
-the store keeps the password, never a token	de opslag bewaart het wachtwoord, nooit een token
 The summary couldn't start: {error}	De samenvatting kon niet starten: {error}
 The summary failed unexpectedly	De samenvatting is onverwacht mislukt
 The summary finished after another project was opened, so it wasn't added	De samenvatting was klaar nadat een ander project was geopend, dus ze is niet toegevoegd
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	De gereedsc
 The trend couldn't start: {error}	De trend kon niet starten: {error}
 The trend failed unexpectedly	De trend is onverwacht mislukt
 The trend finished after another project was opened, so it wasn't added	De trend was klaar nadat een ander project was geopend, dus hij is niet toegevoegd
-the username stays for another try	de gebruikersnaam blijft voor een nieuwe poging
 the UTM zone must be 1 to 60	de UTM-zone moet 1 tot 60 zijn
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	De waarden die van zwart tot wit worden getoond, gelijk voor elke datum en tegel (in de eigen eenheden van de band). Leeg: de eigen stretch van elk bestand.
 the view has no extent	de weergave heeft geen bereik
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Typ het wac
 Type the token this expiry is for.	Typ het token waarvoor deze vervaltijd geldt.
 Type the token, or the password to generate one, to remember it on this computer.	Typ het token, of het wachtwoord om er een te genereren, om het op deze computer te onthouden.
 Typed below	Hieronder getypt
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	U.S. Census (adressen)
 Ukraine	Oekraïne
 UM	UM

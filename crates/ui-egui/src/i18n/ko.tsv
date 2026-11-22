@@ -1,9 +1,7 @@
 # ko interface catalog: English<TAB>translation
  by 	 ×
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance"는 {value}이(가) 아니라 레이어의 인스턴스 번호여야 합니다
 "layer" must be a layer's id or name, not {value}	"layer"는 {value}이(가) 아니라 레이어의 ID 또는 이름이어야 합니다
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}'은(는) 버킷 이름이 아닙니다
 '{date}' isn't a date: write it as YYYY-MM-DD	'{date}'은(는) 날짜가 아닙니다: YYYY-MM-DD 형식으로 입력하세요
 '{size}' isn't a cell size: give a number	'{size}'은(는) 셀 크기가 아닙니다: 숫자를 입력하세요
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	가져온 Zarr 저장소 16개가 이미 대기열에 있습니다
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D 메시
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<없음>
 <null>	<null>
 A .geolibre project as a map	.geolibre 프로젝트를 지도로
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	.qgs 또는 .qgz 프로젝트를 지도로
 A 3D globe seen from space.	우주에서 본 3D 지구본.
 A blank map with a basemap	배경지도가 있는 빈 지도
 A box behind the element, which moves with it.	요소 뒤에 요소와 함께 움직이는 상자를 둡니다.
-a browser's sign-in isn't remembered	브라우저의 로그인은 기억되지 않음
 A call for the rustgis Python package	rustgis Python 패키지용 호출
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	카탈로그(CSW 2.0.2) 주소: 단어와 원하면 지도 영역으로 레코드를 검색한 다음, 연결된 서비스와 파일을 추가합니다.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT 요금제 또는 앱 사용 한도에 도달했습니다. 다시 시도하기 전에 주간 사용량을 확인하세요.
@@ -106,7 +101,6 @@ A projected coordinate system.	투영 좌표계.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	EPSG:32616 같은 투영 좌표계, 또는 도 단위는 EPSG:4326
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	래스터 레이어에는 정의 쿼리나 시간 연결이 없습니다. 쿼리 및 시간 탭은 피처 레이어용입니다
 A rectangle behind the text.	텍스트 뒤의 사각형.
-a refused password is emptied too	거부된 비밀번호도 비워짐
 A report listing the selected layer's records, page after page.	선택한 레이어의 레코드를 페이지별로 나열하는 보고서.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	다른 도구에만 전달되는 결과는 모델 실행 후 제거됩니다. 유지하려면 출력을 추가하세요.
 A result the model keeps, under a name	모델이 이름을 붙여 유지하는 결과
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	검색 영역에
 A service import or refresh is already running.	서비스 가져오기 또는 새로 고침이 이미 진행 중입니다.
 A service's layers stay in their service group.	서비스의 레이어는 해당 서비스 그룹 안에 유지됩니다.
 A sign-in is remembered on this computer: it signs in when a file needs it.	로그인이 이 컴퓨터에 기억됩니다. 파일에 필요할 때 로그인합니다.
-a sign-out asks nothing	로그아웃은 아무것도 묻지 않음
-a signed-in pane keeps no password for after Sign out	로그인한 창은 로그아웃 후를 위한 비밀번호를 보관하지 않음
 A small chart of several numeric fields, drawn on each feature over its symbol	여러 숫자 필드로 만든 작은 차트를 각 피처의 심볼 위에 그립니다
 A streamed layer needs Load All Features first	스트리밍 레이어는 먼저 모든 피처 불러오기가 필요합니다
 A table replaced in a GeoPackage	GeoPackage에서 대체된 테이블
@@ -299,7 +291,6 @@ Add {language}	{language} 추가
 Add {n}	{n}개 추가
 Add ▾	추가 ▾
 Added	추가됨
-Added Fixture	추가된 픽스처
 Added from {start} to {end}: the time slider steps through it	{start}부터 {end}까지 추가됨: 시간 슬라이더로 단계별로 볼 수 있습니다
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overture의 {theme}을(를) 지도 타일로 추가했습니다({release}; 일부 테마는 확대해야만 표시됩니다): {attribution}
 Added {name}	{name} 추가됨
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	헤더로 보내는
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	ArcGIS Online 조직 또는 ArcGIS Enterprise 포털의 주소. 비워 두면 ArcGIS Online
 an ArcGIS sign-in	ArcGIS 로그인
 An AWS profile	AWS 프로필
-an enqueued add is not a success	대기열에 넣은 추가는 성공이 아닙니다
 An image picked for an earlier Image… was dropped: pick it again for that marker	이전 이미지…에서 선택한 이미지가 삭제되었습니다. 해당 마커에 다시 선택하세요
 Analysis	분석
 Analyze	분석
@@ -950,7 +940,6 @@ Coordinate systems	좌표계
 Coordinate System…	좌표계…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	{format} 좌표입니다. 클릭하여 전환: 십진 도, DMS, UTM, MGRS. UTM과 MGRS는 지구의 격자이며, 북위 84° 이북과 남위 80° 이남은 UPS로 읽습니다.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space가 로그인을 거부했습니다: 잘못된 사용자 자격 증명
 Copernicus Data Space Status	Copernicus Data Space 상태
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	명령을 복사했습니다.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	먼저 아래에 나열된 문제를 해결�
 Fixed	고정
 Fixed Zoom In	고정 확대
 Fixed Zoom Out	고정 축소
-Fixture	픽스처
 Flat	평면
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	평평한 지면은 색상 램프의 색을 유지하고 태양을 향한 경사면은 밝아짐
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	잘못된 선택 윤곽선 · �
 Invalid selection outline · draw a smaller radius	잘못된 선택 윤곽선 · 더 작은 반경으로 그리세요
 Invalid shortcut binding.	잘못된 단축키 할당입니다.
 Invalid shortcut key.	잘못된 단축키입니다.
-Invalid user credentials	잘못된 사용자 자격 증명
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
 Invert Color Ramp	색상 램프 반전
@@ -2704,7 +2691,6 @@ No models are available for this account.	이 계정에 사용 가능한 모델�
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	아직 노트북이 없습니다. 분석 › 새 노트북으로 시작하거나, 노트북 추가 및 열기로 엽니다.
 No offline areas	오프라인 영역 없음
 No other reports	다른 보고서 없음
-no password yet	아직 비밀번호 없음
 No place at this grid reference: {reason}	이 격자 참조에 해당하는 위치가 없습니다: {reason}
 No place found	장소를 찾을 수 없습니다
 No place matches that address.	해당 주소와 일치하는 장소가 없습니다.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	그곳에 텍스트 그래픽이 없습니다
 No theme is named {name}.	{name}(이)라는 테마가 없습니다.
 No tools match your search.	검색과 일치하는 도구가 없습니다.
-no typing while it waits	기다리는 동안 입력 불가
 no yearly series	연도별 시리즈 없음
 No {format} here	이곳에는 {format}이(가) 없습니다
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	실행된 것이 없습니다. 스크�
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	아직 공유한 항목이 없습니다. 게시 › 다른 형식으로 공유로 웹 지도, 레이어, 스타일, 장면 등을 만듭니다.
 Nothing to add here	여기에 추가할 항목이 없습니다
 Nothing to test	테스트할 항목이 없습니다
-nothing typed is kept in the pane	입력한 내용은 창에 남지 않음
-nothing typed while it waited is kept	기다리는 동안 입력한 내용은 남지 않음
-nothing typed, Sign in is off	아무것도 입력하지 않아 로그인이 꺼져 있음
 Nothing was found at this address.	이 주소에서 아무것도 찾지 못했습니다.
 Nothing was recorded, so no task was made.	기록된 내용이 없어 태스크를 만들지 않았습니다.
 Now	지금
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	인덱스 레이어의 피처마다 한 페이지.
 One per line: code=name	한 줄에 하나씩: code=이름
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	보기를 그림 한 장으로: 심볼과 라벨이 타일 가장자리에서 잘리지 않으며, 서비스 요청은 보기마다 한 번입니다. 지구본, 기울인 지도, 서비스가 제공하지 않는 투영에서는 타일로 그립니다.
-one sign-in at a time	한 번에 하나의 로그인
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	심볼에서 가져온 선 하나. 외곽선, 평행선, 오프셋을 위해 선을 추가하세요.
 One-time code	일회용 코드
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	파일에서 읽은 타일 아카이브(PMTiles 또는 MBTiles)만 복구할 수 있습니다.
 Only cubes with data where the map is	지도 영역에 데이터가 있는 큐브만
 Only selected polygons will be included in the output.	선택한 폴리곤만 출력에 포함됩니다.
@@ -3330,7 +3310,6 @@ Reload Themes	테마 다시 불러오기
 Reload Tile Archive	타일 아카이브 다시 불러오기
 Reload Web Layers	웹 레이어 다시 불러오기
 Reload {name} and discard its pending edits?	{name}을(를) 다시 불러오고 보류 중인 편집을 버리시겠습니까?
-Remember follows: nothing is remembered now	기억 설정을 따름: 지금은 아무것도 기억되지 않음
 Remember on this computer	이 컴퓨터에 기억
 Remember the key on this computer	이 컴퓨터에 키 기억
 Remove	제거
@@ -3385,7 +3364,6 @@ Repair\nSource	소스\n복구
 Repair Data Source	데이터 원본 복구
 Repair Data Source…	데이터 원본 복구…
 Repair Geometry	지오메트리 복구
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	타일 아카이브 복구
 Repaired {name}	{name} 복구됨
 Repeat	반복
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	모델을 선택하려면 로그인하세요.
 Sign In to Copernicus Data Space	Copernicus Data Space에 로그인
 Sign in with your ChatGPT account.	ChatGPT 계정으로 로그인하세요.
 Sign out	로그아웃
-Sign out deletes it	로그아웃하면 삭제됨
-Sign out deletes the remembered sign-in	로그아웃하면 기억된 로그인이 삭제됨
 Sign Out of ArcGIS	ArcGIS에서 로그아웃
 Sign Out of Copernicus Data Space	Copernicus Data Space에서 로그아웃
 Sign-in	로그인
 Sign-in cancelled.	로그인이 취소되었습니다.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	로그인 시간이 초과되었습니다. 다시 시작하고 브라우저가 이 컴퓨터의 루프백 주소에 접근하도록 허용하세요.
 signed in	로그인됨
-Signed in as synthetic.user@example.invalid.	synthetic.user@example.invalid(으)로 로그인했습니다.
 Signed in as {name}.	{name}(으)로 로그인했습니다.
 Signed in to {portal}	{portal}에 로그인됨
 Signed in to {portal} as {user}	{portal}에 {user}(으)로 로그인됨
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	백그라운
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	배경지도가 이제 {view} 월드뷰를 표시합니다. 프로젝트의 국가 레이어는 기존 국경을 유지합니다
 The basemap's grid color	배경지도의 격자 색상
 The Basemaps plugin's tab of public basemaps.	배경지도 플러그인의 공개 배경지도 탭.
-the box shows it is remembered	상자에 기억되어 있음이 표시됨
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	브라우저가 RustGIS에 클립보드를 제공하지 않았습니다({why}). {keys}(으)로 붙여넣으세요.
 the browser kept neither a copy of it nor where to download it	브라우저에 사본도, 다운로드할 위치도 보관되어 있지 않습니다
 the browser runs everything on one thread	브라우저는 모든 것을 하나의 스레드에서 실행합니다
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	Earthdata Login 토큰
 The environment (AWS_ACCESS_KEY_ID…)	환경 변수(AWS_ACCESS_KEY_ID…)
 The features where the map is	지도 영역의 피처
-the fields are off while it waits	기다리는 동안 필드가 꺼짐
 The first 1,000 entries; narrow it down a folder at a time.	처음 1,000개 항목입니다. 폴더 단위로 범위를 좁히세요.
 The first {n} are listed.	처음 {n}개가 표시됩니다.
 The first {n} are shown: search to narrow them.	처음 {n}개가 표시됩니다: 검색하여 범위를 좁히세요.
 The first {n} of them are listed; the filter searches all of them.	처음 {n}개만 나열됩니다. 필터는 전체를 검색합니다.
 The first {n} rows	처음 {n}개 행
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	흐름 추적이 응답하지 않았습니다: 포인트에서 가장 가까운 유로선 전체를 표시합니다.
-the form is back for another try	다시 시도할 수 있도록 양식이 돌아옴
 The grid already has the basemap's color	격자가 이미 배경지도의 색상입니다
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	격자 숫자는 0~10개의 짝수 자릿수여야 하며, 절반은 동향 거리, 절반은 북향 거리입니다
 The grid's color and opacity	격자의 색상과 불투명도
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	NLDI의 응답이 UTF-8 텍스트가 아닙니다
 the northing doesn't fall in the latitude band given	북향 거리가 지정한 위도대 안에 있지 않습니다
 The notes are cut here: the release page has all of them.	노트가 여기서 잘렸습니다. 전체 내용은 릴리스 페이지에 있습니다.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	그 뒤에 대기 중이던 1개도 포기되었습니다
 the open project has unsaved changes: save them before recovering other work	열린 프로젝트에 저장하지 않은 변경 내용이 있습니다. 다른 작업을 복구하기 전에 저장하세요
 The open project has unsaved changes: save them, then recover this copy.	열린 프로젝트에 저장하지 않은 변경 내용이 있습니다. 저장한 뒤 이 사본을 복구하세요.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	페이�
 the page is too large to copy to the clipboard: export it instead	페이지가 너무 커서 클립보드에 복사할 수 없습니다. 대신 내보내세요
 the page is too large to draw	페이지가 너무 커서 그릴 수 없습니다
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	비밀번호는 Copernicus Data Space의 로그인 서버로만 전송되며 프로젝트에 보관되지 않습니다. 그 결과로 받은 토큰은 데이터 서버로만 전송됩니다.
-the password isn't kept in the pane	비밀번호는 창에 남지 않음
 The password must be at most 4096 bytes, without control characters.	비밀번호는 제어 문자 없이 최대 4096바이트여야 합니다.
 The password or key must fit a 4096-byte HTTP header, without control characters.	비밀번호 또는 키는 제어 문자 없이 4096바이트 HTTP 헤더에 들어가야 합니다.
 The password was refused. Type a password to try again.	비밀번호가 거부되었습니다. 비밀번호를 입력하고 다시 시도하세요.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	시작 프로젝트 {p
 The step's layer {name} isn't in the map.	단계의 레이어 {name}이(가) 지도에 없습니다.
 The store has no variables with two or more dimensions.	저장소에 2차원 이상의 변수가 없습니다.
 the store is gone	저장소가 없어졌습니다
-the store keeps the password, never a token	저장소는 비밀번호를 보관하며 토큰은 보관하지 않음
 The summary couldn't start: {error}	요약을 시작할 수 없습니다: {error}
 The summary failed unexpectedly	요약이 예기치 않게 실패했습니다
 The summary finished after another project was opened, so it wasn't added	다른 프로젝트를 연 뒤에 요약이 완료되어 추가되지 않았습니다
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	이 프로�
 The trend couldn't start: {error}	추세 분석을 시작할 수 없습니다: {error}
 The trend failed unexpectedly	추세 분석이 예기치 않게 실패했습니다
 The trend finished after another project was opened, so it wasn't added	다른 프로젝트를 연 뒤에 추세 분석이 완료되어 추가되지 않았습니다
-the username stays for another try	다시 시도할 수 있도록 사용자 이름은 남음
 the UTM zone must be 1 to 60	UTM 구역은 1~60이어야 합니다
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	검은색에서 흰색으로 표시할 값으로, 모든 날짜와 타일에 동일하게 적용됩니다(밴드 자체 단위). 비워 두면 각 파일 자체의 스트레치를 사용합니다.
 the view has no extent	뷰에 범위가 없습니다
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	비밀번�
 Type the token this expiry is for.	이 만료 시간에 해당하는 토큰을 입력하세요.
 Type the token, or the password to generate one, to remember it on this computer.	이 컴퓨터에 기억하려면 토큰 또는 토큰을 생성할 비밀번호를 입력하세요.
 Typed below	아래에 입력
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	미국 인구조사국(주소)
 Ukraine	우크라이나
 UM	UM

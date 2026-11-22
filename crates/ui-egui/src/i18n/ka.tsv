@@ -1,9 +1,7 @@
 # ka interface catalog: English<TAB>translation
  by 	 ×
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" უნდა იყოს ფენის ეგზემპლარის ნომერი და არა {value}
 "layer" must be a layer's id or name, not {value}	"layer" უნდა იყოს ფენის id ან სახელი და არა {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	„{b}“ არ არის ბაკეტის სახელი
 '{date}' isn't a date: write it as YYYY-MM-DD	„{date}“ არ არის თარიღი: დაწერეთ YYYY-MM-DD ფორმატით
 '{size}' isn't a cell size: give a number	„{size}“ არ არის უჯრედის ზომა: მიუთითეთ რიცხვი
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 იმპორტირებული Zarr საცავი უკვე რიგშია
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D მესი
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<არაფერი>
 <null>	<null>
 A .geolibre project as a map	.geolibre პროექტი რუკად
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	.qgs ან .qgz პროექტი რუკ
 A 3D globe seen from space.	3D გლობუსი კოსმოსიდან დანახული.
 A blank map with a basemap	ცარიელი რუკა საბაზისო რუკით
 A box behind the element, which moves with it.	ყუთი ელემენტის უკან, რომელიც მასთან ერთად მოძრაობს.
-a browser's sign-in isn't remembered	ბრაუზერში შესვლა არ ინახება
 A call for the rustgis Python package	გამოძახება rustgis Python პაკეტისთვის
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	კატალოგის (CSW 2.0.2) მისამართი: მოძებნეთ მისი ჩანაწერები სიტყვებით და, სურვილისამებრ, რუკის არეალით, შემდეგ დაამატეთ სერვისები და ფაილები, რომლებზეც ისინი მიუთითებს.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	მიღწეულია ChatGPT-ის გეგმის ან აპის გამოყენების ლიმიტი. ხელახლა ცდამდე გადახედეთ კვირის გამოყენებას.
@@ -106,7 +101,6 @@ A projected coordinate system.	დაპროექტებული კოო
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	დაპროექტებული სისტემა, მაგალითად EPSG:32616, ან EPSG:4326 გრადუსებისთვის
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	რასტრულ ფენას არ აქვს განსაზღვრის მოთხოვნა ან დროზე მიბმა: „მოთხოვნისა“ და „დროის“ ჩანართები ობიექტების ფენისაა
 A rectangle behind the text.	მართკუთხედი ტექსტის უკან.
-a refused password is emptied too	უარყოფილი პაროლიც იშლება
 A report listing the selected layer's records, page after page.	ანგარიში, რომელიც არჩეული ფენის ჩანაწერებს გვერდ-გვერდ ჩამოთვლის.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	შედეგი, რომელიც მხოლოდ სხვა ხელსაწყოებს გადაეცემა, მოდელის გაშვების შემდეგ იშლება; მის შესანარჩუნებლად დაამატეთ გამოსავალი.
 A result the model keeps, under a name	შედეგი, რომელსაც მოდელი სახელით ინახავს
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	ძიები�
 A service import or refresh is already running.	სერვისის იმპორტი ან განახლება უკვე მიმდინარეობს.
 A service's layers stay in their service group.	სერვისის ფენები რჩება თავიანთი სერვისის ჯგუფში.
 A sign-in is remembered on this computer: it signs in when a file needs it.	ამ კომპიუტერში შესვლა დამახსოვრებულია: შედის, როცა ფაილს ეს სჭირდება.
-a sign-out asks nothing	გასვლა არაფერს კითხულობს
-a signed-in pane keeps no password for after Sign out	შესული პანელი გასვლის შემდეგ პაროლს არ ინახავს
 A small chart of several numeric fields, drawn on each feature over its symbol	რამდენიმე რიცხვითი ველის პატარა დიაგრამა, დახატული თითოეულ ობიექტზე მისი სიმბოლოს ზემოდან
 A streamed layer needs Load All Features first	ნაკადური ფენისთვის ჯერ საჭიროა „ყველა ობიექტის ჩატვირთვა“
 A table replaced in a GeoPackage	ჩანაცვლებული ცხრილი GeoPackage-ში
@@ -299,7 +291,6 @@ Add {language}	{language}-ის დამატება
 Add {n}	{n}-ის დამატება
 Add ▾	დამატება ▾
 Added	დამატებულია
-Added Fixture	დამატებული მოწყობილობა
 Added from {start} to {end}: the time slider steps through it	დაემატა {start}-დან {end}-მდე: დროის სლაიდერი მასში ნაბიჯებით გადის
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overture-ის თემა {theme} დაემატა რუკის ფილებად ({release}; ზოგი თემა მხოლოდ გადიდებისას ჩანს): {attribution}
 Added {name}	დაემატა {name}
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	სათაურ�
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	ArcGIS Online-ის ორგანიზაციის ან ArcGIS Enterprise-ის პორტალის მისამართი; ცარიელისას ArcGIS Online
 an ArcGIS sign-in	ArcGIS-ში შესვლა
 An AWS profile	AWS პროფილი
-an enqueued add is not a success	რიგში ჩადგმული დამატება წარმატება არ არის
 An image picked for an earlier Image… was dropped: pick it again for that marker	ადრინდელი „გამოსახულება…“-სთვის არჩეული გამოსახულება მოცილდა: აირჩიეთ ის ხელახლა იმ მარკერისთვის
 Analysis	ანალიზი
 Analyze	გაანალიზება
@@ -950,7 +940,6 @@ Coordinate systems	კოორდინატთა სისტემები
 Coordinate System…	კოორდინატთა სისტემა…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	კოორდინატები {format} ფორმატში. დააწკაპუნეთ გადასართავად: ათწილადი გრადუსები, DMS, UTM, MGRS. UTM და MGRS დედამიწის ბადეებია, რომლებიც 84° ჩ-ის ჩრდილოეთით და 80° სამხ-ის სამხრეთით UPS-ად იკითხება.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space-მა შესვლა უარყო: მომხმარებლის მონაცემები არასწორია
 Copernicus Data Space Status	Copernicus Data Space-ის სტატუსი
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	ბრძანება დაკოპირდა.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	ჯერ გამოასწორეთ 
 Fixed	ფიქსირებული
 Fixed Zoom In	ფიქსირებული გადიდება
 Fixed Zoom Out	ფიქსირებული დაპატარავება
-Fixture	მოწყობილობა
 Flat	ბრტყელი
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	ბრტყელი ზედაპირი ინარჩუნებს შკალის ფერს, მზისკენ მიქცეული ფერდობები კი ნათდება
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	მონიშვნის კ
 Invalid selection outline · draw a smaller radius	მონიშვნის კონტური არასწორია · დახაზეთ უფრო მცირე რადიუსი
 Invalid shortcut binding.	მალსახმობის მიბმა არასწორია.
 Invalid shortcut key.	მალსახმობის კლავიში არასწორია.
-Invalid user credentials	მომხმარებლის მონაცემები არასწორია
 Invalid: {error}	არასწორია: {error}
 Invert	ინვერსია
 Invert Color Ramp	ფერთა შკალის შებრუნება
@@ -2704,7 +2691,6 @@ No models are available for this account.	ამ ანგარიშისთ�
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	რვეულები ჯერ არ არის. ანალიზი › ახალი რვეული ქმნის ახალს, ხოლო რვეულის დამატება და გახსნა არსებულს ხსნის.
 No offline areas	ოფლაინ არეები არ არის
 No other reports	სხვა ანგარიშები არ არის
-no password yet	პაროლი ჯერ არ არის
 No place at this grid reference: {reason}	ამ ბადის მითითებაზე ადგილი არ არის: {reason}
 No place found	ადგილი ვერ მოიძებნა
 No place matches that address.	ამ მისამართს არცერთი ადგილი არ შეესაბამება.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	იქ ტექსტური გრაფიკა არ არის
 No theme is named {name}.	თემა სახელით {name} არ არსებობს.
 No tools match your search.	თქვენს ძიებას არცერთი ხელსაწყო არ შეესაბამება.
-no typing while it waits	ლოდინისას აკრეფა შეუძლებელია
 no yearly series	წლიური მწკრივი არ არის
 No {format} here	აქ {format} არ არის
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	არაფერი გაეშვ�
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	გაზიარებული ჯერ არაფერია. გამოქვეყნება › გაზიარება როგორც ქმნის ვებ რუკებს, ფენებს, სტილებს, სცენებს და სხვას.
 Nothing to add here	აქ დასამატებელი არაფერია
 Nothing to test	შესამოწმებელი არაფერია
-nothing typed is kept in the pane	აკრეფილი არაფერი ინახება პანელში
-nothing typed while it waited is kept	ლოდინისას აკრეფილი არაფერი ინახება
-nothing typed, Sign in is off	არაფერია აკრეფილი, შესვლა გამორთულია
 Nothing was found at this address.	ამ მისამართზე არაფერი მოიძებნა.
 Nothing was recorded, so no task was made.	არაფერი ჩაწერილა, ამიტომ ამოცანა არ შეიქმნა.
 Now	ახლა
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	ერთი გვერდი ინდექსური ფენის თითო ობიექტზე.
 One per line: code=name	თითო ხაზზე ერთი: კოდი=სახელი
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	ხედის ერთი სურათი: სიმბოლოები და წარწერები ფილების კიდეებზე არ იჭრება და სერვისს თითო ხედზე ერთხელ ეკითხება. ფილებად იხატება გლობუსზე, დახრილ რუკაზე ან პროექციაში, რომელსაც სერვისი არ გვთავაზობს.
-one sign-in at a time	ერთდროულად ერთი შესვლა
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	ერთი შტრიხი, სიმბოლოდან. დაამატეთ შტრიხები გარსებისთვის, პარალელური ხაზებისა და წანაცვლებებისთვის.
 One-time code	ერთჯერადი კოდი
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	შეკეთება შეიძლება მხოლოდ ფაილიდან წაკითხული ფილების არქივის (PMTiles ან MBTiles).
 Only cubes with data where the map is	მხოლოდ კუბები მონაცემებით რუკის არეალში
 Only selected polygons will be included in the output.	გამოსავალში მხოლოდ მონიშნული პოლიგონები შევა.
@@ -3330,7 +3310,6 @@ Reload Themes	თემების გადატვირთვა
 Reload Tile Archive	ფილების არქივის გადატვირთვა
 Reload Web Layers	ვებ ფენების გადატვირთვა
 Reload {name} and discard its pending edits?	გადაიტვირთოს {name} და გაუქმდეს მისი დაუსრულებელი ცვლილებები?
-Remember follows: nothing is remembered now	დამახსოვრება მიჰყვება: ახლა არაფერი ინახება
 Remember on this computer	დამახსოვრება ამ კომპიუტერში
 Remember the key on this computer	გასაღების დამახსოვრება ამ კომპიუტერში
 Remove	ამოშლა
@@ -3385,7 +3364,6 @@ Repair\nSource	წყაროს\nშეკეთება
 Repair Data Source	მონაცემთა წყაროს შეკეთება
 Repair Data Source…	მონაცემთა წყაროს შეკეთება…
 Repair Geometry	გეომეტრიის შეკეთება
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	ფილების არქივის შეკეთება
 Repaired {name}	შეკეთდა {name}
 Repeat	გამეორება
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	მოდელის ასარჩევად შ
 Sign In to Copernicus Data Space	Copernicus Data Space-ში შესვლა
 Sign in with your ChatGPT account.	შედით თქვენი ChatGPT ანგარიშით.
 Sign out	გასვლა
-Sign out deletes it	გასვლა მას შლის
-Sign out deletes the remembered sign-in	გასვლა შლის დამახსოვრებულ შესვლას
 Sign Out of ArcGIS	ArcGIS-იდან გასვლა
 Sign Out of Copernicus Data Space	Copernicus Data Space-დან გასვლა
 Sign-in	შესვლა
 Sign-in cancelled.	შესვლა გაუქმდა.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	შესვლის ლოდინის დრო ამოიწურა. დაიწყეთ თავიდან და მიეცით ბრაუზერს ამ კომპიუტერის უკუკავშირის მისამართზე წვდომა.
 signed in	შესულია
-Signed in as synthetic.user@example.invalid.	შესული ხართ როგორც synthetic.user@example.invalid.
 Signed in as {name}.	შესული ხართ როგორც {name}.
 Signed in to {portal}	შესულია {portal}-ში
 Signed in to {portal} as {user}	შესულია {portal}-ში როგორც {user}
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	ფონუ
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	საბაზისო რუკა ახლა აჩვენებს {view} მსოფლმხედველობას; პროექტის Countries ფენა ინარჩუნებს თავის საზღვრებს
 The basemap's grid color	საბაზისო რუკის ბადის ფერი
 The Basemaps plugin's tab of public basemaps.	საბაზისო რუკების დანამატის ჩანართი საჯარო საბაზისო რუკებით.
-the box shows it is remembered	ყუთი აჩვენებს, რომ დამახსოვრებულია
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	ბრაუზერმა RustGIS-ს გაცვლის ბუფერი არ მისცა ({why}): ჩასვით {keys}-ით.
 the browser kept neither a copy of it nor where to download it	ბრაუზერმა არ შეინახა არც მისი ასლი და არც ჩამოტვირთვის მისამართი
 the browser runs everything on one thread	ბრაუზერი ყველაფერს ერთ ნაკადში ასრულებს
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	Earthdata Login-ის ტოკენი
 The environment (AWS_ACCESS_KEY_ID…)	გარემო (AWS_ACCESS_KEY_ID…)
 The features where the map is	ობიექტები რუკის არეალში
-the fields are off while it waits	ლოდინისას ველები გამორთულია
 The first 1,000 entries; narrow it down a folder at a time.	პირველი 1,000 ჩანაწერი; დააზუსტეთ თითო საქაღალდით.
 The first {n} are listed.	ჩამოთვლილია პირველი {n}.
 The first {n} are shown: search to narrow them.	ნაჩვენებია პირველი {n}: შესამცირებლად გამოიყენეთ ძიება.
 The first {n} of them are listed; the filter searches all of them.	ჩამოთვლილია პირველი {n}; ფილტრი ეძებს ყველაში.
 The first {n} rows	პირველი {n} სტრიქონი
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace-მა არ უპასუხა: ნაჩვენებია წერტილთან უახლოესი მთელი დინების ხაზი.
-the form is back for another try	ფორმა ბრუნდება ახალი ცდისთვის
 The grid already has the basemap's color	ბადეს უკვე საბაზისო რუკის ფერი აქვს
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	ბადის ციფრების რაოდენობა უნდა იყოს ლუწი, 0-დან 10-მდე: ნახევარი აღმოსავლეთის კოორდინატისთვის, ნახევარი ჩრდილოეთისთვის
 The grid's color and opacity	ბადის ფერი და გამჭვირვალობა
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	NLDI-ის პასუხი UTF-8 ტექსტი არ არის
 the northing doesn't fall in the latitude band given	ჩრდილოეთის კოორდინატი არ ხვდება მოცემულ განედურ სარტყელში
 The notes are cut here: the release page has all of them.	შენიშვნები აქ წყდება: ყველა მათგანი გამოშვების გვერდზეა.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	მის შემდეგ მომლოდინეც მიტოვებულია
 the open project has unsaved changes: save them before recovering other work	ღია პროექტს შეუნახავი ცვლილებები აქვს: შეინახეთ ისინი სხვა სამუშაოს აღდგენამდე
 The open project has unsaved changes: save them, then recover this copy.	ღია პროექტს შეუნახავი ცვლილებები აქვს: შეინახეთ ისინი, შემდეგ აღადგინეთ ეს ასლი.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	გვ�
 the page is too large to copy to the clipboard: export it instead	გვერდი ძალიან დიდია გაცვლის ბუფერში დასაკოპირებლად: სანაცვლოდ მოახდინეთ მისი ექსპორტი
 the page is too large to draw	გვერდი დასახატად ძალიან დიდია
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	პაროლი იგზავნება მხოლოდ Copernicus Data Space-ის შესვლის სერვერზე და არასოდეს ინახება პროექტში. მის მიერ გაცემული ტოკენი იგზავნება მხოლოდ მის მონაცემთა სერვერებზე.
-the password isn't kept in the pane	პაროლი პანელში არ ინახება
 The password must be at most 4096 bytes, without control characters.	პაროლი უნდა იყოს მაქსიმუმ 4096 ბაიტი, მმართველი სიმბოლოების გარეშე.
 The password or key must fit a 4096-byte HTTP header, without control characters.	პაროლი ან გასაღები უნდა ჩაეტიოს 4096-ბაიტიან HTTP სათაურში, მმართველი სიმბოლოების გარეშე.
 The password was refused. Type a password to try again.	პაროლი უარყოფილია. ხელახლა საცდელად შეიყვანეთ პაროლი.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	საწყისი 
 The step's layer {name} isn't in the map.	საფეხურის ფენა {name} რუკაზე არ არის.
 The store has no variables with two or more dimensions.	საცავში არ არის ორი ან მეტი განზომილების ცვლადები.
 the store is gone	საცავი აღარ არსებობს
-the store keeps the password, never a token	საცავი ინახავს პაროლს, არასოდეს ტოკენს
 The summary couldn't start: {error}	შეჯამების დაწყება ვერ მოხერხდა: {error}
 The summary failed unexpectedly	შეჯამება მოულოდნელად ჩაიშალა
 The summary finished after another project was opened, so it wasn't added	შეჯამება დასრულდა სხვა პროექტის გახსნის შემდეგ, ამიტომ არ დაემატა
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	ამ პ�
 The trend couldn't start: {error}	ტრენდის ანალიზის დაწყება ვერ მოხერხდა: {error}
 The trend failed unexpectedly	ტრენდის ანალიზი მოულოდნელად ჩაიშალა
 The trend finished after another project was opened, so it wasn't added	ტრენდის ანალიზი დასრულდა სხვა პროექტის გახსნის შემდეგ, ამიტომ არ დაემატა
-the username stays for another try	მომხმარებლის სახელი რჩება ახალი ცდისთვის
 the UTM zone must be 1 to 60	UTM ზონა უნდა იყოს 1-დან 60-მდე
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	მნიშვნელობები, რომლებიც შავიდან თეთრამდე ჩანს, ერთნაირი ყველა თარიღისა და ფილისთვის (არხის საკუთარ ერთეულებში). ცარიელი: თითოეული ფაილის საკუთარი გაჭიმვა.
 the view has no extent	ხედს ფარგლები არ აქვს
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	შეი�
 Type the token this expiry is for.	აკრიფეთ ტოკენი, რომელსაც ეს ვადა ეკუთვნის.
 Type the token, or the password to generate one, to remember it on this computer.	აკრიფეთ ტოკენი, ან პაროლი მის შესაქმნელად, რომ ამ კომპიუტერში დაიმახსოვროთ.
 Typed below	ქვემოთ შეყვანილი
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	აშშ-ის აღწერა (მისამართები)
 Ukraine	უკრაინა
 UM	UM

@@ -1,9 +1,7 @@
 # de interface catalog: English<TAB>translation
  by 	 von
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" muss die Instanznummer eines Layers sein, nicht {value}
 "layer" must be a layer's id or name, not {value}	"layer" muss die ID oder der Name eines Layers sein, nicht {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	„{b}“ ist kein Bucket-Name
 '{date}' isn't a date: write it as YYYY-MM-DD	„{date}“ ist kein Datum: Schreiben Sie es als YYYY-MM-DD
 '{size}' isn't a cell size: give a number	„{size}“ ist keine Zellengröße: Geben Sie eine Zahl an
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 importierte Zarr-Speicher stehen bereits in der Warteschlange
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	3D-Mesh
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Keine>
 <null>	<null>
 A .geolibre project as a map	Ein .geolibre-Projekt als Karte
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Ein .qgs- oder .qgz-Projekt als Karte
 A 3D globe seen from space.	Ein 3D-Globus, aus dem All gesehen.
 A blank map with a basemap	Eine leere Karte mit Grundkarte
 A box behind the element, which moves with it.	Ein Kasten hinter dem Element, der sich mit ihm bewegt.
-a browser's sign-in isn't remembered	die Anmeldung eines Browsers wird nicht gespeichert
 A call for the rustgis Python package	Ein Aufruf für das Python-Paket rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Die Adresse eines Katalogs (CSW 2.0.2): seine Einträge nach Wörtern und, wenn Sie möchten, nach dem Kartenbereich durchsuchen, dann die verknüpften Dienste und Dateien hinzufügen.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Ein Nutzungslimit des ChatGPT-Abos oder der App wurde erreicht. Prüfen Sie die wöchentliche Nutzung vor einem erneuten Versuch.
@@ -106,7 +101,6 @@ A projected coordinate system.	Ein projiziertes Koordinatensystem.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Ein projiziertes System wie EPSG:32616 oder EPSG:4326 für Grad
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	Ein Raster-Layer hat keine Definitionsabfrage und keine Zeitbindung: Die Registerkarten Abfrage und Zeit gehören zu einem Objekt-Layer
 A rectangle behind the text.	Ein Rechteck hinter dem Text.
-a refused password is emptied too	ein abgelehntes Passwort wird ebenfalls geleert
 A report listing the selected layer's records, page after page.	Ein Bericht, der die Datensätze des ausgewählten Layers Seite für Seite auflistet.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Ein Ergebnis, das nur andere Werkzeuge speist, wird nach dem Modelllauf entfernt; fügen Sie eine Ausgabe hinzu, um es zu behalten.
 A result the model keeps, under a name	Ein Ergebnis, das das Modell unter einem Namen behält
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Ein Suchbereich 
 A service import or refresh is already running.	Ein Dienstimport oder eine Aktualisierung läuft bereits.
 A service's layers stay in their service group.	Die Layer eines Dienstes bleiben in ihrer Dienstgruppe.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Eine Anmeldung ist auf diesem Computer gespeichert: sie meldet an, wenn eine Datei sie braucht.
-a sign-out asks nothing	eine Abmeldung fragt nichts
-a signed-in pane keeps no password for after Sign out	ein angemeldeter Bereich behält kein Passwort für nach dem Abmelden
 A small chart of several numeric fields, drawn on each feature over its symbol	Ein kleines Diagramm mehrerer numerischer Felder, auf jedem Objekt über seinem Symbol gezeichnet
 A streamed layer needs Load All Features first	Ein gestreamter Layer benötigt zuerst „Alle Objekte laden“
 A table replaced in a GeoPackage	Eine ersetzte Tabelle in einem GeoPackage
@@ -299,7 +291,6 @@ Add {language}	{language} hinzufügen
 Add {n}	{n} hinzufügen
 Add ▾	Hinzufügen ▾
 Added	Hinzugefügt
-Added Fixture	Hinzugefügte Vorrichtung
 Added from {start} to {end}: the time slider steps through it	Hinzugefügt von {start} bis {end}: Der Zeitschieberegler geht ihn schrittweise durch
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overtures {theme} als Kartenkacheln hinzugefügt ({release}; manche Themen erscheinen erst beim Hineinzoomen): {attribution}
 Added {name}	{name} hinzugefügt
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Ein in einem Header
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Die Adresse einer ArcGIS Online-Organisation oder eines ArcGIS Enterprise-Portals; ArcGIS Online, wenn leer
 an ArcGIS sign-in	eine ArcGIS-Anmeldung
 An AWS profile	Ein AWS-Profil
-an enqueued add is not a success	ein eingereihtes Hinzufügen ist kein Erfolg
 An image picked for an earlier Image… was dropped: pick it again for that marker	Ein für ein früheres Bild… gewähltes Bild wurde verworfen: wählen Sie es für diesen Marker erneut
 Analysis	Analyse
 Analyze	Analysieren
@@ -950,7 +940,6 @@ Coordinate systems	Koordinatensysteme
 Coordinate System…	Koordinatensystem…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Koordinaten in {format}. Klicken zum Wechseln: Dezimalgrad, GMS, UTM, MGRS. UTM und MGRS sind Gitter der Erde, nördlich von 84° N und südlich von 80° S in UPS gelesen.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space hat die Anmeldung abgelehnt: Ungültige Anmeldedaten
 Copernicus Data Space Status	Copernicus Data Space-Status
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Befehl kopiert.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Beheben Sie zuerst die unten aufgeführten P
 Fixed	Fest
 Fixed Zoom In	Fester Zoom hinein
 Fixed Zoom Out	Fester Zoom heraus
-Fixture	Vorrichtung
 Flat	Flach
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Flaches Gelände behält die Farbe des Farbverlaufs, und der Sonne zugewandte Hänge werden heller
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Ungültiger Auswahlumriss · kl
 Invalid selection outline · draw a smaller radius	Ungültiger Auswahlumriss · kleineren Radius zeichnen
 Invalid shortcut binding.	Ungültige Tastenkürzel-Zuweisung.
 Invalid shortcut key.	Ungültige Tastenkombination.
-Invalid user credentials	Ungültige Anmeldedaten
 Invalid: {error}	Ungültig: {error}
 Invert	Umkehren
 Invert Color Ramp	Farbverlauf umkehren
@@ -2704,7 +2691,6 @@ No models are available for this account.	Für dieses Konto sind keine Modelle v
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Noch keine Notizbücher. Analysieren › Neues Notizbuch beginnt eines, Notizbuch hinzufügen und öffnen öffnet eines.
 No offline areas	Keine Offline-Bereiche
 No other reports	Keine weiteren Berichte
-no password yet	noch kein Passwort
 No place at this grid reference: {reason}	Kein Ort an dieser Gitterreferenz: {reason}
 No place found	Kein Ort gefunden
 No place matches that address.	Kein Ort entspricht dieser Adresse.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	dort ist keine Textgrafik
 No theme is named {name}.	Es gibt kein Thema namens {name}.
 No tools match your search.	Keine Werkzeuge entsprechen Ihrer Suche.
-no typing while it waits	keine Eingabe, während es wartet
 no yearly series	keine jährliche Reihe
 No {format} here	Hier kein {format}
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Nichts ausgeführt: Das Skript enthält
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Noch nichts geteilt. Veröffentlichen › Teilen als erstellt Webkarten, Layer, Stile, Szenen und mehr.
 Nothing to add here	Hier gibt es nichts hinzuzufügen
 Nothing to test	Nichts zu testen
-nothing typed is kept in the pane	nichts Eingegebenes bleibt im Bereich
-nothing typed while it waited is kept	nichts, was während des Wartens eingegeben wurde, bleibt erhalten
-nothing typed, Sign in is off	nichts eingegeben, Anmelden ist aus
 Nothing was found at this address.	Unter dieser Adresse wurde nichts gefunden.
 Nothing was recorded, so no task was made.	Es wurde nichts aufgezeichnet, daher wurde keine Aufgabe erstellt.
 Now	Jetzt
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	Eine Seite pro Objekt eines Indexlayers.
 One per line: code=name	Einer pro Zeile: Code=Name
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Ein Bild der Ansicht: Symbole und Beschriftungen werden nicht an Kachelrändern abgeschnitten, und der Dienst wird einmal pro Ansicht abgefragt. In Kacheln gezeichnet auf dem Globus, auf einer geneigten Karte oder in einer Projektion, die der Dienst nicht anbietet.
-one sign-in at a time	eine Anmeldung zur Zeit
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Ein Strich, aus dem Symbol. Fügen Sie Striche für Umrandungen, parallele Linien und Versätze hinzu.
 One-time code	Einmalcode
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Nur ein aus einer Datei gelesenes Kachelarchiv (PMTiles oder MBTiles) kann repariert werden.
 Only cubes with data where the map is	Nur Würfel mit Daten im Kartenausschnitt
 Only selected polygons will be included in the output.	Nur ausgewählte Polygone werden in die Ausgabe übernommen.
@@ -3330,7 +3310,6 @@ Reload Themes	Themen neu laden
 Reload Tile Archive	Kachelarchiv neu laden
 Reload Web Layers	Web-Layer neu laden
 Reload {name} and discard its pending edits?	{name} neu laden und seine ausstehenden Bearbeitungen verwerfen?
-Remember follows: nothing is remembered now	GeoLibre-Werkzeugübersetzungen entfernen
 Remember on this computer	Auf diesem Computer speichern
 Remember the key on this computer	Schlüssel auf diesem Computer speichern
 Remove	Entfernen
@@ -3385,7 +3364,6 @@ Repair\nSource	Quelle\nreparieren
 Repair Data Source	Datenquelle reparieren
 Repair Data Source…	Datenquelle reparieren…
 Repair Geometry	Geometrie reparieren
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Kachelarchiv reparieren
 Repaired {name}	{name} repariert
 Repeat	Wiederholen
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Melden Sie sich an, um ein Modell auszuwählen.
 Sign In to Copernicus Data Space	Bei Copernicus Data Space anmelden
 Sign in with your ChatGPT account.	Melden Sie sich mit Ihrem ChatGPT-Konto an.
 Sign out	Abmelden
-Sign out deletes it	Abmelden löscht sie
-Sign out deletes the remembered sign-in	Abmelden löscht die gespeicherte Anmeldung
 Sign Out of ArcGIS	Von ArcGIS abmelden
 Sign Out of Copernicus Data Space	Von Copernicus Data Space abmelden
 Sign-in	Anmeldung
 Sign-in cancelled.	Anmeldung abgebrochen.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Zeitüberschreitung bei der Anmeldung. Starten Sie erneut und erlauben Sie dem Browser den Zugriff auf die Loopback-Adresse dieses Computers.
 signed in	angemeldet
-Signed in as synthetic.user@example.invalid.	Angemeldet als synthetic.user@example.invalid.
 Signed in as {name}.	Angemeldet als {name}.
 Signed in to {portal}	Bei {portal} angemeldet
 Signed in to {portal} as {user}	Bei {portal} als {user} angemeldet
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	Der Hintergr
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Die Grundkarte zeigt jetzt die Weltsicht „{view}“; der Layer „Countries“ des Projekts behält seine Grenzen
 The basemap's grid color	Die Gitterfarbe der Grundkarte
 The Basemaps plugin's tab of public basemaps.	Die Registerkarte des Grundkarten-Plugins mit öffentlichen Grundkarten.
-the box shows it is remembered	das Kästchen zeigt, dass sie gespeichert ist
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Der Browser hat RustGIS die Zwischenablage nicht gegeben ({why}): Fügen Sie mit {keys} ein.
 the browser kept neither a copy of it nor where to download it	der Browser hat weder eine Kopie noch die Download-Adresse gespeichert
 the browser runs everything on one thread	der Browser führt alles in einem Thread aus
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	das Earthdata Login-Token
 The environment (AWS_ACCESS_KEY_ID…)	Die Umgebung (AWS_ACCESS_KEY_ID…)
 The features where the map is	Die Objekte im Kartenausschnitt
-the fields are off while it waits	die Felder sind aus, während es wartet
 The first 1,000 entries; narrow it down a folder at a time.	Die ersten 1.000 Einträge; grenzen Sie Ordner für Ordner ein.
 The first {n} are listed.	Die ersten {n} werden aufgeführt.
 The first {n} are shown: search to narrow them.	Die ersten {n} werden angezeigt: Suchen Sie, um sie einzugrenzen.
 The first {n} of them are listed; the filter searches all of them.	Die ersten {n} davon sind aufgelistet; der Filter durchsucht alle.
 The first {n} rows	Die ersten {n} Zeilen
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Die Flussverfolgung hat nicht geantwortet: Die ganze Fließlinie, die dem Punkt am nächsten liegt, wird angezeigt.
-the form is back for another try	das Formular ist für einen neuen Versuch wieder da
 The grid already has the basemap's color	Das Gitter hat bereits die Farbe der Grundkarte
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	die Gitterziffern müssen eine gerade Anzahl von 0 bis 10 sein, je zur Hälfte für Rechtswert und Hochwert
 The grid's color and opacity	Farbe und Deckkraft des Gitters
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	Die Antwort des NLDI ist kein UTF-8-Text
 the northing doesn't fall in the latitude band given	der Hochwert liegt nicht im angegebenen Breitenband
 The notes are cut here: the release page has all of them.	Die Hinweise sind hier gekürzt: Die Release-Seite enthält alle.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Auch der danach wartende Vorgang wurde verworfen
 the open project has unsaved changes: save them before recovering other work	das geöffnete Projekt hat ungespeicherte Änderungen: Speichern Sie sie, bevor Sie andere Arbeit wiederherstellen
 The open project has unsaved changes: save them, then recover this copy.	Das geöffnete Projekt hat ungespeicherte Änderungen: Speichern Sie sie und stellen Sie dann diese Kopie wieder her.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	Die Sei
 the page is too large to copy to the clipboard: export it instead	die Seite ist zu groß für die Zwischenablage: Exportieren Sie sie stattdessen
 the page is too large to draw	die Seite ist zu groß zum Zeichnen
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Das Passwort wird nur an den Anmeldeserver von Copernicus Data Space gesendet und nie im Projekt gespeichert. Das Token, das er ausgibt, wird nur an dessen Datenserver gesendet.
-the password isn't kept in the pane	das Passwort bleibt nicht im Bereich
 The password must be at most 4096 bytes, without control characters.	Das Passwort darf höchstens 4096 Byte lang sein, ohne Steuerzeichen.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Das Passwort oder der Schlüssel muss ohne Steuerzeichen in einen HTTP-Header von 4096 Byte passen.
 The password was refused. Type a password to try again.	Das Passwort wurde abgelehnt. Geben Sie ein Passwort ein, um es erneut zu versuchen.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Das Startprojekt {path
 The step's layer {name} isn't in the map.	Der Layer {name} des Schritts ist nicht in der Karte.
 The store has no variables with two or more dimensions.	Der Speicher hat keine Variablen mit zwei oder mehr Dimensionen.
 the store is gone	der Speicher ist nicht mehr vorhanden
-the store keeps the password, never a token	der Speicher behält das Passwort, nie ein Token
 The summary couldn't start: {error}	Die Zusammenfassung konnte nicht starten: {error}
 The summary failed unexpectedly	Die Zusammenfassung ist unerwartet fehlgeschlagen
 The summary finished after another project was opened, so it wasn't added	Die Zusammenfassung wurde erst nach dem Öffnen eines anderen Projekts fertig und daher nicht hinzugefügt
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	Die in dies
 The trend couldn't start: {error}	Der Trend konnte nicht starten: {error}
 The trend failed unexpectedly	Der Trend ist unerwartet fehlgeschlagen
 The trend finished after another project was opened, so it wasn't added	Der Trend wurde erst nach dem Öffnen eines anderen Projekts fertig und daher nicht hinzugefügt
-the username stays for another try	der Benutzername bleibt für einen neuen Versuch
 the UTM zone must be 1 to 60	die UTM-Zone muss zwischen 1 und 60 liegen
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Die von Schwarz bis Weiß dargestellten Werte, gleich für jedes Datum und jede Kachel (in den eigenen Einheiten des Kanals). Leer: die eigene Streckung jeder Datei.
 the view has no extent	die Ansicht hat keine Ausdehnung
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Geben Sie d
 Type the token this expiry is for.	Geben Sie das Token ein, für das dieser Ablauf gilt.
 Type the token, or the password to generate one, to remember it on this computer.	Geben Sie das Token oder das Passwort zum Erzeugen eines Tokens ein, um es auf diesem Computer zu speichern.
 Typed below	Unten eingegeben
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	U.S. Census (Adressen)
 Ukraine	Ukraine
 UM	UM

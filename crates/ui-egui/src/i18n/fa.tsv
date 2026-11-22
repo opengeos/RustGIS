@@ -1,9 +1,7 @@
 # fa interface catalog: English<TAB>translation
  by 	توسط
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" باید شماره نمونه یک لایه باشد، نه {value}
 "layer" must be a layer's id or name, not {value}	"layer" باید شناسه یا نام یک لایه باشد، نه {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	نام باکت «{b}» معتبر نیست
 '{date}' isn't a date: write it as YYYY-MM-DD	«{date}» تاریخ نیست: آن را به شکل YYYY-MM-DD بنویسید
 '{size}' isn't a cell size: give a number	«{size}» اندازه سلول نیست: یک عدد وارد کنید
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	۱۶ ذخیره‌گاه Zarr واردشده از قبل در صف هستند
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	مش سه‌بعدی
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<هیچ>
 <null>	<null>
 A .geolibre project as a map	یک پروژه .geolibre به‌عنوان نقشه
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	یک پروژه .qgs یا .qgz به‌عنوان
 A 3D globe seen from space.	یک کره سه‌بعدی که از فضای دیده می‌شود.
 A blank map with a basemap	یک نقشه خالی با نقشه پایه
 A box behind the element, which moves with it.	کادری پشت عنصر که همراه آن جابه‌جا می‌شود.
-a browser's sign-in isn't remembered	ورود مرورگر به خاطر سپرده نمی‌شود
 A call for the rustgis Python package	یک فراخوانی برای بسته Python به نام rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	آدرس یک کاتالوگ (CSW 2.0.2): رکوردهایش را با کلمات و، در صورت تمایل، با محدودهٔ نقشه جستجو کنید؛ سپس سرویس‌ها و فایل‌های پیوندیافته به آن‌ها را اضافه کنید.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	سقف مصرف طرح ChatGPT یا برنامه پر شده است. پیش از تلاش دوباره، «مصرف هفتگی» را ببینید.
@@ -106,7 +101,6 @@ A projected coordinate system.	سیستم مختصات تصویری
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	یک سیستم تصویرشده مانند EPSG:32616، یا EPSG:4326 برای درجه
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	لایه رستری پرسش تعریف یا پیوند زمانی ندارد: برگه‌های پرس‌وجو و زمان مخصوص لایه عناصر هستند
 A rectangle behind the text.	یک مستطیل پشت متن.
-a refused password is emptied too	رمز ردشده نیز پاک می‌شود
 A report listing the selected layer's records, page after page.	گزارشی که رکوردهای لایه‌ی انتخاب‌شده را صفحه به صفحه فهرست می‌کند
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	نتیجه‌ای که فقط سایر ابزارها را تغذیه می‌کند، پس از اجرای مدل حذف می‌شود؛ یک خروجی اضافه کنید تا آن را حفظ کنید
 A result the model keeps, under a name	نتیجه‌ای که مدل آن را حفظ می‌کند، تحت یک نام
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	پهنه جست�
 A service import or refresh is already running.	واردسازی یا تازه‌سازی سرویس در حال اجراست
 A service's layers stay in their service group.	لایه‌های یک سرویس در گروه سرویس خود می‌مانند.
 A sign-in is remembered on this computer: it signs in when a file needs it.	یک ورود روی این رایانه به خاطر سپرده شده است: هرگاه فایلی به آن نیاز داشته باشد وارد می‌شود.
-a sign-out asks nothing	خروج چیزی نمی‌پرسد
-a signed-in pane keeps no password for after Sign out	پنل واردشده هیچ رمزی برای پس از خروج نگه نمی‌دارد
 A small chart of several numeric fields, drawn on each feature over its symbol	نمودار کوچکی از چند فیلد عددی که روی هر عنصر، بالای نمادش ترسیم می‌شود
 A streamed layer needs Load All Features first	لایه جریانی ابتدا به «بارگذاری همه عناصر» نیاز دارد
 A table replaced in a GeoPackage	جدولی که در یک GeoPackage جایگزین شد
@@ -299,7 +291,6 @@ Add {language}	افزودن {language}
 Add {n}	افزودن {n}
 Add ▾	افزودن ▾
 Added	افزوده شد
-Added Fixture	تجهیزات افزوده‌شده
 Added from {start} to {end}: the time slider steps through it	از {start} تا {end} افزوده شد: لغزنده زمان در آن گام برمی‌دارد
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	تم {theme} از Overture به‌عنوان کاشی نقشه افزوده شد ({release}؛ بعضی تم‌ها فقط در بزرگ‌نمایی نزدیک نمایش داده می‌شوند): {attribution}
 Added {name}	افزوده شد: {name}
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	کلید API که �
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	نشانی یک سازمان ArcGIS Online یا یک پورتال ArcGIS Enterprise؛ اگر خالی باشد ArcGIS Online
 an ArcGIS sign-in	ورود به ArcGIS
 An AWS profile	پروفایل AWS
-an enqueued add is not a success	افزودن در صف‌قرارگرفته موفقیت نیست
 An image picked for an earlier Image… was dropped: pick it again for that marker	تصویری که برای یک تصویر… قبلی برگزیده شده بود کنار گذاشته شد: آن را دوباره برای آن نشانه انتخاب کنید
 Analysis	تحلیل
 Analyze	تحلیل
@@ -950,7 +940,6 @@ Coordinate systems	سیستم‌های مختصات
 Coordinate System…	سیستم مختصات…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	مختصات به قالب {format}. برای تغییر کلیک کنید: درجه اعشاری، DMS، UTM، MGRS. UTM و MGRS شبکه‌هایی از زمین هستند که در شمال 84° N و جنوب 80° S به صورت UPS خوانده می‌شوند.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space ورود را رد کرد: اعتبارنامه کاربر نامعتبر است
 Copernicus Data Space Status	وضعیت Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	فرمان کپی شد.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	ابتدا مشکلات فهرست‌شده 
 Fixed	ثابت
 Fixed Zoom In	بزرگ‌نمایی ثابت به داخل
 Fixed Zoom Out	بزرگ‌نمایی ثابت به خارج
-Fixture	تجهیزات
 Flat	تخت
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	زمین تخت رنگ طیف را نگه می‌دارد و شیب‌های رو به خورشید روشن‌تر می‌شوند
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	مرز انتخاب نامعت�
 Invalid selection outline · draw a smaller radius	مرز انتخاب نامعتبر است · شعاع کوچک‌تری رسم کنید
 Invalid shortcut binding.	پیوند میان‌بر نامعتبر است.
 Invalid shortcut key.	کلید میان‌بر نامعتبر است.
-Invalid user credentials	اعتبارنامه کاربر نامعتبر است
 Invalid: {error}	نامعتبر: {error}
 Invert	وارونه‌کردن
 Invert Color Ramp	وارونه‌کردن طیف رنگی
@@ -2704,7 +2691,6 @@ No models are available for this account.	هیچ مدلی برای این حسا
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	هنوز Notebookی نیست. تحلیل › Notebook جدید یکی می‌سازد، یا افزودن و بازکردن Notebook یکی را باز می‌کند.
 No offline areas	بدون پهنه آفلاین
 No other reports	گزارش دیگری نیست
-no password yet	هنوز رمزی نیست
 No place at this grid reference: {reason}	در این ارجاع شبکه‌ای مکانی نیست: {reason}
 No place found	مکانی پیدا نشد
 No place matches that address.	هیچ مکانی با آن نشانی مطابقت ندارد.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	آن‌جا گرافیک متنی نیست
 No theme is named {name}.	پوسته‌ای با نام {name} نیست.
 No tools match your search.	هیچ ابزاری با جستجوی شما مطابقت ندارد.
-no typing while it waits	بدون تایپ در حین انتظار
 no yearly series	بدون سری سالانه
 No {format} here	این‌جا {format} وجود ندارد
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	چیزی اجرا نشد: اسکریپ�
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	هنوز چیزی به اشتراک گذاشته نشده. انتشار › اشتراک به‌عنوان، نقشه وب، لایه، استایل، صحنه و بیشتر می‌سازد.
 Nothing to add here	چیزی برای افزودن اینجا نیست
 Nothing to test	چیزی برای آزمودن نیست
-nothing typed is kept in the pane	هیچ چیز تایپ‌شده‌ای در پنل نگه داشته نمی‌شود
-nothing typed while it waited is kept	هیچ چیزی که در حین انتظار تایپ شد نگه داشته نمی‌شود
-nothing typed, Sign in is off	چیزی تایپ نشده، ورود خاموش است
 Nothing was found at this address.	در این نشانی چیزی پیدا نشد.
 Nothing was recorded, so no task was made.	چیزی ثبت نشد، پس تسکی ساخته نشد.
 Now	اکنون
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	برای هر عنصر لایه ایندکس، یک صفحه.
 One per line: code=name	هر خط یکی: code=name
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	یک تصویر از نما: نمادها و برچسب‌ها در لبه‌های کاشی بریده نمی‌شوند و در هر نما یک بار از سرویس درخواست می‌شود. روی کره، روی نقشه کج، یا در تصویر نقشه‌ای که سرویس ارائه نمی‌دهد به‌صورت کاشی ترسیم می‌شود.
-one sign-in at a time	یک ورود در هر زمان
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	یک ضربه، از نماد. برای پوسته، خط‌های موازی و آفست‌ها ضربه اضافه کنید.
 One-time code	کد یک‌بارمصرف
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	فقط بایگانی کاشی خوانده‌شده از فایل (PMTiles یا MBTiles) قابل ترمیم است.
 Only cubes with data where the map is	فقط مکعب‌هایی که در محل نقشه داده دارند
 Only selected polygons will be included in the output.	فقط چندضلعی‌های انتخاب‌شده در خروجی گنجانده می‌شوند.
@@ -3330,7 +3310,6 @@ Reload Themes	بارگذاری دوباره پوسته‌ها
 Reload Tile Archive	بارگذاری دوباره بایگانی کاشی
 Reload Web Layers	بارگذاری دوباره لایه‌های وب
 Reload {name} and discard its pending edits?	{name} دوباره بارگذاری شود و ویرایش‌های معلقش دور انداخته شود؟
-Remember follows: nothing is remembered now	«به خاطر سپردن» را دنبال می‌کند: اکنون چیزی به خاطر سپرده نمی‌شود
 Remember on this computer	به خاطر سپردن روی این رایانه
 Remember the key on this computer	کلید روی این رایانه به خاطر سپرده شود
 Remove	حذف‌کردن
@@ -3385,7 +3364,6 @@ Repair\nSource	ترمیم\nمنبع
 Repair Data Source	ترمیم منبع داده
 Repair Data Source…	ترمیم منبع داده…
 Repair Geometry	ترمیم هندسه
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	ترمیم بایگانی کاشی
 Repaired {name}	ترمیم شد: {name}
 Repeat	تکرار
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	برای انتخاب مدل وارد شوید.
 Sign In to Copernicus Data Space	ورود به Copernicus Data Space
 Sign in with your ChatGPT account.	با حساب ChatGPT خود وارد شوید.
 Sign out	خروج
-Sign out deletes it	خروج آن را حذف می‌کند
-Sign out deletes the remembered sign-in	خروج ورود به خاطر سپرده‌شده را حذف می‌کند
 Sign Out of ArcGIS	خروج از ArcGIS
 Sign Out of Copernicus Data Space	خروج از Copernicus Data Space
 Sign-in	ورود
 Sign-in cancelled.	ورود لغو شد.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	ورود با وقفه زمانی مواجه شد. دوباره شروع کنید و اجازه دهید مرورگر به نشانی loopback این رایانه دسترسی داشته باشد.
 signed in	وارد شده
-Signed in as synthetic.user@example.invalid.	وارد شده به‌عنوان synthetic.user@example.invalid.
 Signed in as {name}.	وارد شده به‌عنوان {name}.
 Signed in to {portal}	وارد {portal} شده‌اید
 Signed in to {portal} as {user}	با نام {user} وارد {portal} شده‌اید
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	کارگر �
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	نقشه پایه اکنون نمای جهانی {view} را نشان می‌دهد؛ لایه کشورهای پروژه مرزهای خودش را نگه می‌دارد
 The basemap's grid color	رنگ شبکه نقشه‌ی پایه
 The Basemaps plugin's tab of public basemaps.	برگه نقشه‌های پایه عمومی افزونه Basemaps.
-the box shows it is remembered	کادر نشان می‌دهد که به خاطر سپرده شده است
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	مرورگر کلیپ‌بورد را به RustGIS نداد ({why}): با {keys} بچسبانید.
 the browser kept neither a copy of it nor where to download it	مرورگر نه نسخه‌ای از آن را نگه داشته و نه جای بارگیری‌اش را
 the browser runs everything on one thread	مرورگر همه‌چیز را روی یک رشته اجرا می‌کند
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	توکن Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	محیط (AWS_ACCESS_KEY_ID…)
 The features where the map is	عنصرهای موجود در محل نقشه
-the fields are off while it waits	فیلدها در حین انتظار غیرفعال‌اند
 The first 1,000 entries; narrow it down a folder at a time.	هزار ورودی اول؛ هر بار یک پوشه محدودش کنید.
 The first {n} are listed.	{n} مورد اول فهرست شده‌اند.
 The first {n} are shown: search to narrow them.	{n} مورد اول نمایش داده می‌شوند: برای محدودکردن، جستجو کنید.
 The first {n} of them are listed; the filter searches all of them.	{n} مورد اول فهرست شده‌اند؛ فیلتر در همه آن‌ها جست‌وجو می‌کند.
 The first {n} rows	{n} ردیف اول
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	پاسخی از flowtrace نیامد: کل خط جریان نزدیک به نقطه نمایش داده می‌شود.
-the form is back for another try	فرم برای تلاش دوباره بازمی‌گردد
 The grid already has the basemap's color	شبکه از قبل رنگ نقشه‌ی پایه را دارد
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	ارقام شبکه باید تعدادی زوج از 0 تا 10 باشند، نیمی برای شرقی (easting) و نیمی برای شمالی (northing)
 The grid's color and opacity	رنگ و کدری شبکه
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	پاسخ NLDI متن UTF-8 نیست
 the northing doesn't fall in the latitude band given	مختصات شمالی (northing) در کمربند عرض داده‌شده قرار نمی‌گیرد
 The notes are cut here: the release page has all of them.	یادداشت‌ها این‌جا کوتاه شده‌اند: صفحه انتشار همه آن‌ها را دارد.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	موردی که پس از آن در انتظار بود هم رها شد
 the open project has unsaved changes: save them before recovering other work	پروژه باز تغییرات ذخیره‌نشده دارد: پیش از بازیابی کار دیگر آن‌ها را ذخیره کنید
 The open project has unsaved changes: save them, then recover this copy.	پروژه باز تغییرات ذخیره‌نشده دارد: آن‌ها را ذخیره کنید، سپس این نسخه را بازیابی کنید.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	صفح�
 the page is too large to copy to the clipboard: export it instead	صفحه برای کپی در کلیپ‌بورد خیلی بزرگ است: به‌جای آن برون‌بری کنید
 the page is too large to draw	صفحه برای ترسیم خیلی بزرگ است
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	رمز فقط به سرور ورود Copernicus Data Space فرستاده می‌شود و هرگز در پروژه نگه داشته نمی‌شود. توکنی که می‌دهد فقط به سرورهای داده آن فرستاده می‌شود.
-the password isn't kept in the pane	رمز در پنل نگه داشته نمی‌شود
 The password must be at most 4096 bytes, without control characters.	رمز باید حداکثر 4096 بایت و بدون نویسه‌های کنترلی باشد.
 The password or key must fit a 4096-byte HTTP header, without control characters.	رمز یا کلید باید در یک سرآیند HTTP به اندازه 4096 بایت جا شود، بدون نویسه‌های کنترلی.
 The password was refused. Type a password to try again.	رمز رد شد. برای تلاش دوباره رمزی وارد کنید.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	پروژه آغازی�
 The step's layer {name} isn't in the map.	لایه گام، یعنی {name}، در نقشه نیست.
 The store has no variables with two or more dimensions.	مخزن هیچ متغیری با دو بعد یا بیشتر ندارد.
 the store is gone	مخزن از دست رفته است
-the store keeps the password, never a token	انبار رمز را نگه می‌دارد، هرگز توکن را
 The summary couldn't start: {error}	خلاصه‌سازی شروع نشد: {error}
 The summary failed unexpectedly	خلاصه‌سازی به‌طور غیرمنتظره ناموفق بود
 The summary finished after another project was opened, so it wasn't added	خلاصه‌سازی پس از بازشدن پروژه دیگری تمام شد، پس اضافه نشد
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	ابزار�
 The trend couldn't start: {error}	تحلیل روند شروع نشد: {error}
 The trend failed unexpectedly	تحلیل روند به‌طور غیرمنتظره ناموفق بود
 The trend finished after another project was opened, so it wasn't added	تحلیل روند پس از بازشدن پروژه دیگری تمام شد، پس اضافه نشد
-the username stays for another try	نام کاربری برای تلاش دوباره می‌ماند
 the UTM zone must be 1 to 60	ناحیه UTM باید از 1 تا 60 باشد
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	مقادیری که از سیاه تا سفید نمایش داده می‌شوند، برای همه تاریخ‌ها و کاشی‌ها یکسان (بر حسب واحدهای خود باند). خالی: کشش خود هر فایل.
 the view has no extent	نما گستره‌ای ندارد
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	رمز را
 Type the token this expiry is for.	توکنی را که این انقضا برای آن است تایپ کنید.
 Type the token, or the password to generate one, to remember it on this computer.	برای به خاطر سپردن روی این رایانه، توکن یا رمزی را که برای تولید آن است تایپ کنید.
 Typed below	نوشته‌شده در پایین
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	سرشماری آمریکا (نشانی‌ها)
 Ukraine	اوکراین
 UM	UM

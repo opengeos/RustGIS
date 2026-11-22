@@ -1,9 +1,7 @@
 # lo interface catalog: English<TAB>translation
  by 	 ໂດຍ
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" ຕ້ອງເປັນໝາຍເລກອິນສະແຕນຂອງຊັ້ນຂໍ້ມູນ, ບໍ່ແມ່ນ {value}
 "layer" must be a layer's id or name, not {value}	"layer" ຕ້ອງເປັນ id ຫຼື ຊື່ຂອງຊັ້ນຂໍ້ມູນ, ບໍ່ແມ່ນ {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}' ບໍ່ແມ່ນຊື່ bucket
 '{date}' isn't a date: write it as YYYY-MM-DD	'{date}' ບໍ່ແມ່ນວັນທີ: ຂຽນໃນຮູບແບບ YYYY-MM-DD
 '{size}' isn't a cell size: give a number	'{size}' ບໍ່ແມ່ນຂະໜາດຫ້ອງ: ກະລຸນາໃສ່ຕົວເລກ
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	ບ່ອນເກັບ Zarr ທີ່ນຳເຂົ້າ 16 ແຫ່ງຢູ່ໃນຄິວແລ້ວ
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	ຕາໜ່າງ 3D
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<ບໍ່ມີ>
 <null>	<ຄ່າວ່າງ>
 A .geolibre project as a map	ໂຄງການ .geolibre ໃນຮູບແບບແຜນທີ່
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	ໂຄງການ .qgs ຫຼື .qgz ໃນຮ
 A 3D globe seen from space.	ໜ່ວຍໂລກ 3D ທີ່ເບິ່ງຈາກອາວະກາດ.
 A blank map with a basemap	ແຜນທີ່ເປົ່າວ່າງພ້ອມແຜນທີ່ພື້ນຖານ
 A box behind the element, which moves with it.	ກອບທາງຫຼັງອົງປະກອບ, ເຊິ່ງເຄື່ອນຍ້າຍໄປພ້ອມມັນ.
-a browser's sign-in isn't remembered	ການເຂົ້າສູ່ລະບົບຂອງບຣາວເຊີບໍ່ຖືກຈົດຈຳ
 A call for the rustgis Python package	ການຮຽກໃຊ້ແພັກເກດ Python ຂອງ rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	ທີ່ຢູ່ສາລະບົບ (CSW 2.0.2): ຄົ້ນຫາຂໍ້ມູນຕາມຄຳສັບ ແລະ ຂອບເຂດແຜນທີ່ຖ້າຕ້ອງການ, ຈາກນັ້ນເພີ່ມການບໍລິການ ແລະ ໄຟລ໌ທີ່ເຊື່ອມໂຍງ.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ຮອດຂີດຈຳກັດການນຳໃຊ້ແພັກເກດ ຫຼື ແອັບ ChatGPT ແລ້ວ. ກວດສອບການນຳໃຊ້ປະຈຳອາທິດກ່ອນລອງໃໝ່.
@@ -106,7 +101,6 @@ A projected coordinate system.	ລະບົບພິກັດສາຍແສງ.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	ລະບົບພິກັດສາຍແຜນທີ່ ເຊັ່ນ EPSG:32616, ຫຼື EPSG:4326 ສຳລັບອົງສາ
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	ຊັ້ນຂໍ້ມູນແຣັສເຕີບໍ່ມີຄຳສັ່ງສອບຖາມກຳນົດເງື່ອນໄຂ ຫຼື ການຜູກເວລາ: ແຖບຄຳສັ່ງສອບຖາມ ແລະ ເວລາເປັນຂອງຊັ້ນຂໍ້ມູນຟີເຈີ
 A rectangle behind the text.	ຮູບສີ່ແຈສາກທາງຫຼັງຂໍ້ຄວາມ.
-a refused password is emptied too	ລະຫັດຜ່ານທີ່ຖືກປະຕິເສດກໍຖືກລຶບອອກເຊັ່ນກັນ
 A report listing the selected layer's records, page after page.	ລາຍງານລາຍການຂໍ້ມູນຂອງຊັ້ນຂໍ້ມູນທີ່ເລືອກ, ໄປເທື່ອລະໜ້າ.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	ຜົນໄດ້ຮັບທີ່ສົ່ງຕໍ່ໃຫ້ເຄື່ອງມືອື່ນເທົ່ານັ້ນຈະຖືກລຶບອອກເມື່ອໂມເດວເຮັດວຽກແລ້ວ; ເພີ່ມຂໍ້ມູນອອກຖ້າຕ້ອງການເກັບໄວ້.
 A result the model keeps, under a name	ຜົນໄດ້ຮັບທີ່ໂມເດວເກັບຮັກສາໄວ້ພາຍໃຕ້ຊື່ໃດໜຶ່ງ
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	ພື້ນທ�
 A service import or refresh is already running.	ກຳລັງນຳເຂົ້າ ຫຼື ໂຫຼດຂໍ້ມູນບໍລິການຄືນໃໝ່ຢູ່ແລ້ວ.
 A service's layers stay in their service group.	ຊັ້ນຂໍ້ມູນຂອງບໍລິການຈະຢູ່ໃນກຸ່ມບໍລິການນັ້ນໆ.
 A sign-in is remembered on this computer: it signs in when a file needs it.	ມີການເຂົ້າສູ່ລະບົບທີ່ຈົດຈຳໄວ້ໃນຄອມພິວເຕີເຄື່ອງນີ້: ມັນຈະເຂົ້າສູ່ລະບົບເມື່ອໄຟລ໌ຕ້ອງການ.
-a sign-out asks nothing	ການອອກຈາກລະບົບບໍ່ຖາມຫຍັງ
-a signed-in pane keeps no password for after Sign out	ແຖບທີ່ເຂົ້າສູ່ລະບົບແລ້ວບໍ່ເກັບລະຫັດຜ່ານໄວ້ຫຼັງອອກຈາກລະບົບ
 A small chart of several numeric fields, drawn on each feature over its symbol	ແຜນພູມນ້ອຍຂອງຫຼາຍຟິວຕົວເລກ, ແຕ້ມເທິງແຕ່ລະຟີເຈີທັບສັນຍະລັກຂອງມັນ
 A streamed layer needs Load All Features first	ຊັ້ນຂໍ້ມູນແບບສະຕຣີມຕ້ອງ ໂຫຼດຟີເຈີທັງໝົດ ກ່ອນ
 A table replaced in a GeoPackage	ຕາຕະລາງທີ່ຖືກແທນທີ່ໃນ GeoPackage
@@ -299,7 +291,6 @@ Add {language}	ເພີ່ມ {language}
 Add {n}	ເພີ່ມ {n}
 Add ▾	ເພີ່ມ ▾
 Added	ເພີ່ມແລ້ວ
-Added Fixture	Fixture ທີ່ເພີ່ມແລ້ວ
 Added from {start} to {end}: the time slider steps through it	ເພີ່ມຕັ້ງແຕ່ {start} ຫາ {end}: ໃຊ້ແຖບເລື່ອນເວລາເພື່ອເບິ່ງແຕ່ລະຊ່ວງ
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	ເພີ່ມ {theme} ຂອງ Overture ເປັນໄທລ໌ແຜນທີ່ ({release}; ບາງຫົວຂໍ້ຈະສະແດງເມື່ອຊູມເຂົ້າເທົ່ານັ້ນ): {attribution}
 Added {name}	ເພີ່ມ {name} ແລ້ວ
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	API key ທີ່�
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	ທີ່ຢູ່ອົງກອນ ArcGIS Online ຫຼື ພໍທັລ ArcGIS Enterprise; ຖ້າປະວ່າງຈະຖືເປັນ ArcGIS Online
 an ArcGIS sign-in	ການເຂົ້າສູ່ລະບົບ ArcGIS
 An AWS profile	ໂປຣໄຟລ໌ AWS
-an enqueued add is not a success	ການເພີ່ມທີ່ເຂົ້າຄິວບໍ່ແມ່ນຄວາມສຳເລັດ
 An image picked for an earlier Image… was dropped: pick it again for that marker	ຮູບພາບທີ່ເລືອກສຳລັບ ຮູບພາບ… ກ່ອນໜ້າຖືກຍົກເລີກ: ເລືອກມັນອີກຄັ້ງສຳລັບສັນຍະລັກຈຸດນັ້ນ
 Analysis	ການວິເຄາະ
 Analyze	ວິເຄາະ
@@ -950,7 +940,6 @@ Coordinate systems	ລະບົບພິກັດ
 Coordinate System…	ລະບົບພິກັດ…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	ພິກັດໃນຮູບແບບ {format}. ຄລິກເພື່ອສະຫຼັບ: ອົງສາທົດສະນິຍົມ, DMS, UTM, MGRS. UTM ແລະ MGRS ເປັນຕາໜ່າງຂອງໂລກ, ອ່ານເປັນ UPS ທາງເໜືອຂອງ 84° N ແລະ ທາງໃຕ້ຂອງ 80° S.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space ປະຕິເສດການເຂົ້າສູ່ລະບົບ: ຂໍ້ມູນປະຈຳຕົວຜູ້ໃຊ້ບໍ່ຖືກຕ້ອງ
 Copernicus Data Space Status	ສະຖານະ Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	ສຳເນົາຄຳສັ່ງແລ້ວ.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	ແກ້ໄຂບັນຫາທີ່ລ�
 Fixed	ຄົງທີ່
 Fixed Zoom In	ຊູມເຂົ້າໄລຍະຄົງທີ່
 Fixed Zoom Out	ຊູມອອກໄລຍະຄົງທີ່
-Fixture	Fixture
 Flat	ຮາບພຽງ
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	ພື້ນທີ່ຮາບພຽງຮັກສາສີຂອງແຖບສີ ແລະ ຄວາມຊັນທີ່ຫັນໜ້າຫາຕາເວັນສະຫວ່າງຂຶ້ນ
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	ເສັ້ນຂອບເຂ�
 Invalid selection outline · draw a smaller radius	ເສັ້ນຂອບເຂດທີ່ເລືອກບໍ່ຖືກຕ້ອງ · ກະລຸນາວາດລັດສະໝີໃຫ້ນ້ອຍລົງ
 Invalid shortcut binding.	ການຜູກມັດປຸ່ມລັດບໍ່ຖືກຕ້ອງ.
 Invalid shortcut key.	ປຸ່ມລັດບໍ່ຖືກຕ້ອງ.
-Invalid user credentials	ຂໍ້ມູນປະຈຳຕົວຜູ້ໃຊ້ບໍ່ຖືກຕ້ອງ
 Invalid: {error}	ບໍ່ຖືກຕ້ອງ: {error}
 Invert	ປີ້ນກັບ
 Invert Color Ramp	ປີ້ນຊຸດສີ
@@ -2704,7 +2691,6 @@ No models are available for this account.	ບໍ່ມີຕົວແບບພ�
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	ຍັງບໍ່ມີໂນ້ດບຸກເທື່ອ. ໄປທີ່ ວິເຄາະ › ໂນ້ດບຸກໃໝ່ ເພື່ອເລີ່ມຕົ້ນ, ຫຼື ເພີ່ມ ແລະ ເປີດໂນ້ດບຸກ ເພື່ອເປີດ.
 No offline areas	ບໍ່ມີພື້ນທີ່ອອບລາຍນ໌
 No other reports	ບໍ່ມີນິພົນອື່ນ
-no password yet	ຍັງບໍ່ມີລະຫັດຜ່ານ
 No place at this grid reference: {reason}	ບໍ່ມີສະຖານທີ່ຢູ່ຕາມພິກັດຕາໜ່າງນີ້: {reason}
 No place found	ບໍ່ພົບສະຖານທີ່
 No place matches that address.	ບໍ່ມີສະຖານທີ່ໃດກົງກັບທີ່ຢູ່ນັ້ນ.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	ບໍ່ມີກຣາຟິກຂໍ້ຄວາມຢູ່ບ່ອນນັ້ນ
 No theme is named {name}.	ບໍ່ມີຮູບແບບສີສັນຊື່ {name}.
 No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
-no typing while it waits	ພິມບໍ່ໄດ້ໃນຂະນະລໍຖ້າ
 no yearly series	ບໍ່ມີຊຸດຂໍ້ມູນລາຍປີ
 No {format} here	ບໍ່ມີ {format} ຢູ່ນີ້
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	ບໍ່ມີຫຍັງເຮັດ
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	ຍັງບໍ່ມີການແບ່ງປັນເທື່ອ. ໄປທີ່ ເຜີຍແຜ່ › ແບ່ງປັນເປັນ ເພື່ອສ້າງແຜນທີ່ເວັບ, ຊັ້ນຂໍ້ມູນ, ຮູບແບບ, ຊີນ ແລະ ອື່ນໆ.
 Nothing to add here	ບໍ່ມີຫຍັງທີ່ຈະເພີ່ມຢູ່ນີ້
 Nothing to test	ບໍ່ມີຫຍັງທີ່ຈະທົດສອບ
-nothing typed is kept in the pane	ບໍ່ມີສິ່ງທີ່ພິມຖືກເກັບໄວ້ໃນແຖບ
-nothing typed while it waited is kept	ບໍ່ມີສິ່ງທີ່ພິມໃນຂະນະລໍຖ້າຖືກເກັບໄວ້
-nothing typed, Sign in is off	ບໍ່ໄດ້ພິມຫຍັງ, ເຂົ້າສູ່ລະບົບປິດຢູ່
 Nothing was found at this address.	ບໍ່ພົບຂໍ້ມູນໃດໆທີ່ທີ່ຢູ່ນີ້.
 Nothing was recorded, so no task was made.	ບໍ່ມີຫຍັງຖືກບັນທຶກໄວ້, ຈຶ່ງບໍ່ມີການສ້າງໜ້າວຽກ.
 Now	ດຽວນີ້
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	ໜຶ່ງໜ້າຕໍ່ໜຶ່ງຟີເຈີຂອງຊັ້ນຂໍ້ມູນດັດສະນີ.
 One per line: code=name	ແຖວລະໜຶ່ງລາຍການ: code=ຊື່
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	ສະແດງພາບດຽວຂອງມຸມມອງ: ສັນຍະລັກ ແລະ ປ້າຍກຳກັບຈະບໍ່ຖືກຕັດຂາດຕາມຂອບໄທລ໌, ແລະ ມີການຮຽກຂໍບໍລິການພຽງຄັ້ງດຽວຕໍ່ມຸມມອງ. ສະແດງເປັນໄທລ໌ເທິງໜ່ວຍໂລກ, ເທິງແຜນທີ່ອຽງ, ຫຼື ໃນການສາຍແຜນທີ່ທີ່ບໍລິການບໍ່ໄດ້ຮອງຮັບ.
-one sign-in at a time	ເຂົ້າສູ່ລະບົບໄດ້ເທື່ອລະອັນ
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	ເສັ້ນຂອບໜຶ່ງເສັ້ນ ຈາກສັນຍະລັກ. ເພີ່ມເສັ້ນຂອບສຳລັບຂອບນອກ, ເສັ້ນຂະໜານ ແລະ ໄລຍະຫຍັບ.
 One-time code	ລະຫັດໃຊ້ຄັ້ງດຽວ
-only a discovered list can invalidate the saved table	ສະເພາະແຕ່ລາຍການທີ່ຄົ້ນພົບໃໝ່ເທົ່ານັ້ນຈຶ່ງສາມາດຍົກເລີກຄວາມຖືກຕ້ອງຂອງຕາຕະລາງທີ່ບັນທຶກໄວ້ໄດ້
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	ສະເພາະຄັງເກັບໄທລ໌ທີ່ອ່ານຈາກໄຟລ໌ (PMTiles ຫຼື MBTiles) ເທົ່ານັ້ນທີ່ສາມາດສ້ອມແປງໄດ້.
 Only cubes with data where the map is	ສະເພາະກ້ອນຂໍ້ມູນທີ່ມີຂໍ້ມູນໃນພື້ນທີ່ແຜນທີ່
 Only selected polygons will be included in the output.	ສະເພາະຮູບຫຼາຍແຈທີ່ເລືອກເທົ່ານັ້ນທີ່ຈະຖືກລວມເຂົ້າໃນຜົນຮັບ.
@@ -3330,7 +3310,6 @@ Reload Themes	ໂຫຼດຮູບແບບສີສັນຄືນໃໝ່
 Reload Tile Archive	ໂຫຼດຄັງເກັບໄທລ໌ຄືນໃໝ່
 Reload Web Layers	ໂຫຼດຊັ້ນຂໍ້ມູນເວັບຄືນໃໝ່
 Reload {name} and discard its pending edits?	ໂຫຼດ {name} ຄືນໃໝ່ ແລະ ປະຖິ້ມການດັດແກ້ທີ່ຄ້າງຢູ່ຂອງມັນບໍ?
-Remember follows: nothing is remembered now	ປະຕິບັດຕາມ ຈົດຈຳ: ຕອນນີ້ບໍ່ມີຫຍັງຖືກຈົດຈຳ
 Remember on this computer	ຈົດຈຳໄວ້ໃນຄອມພິວເຕີເຄື່ອງນີ້
 Remember the key on this computer	ຈົດຈຳຄີໄວ້ໃນຄອມພິວເຕີເຄື່ອງນີ້
 Remove	ລຶບອອກ
@@ -3385,7 +3364,6 @@ Repair\nSource	ສ້ອມແປງ\nແຫຼ່ງຂໍ້ມູນ
 Repair Data Source	ສ້ອມແປງແຫຼ່ງຂໍ້ມູນ
 Repair Data Source…	ສ້ອມແປງແຫຼ່ງຂໍ້ມູນ…
 Repair Geometry	ສ້ອມແປງເລຂາຄະນິດ
-Repair is disabled while discovery is in flight	ປິດການສ້ອມແປງໃນຂະນະທີ່ກຳລັງຄົ້ນຫາຂໍ້ມູນ
 Repair Tile Archive	ສ້ອມແປງຄັງເກັບໄທລ໌
 Repaired {name}	ສ້ອມແປງ {name} ສຳເລັດແລ້ວ
 Repeat	ເຮັດຊ້ຳ
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	ເຂົ້າສູ່ລະບົບເພື່�
 Sign In to Copernicus Data Space	ເຂົ້າສູ່ລະບົບ Copernicus Data Space
 Sign in with your ChatGPT account.	ເຂົ້າສູ່ລະບົບດ້ວຍບັນຊີ ChatGPT ຂອງທ່ານ.
 Sign out	ອອກຈາກລະບົບ
-Sign out deletes it	ການອອກຈາກລະບົບລຶບມັນ
-Sign out deletes the remembered sign-in	ການອອກຈາກລະບົບລຶບການເຂົ້າສູ່ລະບົບທີ່ຈົດຈຳໄວ້
 Sign Out of ArcGIS	ອອກຈາກລະບົບ ArcGIS
 Sign Out of Copernicus Data Space	ອອກຈາກລະບົບ Copernicus Data Space
 Sign-in	ການເຂົ້າສູ່ລະບົບ
 Sign-in cancelled.	ການເຂົ້າສູ່ລະບົບຖືກຍົກເລີກ.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	ໝົດເວລາການເຂົ້າສູ່ລະບົບ. ກະລຸນາເລີ່ມໃໝ່ ແລະ ອະນຸຍາດໃຫ້ບຣາວເຊີເຂົ້າເຖິງທີ່ຢູ່ loopback ຂອງຄອມພິວເຕີເຄື່ອງນີ້.
 signed in	ເຂົ້າສູ່ລະບົບແລ້ວ
-Signed in as synthetic.user@example.invalid.	ເຂົ້າສູ່ລະບົບເປັນ synthetic.user@example.invalid.
 Signed in as {name}.	ເຂົ້າສູ່ລະບົບເປັນ {name}.
 Signed in to {portal}	ເຂົ້າສູ່ລະບົບ {portal} ແລ້ວ
 Signed in to {portal} as {user}	ເຂົ້າສູ່ລະບົບ {portal} ໃນນາມ {user} ແລ້ວ
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	ຕົວປ
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	ແຜນທີ່ພື້ນຖານຕອນນີ້ສະແດງມຸມມອງໂລກ {view}; ຊັ້ນຂໍ້ມູນ Countries ຂອງໂຄງການຍັງຮັກສາຊາຍແດນຂອງມັນ
 The basemap's grid color	ສີຕາໜ່າງຂອງແຜນທີ່ພື້ນຖານ
 The Basemaps plugin's tab of public basemaps.	ແທັບແຜນທີ່ພື້ນຖານສາທາລະນະຂອງປລັກອິນ Basemaps.
-the box shows it is remembered	ກອບສະແດງວ່າມັນຖືກຈົດຈຳໄວ້
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	ບຣາວເຊີບໍ່ໄດ້ສົ່ງຄລິບບອດໃຫ້ RustGIS ({why}): ວາງດ້ວຍ {keys}.
 the browser kept neither a copy of it nor where to download it	ບຣາວເຊີບໍ່ໄດ້ເກັບທັງສຳເນົາຂອງມັນ ແລະ ບ່ອນທີ່ຈະດາວໂຫຼດມັນ
 the browser runs everything on one thread	ບຣາວເຊີເຮັດວຽກທຸກຢ່າງໃນເທຣດດຽວ
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	ໂທເຄັນ Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	ສະພາບແວດລ້ອມລະບົບ (AWS_ACCESS_KEY_ID…)
 The features where the map is	ຟີເຈີໃນບໍລິເວນທີ່ແຜນທີ່ຕັ້ງຢູ່
-the fields are off while it waits	ຊ່ອງປ້ອນຖືກປິດໃນຂະນະລໍຖ້າ
 The first 1,000 entries; narrow it down a folder at a time.	1,000 ລາຍການທຳອິດ; ຈຳກັດຂອບເຂດໃຫ້ແຄບລົງເທື່ອລະໂຟນເດີ.
 The first {n} are listed.	ສະແດງ {n} ລາຍການທຳອິດ.
 The first {n} are shown: search to narrow them.	ສະແດງ {n} ລາຍການທຳອິດ: ຄົ້ນຫາເພື່ອຈຳກັດຂອບເຂດໃຫ້ແຄບລົງ.
 The first {n} of them are listed; the filter searches all of them.	{n} ລາຍການທຳອິດຖືກສະແດງ; ຕົວກັ່ນຕອງຄົ້ນຫາທັງໝົດ.
 The first {n} rows	{n} ແຖວທຳອິດ
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	ການຕິດຕາມສາຍນ້ຳໄຫຼບໍ່ມີການຕອບສະໜອງ: ສະແດງສາຍນ້ຳໄຫຼທັງໝົດທີ່ຢູ່ໃກ້ຈຸດທີ່ສຸດ.
-the form is back for another try	ແບບຟອມກັບມາເພື່ອລອງອີກຄັ້ງ
 The grid already has the basemap's color	ຕາໜ່າງມີສີຂອງແຜນທີ່ພື້ນຖານຢູ່ແລ້ວ
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	ຕົວເລກຕາໜ່າງຕ້ອງເປັນຈຳນວນຄູ່ຈາກ 0 ຫາ 10, ເຄິ່ງໜຶ່ງສຳລັບ easting ແລະ ເຄິ່ງໜຶ່ງສຳລັບ northing
 The grid's color and opacity	ສີ ແລະ ຄວາມທຶບແສງຂອງຕາໜ່າງ
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	ຄຳຕອບຂອງ NLDI ບໍ່ແມ່ນຂໍ້ຄວາມ UTF-8
 the northing doesn't fall in the latitude band given	northing ບໍ່ຢູ່ໃນແຖບເສັ້ນຂະໜານທີ່ໃຫ້ມາ
 The notes are cut here: the release page has all of them.	ບົດບັນທຶກຖືກຕັດຢູ່ນີ້: ໜ້າລຸ້ນປ່ອຍມີທັງໝົດ.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	ອັນທີ່ລໍຖ້າຢູ່ຫຼັງມັນກໍຖືກປະໄວ້ເຊັ່ນກັນ
 the open project has unsaved changes: save them before recovering other work	ໂຄງການທີ່ເປີດຢູ່ມີການປ່ຽນແປງທີ່ຍັງບໍ່ໄດ້ບັນທຶກ: ບັນທຶກພວກມັນກ່ອນທີ່ຈະກູ້ຄືນວຽກອື່ນ
 The open project has unsaved changes: save them, then recover this copy.	ໂຄງການທີ່ເປີດຢູ່ມີການປ່ຽນແປງທີ່ຍັງບໍ່ໄດ້ບັນທຶກ: ບັນທຶກພວກມັນ ແລ້ວກູ້ຄືນສຳເນົານີ້.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	ໜ້�
 the page is too large to copy to the clipboard: export it instead	ໜ້າໃຫຍ່ເກີນໄປທີ່ຈະສຳເນົາໃສ່ຄລິບບອດ: ໃຫ້ສົ່ງອອກແທນ
 the page is too large to draw	ໜ້າເຈ້ຍໃຫຍ່ເກີນໄປທີ່ຈະແຕ້ມໄດ້
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	ລະຫັດຜ່ານຖືກສົ່ງໄປຫາເຊີບເວີເຂົ້າສູ່ລະບົບຂອງ Copernicus Data Space ເທົ່ານັ້ນ ແລະ ບໍ່ເຄີຍຖືກເກັບໄວ້ໃນໂຄງການ. ໂທເຄັນທີ່ມັນໃຫ້ຖືກສົ່ງໄປຫາເຊີບເວີຂໍ້ມູນຂອງມັນເທົ່ານັ້ນ.
-the password isn't kept in the pane	ລະຫັດຜ່ານບໍ່ຖືກເກັບໄວ້ໃນແຖບ
 The password must be at most 4096 bytes, without control characters.	ລະຫັດຜ່ານຕ້ອງມີບໍ່ເກີນ 4096 ໄບຕ໌, ໂດຍບໍ່ມີຕົວອັກສອນຄວບຄຸມ.
 The password or key must fit a 4096-byte HTTP header, without control characters.	ລະຫັດຜ່ານ ຫຼື ຄີຕ້ອງພໍດີກັບ HTTP header 4096 ໄບຕ໌, ໂດຍບໍ່ມີຕົວອັກສອນຄວບຄຸມ.
 The password was refused. Type a password to try again.	ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ. ພິມລະຫັດຜ່ານເພື່ອລອງໃໝ່.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	ໂຄງການເ�
 The step's layer {name} isn't in the map.	ຊັ້ນຂໍ້ມູນ {name} ຂອງຂັ້ນຕອນນີ້ບໍ່ມີຢູ່ໃນແຜນທີ່.
 The store has no variables with two or more dimensions.	ບ່ອນເກັບຂໍ້ມູນບໍ່ມີຕົວປ່ຽນທີ່ມີ 2 ມິຕິຂຶ້ນໄປ.
 the store is gone	ບ່ອນເກັບຂໍ້ມູນບໍ່ມີແລ້ວ
-the store keeps the password, never a token	ບ່ອນເກັບເກັບລະຫັດຜ່ານ, ບໍ່ເຄີຍເກັບໂທເຄັນ
 The summary couldn't start: {error}	ບໍ່ສາມາດເລີ່ມຕົ້ນການສະຫຼຸບໄດ້: {error}
 The summary failed unexpectedly	ການສະຫຼຸບລົ້ມເຫຼວຢ່າງບໍ່ຄາດຄິດ
 The summary finished after another project was opened, so it wasn't added	ການສະຫຼຸບສຳເລັດຫຼັງຈາກເປີດໂຄງການອື່ນແລ້ວ ຈຶ່ງບໍ່ໄດ້ຖືກເພີ່ມເຂົ້າ
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	ເຄື�
 The trend couldn't start: {error}	ບໍ່ສາມາດເລີ່ມຕົ້ນການວິເຄາະທ່າອ່ຽງໄດ້: {error}
 The trend failed unexpectedly	ການວິເຄາະທ່າອ່ຽງລົ້ມເຫຼວຢ່າງບໍ່ຄາດຄິດ
 The trend finished after another project was opened, so it wasn't added	ການວິເຄາະທ່າອ່ຽງສຳເລັດຫຼັງຈາກເປີດໂຄງການອື່ນແລ້ວ ຈຶ່ງບໍ່ໄດ້ຖືກເພີ່ມເຂົ້າ
-the username stays for another try	ຊື່ຜູ້ໃຊ້ຍັງຢູ່ເພື່ອລອງອີກຄັ້ງ
 the UTM zone must be 1 to 60	ເຂດ UTM ຕ້ອງເປັນ 1 ຫາ 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	ຄ່າທີ່ສະແດງຈາກສີດຳຫາສີຂາວ ຄືກັນສຳລັບທຸກວັນທີ ແລະ ທຸກໄທລ໌ (ຫົວໜ່ວຍຂອງແຖບຄື້ນເອງ). ຖ້າຫວ່າງເປົ່າ: ໃຊ້ການດຶງຍືດຂອງແຕ່ລະໄຟລ໌ເອງ.
 the view has no extent	ມຸມມອງບໍ່ມີຂອບເຂດ
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	ພິມ�
 Type the token this expiry is for.	ພິມໂທເຄັນທີ່ວັນໝົດອາຍຸນີ້ເປັນຂອງ.
 Type the token, or the password to generate one, to remember it on this computer.	ພິມໂທເຄັນ, ຫຼື ລະຫັດຜ່ານເພື່ອສ້າງມັນ, ເພື່ອຈົດຈຳໄວ້ໃນຄອມພິວເຕີເຄື່ອງນີ້.
 Typed below	ພິມໄວ້ດ້ານລຸ່ມ
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	U.S. Census (ທີ່ຢູ່)
 Ukraine	ຢູເຄຣນ
 UM	UM

@@ -1,12 +1,10 @@
 # zh-tw interface catalog (Traditional Chinese, Taiwan): English<TAB>translation
 # GIS terms follow 國家教育研究院樂詞網「地理學名詞－地理資訊系統名詞」 (terms.naer.edu.tw).
  by 	 與
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
  · {n} more left out: zoom in for them	 · 另有 {n} 個未列出：放大地圖即可看到
  · {n} tile-years had a second file; the first was taken	 · 有 {n} 個圖磚年份另有第二個檔案；已採用第一個
 "instance" must be a layer's instance number, not {value}	"instance" 必須是圖層的實例編號，而不是 {value}
 "layer" must be a layer's id or name, not {value}	"layer" 必須是圖層的 ID 或名稱，而不是 {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	「{b}」不是有效的儲存貯體名稱
 '{date}' isn't a date: write it as YYYY-MM-DD	「{date}」不是日期：請依 YYYY-MM-DD 格式填寫
 '{size}' isn't a cell size: give a number	「{size}」不是網格大小：請輸入數字
@@ -39,11 +37,9 @@
 16 imported Zarr stores are already queued	16 個已匯入的 Zarr 存放區已在佇列中
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	三維網格
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<無>
 <null>	<null>
 A .geolibre project as a map	將 .geolibre 專案作為地圖
@@ -51,7 +47,6 @@ A .qgs or .qgz project as a map	將 .qgs 或 .qgz 專案作為地圖
 A 3D globe seen from space.	從太空看到的三維地球。
 A blank map with a basemap	帶底圖的空白地圖
 A box behind the element, which moves with it.	元素後方的方框，會隨元素一起移動。
-a browser's sign-in isn't remembered	瀏覽器中的登入不會被記住
 A call for the rustgis Python package	用於 rustgis Python 套件的呼叫
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	目錄服務（CSW 2.0.2）的網址：依關鍵字（也可依地圖區域）搜尋其記錄，然後新增記錄所連結的服務和檔案。
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	已達到 ChatGPT 方案或應用程式的用量限制。請檢視每週用量後再重試。
@@ -110,7 +105,6 @@ A projected coordinate system.	投影坐標系統。
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	投影坐標系統（如 EPSG:32616），或以度為單位的 EPSG:4326
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	網格圖層沒有定義查詢或時間繫結：「查詢」和「時間」索引標籤屬於圖徵圖層
 A rectangle behind the text.	文字後方的矩形。
-a refused password is emptied too	被拒絕的密碼也會被清空
 A report listing the selected layer's records, page after page.	逐頁列出所選圖層記錄的報表。
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	僅供其他工具使用的結果會在模型執行後刪除；若要保留，請新增輸出。
 A result the model keeps, under a name	模型以某個名稱保留的結果
@@ -120,8 +114,6 @@ A search area holds at most {n} shapes: Clear it to start again	搜尋區域最�
 A service import or refresh is already running.	服務匯入或重新整理已在進行中。
 A service's layers stay in their service group.	服務的圖層保留在其服務群組中。
 A sign-in is remembered on this computer: it signs in when a file needs it.	此電腦上記住了一個登入：檔案需要時會自動登入。
-a sign-out asks nothing	登出時不會詢問
-a signed-in pane keeps no password for after Sign out	已登入的窗格不會為登出後保留密碼
 A small chart of several numeric fields, drawn on each feature over its symbol	在每個圖徵的符號上方繪製由多個數值欄位組成的小圖表
 A streamed layer needs Load All Features first	串流圖層需要先執行「載入所有圖徵」
 A table replaced in a GeoPackage	GeoPackage 中被取代的表
@@ -305,7 +297,6 @@ Add {language}	新增 {language}
 Add {n}	新增 {n} 項
 Add ▾	新增 ▾
 Added	已新增
-Added Fixture	已新增的夾具
 Added from {start} to {end}: the time slider steps through it	已新增 {start} 至 {end}：時間滑桿將逐步遍歷
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	已將 Overture 的 {theme} 新增為地圖圖磚（{release}；部分主題僅在放大後顯示）：{attribution}
 Added {name}	已新增 {name}
@@ -387,7 +378,6 @@ An API key sent in a header must use plain ASCII characters.	透過請求標頭�
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	ArcGIS Online 組織或 ArcGIS Enterprise 入口網站的網址；留空時為 ArcGIS Online
 an ArcGIS sign-in	ArcGIS 登入
 An AWS profile	AWS 設定檔
-an enqueued add is not a success	已加入佇列的新增不算成功
 An image picked for an earlier Image… was dropped: pick it again for that marker	先前為「影像…」選擇的影像已被捨棄：請為該標記重新選擇
 Analysis	分析工具
 Analyze	分析
@@ -965,7 +955,6 @@ Coordinate systems	坐標系統
 Coordinate System…	坐標系統…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	以 {format} 表示的坐標。點選可切換：十進制度、DMS、UTM、MGRS。UTM 和 MGRS 是覆蓋地球的網格，在北緯 84° 以北和南緯 80° 以南以 UPS 讀取。
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space 拒絕了登入：使用者憑證無效
 Copernicus Data Space Status	Copernicus Data Space 狀態
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	已複製命令。
@@ -1715,7 +1704,6 @@ Fix the problems listed below first	請先修復下面列出的問題
 Fixed	固定
 Fixed Zoom In	固定比例放大
 Fixed Zoom Out	固定比例縮小
-Fixture	夾具
 Flat	平頭
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	平地保持色階的顏色，朝向太陽的坡面會變亮
 FlatGeobuf	FlatGeobuf
@@ -2114,7 +2102,6 @@ Invalid selection outline · draw a smaller area	選取輪廓無效 · 請繪製
 Invalid selection outline · draw a smaller radius	選取輪廓無效 · 請繪製更小的半徑
 Invalid shortcut binding.	快速鍵繫結無效。
 Invalid shortcut key.	快速鍵無效。
-Invalid user credentials	使用者憑證無效
 Invalid: {error}	無效：{error}
 Invert	反轉
 Invert Color Ramp	反轉色帶
@@ -2743,7 +2730,6 @@ No models are available for this account.	此帳戶沒有可用模型。
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	暫無筆記本。使用「分析 › 新增筆記本」新增一個，或使用「新增並開啟筆記本」開啟一個。
 No offline areas	無離線區域
 No other reports	無其他報表
-no password yet	尚無密碼
 No place at this grid reference: {reason}	此網格參考處沒有位置：{reason}
 No place found	未找到地點
 No place matches that address.	沒有符合該地址的地點。
@@ -2780,7 +2766,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	該處沒有文字圖形
 No theme is named {name}.	沒有名為 {name} 的主題。
 No tools match your search.	沒有符合搜尋條件的工具。
-no typing while it waits	等待時無法輸入
 no yearly series	無年度序列
 No {format} here	此處沒有 {format}
 NoData	NoData
@@ -2829,9 +2814,6 @@ Nothing ran: the script has no commands.	未執行任何內容：指令碼中沒
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	尚未分享任何內容。「發布 › 分享為」可建立 Web 地圖、圖層、樣式、場景等。
 Nothing to add here	此處沒有可新增的內容
 Nothing to test	沒有可測試的內容
-nothing typed is kept in the pane	輸入的內容都不會保留在窗格中
-nothing typed while it waited is kept	等待期間輸入的內容都不會保留
-nothing typed, Sign in is off	未輸入任何內容，「登入」為停用
 Nothing was found at this address.	此網址未找到任何內容。
 Nothing was recorded, so no task was made.	未錄製任何內容，因此未建立任務。
 Now	現在
@@ -2880,10 +2862,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	索引圖層的每個圖徵一頁。
 One per line: code=name	每行一個：代碼=名稱
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	檢視的一張圖片：符號和標註不會在圖磚邊緣被截斷，每個檢視只向服務請求一次。在地球儀、傾斜地圖或服務不提供的投影上以圖磚繪製。
-one sign-in at a time	一次一個登入
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	來自符號的一條筆畫。新增筆畫可繪製輪廓線、平行線和偏移線。
 One-time code	一次性驗證碼
-only a discovered list can invalidate the saved table	只有探索到的清單才能使已儲存的資料表失效
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	只有從檔案讀取的圖磚封存檔（PMTiles 或 MBTiles）才能修復。
 Only cubes with data where the map is	僅限地圖所在範圍有資料的立方體
 Only selected polygons will be included in the output.	輸出中僅包含已選取的多邊形。
@@ -3374,7 +3354,6 @@ Reload Themes	重新載入主題
 Reload Tile Archive	重新載入圖磚封存檔
 Reload Web Layers	重新載入 Web 圖層
 Reload {name} and discard its pending edits?	要重新載入 {name} 並放棄其待處理的編輯嗎？
-Remember follows: nothing is remembered now	「記住」跟隨設定：目前不記住任何內容
 Remember on this computer	在此電腦上記住
 Remember the key on this computer	在此電腦上記住金鑰
 Remove	移除
@@ -3429,7 +3408,6 @@ Repair\nSource	修復\n資料來源
 Repair Data Source	修復資料來源
 Repair Data Source…	修復資料來源…
 Repair Geometry	修復幾何
-Repair is disabled while discovery is in flight	探索進行期間已停用修復功能
 Repair Tile Archive	修復圖磚封存檔
 Repaired {name}	已修復 {name}
 Repeat	重複
@@ -3974,15 +3952,12 @@ Sign in to choose a model.	登入後即可選擇模型。
 Sign In to Copernicus Data Space	登入 Copernicus Data Space
 Sign in with your ChatGPT account.	請使用您的 ChatGPT 帳戶登入。
 Sign out	登出
-Sign out deletes it	登出時刪除
-Sign out deletes the remembered sign-in	登出時刪除記住的登入
 Sign Out of ArcGIS	登出 ArcGIS
 Sign Out of Copernicus Data Space	登出 Copernicus Data Space
 Sign-in	登入
 Sign-in cancelled.	登入已取消。
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	登入逾時。請重新開始，並允許瀏覽器存取此電腦的回送位址。
 signed in	已登入
-Signed in as synthetic.user@example.invalid.	已登入為 synthetic.user@example.invalid。
 Signed in as {name}.	已登入為 {name}。
 Signed in to {portal}	已登入 {portal}
 Signed in to {portal} as {user}	已以 {user} 身份登入 {portal}
@@ -4289,7 +4264,6 @@ The background worker could not start ({error}). Retry the command.	背景工作
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	底圖現在顯示{view}世界觀；專案的「國家」圖層保持其國界
 The basemap's grid color	底圖的網格顏色
 The Basemaps plugin's tab of public basemaps.	底圖外掛中列出公開底圖的索引標籤。
-the box shows it is remembered	方框顯示已記住
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	瀏覽器未向 RustGIS 提供剪貼簿（{why}）：請使用 {keys} 貼上。
 the browser kept neither a copy of it nor where to download it	瀏覽器既未儲存其副本，也未儲存其下載網址
 the browser runs everything on one thread	瀏覽器在單一執行緒上執行所有內容
@@ -4314,14 +4288,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	Earthdata Login 權杖
 The environment (AWS_ACCESS_KEY_ID…)	環境變數（AWS_ACCESS_KEY_ID…）
 The features where the map is	地圖所在範圍內的圖徵
-the fields are off while it waits	等待時欄位會停用
 The first 1,000 entries; narrow it down a folder at a time.	前 1,000 個項目；請逐層進入資料夾縮小範圍。
 The first {n} are listed.	已列出前 {n} 個。
 The first {n} are shown: search to narrow them.	僅顯示前 {n} 個：請搜尋以縮小範圍。
 The first {n} of them are listed; the filter searches all of them.	列出了其中的前 {n} 個；篩選會搜尋全部。
 The first {n} rows	前 {n} 列
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	流向追蹤未回應：顯示距該點最近的整條流線。
-the form is back for another try	表單會恢復以便再試一次
 The grid already has the basemap's color	網格已使用底圖的顏色
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	網格數字必須是 0 到 10 的偶數位，一半為東坐標，一半為北坐標
 The grid's color and opacity	網格的顏色和不透明度
@@ -4388,7 +4360,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	NLDI 的回應不是 UTF-8 文字
 the northing doesn't fall in the latitude band given	北坐標不在給定的緯度帶內
 The notes are cut here: the release page has all of them.	說明在此處截斷：完整內容請見發行頁面。
-the old file's list must disappear immediately	舊檔案的清單必須立即消失
 The one waiting after it was left too	排在其後等待的那一個也已放棄
 the open project has unsaved changes: save them before recovering other work	開啟的專案有未儲存的變更：請在復原其他工作前儲存
 The open project has unsaved changes: save them, then recover this copy.	開啟的專案有未儲存的變更：請先儲存，然後復原此副本。
@@ -4398,7 +4369,6 @@ The page in colour, the title in light text and the map in a light card.	頁面�
 the page is too large to copy to the clipboard: export it instead	頁面太大，無法複製到剪貼簿：請改為匯出
 the page is too large to draw	頁面太大，無法繪製
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	密碼只會傳送到 Copernicus Data Space 的登入伺服器，絕不會保存在專案中。取得的權杖只會傳送到其資料伺服器。
-the password isn't kept in the pane	密碼不會保留在窗格中
 The password must be at most 4096 bytes, without control characters.	密碼最多 4096 個位元組，且不得包含控制字元。
 The password or key must fit a 4096-byte HTTP header, without control characters.	密碼或金鑰必須能放入 4096 位元組的 HTTP 請求標頭，且不含控制字元。
 The password was refused. Type a password to try again.	密碼被拒絕。請輸入密碼重試。
@@ -4494,7 +4464,6 @@ The start-up project {path} isn't a RustGIS project file.	啟動專案 {path} �
 The step's layer {name} isn't in the map.	此步驟的圖層 {name} 不在地圖中。
 The store has no variables with two or more dimensions.	該資料存放區中沒有二維或更多維的變數。
 the store is gone	該資料存放區已不存在
-the store keeps the password, never a token	存放區保存密碼，絕不保存權杖
 The summary couldn't start: {error}	無法開始彙總：{error}
 The summary failed unexpectedly	彙總意外失敗
 The summary finished after another project was opened, so it wasn't added	彙總完成時已開啟另一個專案，因此未新增
@@ -4525,7 +4494,6 @@ The tools run on this project: saved with it, and each can run again	在此專�
 The trend couldn't start: {error}	無法開始趨勢分析：{error}
 The trend failed unexpectedly	趨勢分析意外失敗
 The trend finished after another project was opened, so it wasn't added	趨勢分析完成時已開啟另一個專案，因此未新增
-the username stays for another try	使用者名稱會保留以便再試一次
 the UTM zone must be 1 to 60	UTM 分帶必須為 1 到 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	從黑到白顯示的值範圍，對每個日期和圖磚相同（使用波段自身的單位）。留空：每個檔案使用自身的拉伸。
 the view has no extent	檢視沒有範圍
@@ -4734,7 +4702,6 @@ Type the password, then Save. Remember on this computer is optional.	輸入密�
 Type the token this expiry is for.	請輸入此到期時間所對應的權杖。
 Type the token, or the password to generate one, to remember it on this computer.	請輸入權杖，或輸入密碼以產生權杖，才能在此電腦上記住。
 Typed below	在下方輸入
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	美國人口普查（地址）
 ui.mcpRelay: port {port} is not a port number (0 to 65535)	ui.mcpRelay：埠 {port} 不是有效的埠號（0 到 65535）
 ui.scale accepts only the factor parameter	ui.scale 只接受 factor 參數

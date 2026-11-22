@@ -1,9 +1,7 @@
 # vi interface catalog: English<TAB>translation
  by 	 theo
- synthetic.user@example.invalid 	 synthetic.user@example.invalid
 "instance" must be a layer's instance number, not {value}	"instance" phải là số thực thể của một lớp, không phải {value}
 "layer" must be a layer's id or name, not {value}	"layer" phải là id hoặc tên của một lớp, không phải {value}
-' { name.replace('	' { name.replace('
 '{b}' isn't a bucket name	'{b}' không phải tên bucket
 '{date}' isn't a date: write it as YYYY-MM-DD	'{date}' không phải là ngày: hãy viết theo dạng YYYY-MM-DD
 '{size}' isn't a cell size: give a number	'{size}' không phải là kích thước ô: hãy nhập một số
@@ -36,11 +34,9 @@
 16 imported Zarr stores are already queued	16 kho Zarr đã nhập đang có trong hàng đợi
 18:00 UTC	18:00 UTC
 18TWL8395907350 · 18north 583959 4507351	18TWL8395907350 · 18north 583959 4507351
-200 OK	200 OK
 3010, lv95	3010, lv95
 3D mesh	Lưới 3D
 40.7128 · 40°42′46″N	40.7128 · 40°42′46″N
-401 Unauthorized	401 Unauthorized
 <None>	<Không có>
 <null>	<null>
 A .geolibre project as a map	Một dự án .geolibre dưới dạng bản đồ
@@ -48,7 +44,6 @@ A .qgs or .qgz project as a map	Một dự án .qgs hoặc .qgz dưới dạng b
 A 3D globe seen from space.	Quả địa cầu 3D nhìn từ không gian.
 A blank map with a basemap	Bản đồ trống có bản đồ nền
 A box behind the element, which moves with it.	Một hộp phía sau phần tử, di chuyển cùng nó.
-a browser's sign-in isn't remembered	đăng nhập trong trình duyệt không được ghi nhớ
 A call for the rustgis Python package	Lệnh gọi cho gói Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Địa chỉ của một danh mục (CSW 2.0.2): tìm các bản ghi của nó theo từ khóa và, nếu muốn, theo vùng bản đồ, rồi thêm các dịch vụ và tệp mà chúng liên kết tới.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Đã đạt giới hạn sử dụng của gói ChatGPT hoặc ứng dụng. Xem mức sử dụng hằng tuần trước khi thử lại.
@@ -106,7 +101,6 @@ A projected coordinate system.	Một hệ tọa độ phép chiếu.
 A projected system such as EPSG:32616, or EPSG:4326 for degrees	Một hệ chiếu như EPSG:32616, hoặc EPSG:4326 cho độ
 a raster layer has no definition query or time binding: the Query and Time tabs are a feature layer's	lớp raster không có truy vấn định nghĩa hay liên kết thời gian: các thẻ Truy vấn và Thời gian dành cho lớp đối tượng
 A rectangle behind the text.	Một hình chữ nhật phía sau văn bản.
-a refused password is emptied too	mật khẩu bị từ chối cũng được xóa trống
 A report listing the selected layer's records, page after page.	Báo cáo liệt kê các bản ghi của lớp được chọn, hết trang này đến trang khác.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Kết quả chỉ làm đầu vào cho công cụ khác sẽ bị xóa sau khi mô hình chạy xong; hãy thêm một đầu ra để giữ lại.
 A result the model keeps, under a name	Một kết quả mà mô hình giữ lại, dưới một tên
@@ -116,8 +110,6 @@ A search area holds at most {n} shapes: Clear it to start again	Vùng tìm kiế
 A service import or refresh is already running.	Đang nhập hoặc làm mới một dịch vụ.
 A service's layers stay in their service group.	Các lớp của một dịch vụ được giữ trong nhóm dịch vụ của chúng.
 A sign-in is remembered on this computer: it signs in when a file needs it.	Một lần đăng nhập được ghi nhớ trên máy tính này: nó tự đăng nhập khi một tệp cần.
-a sign-out asks nothing	đăng xuất không hỏi gì
-a signed-in pane keeps no password for after Sign out	ngăn đã đăng nhập không giữ mật khẩu nào cho sau khi Đăng xuất
 A small chart of several numeric fields, drawn on each feature over its symbol	Biểu đồ nhỏ của nhiều trường số, vẽ trên mỗi đối tượng đè lên ký hiệu của nó
 A streamed layer needs Load All Features first	Lớp tải dần cần chạy Tải tất cả đối tượng trước
 A table replaced in a GeoPackage	Bảng được thay thế trong GeoPackage
@@ -299,7 +291,6 @@ Add {language}	Thêm {language}
 Add {n}	Thêm {n}
 Add ▾	Thêm ▾
 Added	Đã thêm
-Added Fixture	Đã thêm Fixture
 Added from {start} to {end}: the time slider steps through it	Đã thêm từ {start} đến {end}: thanh trượt thời gian đi qua khoảng này
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Đã thêm {theme} của Overture dưới dạng ô bản đồ ({release}; một số chủ đề chỉ hiện khi phóng to): {attribution}
 Added {name}	Đã thêm {name}
@@ -381,7 +372,6 @@ An API key sent in a header must use plain ASCII characters.	Khóa API gửi tro
 An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank	Địa chỉ của tổ chức ArcGIS Online hoặc cổng ArcGIS Enterprise; để trống là ArcGIS Online
 an ArcGIS sign-in	một lần đăng nhập ArcGIS
 An AWS profile	Một hồ sơ AWS
-an enqueued add is not a success	một lệnh thêm đã xếp hàng không phải là thành công
 An image picked for an earlier Image… was dropped: pick it again for that marker	Một ảnh đã chọn cho một Ảnh… trước đó đã bị bỏ: hãy chọn lại cho điểm đánh dấu đó
 Analysis	Phân tích
 Analyze	Phân tích
@@ -950,7 +940,6 @@ Coordinate systems	Hệ tọa độ
 Coordinate System…	Hệ tọa độ…
 Coordinates in {format}. Click to switch: decimal degrees, DMS, UTM, MGRS. UTM and MGRS are grids of the Earth, read in UPS north of 84° N and south of 80° S.	Tọa độ dạng {format}. Nhấp để chuyển: độ thập phân, DMS, UTM, MGRS. UTM và MGRS là các lưới của Trái Đất, đọc theo UPS ở phía bắc 84° N và phía nam 80° S.
 Copernicus Data Space	Copernicus Data Space
-Copernicus Data Space refused the sign-in: Invalid user credentials	Copernicus Data Space từ chối đăng nhập: Thông tin xác thực người dùng không hợp lệ
 Copernicus Data Space Status	Trạng thái Copernicus Data Space
 Copernicus Data Space…	Copernicus Data Space…
 Copied the command.	Đã sao chép lệnh.
@@ -1688,7 +1677,6 @@ Fix the problems listed below first	Hãy sửa các vấn đề liệt kê bên 
 Fixed	Cố định
 Fixed Zoom In	Phóng to cố định
 Fixed Zoom Out	Thu nhỏ cố định
-Fixture	Fixture
 Flat	Phẳng
 Flat ground keeps the ramp's colour and slopes facing the sun brighten	Vùng đất phẳng giữ màu của dải màu và các sườn hướng về mặt trời sáng lên
 FlatGeobuf	FlatGeobuf
@@ -2083,7 +2071,6 @@ Invalid selection outline · draw a smaller area	Đường viền chọn không 
 Invalid selection outline · draw a smaller radius	Đường viền chọn không hợp lệ · vẽ bán kính nhỏ hơn
 Invalid shortcut binding.	Phép gán phím tắt không hợp lệ.
 Invalid shortcut key.	Phím tắt không hợp lệ.
-Invalid user credentials	Thông tin xác thực người dùng không hợp lệ
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
 Invert Color Ramp	Đảo ngược dải màu
@@ -2704,7 +2691,6 @@ No models are available for this account.	Không có mô hình nào cho tài kho
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Chưa có sổ tay nào. Phân tích › Sổ tay mới tạo một sổ tay, hoặc Thêm và mở sổ tay mở một sổ tay có sẵn.
 No offline areas	Không có khu vực ngoại tuyến
 No other reports	Không có báo cáo nào khác
-no password yet	chưa có mật khẩu
 No place at this grid reference: {reason}	Không có địa điểm tại tham chiếu lưới này: {reason}
 No place found	Không tìm thấy địa điểm
 No place matches that address.	Không có địa điểm nào khớp với địa chỉ đó.
@@ -2739,7 +2725,6 @@ No tasks yet. Record one, or make one from your geoprocessing history with Analy
 no text graphic there	không có đồ họa văn bản ở đó
 No theme is named {name}.	Không có chủ đề nào tên {name}.
 No tools match your search.	Không có công cụ nào khớp với tìm kiếm của bạn.
-no typing while it waits	không nhập được trong khi chờ
 no yearly series	không có chuỗi theo năm
 No {format} here	Không có {format} ở đây
 NoData	NoData
@@ -2787,9 +2772,6 @@ Nothing ran: the script has no commands.	Không có gì được chạy: script 
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Chưa chia sẻ gì. Xuất bản › Chia sẻ thành tạo bản đồ web, lớp, kiểu, cảnh và nhiều hơn nữa.
 Nothing to add here	Không có gì để thêm ở đây
 Nothing to test	Không có gì để kiểm tra
-nothing typed is kept in the pane	không gì đã nhập được giữ trong ngăn
-nothing typed while it waited is kept	không gì đã nhập trong lúc chờ được giữ lại
-nothing typed, Sign in is off	chưa nhập gì, Đăng nhập bị tắt
 Nothing was found at this address.	Không tìm thấy gì tại địa chỉ này.
 Nothing was recorded, so no task was made.	Chưa ghi được gì nên không có nhiệm vụ nào được tạo.
 Now	Bây giờ
@@ -2837,10 +2819,8 @@ One marker, from the symbol. Add marks to stack markers, or to shift or turn the
 One page per feature of an index layer.	Mỗi đối tượng của lớp chỉ mục là một trang.
 One per line: code=name	Mỗi dòng một mục: mã=tên
 One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.	Một ảnh của khung nhìn: ký hiệu và nhãn không bị cắt ở cạnh ô bản đồ, và dịch vụ được hỏi một lần cho mỗi khung nhìn. Được vẽ theo ô trên quả địa cầu, trên bản đồ nghiêng, hoặc trong phép chiếu mà dịch vụ không cung cấp.
-one sign-in at a time	mỗi lần một đăng nhập
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Một nét, từ ký hiệu. Thêm nét để tạo viền bọc, đường song song và độ lệch.
 One-time code	Mã dùng một lần
-only a discovered list can invalidate the saved table	only a discovered list can invalidate the saved table
 Only a tile archive read from a file (PMTiles or MBTiles) can be repaired.	Chỉ có thể sửa kho ô bản đồ đọc từ tệp (PMTiles hoặc MBTiles).
 Only cubes with data where the map is	Chỉ các khối có dữ liệu trong vùng bản đồ
 Only selected polygons will be included in the output.	Chỉ các vùng được chọn mới có trong kết quả.
@@ -3330,7 +3310,6 @@ Reload Themes	Tải lại chủ đề
 Reload Tile Archive	Tải lại kho ô bản đồ
 Reload Web Layers	Tải lại lớp web
 Reload {name} and discard its pending edits?	Tải lại {name} và hủy bỏ các chỉnh sửa đang chờ của nó?
-Remember follows: nothing is remembered now	Ghi nhớ theo thiết lập: hiện không ghi nhớ gì
 Remember on this computer	Ghi nhớ trên máy tính này
 Remember the key on this computer	Ghi nhớ khóa trên máy tính này
 Remove	Gỡ bỏ
@@ -3385,7 +3364,6 @@ Repair\nSource	Sửa\nnguồn
 Repair Data Source	Sửa nguồn dữ liệu
 Repair Data Source…	Sửa nguồn dữ liệu…
 Repair Geometry	Sửa hình học
-Repair is disabled while discovery is in flight	Repair is disabled while discovery is in flight
 Repair Tile Archive	Sửa kho ô bản đồ
 Repaired {name}	Đã sửa {name}
 Repeat	Lặp lại
@@ -3925,15 +3903,12 @@ Sign in to choose a model.	Đăng nhập để chọn mô hình.
 Sign In to Copernicus Data Space	Đăng nhập Copernicus Data Space
 Sign in with your ChatGPT account.	Hãy đăng nhập bằng tài khoản ChatGPT của bạn.
 Sign out	Đăng xuất
-Sign out deletes it	Đăng xuất sẽ xóa nó
-Sign out deletes the remembered sign-in	Đăng xuất sẽ xóa lần đăng nhập đã ghi nhớ
 Sign Out of ArcGIS	Đăng xuất khỏi ArcGIS
 Sign Out of Copernicus Data Space	Đăng xuất khỏi Copernicus Data Space
 Sign-in	Đăng nhập
 Sign-in cancelled.	Đã hủy đăng nhập.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Đã hết thời gian đăng nhập. Hãy bắt đầu lại và cho phép trình duyệt truy cập địa chỉ loopback của máy tính này.
 signed in	đã đăng nhập
-Signed in as synthetic.user@example.invalid.	Đã đăng nhập là synthetic.user@example.invalid.
 Signed in as {name}.	Đã đăng nhập là {name}.
 Signed in to {portal}	Đã đăng nhập vào {portal}
 Signed in to {portal} as {user}	Đã đăng nhập vào {portal} với tên {user}
@@ -4238,7 +4213,6 @@ The background worker could not start ({error}). Retry the command.	Không thể
 The basemap now shows the {view} worldview; the project's Countries layer keeps its borders	Bản đồ nền hiện hiển thị góc nhìn {view}; lớp Countries của dự án giữ nguyên đường biên giới của nó
 The basemap's grid color	Màu lưới của bản đồ nền
 The Basemaps plugin's tab of public basemaps.	Thẻ bản đồ nền công khai của plugin Bản đồ nền.
-the box shows it is remembered	ô đánh dấu cho thấy nó đã được ghi nhớ
 The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.	Trình duyệt không cấp bảng nhớ tạm cho RustGIS ({why}): hãy dán bằng {keys}.
 the browser kept neither a copy of it nor where to download it	trình duyệt không giữ bản sao lẫn nơi tải xuống của nó
 the browser runs everything on one thread	trình duyệt chạy mọi thứ trên một luồng
@@ -4262,14 +4236,12 @@ The downloaded translations name none of these tools: they may be for another Ge
 the Earthdata Login token	token Earthdata Login
 The environment (AWS_ACCESS_KEY_ID…)	Môi trường (AWS_ACCESS_KEY_ID…)
 The features where the map is	Các đối tượng trong vùng bản đồ
-the fields are off while it waits	các trường bị tắt trong khi chờ
 The first 1,000 entries; narrow it down a folder at a time.	1.000 mục đầu tiên; hãy thu hẹp dần từng thư mục.
 The first {n} are listed.	Đã liệt kê {n} mục đầu tiên.
 The first {n} are shown: search to narrow them.	Đang hiển thị {n} mục đầu tiên: hãy tìm kiếm để thu hẹp.
 The first {n} of them are listed; the filter searches all of them.	{n} mục đầu tiên trong số đó được liệt kê; bộ lọc tìm trong tất cả.
 The first {n} rows	{n} hàng đầu tiên
 The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace không phản hồi: hiển thị toàn bộ đường dòng chảy gần điểm nhất.
-the form is back for another try	biểu mẫu quay lại để thử lần nữa
 The grid already has the basemap's color	Lưới đã có màu của bản đồ nền
 the grid digits must be an even count of 0 to 10, half for the easting and half for the northing	số chữ số lưới phải là số chẵn từ 0 đến 10, một nửa cho tọa độ đông và một nửa cho tọa độ bắc
 The grid's color and opacity	Màu và độ mờ đục của lưới
@@ -4336,7 +4308,6 @@ The next page link was refused: it points where this search may not read, so onl
 the NLDI's answer isn't UTF-8 text	phản hồi của NLDI không phải văn bản UTF-8
 the northing doesn't fall in the latitude band given	tọa độ bắc không nằm trong đai vĩ độ đã cho
 The notes are cut here: the release page has all of them.	Ghi chú bị cắt tại đây: trang phát hành có đầy đủ.
-the old file's list must disappear immediately	the old file's list must disappear immediately
 The one waiting after it was left too	Mục đang chờ sau nó cũng bị bỏ qua
 the open project has unsaved changes: save them before recovering other work	dự án đang mở có thay đổi chưa lưu: hãy lưu trước khi khôi phục công việc khác
 The open project has unsaved changes: save them, then recover this copy.	Dự án đang mở có thay đổi chưa lưu: hãy lưu, rồi khôi phục bản sao này.
@@ -4346,7 +4317,6 @@ The page in colour, the title in light text and the map in a light card.	Trang c
 the page is too large to copy to the clipboard: export it instead	trang quá lớn để sao chép vào bảng nhớ tạm: hãy xuất nó
 the page is too large to draw	trang quá lớn để vẽ
 The password is sent only to Copernicus Data Space's sign-in server and never kept in the project. The token it gives is sent only to its data servers.	Mật khẩu chỉ được gửi tới máy chủ đăng nhập của Copernicus Data Space và không bao giờ được giữ trong dự án. Token nhận được chỉ được gửi tới các máy chủ dữ liệu của nó.
-the password isn't kept in the pane	mật khẩu không được giữ trong ngăn
 The password must be at most 4096 bytes, without control characters.	Mật khẩu phải có tối đa 4096 byte, không có ký tự điều khiển.
 The password or key must fit a 4096-byte HTTP header, without control characters.	Mật khẩu hoặc khóa phải vừa trong một header HTTP 4096 byte, không có ký tự điều khiển.
 The password was refused. Type a password to try again.	Mật khẩu bị từ chối. Hãy nhập mật khẩu để thử lại.
@@ -4441,7 +4411,6 @@ The start-up project {path} isn't a RustGIS project file.	Dự án khởi độn
 The step's layer {name} isn't in the map.	Lớp {name} của bước này không có trên bản đồ.
 The store has no variables with two or more dimensions.	Kho không có biến nào có từ hai chiều trở lên.
 the store is gone	kho không còn nữa
-the store keeps the password, never a token	kho lưu mật khẩu, không bao giờ lưu token
 The summary couldn't start: {error}	Không thể bắt đầu tổng hợp: {error}
 The summary failed unexpectedly	Tổng hợp thất bại ngoài dự kiến
 The summary finished after another project was opened, so it wasn't added	Tổng hợp hoàn tất sau khi một dự án khác được mở, nên không được thêm
@@ -4472,7 +4441,6 @@ The tools run on this project: saved with it, and each can run again	Các công 
 The trend couldn't start: {error}	Không thể bắt đầu phân tích xu hướng: {error}
 The trend failed unexpectedly	Phân tích xu hướng thất bại ngoài dự kiến
 The trend finished after another project was opened, so it wasn't added	Phân tích xu hướng hoàn tất sau khi một dự án khác được mở, nên không được thêm
-the username stays for another try	tên người dùng được giữ lại để thử lần nữa
 the UTM zone must be 1 to 60	múi UTM phải từ 1 đến 60
 The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Các giá trị hiển thị từ đen đến trắng, giống nhau cho mọi ngày và mọi ô (theo đơn vị riêng của băng). Để trống: mỗi tệp dùng kiểu kéo giãn riêng.
 the view has no extent	khung nhìn không có phạm vi
@@ -4678,7 +4646,6 @@ Type the password, then Save. Remember on this computer is optional.	Nhập mậ
 Type the token this expiry is for.	Nhập token ứng với thời hạn này.
 Type the token, or the password to generate one, to remember it on this computer.	Nhập token, hoặc mật khẩu để tạo token, để ghi nhớ nó trên máy tính này.
 Typed below	Nhập bên dưới
-typing must not start another lookup	typing must not start another lookup
 U.S. Census (addresses)	Điều tra Dân số Hoa Kỳ (địa chỉ)
 Ukraine	Ukraina
 UM	UM
