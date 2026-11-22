@@ -104,7 +104,8 @@ in the fixtures' README and in the test's `SKIPS` when a release has no such fil
 
 New project saves and map/layer exports write format 2. Their `requires` header names only
 features present in the saved payload: `terrain-block`, `terrain-block-shape` (a block
-diagram cut to a circle), `terrain-water`,
+diagram cut to a circle or to polygons), `terrain-block-polygon` (one cut to polygons),
+`terrain-water`,
 `terrain-water-shore` (a terrain water's shore band other than the default),
 `terrain-block-water` (water in a block diagram's walls),
 `shaded-relief-effects` (cast shadows, sky visibility, fill light or rock colour),
@@ -145,6 +146,11 @@ Projects, map files and layer files with a window of a Zarr variable that follow
 (`layer.addZarr` with `"time": true` and `"cells"` or `"bbox"`) require `zarr-window`, so an older
 reader refuses them instead of reading the whole map at each step. A saved `layer.addZarr` command
 with both needs nothing: an older RustGIS refuses it when it runs.
+
+Projects, map files and layer files with a label class curved along a guide line layer
+(`labels.placement` with a `guide`) require `label-guide`, so an older reader refuses them instead
+of placing those labels as without it and saving them again without the guide. A saved
+`labels.placement` command with a guide needs nothing: an older RustGIS refuses the key when it runs.
 
 Projects with an ink on a legend, colorbar, table or chart (`color` on those elements) require
 `layout-element-ink`, so an older reader refuses them instead of drawing those elements in dark

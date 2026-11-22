@@ -51,7 +51,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).roles(&[]).effects(crate::policy::Effects::NONE).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.grb|.grib|.grb2|.grib2 (GRIB)|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files))
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "drawingInfo"?: object (internal, with service: an ArcGIS layer's drawingInfo from its description, which the layer is drawn with), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
@@ -6751,11 +6751,20 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     if let Some(walls) = s.map_mut().view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.walls_layer.as_mut()) {
         replace(walls);
     }
-    // And the lines point labels are turned square to (#2263).
+    // And the polygons it is cut to (#2318).
+    if let Some(rustgis_map::view::BlockShape::Polygon { layer, .. }) =
+        s.map_mut().view.terrain.as_mut().and_then(|t| t.block.as_mut()).map(|b| &mut b.shape)
+    {
+        replace(layer);
+    }
+    // And the lines point labels are turned square to (#2263), and labels curved along (#2262).
     for layer in &mut s.map_mut().layers {
         for class in std::iter::once(&mut layer.labels.default).chain(layer.labels.classes.iter_mut()) {
             if let Some(to) = &mut class.square_to {
                 replace(&mut to.layer);
+            }
+            if let Some(guide) = &mut class.guide {
+                replace(&mut guide.layer);
             }
         }
     }
@@ -6905,21 +6914,38 @@ pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
     }
 }
 
-/// After layers called `names` are removed: point labels turned square to one of them (#2263)
-/// keep its name, so a layer of that name brings their line back, and are placed as auto
-/// meanwhile: said once a layer, as for the terrain's water.
+/// After layers called `names` are removed: point labels turned square to one of them (#2263),
+/// and labels curved along one (#2262), keep its name, so a layer of that name brings their line
+/// back, and are placed as auto, or as without a guide, meanwhile: said once a kind, naming the
+/// layers, as for the terrain's water.
 fn square_labels_follow_removal(s: &mut Session, names: &[String]) {
-    for n in names {
-        let used = s.map().layers.iter().flat_map(|l| l.labels.in_order()).any(|c| {
+    let (mut squared, mut guided) = (Vec::new(), Vec::new());
+    for n in names.iter().filter(|n| named_layers(s, n) == 0) {
+        let classes = || s.map().layers.iter().flat_map(|l| l.labels.in_order());
+        let squares = |c: &rustgis_map::LabelClass| {
             c.placement == rustgis_map::LabelPlacement::Perpendicular
                 && c.square_to.as_ref().is_some_and(|t| t.layer.eq_ignore_ascii_case(n))
-        });
-        if used && named_layers(s, n) == 0 {
-            s.notify(
-                format!("Labels: the perpendicular labels' line layer '{n}' was removed, so they are placed as auto until a layer of that name comes back"),
-                false,
-            );
+        };
+        if classes().any(squares) {
+            squared.push(format!("'{n}'"));
         }
+        if classes().any(|c| c.guide.as_ref().is_some_and(|g| g.layer.eq_ignore_ascii_case(n))) {
+            guided.push(format!("'{n}'"));
+        }
+    }
+    if !squared.is_empty() {
+        let (count, names) = (squared.len(), squared.join(", "));
+        s.notify(
+            format!("Labels: {count} perpendicular labels' line layer(s) {names} removed, so their labels are placed as auto until a layer of that name comes back"),
+            false,
+        );
+    }
+    if !guided.is_empty() {
+        let (count, names) = (guided.len(), guided.join(", "));
+        s.notify(
+            format!("Labels: {count} guide layer(s) {names} removed, so the labels they guided are placed as without them until a layer of that name comes back"),
+            false,
+        );
     }
 }
 
@@ -6947,6 +6973,18 @@ fn terrain_follows_removal(s: &mut Session, names: &[String]) {
             ),
             false,
         );
+    }
+    // And the layer of the polygons it is cut to (#2318): no block is drawn meanwhile.
+    let cut = s.map().view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|b| match &b.shape {
+        rustgis_map::view::BlockShape::Polygon { layer, .. } => Some(layer.clone()),
+        _ => None,
+    });
+    if let Some(c) = cut.filter(|c| dem.is_none() && names.iter().any(|n| n.eq_ignore_ascii_case(c)) && named_layers(s, c) == 0) {
+        s.notify(
+            format!("Terrain: the layer '{c}' the block is cut to was removed, so no block is drawn until a layer of that name comes back"),
+            false,
+        );
+        super::terrain_blocks::said_removed(s, &c);
     }
     let Some(dem) = dem else { return };
     s.map_mut().view.terrain = None;

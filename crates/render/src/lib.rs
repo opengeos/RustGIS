@@ -18,6 +18,7 @@ pub mod fonts;
 mod glyphs;
 pub mod gpu_scene;
 mod gradient_fill;
+mod guide_labels;
 mod label_places;
 pub mod layout;
 mod line_labels;
@@ -42,6 +43,7 @@ pub mod terrain;
 mod text;
 pub use text::CALLOUT_WIDTH;
 mod frame_cache;
+mod layer_meshes;
 pub mod tile_mesh;
 mod tiles;
 pub mod vector;
@@ -2792,7 +2794,6 @@ fn drape_terrain(
     // A block diagram (#1914): each vertex's sides of the box it lies beyond, and the stretches of
     // the box's edge the ground cut to it ends at, for the walls.
     let block = ground.block(map);
-    let mut edges = Vec::new();
     for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
         if rustgis_data::progress::check().is_err() || cancel::requested() {
             return false;
@@ -2853,65 +2854,144 @@ fn drape_terrain(
     tris.sort_by(|a, b| b.0.total_cmp(&a.0));
     let fog_paint = |t: f64| paint(fog, t as f32);
     let fog_at = |depth: f64| fog_share(depth, far);
-    for (drawn, (depth, bi, at)) in tris.into_iter().enumerate() {
-        // An export cancelled meanwhile (see `rustgis_data::progress`) stops here: it writes
-        // nothing. So does a settled frame on screen gone out of date (see `cancel`).
-        if drawn % 4096 == 0 && (rustgis_data::progress::check().is_err() || cancel::requested()) {
-            return false;
-        }
-        let (Some((v, _, pic)), Some((nx, grid, codes))) = (bands.get(bi as usize), grids.get(bi as usize)) else { continue };
+    // Triangle `at` of band `bi`, `depth` away: its picture's place on screen ([`affine`]) and
+    // what of it to fill, all of it or, across the block's outline, the parts inside it (a box's
+    // or a circle's one convex part fanned into triangles from its first corner), the stretches
+    // of the outline under it kept in `edges` for the walls.
+    let prepare = |bi: u32, at: u32, depth: f64, edges: &mut Vec<block::Edge>| -> Option<(Transform, DrapeParts)> {
+        let (Some((v, _, pic)), Some((nx, grid, codes))) = (bands.get(bi as usize), grids.get(bi as usize)) else { return None };
         let (nx, cell, half) = (*nx, at as usize / 2, at as usize % 2);
-        let Some([p, q, r]) = triangles(grid, nx, cell % nx, cell / nx).and_then(|t| t.get(half).copied()) else { continue };
+        let [p, q, r] = triangles(grid, nx, cell % nx, cell / nx).and_then(|t| t.get(half).copied())?;
         let (dst, src) = ([p.0, q.0, r.0], [p.1, q.1, r.1]);
-        let Some(t) = affine(src, dst) else { continue };
-        // Across the block's edge: the part inside the box, fanned into triangles from its first
-        // corner, and the stretch of edge under it kept for the walls.
-        let cut = match (&block, triangles(codes, nx, cell % nx, cell / nx).and_then(|c| c.get(half).copied())) {
-            (Some(b), Some(c)) => {
-                let kb = f64::from(pic.width()) / v.width.max(1e-9);
-                let m = src.map(|(x, y)| v.camera.to_map(x / kb, y / kb, v.width, v.height));
-                // Wholly inside the box it is drawn whole; but a corner on the box's edge still
-                // gives its wall a stretch, as the triangles across that edge clip to nothing.
-                if c == [0; 3] && !block::on_side(m, b) {
-                    None
-                } else {
-                    let poly = block::clip(m, b);
-                    let screen: Vec<(f64, f64)> = poly
-                        .iter()
-                        .map(|(w, _, _)| {
-                            (w[0] * dst[0].0 + w[1] * dst[1].0 + w[2] * dst[2].0, w[0] * dst[0].1 + w[1] * dst[1].1 + w[2] * dst[2].1)
-                        })
-                        .collect();
-                    block::edges(b, &poly, &screen, depth, &mut edges);
-                    (c != [0; 3]).then_some(screen)
-                }
-            }
-            _ => None,
+        let t = affine(src, dst)?;
+        let (Some(b), Some(c)) = (&block, triangles(codes, nx, cell % nx, cell / nx).and_then(|c| c.get(half).copied())) else {
+            return Some((t, DrapeParts::Whole(dst)));
         };
-        let pieces: Vec<[(f64, f64); 3]> = match &cut {
-            Some(s) => (2..s.len()).filter_map(|i| Some([*s.first()?, *s.get(i - 1)?, *s.get(i)?])).collect(),
-            None => vec![dst],
-        };
-        // Fog from halfway to the reach.
-        let f = fog_at(depth);
-        for piece in pieces {
-            // Each edge moved a hair outward along its normal, so neighbours overlap and leave no seam.
-            let Some(path) = grown_triangle(piece) else { continue };
-            let shader = tiny_skia::Pattern::new(pic.as_ref(), SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, 1.0, t);
-            pm.fill_path(&path, &Paint { shader, anti_alias: true, ..Paint::default() }, FillRule::Winding, Transform::identity(), None);
-            if f > 0.004 {
-                pm.fill_path(&path, &fog_paint(f), FillRule::Winding, Transform::identity(), None);
-            }
+        let kb = f64::from(pic.width()) / v.width.max(1e-9);
+        let m = src.map(|(x, y)| v.camera.to_map(x / kb, y / kb, v.width, v.height));
+        // Wholly inside the box it is drawn whole; but a corner on the box's edge still gives its
+        // wall a stretch, as the triangles across that edge clip to nothing.
+        if c == [0; 3] && !block::on_side(m, b) {
+            return Some((t, DrapeParts::Whole(dst)));
         }
-    }
+        let mut parts = Vec::new();
+        for poly in block::pieces(m, b) {
+            let screen: Vec<(f64, f64)> = poly
+                .iter()
+                .map(|(w, _, _)| (w[0] * dst[0].0 + w[1] * dst[1].0 + w[2] * dst[2].0, w[0] * dst[0].1 + w[1] * dst[1].1 + w[2] * dst[2].1))
+                .collect();
+            block::edges(b, &poly, &screen, depth, edges);
+            parts.push(screen);
+        }
+        Some(match () {
+            // A polygon block's parts can be concave: each is filled as it is.
+            _ if b.outline.is_some() => (t, DrapeParts::Parts(parts)),
+            _ if c == [0; 3] => (t, DrapeParts::Whole(dst)),
+            _ => {
+                let fan = |s: &Vec<(f64, f64)>| {
+                    (2..s.len()).filter_map(|i| Some(vec![*s.first()?, *s.get(i - 1)?, *s.get(i)?])).collect::<Vec<_>>()
+                };
+                (t, DrapeParts::Parts(parts.iter().flat_map(fan).collect()))
+            }
+        })
+    };
+    // A part of band `bi`'s picture placed by `t`, under fog `f`: a triangle with each edge moved
+    // a hair outward along its normal, so neighbours overlap and leave no seam.
+    let fill = |pm: &mut Pixmap, bi: u32, t: Transform, f: f64, piece: &[(f64, f64)]| {
+        let Some((_, _, pic)) = bands.get(bi as usize) else { return };
+        let path = match piece {
+            [a, b, c] => grown_triangle([*a, *b, *c]),
+            _ => {
+                let mut pb = PathBuilder::new();
+                for (i, p) in piece.iter().enumerate() {
+                    if i == 0 { pb.move_to(p.0 as f32, p.1 as f32) } else { pb.line_to(p.0 as f32, p.1 as f32) }
+                }
+                pb.close();
+                pb.finish()
+            }
+        };
+        let Some(path) = path else { return };
+        let shader = tiny_skia::Pattern::new(pic.as_ref(), SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, 1.0, t);
+        pm.fill_path(&path, &Paint { shader, anti_alias: true, ..Paint::default() }, FillRule::Winding, Transform::identity(), None);
+        if f > 0.004 {
+            pm.fill_path(&path, &fog_paint(f), FillRule::Winding, Transform::identity(), None);
+        }
+    };
     // Walls once the base is settled: over elevation tiles still on their way it would move with
     // each tile (the frame is drawn again when they arrive, `Ground::pending`).
-    if let Some(b) = block.as_ref().filter(|b| b.walls_stand(ground)) {
-        let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
-        let water = block::water_runs(map, b, ground, cam.res, scale, env);
-        block::draw_walls(pm, view, ground, b, &edges, &block::runs(map, b, scale, env), &water, fog, far);
+    let walls = block.as_ref().filter(|b| b.walls_stand(ground));
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // The water the walls cut through (#2317).
+    let water = walls.map(|b| block::water_runs(map, b, ground, cam.res, scale, env)).unwrap_or_default();
+    let mut edges = Vec::new();
+    // A polygon block's walls stand among the ground (`block::draw_walls`): the stretches of its
+    // outline are read first, and the triangles they came from kept cut for drawing.
+    let polygon = walls.is_some_and(|b| b.outline.is_some());
+    let mut cut: std::collections::HashMap<usize, (Transform, DrapeParts)> = std::collections::HashMap::new();
+    if polygon {
+        for (i, &(depth, bi, at)) in tris.iter().enumerate() {
+            if i % 4096 == 0 && (rustgis_data::progress::check().is_err() || cancel::requested()) {
+                return false;
+            }
+            // Only those with parts: one wholly off the outline gives none and is cheap to read again.
+            if let Some(parts) = prepare(bi, at, depth, &mut edges)
+                && matches!(&parts.1, DrapeParts::Parts(ps) if !ps.is_empty())
+            {
+                cut.insert(i, parts);
+            }
+        }
     }
-    true
+    // Draws the triangles still to draw at least `key` away, far to near, and says whether to go
+    // on. Called before each run of a polygon block's walls, it looks at Cancel each time.
+    let (mut next, mut stopped) = (0, false);
+    let mut draw_to = |pm: &mut Pixmap, key: f64, edges: &mut Vec<block::Edge>| -> bool {
+        if !stopped && (rustgis_data::progress::check().is_err() || cancel::requested()) {
+            stopped = true;
+        }
+        while let Some(&(depth, bi, at)) = tris.get(next).filter(|t| t.0 >= key && !stopped) {
+            // An export cancelled meanwhile (see `rustgis_data::progress`) stops here: it writes
+            // nothing. So does a settled frame on screen gone out of date (see `cancel`).
+            if next % 4096 == 0 && (rustgis_data::progress::check().is_err() || cancel::requested()) {
+                stopped = true;
+                return false;
+            }
+            next += 1;
+            let Some((t, parts)) = cut.remove(&(next - 1)).or_else(|| prepare(bi, at, depth, edges)) else { continue };
+            // Fog from halfway to the reach.
+            let f = fog_at(depth);
+            match &parts {
+                DrapeParts::Whole(d) => fill(pm, bi, t, f, d),
+                DrapeParts::Parts(ps) => ps.iter().for_each(|p| fill(pm, bi, t, f, p)),
+            }
+        }
+        !stopped
+    };
+    match walls {
+        Some(b) if polygon => {
+            let mut scratch = Vec::new();
+            block::draw_walls(pm, view, ground, b, &edges, &block::runs(map, b, scale, env), &water, fog, far, |pm, key| {
+                let go_on = draw_to(pm, key, &mut scratch);
+                scratch.clear();
+                go_on
+            });
+            draw_to(pm, f64::NEG_INFINITY, &mut scratch);
+        }
+        _ => {
+            draw_to(pm, f64::NEG_INFINITY, &mut edges);
+            // A cancelled frame is thrown away: its walls aren't drawn.
+            if let Some(b) = walls.filter(|_| !stopped) {
+                block::draw_walls(pm, view, ground, b, &edges, &block::runs(map, b, scale, env), &water, fog, far, |_, _| true);
+            }
+        }
+    }
+    !stopped
+}
+
+/// What of a draped triangle to fill ([`drape_terrain`]): all of it, or its parts inside a block's
+/// outline.
+enum DrapeParts {
+    Whole([(f64, f64); 3]),
+    Parts(Vec<Vec<(f64, f64)>>),
 }
 
 /// How much of the fog covers what lies `depth` away in a tilted view whose reach is `far`:
@@ -3137,8 +3217,8 @@ fn gpu_turned(
         if (k - 1.0).abs() > 1e-6 {
             for c in &mut scene.cmds {
                 match c {
-                    DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
-                    DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
+                    DrawCmd::Mesh { vertices, .. } => std::sync::Arc::make_mut(vertices).iter_mut().for_each(|v| v.stroke_px *= k),
+                    DrawCmd::Points { instances, .. } => std::sync::Arc::make_mut(instances).iter_mut().for_each(|p| p.radius_px *= k),
                     DrawCmd::Image { .. }
                     | DrawCmd::Extrusion { .. }
                     | DrawCmd::Tiles { .. }
@@ -3201,7 +3281,7 @@ fn gpu_turned(
         .flat_map(|m| mesh::marker_instances(m.at, origin, &m.symbol, ppp, m.selected.then_some(SELECTION)))
         .collect();
     if !instances.is_empty() {
-        cmds.push(DrawCmd::Points { origin, instances });
+        cmds.push(DrawCmd::Points { origin, instances: std::sync::Arc::new(instances) });
         clips.push(CmdClip { upright: true, ..CmdClip::ALL });
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
@@ -4175,14 +4255,14 @@ fn holds_picture(cmds: &[gpu_scene::DrawCmd]) -> bool {
 
 /// Whether a frame of `map` for `view` can start from a kept picture and keep its own
 /// ([`frame_cache`]): flat and north-up, with no layer drawing from another (a mask, the swipe,
-/// labels turned square to another layer's lines, terrain water).
+/// labels turned square to another layer's lines or curved along a guide layer, terrain water).
 fn keeps_pictures(map: &Map, view: &View) -> bool {
     view.camera.bearing == 0.0
         && view.camera.pitch == 0.0
         && !map.projection.is_globe()
         && map.swipe.is_none()
         && map.view.terrain.as_ref().is_none_or(|t| t.water.is_none())
-        && map.layers.iter().all(|l| l.mask.is_none() && l.labels.in_order().all(|c| c.square_to.is_none()))
+        && map.layers.iter().all(|l| l.mask.is_none() && l.labels.in_order().all(|c| c.square_to.is_none() && c.guide.is_none()))
 }
 
 /// Draws one north-up frame. `labels_to` says where its labels go: a turned or tilted view the
@@ -4268,6 +4348,12 @@ fn render_frame(
         Some(g) => g.may_see(e),
         None => e.intersects(&mesh_cull),
     };
+    // A screen scene keeps each layer's mesh for the next of the same view, and takes those still
+    // standing (see `layer_meshes`): the map's projection, which the meshes are in, when it does.
+    layer_meshes::let_go();
+    let mesh_projection = (gpu && !full_res_rasters && matches!(labels_to, Labels::Own)).then(|| map.projection.clone());
+    // The meshes this scene takes and keeps stay kept while it is drawn.
+    let _mesh_scene = mesh_projection.is_some().then(layer_meshes::Scene::begin);
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -4591,6 +4677,8 @@ fn render_frame(
     // Of those held in another system, the ids, noted read once a label is squared to them.
     let mut square_held = std::collections::HashMap::new();
     let square_lines = square_lines(map, &ctx, &flat, &mut square_held);
+    // And the lines labels are curved along (#2262).
+    let guide_lines = guide_lines(map, &ctx, &flat, &key, scale, distance);
     // The view's centre in longitude/latitude from the map's own coordinates (Web Mercator or
     // the map's system); none, so nothing is clipped, where the projection has no place there.
     let clip = map.view.clip_distance.and_then(|d| Some((map.to_lonlat(view.camera.center)?, d)));
@@ -5035,18 +5123,50 @@ fn render_frame(
             if gpu_layer {
                 flush_acc(pm.pixels(), &mut cmds, &mut cpu_dirty)
                     .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
-                let collected = mesh::collect_layer(
-                    &mut cmds,
-                    layer,
-                    &drawn,
-                    extents,
-                    &rows,
-                    &mesh_visible,
-                    ctx.wireframe,
-                    ctx.ppp,
-                    map_per_px,
-                    mesh_room,
-                );
+                // Kept from the last scene of this view when the layer looks as it did (a layer read
+                // from its source has no look, and draws in batches).
+                let keeping = mesh_projection.as_ref().filter(|_| !complete_source).and_then(|projection| {
+                    let level = rustgis_map::lod::level(thin_tol);
+                    let drawn_copy = if display_only {
+                        layer_meshes::Drawn::Display(level)
+                    } else if std::ptr::eq(layer.thinned_cache(thin_tol), layer.projected_cache()) {
+                        layer_meshes::Drawn::Projected
+                    } else {
+                        layer_meshes::Drawn::Thinned(level)
+                    };
+                    let made = layer_meshes::Made {
+                        projection: projection.clone(),
+                        drawn: drawn_copy,
+                        cull: mesh_cull,
+                        map_per_px,
+                        ppp: ctx.ppp,
+                        wireframe: ctx.wireframe,
+                    };
+                    Some((rustgis_map::look::LayerLook::of(layer)?, made))
+                });
+                let before = cmds.len();
+                let collected = match keeping.as_ref().and_then(|(look, made)| layer_meshes::take(&mut cmds, look, made, &rows)) {
+                    Some(used) => Ok(used),
+                    None => {
+                        let collected = mesh::collect_layer(
+                            &mut cmds,
+                            layer,
+                            &drawn,
+                            extents,
+                            &rows,
+                            &mesh_visible,
+                            ctx.wireframe,
+                            ctx.ppp,
+                            map_per_px,
+                            mesh_room,
+                        );
+                        if let (Ok(used), Some((look, made))) = (collected, keeping) {
+                            let kept = cmds.get(before..).unwrap_or_default();
+                            layer_meshes::keep(layer.instance_id(), look, made, &rows, kept, used, layer.selection.len());
+                        }
+                        collected
+                    }
+                };
                 // Once a batch is too dense, the layer's later ones fall back too (they get no
                 // room); one lyon refused leaves the room to the batches after it.
                 mesh_room = match collected {
@@ -5518,11 +5638,12 @@ fn render_frame(
                             && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
                         // A polygon's label curved along its centre line (#2262): its text unwrapped,
                         // kept for that; where it doesn't fit, placed and wrapped as `Auto`.
-                        let mut unwrapped = (class.placement == LabelPlacement::Curved
-                            && matches!(g, Geometry::Polygon(_))
-                            && point.is_some()
-                            && moved.is_none()
-                            && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none())
+                        // So is a point's or a polygon's curved along its guide line (#2262).
+                        let curvable =
+                            point.is_some() && moved.is_none() && raw.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
+                        let guided = class.guide.as_ref().filter(|_| curvable && (is_point || matches!(g, Geometry::Polygon(_))));
+                        let mut unwrapped = (curvable
+                            && (guided.is_some() || (class.placement == LabelPlacement::Curved && matches!(g, Geometry::Polygon(_)))))
                         .then(|| raw.clone());
                         let mut text =
                             if curving || (class.wrap_char.is_none() && class.wrap_length == 0) { raw } else { class.wrap(&raw) };
@@ -5799,7 +5920,47 @@ fn render_frame(
                         {
                             squared = true;
                             places.push((0, lx, ly, Some(angle), Vec::new()));
+                        } else if let (Some(line_text), Some(guide)) = (unwrapped.as_deref(), guided)
+                            && let Some(lines) = guide_lines.get(&(guide.layer.to_ascii_lowercase(), guide.field.clone()))
+                            && let Some(((cx, cy), glyphs)) = {
+                                // Its feature's value in the guide's field, matching its line.
+                                let value = guide.field.as_deref().and_then(|f| ds_ptr.field_index(f)).map(|fi| ds_ptr.value(row, fi));
+                                let value = value.filter(|v| !v.is_null()).map(|v| v.to_string());
+                                let near = match g {
+                                    Geometry::Polygon(polys) => {
+                                        // Its projected extent on the screen, cheaper than its
+                                        // outline, to look for a guide line near (on the flat map).
+                                        let within = globe.is_none().then(|| {
+                                            let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                                            [(e.min_x, e.min_y), (e.max_x, e.min_y), (e.min_x, e.max_y), (e.max_x, e.max_y)]
+                                                .into_iter()
+                                                .map(|(cx, cy)| ctx.view.to_screen(Coord::new(cx, cy)))
+                                                .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, (sx, sy)| {
+                                                    let (sx, sy) = (sx as f32, sy as f32);
+                                                    [b[0].min(sx), b[1].min(sy), b[2].max(sx), b[3].max(sy)]
+                                                })
+                                        });
+                                        guide_labels::Near::Polygon(within, Box::new(|| area_labels::screen_rings(ctx, polys)))
+                                    }
+                                    _ => guide_labels::Near::Point((x as f32, y as f32)),
+                                };
+                                guide_labels::glyphs(
+                                    lines,
+                                    value.as_deref(),
+                                    near,
+                                    line_text,
+                                    |c| text::measure_in(c, size, face),
+                                    spacing * 1.33,
+                                    size,
+                                )
+                            }
+                        {
+                            // On its line: no other places round its point.
+                            squared = true;
+                            places.push((0, cx, cy, None, glyphs));
+                            text = unwrapped.take().unwrap_or_default();
                         } else if let (Some(line_text), Geometry::Polygon(polys)) = (unwrapped.as_deref(), g)
+                            && class.placement == LabelPlacement::Curved
                             && let Some(((cx, cy), glyphs)) =
                                 area_labels::glyphs(ctx, polys, line_text, |c| text::measure_in(c, size, face), spacing * 1.33, size)
                         {
@@ -6784,6 +6945,141 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
         .max_by(|a, b| length(a).total_cmp(&length(b)))
 }
 
+/// A line in longitude and latitude on the screen: its runs, broken where a place doesn't project
+/// (on the globe, cut at the horizon as its stroke is).
+fn screen_pieces(ctx: &Ctx<'_>, flat: &rustgis_map::projection::Flat, part: &[Coord]) -> Vec<Vec<(f32, f32)>> {
+    match &ctx.globe {
+        Some(g) => globe_runs(g, part),
+        None => {
+            let points: Vec<Option<(f32, f32)>> =
+                part.iter().map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32))).collect();
+            points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
+        }
+    }
+}
+
+/// The lines of the guide layers ([`rustgis_map::LabelClass::guide`], #2262) of the label classes
+/// shown at `scale` and `distance`, keyed by layer name in ASCII lower case (as
+/// [`Map::layer_by_name`] matches names) and field, on the screen ([`guides_of`]). Worked out once
+/// a frame, before the layers are drawn (each layer is then borrowed to draw it). On the flat map
+/// a guide layer is read from its copy there as it is drawn (`key` names the projection): the
+/// projected one its drawing keeps, else a display copy of it at this scale, which the layer's
+/// budget for those bounds ([`rustgis_map::Layer::prepare_display`]), else (held in another
+/// system, small, or in a projection those aren't made for) the projected copy its drawing would
+/// keep, about its geometry's size again, as a shown layer's.
+fn guide_lines(
+    map: &mut Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+    key: &str,
+    scale: f64,
+    distance: f64,
+) -> std::collections::HashMap<(String, Option<String>), guide_labels::Guides> {
+    let shown = map.layers.iter().filter(|l| l.visible && l.labels.enabled).flat_map(|l| l.labels.in_order());
+    let mut wanted: Vec<(String, Option<String>)> = shown
+        .filter(|c| c.visible && c.in_range(scale, distance))
+        .filter_map(|c| c.guide.as_ref().map(|g| (g.layer.to_ascii_lowercase(), g.field.clone())))
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if ctx.globe.is_none() {
+        for (name, _) in &wanted {
+            if let Some(l) = map.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name))
+                && l.source.is_none()
+                && !l.is_cached(key)
+            {
+                // As its drawing asks for it, so that the two share it (a guide layer isn't
+                // read from a source: see `guides_of`). None is made from a layer held in another
+                // system, nor for a small one or another projection: it gets the projected copy
+                // its drawing would keep, as converting it again each frame costs far more (a
+                // whole view of 2 M vertices held in Polyconic, 0.85 s).
+                let tol = ctx.view.lod_tolerance();
+                if !l.prepare_display(flat, tol, false) {
+                    l.thinned_in(flat, key, tol);
+                }
+            }
+        }
+    }
+    let map = &*map;
+    wanted
+        .into_iter()
+        .map(|k| {
+            let guides = guides_of(map, ctx, flat, key, &k);
+            (k, guides)
+        })
+        .collect()
+}
+
+/// The lines of the guide layer `name` (shown or not) on the screen, their stretches in view
+/// ([`screen_pieces`], thinned as [`guide_labels::Guides`] keeps them), each with its value in
+/// `field`, read only for a line with a stretch in view. On the flat map, read from its copy there
+/// as drawn ([`guide_lines`]), a line whose extent is out of view is passed over by it: a frame
+/// costs a look at each line's extent and a pass over the vertices of those in view. On the globe
+/// each vertex is projected, as for [`square_lines`] (the view's extent, worked out in the layer's
+/// system once to pass over lines unconverted, is the whole world there). What is kept is at most about
+/// 24 bytes a point of the stretches in view, which thinning bounds by their length on the screen,
+/// and dropped with the frame. A layer read in place from its source gives none: only a view's
+/// window of it is at hand (`labels.placement` refuses it, and a file that has one says so).
+fn guides_of(
+    map: &Map,
+    ctx: &Ctx<'_>,
+    flat: &rustgis_map::projection::Flat,
+    key: &str,
+    (name, field): &(String, Option<String>),
+) -> guide_labels::Guides {
+    let mut guides = guide_labels::Guides::default();
+    let Some(layer) = map.layer_by_name(name).filter(|l| l.source.is_none()) else { return guides };
+    // Read, even when it gives no lines (its system can't be converted).
+    note_held_read(layer);
+    let features = &layer.dataset.features;
+    let field = field.as_deref().and_then(|f| layer.dataset.field_index(f));
+    let (w, h) = (ctx.view.width as f32, ctx.view.height as f32);
+    let mut add = |row: usize, pieces: Vec<Vec<(f32, f32)>>| {
+        let mut value: Option<Option<String>> = None;
+        for piece in pieces {
+            for stretch in line_labels::in_view(piece.into_iter().map(Some), w, h) {
+                let v =
+                    value.get_or_insert_with(|| field.map(|fi| features.value(row, fi)).filter(|v| !v.is_null()).map(|v| v.to_string()));
+                guides.push(&stretch, v.as_deref());
+            }
+        }
+    };
+    let drawn = || match layer.is_cached(key) {
+        true => Some((layer.thinned_cache(ctx.view.lod_tolerance()), layer.projected_extents())),
+        false => layer.display_cache(),
+    };
+    if let Some((geoms, extents)) = ctx.globe.is_none().then(drawn).flatten() {
+        // A point the projection can't show is NaN in the copy, and breaks the line there.
+        let screen = |c: &Coord| c.is_finite().then(|| ctx.view.to_screen(*c)).map(|(x, y)| (x as f32, y as f32));
+        for (row, g) in geoms.iter().enumerate() {
+            if !extents.get(row).is_some_and(|e| e.intersects(&ctx.cull)) {
+                continue;
+            }
+            let Some(Geometry::Line(parts)) = g else { continue };
+            let pieces = parts
+                .iter()
+                .flat_map(|part| {
+                    let points: Vec<Option<(f32, f32)>> = part.iter().map(screen).collect();
+                    points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect::<Vec<_>>()
+                })
+                .collect();
+            add(row, pieces);
+        }
+        return guides;
+    }
+    // Read in longitude/latitude, as the lines labels are square to; those whose extent misses the
+    // view's, in the layer's own system, aren't (the whole world on the globe).
+    let Ok(to) = layer.dataset.lonlat_conversion() else { return guides };
+    let reach = layer.dataset.extent_from_lonlat(&view_lonlat(map, ctx.view)).padded(0.05, 0.0);
+    for (row, r) in features.rows().enumerate() {
+        let Some(g) = r.geometry().filter(|g| g.extent().intersects(&reach)) else { continue };
+        let Some(g) = rustgis_data::Dataset::converted_to_lonlat(&to, g) else { continue };
+        let Geometry::Line(parts) = &*g else { continue };
+        add(row, parts.iter().flat_map(|part| screen_pieces(ctx, flat, part)).collect());
+    }
+    guides
+}
+
 thread_local! {
     /// The layers held in another system that the drawing on this thread read beside drawing
     /// them (terrain water, block walls, the lines labels square to), which may be hidden; `None`
@@ -6885,17 +7181,7 @@ fn square_lines(
                     }
                     _ => part,
                 };
-                let pieces = match &ctx.globe {
-                    Some(g) => globe_runs(g, part),
-                    None => {
-                        let points: Vec<Option<(f32, f32)>> = part
-                            .iter()
-                            .map(|c| flat.forward_checked(*c).map(|m| ctx.view.to_screen(m)).map(|(x, y)| (x as f32, y as f32)))
-                            .collect();
-                        points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).collect()
-                    }
-                };
-                runs.extend(pieces.into_iter().filter_map(square_labels::Run::new));
+                runs.extend(screen_pieces(ctx, flat, part).into_iter().filter_map(square_labels::Run::new));
             }
         }
         out.insert(name, runs);
@@ -10855,6 +11141,78 @@ mod tests {
             "{beside:?} vs {fog:?}"
         );
         assert_ne!(beside, px(&whole, 4, top - 4.0));
+    }
+
+    #[test]
+    fn a_polygon_blocks_inner_wall_hides_behind_the_nearer_ground() {
+        // #2318: flat ground 500 m high cut to an L (a 2 km square without its north-east quarter)
+        // seen from the south-east. The inner corner's wall facing east stands behind the
+        // south-east arm: where the arm's ground is in front of it, the ground shows, as it does
+        // over a whole box; near its top, with nothing in front of it, the wall.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 20.0, bearing: 315.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![500.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        let deg = |x: f64, y: f64| rustgis_geom::merc_to_lonlat(Coord::new(x, y));
+        let l = [(-1000.0, -1000.0), (1000.0, -1000.0), (1000.0, 0.0), (0.0, 0.0), (0.0, 1000.0), (-1000.0, 1000.0), (-1000.0, -1000.0)];
+        let mut d = Dataset::new("area", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Polygon(vec![vec![l.iter().map(|&(x, y)| deg(x, y)).collect()]])), vec![Value::Text("L".into())]);
+        m.add_dataset(d);
+        let frame = |m: &mut Map, shape| {
+            m.view.terrain = Some(rustgis_map::view::Terrain {
+                source: rustgis_map::view::TerrainSource::Layer("dem".into()),
+                exaggeration: 1.0,
+                block: Some(rustgis_map::view::TerrainBlock {
+                    extent: None,
+                    depth: Some(1000.0),
+                    walls: rustgis_map::view::BLOCK_WALLS,
+                    walls_layer: None,
+                    water: None,
+                    shape,
+                }),
+                water: None,
+            });
+            let g = terrain::Ground::of(m, &camera).expect("terrain");
+            (render(m, &view).expect("a frame"), g.block(m).expect("a block"), g.per_unit(Coord::new(0.0, 0.0)))
+        };
+        let shape = rustgis_map::view::BlockShape::Polygon { layer: "area".into(), filter: Some("name = 'L'".into()) };
+        let (cut, b, per_unit) = frame(&mut m, shape);
+        assert!([b.x0 + 1000.0, b.y0 + 1000.0, b.x1 - 1000.0, b.y1 - 1000.0].iter().all(|d| d.abs() < 1e-3), "{b:?}");
+        assert!((b.base + 500.0).abs() < 1e-6, "{}", b.base);
+        // Picking nothing: no block (the command refuses such a query before it is set).
+        let none = rustgis_map::view::BlockShape::Polygon { layer: "area".into(), filter: Some("name = 'U'".into()) };
+        m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).expect("a block").shape = none;
+        assert!(terrain::Ground::of(&m, &camera).and_then(|g| g.block(&m)).is_none());
+        let (boxed, _, _) = frame(&mut m, rustgis_map::view::BlockShape::Box);
+        let screen = |x: f64, y: f64, metres: f64| {
+            let (u, v) = camera.ground_px(Coord::new(x, y));
+            camera.project_raised(u, v, metres / per_unit / camera.res, view.width, view.height).expect("in view")
+        };
+        let px = |r: &Rendered, p: (f64, f64)| r.pixmap.pixel(p.0 as u32, p.1 as u32).expect("in the frame").demultiply();
+        let sandy = |c: tiny_skia::ColorU8| c.red() > c.green() && c.green() > c.blue() + 8;
+        // Halfway down the inner wall's middle: the ray to it meets the arm's ground first.
+        let hidden = screen(0.0, 500.0, 0.0);
+        let arm = (0..=100).flat_map(|i| (0..=100).map(move |j| (i as f64 * 10.0, -(j as f64) * 10.0)));
+        let nearest = arm.map(|(x, y)| (screen(x, y, 500.0), (x, y))).min_by(|a, c| {
+            let d = |p: (f64, f64)| (p.0 - hidden.0).hypot(p.1 - hidden.1);
+            d(a.0).total_cmp(&d(c.0))
+        });
+        let ((sx, sy), _) = nearest.expect("a point of the arm");
+        assert!((sx - hidden.0).hypot(sy - hidden.1) < 2.0, "the arm stands in front of {hidden:?}");
+        let (shown, over_box) = (px(&cut, hidden), px(&boxed, hidden));
+        assert!(!sandy(shown), "{shown:?}");
+        assert!(
+            [(shown.red(), over_box.red()), (shown.green(), over_box.green())].iter().all(|(a, c)| a.abs_diff(*c) <= 6),
+            "{shown:?} {over_box:?}"
+        );
+        // Just under the wall's top at its far end, nothing in front: the wall.
+        let seen = px(&cut, screen(0.0, 900.0, 440.0));
+        assert!(sandy(seen), "{seen:?}");
     }
 
     #[test]

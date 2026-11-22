@@ -73,6 +73,7 @@ pub const READ_FORMAT: u32 = 2;
 pub const CAPABILITIES: &[&str] = &[
     "terrain-block",
     "terrain-block-shape",
+    "terrain-block-polygon",
     "terrain-water",
     "terrain-water-shore",
     "terrain-block-water",
@@ -104,6 +105,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-frame-border",
     NATIVE_COORDINATES,
     "layout-legend-text",
+    "label-guide",
 ];
 /// A layer or table saved in a coordinate system of its own, not longitude/latitude
 /// (`Dataset::held_in`, #2032 C2d): an older reader would read its coordinates as degrees.
