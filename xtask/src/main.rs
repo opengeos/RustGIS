@@ -212,7 +212,6 @@ fn commands() -> Result<(), String> {
     cargo(&["run", "-q", "--locked", "-p", "rustgis-engine", "--example", "command_surface"])
 }
 
-/// Runs the task named by the first argument (the list at the top of this file).
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let r = match task.as_str() {
