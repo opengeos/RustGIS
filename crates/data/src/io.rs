@@ -520,7 +520,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             let mut notes = Vec::new();
             let cpg = crate::dbf::read_cpg(path, &mut notes);
             let (ds, mut report) = read_dbf(std::fs::read(path)?, cpg.as_deref(), &name, &mut csv_memory_budget())?;
-            report.messages.extend(notes);
+            report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
             (ds, report)
         }
         "shp" => read_shapefile_in(path, &name, None)?,
@@ -3075,7 +3075,7 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
         cpg: crate::dbf::read_cpg(path, &mut notes),
     };
     let (ds, mut report) = read_shapefile_parts(parts, name, crs)?;
-    report.messages.extend(notes);
+    report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
     Ok((ds, report))
 }
 
@@ -3486,7 +3486,8 @@ struct DbfRead {
 }
 
 /// Opens dBASE attributes with the Shapefile reader's code-page and date/number handling.
-fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
+/// `name` is the layer's, for the error of a `.dbf` it can't open.
+fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfRead> {
     use std::io::Cursor;
     let mut encoding_notes = Vec::new();
     let encoding = crate::dbf::encoding(cpg, bytes.get(29).copied().unwrap_or(0), &mut encoding_notes);
@@ -3503,7 +3504,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
         // A date's year may be padded with spaces on the left (`   10101`): keep them.
         .with_options(shapefile::dbase::ReadingOptions::default().character_trim(shapefile::dbase::TrimOption::End))
         .build(Cursor::new(bytes))
-        .map_err(|e| DataError::Format(format!("the .dbf: {e}")))?;
+        .map_err(|e| DataError::Format(format!("{name}: the .dbf: {e}")))?;
     // Field order comes from the .dbf header (records are unordered maps).
     let order: Vec<(String, FieldType)> = dbf
         .fields()
@@ -3531,7 +3532,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
 /// same budget as delimited tables; archive members share the remaining allowance.
 /// The bounded file read and header decoding finish before cancellation can be observed.
 fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
-    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(bytes, cpg)?;
+    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(bytes, cpg, name)?;
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8);
     let allowance = *budget;
@@ -3699,7 +3700,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     use shapefile::Shape;
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
-    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref())?;
+    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref(), name)?;
     let shapes = match parts.shx {
         Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
         None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
@@ -4436,10 +4437,12 @@ impl CsvLosses {
     pub fn notes(&self, fields: &[Field], target: &str) -> Vec<String> {
         let mut notes = Vec::new();
         if self.as_one_point > 0 {
-            let what = if self.as_one_point == 1 { "1 feature has".to_string() } else { format!("{} features have", self.as_one_point) };
-            notes.push(format!(
-                "{target}: {what} more than one point (a multipoint, line or polygon) and was written as one, as CSV holds a point a row"
-            ));
+            let what = if self.as_one_point == 1 {
+                "1 feature has more than one point (a multipoint, line or polygon) and was".to_string()
+            } else {
+                format!("{} features have more than one point (a multipoint, line or polygon) and were", self.as_one_point)
+            };
+            notes.push(format!("{target}: {what} written as one, as CSV holds a point a row"));
         }
         if self.unwritten > 0 {
             let what = if self.unwritten == 1 { "1 feature".to_string() } else { format!("{} features", self.unwritten) };
@@ -8850,7 +8853,11 @@ mod tests {
             .collect();
         assert_eq!(kept, [(0.0, Value::Text("a".into())), (2.0, Value::Text("c".into()))]);
         assert_eq!(deleted(&report), 1, "{:?}", report.messages);
-        assert!(report.messages.iter().any(|m| m == "pts: 1 dBASE record marked deleted was left out, with its shape"), "{:?}", report.messages);
+        assert!(
+            report.messages.iter().any(|m| m == "pts: 1 dBASE record marked deleted was left out, with its shape"),
+            "{:?}",
+            report.messages
+        );
         assert_eq!(report.skipped, 0);
     }
 
@@ -8862,7 +8869,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = three_named_points(dir.path());
         let clean = std::fs::read(path.with_extension("dbf")).unwrap();
-        let notes = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("marked deleted") || m.contains("unreadable")).cloned().collect::<Vec<_>>();
+        let notes = |r: &ReadReport| {
+            r.messages.iter().filter(|m| m.contains("marked deleted") || m.contains("unreadable")).cloned().collect::<Vec<_>>()
+        };
         let (ds, report) = read_bytes("t.dbf", &clean).unwrap();
         assert_eq!(ds.features.len(), 3);
         assert!(notes(&report).is_empty(), "{:?}", report.messages);

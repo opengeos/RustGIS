@@ -403,7 +403,7 @@ pub(crate) fn read_cpg(path: &std::path::Path, notes: &mut Vec<String>) -> Optio
     match try_read_cpg(path) {
         Ok(bytes) => bytes,
         Err(e) => {
-            notes.push(format!("Shapefile: could not read .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"));
+            notes.push(format!("could not read the .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"));
             None
         }
     }
