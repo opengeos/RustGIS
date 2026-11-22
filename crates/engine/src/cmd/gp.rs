@@ -509,7 +509,8 @@ pub(crate) struct StartedRun {
 type FullIds = std::collections::HashMap<String, Vec<u64>>;
 
 fn full_ids(full: &std::collections::HashMap<String, Dataset>) -> FullIds {
-    full.iter().map(|(k, d)| (k.clone(), d.features.iter().map(|f| f.id).collect())).collect()
+    // (Not the standalone tables converted for a run, [`table_key`]: no layer is updated from them.)
+    full.iter().filter(|(k, _)| !k.starts_with('\0')).map(|(k, d)| (k.clone(), d.features.iter().map(|f| f.id).collect())).collect()
 }
 
 /// Checks and carries the admitted owner through every synchronous input/preparation request.
@@ -1534,7 +1535,8 @@ fn attributes_only(spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) ->
 /// The layers a tool reads, in the system it works in ([`work_system`], [`Inputs::dataset`]):
 /// its first input's own for a tool that works in it, every other input converted into it; else
 /// longitude/latitude. An input with a place that system can't hold has the run work in
-/// longitude/latitude instead, and a message says so. Returns the system.
+/// longitude/latitude instead, and a message says so (the conversions made for the first attempt
+/// are dropped then, and the inputs read again in longitude/latitude). Returns the system.
 fn work_inputs(
     map: &rustgis_map::Map,
     tables: &[crate::project::Table],
@@ -1633,6 +1635,29 @@ fn inputs_in(
             converted.insert(key, c);
         }
     }
+    // A standalone table given by its number ([`Inputs::table`]), as one given by name.
+    fn numbers(v: &Value, out: &mut Vec<u64>) {
+        match v {
+            Value::Number(n) => out.extend(n.as_u64()),
+            Value::Array(a) => a.iter().for_each(|x| numbers(x, out)),
+            Value::Object(o) => o.values().for_each(|x| numbers(x, out)),
+            _ => {}
+        }
+    }
+    let mut ids = Vec::new();
+    match params {
+        Value::Object(o) => o.iter().filter(|(k, _)| k.as_str() != "output").for_each(|(_, v)| numbers(v, &mut ids)),
+        other => numbers(other, &mut ids),
+    }
+    for t in tables.iter().filter(|t| ids.contains(&u64::from(t.id))) {
+        if t.dataset.geometry_type == rustgis_data::GeometryType::None {
+            continue;
+        }
+        if let std::borrow::Cow::Owned(c) = t.dataset.in_crs(work)? {
+            say(&t.dataset, &c)?;
+            converted.insert(table_key(t.id), c);
+        }
+    }
     // One notice for them all, naming each layer.
     let mut said = Vec::new();
     if !bent.is_empty() {
@@ -1646,6 +1671,12 @@ fn inputs_in(
         ));
     }
     Ok((converted, said))
+}
+
+/// The key a standalone table given by its number is converted under among a run's inputs
+/// ([`inputs_in`]): one no layer's name can be.
+fn table_key(id: u32) -> String {
+    format!("\u{0}table {id}")
 }
 
 /// How far, on the ground, an edge converted into another system may move from where a run in
@@ -1793,19 +1824,19 @@ fn env_rows(
         .filter(|l| !l.is_raster() && l.selection.is_empty())
         .map(|l| {
             let ds = full.get(&l.name.to_ascii_lowercase()).unwrap_or(&l.dataset);
-            // The extent in the layer's own coordinates, as its features' boxes are: a box there
-            // around the longitude/latitude one, which can reach past its edges, so a feature it
-            // reaches is admitted only when its box in longitude/latitude meets the extent, as in a
-            // run in longitude/latitude.
-            let own = ds.extent_from_lonlat(&e);
+            // A feature is admitted when its box in longitude/latitude meets the extent, as in a
+            // run in longitude/latitude (which reads the whole layer converted too): no box in the
+            // layer's own system tests that, a box there around the extent missing a feature whose
+            // box in longitude/latitude meets it. One with a place that can't be read in
+            // longitude/latitude, or a layer that can't be, is admitted by its own box meeting the
+            // extent's there, as before.
+            let own = std::cell::OnceCell::new();
+            let by_own = |g: &rustgis_data::Geometry| g.extent().intersects(own.get_or_init(|| ds.extent_from_lonlat(&e)));
             let to_lonlat = ds.lonlat_conversion().ok();
-            let meets = |g: &rustgis_data::Geometry| {
-                g.extent().intersects(&own)
-                    && to_lonlat.as_ref().is_some_and(|to| {
-                        // (A feature with a place that can't be read in longitude/latitude is
-                        // admitted by its box alone, as before.)
-                        to.is_identity() || Dataset::geometry_to_lonlat_by(to, g).map_or(true, |g| g.extent().intersects(&e))
-                    })
+            let meets = |g: &rustgis_data::Geometry| match &to_lonlat {
+                Some(to) if to.is_identity() => g.extent().intersects(&e),
+                Some(to) => Dataset::geometry_to_lonlat_by(to, g).map_or_else(|_| by_own(g), |g| g.extent().intersects(&e)),
+                None => by_own(g),
             };
             let rows: Vec<usize> =
                 ds.features.rows().enumerate().filter(|(_, r)| r.geometry().is_some_and(meets)).map(|(i, _)| i).collect();
@@ -1853,7 +1884,13 @@ impl Inputs for MapInputs<'_> {
             })
     }
     fn table(&self, id: u32) -> Option<&Dataset> {
-        self.snap.tables.iter().find(|t| t.id == id).map(|t| &t.dataset)
+        // Converted before the run when the tool's parameters give its number ([`inputs_in`]);
+        // else read as it is only in the system the tool works in, as a layer is.
+        self.loaded.get(&table_key(id)).or_else(|| {
+            self.snap.tables.iter().find(|t| t.id == id).map(|t| &t.dataset).filter(|d| {
+                d.geometry_type == rustgis_data::GeometryType::None || d.coord_crs().to(self.work).is_ok_and(|to| to.is_identity())
+            })
+        })
     }
     fn work_crs(&self) -> Crs {
         self.work

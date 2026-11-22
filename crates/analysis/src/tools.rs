@@ -8204,8 +8204,9 @@ fn split_line_at_vertices(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Stri
     geometry::split(inp, p)
 }
 
-/// Encloses each feature independently in its layer's own axes (longitude/latitude for a layer
-/// not in a projected system).
+/// Encloses each feature independently in the axes of the system the run works in: its layer's
+/// own for one held in a projected system other than Web Mercator and the other world projections,
+/// else longitude/latitude.
 fn feature_envelope_to_polygon(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     geometry::convert(inp, p, geometry::Conversion::FeatureEnvelopeToPolygon)
 }

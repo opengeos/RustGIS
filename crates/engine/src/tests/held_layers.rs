@@ -1783,3 +1783,60 @@ fn bent_edges_are_found_beyond_their_middle_and_on_closing_edges() {
     assert_eq!(open.0, 4);
     assert_eq!(bent(Geometry::Polygon(vec![vec![closed]])).0, 4);
 }
+
+/// A line held in UTM along a northing is tilted in longitude/latitude: an environment's extent
+/// near a corner of its box there, away from the line, admits it, in a run in longitude/latitude
+/// and in the held system alike (CodeRabbit, on #2659).
+#[test]
+fn the_environments_extent_admits_a_tilted_line_by_its_box_in_longitude_latitude() {
+    let mut ss = both();
+    let back = UTM.to(Crs::LonLat).unwrap();
+    // From the central meridian 200 km east at northing 5,400 km (48.7°N): its east end some
+    // 3.6 km south of its west end's latitude.
+    let (w, e) = (back.point(Coord::new(500_000.0, 5_400_000.0)).unwrap(), back.point(Coord::new(700_000.0, 5_400_000.0)).unwrap());
+    assert!((w.y - e.y).abs() > 0.02, "{w:?} {e:?}");
+    let mut line = Dataset::new("Tilted", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    line.push(Some(Geometry::Line(vec![vec![w, e]])), vec![Cell::Text("tilted".into())]);
+    // A small box at the corner of the line's box at its west end's longitude and east end's
+    // latitude, inside it: kilometres from the line.
+    let (x, y) = (w.x + 0.002, e.y + 0.002 * (w.y - e.y).signum());
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = line.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        s.project.gp_env.extent = Some(rustgis_geom::Extent { min_x: x - 0.001, min_y: y - 0.001, max_x: x + 0.001, max_y: y + 0.001 });
+    }
+    run_both(&mut ss, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Tilted", "output": "Admitted"}}));
+    for s in &ss {
+        assert_eq!(s.map().layer_by_name("Admitted").unwrap().dataset.features.len(), 1);
+    }
+}
+
+/// A standalone table with geometry given by its number is converted into the system the run
+/// works in, as one given by name is (claude-review, on #2659).
+#[test]
+fn a_numbered_table_is_converted_into_the_held_system() {
+    let mut ss = both();
+    let mut wells = Dataset::new("Wells", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for (x, y) in [(11.51, 48.71), (11.6, 48.8)] {
+        wells.push(Some(Geometry::Point(Coord::new(x, y))), vec![Cell::Text(format!("{x},{y}"))]);
+    }
+    let mut area = Dataset::new("Area", GeometryType::Polygon, Vec::new());
+    let ring = [(11.5, 48.7), (11.52, 48.7), (11.52, 48.72), (11.5, 48.72), (11.5, 48.7)];
+    area.push(Some(Geometry::Polygon(vec![vec![ring.iter().map(|&(x, y)| Coord::new(x, y)).collect()]])), Vec::new());
+    let mut ids = Vec::new();
+    for (s, crs) in ss.iter_mut().zip([Crs::LonLat, UTM]) {
+        let mut d = wells.clone();
+        d.hold_in(crs).unwrap();
+        s.map_mut().add_dataset(d);
+        // In longitude/latitude in both sessions.
+        ids.push(s.project.add_table(area.clone()));
+    }
+    assert_eq!(ids[0], ids[1]);
+    run_both(&mut ss, "gp.run", &json!({"tool": "clip", "params": {"input": "Wells", "clip": ids[0], "output": "Inside"}}));
+    for s in &ss {
+        let ds = &s.map().layer_by_name("Inside").unwrap().dataset;
+        assert_eq!(ds.coord_crs(), if std::ptr::eq(s, &ss[0]) { Crs::LonLat } else { UTM });
+        assert_eq!((0..ds.features.len()).map(|r| ds.value(r, 0).to_string()).collect::<Vec<_>>(), vec!["11.51,48.71"]);
+    }
+}
