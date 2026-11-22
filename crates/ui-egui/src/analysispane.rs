@@ -488,7 +488,20 @@ pub fn land_job(app: &mut RustGisApp) -> bool {
         return true;
     }
     let Some(job) = app.workflow.job.take() else { return false };
+    // Cancelled once its work was done, before it landed (in the frame between): dropped, so
+    // nothing is added, and a file it wrote beside its destination is removed.
+    let cancelled = || Err(crate::i18n::fmt("{tool} was cancelled", &[("tool", tl_raw!(job.name))]));
     match job.kind {
+        JobKind::Tool { id, slot } if job.control.is_cancelled() => {
+            drop(take(&slot));
+            gp::tool_abandon(&mut app.session, id);
+            show_job(app, job.section, cancelled());
+        }
+        JobKind::Raster { id, slot, .. } if job.control.is_cancelled() => {
+            drop(take(&slot));
+            workflows::raster_abandon(&mut app.session, id);
+            show_job(app, job.section, cancelled());
+        }
         JobKind::Tool { id, slot } => {
             let Some(done) = take(&slot) else { return false };
             let r = gp::tool_complete(&mut app.session, id, done).and_then(|_| app.finish_gp(id));
@@ -3087,6 +3100,37 @@ mod tests {
         assert!(app.workflow.result.as_ref().is_some_and(|r| r["classTable"].is_string()), "{:?}", app.workflow.result);
         assert_eq!(app.session.map().layers.len(), layers + 1);
         assert_eq!(app.session.project.tables.len(), tables + 1);
+    }
+
+    /// A Cancel that comes once the work is done, before the job lands, still holds: nothing is
+    /// added, and the GeoTIFF it wrote beside its destination is removed, the destination left as
+    /// it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_cancel_after_the_work_is_done_drops_what_it_made() {
+        let dir = std::env::temp_dir().join(format!("rustgis-late-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("burned.tif");
+        std::fs::write(&path, b"before").unwrap();
+        let mut app = RustGisApp::with_sample();
+        app.reads_off_frame = true;
+        let layers = app.session.map().layers.len();
+        let p = json!({"layer": "Countries", "field": "name", "cellSize": 5, "path": path.to_string_lossy()});
+        app.run("raster.rasterize", p).unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !matches!(&app.workflow.job, Some(Job { kind: JobKind::Raster { slot, .. }, .. }) if filled(slot)) {
+            assert!(std::time::Instant::now() < end, "the run never finished");
+            std::thread::sleep(std::time::Duration::from_millis(5)); // test-wait: polling for the worker to fill its slot
+        }
+        app.workflow.job.as_ref().unwrap().control.cancel();
+        assert!(!land_job(&mut app));
+        assert!(app.workflow.job.is_none());
+        assert!(app.workflow.error.as_deref().is_some_and(|e| e.contains("was cancelled")), "{:?}", app.workflow.error);
+        assert_eq!(app.session.map().layers.len(), layers);
+        assert_eq!(std::fs::read(&path).unwrap(), b"before");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a staged file was left");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Interpolate runs on a thread of its own from the pane (#1291 step 3): the pane goes on while

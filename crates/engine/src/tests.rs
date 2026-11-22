@@ -51278,9 +51278,13 @@ fn raster_tools_run_on_another_thread() {
                 .map(|o| o.iter().filter(|(k, _)| !named.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
         };
         assert_eq!(besides(&here), besides(&there), "{command} {p}");
-        // Each run says them, or neither: only their values differ.
-        for key in named {
-            assert_eq!(here.get(key).map(Value::is_string), there.get(key).map(Value::is_string), "{command} {key}: {here} {there}");
+        // Each run gives the layer's id, and says the names as text, or neither: only their
+        // values differ.
+        assert!(here["layer"].is_u64() && there["layer"].is_u64(), "{command}: {here} {there}");
+        for key in ["name", "classTable"] {
+            let said = |v: &Value| v.get(key).map(|n| n.as_str().map(|_| ()).ok_or(()));
+            assert_eq!(said(&here), said(&there), "{command} {key}: {here} {there}");
+            assert_ne!(said(&here), Some(Err(())), "{command} {key} is not text: {here}");
         }
         // A name said is the one the layer got.
         if let Some(name) = there["name"].as_str() {

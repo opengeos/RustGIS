@@ -650,14 +650,14 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             })?;
             if unsized_by > 0 && !extent_given {
                 notes.push((
-            format!(
-                "{ln}: {unsized_by} {} that can't be placed in longitude/latitude {} left out of the grid's extent: check {} coordinates and the layer's coordinate system",
-                if unsized_by == 1 { "vertex" } else { "vertices" },
-                if unsized_by == 1 { "was" } else { "were" },
-                if unsized_by == 1 { "its" } else { "their" }
-            ),
-            false,
-        ));
+                    format!(
+                        "{ln}: {unsized_by} {} that can't be placed in longitude/latitude {} left out of the grid's extent: check {} coordinates and the layer's coordinate system",
+                        if unsized_by == 1 { "vertex" } else { "vertices" },
+                        if unsized_by == 1 { "was" } else { "were" },
+                        if unsized_by == 1 { "its" } else { "their" }
+                    ),
+                    false,
+                ));
             }
             // The smallest pixel type the GeoTIFF writer keeps that holds every value and the no-data.
             let whole =
