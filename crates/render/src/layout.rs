@@ -2371,8 +2371,8 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     // always was.
     let centre = 0.62 + 0.12 * (rows.up as f32 - 1.0 - rows.down as f32);
     let mut y0 = r.y() + r.height() * centre - bar_h / 2.0;
-    if squeezed {
-        // Its smaller lines inside the box: from its top, if they can't all be.
+    if kept_inside {
+        // Its lines, smaller or not, inside the box: from its top, if they can't all be.
         let (top, bottom) = (r.y() + reach(rows.up, px), r.bottom() - reach(rows.down, px) - bar_h);
         y0 = if top <= bottom { y0.clamp(top, bottom) } else { top };
     }
@@ -8619,7 +8619,8 @@ Elaboração: RustGIS",
         pm.fill(tiny_skia::Color::WHITE);
         let r = Rect::from_xywh(0.0, 0.0, 40.0, 60.0).unwrap();
         crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
-        assert!(marked_span(&pm, 37).is_some(), "ink drawn");
+        // Moved down so its big labels stay inside the box, the bar is drawn under them.
+        assert!((40..50).any(|y| marked_span(&pm, y).is_some()), "ink drawn");
     }
 
     #[test]
@@ -8928,6 +8929,27 @@ Elaboração: RustGIS",
         assert_eq!(last_label("25", "Kilometres", 80.0, measure), "25 Kilo…");
         assert_eq!(last_label("25", "Kilometres", 40.0, measure), "25", "the number alone when not a letter fits");
         assert_eq!(last_label("1,250", "km", 10.0, measure), "1,250", "the number is never cut");
+    }
+
+    /// A bar whose lines just fit its box, so none is written smaller, still draws them all inside it.
+    #[test]
+    fn a_scale_bar_rows_stay_inside_a_box_they_just_fit() {
+        let bar = BarOptions {
+            unit_label: Some("Kilometres"),
+            unit_label_position: UnitLabelPosition::Above,
+            label_position: ScaleLabelPosition::Above,
+            label_size: 24.0,
+            units: ScaleUnits::Kilometers,
+            ..BarOptions::default()
+        };
+        // The 93 x 88 box in the middle of a taller page, so ink outside it would show.
+        let mut pm = Pixmap::new(93, 128).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let r = Rect::from_xywh(0.0, 20.0, 93.0, 88.0).unwrap();
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, &bar, DEFAULT_COLORS, 1.0, false));
+        let marked = |p: tiny_skia::PremultipliedColorU8| p.red() < 200 || p.green() < 200 || p.blue() < 200;
+        let rows: Vec<u32> = (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| pm.pixel(x, y).is_some_and(marked))).collect();
+        assert!(!rows.is_empty() && rows.iter().all(|&y| (20..108).contains(&y)), "every line inside the box: {rows:?}");
     }
 
     /// A bar in a box too short for its lines writes them smaller, all inside the box.
