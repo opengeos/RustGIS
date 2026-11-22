@@ -108,6 +108,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-legend-text",
     "label-guide",
     PROJECT_CRS,
+    "layout-scale-grid-text",
 ];
 /// A layer or table saved in a coordinate system of its own, not longitude/latitude
 /// (`Dataset::held_in`, #2032 C2d): an older reader would read its coordinates as degrees.

@@ -225,6 +225,13 @@ and saving it again without its size (#2581). A saved `layout.addElement` for a 
 default and need nothing. A saved `layout.import` whose `text` has such a legend requires it as
 well. Layout files are not covered, as for backgrounds (#2277).
 
+Projects with a scale bar or a grid whose labels aren't the default 8 points (`text_size` on a
+scale bar, `label_size` on a frame's grid) require `layout-scale-grid-text`, so an older reader
+refuses them instead of drawing those labels at 8 points and saving them again without their size
+(#2581). A saved `layout.addElement` for a scale bar with `textSize` or a grid with `labelSize`
+of another size, a `layout.update` with such a `textSize` or `"grid": {"labelSize": …}`, and a
+`layout.import` whose `text` has such an element require it too; `null` or 8 need nothing.
+
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,
 with `held_in` beside them, and require `native-coordinates`: an older reader would read those

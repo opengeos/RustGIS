@@ -101,6 +101,11 @@ impl Project {
         {
             required.push("layout-legend-text");
         }
+        if !required.contains(&"layout-scale-grid-text")
+            && self.layouts.iter().any(|l| l.elements.iter().any(|e| e.kind.has_custom_scale_or_grid_text()))
+        {
+            required.push("layout-scale-grid-text");
+        }
         // A coordinate system whose PROJ definition, which an older reader reads, doesn't place
         // points as its WKT does (angles in grads, a datum transformation the definition can't
         // hold).
@@ -150,6 +155,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
     ("layout-legend-text", command_uses_legend_text),
+    ("layout-scale-grid-text", command_uses_scale_or_grid_text),
 ];
 
 /// A saved `map.graticule` that switches to the MGRS grid, its type read as the command reads it:
@@ -202,6 +208,25 @@ fn command_uses_legend_text(id: &str, params: &Value) -> bool {
         "layout.update" => sized(),
         "layout.import" => imported_layout_uses(params, "\"text_size\"", |e| e.kind.has_custom_legend_text()),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_legend_text)),
+        _ => false,
+    }
+}
+
+/// A layout command that gives a scale bar's labels or a grid's labels a size other than the
+/// default 8 points (#2581): an older reader warns that it ignores `textSize` or `labelSize` and
+/// draws them at 8. `null` or 8 only give the default. A saved `layout.update` isn't told which
+/// element it changes, so any other `textSize` requires it, a legend's too, as for the other
+/// layout keys; a grid's size is one of its `"grid"` options there.
+fn command_uses_scale_or_grid_text(id: &str, params: &Value) -> bool {
+    let own = |p: &Value, key: &str| p.get(key).is_some_and(|v| !v.is_null() && v.as_f64() != Some(rustgis_map::layout::SCALE_BAR_TEXT_PT));
+    let kind = |k: &str| params.get("kind").and_then(Value::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case(k));
+    match id {
+        "layout.addElement" => (kind("scaleBar") && own(params, "textSize")) || (kind("grid") && own(params, "labelSize")),
+        "layout.update" => own(params, "textSize") || params.get("grid").is_some_and(|g| own(g, "labelSize")),
+        "layout.import" => ["\"text_size\"", "\"label_size\""]
+            .iter()
+            .any(|key| imported_layout_uses(params, key, |e| e.kind.has_custom_scale_or_grid_text())),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_scale_or_grid_text)),
         _ => false,
     }
 }
@@ -1568,11 +1593,10 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                if required {
-                    assert_eq!(saved["requires"], json!(["layout-legend-text"]), "{id} {params}");
-                } else {
-                    assert!(saved.get("requires").is_none(), "{id} {params}");
-                }
+                // A saved update isn't told which element it sizes, so a scale bar's capability
+                // may come with it (`layout-scale-grid-text`): only this one is looked at here.
+                let needs = saved["requires"].as_array().is_some_and(|r| r.contains(&json!("layout-legend-text")));
+                assert_eq!(needs, required, "{id} {params}");
             }
         }
         // An imported layout's text with a sized legend needs it; with the default, none.
@@ -1586,6 +1610,78 @@ mod tests {
         let mut unknown = saved;
         unknown["requires"] = json!(["layout-legend-text", "future-legend"]);
         assert!(Project::from_json(&unknown.to_string()).unwrap_err().contains("future-legend"));
+    }
+
+    /// A scale bar's or a grid's label size other than the default (#2581) is required where it is
+    /// saved, so an older reader refuses the project instead of drawing them at 8 points and saving
+    /// them so. The default sizes are not written and need nothing.
+    #[test]
+    fn scale_and_grid_text_capability_follows_saved_layouts_and_commands() {
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_scale_grid_text.rgis")).unwrap();
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["layout-scale-grid-text"]));
+        let elements = &saved["layouts"][0]["elements"];
+        assert_eq!(elements[0]["kind"]["MapFrame"]["grid"]["label_size"], json!(14.0));
+        assert!(elements[1]["kind"]["ScaleBar"].get("text_size").is_none());
+        assert_eq!(elements[2]["kind"]["ScaleBar"]["text_size"], json!(16.0));
+        assert_eq!(Project::from_json(&saved.to_string()).unwrap().layouts, fixture.layouts);
+        // Each alone needs it.
+        let clean_with = |grid: bool, bar: bool| {
+            let mut p = fixture.clone();
+            for e in &mut p.layouts[0].elements {
+                match &mut e.kind {
+                    rustgis_map::layout::ElementKind::MapFrame { grid: Some(g), .. } if !grid => {
+                        g.label_size = rustgis_map::layout::GRID_LABEL_PT;
+                    }
+                    rustgis_map::layout::ElementKind::ScaleBar { text_size, .. } if !bar => {
+                        *text_size = rustgis_map::layout::SCALE_BAR_TEXT_PT;
+                    }
+                    _ => {}
+                }
+            }
+            serde_json::to_value(&p).unwrap()
+        };
+        assert_eq!(clean_with(true, false)["requires"], json!(["layout-scale-grid-text"]), "a grid's size alone");
+        assert_eq!(clean_with(false, true)["requires"], json!(["layout-scale-grid-text"]), "a scale bar's size alone");
+        let base = clean_with(false, false);
+        assert!(base.get("requires").is_none(), "default sizes need nothing");
+        // A saved command that sizes them needs it; null or 8 only give the default.
+        for (id, params, required) in [
+            ("layout.update", json!({"element": 3, "textSize": 16}), true),
+            ("layout.update", json!({"element": 3, "textSize": null}), false),
+            ("layout.update", json!({"element": 3, "textSize": 8}), false),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 12}}), true),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": 8}}), false),
+            ("layout.update", json!({"element": 1, "grid": {"labelSize": null}}), false),
+            ("layout.update", json!({"element": 1, "grid": false}), false),
+            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 12}), true),
+            ("layout.addElement", json!({"kind": "scaleBar"}), false),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": 12}), true),
+            ("layout.addElement", json!({"kind": "grid", "labelSize": null}), false),
+            ("layout.addElement", json!({"kind": "text", "text": "labelSize", "size": 18}), false),
+        ] {
+            let script = format!("{id} {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Size", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Size", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let needs = saved["requires"].as_array().is_some_and(|r| r.contains(&json!("layout-scale-grid-text")));
+                assert_eq!(needs, required, "{id} {params}");
+            }
+        }
+        // An imported layout's text with a sized bar or grid needs it; with the defaults, none.
+        for (layout, required) in
+            [(&saved["layouts"][0], true), (&clean_with(true, false)["layouts"][0], true), (&base["layouts"][0], false)]
+        {
+            let params = json!({"text": layout.to_string()});
+            let mut document = base.clone();
+            document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Import", "command": "layout.import", "params": params}]}]);
+            let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+            assert_eq!(saved.get("requires").is_some(), required, "{layout}");
+        }
     }
 
     /// Nondefault relief effects survive project, map and layer files; ordinary relief needs none.

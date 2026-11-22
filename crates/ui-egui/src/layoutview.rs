@@ -6,7 +6,7 @@
 
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{
-    Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LEGEND_TEXT_SIZE,
+    Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LAYOUT_TEXT_SIZE,
     Layout, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
     MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE,
     Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TextAlign, TickSide, chart_stack_refusal, frame_camera, line_angle, line_length,
@@ -1570,6 +1570,24 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
         if !g.labels {
             return;
         }
+        // Its labels' points; their room from the edge and MGRS squares' names follow (#2581).
+        let input_label = ui.label(tl!("Label size"));
+        let mut pt = g.label_size;
+        let drag = Dragged::lend(ui, key("labelSize"), &mut pt);
+        let r = ui
+            .add(
+                egui::DragValue::new(&mut pt)
+                    .update_while_editing(false)
+                    .range(LAYOUT_TEXT_SIZE)
+                    .speed(0.1)
+                    .max_decimals(1)
+                    .suffix(" pt"),
+            )
+            .labelled_by(input_label.id);
+        if drag.settled(ui, &r, &mut pt) && (pt - g.label_size).abs() > 1e-6 {
+            set(app, json!({"labelSize": pt}));
+        }
+        ui.end_row();
         if measured {
             let input_label = ui.label(tl!("MGRS labels"));
             let mut mgrs = g.mgrs;
@@ -1850,7 +1868,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             .add(
                                 egui::DragValue::new(&mut pt)
                                     .update_while_editing(false)
-                                    .range(LEGEND_TEXT_SIZE)
+                                    .range(LAYOUT_TEXT_SIZE)
                                     .speed(0.1)
                                     .max_decimals(1)
                                     .suffix(" pt"),
@@ -2010,7 +2028,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             ui.end_row();
                         }
                     }
-                    ElementKind::ScaleBar { units, divisions, style, color, fill, .. } => {
+                    ElementKind::ScaleBar { units, divisions, style, color, fill, text_size, .. } => {
                         let input_label = ui.label(tl!("Style"));
                         egui::ComboBox::from_id_salt(("scale_style", id))
                             .selected_text(tl!(style.label()))
@@ -2045,6 +2063,24 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut n) && n as usize != *divisions {
                             update(app, json!({"divisions": n}));
+                        }
+                        ui.end_row();
+                        // Its labels' points; their room follows, the bar keeping its size (#2581).
+                        let input_label = ui.label(tl!("Text size"));
+                        let mut pt = *text_size;
+                        let drag = Dragged::lend(ui, drag_key("textSize"), &mut pt);
+                        let r = ui
+                            .add(
+                                egui::DragValue::new(&mut pt)
+                                    .update_while_editing(false)
+                                    .range(LAYOUT_TEXT_SIZE)
+                                    .speed(0.1)
+                                    .max_decimals(1)
+                                    .suffix(" pt"),
+                            )
+                            .labelled_by(input_label.id);
+                        if drag.settled(ui, &r, &mut pt) && (pt - text_size).abs() > 1e-6 {
+                            update(app, json!({"textSize": pt}));
                         }
                         ui.end_row();
                         // The fill is the alternating bar's light divisions: the other styles draw none.
