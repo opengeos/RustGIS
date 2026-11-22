@@ -129,7 +129,6 @@ a vector an image patch	ໜຶ່ງເວັກເຕີຕໍ່ໜຶ່ງ�
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	ເຂດ UTM ຂອງ WGS 84 ສຳລັບປ້າຍ MGRS, ຕາມລະຫັດ EPSG ຂອງມັນ (32632); ຫວ່າງ: ເຂດຂອງແຜນທີ່ເມື່ອເປັນເຂດ UTM, ບໍ່ດັ່ງນັ້ນແມ່ນເຂດທີ່ຈຸດກາງຂອງກອບ.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	ບ່ອນເກັບ Zarr (ຮູບແບບ 2 ຫຼື 3) ຕາມທີ່ຢູ່ເວັບ ພ້ອມເມຕາເດຕາລວມ, ຫຼື ໂຟນເດີໃນຄອມພິວເຕີນີ້. ແຜນທີ່ຂອງຕົວປ່ຽນຈະຖືກອ່ານຕາມຂັ້ນຕອນທີ່ເລືອກໄວ້ໃນມິຕິອື່ນ ເຊັ່ນ: ເວລາ.
 A Zarr variable's values through time at points clicked on the map.	ຄ່າຂອງຕົວປ່ຽນ Zarr ຕາມຊ່ວງເວລາ ຢູ່ຈຸດທີ່ກົດເທິງແຜນທີ່.
-A4 portrait sheet	ເຈ້ຍ A4 ລວງຕັ້ງ
 A5 Grid	ຕາໜ່າງ A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	ຮູບຫ້າແຈເນື້ອທີ່ເທົ່າກັນຂອງ A5 ຕາມຄວາມລະອຽດທີ່ເລືອກ, ຄຸມພື້ນທີ່ແຜນທີ່, ຊັ້ນຂໍ້ມູນ ຫຼື ທົ່ວໂລກ, ໃນຮູບແບບຮູບຫຼາຍແຈພ້ອມລະຫັດ.
 About	ກ່ຽວກັບ

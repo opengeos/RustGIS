@@ -129,7 +129,6 @@ a vector an image patch	một vectơ cho mỗi mảnh ảnh
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	Múi UTM WGS 84 cho nhãn MGRS, theo mã EPSG (32632); để trống: của bản đồ nếu là múi UTM, nếu không là múi tại tâm khung.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Một kho Zarr (định dạng 2 hoặc 3) theo địa chỉ web, có siêu dữ liệu hợp nhất, hoặc một thư mục trên máy tính này. Bản đồ của một biến được đọc theo các bước đã chọn của các chiều khác, chẳng hạn thời gian.
 A Zarr variable's values through time at points clicked on the map.	Giá trị theo thời gian của một biến Zarr tại các điểm được nhấp trên bản đồ.
-A4 portrait sheet	Trang A4 thẳng đứng
 A5 Grid	Lưới A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Các ô ngũ giác đồng diện tích của A5 ở một độ phân giải, trên phạm vi bản đồ, một lớp hoặc toàn thế giới, dưới dạng vùng kèm id của chúng.
 About	Giới thiệu

@@ -129,7 +129,6 @@ a vector an image patch	un vector por parche de imagen
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	Una zona UTM WGS 84 para las etiquetas MGRS, por su código EPSG (32632); vacío: la del mapa cuando lo es; si no, la zona del centro del marco.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Un almacén Zarr (formato 2 o 3) por su dirección web, con metadatos consolidados, o una carpeta de este equipo. El mapa de una variable se lee para los pasos elegidos de sus otras dimensiones, como el tiempo.
 A Zarr variable's values through time at points clicked on the map.	Los valores de una variable Zarr a lo largo del tiempo en puntos en los que se hace clic en el mapa.
-A4 portrait sheet	Hoja A4 vertical
 A5 Grid	Cuadrícula A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Las celdas pentagonales de áreas iguales de A5 a una resolución, sobre la extensión del mapa, una capa o el mundo, como polígonos con sus identificadores.
 About	Acerca de

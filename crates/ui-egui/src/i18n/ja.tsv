@@ -129,7 +129,6 @@ a vector an image patch	画像パッチごとに 1 つのベクトル
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	MGRS ラベル用の WGS 84 UTM ゾーン (EPSG コードで指定、32632)。空の場合: マップの座標系が UTM ゾーンならそれ、それ以外はフレーム中心のゾーン。
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	統合メタデータを持つ Zarr ストア (フォーマット 2 または 3) の Web アドレス、またはこのコンピューター上のフォルダー。変数のマップは、時間など他の次元で選んだステップについて読み込まれます。
 A Zarr variable's values through time at points clicked on the map.	マップ上でクリックしたポイントにおける Zarr 変数の値の時間変化。
-A4 portrait sheet	A4 縦向き用紙
 A5 Grid	A5 グリッド
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	指定した解像度の A5 の等面積五角形セルを、マップの範囲、レイヤー、または全世界にわたって ID 付きのポリゴンとして作成します。
 About	バージョン情報

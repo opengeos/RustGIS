@@ -129,7 +129,6 @@ a vector an image patch	თითო ვექტორი გამოსახ
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	WGS 84 UTM ზონა MGRS წარწერებისთვის, მისი EPSG კოდით (32632); ცარიელი: რუკისა, თუ ის ასეთია, სხვა შემთხვევაში ზონა ჩარჩოს ცენტრში.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Zarr საცავი (ფორმატი 2 ან 3) ვებ მისამართით, კონსოლიდირებული მეტამონაცემებით, ან საქაღალდე ამ კომპიუტერში. ცვლადის რუკა იკითხება მისი სხვა განზომილებების არჩეული ნაბიჯებისთვის, მაგ. დროისთვის.
 A Zarr variable's values through time at points clicked on the map.	Zarr ცვლადის მნიშვნელობები დროში რუკაზე დაწკაპუნებულ წერტილებში.
-A4 portrait sheet	A4 ფურცელი, ვერტიკალური
 A5 Grid	A5 ბადე
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	A5-ის ტოლფართობიანი ხუთკუთხა უჯრედები მოცემული გარჩევადობით, რუკის ფარგლებში, ფენაზე ან მთელ მსოფლიოზე, პოლიგონების სახით თავიანთი იდენტიფიკატორებით.
 About	შესახებ

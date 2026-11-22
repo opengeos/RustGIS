@@ -129,7 +129,6 @@ a vector an image patch	вектор на фрагмент изображени�
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	Зона UTM WGS 84 для подписей MGRS, по коду EPSG (32632); если пусто — зона карты, если она в ней, иначе зона в центре фрейма.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Хранилище Zarr (формат 2 или 3) по веб-адресу, с консолидированными метаданными, или папка на этом компьютере. Карта переменной читается для выбранных шагов её других измерений, например времени.
 A Zarr variable's values through time at points clicked on the map.	Значения переменной Zarr во времени в точках, указанных щелчком на карте.
-A4 portrait sheet	Лист A4, книжная ориентация
 A5 Grid	Сетка A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Равновеликие пятиугольные ячейки A5 заданного разрешения в экстенте карты, слоя или всего мира, в виде полигонов с их идентификаторами.
 About	О программе

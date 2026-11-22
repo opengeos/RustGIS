@@ -129,7 +129,6 @@ a vector an image patch	görüntü parçası başına bir vektör
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	MGRS etiketleri için EPSG koduyla (32632) bir WGS 84 UTM dilimi; boşsa: haritanınki öyleyse o, değilse çerçevenin merkezindeki dilim.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Web adresiyle, birleştirilmiş meta verili bir Zarr deposu (biçim 2 veya 3) ya da bu bilgisayardaki bir klasör. Bir değişkenin haritası, zaman gibi diğer boyutlarının seçilen adımları için okunur.
 A Zarr variable's values through time at points clicked on the map.	Haritada tıklanan noktalarda bir Zarr değişkeninin zaman içindeki değerleri.
-A4 portrait sheet	A4 dikey sayfa
 A5 Grid	A5 Izgarası
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Bir çözünürlükte, harita kapsamı, bir katman veya tüm dünya üzerinde A5'in eşit alanlı beşgen hücreleri, kimlikleriyle birlikte poligonlar olarak.
 About	Hakkında

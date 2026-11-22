@@ -129,7 +129,6 @@ a vector an image patch	একটি image patch-এর একটি vector
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	MGRS লেবেলের জন্য একটি WGS 84 UTM জোন, এর EPSG কোড দিয়ে (32632); ফাঁকা: মানচিত্রেরটি যদি তা UTM জোন হয়, নইলে ফ্রেমের কেন্দ্রের জোন।
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	ওয়েব ঠিকানা দিয়ে Zarr store (format 2 বা 3), consolidated metadata-সহ, অথবা এই কম্পিউটারের একটি folder। time-এর মতো অন্য dimension-এর নির্বাচিত ধাপগুলোর জন্য variable-এর মানচিত্র পড়া হয়।
 A Zarr variable's values through time at points clicked on the map.	মানচিত্রে ক্লিক করা বিন্দুগুলোতে সময়ের সঙ্গে Zarr variable-এর মান।
-A4 portrait sheet	A4 লম্বালম্বি পৃষ্ঠা
 A5 Grid	A5 গ্রিড
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	নির্বাচিত resolution-এ A5-এর সম-ক্ষেত্রফলবিশিষ্ট পঞ্চভুজ কোষ, মানচিত্রের extent, একটি layer বা পুরো পৃথিবী জুড়ে polygon ও তাদের ID হিসেবে।
 About	সম্পর্কে

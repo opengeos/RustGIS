@@ -135,7 +135,6 @@ a vector an image patch	每個影像塊一個向量
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	用於 MGRS 標註的 WGS 84 UTM 分帶，以其 EPSG 代碼表示（32632）；留空：地圖坐標系統為 UTM 分帶時使用它，否則使用圖框中心所在的分帶。
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	透過網址指定的 Zarr 存放區（格式 2 或 3，需含合併詮釋資料），或本機上的資料夾。變數的地圖依其他維度（如時間）中所選的步長讀取。
 A Zarr variable's values through time at points clicked on the map.	地圖上點選位置處的 Zarr 變數隨時間變化的值。
-A4 portrait sheet	A4 縱向圖紙
 A5 Grid	A5 網格
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	依指定解析度在地圖範圍、某個圖層或全球範圍內產生 A5 等積五邊形單元，以帶 id 的多邊形輸出。
 About	關於

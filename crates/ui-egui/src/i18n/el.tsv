@@ -129,7 +129,6 @@ a vector an image patch	ένα διάνυσμα ανά τμήμα εικόνας
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	Μια ζώνη UTM WGS 84 για τις ετικέτες MGRS, με τον κωδικό EPSG της (32632)· κενό: του χάρτη όταν είναι τέτοια, αλλιώς η ζώνη στο κέντρο του πλαισίου.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Μια αποθήκη Zarr (μορφή 2 ή 3) μέσω της διεύθυνσής της στο web, με ενοποιημένα μεταδεδομένα, ή ένας φάκελος σε αυτόν τον υπολογιστή. Ο χάρτης μιας μεταβλητής διαβάζεται για τα βήματα που επιλέγονται στις άλλες διαστάσεις της, όπως ο χρόνος.
 A Zarr variable's values through time at points clicked on the map.	Οι τιμές μιας μεταβλητής Zarr στον χρόνο, στα σημεία όπου κάνετε κλικ στον χάρτη.
-A4 portrait sheet	Φύλλο A4, κατακόρυφο
 A5 Grid	Πλέγμα A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Τα ισεμβαδικά πενταγωνικά κελιά του A5 σε μια ανάλυση, στην έκταση του χάρτη, ενός επιπέδου ή ολόκληρου του κόσμου, ως πολύγωνα με τα αναγνωριστικά τους.
 About	Πληροφορίες

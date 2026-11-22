@@ -129,7 +129,6 @@ a vector an image patch	satu vektor per patch citra
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	Zona UTM WGS 84 untuk label MGRS, berdasarkan kode EPSG-nya (32632); kosong: milik peta jika berupa zona UTM, jika tidak zona di pusat bingkai.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Penyimpanan Zarr (format 2 atau 3) melalui alamat webnya, dengan metadata terkonsolidasi, atau folder di komputer ini. Peta variabel dibaca untuk langkah yang dipilih dari dimensi lainnya, seperti waktu.
 A Zarr variable's values through time at points clicked on the map.	Nilai variabel Zarr sepanjang waktu di titik-titik yang diklik pada peta.
-A4 portrait sheet	Lembar A4 potret
 A5 Grid	Grid A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Sel pentagonal luas sama A5 pada suatu resolusi, di atas cakupan peta, sebuah layer, atau seluruh dunia, sebagai poligon beserta id-nya.
 About	Tentang

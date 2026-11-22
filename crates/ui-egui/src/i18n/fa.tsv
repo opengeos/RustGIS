@@ -129,7 +129,6 @@ a vector an image patch	یک برداری یک تصویر کوچک
 A WGS 84 UTM zone for MGRS labels, by its EPSG code (32632); empty: the map's when it is one, else the zone at the frame's centre.	یک ناحیه UTM در WGS 84 برای برچسب‌های MGRS، با کد EPSG آن (32632)؛ خالی: ناحیه نقشه اگر UTM باشد، وگرنه ناحیه مرکز قاب.
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	یک ذخیره‌سازی Zarr (فرمت ۲ یا ۳) با آدرس وب، با متادیتای ادغام‌شده، یا یک پوشه روی این کامپیوتر. نقشه‌ی یک متغیر برای مراحل انتخاب‌شده از ابعاد دیگر آن، مانند زمان، خوانده می‌شود
 A Zarr variable's values through time at points clicked on the map.	مقادیر یک متغیر Zarr در گذر زمان در نقاطی که روی نقشه کلیک می‌شوند.
-A4 portrait sheet	برگه A4 عمودی
 A5 Grid	شبکه A5
 A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	سلول‌های پنج‌ضلعی هم‌مساحت A5 در یک تفکیک‌پذیری، روی گستره نقشه، یک لایه یا کل جهان، به‌صورت چندضلعی همراه با شناسه‌هایشان.
 About	درباره
