@@ -531,8 +531,15 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
             form_options: m.options,
             ..Default::default()
         };
-        if let Err(why) = form_address(&filled) {
-            return Err(i18n::fmt("The form can't show this address ({why}): keep using the address.", &[("why", &why)]));
+        match form_address(&filled) {
+            Err(why) => {
+                return Err(i18n::fmt("The form can't show this address ({why}): keep using the address.", &[("why", &why)]));
+            }
+            // The address it writes must name the same database (the form trims what is typed).
+            Ok(back) if rustgis_engine::data::source::msconn::database_name(&back).unwrap_or_default() != filled.database => {
+                return Err(tl!("The form can't show this address's database name: keep using the address.").into());
+            }
+            Ok(_) => {}
         }
         st.sign_in = std::mem::take(&mut filled.sign_in);
         st.user = std::mem::take(&mut filled.user);
@@ -2571,6 +2578,10 @@ mod tests {
         assert!(swap_form(&mut v6).is_err());
         assert!(!v6.form && v6.server.is_empty());
         assert_eq!(v6.address, "mssql://reader@[::1]:1500/gis");
+        // A database the form would write back as another (a leading space it trims) stays too.
+        let mut spaced = State { kind: "sqlserver".into(), address: "mssql://reader@gis-db/%20utility".into(), ..Default::default() };
+        assert!(swap_form(&mut spaced).is_err());
+        assert!(!spaced.form && spaced.server.is_empty());
         // An empty instance is a route of its own to the engine (no default port): the form
         // can't show it, so the address stays as typed and why is said.
         for empty in
