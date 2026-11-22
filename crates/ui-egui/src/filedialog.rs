@@ -43,7 +43,8 @@ mod phone {
         }
 
         pub fn pick_files(self) -> Option<Vec<PathBuf>> {
-            none("open a file").map(|p| vec![p])
+            let _ = none("open a file");
+            None
         }
 
         pub fn pick_folder(self) -> Option<PathBuf> {

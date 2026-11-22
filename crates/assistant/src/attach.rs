@@ -175,13 +175,20 @@ fn finish(name: String, img: DynamicImage, orientation: Orientation) -> Result<P
     let turned =
         matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
     let original = if turned { (h, w) } else { (w, h) };
-    let fit = |side: u32| {
-        let mut fitted = if w.max(h) > side { img.resize(side, side, image::imageops::FilterType::Triangle) } else { img.clone() };
-        fitted.apply_orientation(orientation);
-        fitted
+    // Each smaller try is drawn from the last one, not from the whole picture, which is let go
+    // once drawn small; turning upright is done on the small picture.
+    let shrink = |from: &DynamicImage, side: u32| {
+        if from.width().max(from.height()) > side { from.resize(side, side, image::imageops::FilterType::Triangle) } else { from.clone() }
+    };
+    let upright = |small: &DynamicImage| {
+        let mut turned = small.clone();
+        turned.apply_orientation(orientation);
+        turned
     };
     let mut side = LONGEST_SIDE;
-    let mut fitted = fit(side);
+    let mut small = shrink(&img, side);
+    drop(img);
+    let mut fitted = upright(&small);
     // Opaque pixels go as a JPEG, far lighter for a photo; transparency needs a PNG. Looked at
     // once drawn small, so a large picture isn't copied whole to look.
     let alpha = fitted.color().has_alpha() && fitted.to_rgba8().pixels().any(|p| p.0[3] < 255);
@@ -195,7 +202,8 @@ fn finish(name: String, img: DynamicImage, orientation: Orientation) -> Result<P
             return Ok(Picture { name, data, mime, width: fitted.width(), height: fitted.height(), original });
         }
         side = side * 3 / 4;
-        fitted = fit(side);
+        small = shrink(&small, side);
+        fitted = upright(&small);
     }
 }
 

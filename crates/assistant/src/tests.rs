@@ -5169,6 +5169,10 @@ fn a_model_that_refuses_pictures_gets_their_names_and_the_user_is_told() {
     assert!(text.ends_with("[a picture the user attached, atlas.jpg, 64 × 40, no longer attached]"), "{text}");
     let told = "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.";
     assert!(a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == told)));
+    assert!(
+        !a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string().contains("map's pictures"))),
+        "no map picture was sent"
+    );
     // The next message's pictures go as names at once, and that is said when they are attached.
     a.receive(a.generation(), ok(json!({"choices":[{"message":{"content":"A map."},"finish_reason":"stop"}]})), &mut s);
     let before = a.transcript.len();
@@ -5216,4 +5220,23 @@ fn a_delegated_task_says_the_pictures_stay_behind() {
     assert!(matches!(a.ask("style it", &s), Step::Send(_)));
     let _ = a.receive(a.generation(), ok(calls("delegate", json!({"task": "Style the countries"}))), &mut s);
     assert!(!a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == said)));
+}
+
+#[test]
+fn a_picture_too_heavy_at_the_longest_side_is_drawn_smaller_until_it_fits() {
+    // Noise with transparency: a PNG that weighs about 4 bytes a pixel, so 1568 px a side is
+    // over the limit and it takes more than one smaller try.
+    let mut seed = 7u32;
+    let img = image::RgbaImage::from_fn(2000, 2000, |_, _| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let [a, b, c, d] = seed.to_le_bytes();
+        image::Rgba([a, b, c, d | 1])
+    });
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let p = crate::attach::prepare("noise.png", &png).unwrap();
+    assert_eq!(p.mime, "image/png");
+    assert!(p.data.len() <= crate::tools::MAX_PNG_BYTES, "{}", p.data.len());
+    assert!(p.width < 1176 && p.width == p.height, "more than one smaller try: {}", p.width);
+    assert_eq!(p.original, (2000, 2000));
 }

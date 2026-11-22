@@ -115,7 +115,12 @@ pub fn keep_images(turns: &mut [Turn], keep: usize) -> bool {
 
 /// Whether any tool result in the turns still carries an image, or any message a picture.
 pub fn has_images(turns: &[Turn]) -> bool {
-    has_pictures(turns) || turns.iter().any(|t| matches!(t, Turn::Results(rs) if rs.iter().any(|r| !r.images.is_empty())))
+    has_pictures(turns) || has_tool_images(turns)
+}
+
+/// Whether any tool result in the turns still carries an image (`view_map`'s).
+pub fn has_tool_images(turns: &[Turn]) -> bool {
+    turns.iter().any(|t| matches!(t, Turn::Results(rs) if rs.iter().any(|r| !r.images.is_empty())))
 }
 
 /// Count the serialized JSON bytes without allocating another copy of native reasoning or args.

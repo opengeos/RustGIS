@@ -283,7 +283,12 @@ fn ask_request(args: &[String]) -> Option<String> {
 /// ([`rustgis_assistant::attach::prepare`]). One that can't be is an error, so the request isn't
 /// sent without it.
 fn ask_pictures(args: &[String]) -> Result<Vec<rustgis_assistant::attach::Picture>, String> {
-    use rustgis_assistant::attach::{prepare, read};
+    use rustgis_assistant::attach::{MAX_PER_MESSAGE, prepare, read};
+    // Refused before any is read: a request takes at most four.
+    let given = args.iter().filter(|a| *a == "--image").count();
+    if given > MAX_PER_MESSAGE {
+        return Err(format!("--image: a request takes at most {MAX_PER_MESSAGE} pictures, {given} given"));
+    }
     let mut pictures = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a != "--image" {
@@ -988,6 +993,37 @@ fn cli() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_takes_up_to_four_pictures_and_says_what_it_refuses() {
+        // A 1 × 1 PNG.
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        let dir = std::env::temp_dir().join(format!("rustgis-cli-image-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("map.png");
+        std::fs::write(&png, PNG).unwrap();
+        let png = png.display().to_string();
+        let ask = |images: &[&str]| {
+            let mut args = vec!["ask".to_string(), "Style it like this".into()];
+            for i in images {
+                args.extend(["--image".to_string(), i.to_string()]);
+            }
+            ask_pictures(&args)
+        };
+        let pictures = ask(&[&png]).unwrap();
+        assert_eq!((pictures[0].name.as_str(), pictures[0].width, pictures[0].height), ("map.png", 1, 1));
+        assert_eq!(ask_request(&["ask".into(), "--image".into(), png.clone(), "Style it".into()]).as_deref(), Some("Style it"));
+        // A fifth is refused before any is read; so is a file that isn't there.
+        let five = ask(&[&png, &png, &png, &png, "missing.png"]).unwrap_err();
+        assert!(five.contains("at most 4 pictures, 5 given"), "{five}");
+        assert!(ask(&["missing.png"]).unwrap_err().starts_with("missing.png: "));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretError};
     use std::sync::{Arc, Mutex};
 

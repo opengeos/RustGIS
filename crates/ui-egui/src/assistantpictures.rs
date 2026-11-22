@@ -84,14 +84,19 @@ pub fn button(app: &mut RustGisApp, ui: &mut Ui) {
     {
         let mut paths = pick_files().unwrap_or_default();
         let room = attach::MAX_PER_MESSAGE.saturating_sub(app.assistant.pictures.count()).min(paths.len());
-        app.assistant.pictures.left_out.extend(paths.drain(room..));
+        app.assistant.pictures.left_out.extend(paths.drain(room..).map(|p| file_name(&p)));
         // Each file is read on the worker too: a slow disk doesn't hold the window.
         for path in paths {
-            let name = path.clone();
-            start(app, name, move || attach::prepare(&path, &attach::read(&path).map_err(Note::text)?));
+            start(app, file_name(&path), move || attach::prepare(&path, &attach::read(&path).map_err(Note::text)?));
         }
         say_refused(app);
     }
+}
+
+/// The name of the file at `path`, as a picture is named.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// The pictures the system's dialog gives (none in a unit test, or cancelled).
@@ -160,7 +165,7 @@ pub fn received(app: &mut RustGisApp, name: &str, bytes: Vec<u8>) {
 }
 
 /// A pasted picture's pixels for the message. Its size is checked before its pixels are copied.
-fn pasted(app: &mut RustGisApp, image: &egui::ColorImage) {
+fn pasted(app: &mut RustGisApp, image: std::sync::Arc<egui::ColorImage>) {
     let name = tl!("pasted picture").to_string();
     if !room(app, &name) {
         return;
@@ -171,43 +176,48 @@ fn pasted(app: &mut RustGisApp, image: &egui::ColorImage) {
         app.assistant.pictures.refused.push(attach::too_many_pixels(name));
         return;
     }
-    let mut rgba = Vec::with_capacity(image.pixels.len().saturating_mul(4));
-    for c in &image.pixels {
-        rgba.extend_from_slice(&c.to_srgba_unmultiplied());
-    }
-    start(app, name.clone(), move || attach::from_rgba(&name, w, h, rgba));
+    // Its pixels are copied on the worker, with the rest of the reading.
+    start(app, name.clone(), move || {
+        let mut rgba = Vec::with_capacity(image.pixels.len().saturating_mul(4));
+        for c in &image.pixels {
+            rgba.extend_from_slice(&c.to_srgba_unmultiplied());
+        }
+        drop(image);
+        attach::from_rgba(&name, w, h, rgba)
+    });
 }
 
 /// Reads a picture: on a worker on the desktop (decoding a large photo takes a moment), at once
-/// in the browser, which has one thread. A worker the system refuses reads it here. Decoding is
+/// in the browser, which has one thread. When the system refuses the worker, the picture isn't
+/// read (that would hold the window) and that is said: it can be attached again. A reader that
+/// panics is said as a picture that can't be read, not waited on. Decoding is
 /// one step with no check for Cancel; taking the picture off while it is read drops it when the
 /// worker is done.
 fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Picture, Note> + Send + 'static) {
+    let label = name.clone();
+    let read = move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| {
+            Err(Note::with("{name}: the picture can't be read ({why})", [("name", label), ("why", "the decoder failed".into())]))
+        })
+    };
     #[cfg(not(target_arch = "wasm32"))]
     {
         let slot: crate::Slot<Result<Picture, Note>> = Default::default();
-        let label = name.clone();
         let out = slot.clone();
-        let read = std::sync::Arc::new(std::sync::Mutex::new(Some(read)));
-        let work = read.clone();
         let spawned = std::thread::Builder::new().name("assistant picture".into()).spawn(move || {
-            let Some(read) = work.lock().ok().and_then(|mut r| r.take()) else { return };
             // One picture is decoded at a time, so pictures picked together hold one decode's
-            // memory, not one each. A decoder that panics is said, not waited on forever.
+            // memory, not one each.
             let _turn = DECODING.lock().unwrap_or_else(|e| e.into_inner());
-            let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| {
-                Err(Note::with("{name}: the picture can't be read ({why})", [("name", label), ("why", "the decoder failed".into())]))
-            });
+            let picture = read();
             if let Ok(mut out) = out.lock() {
                 *out = Some(picture);
             }
         });
         if spawned.is_ok() {
             app.assistant.pictures.reading.push((name, slot));
-            return;
-        }
-        if let Some(read) = read.lock().ok().and_then(|mut r| r.take()) {
-            finished(app, read());
+        } else {
+            let why = "the system refused a thread to read it on; attach it again".to_string();
+            finished(app, Err(Note::with("{name}: the picture can't be read ({why})", [("name", name), ("why", why)])));
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -232,15 +242,20 @@ static DECODING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Takes in the pictures read since the last frame, and a picture pasted into the focused message
 /// box (`focused`).
 pub fn poll(app: &mut RustGisApp, ui: &Ui, focused: bool) {
+    // Another frame while a picture is read, and one after the last is: a message waiting for it
+    // (a suggestion) is sent at the start of a frame, before this takes the pictures in.
+    let waited = app.assistant.pictures.reading();
     if take_read(app) {
         ui.ctx().request_repaint_after(web_time::Duration::from_millis(100));
+    } else if waited {
+        ui.ctx().request_repaint();
     }
     if focused {
         let images: Vec<std::sync::Arc<egui::ColorImage>> = ui.input(|i| {
             i.events.iter().filter_map(|e| if let egui::Event::PasteImage(img) = e { Some(img.clone()) } else { None }).collect()
         });
         for image in images {
-            pasted(app, &image);
+            pasted(app, image);
         }
     }
 }
@@ -330,6 +345,25 @@ mod tests {
             std::thread::yield_now();
         }
         panic!("the picture was never read");
+    }
+
+    #[test]
+    fn the_frame_that_takes_in_the_last_picture_asks_for_another() {
+        let mut app = RustGisApp::with_sample();
+        received(&mut app, "map.png", png());
+        // The worker is done; nothing else happens in the window.
+        for _ in 0..1_000_000 {
+            if app.assistant.pictures.reading.iter().all(|(_, slot)| slot.lock().is_ok_and(|s| s.is_some())) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| poll(&mut app, ui, false));
+        // No renderer here takes the frame's textures.
+        out.textures_delta.clear();
+        assert!(app.assistant.pictures.any() && !app.assistant.pictures.reading());
+        assert!(ctx.has_requested_repaint(), "a queued message is sent on the next frame");
     }
 
     #[test]

@@ -792,9 +792,12 @@ impl Agent {
             // The model doesn't read images: ask again with their captions, once, and keep it so.
             Err(_) if images_refused => {
                 self.no_images.extend(self.sent_images_to.take());
-                self.transcript.push(Entry::Note(Note::new(
-                    "The model doesn't read images: the map's pictures go to it as their captions, and view_map is off for it.",
-                )));
+                // Each kind of picture the request carried is said: the map's, the user's.
+                if compact::has_tool_images(&self.turns) {
+                    self.transcript.push(Entry::Note(Note::new(
+                        "The model doesn't read images: the map's pictures go to it as their captions, and view_map is off for it.",
+                    )));
+                }
                 if compact::has_pictures(&self.turns) {
                     self.transcript.push(Entry::Note(Note::new(PICTURES_AS_NAMES)));
                 }
