@@ -201,8 +201,8 @@ fn count<'a>(
     // A plain `href` before an XLink one, as usvg takes them (SVG 2).
     let named = |ns: Option<&str>| n.attributes().find(|a| a.name() == "href" && a.namespace() == ns).map(|a| a.value());
     let href = named(None).or_else(|| named(Some("http://www.w3.org/1999/xlink")));
-    // What a `<use>` repeats counts as if it were under it (its link read past spaces, as usvg does).
-    let used = n.has_tag_name("use").then(|| href.and_then(|h| h.trim().strip_prefix('#')).and_then(|id| ids.get(id))).flatten();
+    // What a `<use>` repeats counts as if it were under it, its link read as usvg reads it.
+    let used = n.has_tag_name("use").then(|| href.and_then(|h| svgtypes::IRI::from_str(h).ok()).and_then(|iri| ids.get(iri.0))).flatten();
     let mut total = (1u64, points_of(n));
     for under in n.children().filter(|c| c.is_element()).chain(used.copied()) {
         let (e, v) = count(under, ids, seen, depth + 1)?;
@@ -591,6 +591,10 @@ mod tests {
         assert_eq!(doc(&format!(r##"{long}{}"##, r##"<use href="#p"/>"##.repeat(10))), None);
         // usvg reads a link past the spaces around it.
         assert_eq!(doc(&format!(r##"{long}{}"##, r##"<use href=" #p "/>"##.repeat(10))), None);
+        // Only ASCII spaces: an id ending in a no-break space keeps it, as svgtypes reads it.
+        let nbsp = format!(r#"<defs><path id="p&#xA0;" d="M0 0{}"/></defs>"#, " L1 1".repeat(20_000));
+        assert_eq!(doc(&format!(r##"{nbsp}{}"##, r##"<use href="#p&#xA0;"/>"##.repeat(10))), None);
+        assert!(doc(&format!(r##"{long}<use href=" #p "/>"##)).is_some());
     }
 
     /// An arc is counted as the curves usvg divides it into, never fewer: a path's, its radii
