@@ -447,6 +447,7 @@ mod tests {
             "#[test] fn t() { assert_eq![x, x]; }",
             "#[test] fn t() { assert_eq!(get::<u8, Vec<u8>>(1), get::<u8, Vec<u8>>(1)); }",
             "#[test] fn t() { assert_eq!(f::<(u8, u8)>(), f::<(u8, u8)>(), \"m\"); }",
+            "#[test] fn t() { assert_eq!(f::<u8, u16>(), f::<u8, u16>()); }",
             "#[test] fn t() { assert_eq!(1, 1); }",
         ] {
             let errors = scan(Path::new("src/lib.rs"), text, false).0;
@@ -463,6 +464,9 @@ mod tests {
             "#[test] fn t() { assert_eq!(get::<u8, Vec<u8>>(), get::<u8, Vec<i8>>()); }",
             "#[test] fn t() { assert_eq!(g(1, 2), g(1, 3)); }",
             "#[test] fn t() { assert_eq!(v[0], v[1]); assert_ne!(\"a\", \"b\"); }",
+            // Commas inside nested generic arguments don't end a side.
+            "#[test] fn t() { assert_eq!(HashMap::<u8, HashMap::<u8, u16>>::new(), expected); }",
+            "#[test] fn t() { assert_eq!(f::<u8, u16>(), f::<u8, i16>()); }",
             // A message that repeats the first side is not a second side.
             "#[test] fn t() { assert_eq!(a, b, a); }",
             "#[test] fn t() { assert!(a == a); assert_eq!(a); }",
