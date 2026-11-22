@@ -17,8 +17,6 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::{RustGisApp, Slot, i18n};
 
 type Answer = Slot<Result<Vec<u8>, String>>;
-/// A routing answer read where it landed: its routes and its text, or what went wrong.
-type Routed = Slot<Result<(Vec<Route>, String), String>>;
 
 /// The start, a stop, or the destination.
 #[derive(Clone, Debug, Default)]
@@ -54,7 +52,7 @@ pub struct State {
     pub consent: bool,
     loaded: bool,
     /// A request under way, and what it asked.
-    pending: Option<(Routed, String)>,
+    pending: Option<(Answer, String)>,
     /// What the routes shown (or the request under way) were asked for.
     asked: String,
     pub routes: Vec<Route>,
@@ -153,27 +151,13 @@ impl State {
 }
 
 fn fetch(url: &str) -> Answer {
-    fetch_read(url, |r| r)
-}
-
-/// Downloads `url`; the slot gets the answer as `read` reads it where it lands.
-fn fetch_read<T: Send + 'static>(url: &str, read: impl FnOnce(Result<Vec<u8>, String>) -> T + Send + 'static) -> Slot<T> {
-    let slot: Slot<T> = Slot::default();
+    let slot: Answer = Slot::default();
     let land = slot.clone();
-    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(read(r))));
+    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
     slot
 }
 
-/// Asks for routes at `url`. The answer is read where it lands, on the download's thread on the
-/// desktop, not on the frame: measuring a long route's line on the ellipsoid takes a while.
-fn fetch_routes(url: &str) -> Routed {
-    fetch_read(url, |r| {
-        let router = Router { base: routing::VALHALLA.into() };
-        r.map_err(|e| routing::explain(&e)).and_then(|b| Ok((router.parse(&b)?, String::from_utf8_lossy(&b).into_owned())))
-    })
-}
-
-fn take<T>(slot: &Slot<T>) -> Option<T> {
+fn take(slot: &Answer) -> Option<Result<Vec<u8>, String>> {
     slot.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
@@ -333,7 +317,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 st.pending = None;
                 // Only the answer to what's asked now (the places may have changed meanwhile).
                 if key == st.key(&language) {
-                    match r {
+                    let router = Router { base: routing::VALHALLA.into() };
+                    match r.map_err(|e| routing::explain(&e)).and_then(|b| {
+                        let routes = router.parse(&b)?;
+                        Ok((routes, String::from_utf8_lossy(&b).into_owned()))
+                    }) {
                         Ok((routes, text)) => {
                             st.routes = routes;
                             st.answer = text;
@@ -372,7 +360,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 language,
             };
             match Router::new(None).and_then(|r| r.url(&req)) {
-                Ok(url) => st.pending = Some((fetch_routes(&url), key)),
+                Ok(url) => st.pending = Some((fetch(&url), key)),
                 Err(e) => st.error = Some(e),
             }
         }

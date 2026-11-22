@@ -5,7 +5,7 @@
 //! Answers are asked for in OSRM's form, whose steps carry a maneuver (its type and direction),
 //! an instruction, the street, and spoken announcements.
 
-use rustgis_geom::{Coord, wgs84_distance_m};
+use rustgis_geom::{Coord, wgs84_step_m};
 use serde_json::{Value, json};
 
 /// The public Valhalla server (FOSSGIS), the default.
@@ -237,7 +237,8 @@ fn route(r: &Value) -> Option<Route> {
                 match line.last() {
                     Some(last) if *last == p => {}
                     Some(last) => {
-                        let d = along.last().copied().unwrap_or(0.0) + wgs84_distance_m(*last, p);
+                        // On the ellipsoid, a few operations a step: a route can hold half a million.
+                        let d = along.last().copied().unwrap_or(0.0) + wgs84_step_m(*last, p);
                         line.push(p);
                         along.push(d);
                     }
@@ -533,7 +534,7 @@ mod tests {
         let routes = r.parse(ANSWER.replace(r#""duration":302.776,"distance":1921.553,"#, r#""duration":302.776,"#).as_bytes()).unwrap();
         let a = &routes[0];
         let ellipsoid = rustgis_geom::wgs84_length_m(&a.line);
-        assert!((a.distance_m - ellipsoid).abs() < 1e-6, "{} m, {ellipsoid} m on the ellipsoid", a.distance_m);
+        assert!((a.distance_m / ellipsoid - 1.0).abs() < 1e-6, "{} m, {ellipsoid} m on the ellipsoid", a.distance_m);
         assert_eq!(a.along.last().copied(), Some(a.distance_m));
     }
 
