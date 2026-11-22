@@ -3480,6 +3480,9 @@ struct DbfRead {
     /// For each field, its text values that aren't UTF-8 in a table read as UTF-8
     /// ([`crate::dbf::not_utf8`]).
     not_utf8: Vec<usize>,
+    /// The records marked deleted, by position, ascending: the reader gives them as any other
+    /// ([`crate::dbf::take_deleted`]), and they are left out by position.
+    deleted: Vec<usize>,
 }
 
 /// Opens dBASE attributes with the Shapefile reader's code-page and date/number handling.
@@ -3490,6 +3493,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
     // Counted before a date column is marked a character one below: its values aren't text.
     let (names, not_utf8) = if encoding.is_utf8() { crate::dbf::not_utf8(&bytes) } else { (Vec::new(), Vec::new()) };
     encoding_notes.extend(crate::dbf::not_utf8_names_note(&names));
+    let deleted = crate::dbf::take_deleted(&mut bytes);
     crate::dbf::readable_header_date(&mut bytes);
     let date_columns = crate::dbf::dates_as_text(&mut bytes);
     crate::dbf::floats_as_numeric(&mut bytes);
@@ -3499,7 +3503,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
         // A date's year may be padded with spaces on the left (`   10101`): keep them.
         .with_options(shapefile::dbase::ReadingOptions::default().character_trim(shapefile::dbase::TrimOption::End))
         .build(Cursor::new(bytes))
-        .map_err(|e| DataError::Format(format!("Shapefile: the .dbf: {e}")))?;
+        .map_err(|e| DataError::Format(format!("the .dbf: {e}")))?;
     // Field order comes from the .dbf header (records are unordered maps).
     let order: Vec<(String, FieldType)> = dbf
         .fields()
@@ -3519,7 +3523,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
         })
         .collect();
     let fields = order.into_iter().map(|(n, t)| Field::new(n, t)).collect();
-    Ok(DbfRead { reader: dbf, fields, decimals, report: ReadReport { messages: encoding_notes, ..Default::default() }, not_utf8 })
+    Ok(DbfRead { reader: dbf, fields, decimals, report: ReadReport { messages: encoding_notes, ..Default::default() }, not_utf8, deleted })
 }
 
 /// Reads a geometry-free dBASE table, checking cancellation and counting progress per record.
@@ -3527,14 +3531,19 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>) -> Result<DbfRead> {
 /// same budget as delimited tables; archive members share the remaining allowance.
 /// The bounded file read and header decoding finish before cancellation can be observed.
 fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
-    let DbfRead { mut reader, fields, decimals, mut report, not_utf8 } = dbf_reader(bytes, cpg)?;
+    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(bytes, cpg)?;
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8);
     let allowance = *budget;
     let mut left = allowance;
     crate::progress::begin(reader.header().num_records as usize);
-    for record in reader.iter_records() {
+    let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
+    for (k, record) in reader.iter_records().enumerate() {
         crate::progress::step(1)?;
+        if is_deleted(k) {
+            left_out += 1;
+            continue;
+        }
         match record {
             Ok(record) => {
                 let attrs = dbf_attrs(&record, &ds.fields, &mut counts);
@@ -3564,18 +3573,41 @@ fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) 
             Err(_) => report.skipped += 1,
         }
     }
-    // The iterator passes over records marked deleted; the header still counts them.
-    let deleted = (reader.header().num_records as usize).saturating_sub(ds.features.len() + report.skipped);
-    if deleted > 0 {
-        report.messages.push(format!("{name}: {deleted} dBASE records marked deleted were left out"));
-    }
+    report.messages.extend(deleted_records_note(name, left_out, false));
     dbf_notices(&ds, &mut report, &counts);
     integral_numeric_to_integer(&mut ds, &decimals);
-    if report.skipped > 0 {
-        report.messages.push(format!("{name}: {} dBASE records were unreadable and left out", report.skipped));
+    match report.skipped {
+        0 => {}
+        1 => report.messages.push(format!("{name}: 1 dBASE record was unreadable and left out")),
+        n => report.messages.push(format!("{name}: {n} dBASE records were unreadable and left out")),
     }
     *budget = left;
     Ok((ds, report))
+}
+
+/// Whether the record at a position, asked in ascending order, is one of `deleted` (ascending).
+fn deleted_by_position(deleted: &[usize]) -> impl FnMut(usize) -> bool + '_ {
+    let mut next = deleted.iter().peekable();
+    move |k| {
+        while next.next_if(|d| **d < k).is_some() {}
+        next.next_if(|d| **d == k).is_some()
+    }
+}
+
+/// The notice for `n` records of `name`'s `.dbf` marked deleted and left out, and for a
+/// Shapefile (`with_shapes`), their shapes with them.
+fn deleted_records_note(name: &str, n: usize, with_shapes: bool) -> Option<String> {
+    deleted_records_text(n, with_shapes).map(|t| format!("{name}: {t}"))
+}
+
+/// [`deleted_records_note`] without the layer's name.
+pub(crate) fn deleted_records_text(n: usize, with_shapes: bool) -> Option<String> {
+    let (what, shapes) = match n {
+        0 => return None,
+        1 => ("1 dBASE record marked deleted was left out".to_string(), ", with its shape"),
+        n => (format!("{n} dBASE records marked deleted were left out"), ", with their shapes"),
+    };
+    Some(if with_shapes { format!("{what}{shapes}") } else { what })
 }
 
 /// Converts one record to typed values, sharing loss counts with the containing dataset.
@@ -3667,7 +3699,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     use shapefile::Shape;
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
-    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8 } = dbf_reader(parts.dbf, parts.cpg.as_deref())?;
+    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref())?;
     let shapes = match parts.shx {
         Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
         None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
@@ -3692,7 +3724,13 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8);
     let mut source_kind = GeometryType::None;
     let pt = |x: f64, y: f64| Coord::new(x, y);
-    for item in reader.iter_shapes_and_records() {
+    // Paired by position: a record marked deleted is read as any other, and left out with its shape.
+    let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
+    for (k, item) in reader.iter_shapes_and_records().enumerate() {
+        if is_deleted(k) {
+            left_out += 1;
+            continue;
+        }
         let Ok((shape, record)) = item else {
             report.skipped += 1;
             continue;
@@ -3758,6 +3796,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         ds.push_next(geom, attrs);
     }
     ds.drop_zm(&mut report, zm_shapes);
+    report.messages.extend(deleted_records_note(name, left_out, true));
     dbf_notices(&ds, &mut report, &counts);
     ds.geometry_type = dominant_type(&ds);
     // A bad .prj must not turn a spatial layer into an attribute-only table and hide the
@@ -8761,5 +8800,86 @@ mod tests {
         let own = shapefile_geometry_notes(&line, "out.shp", utm);
         assert!(own.iter().any(|n| n.contains("1 vertex with a missing or infinite coordinate")), "{own:?}");
         assert!(shapefile_geometry_notes(&line, "out.shp", Crs::Epsg(25832)).is_empty());
+    }
+
+    /// The `.dbf` of three points, named `a`, `b` and `c`, with a numeric `n` of 1, 2 and 3.
+    fn three_named_points(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("pts.shp");
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+        let mut ds = Dataset::new("pts", GeometryType::Point, fields);
+        for (k, name) in ["a", "b", "c"].iter().enumerate() {
+            let x = k as f64;
+            ds.push(Some(Geometry::Point(Coord::new(x, x))), vec![Value::Text((*name).into()), Value::Int(k as i64 + 1)]);
+        }
+        write_path(&ds, &path).unwrap();
+        path
+    }
+
+    /// Where record `k` of a `.dbf` starts (its deletion flag).
+    fn dbf_record_at(dbf: &[u8], k: usize) -> usize {
+        let header = usize::from(u16::from_le_bytes([dbf[8], dbf[9]]));
+        let len = usize::from(u16::from_le_bytes([dbf[10], dbf[11]]));
+        header + k * len
+    }
+
+    /// A Shapefile whose `.dbf` marks its middle record deleted: that record's shape is left out
+    /// with it, each kept shape keeps its own attributes (dBASE's reader passing over the record
+    /// once paired every later shape with the next record, and dropped the last shape), and one
+    /// notice gives the count. A clean file says nothing of it.
+    #[test]
+    fn a_deleted_dbf_record_leaves_its_shape_out_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let deleted = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("marked deleted")).count();
+        let (clean, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(clean.features.len(), 3);
+        assert_eq!(deleted(&report), 0, "{:?}", report.messages);
+        let dbf_path = path.with_extension("dbf");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        let at = dbf_record_at(&dbf, 1);
+        dbf[at] = b'*';
+        std::fs::write(&dbf_path, &dbf).unwrap();
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        let kept: Vec<_> = ds
+            .features
+            .iter()
+            .map(|f| {
+                let Some(Geometry::Point(p)) = f.geometry.clone() else { panic!("a point") };
+                (p.x, f.attrs[0].clone())
+            })
+            .collect();
+        assert_eq!(kept, [(0.0, Value::Text("a".into())), (2.0, Value::Text("c".into()))]);
+        assert_eq!(deleted(&report), 1, "{:?}", report.messages);
+        assert!(report.messages.iter().any(|m| m == "pts: 1 dBASE record marked deleted was left out, with its shape"), "{:?}", report.messages);
+        assert_eq!(report.skipped, 0);
+    }
+
+    /// A standalone table: a record marked deleted is left out and counted, and one dBASE can't
+    /// read (a number that isn't one) is left out and said, with the rows on both sides kept.
+    /// Clean input says neither.
+    #[test]
+    fn a_dbf_table_counts_deleted_and_unreadable_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let clean = std::fs::read(path.with_extension("dbf")).unwrap();
+        let notes = |r: &ReadReport| r.messages.iter().filter(|m| m.contains("marked deleted") || m.contains("unreadable")).cloned().collect::<Vec<_>>();
+        let (ds, report) = read_bytes("t.dbf", &clean).unwrap();
+        assert_eq!(ds.features.len(), 3);
+        assert!(notes(&report).is_empty(), "{:?}", report.messages);
+        let mut one_deleted = clean.clone();
+        let at = dbf_record_at(&one_deleted, 1);
+        one_deleted[at] = b'*';
+        let (ds, report) = read_bytes("t.dbf", &one_deleted).unwrap();
+        assert_eq!(ds.features.iter().map(|f| f.attrs[0].clone()).collect::<Vec<_>>(), [Value::Text("a".into()), Value::Text("c".into())]);
+        assert_eq!(notes(&report), ["t: 1 dBASE record marked deleted was left out"]);
+        // The `n` column follows the 1-byte flag and the `name` column.
+        let mut unreadable = clean.clone();
+        let name_len = usize::from(unreadable[32 + 16]);
+        let at = dbf_record_at(&unreadable, 1) + 1 + name_len;
+        let n_len = usize::from(unreadable[64 + 16]);
+        unreadable[at..at + n_len].fill(b'x');
+        let (ds, report) = read_bytes("t.dbf", &unreadable).unwrap();
+        assert_eq!(ds.features.iter().map(|f| f.attrs[0].clone()).collect::<Vec<_>>(), [Value::Text("a".into()), Value::Text("c".into())]);
+        assert_eq!(notes(&report), ["t: 1 dBASE record was unreadable and left out"]);
     }
 }
