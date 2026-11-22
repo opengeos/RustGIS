@@ -2356,18 +2356,19 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
         // In longitude/latitude, a copy only of a layer held in another system; refused, naming
         // the layer, rather than checked on coordinates of another system.
         // A cancel while converting is the check's cancel, said as the rules' is. A conversion's
-        // error already starts with its layer's name; it isn't given twice.
-        let named = |e: String| {
+        // error already starts with its layer's name; it isn't given twice. A covering layer's is
+        // named as that layer, not the one checked.
+        let named = |layer: &str, e: String| {
             if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) {
                 "the topology check was cancelled".to_string()
-            } else if e.starts_with(&format!("{}:", i.layer)) {
+            } else if e.starts_with(&format!("{layer}:")) {
                 e
             } else {
-                format!("{}: {e}", i.layer)
+                format!("{layer}: {e}")
             }
         };
-        let data = i.data.in_lonlat().map_err(named)?;
-        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(named)).transpose()?;
+        let data = i.data.in_lonlat().map_err(|e| named(&i.layer, e))?;
+        let by = i.by.as_ref().map(|b| b.in_lonlat().map_err(|e| named(&b.name, e))).transpose()?;
         rustgis_analysis::validate_latitudes(&data, i.rows.iter().copied())?;
         found.push(match (&i.rule, &by) {
             (TopologyRule::MustNotOverlap { .. }, _) => t::overlaps(&data, &i.rows),
@@ -2641,19 +2642,37 @@ mod tests {
     }
 
     /// A held layer with a place that can't be given in longitude/latitude is refused, naming
-    /// the layer once.
+    /// the layer once; a covering layer's is named as that layer, not the one checked.
     #[test]
     fn a_topology_refusal_names_its_layer_once() {
-        let mut ds = rustgis_data::Dataset::new("Parcels", GeometryType::Polyline, vec![]);
-        ds.hold_in(rustgis_data::raster::Crs::Epsg(32632)).unwrap();
-        // Far beyond any place UTM 32N holds.
-        ds.push(Some(Geometry::Line(vec![vec![Coord::new(1e12, 1e12), Coord::new(1e12 + 1.0, 1e12)]])), vec![]);
+        let held = |name: &str, kind: GeometryType, far: bool| {
+            let mut ds = rustgis_data::Dataset::new(name, kind, vec![]);
+            ds.hold_in(rustgis_data::raster::Crs::Epsg(32632)).unwrap();
+            // Far beyond any place UTM 32N holds, or in it.
+            let (x, y) = if far { (1e12, 1e12) } else { (500_000.0, 5_400_000.0) };
+            let ring = vec![Coord::new(x, y), Coord::new(x + 10.0, y), Coord::new(x + 10.0, y + 10.0), Coord::new(x, y)];
+            let shape = match kind {
+                GeometryType::Polygon => Geometry::Polygon(vec![vec![ring]]),
+                GeometryType::Point => Geometry::Point(Coord::new(x, y)),
+                _ => Geometry::Line(vec![ring]),
+            };
+            ds.push(Some(shape), vec![]);
+            ds
+        };
         let mut s = Session::new(crate::Project::default());
-        s.map_mut().add_dataset(ds);
+        s.map_mut().add_dataset(held("Parcels", GeometryType::Polyline, true));
         s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Parcels"}})).unwrap();
         let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
         assert!(e.starts_with("Parcels: feature"), "{e}");
         assert_eq!(e.matches("Parcels").count(), 1, "{e}");
+
+        let mut s = Session::new(crate::Project::default());
+        s.map_mut().add_dataset(held("Cities", GeometryType::Point, false));
+        s.map_mut().add_dataset(held("Countries", GeometryType::Polygon, true));
+        s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
+        let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
+        assert!(e.starts_with("Countries: feature"), "{e}");
+        assert!(!e.contains("Cities"), "{e}");
     }
 
     #[test]

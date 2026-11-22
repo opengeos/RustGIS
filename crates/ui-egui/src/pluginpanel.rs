@@ -1020,13 +1020,13 @@ fn tabs(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, stat
     }
 }
 
-/// The weekday of a date, 0 for Monday. A month outside 1 to 12 counts as January's offset rather
-/// than failing.
+/// The weekday of a date, 0 for Monday. A month outside 1 to 12 (callers pass only those) gives
+/// some weekday rather than failing.
 fn weekday(y: i32, m: u32, d: u32) -> u32 {
     // Sakamoto's method, which counts from Sunday.
     const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let y = i64::from(y) - i64::from(m < 3);
-    let offset = T.get(m.wrapping_sub(1) as usize).copied().unwrap_or(0);
+    let offset = m.checked_sub(1).and_then(|i| T.get(i as usize)).copied().unwrap_or(0);
     let sunday = (y + y / 4 - y / 100 + y / 400 + offset + i64::from(d)).rem_euclid(7) as u32;
     (sunday + 6) % 7
 }
