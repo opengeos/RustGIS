@@ -3366,6 +3366,14 @@ fn held_to_limits(p: &Value, shape: Option<Shape>) -> Vec<String> {
     said
 }
 
+/// A frame's extent indicator's or border's `width` in `p` (that object) held to `range` points,
+/// said as [`held_to_limits`] says it; `what` names the setting ("extent indicator width").
+fn held_width(p: &Value, what: &str, range: (f64, f64)) -> Option<String> {
+    let w = f(p, "width")?;
+    let kept = w.clamp(range.0, range.1);
+    (w != kept).then(|| format!("{what} {w} held to {kept} ({} to {} points)", range.0, range.1))
+}
+
 /// Says what [`held_to_limits`] found, in one notice for the command `title`.
 fn say_held(s: &mut Session, title: &str, held: Vec<String>) {
     if !held.is_empty() {
@@ -3892,6 +3900,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
                 *extent_color = color;
                 *extent_width = width;
             }
+            let range = (rustgis_map::layout::MIN_INDICATOR_WIDTH, rustgis_map::layout::MAX_INDICATOR_WIDTH);
+            say_held(s, "Add Element", held_width(p, "extent indicator width", range).into_iter().collect());
             return Ok(json!({"element": frame}));
         }
         "grid" => {
@@ -5057,7 +5067,17 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             (_, Some(_)) => return Err("only map frames have a grid".into()),
             _ => None,
         };
-        held = held_to_limits(p, Shape::of_kind(kind));
+        let mut said = held_to_limits(p, Shape::of_kind(kind));
+        if let (ElementKind::MapFrame { .. }, Some(Some(_))) = (kind, &indicator)
+            && let Some(v) = p.get("extentIndicator")
+        {
+            let range = (rustgis_map::layout::MIN_INDICATOR_WIDTH, rustgis_map::layout::MAX_INDICATOR_WIDTH);
+            said.extend(held_width(v, "extent indicator width", range));
+        }
+        if let (ElementKind::MapFrame { .. }, Some(v @ Value::Object(_))) = (kind, p.get("border")) {
+            said.extend(held_width(v, "border width", (0.0, rustgis_map::layout::MAX_FRAME_BORDER_WIDTH)));
+        }
+        held = said;
         (restyle(kind, p)?, grid, indicator, border)
     };
     // A line turned to an "angle" or made a "length" long, about its centre: its new box,

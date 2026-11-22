@@ -2013,7 +2013,8 @@ const MAX_UNKNOWN_NAMED: usize = 3;
 /// is in: counted, and the first few kept by their place in the file (`maps.0.layers.2.glow`).
 #[derive(Default)]
 struct UnknownKeys {
-    /// (part, map index for a key inside a map, place in the file), the first few of each part.
+    /// (part, map index for a key inside a map, place in the file), the first few of each part and
+    /// map.
     named: Vec<(ReadPart, Option<usize>, String)>,
     /// How many keys each part (and each map) has.
     counted: std::collections::HashMap<(ReadPart, Option<usize>), usize>,
@@ -2032,10 +2033,13 @@ impl UnknownKeys {
             Some("layouts") => (ReadPart::Layouts, None),
             _ => (ReadPart::Items, None),
         };
-        if self.named.iter().filter(|(p, ..)| *p == part).count() < MAX_UNKNOWN_NAMED {
+        // The first few of each part and map, so an import that leaves some maps out still names
+        // those of the maps it takes.
+        let seen = self.counted.entry((part, map)).or_default();
+        if *seen < MAX_UNKNOWN_NAMED {
             self.named.push((part, map, crate::project::short_name(place)));
         }
-        *self.counted.entry((part, map)).or_default() += 1;
+        *seen += 1;
     }
 
     /// One notice for each part with keys left out, leaving out keys in maps past `map_limit`
@@ -2049,8 +2053,13 @@ impl UnknownKeys {
                 if n == 0 {
                     return None;
                 }
-                let named: Vec<&str> =
-                    self.named.iter().filter(|(p, m, _)| *p == part && kept(m)).map(|(.., place)| place.as_str()).collect();
+                let named: Vec<&str> = self
+                    .named
+                    .iter()
+                    .filter(|(p, m, _)| *p == part && kept(m))
+                    .map(|(.., place)| place.as_str())
+                    .take(MAX_UNKNOWN_NAMED)
+                    .collect();
                 let mut which = named.join(", ");
                 if n > named.len() {
                     which = format!("{which} and {} more", n - named.len());

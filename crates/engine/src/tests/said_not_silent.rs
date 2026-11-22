@@ -155,6 +155,18 @@ fn a_project_with_keys_this_version_doesnt_read_says_so() {
     let items = format!("{:?}", opened.take_read_notices(&[ReadPart::Items]));
     assert!(items.contains("\"1\"") && items.contains("glow") && !items.contains("haze"), "{items}");
 
+    // An import that takes only the first map counts and names only its keys, not the second's.
+    let mut two = file.clone();
+    let mut first = serde_json::from_str::<Value>(&text).unwrap()["maps"][0].clone();
+    first["mist"] = json!(1);
+    first["name"] = json!("First");
+    if let Some(maps) = two["maps"].as_array_mut() {
+        maps.insert(0, first);
+    }
+    let mut taken = Project::from_import_maps_json(&two.to_string(), None, 1).unwrap();
+    let maps = format!("{:?}", taken.take_read_notices(&[ReadPart::Maps]));
+    assert!(maps.contains("Plain(\"1\")") && maps.contains("maps.0.mist") && !maps.contains("maps.1"), "{maps}");
+
     // Opened by the session, each part's keys come in one notice.
     let dir = std::env::temp_dir().join(format!("rustgis-unknown-keys-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
