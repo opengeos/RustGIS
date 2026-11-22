@@ -1423,14 +1423,18 @@ impl PostgisSource {
     /// ([`FeatureSource::coord_crs`]), or longitude/latitude, as a layer a project saved before
     /// RustGIS kept a table's own coordinates holds it, which the server converts. Edits in
     /// another (a table whose column was given another SRID since the layer was loaded) are
-    /// converted to longitude/latitude first; one that can't be is refused, naming its row.
-    /// Needs a connection from [`connect_writable`].
+    /// refused: convert them first ([`Edits::to_lonlat`]). Needs a connection from
+    /// [`connect_writable`].
     pub fn save(&self, edits: &Edits, fields: &[Field], held: Crs) -> Result<std::result::Result<Saved, Vec<Conflict>>> {
-        if held != self.held && held != Crs::LonLat {
-            let converted = super::edits::in_lonlat(edits, held)?;
-            return self.save(&converted, fields, Crs::LonLat);
-        }
         let own = held == self.held;
+        if !own && held != Crs::LonLat {
+            return Err(DataError::Format(format!(
+                "{}: the edits are in {}, and the table is read in {}; convert them to longitude/latitude first",
+                self.table.label(),
+                held.label(),
+                self.held.label()
+            )));
+        }
         let key = self.key.as_deref().ok_or_else(|| {
             DataError::Format(format!(
                 "{}: no single-column integer primary key, so its rows can't be told apart to save",
@@ -1781,7 +1785,8 @@ mod tests {
 
     /// A table in a system RustGIS converts itself is written as the layer holds it, in that
     /// system; a layer held in longitude/latitude (saved by an older release) is converted by the
-    /// server as before; one held in another system is converted to longitude/latitude first.
+    /// server as before; edits in another system are refused, and converted to longitude/latitude
+    /// in place by [`Edits::to_lonlat`].
     #[test]
     fn edits_are_written_in_the_system_the_layer_holds_them_in() {
         let mut held = source("GEOMETRY");
@@ -1797,20 +1802,18 @@ mod tests {
         server.table.srid = 2056;
         assert_eq!(server.geometry_in(1, 2, true), "ST_Transform(ST_SetSRID(ST_GeomFromWKB($1::bytea), 4326), 2056)");
         assert_eq!(server.coord_crs(), Crs::LonLat);
-        // Taken on to the save itself, which this source without a key refuses.
         let e = held.save(&Edits::default(), &[], Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
-        assert!(e.contains("primary key"), "{e}");
-        let edits = Edits {
-            inserts: vec![Feature {
-                id: 7,
-                geometry: Some(crate::Geometry::Point(rustgis_geom::Coord::new(600_000.0, 200_000.0))),
-                attrs: Vec::new(),
-            }],
-            ..Edits::default()
-        };
-        let lonlat = super::super::edits::in_lonlat(&edits, Crs::from_epsg(21781).unwrap()).unwrap();
-        let Some(crate::Geometry::Point(c)) = &lonlat.inserts[0].geometry else { panic!() };
+        assert!(e.contains("EPSG:21781") && e.contains("EPSG:2056") && e.contains("convert them"), "{e}");
+        // Converted in place; a new feature that can't be is named by its place, not its id.
+        let point = |x, y| Some(crate::Geometry::Point(rustgis_geom::Coord::new(x, y)));
+        let mut edits =
+            Edits { inserts: vec![Feature { id: 1, geometry: point(600_000.0, 200_000.0), attrs: Vec::new() }], ..Edits::default() };
+        edits.to_lonlat(Crs::from_epsg(21781).unwrap()).unwrap();
+        let Some(crate::Geometry::Point(c)) = &edits.inserts[0].geometry else { panic!() };
         assert!((c.x - 7.4386).abs() < 1e-3 && (c.y - 46.9511).abs() < 1e-3, "{c:?}");
+        let mut bad = Edits { inserts: vec![Feature { id: 1, geometry: point(f64::NAN, 0.0), attrs: Vec::new() }], ..Edits::default() };
+        let e = bad.to_lonlat(Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
+        assert!(e.starts_with("new feature 1:"), "{e}");
     }
 
     #[test]

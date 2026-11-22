@@ -64,28 +64,36 @@ pub struct Saved {
     pub assumed_utc: Vec<usize>,
 }
 
-/// `edits` with their geometry converted from `held` to longitude/latitude, for a source that
-/// takes them so; fails on a geometry that can't be, naming its row.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn in_lonlat(edits: &Edits, held: crate::raster::Crs) -> crate::Result<Edits> {
-    let to = held.to(crate::raster::Crs::LonLat).map_err(crate::DataError::Format)?;
-    let convert = |f: &Feature| -> crate::Result<Feature> {
-        let mut f = f.clone();
-        if let Some(g) = f.geometry.take() {
-            let placed = to.whole_geometry(&g).ok_or_else(|| {
-                crate::DataError::Format(format!(
-                    "row {}: its geometry can't be converted from {} to longitude/latitude",
-                    f.id,
-                    held.label()
-                ))
-            })?;
-            f.geometry = Some(placed);
+impl Edits {
+    /// Converts the geometry of the rows changed and added from `held` to longitude/latitude, in
+    /// place (no copy), for a table that takes them so: a layer held in a system other than the
+    /// table's (its column given another SRID since it was loaded). Fails on a geometry that can't
+    /// be converted, naming its row, or the new feature, and stops once the run is cancelled; the
+    /// edits are then left part converted, for the caller to drop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn to_lonlat(&mut self, held: crate::raster::Crs) -> crate::Result<()> {
+        let to = held.to(crate::raster::Crs::LonLat).map_err(crate::DataError::Format)?;
+        let convert = |f: &mut Feature, what: &dyn Fn() -> String| -> crate::Result<()> {
+            crate::progress::check()?;
+            if let Some(g) = &f.geometry {
+                let placed = to.whole_geometry(g).ok_or_else(|| {
+                    crate::DataError::Format(format!(
+                        "{}: its geometry can't be converted from {} to longitude/latitude",
+                        what(),
+                        held.label()
+                    ))
+                })?;
+                f.geometry = Some(placed);
+            }
+            Ok(())
+        };
+        for (f, _) in &mut self.updates {
+            let id = f.id.cast_signed();
+            convert(f, &|| format!("row {id}"))?;
         }
-        Ok(f)
-    };
-    Ok(Edits {
-        updates: edits.updates.iter().map(|(f, v)| Ok((convert(f)?, *v))).collect::<crate::Result<_>>()?,
-        deletes: edits.deletes.clone(),
-        inserts: edits.inserts.iter().map(convert).collect::<crate::Result<_>>()?,
-    })
+        for (n, f) in self.inserts.iter_mut().enumerate() {
+            convert(f, &|| format!("new feature {}", n + 1))?;
+        }
+        Ok(())
+    }
 }

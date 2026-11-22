@@ -203,8 +203,8 @@ impl EditTable {
     ///
     /// `held` is the system the edits' geometry is in, which the rows returned are given in too:
     /// the table's own ([`Self::coord_crs`]), or longitude/latitude, as a layer a project saved
-    /// before RustGIS kept a table's own coordinates holds it; edits in another are converted to
-    /// longitude/latitude first, and refused, naming the row, where they can't be.
+    /// before RustGIS kept a table's own coordinates holds it; edits in another are refused:
+    /// convert them first ([`Edits::to_lonlat`]).
     pub fn save(
         &self,
         edits: &Edits,
@@ -213,13 +213,15 @@ impl EditTable {
         expected_revision: &str,
         held: Crs,
     ) -> Result<std::result::Result<SavedRows, Vec<Conflict>>> {
-        // Edits in another system (a table whose SRS was changed since, which the check below
-        // refuses anyway) are converted to longitude/latitude first.
-        if held != self.coord_crs() && held != Crs::LonLat {
-            let converted = super::super::edits::in_lonlat(edits, held)?;
-            return self.save(&converted, fields, reserved, expected_revision, Crs::LonLat);
-        }
         let lonlat = held != self.coord_crs();
+        if lonlat && held != Crs::LonLat {
+            return Err(DataError::Format(format!(
+                "{}: the edits are in {}, and the table is in {}; convert them to longitude/latitude first",
+                self.table(),
+                held.label(),
+                self.coord_crs().label()
+            )));
+        }
         let mut conn =
             Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).map_err(err)?;
@@ -1786,13 +1788,16 @@ mod tests {
         given.for_each_coord(|c| close &= c.x.abs() <= 180.0);
         assert!(close, "{given:?}");
         assert_eq!(wkb::decode(split_blob(&blob_at(&path, 1)).unwrap().1), table.src.reproject.to_native(&back));
-        // Held in another system: converted to longitude/latitude first, and written so.
+        // Held in another system: refused as given, and written once converted in place.
         let utm = Crs::from_epsg(32632).unwrap();
         let mut edits = update(&table, None);
         let there = Crs::LonLat.to(utm).unwrap().geometry(&back);
         edits.updates[0].0.geometry = Some(there);
         let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
-        table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap().unwrap();
+        let e = table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap_err().to_string();
+        assert!(e.contains("EPSG:32632") && e.contains("convert them"), "{e}");
+        edits.to_lonlat(utm).unwrap();
+        table.save(&edits, &[], std::iter::empty(), &revision, Crs::LonLat).unwrap().unwrap();
         let stored = wkb::decode(split_blob(&blob_at(&path, 1)).unwrap().1).unwrap();
         let mut near = true;
         let want = table.src.reproject.to_native(&back).unwrap();

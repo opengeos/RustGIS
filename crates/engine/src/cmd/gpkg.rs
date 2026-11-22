@@ -237,10 +237,15 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             return Err(format!("{name}: {table} changed shape since it was loaded, so nothing was saved. Discard Edits loads it again"));
         }
         let rows = changes.insert_rows;
-        let edits = rustgis_data::source::edits::Edits { updates: changes.updates, deletes: changes.deletes, inserts: changes.inserts };
+        let mut edits = rustgis_data::source::edits::Edits { updates: changes.updates, deletes: changes.deletes, inserts: changes.inserts };
         // In the system the layer holds its geometry in: the table's own, or longitude/latitude
-        // for a layer a project saved before RustGIS kept a table's own coordinates.
-        let held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
+        // for a layer a project saved before RustGIS kept a table's own coordinates. Edits held
+        // in another go in longitude/latitude, converted in place.
+        let mut held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
+        if held != src.coord_crs() && held != rustgis_data::raster::Crs::LonLat {
+            edits.to_lonlat(held).map_err(|e| format!("{name}: {e}; nothing was saved"))?;
+            held = rustgis_data::raster::Crs::LonLat;
+        }
         let saved_rows = match src.save(&edits, &fields, edit.versions.iter().map(|(key, _)| key), &edit.revision, held).map_err(err)? {
             Ok(saved) => saved,
             Err(conflicts) => {

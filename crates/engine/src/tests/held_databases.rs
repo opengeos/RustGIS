@@ -194,3 +194,60 @@ fn a_geopackage_edit_session_works_in_the_tables_own_system() {
     assert_eq!(s.map().layer(id).unwrap().dataset.coord_crs(), Crs::LonLat);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A column of no fixed coordinate system whose rows say none (SRID 0), loaded with `"crs"`, is
+/// held in that system: read as stored, and edits written back as stored, still with SRID 0.
+/// `RUSTGIS_TEST_POSTGIS` names a database (`postgresql://…`) where the test may make and drop a
+/// table of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "needs a live PostGIS database with table creation rights in RUSTGIS_TEST_POSTGIS"]
+fn postgis_srid_zero_with_a_crs_live() {
+    /// Drops the test's table, however the test ends.
+    struct Cleanup(String, String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if let Ok(mut c) = postgres::Client::connect(&self.0, postgres::NoTls) {
+                let _ = c.batch_execute(&format!("DROP TABLE IF EXISTS public.{}", self.1));
+            }
+        }
+    }
+    let Ok(url) = std::env::var("RUSTGIS_TEST_POSTGIS") else { return };
+    let url = url.trim_start_matches("postgres:").to_string();
+    let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    let table = format!("rustgis_srid0_test_{}", std::process::id());
+    let _cleanup = Cleanup(url.clone(), table.clone());
+    db.batch_execute(&format!(
+        "CREATE TABLE public.{table} (id int PRIMARY KEY, name text, geom geometry);
+         INSERT INTO public.{table} VALUES (1, 'Bern', ST_MakePoint(2600000.123, 1200000.456));"
+    ))
+    .unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("pg.connect", &json!({"connection": url})).unwrap();
+    let r = s.run("pg.addLayer", &json!({"table": format!("public.{table}"), "name": "Z", "crs": "EPSG:2056"})).unwrap();
+    let id = r["layers"][0].as_u64().unwrap() as u32;
+    s.map_mut().editing.settings.enabled = true;
+    let lv95 = rustgis_data::raster::Crs::from_epsg(2056).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert_eq!(l.dataset.coord_crs(), lv95);
+    assert_eq!(
+        l.dataset.features.iter().next().unwrap().geometry,
+        Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(2_600_000.123, 1_200_000.456)))
+    );
+    s.run(
+        "edit.addFeature",
+        &json!({"layer": "Z", "geometry": {"type": "Point", "coordinates": [7.6280021, 46.7536016]}, "attributes": {"id": 2, "name": "new"}}),
+    )
+    .unwrap();
+    let r = s.run("pg.saveEdits", &json!({"layer": "Z"})).unwrap();
+    assert_eq!(r["inserted"].as_u64(), Some(1), "{r}");
+    let row = db.query_one(format!("SELECT ST_X(geom), ST_Y(geom), ST_SRID(geom) FROM public.{table} WHERE id = 2").as_str(), &[]).unwrap();
+    let (x, y, srid): (f64, f64, i32) = (row.get(0), row.get(1), row.get(2));
+    assert_eq!(srid, 0, "the column's rows keep saying none");
+    let want = rustgis_data::raster::Crs::LonLat
+        .to(lv95)
+        .unwrap()
+        .geometry(&rustgis_data::Geometry::Point(rustgis_geom::Coord::new(7.6280021, 46.7536016)));
+    let rustgis_data::Geometry::Point(want) = want else { panic!() };
+    assert!((x - want.x).abs() < 1e-6 && (y - want.y).abs() < 1e-6, "{x} {y} vs {want:?}");
+}
