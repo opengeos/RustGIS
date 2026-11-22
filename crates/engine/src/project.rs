@@ -782,11 +782,18 @@ pub struct OfflineArea {
     /// The versions that lost when a sync or a Bring Back of the area found a feature changed both
     /// here and in the field, oldest first: kept so they can be looked at again after the notice
     /// is gone (Data › Offline › Conflicts), until they are dismissed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conflicts: Vec<AreaConflict>,
+    // Shared, so an Undo step's copy of the project doesn't copy them: a change replaces the list
+    // (`Arc::make_mut`) only in the project that makes it.
+    #[serde(default, skip_serializing_if = "no_conflicts")]
+    pub conflicts: std::sync::Arc<Vec<AreaConflict>>,
     /// The snapshot: the map's feature layers holding the features meeting the extent.
     #[cfg_attr(feature = "schema", schemars(with = "crate::schema::Open"))]
     pub data: Map,
+}
+
+/// Whether an offline area keeps no conflicts, so none are saved.
+fn no_conflicts(c: &std::sync::Arc<Vec<AreaConflict>>) -> bool {
+    c.is_empty()
 }
 
 /// A feature a sync or a Bring Back of an offline area changed in one place and found changed in

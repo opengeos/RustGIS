@@ -772,19 +772,18 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         let mut written = HashSet::new();
         let lost = |kind, id, values, shape| super::workspace::conflict(&changes.package, lc.layer, &name, id, kind, values, shape);
         for g in &lc.edited {
+            // An edit naming a feature the package's map hasn't has no values to bring back or keep.
+            let Some(&p) = at_field.get(&g.id) else {
+                done.unknown += 1;
+                continue;
+            };
             let Some(&r) = at.get(&g.id) else {
                 done.skipped += 1;
                 done.dropped.push(tag(&name, g.id));
                 // The field's edits lost: the values and shape it changed.
-                if let Some(&p) = at_field.get(&g.id) {
-                    let values = g.values.iter().map(|(field, _)| (field.clone(), field_value(p, field))).collect();
-                    let shape = g.geometry.as_ref().map(|_| theirs.features.geometry(p).cloned());
-                    done.lost.push(lost(ConflictKind::Dropped, g.id, values, shape));
-                }
-                continue;
-            };
-            let Some(&p) = at_field.get(&g.id) else {
-                done.unknown += 1;
+                let values = g.values.iter().map(|(field, _)| (field.clone(), field_value(p, field))).collect();
+                let shape = g.geometry.as_ref().map(|_| theirs.features.geometry(p).cloned());
+                done.lost.push(lost(ConflictKind::Dropped, g.id, values, shape));
                 continue;
             };
             let (mut changed, mut values, mut shape) = (false, Vec::new(), None);

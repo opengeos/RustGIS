@@ -1322,7 +1322,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
-            conflicts: Vec::new(),
+            conflicts: Default::default(),
             data: with_area.map().clone(),
         });
         assert_eq!(serde_json::to_value(&with_area).unwrap()["requires"], json!(["field-origin"]));
@@ -1351,8 +1351,11 @@ mod tests {
         let saved = serde_json::to_value(&project).unwrap();
         assert!(saved["requires"].as_array().unwrap().contains(&json!("field-conflicts")), "{}", saved["requires"]);
         assert_eq!(Project::from_json(&saved.to_string()).unwrap().offline_areas[0].conflicts, *kept);
+        // An Undo step's copy of the project shares them.
+        let copy = project.clone();
+        assert!(std::sync::Arc::ptr_eq(&copy.offline_areas[0].conflicts, &project.offline_areas[0].conflicts));
         let mut none = project.clone();
-        none.offline_areas[0].conflicts.clear();
+        none.offline_areas[0].conflicts = Default::default();
         let saved = serde_json::to_value(&none).unwrap();
         assert!(!saved["requires"].as_array().unwrap().contains(&json!("field-conflicts")), "{}", saved["requires"]);
         // A kind this version doesn't know is refused, not read as another.
@@ -1401,7 +1404,7 @@ mod tests {
             generation: String::new(),
             returned: vec!["a1b2c3d4e5f60718293a4b5c6d7e8f90".into()],
             ids: Default::default(),
-            conflicts: Vec::new(),
+            conflicts: Default::default(),
             data: with_area.map().clone(),
         });
         let saved = serde_json::to_value(&with_area).unwrap();
@@ -1445,7 +1448,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
-            conflicts: Vec::new(),
+            conflicts: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].tiles.clear();
@@ -1474,7 +1477,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
-            conflicts: Vec::new(),
+            conflicts: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].view.terrain = None;

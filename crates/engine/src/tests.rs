@@ -9279,7 +9279,7 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
-        conflicts: Vec::new(),
+        conflicts: Default::default(),
         data: project.maps[0].clone(),
     });
     let clean = serde_json::to_string(&project).unwrap();
@@ -18216,10 +18216,11 @@ fn saving_kept_conflicts_counts_numbers_written_as_null_and_refuses_bad_shapes()
         (done, s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>())
     };
     let point = |x: f64| Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(x, 1.0)));
-    s.project.offline_areas[0].conflicts = vec![kept(vec![("population".into(), rustgis_data::Value::Int(10))], point(1.0))];
+    s.project.offline_areas[0].conflicts = vec![kept(vec![("population".into(), rustgis_data::Value::Int(10))], point(1.0))].into();
     let (done, notices) = said(&mut s);
     assert!(done.is_ok() && notices.iter().all(|n| !n.contains("written as null")), "{notices:?}");
-    s.project.offline_areas[0].conflicts.push(kept(vec![("population".into(), rustgis_data::Value::Float(f64::NAN))], point(1.0)));
+    std::sync::Arc::make_mut(&mut s.project.offline_areas[0].conflicts)
+        .push(kept(vec![("population".into(), rustgis_data::Value::Float(f64::NAN))], point(1.0)));
     let (done, notices) = said(&mut s);
     assert!(done.is_ok(), "{done:?}");
     assert!(
@@ -18227,7 +18228,7 @@ fn saving_kept_conflicts_counts_numbers_written_as_null_and_refuses_bad_shapes()
         "{notices:?}"
     );
     let before = std::fs::read(&path).unwrap();
-    s.project.offline_areas[0].conflicts.push(kept(Vec::new(), point(f64::NAN)));
+    std::sync::Arc::make_mut(&mut s.project.offline_areas[0].conflicts).push(kept(Vec::new(), point(f64::NAN)));
     let (done, _) = said(&mut s);
     let e = done.unwrap_err();
     assert!(e.contains("offline area 'Fieldwork'") && e.contains("Assets #1") && e.contains("dismiss it first"), "{e}");
@@ -54018,7 +54019,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
-        conflicts: Vec::new(),
+        conflicts: Default::default(),
         data: snapshot,
     });
     let mut reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());

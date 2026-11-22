@@ -313,7 +313,14 @@ pub fn commands() -> Vec<C> {
         C::new("offline.conflicts", "Conflicts", "Data › Offline", |s, p| {
             let ai = area_index(s, p)?;
             let a = s.project.offline_areas.get(ai).ok_or("no such area")?;
-            Ok(json!({"area": a.name, "map": a.map, "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()}))
+            let listed = json!({"area": a.name, "map": a.map, "conflicts": a.conflicts.iter().enumerate().map(|(i, c)| conflict_json(i, c)).collect::<Vec<_>>()});
+            // JSON has no NaN or infinity: such a kept value is listed as null, and said.
+            let nulled = a.conflicts.iter().flat_map(|c| &c.values).filter(|(_, v)| v.is_non_finite()).count();
+            if nulled > 0 {
+                let area = a.name.clone();
+                s.notify(format!("Offline area '{area}': {nulled} kept value(s) aren't finite numbers (NaN or infinity), so they are listed as null"), false);
+            }
+            Ok(listed)
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .view()
         .params(r#"{"name": offline area}"#),
@@ -330,7 +337,7 @@ pub fn commands() -> Vec<C> {
                 return Err(format!("offline area '{}' has no conflict {unknown}: it has {held}", a.name));
             }
             let mut i = 0u64;
-            a.conflicts.retain(|_| {
+            std::sync::Arc::make_mut(&mut a.conflicts).retain(|_| {
                 let keep = picked.as_ref().is_some_and(|p| !p.contains(&i));
                 i += 1;
                 keep
@@ -865,7 +872,7 @@ pub(crate) fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         generation: String::new(),
         returned: Vec::new(),
         ids: Default::default(),
-        conflicts: Vec::new(),
+        conflicts: Default::default(),
         data,
     });
     note_unbound(s, bound, &format!("the offline area '{name}'"));
@@ -1266,8 +1273,10 @@ pub(crate) fn conflict(
 /// on the area after those kept before, so they can be looked at after the notice has gone (the
 /// command's Undo takes them away again, with its changes).
 pub(crate) fn keep_conflicts(s: &mut Session, ai: usize, found: Vec<AreaConflict>) {
-    if let Some(a) = s.project.offline_areas.get_mut(ai) {
-        a.conflicts.extend(found);
+    if !found.is_empty()
+        && let Some(a) = s.project.offline_areas.get_mut(ai)
+    {
+        std::sync::Arc::make_mut(&mut a.conflicts).extend(found);
     }
 }
 

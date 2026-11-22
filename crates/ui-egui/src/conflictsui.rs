@@ -8,8 +8,8 @@ use serde_json::json;
 use crate::RustGisApp;
 use crate::i18n;
 
-/// The rows the window shows at most; the rest are counted below them.
-const SHOWN: usize = 500;
+/// The rows of one page of the window.
+const PAGE: usize = 200;
 
 /// The open Conflicts window: the project it was opened in ([`Session::opened`]) and its area, by
 /// identity (by name for an area made before areas had one).
@@ -17,6 +17,8 @@ pub struct Form {
     opened: u64,
     area: String,
     name: String,
+    /// The page shown, from 0.
+    page: usize,
 }
 
 impl Form {
@@ -28,7 +30,7 @@ impl Form {
             .iter()
             .find(|a| a.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| i18n::fmt("There is no offline area '{name}'.", &[("name", name)]))?;
-        Ok(Self { opened: s.opened, area: a.id.clone(), name: a.name.clone() })
+        Ok(Self { opened: s.opened, area: a.id.clone(), name: a.name.clone(), page: 0 })
     }
 
     /// The area's place in the project, while it is the one the window was opened on.
@@ -53,7 +55,9 @@ fn happened(kind: ConflictKind) -> &'static str {
 /// The version that lost, as text: `field = value` for each value, one a line, and the shape when
 /// it lost.
 fn lost(c: &AreaConflict) -> String {
-    let mut parts: Vec<String> = c.values.iter().map(|(n, v)| format!("{n} = {v}")).collect();
+    // Numbers in full, as a file writes them, not rounded for display.
+    let shown = |v: &rustgis_engine::data::Value| if v.is_null() { "<null>".to_string() } else { v.to_file_text() };
+    let mut parts: Vec<String> = c.values.iter().map(|(n, v)| format!("{n} = {}", shown(v))).collect();
     if c.shape {
         parts.push(if c.geometry.is_some() { tl!("its shape").to_string() } else { tl!("no shape").to_string() });
     }
@@ -65,13 +69,17 @@ fn lost(c: &AreaConflict) -> String {
 
 /// Shows the window while it is open.
 pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
-    let Some(form) = app.dialogs.conflicts.take() else { return };
+    let Some(mut form) = app.dialogs.conflicts.take() else { return };
     let Some(ai) = form.index(&app.session) else {
         app.dialogs.open = None;
         return;
     };
     let Some(area) = app.session.project.offline_areas.get(ai) else { return };
     let (map, conflicts) = (area.map.clone(), &area.conflicts);
+    // The last page still there, after dismissals.
+    let pages = conflicts.len().div_ceil(PAGE).max(1);
+    form.page = form.page.min(pages - 1);
+    let first = form.page * PAGE;
     let mut open = true;
     let (mut dismiss, mut show_at, mut all) = (None, None, false);
     egui::Window::new(i18n::fmt("Conflicts: {area}", &[("area", &form.name)]))
@@ -97,7 +105,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         ui.strong(title);
                     }
                     ui.end_row();
-                    for (i, c) in conflicts.iter().enumerate().take(SHOWN) {
+                    for (i, c) in conflicts.iter().enumerate().skip(first).take(PAGE) {
                         ui.label(format!("{} #{}", c.layer_name, c.feature));
                         ui.label(happened(c.kind));
                         ui.add(egui::Label::new(lost(c)).wrap());
@@ -118,12 +126,25 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         ui.end_row();
                     }
                 });
-                if conflicts.len() > SHOWN {
-                    ui.weak(i18n::fmt("{n} more not shown.", &[("n", &(conflicts.len() - SHOWN).to_string())]));
-                }
             });
             ui.add_space(4.0);
-            all = ui.button(tl!("Dismiss All")).clicked();
+            ui.horizontal(|ui| {
+                all = ui.button(tl!("Dismiss All")).clicked();
+                if pages > 1 {
+                    ui.separator();
+                    if ui.add_enabled(form.page > 0, egui::Button::new(tl!("Previous"))).clicked() {
+                        form.page -= 1;
+                    }
+                    let last = (first + PAGE).min(conflicts.len());
+                    ui.label(i18n::fmt(
+                        "{from}–{to} of {count}",
+                        &[("from", &(first + 1).to_string()), ("to", &last.to_string()), ("count", &conflicts.len().to_string())],
+                    ));
+                    if ui.add_enabled(form.page + 1 < pages, egui::Button::new(tl!("Next"))).clicked() {
+                        form.page += 1;
+                    }
+                }
+            });
         });
     if let Some((layer, feature)) = show_at {
         show_feature(app, &map, layer, feature);
