@@ -2015,12 +2015,12 @@ fn mgrs_squares(
 /// The graticule labels drawn, of those at each edge crossing (`labels`: edge, place along it,
 /// text, a meridian's or not) on a frame `size` pixels, `label_h` tall: away from the corners (all
 /// of a label, `along` its edge, fits, and none at a side's ends by a top or bottom label), within
-/// the frame across (how far it reaches in from its edge, `across`, at most the frame's other
-/// side: a label larger than a short frame isn't cut by it), and none over another. Meridians are labelled along the top and
-/// bottom and parallels along the sides first; a line that leaves the frame through the other
-/// edges (a slanting meridian on a projected map) is labelled there only well clear of the labels
-/// already set on that edge. Their room from the corners and between them is in `unit`s, a point
-/// at the labels' default size in pixels, so it follows their size.
+/// the frame across (how far it reaches in from its edge, `across`, at most the frame's other side:
+/// a label larger than a short frame isn't cut by it), and none over another. Meridians are
+/// labelled along the top and bottom and parallels along the sides first; a line that leaves the
+/// frame through the other edges (a slanting meridian on a projected map) is labelled there only
+/// well clear of the labels already set on that edge. Their room from the corners and between them
+/// is in `unit`s, a point at the labels' default size in pixels, so it follows their size.
 /// A label left out for want of room is thinning, as on any map, not a loss to report: the grid
 /// still shows its lines, and the user guide says labels go where there is room.
 fn kept_labels(
@@ -2254,7 +2254,8 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
 /// How far a scale bar starts in from its box's left side, in pixels, for its first label `first`
 /// at `k` times the default size (#2581): [`BAR_INSET`] in proportion, or more, so that label
 /// reaches no further past the side than it does at the default size, as the bar moves down to
-/// keep its labels from reaching higher. At the default size, [`BAR_INSET`].
+/// keep its labels from reaching higher. At the default size, [`BAR_INSET`]: pixels, as the
+/// drawing has always placed the bar, not following `ppp`, which only the labels' widths do.
 fn bar_inset(first: &str, k: f32, ppp: f32) -> f32 {
     let half = |k: f32| text::measure(first, SCALE_BAR_TEXT_PT as f32 * k * ppp, false) / 2.0;
     (BAR_INSET * k).max(half(k) - (half(1.0) - BAR_INSET).max(0.0))
@@ -8672,6 +8673,11 @@ Elaboração: RustGIS",
             .map(|(.., s)| s)
             .collect();
         assert!(kept.is_empty(), "{kept:?}");
+        // And on a frame 15 pixels wide, the sides' labels, whose flat labels reach their width in.
+        let across = |edge: Edge, s: &str| if matches!(edge, Edge::Left | Edge::Right) { s.len() as f32 * 5.0 + 6.0 } else { 6.0 };
+        let side = vec![label(Edge::Right, 200.0, "6°S", false), label(Edge::Left, 250.0, "8°S", false)];
+        assert_eq!(kept_labels(side.clone(), (600.0, 500.0), (along, across), 10.0, 1.0).len(), 2, "a wide frame keeps them");
+        assert!(kept_labels(side, (15.0, 500.0), (along, across), 10.0, 1.0).is_empty(), "a narrow one leaves them out");
     }
 
     /// A layout with a decimal comma swaps the marks of the numbers it prints, `{scale}` included,

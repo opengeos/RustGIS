@@ -3550,13 +3550,13 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
     };
     let Some(loss) = text_fit_loss(s, li, id) else { return };
     // A scale bar's labels (#2581): its box too small for them, or one off the page.
-    let said = if bar {
+    let notices = if bar {
         rustgis_render::layout::scale_bar_fit_notices(&[loss])
     } else {
         rustgis_render::layout::lines_left_out_notice(&loss).into_iter().collect()
     };
-    for said in said {
-        s.warn(said);
+    for notice in notices {
+        s.warn(notice);
     }
 }
 
