@@ -1006,6 +1006,10 @@ pub struct Session {
     /// the command fails ([`PutAside`]); and how deep commands run within commands now.
     put_aside: Option<Box<PutAside>>,
     pub(crate) depth: u32,
+    /// Rasters added while the project takes its system from the first layer added, whose pixels
+    /// hadn't landed when the step that added them ended: still candidates until they have
+    /// ([`cmd::project::first_layer_watch`]).
+    pub(crate) first_layer_pending: Vec<u64>,
     /// Only the command's registered id, never its parameters. Nested commands restore this.
     pub(crate) diagnostic_source: Option<&'static str>,
     /// How many of the commands running now restore the project if they fail: a replacement is
@@ -1473,6 +1477,7 @@ impl Session {
             merged: None,
             put_aside: None,
             depth: 0,
+            first_layer_pending: Vec::new(),
             diagnostic_source: None,
             restorable: 0,
             published_syncs: Vec::new(),

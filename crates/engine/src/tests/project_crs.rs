@@ -167,3 +167,114 @@ fn a_layer_without_a_system_of_its_own_gives_none() {
     s.run("layer.template", &json!({"template": "lines"})).unwrap();
     assert_eq!(s.project.coordinate_system, None);
 }
+
+/// An ASCII grid of 4 × 3 cells at (x, y), 0.5 units a side.
+fn grid(dir: &std::path::Path, name: &str, x: f64, y: f64, prj: Option<String>) -> std::path::PathBuf {
+    let path = dir.join(format!("{name}.asc"));
+    std::fs::write(&path, format!("ncols 4\nnrows 3\nxllcorner {x}\nyllcorner {y}\ncellsize 0.5\n1 2 3 4\n5 6 7 8\n9 10 11 12\n")).unwrap();
+    if let Some(prj) = prj {
+        std::fs::write(dir.join(format!("{name}.prj")), prj).unwrap();
+    }
+    path
+}
+
+#[test]
+fn a_raster_read_as_wgs84_by_assumption_gives_none_and_one_that_names_its_system_gives_it() {
+    let dir = std::env::temp_dir().join(format!("rustgis-project-crs-{}-grids", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    // No .prj, coordinates that look like degrees: WGS 84 assumed, so no system of its own.
+    let assumed = grid(&dir, "assumed", 8.0, 46.0, None);
+    s.run("layer.addData", &json!({"path": assumed})).unwrap();
+    let l = s.map().layers.last().unwrap();
+    assert!(l.raster.as_ref().unwrap().data.as_ref().unwrap().crs_assumed);
+    assert_eq!(s.project.coordinate_system, None);
+    // With its .prj: LV95.
+    let named = grid(&dir, "named", 2_600_000.0, 1_200_000.0, rustgis_data::raster::wkt::to_wkt(LV95));
+    s.run("layer.addData", &json!({"path": named})).unwrap();
+    assert_eq!(s.project.coordinate_system, Some(LV95));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_system_given_back_reads_as_the_same_system() {
+    let mut s = Session::new(Project::default());
+    // A WKT whose PROJ definition alone loses its grads, and an ESRI code.
+    let grads = r#"GEOGCS["NTF (Paris)",DATUM["Nouvelle_Triangulation_Francaise_Paris",SPHEROID["Clarke 1880 (IGN)",6378249.2,293.466021293627,AUTHORITY["EPSG","7011"]],AUTHORITY["EPSG","6807"]],PRIMEM["Paris",2.33722917,AUTHORITY["EPSG","8903"]],UNIT["grad",0.0157079632679489,AUTHORITY["EPSG","9105"]]]"#;
+    for given in [grads, "ESRI:102033", "EPSG:2056"] {
+        let out = s.run("project.coordinateSystem", &json!({"crs": given})).unwrap();
+        let first = s.project.coordinate_system.unwrap();
+        s.run("project.coordinateSystem", &json!({"crs": null})).unwrap();
+        s.run("project.coordinateSystem", &json!({"crs": out["crs"]})).unwrap();
+        let again = s.project.coordinate_system.unwrap();
+        assert_eq!((first.definition_text(), first.label()), (again.definition_text(), again.label()), "{given}");
+    }
+    let out = s.run("project.coordinateSystem", &json!({"crs": "ESRI:102033"})).unwrap();
+    assert_eq!(out["crs"], "ESRI:102033");
+}
+
+#[test]
+fn a_script_step_gives_the_system_to_the_steps_after_it() {
+    let (dir, path) = lv95_file("script");
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let script = format!("layer.addData {}\nmap.new {}", json!({"path": path}), json!({"name": "After"}));
+    s.run("script.run", &json!({"script": script})).unwrap();
+    assert_eq!(s.project.coordinate_system, Some(LV95));
+    assert_eq!(s.map().projection.code(), "EPSG:2056", "the new map, made after the layer, is in it");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.coordinate_system, None, "one step with the script");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_raster_whose_pixels_land_between_commands_still_gives_its_system() {
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let gt = rustgis_data::raster::GeoTransform { origin_x: 2_600_000.0, origin_y: 1_200_000.0, pixel_width: 10.0, pixel_height: -10.0 };
+    let r = rustgis_data::raster::Raster::new(
+        "dem",
+        2,
+        2,
+        vec![vec![1.0; 4]],
+        gt,
+        LV95,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    // Added with its pixels still to come, as a raster read in place is.
+    let watch = crate::cmd::project::first_layer_watch(&s, "layer.addData").unwrap();
+    let mut layer = rustgis_map::RasterLayer::from_path(r, "dem.tif");
+    let pixels = layer.data.take();
+    let id = s.map_mut().add_raster("dem", layer);
+    crate::cmd::project::take_first_layer_system(&mut s, &watch);
+    assert_eq!(s.project.coordinate_system, None);
+    // They land while the map draws, between commands. A command that changes nothing leaves the
+    // project as it is; the next that changes it finds the raster, unsaved and undone with it.
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = pixels;
+    s.mark_saved();
+    s.run("map.zoomIn", &json!({})).unwrap();
+    assert_eq!(s.project.coordinate_system, None);
+    assert!(!s.dirty());
+    s.run("project.rename", &json!({"name": "Swiss"})).unwrap();
+    assert_eq!(s.project.coordinate_system, Some(LV95));
+    assert!(s.dirty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.coordinate_system, None);
+}
+
+#[test]
+fn a_script_that_fails_after_taking_the_system_gives_it_back() {
+    let (dir, path) = lv95_file("failing");
+    let mut s = Session::new(Project::default());
+    s.run("project.coordinateSystem", &json!({"fromFirstLayer": true})).unwrap();
+    let script = format!("layer.addData {}\nlayer.remove {}", json!({"path": path}), json!({"layer": "No such layer"}));
+    assert!(s.run("script.run", &json!({"script": script})).is_err());
+    assert_eq!(s.project.coordinate_system, None);
+    assert!(s.map().layers.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}

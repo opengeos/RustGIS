@@ -13,6 +13,9 @@ use crate::{RustGisApp, i18n};
 
 #[derive(Default)]
 pub struct Dialogs {
+    /// Project Properties: the system text last read, and what was said of it (and whether that is
+    /// an error); empty when the dialog opens, so each opening reads its text once.
+    pub project_crs_said: Option<(String, Option<(String, bool)>)>,
     /// The layer captured when Define Projection opens; changing selection must not retarget it.
     pub projection_layer: Option<u32>,
     /// Map-local layer IDs require the dialog to retain its original project and map as well.
@@ -212,7 +215,7 @@ impl Dialogs {
                 self.a = if is_code { self.text.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string() } else { String::new() };
             }
             "projectProperties" => {
-                self.text = s.project.coordinate_system.map(|c| c.definition_text()).unwrap_or_default();
+                self.text = s.project.coordinate_system.map(rustgis_engine::cmd::project::crs_text).unwrap_or_default();
                 self.flag = s.project.crs_from_first_layer;
             }
             "addDxf" => {
@@ -551,7 +554,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let input_label = ui.label(tl!("Coordinate system"));
                 let recent = app.ui.recent_crs.clone();
                 let width = ui.available_width();
-                let (r, _) = crate::crspicker::crs_box(
+                let (r, taken) = crate::crspicker::crs_box(
                     ui,
                     "projectProperties",
                     &mut app.dialogs.text,
@@ -563,13 +566,15 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 );
                 let r = r.labelled_by(input_label.id);
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Coordinate system")));
-                // Read when the text changes, not every frame: a WKT or PROJ definition costs a
-                // conversion to build, and each one typed takes a place in the run's table.
+                // Read once the text is taken (the box left, a row picked, or the dialog opened on
+                // it), not as it is typed: a WKT or PROJ definition costs a conversion to build,
+                // and each one read takes a place in the run's table of typed systems for good.
                 let typed = app.dialogs.text.trim().to_string();
-                let memo = egui::Id::unique("projectPropertiesSystem");
-                let cached: Option<(String, Option<(String, bool)>)> = ui.data(|d| d.get_temp(memo));
+                let cached = app.dialogs.project_crs_said.clone();
+                let committed = taken || r.lost_focus() || cached.is_none();
                 let said = match cached {
                     Some((text, said)) if text == typed => said,
+                    _ if !committed => None,
                     _ => {
                         let said = match (!typed.is_empty()).then(|| rustgis_engine::data::raster::Crs::parse(&typed)) {
                             Some(Ok(crs)) => rustgis_engine::cmd::navigate::map_projection_for(crs)
@@ -578,7 +583,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                             Some(Err(e)) => Some((e, true)),
                             None => None,
                         };
-                        ui.data_mut(|d| d.insert_temp(memo, (typed.clone(), said.clone())));
+                        app.dialogs.project_crs_said = Some((typed.clone(), said.clone()));
                         said
                     }
                 };

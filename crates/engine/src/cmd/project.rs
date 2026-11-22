@@ -850,22 +850,35 @@ fn coordinate_system(s: &mut Session, p: &Value) -> CmdResult {
     Ok(project_crs_json(&s.project))
 }
 
-/// The project's coordinate system as commands give it: its code (which `crs` reads back), its
-/// name, whether a map can be drawn in it, and whether the first layer added gives it one.
+/// Text `crs` reads back as the same system: an EPSG or ESRI code, else a custom system's WKT when
+/// it was given one (its PROJ definition alone can leave out what places points, such as angles in
+/// grads), else its PROJ definition.
+pub fn crs_text(crs: rustgis_data::raster::Crs) -> String {
+    let label = crs.label();
+    if label.starts_with("ESRI:") { label } else { crs.definition_text() }
+}
+
+/// The project's coordinate system as commands give it: text that `crs` reads back as the same
+/// system ([`crs_text`]), its name, whether a map can be drawn in it, and whether the first layer
+/// added gives it one.
 pub(crate) fn project_crs_json(project: &crate::project::Project) -> Value {
     let crs = project.coordinate_system;
     json!({
-        "crs": crs.map(|c| c.code()),
+        "crs": crs.map(crs_text),
         "label": crs.map(|c| c.label()),
         "mapsCanUse": crs.map(|c| super::navigate::map_projection_for(c).is_ok()),
         "fromFirstLayer": project.crs_from_first_layer,
     })
 }
 
-/// The layers in the project before a command, when the project is to take its coordinate
-/// system from the first layer added ([`Project::crs_from_first_layer`]) and has none yet; else
-/// `None`, and nothing is looked at. Undo and Redo bring back layers that were added before, and
-/// a project opened or started brings its own setting: they give none.
+/// The layers in the project before a step (a command, or a line of a script or task), when the
+/// project is to take its coordinate system from the first layer added
+/// ([`Project::crs_from_first_layer`]) and has none yet; else `None`, and nothing is looked at.
+/// Undo and Redo bring back layers that were added before, and a project opened or started brings
+/// its own setting: they give none. A raster whose pixels haven't landed (read in place, or from
+/// a server) says no system until they do: it is left out, as are those
+/// [`take_first_layer_system`] kept waiting, so the first step that changes the project after
+/// their pixels land finds them.
 ///
 /// [`Project::crs_from_first_layer`]: crate::project::Project::crs_from_first_layer
 pub(crate) fn first_layer_watch(s: &Session, id: &str) -> Option<(u64, std::collections::HashSet<u64>)> {
@@ -873,34 +886,40 @@ pub(crate) fn first_layer_watch(s: &Session, id: &str) -> Option<(u64, std::coll
     if !p.crs_from_first_layer || p.coordinate_system.is_some() || matches!(id, "edit.undo" | "edit.redo") {
         return None;
     }
-    // A raster whose pixels haven't landed yet (read in place, or from a server) says no system
-    // until they do: it counts as added until then, so the next command finds it.
-    let decided = |l: &&rustgis_map::Layer| l.raster.as_ref().is_none_or(|r| r.data.is_some());
+    let decided =
+        |l: &&rustgis_map::Layer| l.raster.as_ref().is_none_or(|r| r.data.is_some()) && !s.first_layer_pending.contains(&l.instance_id());
     Some((s.opened, p.maps.iter().flat_map(|m| m.layers.iter().filter(decided).map(rustgis_map::Layer::instance_id)).collect()))
 }
 
 /// The coordinate system a layer says it is in: a raster's, or the one a feature layer was read
-/// in. `None` for a feature layer whose source named none (taken for longitude/latitude).
+/// in. `None` for a layer whose file named none: a feature layer taken for longitude/latitude, a
+/// raster read as WGS 84 because its coordinates look like degrees, a scan not yet placed.
 pub fn layer_system(l: &rustgis_map::Layer) -> Option<rustgis_data::raster::Crs> {
     match &l.raster {
-        Some(r) => r.data.as_ref().map(|d| d.crs),
+        Some(r) => r.data.as_ref().filter(|d| d.georeferenced && !d.crs_assumed).map(|d| d.crs),
         None => l.dataset.crs,
     }
 }
 
-/// After a command: the project takes the coordinate system of the first layer it added that
-/// has one, in the maps' order, and says so ([`first_layer_watch`]).
+/// After a step: the project takes the coordinate system of the first layer it added that has
+/// one, in the maps' order, and says so ([`first_layer_watch`]). Rasters it added whose pixels
+/// are still to come wait for the next step.
 pub(crate) fn take_first_layer_system(s: &mut Session, (opened, before): &(u64, std::collections::HashSet<u64>)) {
-    if s.opened != *opened || !s.project.crs_from_first_layer || s.project.coordinate_system.is_some() {
+    if s.opened != *opened {
+        s.first_layer_pending.clear();
         return;
     }
-    let found = s
-        .project
-        .maps
-        .iter()
-        .flat_map(|m| m.layers.iter())
-        .filter(|l| !before.contains(&l.instance_id()))
-        .find_map(|l| layer_system(l).map(|crs| (crs, l.name.clone())));
+    if !s.project.crs_from_first_layer || s.project.coordinate_system.is_some() {
+        return;
+    }
+    let added = || s.project.maps.iter().flat_map(|m| m.layers.iter()).filter(|l| !before.contains(&l.instance_id()));
+    let found = added().find_map(|l| layer_system(l).map(|crs| (crs, l.name.clone())));
+    // Those waiting stay listed when one is taken: a script that took it, failing later, gives
+    // the project back without it, and they are still to be found then.
+    if found.is_none() {
+        s.first_layer_pending =
+            added().filter(|l| l.raster.as_ref().is_some_and(|r| r.data.is_none())).map(rustgis_map::Layer::instance_id).collect();
+    }
     if let Some((crs, name)) = found {
         s.project.coordinate_system = Some(crs);
         s.notify(
