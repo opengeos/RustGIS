@@ -538,7 +538,8 @@ pub fn published_tools() -> impl Iterator<Item = &'static ToolSpec> {
 }
 
 /// Resolves only published schemas and captures the same publication's runner and generation.
-/// IDs precede names; builtin display names precede external display names. Missing publication
+/// IDs precede names; builtin display names precede external display names, and those precede
+/// a built-in tool's former name ([`FORMER_NAMES`]). Missing publication
 /// remains missing until trusted native startup or an explicitly authorized loading action.
 pub fn resolve_published(name: &str) -> Option<ResolvedTool> {
     let builtin = |spec| ResolvedTool { spec, source: None, runner: None, generation: 0 };
@@ -563,7 +564,15 @@ pub fn resolve_published(name: &str) -> Option<ResolvedTool> {
         .copied()
         .or_else(|| TOOLS.iter().find(|t| t.name.eq_ignore_ascii_case(name)).map(builtin))
         .or_else(|| external.into_iter().find(|r| r.spec.name.eq_ignore_ascii_case(name)))
+        .or_else(|| {
+            let id = FORMER_NAMES.iter().find(|(old, _)| old.eq_ignore_ascii_case(name))?.1;
+            TOOLS.iter().find(|t| t.id == id).map(builtin)
+        })
 }
+
+/// Built-in tools' display names before a rename, and the ids they name: a script or notebook
+/// saved with the old name still runs the tool, after every current name has had its turn.
+const FORMER_NAMES: &[(&str, &str)] = &[("A5 Grid", "a5Grid"), ("Aggregate Points to A5", "a5Aggregate")];
 
 /// The runner for external tools; never called (external specs carry the runner's id).
 pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, String> {

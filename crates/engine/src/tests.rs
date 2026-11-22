@@ -6735,6 +6735,12 @@ fn a5_grids_and_points_by_cell() {
     let total: f64 = (0..by.features.len()).map(|r| by.value(r, i).as_f64().unwrap()).sum();
     assert_eq!(total as usize, cities);
     assert!(s.run("gp.run", &json!({"tool": "a5Grid", "params": {"resolution": 13, "area": "World"}})).is_err());
+    // A script saved with the names the tools had before they took a system still runs them.
+    s.run("gp.run", &json!({"tool": "A5 Grid", "params": {"resolution": 1, "area": "World", "output": "old name"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("old name").unwrap().dataset.fields[0].name, "a5");
+    s.run("gp.run", &json!({"tool": "Aggregate Points to A5", "params": {"input": "Cities", "resolution": 2, "output": "old by cell"}}))
+        .unwrap();
+    assert!(s.map().layer_by_name("old by cell").is_some());
 }
 
 /// Generate Tessellation and Aggregate Points to Grid through `gp.run` in every system, every
