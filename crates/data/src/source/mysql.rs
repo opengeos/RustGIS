@@ -898,8 +898,8 @@ impl MysqlSource {
         };
         // Read in the table's own system: each placed in longitude/latitude, vertex by vertex.
         b.features
-            .iter()
-            .filter_map(|f| f.geometry.clone())
+            .into_iter()
+            .filter_map(|f| f.geometry)
             .filter_map(|g| self.reproject.read(g))
             .fold(Extent::EMPTY, |e, p| e.union(&p.lonlat))
     }

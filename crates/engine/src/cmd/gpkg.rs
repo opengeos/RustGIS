@@ -241,7 +241,8 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
         // In the system the layer holds its geometry in: the table's own, or longitude/latitude
         // for a layer a project saved before RustGIS kept a table's own coordinates. Edits held
         // in another go in longitude/latitude, converted in place.
-        let mut held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
+        let layer_held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
+        let mut held = layer_held;
         if held != src.coord_crs() && held != rustgis_data::raster::Crs::LonLat {
             edits.to_lonlat(held).map_err(|e| format!("{name}: {e}; nothing was saved"))?;
             held = rustgis_data::raster::Crs::LonLat;
@@ -267,6 +268,28 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
         let rounded_dates = saved_rows.rounded_dates;
         let unread_dates = saved_rows.unread_dates;
         let mut stored: std::collections::HashMap<_, _> = saved_rows.features.into_iter().map(|f| (f.id, f)).collect();
+        // Saved through longitude/latitude, the rows read back are put in the layer's own system
+        // again, so they agree with its other rows and its `held_in`. A row with no place there
+        // keeps the layer's own geometry (it was saved from it). A deleted row the table kept
+        // (a trigger refused the delete) with no place there stays out of the layer, and is said:
+        // put back without geometry, its next save would write NULL over the table's geometry.
+        // Out of the layer, it is out of the next save's baseline too, so the table keeps it.
+        let mut unplaced = std::collections::HashSet::new();
+        if held != layer_held {
+            let back = rustgis_data::raster::Crs::LonLat.to(layer_held).ok();
+            for f in stored.values_mut() {
+                if let Some(g) = &f.geometry {
+                    match back.as_ref().and_then(|t| t.whole_geometry(g)) {
+                        Some(placed) => f.geometry = Some(placed),
+                        None => {
+                            f.geometry = None;
+                            unplaced.insert(f.id);
+                        }
+                    }
+                }
+            }
+        }
+        let (mut restored_without_place, mut kept_own_geometry) = (0usize, 0usize);
         let versions = saved.versions.iter().copied().collect();
         if let Some(l) = s.map_mut().layer_mut(id) {
             for (row, (_, key)) in rows.iter().zip(&saved.inserted) {
@@ -293,12 +316,21 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
                             std::mem::swap(stored, local);
                         }
                     }
-                    geometry_changed |= row.geometry != feature.geometry;
+                    if unplaced.contains(&row.id) {
+                        row.geometry = feature.geometry.take();
+                        kept_own_geometry += 1;
+                    } else {
+                        geometry_changed |= row.geometry != feature.geometry;
+                    }
                     *feature = row;
                 }
             }
             for (key, _) in &edits.deletes {
                 if let Some(row) = stored.remove(key) {
+                    if unplaced.contains(&row.id) {
+                        restored_without_place += 1;
+                        continue;
+                    }
                     l.dataset.features.push(row);
                     geometry_changed = true;
                 }
@@ -326,6 +358,24 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             ),
             false,
         );
+        if kept_own_geometry > 0 {
+            s.notify(
+                format!(
+                    "{name}: {kept_own_geometry} row(s) read back from {table} have no place in {}, so they keep the geometry they were saved with; Discard Edits loads the table's",
+                    layer_held.label()
+                ),
+                false,
+            );
+        }
+        if restored_without_place > 0 {
+            s.notify(
+                format!(
+                    "{name}: {table} kept {restored_without_place} row(s) deleted here, which have no place in {}, so they aren't shown; the table keeps them as they are. Discard Edits loads them again",
+                    layer_held.label()
+                ),
+                false,
+            );
+        }
         if !saved.skipped_fields.is_empty() {
             s.notify(format!("{name}: {table} has no column for {}, so it wasn't saved", saved.skipped_fields.join(", ")), false);
         }

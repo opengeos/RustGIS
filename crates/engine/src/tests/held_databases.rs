@@ -195,6 +195,60 @@ fn a_geopackage_edit_session_works_in_the_tables_own_system() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A GeoPackage layer held in a system that is neither the table's nor longitude/latitude saves
+/// through longitude/latitude, and the rows read back go into the layer in its own system again,
+/// so a second save writes them where they were.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_geopackage_layer_held_in_a_third_system_saves_twice_in_place() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value, raster::Crs};
+    let dir = std::env::temp_dir().join(format!("rustgis-held-gpkg3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("towns.gpkg");
+    let lv95 = Crs::from_epsg(2056).unwrap();
+    let utm = Crs::from_epsg(32632).unwrap();
+    let mut ds = Dataset::new("towns", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    ds.push(Some(Geometry::Point(Coord::new(2_600_000.123, 1_200_000.456))), vec![Value::Text("Bern".into())]);
+    ds.crs = Some(lv95);
+    ds.held_in = lv95;
+    rustgis_data::io::write_path_in(&ds, &path, lv95).unwrap();
+    let stored = || -> Coord {
+        let (back, _) = rustgis_data::io::read_path(&path).unwrap();
+        let Some(Geometry::Point(c)) = back.features.iter().next().unwrap().geometry.clone() else { panic!() };
+        c
+    };
+    let mut s = Session::new(Project::default());
+    let loaded = s.run("gpkg.addLayer", &json!({"path": path, "table": "towns", "name": "T"})).unwrap();
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    s.map_mut().editing.settings.enabled = true;
+    let in_utm = {
+        let l = s.map_mut().layer_mut(id).unwrap();
+        l.dataset = rustgis_data::io::project(&l.dataset, utm).unwrap();
+        l.touch_geometry();
+        let features: Vec<_> = l.dataset.features.iter().cloned().collect();
+        if let Some(g) = l.gpkg.as_mut() {
+            g.versions = rustgis_map::source::versions_of(&features, &g.versions, &Default::default());
+        }
+        let Some(Geometry::Point(c)) = features[0].geometry.clone() else { panic!() };
+        c
+    };
+    // Within 1 cm, not exactly: the layer's point went LV95 → UTM directly, the read-back goes
+    // LV95 → longitude/latitude → UTM, and the two paths differ by about a millimetre.
+    for name in ["Bärn", "Berne"] {
+        s.run("edit.setValue", &json!({"layer": "T", "row": 0, "field": "name", "value": name})).unwrap();
+        let r = s.run("gpkg.saveEdits", &json!({"layer": "T"})).unwrap();
+        assert_eq!(r["saved"], true, "{r}");
+        let l = s.map().layer(id).unwrap();
+        assert_eq!(l.dataset.coord_crs(), utm);
+        let Some(Geometry::Point(c)) = l.dataset.features.iter().next().unwrap().geometry.clone() else { panic!() };
+        assert!((c.x - in_utm.x).abs() < 1e-2 && (c.y - in_utm.y).abs() < 1e-2, "{name}: the layer keeps it in UTM: {c:?} vs {in_utm:?}");
+        let c = stored();
+        assert!((c.x - 2_600_000.123).abs() < 1e-2 && (c.y - 1_200_000.456).abs() < 1e-2, "{name}: the table keeps it in place: {c:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A column of no fixed coordinate system whose rows say none (SRID 0), loaded with `"crs"`, is
 /// held in that system: read as stored, and edits written back as stored, still with SRID 0.
 /// `RUSTGIS_TEST_POSTGIS` names a database (`postgresql://…`) where the test may make and drop a
