@@ -318,7 +318,9 @@ A stroke can be dashed: **Dash** takes the lengths in points, dash and gap in tu
 `4 2 1 2` for dash-dot; an odd list is repeated, as in SVG), and its menu offers dashed,
 dotted, dash-dot and long-dash patterns sized to the stroke's width. Empty is a solid line. With
 flat caps the dashes are as long as given; round and square caps add half the width at each end.
-By command, `"dash"` on a stroke (`null` for solid):
+A pattern under a pixel a round where it is drawn, or one that would cut a line into more than
+100,000 dashes, is drawn solid in the map and in PNG and PDF exports, and a notice names the
+layer. By command, `"dash"` on a stroke (`null` for solid):
 
 ```text
 layer.lineStrokes={"layer":"Paths","strokes":[{"color":"#000000","width":1.2,"cap":"flat","dash":[6,3]}]}

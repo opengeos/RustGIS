@@ -6,6 +6,7 @@
 //! the labels too, for export and the command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod approximations;
 mod area_labels;
 mod bands;
 mod block;
@@ -1176,8 +1177,13 @@ impl Ctx<'_> {
     /// pixel a round, or one that would cut the path into more than [`MAX_DASHES`] dashes (each
     /// is a path of its own), would only cost time. The whole path counts, on screen or not: the
     /// dashing doesn't skip what's off screen.
+    /// Drawn solid, it says so for the layer being drawn ([`approximations::dashes_drawn_solid`]).
     fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<Vec<f32>> {
-        dash_steps(d, self.ppp, path)
+        let steps = dash_steps(d, self.ppp, path);
+        if steps.is_none() {
+            approximations::dashes_drawn_solid();
+        }
+        steps
     }
 
     /// `starts`: where along its line each of `path`'s pieces begins ([`Self::ring_path_at`]), so a
@@ -2827,6 +2833,10 @@ fn drape_terrain(
     // A block diagram (#1914): each vertex's sides of the box it lies beyond, and the stretches of
     // the box's edge the ground cut to it ends at, for the walls.
     let block = ground.block(map);
+    // Ground in it with no height is taken as 0 (see `approximations`).
+    if let Some(said) = block.as_ref().and_then(terrain::Block::without_height_notice) {
+        approximations::note(said);
+    }
     for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
         if rustgis_data::progress::check().is_err() || cancel::requested() {
             return false;
@@ -4800,6 +4810,8 @@ fn render_frame(
     for (at, li) in order.into_iter().enumerate() {
         // Each layer drawn is a layer of the recording (#1815); what comes between them isn't.
         pm.layer(None);
+        // And what it approximates is said under its name (see `approximations`).
+        approximations::layer(None);
         // A frame no longer wanted stops between layers (see `cancel`).
         if cancel::requested() {
             break;
@@ -4866,6 +4878,7 @@ fn render_frame(
             continue;
         }
         pm.layer_with_id(&layer_name(layer), u64::from(layer.id));
+        approximations::layer(Some(&layer.name));
         let opacity = layer.opacity() * group_opacity.get(&layer.id).copied().unwrap_or(1.0);
         let mask = masks.iter().find(|(id, _)| *id == layer.id).map(|(_, m)| m);
         let (blend, layer_blend) = (blend_mode(layer.blend), layer.blend);
@@ -6323,6 +6336,7 @@ fn render_frame(
         }
     }
     pm.layer(None);
+    approximations::layer(None);
     // A frame stopped part-way (see `cancel`) is no frame: its tiles, labels and effects aren't
     // worth working out. Nor is one the last layer left a picture in (see `pictureless`).
     if cancel::requested() || (pictureless && (cpu_dirty || holds_picture(&cmds))) {
@@ -7999,7 +8013,8 @@ thread_local! {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ShadowsSaid {
     /// Why layers were drawn without them, each once, named by the layer ("Relief: its cast
-    /// shadows aren't drawn: …").
+    /// shadows aren't drawn: …"); then what else the frames drew otherwise than their layers
+    /// ask, each once ("Roads: dashed lines are drawn solid …", see `approximations`).
     pub notices: Vec<String>,
     /// Some were drawn without them still being worked out (on the interface's thread, which
     /// doesn't wait): drawn again once they land, they show them.
@@ -8007,7 +8022,8 @@ pub struct ShadowsSaid {
 }
 
 /// Runs `f`, which draws maps or pages on this thread, and gives what its frames said of their
-/// cast shadows: the one way to read it, so whatever draws for someone says it (Never silent).
+/// cast shadows, and what else they approximated (a dashed line drawn solid, …): the one way to
+/// read it, so whatever draws for someone says it (Never silent).
 /// What frames drawn before on this thread left (the map view's, say) is not `f`'s.
 pub fn shadows_said<T>(f: impl FnOnce() -> T) -> (T, ShadowsSaid) {
     take_said();
@@ -8015,9 +8031,23 @@ pub fn shadows_said<T>(f: impl FnOnce() -> T) -> (T, ShadowsSaid) {
     (out, take_said())
 }
 
-/// What frames drawn on this thread since the last call said of their cast shadows.
+/// What frames drawn on this thread since the last call said of their cast shadows, and what
+/// else they approximated ([`approximations::take`]).
 fn take_said() -> ShadowsSaid {
-    ShadowsSaid { notices: take_shadow_notices(), to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
+    let mut notices = take_shadow_notices();
+    for e in approximations::take() {
+        if !notices.contains(&e) {
+            notices.push(e);
+        }
+    }
+    ShadowsSaid { notices, to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
+}
+
+/// What frames drawn on this thread approximated since the last call, each once: what the map
+/// view says after each of its frames (see `approximations`). Exports and pages read it through
+/// [`shadows_said`] instead.
+pub fn take_approximations() -> Vec<String> {
+    approximations::take()
 }
 
 fn take_shadow_notices() -> Vec<String> {
@@ -8236,7 +8266,8 @@ pub struct Placed {
     pub credits: Vec<String>,
     /// Why parts of it may be empty: tiles or streamed data still on their way when the wait
     /// ran out, tile layers that couldn't be drawn. In a picture placed on the ground a gap looks
-    /// like data, so an export says these.
+    /// like data, so an export says these. And what it drew otherwise than its layers ask (a
+    /// dashed line drawn solid, see `approximations`), which it says too.
     pub gaps: Vec<String>,
 }
 
@@ -8249,12 +8280,17 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     // Layers drawn without their cast shadows are said as gaps, not as tile layers that failed;
     // what frames before it said is kept for `shadows_said`.
     let (before, before_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(false)));
+    // So is what it approximated: its own, said with it.
+    let approximated_before = approximations::take();
     let r = render_exported(map, view);
     let (shadows, to_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(before_come)));
     SHADOW_NOTICES.with(|n| *n.borrow_mut() = before);
+    let approximated = approximations::take();
+    approximations::restore(approximated_before);
     let r = r?;
     let tile_errors: Vec<&String> = r.tile_errors.iter().filter(|e| !shadows.contains(e)).collect();
     let mut gaps = shadows;
+    gaps.extend(approximated);
     if to_come {
         gaps.push(
             "made without the cast shadows or sky visibility still being worked out, as the window doesn't wait for them: once the map shows them, draw or export it again"
@@ -11301,7 +11337,15 @@ mod tests {
         m.view.terrain = terrain(Some(block(Some([-1000.0, -1000.0, 1000.0, 1000.0]))));
         let b = g.block(&m).expect("a block");
         assert!((b.base + 500.0).abs() < 1e-6, "{}", b.base);
+        take_approximations();
         let cut = render(&mut m, &view).expect("a frame");
+        // Ground with a height everywhere in it: nothing said of it (#2639). Half off the DEM:
+        // said, with how much.
+        assert!(!take_approximations().iter().any(|e| e.starts_with("Block diagram")));
+        m.view.terrain = terrain(Some(block(Some([4000.0, -1000.0, 6000.0, 1000.0]))));
+        render(&mut m, &view).expect("a frame");
+        let said = take_approximations();
+        assert!(said.iter().any(|e| e.starts_with("Block diagram: about 49%") && e.contains("no height")), "{said:?}");
         m.view.terrain = terrain(None);
         let whole = render(&mut m, &view).expect("a frame");
         // The near edge's middle, on the ground and at the base.
@@ -14084,9 +14128,18 @@ mod tests {
         let runs = row.windows(2).filter(|w| w[0] != w[1]).count();
         assert!((10..=13).contains(&runs), "{runs} changes along the row");
         // A pattern under a pixel a round draws solid rather than cut into slivers.
+        // Dashes drawn as dashes say nothing (#2639).
+        assert!(take_approximations().is_empty());
         let dash = rustgis_map::symbology::Dash::new(&[0.2, 0.2]);
         m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
         assert!(dark(&mut m).iter().all(|d| *d), "too fine: solid");
+        // Drawn solid, it says so once for the layer, however many frames draw it (#2639).
+        dark(&mut m);
+        let said = take_approximations();
+        assert!(said.len() == 1 && said.iter().all(|e| e.starts_with("road: dashed lines are drawn solid")), "{said:?}");
+        // An export reads it too.
+        let (_, said) = shadows_said(|| render_png(&mut m, &view));
+        assert!(said.notices.iter().any(|e| e.starts_with("road: dashed lines are drawn solid")), "{said:?}");
     }
 
     #[test]
