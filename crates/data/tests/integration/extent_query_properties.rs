@@ -27,9 +27,13 @@ fn declared(ext: &str, difference: &str) -> bool {
     LIMITS.iter().any(|(f, start, _)| *f == ext && difference.starts_with(start))
 }
 
-/// A number from the environment, else `default`.
+/// A number from the environment, else `default`; one set that isn't a whole number fails, so a
+/// typo doesn't run the defaults without a word (#2639).
 fn env(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    match std::env::var(name) {
+        Ok(v) => v.trim().parse().unwrap_or_else(|_| panic!("{name}={v:?} isn't a whole number")),
+        Err(_) => default,
+    }
 }
 
 /// Values that extents and geometries share, so boxes touch: whole degrees, the edges of the

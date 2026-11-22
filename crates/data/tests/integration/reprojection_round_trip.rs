@@ -132,9 +132,13 @@ impl Where {
     }
 }
 
-/// A number from the environment, else `default`.
+/// A number from the environment, else `default`; one set that isn't a whole number fails, so a
+/// typo doesn't run the defaults without a word (#2639).
 fn env(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    match std::env::var(name) {
+        Ok(v) => v.trim().parse().unwrap_or_else(|_| panic!("{name}={v:?} isn't a whole number")),
+        Err(_) => default,
+    }
 }
 
 /// A longitude folded into −180..180.

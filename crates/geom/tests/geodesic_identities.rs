@@ -12,9 +12,13 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRunner};
 use rustgis_geom::{Coord, geodesic_ring_area_m2, geodesic_ring_perimeter_m, haversine_m, wgs84_distance_m, wgs84_ring_perimeter_area_m2};
 
-/// A number from the environment, else `default`.
+/// A number from the environment, else `default`; one set that isn't a whole number fails, so a
+/// typo doesn't run the defaults without a word (#2639).
 fn env(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    match std::env::var(name) {
+        Ok(v) => v.trim().parse().unwrap_or_else(|_| panic!("{name}={v:?} isn't a whole number")),
+        Err(_) => default,
+    }
 }
 
 /// A runner seeded from `PROPERTY_SEED`, running `PROPERTY_CASES` cases (else `default`).
