@@ -63,7 +63,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"before": raster, "after": raster, "band"?: 1-based, "method"?: "difference"|"ratio"|"percent", "name"?, "ran"?: (internal: a raster the app has worked out)}"#),
         C::new("raster.spectral", "Spectral Analysis", "Imagery › Image Analysis", spectral).inputs(spectral_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
             .view()
-            .params(r#"{"layer": raster, "lon"?, "lat"?, "points"?: [[lon, lat], …] (up to 1000: a profile each, in "profiles"; one off the raster has a null pixel and values, and is said), "zone"?: polygon layer (the mean of its selected or first polygon's pixels)}"#),
+            .params(r#"{"layer": raster, "lon"?, "lat"?, "points"?: [[lon, lat], …] (up to 1000: a profile each, in "profiles"; one off the raster has a null pixel and values, and is said), "zone"?: polygon layer (the mean of its selected or first polygon's pixels, every part of it)}"#),
         C::new("raster.classify", "Classification Wizard", "Imagery › Image Classification", |s, p| {
             super::workflows::made_or_ran(s, p, "raster.classify")
         }).inputs(raster_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -1076,9 +1076,9 @@ fn spectral_read(s: &mut Session, p: &Value, r: &Arc<Raster>, zone: Option<&str>
     answer(json!({"bands": names, "values": vals, "pixel": [col, row]}))
 }
 
-/// The polygon a spectral zone names: the polygon layer `z`'s selected feature, or its first, in
-/// the system the layer holds its coordinates in.
-fn zone_rings(s: &Session, z: &str) -> Result<(Crs, Vec<Vec<Coord>>), String> {
+/// The polygon a spectral zone names, every part of it (each its rings): the polygon layer `z`'s
+/// selected feature, or its first, in the system the layer holds its coordinates in.
+fn zone_rings(s: &Session, z: &str) -> Result<(Crs, Vec<Vec<Vec<Coord>>>), String> {
     let l =
         s.map().layer_by_name(z).filter(|l| l.geometry_type() == GeometryType::Polygon).ok_or_else(|| format!("no polygon layer '{z}'"))?;
     let row = l.selection.first().copied().unwrap_or(0);
@@ -1088,15 +1088,19 @@ fn zone_rings(s: &Session, z: &str) -> Result<(Crs, Vec<Vec<Coord>>), String> {
     let Geometry::Polygon(polys) = g else {
         return Err("the zone has no polygon".into());
     };
-    Ok((l.dataset.coord_crs(), polys.first().cloned().ok_or("the zone has no polygon")?))
+    if polys.is_empty() {
+        return Err("the zone has no polygon".into());
+    }
+    Ok((l.dataset.coord_crs(), polys.clone()))
 }
 
-/// A zone's means, every band's: those a script's copy of the session read, when of this raster
+/// A zone's means, every band's, over all its parts (which don't overlap, so each pixel counts
+/// once): those a script's copy of the session read, when of this raster
 /// and this polygon; read here otherwise (and recorded, on that copy, for the script's run here to
 /// take). A raster a tool made earlier in the script is decoded apart on each side, so its zones
 /// are read again here.
 #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "zones are read ahead on the desktop only"))]
-fn zone_means(s: &mut Session, r: &Arc<Raster>, crs: Crs, rings: Vec<Vec<Coord>>) -> Result<Option<(Vec<f64>, usize)>, String> {
+fn zone_means(s: &mut Session, r: &Arc<Raster>, crs: Crs, rings: Vec<Vec<Vec<Coord>>>) -> Result<Option<(Vec<f64>, usize)>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let same = |z: &ZoneMeans| Arc::ptr_eq(&z.raster, r) && z.crs == crs && z.rings == rings;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1114,7 +1118,16 @@ fn zone_means(s: &mut Session, r: &Arc<Raster>, crs: Crs, rings: Vec<Vec<Coord>>
     }
     let all: Vec<usize> = (0..r.band_count()).collect();
     // The cells are tested in the zone's own system: none of it converted when it is the raster's.
-    let means = rasterops::zonal_means_in(r, crs, &all, &rings);
+    let means = (|| {
+        let (mut sums, mut n) = (vec![0.0; all.len()], 0usize);
+        for part in &rings {
+            if let Some((m, k)) = rasterops::zonal_means_in(r, crs, &all, part)? {
+                sums.iter_mut().zip(&m).for_each(|(s, v)| *s += v * k as f64);
+                n += k;
+            }
+        }
+        Ok((n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n)))
+    })();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(ZonesAhead::Recording(zones)) = &mut s.zones_ahead {
         zones.push(ZoneMeans { raster: r.clone(), crs, rings, means: means.clone() });
@@ -1136,7 +1149,7 @@ pub(crate) enum ZonesAhead {
 pub(crate) struct ZoneMeans {
     raster: Arc<Raster>,
     crs: Crs,
-    rings: Vec<Vec<Coord>>,
+    rings: Vec<Vec<Vec<Coord>>>,
     means: Result<Option<(Vec<f64>, usize)>, String>,
 }
 

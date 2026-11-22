@@ -2305,6 +2305,23 @@ fn a_held_layer_is_burned_in_its_own_system() {
     assert_eq!(a["cells"], 100, "{a}");
 }
 
+/// A spectral zone of two parts reads both: two 100 m squares of one feature, held in UTM, each
+/// holding 10 × 10 centres of 10 m cells (none on an edge), burned and then read as the zone, give
+/// 200 pixels.
+#[test]
+fn a_spectral_zone_reads_every_part() {
+    let square = |x0: f64, y0: f64| -> Vec<Coord> {
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect()
+    };
+    let parts = vec![vec![square(2_000_002.0, 5_401_302.0)], vec![square(2_000_502.0, 5_401_302.0)]];
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Two", GeometryType::Polygon, vec![Geometry::Polygon(parts)], UTM);
+    let burned = s.run("raster.rasterize", &json!({"layer": "Two", "value": 3, "cellSize": 10, "name": "Burned"})).unwrap();
+    assert_eq!(burned["cells"], 200, "{burned}");
+    let read = s.run("raster.spectral", &json!({"layer": "Burned", "zone": "Two"})).unwrap();
+    assert_eq!((read["pixels"].clone(), read["values"].clone()), (json!(200), json!([3.0])), "{read}");
+}
+
 /// Rasterize's default grid in another system takes in the polygons as they are burned, by the
 /// direct operation: a 5 cm square held in Gauss-Krüger zone 3 (DHDN), burned onto 1 cm cells in
 /// ETRS89 / UTM 32N, lands 0.44 m from where the route through WGS 84 puts it, so a grid sized
