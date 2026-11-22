@@ -648,14 +648,23 @@ pub struct FieldOrigin {
 }
 
 impl Project {
-    /// Keeps the ids new features of each offline area's map are given above those its packages
-    /// gave ([`OfflineArea::ids`]).
+    /// Keeps the ids new features are given above those an offline area's packages gave
+    /// ([`OfflineArea::ids`]), in both maps a feature can be added to for the area: its source map
+    /// (by [`OfflineArea::map`]) and its offline map, when open (by its area id, or the offline
+    /// title a map saved before maps carried one has). Run again wherever either is made anew.
     pub(crate) fn keep_area_ids(&mut self) {
         for area in &self.offline_areas {
-            let Some(map) = self.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&area.map)) else { continue };
-            for (layer, id) in &area.ids {
-                if let Some(l) = map.layers.iter_mut().find(|l| l.id == *layer && !l.is_raster()) {
-                    l.dataset.features.keep_ids_above(*id);
+            let offline = format!("{}{}", area.name, crate::cmd::field::OFFLINE);
+            let is_area_map = |m: &Map| {
+                m.name.eq_ignore_ascii_case(&area.map)
+                    || (!area.id.is_empty() && m.offline_area_id.as_deref() == Some(area.id.as_str()))
+                    || (m.offline_area_id.is_none() && m.name.eq_ignore_ascii_case(&offline))
+            };
+            for map in self.maps.iter_mut().filter(|m| is_area_map(m)) {
+                for (layer, id) in &area.ids {
+                    if let Some(l) = map.layers.iter_mut().find(|l| l.id == *layer && !l.is_raster()) {
+                        l.dataset.features.keep_ids_above(*id);
+                    }
                 }
             }
         }

@@ -140,15 +140,17 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     if l.is_raster() {
         return Err("features can't be pasted into a raster layer".into());
     }
-    // Ids for every pasted feature, above every id the layer has or keeps new rows above, refused
-    // before anything changes when they would run past the largest id.
+    let want = l.geometry_type();
+    // Ids for every feature the layer takes (one of another shape is left out below), above every id
+    // it has or keeps new rows above, refused before anything changes when they would run past the
+    // largest id.
+    let taking = src.features.rows().filter(|r| !r.geometry().is_some_and(|g| want != GeometryType::None && g.kind() != want)).count();
     let mut next = l
         .dataset
         .features
-        .free_ids(src.features.len())
+        .free_ids(taking)
         .ok_or_else(|| format!("{}: no ids are left above the layer's highest for the pasted features", l.name))?
         .saturating_sub(1);
-    let want = l.geometry_type();
     if want != GeometryType::None && src.geometry_type != GeometryType::None && want != src.geometry_type {
         return Err(format!(
             "{} features can't go in a {} layer; use Paste Special to paste them as a new layer",
@@ -288,6 +290,18 @@ mod tests {
         let refused = s.run("edit.paste", &json!({"layer": id})).unwrap_err();
         assert!(refused.contains("no ids are left"), "{refused}");
         assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), before);
+        // A polygon and a point pasted into a polygon layer with room for one id: the point is
+        // left out, as ever, and the polygon takes the one id left.
+        let countries = s.map().layer_by_name("Countries").unwrap().id;
+        let ds = &mut s.map_mut().layer_mut(countries).unwrap().dataset;
+        let fields = ds.fields.len();
+        ds.features.push_parts(u64::MAX - 1, None, vec![Attr::Null; fields]);
+        let mixed = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}},
+            {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0.5,0.5]}}]}"#;
+        let pasted = s.run("edit.paste", &json!({"layer": countries, "text": mixed})).unwrap();
+        assert_eq!(pasted["pasted"], 1, "{pasted}");
+        assert!(s.map().layer(countries).unwrap().dataset.features.iter().any(|f| f.id == u64::MAX));
         // With room for them, they paste.
         s.map_mut().layer_mut(id).unwrap().dataset.features.retain_rows(|r| r.id() != u64::MAX - 1);
         s.run("edit.paste", &json!({"layer": id})).unwrap();

@@ -349,6 +349,8 @@ pub fn commands() -> Vec<C> {
                 }
                 s.project.maps.push(m);
                 s.project.active_map = s.project.maps.len() - 1;
+                // New features added in it are kept above the ids the area's packages gave.
+                s.project.keep_area_ids();
             }
             s.active_layer = s.map().layers.first().map(|l| l.id);
             s.zoom_to(&extent);
@@ -682,6 +684,9 @@ fn snapshot(m: &mut rustgis_map::Map, e: &Extent) -> rustgis_map::Map {
         let own = l.dataset.extent_from_lonlat(e);
         c.dataset.features =
             l.dataset.features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&own))).cloned().collect();
+        // New features in the copy are given ids above every id the layer has or keeps, so none takes
+        // the id of one left out, or deleted since a package of the area was made.
+        c.dataset.features.keep_ids_above(l.dataset.features.highest_id());
         c.selection.clear();
         // Only part of the rows read: no longer the layer its file's record describes.
         c.synced = None;
@@ -1008,6 +1013,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
             // The features this sync writes, by their ids in the source: only these are converted
             // back to a held source's system.
             let mut written = std::collections::HashSet::new();
+            // Every id the source had, or kept new ones above, before this sync: a feature added
+            // offline keeps its own id only above it.
+            let home_top = sl.dataset.features.highest_id();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.
             let before = sl.dataset.features.len();
             sl.dataset.features.retain_rows(|x| {
@@ -1063,12 +1071,9 @@ pub(crate) fn sync_area(s: &mut Session, ai: usize, edited: &rustgis_map::Map) -
                 } else {
                     // Added offline: its own id when the source and the area haven't used it, else
                     // a fresh one above any they have (its id clashed with one outside the area).
-                    let id = if at.contains_key(&fid) || had.contains(&fid) {
-                        renumbered += 1;
-                        top.checked_add(1).ok_or_else(|| super::field_changes::exhausted(&lname))?
-                    } else {
-                        fid
-                    };
+                    let (id, renewed) =
+                        super::field_changes::id_at_home(fid, home_top, at.contains_key(&fid) || had.contains(&fid), top, &lname)?;
+                    renumbered += usize::from(renewed);
                     top = top.max(id);
                     let mut attrs = vec![rustgis_data::Value::Null; sl.dataset.fields.len()];
                     for (i, j) in to_source.iter().enumerate() {
@@ -1162,6 +1167,8 @@ pub(crate) fn renew_area(
             a.generation = id;
         }
     }
+    // The offline map, made anew, keeps new ids above those the area's packages gave.
+    s.project.keep_area_ids();
     Ok(())
 }
 

@@ -375,7 +375,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut Vec<String>) -> Result<
         copied = copy_streams(&mut map, extent, stream_budget(available), &mut losses)?;
     }
     // Going out, the highest id each layer has: features added in the field are given ids above it,
-    // and so are those added to the area's map here while the package is out.
+    // and so are those added here, in the area's map or its offline map, while the package is out.
     if !coming_back && let Some(origin) = project.field_origin.as_mut() {
         // At least what earlier packages of the area recorded: the area's map, renewed from the
         // snapshot, holds no floor of its own, and a package still out may hold a higher id.

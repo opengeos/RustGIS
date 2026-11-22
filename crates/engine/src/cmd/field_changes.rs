@@ -383,7 +383,17 @@ pub(crate) fn keep_base(given: &GivenRows) -> Kept {
             ));
         }
     }
-    written.map(|()| notes)
+    outcome(written, notes)
+}
+
+/// What a keep says: on success, the notices of what it let go; on a failure, the failure with any
+/// folder it couldn't remove after it, so neither is lost.
+fn outcome(written: Result<(), String>, notes: Vec<(String, bool)>) -> Kept {
+    match written {
+        Ok(()) => Ok(notes),
+        Err(e) if notes.is_empty() => Err(e),
+        Err(e) => Err(format!("{e}; {}", notes.into_iter().map(|(text, _)| text).collect::<Vec<_>>().join("; "))),
+    }
 }
 
 /// Removes `dir`, `what`: nothing to say when it goes, the folder and why when it can't.
@@ -394,10 +404,13 @@ fn let_go(dir: &Path, what: &str) -> Option<(String, bool)> {
 }
 
 /// Moves the complete copy `part` into place as `dir`, whole, so a folder there is always complete.
-/// One kept there by another opening of the same package meanwhile wins and is left as it is: it
-/// holds the same rows. A complete copy there is never replaced; an empty folder may be, as the
-/// system's rename replaces one.
+/// An empty folder there (left by a removal cut short) is removed first, on every system; one that
+/// holds anything is another opening's copy of the same package, which wins and is left as it is.
 fn publish(part: &Path, dir: &Path) -> Result<(), String> {
+    // Removed only while empty, so a copy put there meanwhile is never touched.
+    if dir.is_dir() {
+        let _ = std::fs::remove_dir(dir);
+    }
     match std::fs::rename(part, dir) {
         Ok(()) => Ok(()),
         Err(_) if dir.join(LAYERS).is_file() => Ok(()),
@@ -673,6 +686,8 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         if held.is_some() {
             sl.dataset = sl.dataset.in_lonlat().map_err(error)?.into_owned();
         }
+        // Every id the layer had, or kept new ones above, before this return.
+        let home_top = sl.dataset.features.highest_id();
         let wanted: HashSet<u64> =
             lc.added.iter().copied().chain(lc.deleted.iter().map(|g| g.id)).chain(lc.edited.iter().map(|g| g.id)).collect();
         let at_field: HashMap<u64, usize> =
@@ -761,12 +776,8 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
                 done.unknown += 1;
                 continue;
             };
-            let own = if at.contains_key(id) {
-                done.renumbered += 1;
-                top.checked_add(1).ok_or_else(|| exhausted(&name))?
-            } else {
-                *id
-            };
+            let (own, renewed) = id_at_home(*id, home_top, at.contains_key(id), top, &name)?;
+            done.renumbered += usize::from(renewed);
             top = top.max(own);
             at.insert(own, sl.dataset.features.len());
             let mut attrs = vec![Value::Null; sl.dataset.fields.len()];
@@ -856,6 +867,15 @@ pub(crate) fn photos_named(
         }
     }
     named
+}
+
+/// The id a feature added in the field with id `own` takes in a home layer: its own while it is
+/// above `home_top`, every id the layer had or kept new ones above before this return, and not
+/// `taken`; else one above `top`, every id there is now. An id at or below `home_top` that no row
+/// uses may still be one a package out holds (a feature deleted here since), so it isn't kept.
+/// Whether it took a new one; refused when none is left.
+pub(crate) fn id_at_home(own: u64, home_top: u64, taken: bool, top: u64, layer: &str) -> Result<(u64, bool), String> {
+    if own > home_top && !taken { Ok((own, false)) } else { top.checked_add(1).map(|id| (id, true)).ok_or_else(|| exhausted(layer)) }
 }
 
 /// The refusal when a feature added in the field needs a new id and none is left above the
@@ -965,6 +985,13 @@ mod tests {
         }
         publish(&part, &dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join(LAYERS)).unwrap(), "first");
+        // An empty folder there is replaced, on every system.
+        let (empty, part) = (root.join("empty"), root.join("fresh.part"));
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&part).unwrap();
+        std::fs::write(part.join(LAYERS), "fresh").unwrap();
+        publish(&part, &empty).unwrap();
+        assert_eq!(std::fs::read_to_string(empty.join(LAYERS)).unwrap(), "fresh");
     }
 
     /// A return sent while its package's rows are still being kept: once the keep puts its copy in
@@ -986,6 +1013,16 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+    }
+
+    /// A keep that failed and then couldn't remove its partial copy says both.
+    #[test]
+    fn a_failed_keep_says_the_folder_it_left_behind() {
+        let left = ("/kept/rows.part: a copy cut short couldn't be removed".to_string(), true);
+        let said = outcome(Err("disk full".into()), vec![left.clone()]).unwrap_err();
+        assert!(said.contains("disk full") && said.contains(&left.0), "{said}");
+        assert_eq!(outcome(Err("disk full".into()), Vec::new()).unwrap_err(), "disk full");
+        assert_eq!(outcome(Ok(()), vec![left.clone()]).unwrap(), vec![left]);
     }
 
     /// A folder that can't be removed is said, by name, as an error.

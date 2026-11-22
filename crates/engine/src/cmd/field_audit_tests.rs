@@ -1087,6 +1087,113 @@ fn a_layer_with_no_ids_left_above_is_not_packaged() {
     assert!(refused.contains("Cities") && refused.contains("ids of their own"), "{refused}");
 }
 
+/// A package is out holding the city with the highest id. The office deletes the city and syncs,
+/// which renews the area's offline map without it, then adds a feature in that offline map and
+/// syncs again. The new feature never takes the city's id, so the package's edit of the city is
+/// dropped, and said, rather than written over the office's feature: with its list of changes or
+/// as a whole map (refused then by its return check).
+#[test]
+fn a_feature_added_in_a_renewed_offline_map_never_takes_an_id_a_package_holds() {
+    for whole in [false, true] {
+        let temp = Temp::new("renewed-offline-floor");
+        let mut home = home(&temp);
+        let source = home.map().name.clone();
+        let (_, out) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+        let mut a = phone(&temp, &out, "a");
+        if whole {
+            let package_id = a.project.field_origin.as_ref().unwrap().package.clone();
+            std::fs::remove_dir_all(crate::cmd::field_changes::test_bases::root().unwrap().join(package_id)).unwrap();
+        }
+        let cities = layer(&a, "Cities");
+        let name = text_field(&a, cities);
+        let (row, top) = {
+            let f = &a.map().layer(cities).unwrap().dataset.features;
+            f.iter().enumerate().max_by_key(|(_, f)| f.id).map(|(i, f)| (i, f.id)).unwrap()
+        };
+        a.run("edit.setValue", &json!({"layer": cities, "row": row, "field": name, "value": "Crew edit"})).unwrap();
+        let at = home.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == top).unwrap();
+        home.run("select.rows", &json!({"layer": cities, "rows": [at]})).unwrap();
+        home.run("edit.delete", &Value::Null).unwrap();
+        home.run("offline.open", &json!({"name": "All"})).unwrap();
+        home.run("offline.sync", &json!({"name": "All"})).unwrap();
+        let new = add_point(&mut home, cities, &name, "Office, in the offline map", [12.0, 5.0]);
+        assert!(new > top, "{whole}: the offline map's feature took id {new}, at or below {top}");
+        home.run("offline.sync", &json!({"name": "All"})).unwrap();
+        home.run("map.activate", &json!({"name": source})).unwrap();
+        let (done, said) = try_bring_back(&temp, &mut a, &mut home, "a");
+        if whole {
+            assert!(done.unwrap_err().contains("out of date"));
+        } else {
+            let done = done.unwrap();
+            assert_eq!(done["skipped"].as_u64(), Some(1), "{done}");
+            assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{top}"))), "{said:?}");
+        }
+        let hc = layer(&home, "Cities");
+        assert_eq!(value_of(&home, hc, new, &name).as_deref(), Some("Office, in the offline map"), "{whole}");
+    }
+}
+
+/// Area A's package is out holding the city with the highest id; the office deletes it, then
+/// makes area B. B's snapshot, its package and its offline map all keep new ids above the deleted
+/// city's, so neither B's phone nor the office in B's offline map gives a new feature that id.
+#[test]
+fn a_new_areas_snapshot_keeps_ids_above_those_deleted_since() {
+    let temp = Temp::new("snapshot-floor");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    let world = json!([-180.0, -90.0, 180.0, 90.0]);
+    let (_, out_a) = package(&mut home, &json!({"name": "A", "extent": world})).unwrap();
+    let a = phone(&temp, &out_a, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let top = a.map().layer(cities).unwrap().dataset.features.iter().map(|f| f.id).max().unwrap();
+    let at = home.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == top).unwrap();
+    home.run("select.rows", &json!({"layer": cities, "rows": [at]})).unwrap();
+    home.run("edit.delete", &Value::Null).unwrap();
+    let (_, out_b) = package(&mut home, &json!({"name": "B", "extent": world})).unwrap();
+    let mut b = phone(&temp, &out_b, "b");
+    assert!(b.project.field_origin.as_ref().unwrap().ids.get(&cities).is_some_and(|id| *id >= top));
+    assert!(add_point(&mut b, cities, &name, "From B", [10.0, 5.0]) > top);
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    home.run("offline.open", &json!({"name": "B"})).unwrap();
+    assert!(add_point(&mut home, cities, &name, "In B's offline map", [11.0, 5.0]) > top);
+}
+
+/// Package A is out. The office adds a city, syncs, and makes package B with it; then deletes the
+/// city. A's phone captures a point, which its package gave that same id, and A comes back first:
+/// the point takes a new id, as the deleted city's may still be held by a package out, so B's edit
+/// of the city is dropped, and said, rather than written over A's point.
+#[test]
+fn a_feature_added_in_the_field_never_keeps_an_id_another_package_holds() {
+    let temp = Temp::new("held-elsewhere-id");
+    let mut home = home(&temp);
+    let source = home.map().name.clone();
+    let (_, out_a) = package(&mut home, &json!({"name": "All", "extent": [-180.0, -90.0, 180.0, 90.0]})).unwrap();
+    let mut a = phone(&temp, &out_a, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let city = add_point(&mut home, cities, &name, "Office's city", [12.0, 5.0]);
+    home.run("offline.open", &json!({"name": "All"})).unwrap();
+    home.run("offline.sync", &json!({"name": "All"})).unwrap();
+    let (_, out_b) = package(&mut home, &Value::Null).unwrap();
+    home.run("map.activate", &json!({"name": source})).unwrap();
+    let mut b = phone(&temp, &out_b, "b");
+    let at = home.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == city).unwrap();
+    home.run("select.rows", &json!({"layer": cities, "rows": [at]})).unwrap();
+    home.run("edit.delete", &Value::Null).unwrap();
+    let point = add_point(&mut a, cities, &name, "A's point", [10.0, 5.0]);
+    assert_eq!(point, city, "the test needs A's point to have the office city's id");
+    let (done, _) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!(done["renumbered"].as_u64(), Some(1), "{done}");
+    let r = b.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == city).unwrap();
+    b.run("edit.setValue", &json!({"layer": cities, "row": r, "field": name, "value": "B's edit"})).unwrap();
+    let (done, said) = bring_back(&temp, &mut b, &mut home, "b");
+    assert_eq!(done["skipped"].as_u64(), Some(1), "{done}");
+    assert!(said.iter().any(|t| t.contains("edits were dropped") && t.contains(&format!("Cities #{city}"))), "{said:?}");
+    assert_eq!(with_label(&home, cities, &name, "A's point"), 1);
+    assert_eq!(with_label(&home, cities, &name, "B's edit"), 0);
+}
+
 /// A layer removed on the phone is said on sending: its features go back unchanged.
 #[test]
 fn a_layer_removed_in_the_field_is_said_on_sending() {

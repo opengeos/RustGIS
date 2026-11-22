@@ -173,7 +173,9 @@ folder until it is removed by hand. **Send Field Package** compares the map with
 the list of changes with the map. A package opened on a device that doesn't keep its rows (the
 browser, or a field project copied to another device) goes back as a whole map, and the phone says
 so: Bring Back then compares the map with the area as it was last synced, and refuses it if the area
-has been brought back or synced since the package was made.
+has been brought back or synced since the package was made. A package made before packages carried
+that return check has none: it comes back with a notice, and can undo or repeat what came home
+since.
 
 Where a change meets one made on the computer since the package was made:
 
@@ -209,8 +211,8 @@ gave, and one added on the computer an id above every id the area's packages gav
 taken for a feature a package holds. A feature added on the phone keeps its id unless the computer
 uses it already; then it takes the next free one, and the summary says how many did. A package made
 before packages had an identity of their own comes back as a whole map, as described above; one made
-before packages carried a return check comes back as before, with a notice. A package for an area
-the project doesn't have is refused.
+before packages carried a return check comes back with a notice and no such protection: it can undo
+or repeat what came home since. A package for an area the project doesn't have is refused.
 
 ### Origin identities and older field copies
 
