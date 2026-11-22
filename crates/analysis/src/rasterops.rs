@@ -410,15 +410,6 @@ pub fn weighted_overlay(criteria: &[(Vec<f32>, f64)]) -> Result<Vec<f32>, String
     )
 }
 
-/// Metres between two longitude/latitude points.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the elevation profile's distances are on the sphere; moving them to the ellipsoid waits on #2032's open change to this file (#2721)"
-)]
-fn dist_m(a: Coord, b: Coord) -> f64 {
-    rustgis_geom::haversine_m(a, b)
-}
-
 /// Elevation (bilinear) at a longitude/latitude point.
 pub fn elevation_at(r: &Raster, b: usize, ll: Coord) -> Option<f64> {
     let w = r.transformer().from_lonlat(ll)?;
@@ -436,13 +427,26 @@ pub fn elevation_at(r: &Raster, b: usize, ll: Coord) -> Option<f64> {
     }
 }
 
-/// An elevation profile along a path: (distance from the start in metres, point, elevation).
+/// An elevation profile along a path: (distance from the start in metres, point, elevation), the
+/// distances on the WGS 84 ellipsoid, as the Measure tool measures them.
 pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64, Coord, Option<f64>)> {
+    profile_by(r, b, path, samples, rustgis_geom::wgs84_distance_m)
+}
+
+/// [`profile`] with each leg of the path `metres` long: on another body, its sphere's distance.
+/// Samples are spaced evenly by those distances.
+pub fn profile_by(
+    r: &Raster,
+    b: usize,
+    path: &[Coord],
+    samples: usize,
+    metres: impl Fn(Coord, Coord) -> f64,
+) -> Vec<(f64, Coord, Option<f64>)> {
     let samples = samples.clamp(2, 10_000);
     let legs: Vec<f64> = path
         .windows(2)
         .map(|w| match w {
-            [a, c] => dist_m(*a, *c),
+            [a, c] => metres(*a, *c),
             _ => 0.0,
         })
         .collect();
@@ -2861,6 +2865,11 @@ mod tests {
         let p = profile(&r, 0, &[Coord::new(0.0005, 0.01), Coord::new(0.0195, 0.01)], 20);
         assert_eq!(p.len(), 20);
         assert!(p.last().and_then(|x| x.2).unwrap_or(0.0) > p[0].2.unwrap_or(0.0) + 150.0);
+        // Distances along it are the ellipsoid's, as Measure gives them, not the sphere's, which
+        // makes this path about 0.2% longer.
+        let path = [Coord::new(0.0005, 0.0005), Coord::new(0.0195, 0.0005), Coord::new(0.0195, 0.0195)];
+        let (along, ellipsoid) = (profile(&r, 0, &path, 20).last().map_or(0.0, |x| x.0), rustgis_geom::wgs84_length_m(&path));
+        assert!((along - ellipsoid).abs() < 1e-6, "{along} m along, {ellipsoid} m on the ellipsoid");
     }
 
     #[test]
