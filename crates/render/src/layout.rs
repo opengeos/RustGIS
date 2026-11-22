@@ -456,8 +456,10 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
         .collect::<Vec<_>>();
     // Scale bars alone: their labels are no text to break (#2581).
     let bars = clipped.iter().all(|(id, _)| matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::ScaleBar { .. })));
-    let advice = if bars {
-        "make the scale bar larger or move it inside the page, or reduce its text size"
+    let advice = if bars && clipped.len() == 1 {
+        "move it inside the page or make its box larger, or reduce its text size"
+    } else if bars {
+        "move them inside the page or make their boxes larger, or reduce their text size"
     } else if wraps.contains(&Some(false)) {
         "resize or move the text, reduce its size, add line breaks, or turn on Wrap to the box"
     } else if wraps.iter().all(|w| *w == Some(true)) {
@@ -2018,11 +2020,12 @@ fn mgrs_squares(
 /// text, a meridian's or not) on a frame `size` pixels, `label_h` tall: away from the corners (all
 /// of a label, `along` its edge, fits, and none at a side's ends by a top or bottom label), within
 /// the frame across (how far it reaches in from its edge, `across`, at most the frame's other side:
-/// a label larger than a short frame isn't cut by it), and none over another. Meridians are
-/// labelled along the top and bottom and parallels along the sides first; a line that leaves the
-/// frame through the other edges (a slanting meridian on a projected map) is labelled there only
-/// well clear of the labels already set on that edge. Their room from the corners and between them
-/// is in `unit`s, a point at the labels' default size in pixels, so it follows their size.
+/// one reaching further in is left out, at any size, rather than cut by the frame), and none over
+/// another. Meridians are labelled along the top and bottom and parallels along the sides first; a
+/// line that leaves the frame through the other edges (a slanting meridian on a projected map) is
+/// labelled there only well clear of the labels already set on that edge. Their room from the
+/// corners and between them is in `unit`s, a point at the labels' default size in pixels, so it
+/// follows their size.
 /// A label left out for want of room is thinning, as on any map, not a loss to report: the grid
 /// still shows its lines, and the user guide says labels go where there is room.
 fn kept_labels(
@@ -8489,9 +8492,11 @@ Elaboração: RustGIS",
         let (small, big) = (at(SCALE_BAR_TEXT_PT), at(16.0));
         assert_eq!((small.len, small.bar_h, small.y0), (big.len, big.bar_h, big.y0), "the bar keeps its size");
         assert!((big.px - 2.0 * small.px).abs() < 1e-3, "{} against {}", big.px, small.px);
-        // Its inset follows, and more: its first label reaches no further left than at 8 points.
+        // Its inset follows, and more: its first label reaches no further left than at 8 points,
+        // where its "0" pokes a little past the box's side.
         let reach = |b: &BarLayout| b.x0 - text::measure(&b.labels[0].1, b.px / 1.33, false) / 2.0;
-        assert!(big.x0 >= 2.0 * BAR_INSET - 1e-3 && (reach(&big) - reach(&small).min(0.0)).abs() < 1e-3, "{} {}", big.x0, reach(&big));
+        assert!(reach(&small) < 0.0, "{}", reach(&small));
+        assert!(big.x0 >= 2.0 * BAR_INSET - 1e-3 && (reach(&big) - reach(&small)).abs() < 1e-3, "{} {}", big.x0, reach(&big));
         let over = |b: &BarLayout| b.y0 - b.label_y;
         assert!((over(&big) - 2.0 * over(&small)).abs() < 1e-3, "its room over the bar follows");
         // The default draws the bar as before: an 8-point label 1.33 pixels a point, 2 pixels in.
@@ -8564,7 +8569,7 @@ Elaboração: RustGIS",
         }
         assert_eq!(clipped_text(&l, &maps, 96.0, &info), vec![(bar, "Scale Bar".into())]);
         let note = clipped_text_notice(&l, &clipped_text(&l, &maps, 96.0, &info)).unwrap();
-        assert!(note.contains("make the scale bar larger"), "{note}");
+        assert!(note.ends_with("move it inside the page or make its box larger, or reduce its text size"), "{note}");
         let loss = text_loss(&l, &maps, 96.0, &info, bar).unwrap();
         assert!(loss.below_box && scale_bar_fit_notices(std::slice::from_ref(&loss))[0].contains("its box is too small"), "{loss:?}");
         // A tall box holds them at 20 points; off the page's right edge, its last label is cut.
