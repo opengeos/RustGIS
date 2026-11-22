@@ -395,7 +395,7 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     let address = address.trim();
     let (public, _) = msconn::split_password(address)?;
     let password = public != address;
-    let rest = public.strip_prefix("mssql://")?;
+    let rest = public.get(..8).filter(|scheme| scheme.eq_ignore_ascii_case("mssql://")).and_then(|_| public.get(8..))?;
     let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
     let (user, hostport) = match authority.rsplit_once('@') {
@@ -442,7 +442,7 @@ fn form_address(st: &State) -> Result<String, String> {
     if !windows && st.user.trim().is_empty() {
         return Err(tl!("Type the user name, or choose Windows sign-in").into());
     }
-    let address = mssql_address(&SdeConnection {
+    let mut address = mssql_address(&SdeConnection {
         platform: "sqlserver".into(),
         server: st.server.clone(),
         database: st.database.trim().to_owned(),
@@ -451,7 +451,6 @@ fn form_address(st: &State) -> Result<String, String> {
         version: None,
     })
     .map_err(|e| e.to_string())?;
-    let mut address = address;
     let options = st.form_options.trim().trim_matches(|c| c == '&' || c == '?');
     for option in [options, if st.trust_cert { "trust-server-certificate=true" } else { "" }] {
         if !option.is_empty() {
@@ -625,7 +624,8 @@ pub(crate) fn fill_from_sde(app: &mut RustGisApp, path: &str) -> Result<(), Stri
     st.kind = "sqlserver".into();
     st.form = true;
     // The certificate choice and the address's options were for the server before.
-    if !st.server.trim().eq_ignore_ascii_case(text("server").trim()) {
+    let cleared = !st.server.trim().eq_ignore_ascii_case(text("server").trim()) && (st.trust_cert || !st.form_options.is_empty());
+    if cleared {
         st.trust_cert = false;
         st.form_options.clear();
     }
@@ -633,23 +633,26 @@ pub(crate) fn fill_from_sde(app: &mut RustGisApp, path: &str) -> Result<(), Stri
     st.database = text("database");
     st.sign_in = if windows { "windows" } else { "sql" }.into();
     st.user = if windows { String::new() } else { text("user") };
-    if !st.typed_name {
+    // A saved connection's name was typed when it was made.
+    if st.id.is_none() && !st.typed_name {
         st.name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     }
     st.password.clear();
     st.remember = false;
     st.test = None;
     app.dialogs.error = None;
-    app.dialogs.info = Some(
-        if windows {
-            tl!("This file signs in as the Windows user: Save, or Test to check the connection.")
-        } else if app.ui.connection.user.is_empty() {
-            tl!("Type the user and the password, then Save.")
-        } else {
-            tl!("Type the password, then Save.")
-        }
-        .to_string(),
-    );
+    let next = if windows {
+        tl!("This file signs in as the Windows user: Save, or Test to check the connection.")
+    } else if app.ui.connection.user.is_empty() {
+        tl!("Type the user and the password, then Save.")
+    } else {
+        tl!("Type the password, then Save.")
+    };
+    app.dialogs.info = Some(if cleared {
+        format!("{} {next}", tl!("The certificate choice and the options were for the previous server, and were cleared."))
+    } else {
+        next.to_string()
+    });
     Ok(())
 }
 
@@ -2252,6 +2255,8 @@ mod tests {
         assert_eq!(f("mssql://gis-db:1444/util%20ity"), Some(("gis-db,1444".into(), None, "util ity".into(), false)));
         assert_eq!(f("mssql://gis-db:1433/u"), Some(("gis-db".into(), None, "u".into(), false)));
         assert_eq!(f("postgres:host=x"), None);
+        // The scheme is read without case, as the engine reads it.
+        assert_eq!(f(" MSSQL://gis-db/utility "), Some(("gis-db".into(), None, "utility".into(), false)));
         // What the form composes comes back as it was typed.
         let composed = form_address(&gdb_form("sql")).unwrap();
         let back = parse_mssql(&composed).unwrap();
@@ -2309,6 +2314,12 @@ mod tests {
         let list = &app.session.connections.connections;
         assert_eq!(list.len(), 1);
         assert_eq!((list[0].name.as_str(), list[0].address.as_str()), ("sqlserver-os", "mssql://gisdb.example.invalid/gis"));
+        // A saved connection edited from a file keeps its name: it was typed when it was made.
+        let id = list[0].id.clone();
+        app.run("connection.edit", json!({"id": id, "name": "Utility GDB"})).unwrap();
+        app.run("ui.connection", json!({"id": id})).unwrap();
+        fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
+        assert_eq!(app.ui.connection.name, "Utility GDB");
     }
 
     #[test]
@@ -2342,11 +2353,14 @@ mod tests {
         fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
         assert!(app.ui.connection.trust_cert);
         assert_eq!(app.ui.connection.form_options, "ca=C:/certs/ca.pem");
+        assert!(!app.dialogs.info.as_deref().unwrap_or("").contains("previous server"));
         app.ui.connection.server = "elsewhere".into();
         fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
         assert_eq!(app.ui.connection.server, server);
         assert!(!app.ui.connection.trust_cert);
         assert!(app.ui.connection.form_options.is_empty());
+        // … and says so.
+        assert!(app.dialogs.info.as_deref().is_some_and(|i| i.contains("previous server")), "{:?}", app.dialogs.info);
     }
 
     #[test]
