@@ -10,6 +10,10 @@ mod scene_losses;
 #[path = "tests/cancellation.rs"]
 mod cancellation;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/cube_mask.rs"]
+mod cube_mask;
+
 #[path = "tests/permission_policy.rs"]
 mod permission_policy;
 
@@ -105,6 +109,18 @@ pub(crate) fn isolate_process_test(name: &str) -> bool {
         String::from_utf8_lossy(&output.stderr)
     );
     true
+}
+
+#[test]
+fn cached_sample_projects_have_distinct_instance_ids() {
+    let a = world();
+    let b = world();
+    assert_ne!(a.map().instance_id(), b.map().instance_id(), "each sample session needs a fresh map instance id");
+    assert_eq!(a.map().layers.len(), b.map().layers.len());
+    for (la, lb) in a.map().layers.iter().zip(&b.map().layers) {
+        assert_eq!(la.id, lb.id);
+        assert_ne!(la.instance_id(), lb.instance_id(), "layer {} must get a fresh instance id", la.name);
+    }
 }
 
 #[test]
@@ -3052,6 +3068,164 @@ fn qgis_annotation_layers_import_as_graphics_layers() {
     assert_eq!(texts, 8, "the texts come in all the same");
 }
 
+/// A QGIS style's raster image markers draw their PNG or JPEG file, read from the style's folder;
+/// one that isn't a PNG or JPEG, doesn't open or is past what a marker keeps is a circle, noted.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn qgis_raster_image_markers_read_their_files_from_the_style_folder() {
+    use base64::Engine;
+    use rustgis_map::{Marker, Picture};
+    // Removed however the test ends.
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let guard = Dir(std::env::temp_dir().join(format!("rustgis-qgis-raster-markers-{}", std::process::id())));
+    let dir = guard.0.clone();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("pins")).unwrap();
+    let image = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+    image.save(dir.join("pins/pin.png")).unwrap();
+    image.save(dir.join("pins/pin.jpg")).unwrap();
+    image.save(dir.join("pins/pin.gif")).unwrap();
+    // Past the 2 MiB of base64 a marker keeps (1.5 MiB of file); its start a PNG's.
+    let mut big = std::fs::read(dir.join("pins/pin.png")).unwrap();
+    big.resize(1600 << 10, 0);
+    std::fs::write(dir.join("pins/big.png"), big).unwrap();
+    let qml = |file: &str| {
+        format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+            <layer class="RasterMarker" enabled="1"><Option type="Map"><Option name="imageFile" value="{file}"/><Option name="size" value="6"/>
+            <Option name="size_unit" value="Point"/></Option></layer></symbol></symbols></renderer-v2></qgis>"#
+        )
+    };
+    let notes =
+        |r: &serde_json::Value| r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let mut s = world();
+    let marker = |s: &Session| s.map().layer_by_name("Cities").unwrap().symbol(0).marker;
+    for file in ["./pins/pin.png", "pins/pin.jpg"] {
+        let path = dir.join("pins.qml");
+        std::fs::write(&path, qml(file)).unwrap();
+        let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(dir.join(file)).unwrap());
+        assert_eq!(marker(&s), Marker::Picture(Picture::new(&b64)), "{file}");
+        assert!(notes(&r).is_empty(), "{file}: {:?}", notes(&r));
+    }
+    for (file, note) in [
+        ("pins/pin.gif", "raster image markers whose image isn't a PNG or JPEG RustGIS reads, drawn as circles"),
+        ("pins/gone.png", "raster image markers whose image file doesn't open, drawn as circles"),
+        ("pins/big.png", "raster image markers whose image is past 2 MiB of base64, drawn as circles"),
+    ] {
+        let path = dir.join("pins.qml");
+        std::fs::write(&path, qml(file)).unwrap();
+        let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+        assert_eq!(marker(&s), Marker::Circle, "{file}");
+        assert_eq!(notes(&r), [note], "{file}");
+    }
+    // An empty file isn't an image.
+    std::fs::write(dir.join("pins/empty.png"), b"").unwrap();
+    let path = dir.join("pins.qml");
+    std::fs::write(&path, qml("pins/empty.png")).unwrap();
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+    assert_eq!(notes(&r), ["raster image markers whose image isn't a PNG or JPEG RustGIS reads, drawn as circles"]);
+    // A named pipe isn't opened: opening one waits for a writer, which would hold the import.
+    #[cfg(unix)]
+    if std::process::Command::new("mkfifo").arg(dir.join("pins/pipe.png")).status().is_ok_and(|s| s.success()) {
+        let path = dir.join("pins.qml");
+        std::fs::write(&path, qml("pins/pipe.png")).unwrap();
+        let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+        assert_eq!(notes(&r), ["raster image markers whose image file doesn't open, drawn as circles"]);
+    } else {
+        eprintln!("skipped the named pipe: no mkfifo");
+    }
+    // Embedded in the style, it needs no folder.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(dir.join("pins/pin.png")).unwrap());
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(&format!("base64:{b64}"))})).unwrap();
+    assert_eq!(marker(&s), Marker::Picture(Picture::new(&b64)));
+    assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+    // An import reads at most so many bytes of images (1 KiB in tests), those that don't draw too:
+    // of three of 600 characters that aren't images, the third isn't read.
+    let junk = |c: char| {
+        format!(
+            r#"<layer class="RasterMarker" enabled="1"><Option type="Map"><Option name="imageFile" value="base64:{}"/></Option></layer>"#,
+            c.to_string().repeat(600)
+        )
+    };
+    let three = format!(
+        r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">{}{}{}</symbol></symbols></renderer-v2></qgis>"#,
+        junk('A'),
+        junk('B'),
+        junk('C')
+    );
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": three})).unwrap();
+    let mut said: Vec<(String, u64)> =
+        r["notes"].as_array().unwrap().iter().map(|n| (n["text"].as_str().unwrap().to_string(), n["count"].as_u64().unwrap())).collect();
+    said.sort();
+    assert_eq!(
+        said,
+        [
+            ("raster image markers past the bytes of images an import reads, drawn as circles".to_string(), 1),
+            ("raster image markers whose image isn't a PNG or JPEG RustGIS reads, drawn as circles".to_string(), 2),
+        ]
+    );
+    // A file past what a marker keeps is charged for what was read of it: two take the budget.
+    for name in ["big2.png", "big3.png"] {
+        std::fs::copy(dir.join("pins/big.png"), dir.join("pins").join(name)).unwrap();
+    }
+    let file = |f: &str| {
+        format!(
+            r#"<layer class="RasterMarker" enabled="1"><Option type="Map"><Option name="imageFile" value="pins/{f}"/></Option></layer>"#
+        )
+    };
+    let path = dir.join("pins.qml");
+    std::fs::write(
+        &path,
+        format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">{}{}{}</symbol></symbols></renderer-v2></qgis>"#,
+            file("big.png"),
+            file("big2.png"),
+            file("big3.png")
+        ),
+    )
+    .unwrap();
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+    let mut said = notes(&r);
+    said.sort();
+    assert_eq!(
+        said,
+        [
+            "raster image markers past the bytes of images an import reads, drawn as circles",
+            "raster image markers whose image is past 2 MiB of base64, drawn as circles",
+        ]
+    );
+    // A file that doesn't open is charged nothing: an image after it still reads.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = dir.join("pins/locked.png");
+        std::fs::copy(dir.join("pins/big.png"), &locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Run as root, it opens anyway.
+        if std::fs::File::open(&locked).is_err() {
+            std::fs::write(
+                &path,
+                format!(
+                    r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">{}{}</symbol></symbols></renderer-v2></qgis>"#,
+                    file("locked.png"),
+                    file("pin.png")
+                ),
+            )
+            .unwrap();
+            let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+            assert_eq!(notes(&r), ["raster image markers whose image file doesn't open, drawn as circles"]);
+        } else {
+            eprintln!("skipped the unopenable file: it opens as this user");
+        }
+    }
+}
+
 /// Pictures are charged to an import's budget (1 KiB in tests) only once placed: pictures that
 /// don't take to longitude and latitude leave it whole, and those past it are left out, noted.
 #[test]
@@ -4616,7 +4790,7 @@ fn removing_a_perpendicular_label_line_says_so() {
     s.run("layer.remove", &json!({"layer": "Rivers"})).unwrap();
     let notes = said(&s, mark);
     assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!(notes[0].contains("'Rivers' was removed"), "{notes:?}");
+    assert!(notes[0].contains("1 perpendicular labels' line layer(s) 'Rivers' removed"), "{notes:?}");
     let c = s.map().layer_by_name("Cities").unwrap().labels.default.clone();
     assert_eq!((c.placement, c.square_to.unwrap().layer.as_str()), (crate::map::LabelPlacement::Perpendicular, "Rivers"));
 }
@@ -4643,6 +4817,138 @@ fn opening_a_project_says_when_a_perpendicular_line_is_dropped() {
     let notes = said(&damaged);
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].contains("2 perpendicular label line setting(s)"), "{notes:?}");
+}
+
+/// `labels.placement`'s guide (#2262): a line layer by name and a field both layers have, for
+/// point and polygon labels; followed through a rename, said when removed, cleared by null; a
+/// project's guide that doesn't read dropped and said once.
+#[test]
+fn labels_are_guided_along_a_line_layer() {
+    let mut s = world();
+    let guide = |s: &Session| s.map().layer_by_name("Lakes").unwrap().labels.default.guide.clone();
+    let place = |s: &mut Session, layer: &str, g: Value| s.run("labels.placement", &json!({"layer": layer, "guide": g}));
+    assert!(place(&mut s, "Rivers", json!({"layer": "Rivers"})).is_err(), "a line's label follows its own line");
+    assert!(place(&mut s, "Lakes", json!({"layer": "Countries"})).is_err(), "no lines");
+    assert!(place(&mut s, "Lakes", json!({"layer": "Nowhere"})).is_err());
+    assert!(place(&mut s, "Lakes", json!({"layer": "Rivers", "field": "nowhere"})).is_err());
+    assert!(place(&mut s, "Lakes", json!({"field": "name"})).is_err());
+    place(&mut s, "Lakes", json!({"layer": "rivers", "field": "name"})).unwrap();
+    assert_eq!(guide(&s), Some(crate::map::LabelGuide { layer: "Rivers".into(), field: Some("name".into()) }));
+    place(&mut s, "Cities", json!({"layer": "Rivers", "field": ""})).unwrap();
+    let square = json!({"layer": "Cities", "position": "perpendicular", "to": {"layer": "Rivers"}});
+    assert!(s.run("labels.placement", &square).is_err(), "square to a line or along a guide, not both");
+    let back: crate::map::LabelClass =
+        serde_json::from_value(serde_json::to_value(&s.map().layer_by_name("Lakes").unwrap().labels.default).unwrap()).unwrap();
+    assert_eq!(back.guide, guide(&s));
+    s.run("layer.rename", &json!({"layer": "Rivers", "name": "Waters"})).unwrap();
+    assert_eq!(guide(&s).map(|g| g.layer), Some("Waters".into()));
+    let mark = s.notices_given();
+    s.run("layer.remove", &json!({"layer": "Waters"})).unwrap();
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("guide layer")).map(|n| n.text.clone()).collect();
+    assert!(said.len() == 1 && said[0].contains("1 guide layer(s) 'Waters' removed"), "{said:?}");
+    place(&mut s, "Lakes", Value::Null).unwrap();
+    assert_eq!(guide(&s), None);
+    let said = |v: &Value| {
+        let s = Session::new(Project::from_json(&v.to_string()).unwrap());
+        s.notices.iter().filter(|n| n.text.contains("label guide")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let clean: Value = serde_json::to_value(&world().project).unwrap();
+    let mut fine = clean.clone();
+    // (Spaces round its layer's name trimmed, as the command keeps it.)
+    fine["maps"][0]["layers"][0]["labels"]["guide"] = json!({"layer": " Rivers ", "field": "name"});
+    assert!(said(&clean).is_empty() && said(&fine).is_empty());
+    let read = Project::from_json(&fine.to_string()).unwrap();
+    assert_eq!(read.maps[0].layers[0].labels.default.guide.as_ref().map(|g| g.layer.as_str()), Some("Rivers"));
+    let mut damaged = clean.clone();
+    damaged["maps"][0]["layers"][0]["labels"]["guide"] = json!({"layer": ""});
+    damaged["maps"][0]["layers"][1]["labels"]["guide"] = json!({"layer": "Rivers", "field": 3});
+    assert_eq!(Project::from_json(&damaged.to_string()).unwrap().maps[0].layers[1].labels.default.guide, None);
+    let notes = said(&damaged);
+    assert!(notes.len() == 1 && notes[0].contains("2 label guide setting(s)"), "{notes:?}");
+    // A saved guided label (`label_guide.rgis`) reads back as saved, saying nothing.
+    let mut saved = Project::from_json(include_str!("../../../schema/fixtures/label_guide.rgis")).unwrap();
+    let class = &saved.maps[0].layers[0].labels.default;
+    assert_eq!(class.guide, Some(crate::map::LabelGuide { layer: "rios".into(), field: Some("nome".into()) }));
+    assert!(saved.take_read_notices(&crate::project::ALL_PARTS).is_empty());
+    // Saved, it requires `label-guide`, which an older reader refuses rather than drop.
+    assert_eq!(serde_json::to_value(&saved).unwrap()["requires"], json!(["label-guide"]));
+    assert!(clean.get("requires").is_none());
+}
+
+/// A guide layer read in place from its file (#2262) has only a view's window at hand: refused
+/// until it is loaded whole, and said once when a project or map file has one.
+#[test]
+fn a_guide_layer_read_in_place_is_refused_and_said() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut ds = Dataset::new("cumeadas", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    for i in 0..4 {
+        let y = f64::from(i) * 5.0;
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(-10.0, y), Coord::new(10.0, y + 1.0)]])), vec![V::Text(format!("Serra {i}"))]);
+    }
+    let path = std::env::temp_dir().join(format!("rustgis-engine-{}-guide-streamed.fgb", std::process::id()));
+    rustgis_data::io::write_path(&ds, &path).unwrap();
+    let mut s = world();
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    assert!(s.map().layer_by_name("cumeadas").unwrap().is_streamed());
+    let e = s.run("labels.placement", &json!({"layer": "Lakes", "guide": {"layer": "cumeadas"}})).unwrap_err();
+    assert!(e.contains("layer.loadAll"), "{e}");
+    // A project that has one anyway (written by hand, or the layer made streamed since): said once.
+    for name in ["Lakes", "Cities"] {
+        let l = s.map_mut().layers.iter_mut().find(|l| l.name == name).unwrap();
+        l.labels.default.guide = Some(crate::map::LabelGuide { layer: "cumeadas".into(), field: None });
+    }
+    let mut read = Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    let said: Vec<String> =
+        read.take_read_notices(&crate::project::ALL_PARTS).iter().map(|n| n.english()).filter(|n| n.contains("read in place")).collect();
+    assert!(said.len() == 1 && said[0].contains("2 label guide(s) along 'cumeadas'"), "{said:?}");
+    // Loaded whole, it guides.
+    s.run("layer.loadAll", &json!({"layer": "cumeadas"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Lakes", "guide": {"layer": "cumeadas"}})).unwrap();
+    let _ = std::fs::remove_file(path);
+}
+
+/// A guide (#2262) its labels can't follow as written, in a project written by hand: along a layer
+/// that isn't there or has no lines, by a field one of the two layers lacks, or on a perpendicular
+/// label (square to its line where one is near): said once a kind on opening; a clean one isn't.
+#[test]
+fn a_guide_its_labels_cant_follow_is_said_on_opening() {
+    let guided = |s: &Session| {
+        let mut read = Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+        let said: Vec<String> = read.take_read_notices(&crate::project::ALL_PARTS).iter().map(|n| n.english()).collect();
+        said.into_iter().filter(|n| n.contains("guide")).collect::<Vec<_>>()
+    };
+    let mut s = world();
+    s.run("labels.placement", &json!({"layer": "Lakes", "guide": {"layer": "Rivers"}})).unwrap();
+    assert!(guided(&s).is_empty(), "a clean guide isn't said: {:?}", guided(&s));
+    let set = |s: &mut Session, name: &str, layer: &str, field: Option<&str>| {
+        let l = s.map_mut().layers.iter_mut().find(|l| l.name == name).unwrap();
+        l.labels.default.guide = Some(crate::map::LabelGuide { layer: layer.into(), field: field.map(Into::into) });
+    };
+    set(&mut s, "Lakes", "Serras", None);
+    set(&mut s, "Countries", "Lakes", None);
+    let said = guided(&s);
+    assert!(said.len() == 1 && said[0].contains("2 label guide(s) along 'Lakes', 'Serras'"), "{said:?}");
+    set(&mut s, "Lakes", "Rivers", Some("nome"));
+    set(&mut s, "Countries", "Rivers", None);
+    let said = guided(&s);
+    assert!(said.len() == 1 && said[0].contains("1 label guide field(s)") && said[0].contains("'nome'"), "{said:?}");
+    set(&mut s, "Lakes", "Rivers", None);
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "perpendicular", "to": {"layer": "Rivers"}})).unwrap();
+    set(&mut s, "Cities", "Rivers", None);
+    let said = guided(&s);
+    assert!(said.len() == 1 && said[0].contains("1 perpendicular label class(es)"), "{said:?}");
+}
+
+/// A limited project-map import (#2262) audits the guides of the maps it keeps, as a full open does.
+#[test]
+fn a_limited_map_import_says_a_guide_it_cant_follow() {
+    let mut s = world();
+    let lakes = s.map_mut().layers.iter_mut().find(|l| l.name == "Lakes").unwrap();
+    lakes.labels.default.guide = Some(crate::map::LabelGuide { layer: "Nowhere".into(), field: None });
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut read = Project::from_import_maps_json(&text, None, s.project.maps.len()).unwrap();
+    let said: Vec<String> = read.take_read_notices(&crate::project::ALL_PARTS).iter().map(|n| n.english()).collect();
+    assert!(said.iter().any(|n| n.contains("guide") && n.contains("Nowhere")), "{said:?}");
 }
 
 #[test]
@@ -4920,7 +5226,7 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
         <maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>w</id><datasource>url=https://wms.example/wms&amp;layers=a</datasource><layername>Web</layername><provider>wms</provider>
         <pipe><rasterrenderer opacity="0.5" type="singlebandcolordata"/></pipe><blendMode>6</blendMode></maplayer></projectlayers></qgis>"#;
     let mut report = rustgis_map::qgis::Report::default();
-    let project = rustgis_map::qgis::read_project(web, "", &mut report).unwrap();
+    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err("whose image file doesn't open"), &mut report).unwrap();
     let mut w = world();
     let before = w.active_layer;
     w.active_layer = w.map().layers.iter().map(|l| l.id).find(|id| Some(*id) != before);
@@ -5299,12 +5605,18 @@ fn command_ids_are_unique() {
 
 /// A 3-band 8×6 UTM 17N GeoTIFF near 81°W, 42°N, as base64.
 fn utm_tiff_b64() -> String {
-    use base64::Engine;
-    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
-    let gt = GeoTransform { origin_x: 497_000.0, origin_y: 4_651_000.0, pixel_width: 500.0, pixel_height: -500.0 };
-    let bands = (0..3).map(|b| (0..48).map(|i| ((i * 5 + b * 40) % 256) as f32).collect()).collect();
-    let r = Raster::new("utm", 8, 6, bands, gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Rgb { alpha: false }, "UInt8").unwrap();
-    base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+    static ENCODED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ENCODED
+        .get_or_init(|| {
+            use base64::Engine;
+            use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+            let gt = GeoTransform { origin_x: 497_000.0, origin_y: 4_651_000.0, pixel_width: 500.0, pixel_height: -500.0 };
+            let bands = (0..3).map(|b| (0..48).map(|i| ((i * 5 + b * 40) % 256) as f32).collect()).collect();
+            let r = Raster::new("utm", 8, 6, bands, gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Rgb { alpha: false }, "UInt8")
+                .unwrap();
+            base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+        })
+        .clone()
 }
 
 /// The sample world with a streamed layer active.
@@ -6667,6 +6979,39 @@ fn hostile_params_never_panic(shard: usize) {
         .collect();
     // Shards share the process under `cargo test`: each streams its own file.
     let streamed = grid_fgb(&format!("hostile-{shard}"), 20);
+    // Compare against each fixture's own initial state (`with_raster` and `with_streamed` start
+    // dirty with an undo entry from adding their layer). Captures session mutation counters,
+    // camera, and per-layer geometry/style/visibility/label state in O(layers) time so any
+    // failing payload that mutates state still triggers a full fixture rebuild.
+    let state_of = |s: &Session| {
+        let m = s.map();
+        let cam = (
+            m.camera.center.x.to_bits(),
+            m.camera.center.y.to_bits(),
+            m.camera.res.to_bits(),
+            m.camera.bearing.to_bits(),
+            m.camera.pitch.to_bits(),
+        );
+        let layers: Vec<_> = m
+            .layers
+            .iter()
+            .map(|l| {
+                (
+                    l.id,
+                    l.visible,
+                    l.transparency.to_bits(),
+                    // CoW `Features`: `PartialEq` short-circuits on `Arc::ptr_eq` in O(1) when
+                    // unchanged and catches any row, attribute or geometry mutation.
+                    l.dataset.features.clone(),
+                    l.selection.len(),
+                    l.labels.enabled,
+                    l.labels.default.field.len(),
+                    l.definition_query.as_deref().map(str::len),
+                )
+            })
+            .collect();
+        (s.states, s.unsaved_marks, s.opened, s.active_layer, s.tool, s.project.maps.len(), cam, layers)
+    };
     for id in ids {
         if matches!(
             id,
@@ -6704,6 +7049,12 @@ fn hostile_params_never_panic(shard: usize) {
         ) {
             continue;
         }
+        let mut s_world = world();
+        let mut s_raster = with_raster();
+        let mut s_streamed = with_streamed(&streamed);
+        let base_world = state_of(&s_world);
+        let base_raster = state_of(&s_raster);
+        let base_streamed = state_of(&s_streamed);
         for p in &junk {
             // Places given by name go to the public geocoder: with an answer given, the junk
             // goes through reading it and the options, and nothing is fetched.
@@ -6718,17 +7069,25 @@ fn hostile_params_never_panic(shard: usize) {
                 _ if id == "map.route" => continue,
                 p => p,
             };
-            let mut s = world();
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
-            // Again with a raster layer active.
-            let mut s = with_raster();
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
-            // And with a streamed layer active.
-            let mut s = with_streamed(&streamed);
-            let _ = s.run(id, p);
-            let _ = s.run("info.project", &Value::Null);
+            // Most hostile payloads return Err without modifying the session; rebuild through the
+            // full fixture constructor whenever the command succeeded or changed session/project
+            // state (`Session::run` bumps `revision` on every call, including errors, so compare
+            // `state_of` instead).
+            let changed = s_world.run(id, p).is_ok() || state_of(&s_world) != base_world;
+            let _ = s_world.run("info.project", &Value::Null);
+            if changed {
+                s_world = world();
+            }
+            let changed = s_raster.run(id, p).is_ok() || state_of(&s_raster) != base_raster;
+            let _ = s_raster.run("info.project", &Value::Null);
+            if changed {
+                s_raster = with_raster();
+            }
+            let changed = s_streamed.run(id, p).is_ok() || state_of(&s_streamed) != base_streamed;
+            let _ = s_streamed.run("info.project", &Value::Null);
+            if changed {
+                s_streamed = with_streamed(&streamed);
+            }
         }
     }
 }
@@ -13024,6 +13383,64 @@ fn a_publication_layouts_raster_gets_a_colorbar() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A raster's long name as its colorbar's title stays in the legend's box (#2493). The box widens
+/// for the title, up to the legend's cap (45% of the frame), and a longer title wraps there; a
+/// figure's wraps within its 40 mm bar. The colorbar is taller by each line past the first. A
+/// short name keeps the one line and the height it had. Fonts differ between systems, so whether
+/// the name fits one line on A4 isn't asked: only that it wraps no sooner than at the cap.
+#[test]
+fn a_publications_colorbar_title_stays_in_the_legends_box() {
+    use rustgis_render::layout::{COLORBAR_TITLE_PT, colorbar_title_lines, colorbar_title_width_mm, line_pitch_mm};
+    let dir = std::env::temp_dir().join(format!("rustgis-2493-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tif = dir.join("chuva.tif");
+    std::fs::write(&tif, rustgis_data::raster::cog::example(256, 128)).unwrap();
+    let long = "Precipitação média mensal JAXA GSMaP (mm/mês), jan–mar 2025";
+    // The colorbar, the legend's box and the map frame of a publication on `profile` of the raster
+    // named `name`, and the command's answer.
+    let publish = |name: &str, profile: &str| {
+        let mut s = Session::new(Project::default());
+        s.run("layer.addData", &json!({"path": tif.display().to_string(), "name": name})).unwrap();
+        let p = json!({"extent": [10, 45, 11, 46], "profile": profile, "title": "Colorbar test", "author": "", "locator": "none"});
+        let r = s.run("layout.publication", &p).unwrap();
+        let l = s.project.layouts.last().unwrap();
+        let named = |n: &str| l.elements.iter().find(|e| e.name == n).cloned().unwrap_or_else(|| panic!("{profile}: no {n}: {r}"));
+        (named("Colorbar"), named("Legend Box"), named("Map Frame"), r)
+    };
+    // Whether the name wraps whatever the font: A5's and the figure's room is well under its width.
+    for (profile, wraps) in [("a4-landscape", None), ("a5-portrait", Some(true)), ("figure-1col", Some(true))] {
+        // A short name: one line, the colorbar's height as before.
+        let (bar, short_box, _, r) = publish("chuva", profile);
+        assert_eq!((colorbar_title_lines("chuva", bar.w).len(), bar.h), (1, 15.0), "{profile}: {r}");
+        assert!(!r["warnings"].to_string().contains("colorbar"), "chuva on {profile}: {r}");
+        let (bar, then, frame, r) = publish(long, profile);
+        // The title's lines as the colorbar draws them, at its width.
+        let lines = colorbar_title_lines(long, bar.w);
+        let widest = lines.iter().map(|line| colorbar_title_width_mm(line)).fold(0.0, f64::max);
+        let tall = 15.0 + (lines.len() - 1) as f64 * line_pitch_mm(COLORBAR_TITLE_PT);
+        let inside = bar.x >= then.x - 1e-9
+            && bar.y >= then.y - 1e-9
+            && bar.x + bar.w <= then.x + then.w + 1e-9
+            && bar.y + bar.h <= then.y + then.h + 1e-9;
+        assert!(inside, "{profile}: the colorbar outside its box: {r}");
+        assert!(widest <= bar.w + 0.01, "{profile}: {lines:?} wider than the colorbar's {} mm: {r}", bar.w);
+        assert!(bar.h >= tall - 1e-9, "{profile}: {lines:?} need {tall} mm, the colorbar has {}: {r}", bar.h);
+        if let Some(wraps) = wraps {
+            assert_eq!(lines.len() > 1, wraps, "{profile}: {lines:?} in {} mm: {r}", bar.w);
+        }
+        // The title widens the box up to the legend's cap, never past it or the box a short name
+        // gets (a figure's bar alone is wider than the cap), and wraps only once the box is there.
+        let cap = frame.w * 0.45;
+        assert!(then.w <= cap.max(short_box.w) + 1e-9, "{profile}: the box past the legend's cap: {r}");
+        assert!(lines.len() == 1 || then.w >= cap - 1e-6, "{profile}: {lines:?} wrapped in a box {} mm wide, short of {cap}: {r}", then.w);
+        if profile == "figure-1col" {
+            assert!(bar.w <= 40.0 + 1e-9, "a figure's colorbar is at most 40 mm wide: {r}");
+        }
+        assert!(!r["warnings"].to_string().contains("colorbar"), "{profile}: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Series page labels and dynamic text share the row-number fallback for null and blank names.
 #[test]
 fn map_series_empty_names_use_row_numbers() {
@@ -17545,6 +17962,54 @@ fn plugin_panels_keep_their_state_between_calls() {
     assert!(s.run("plugin.panel", &json!({"id": "eng-panel"})).unwrap_err().contains("disabled"));
     rustgis_plugins::unload("eng-panel");
     rustgis_plugins::unload("eng-nopanel");
+}
+
+/// A plugin updated with another panel declaration has its panel's kept state made again from
+/// it, which loses what the state command set: the panel is marked for that command to run again,
+/// as the panel in view does, and a refresh clears the mark and gives the plugin's values back
+/// (#2550). A state made the first time isn't marked (opening the panel runs the command), nor is
+/// one the same declaration keeps, nor a panel with no state command.
+#[test]
+fn an_updated_plugins_panel_is_marked_for_its_state_command() {
+    use rustgis_plugins::{Package, testing};
+    let id = "eng-panel-update";
+    let with_items = |extra: &[Value], state: bool| {
+        let mut m: Value = serde_json::from_str(&testing::panel_manifest(id)).unwrap();
+        m["panel"]["items"].as_array_mut().unwrap().extend(extra.iter().cloned());
+        if !state {
+            m["panel"].as_object_mut().unwrap().remove("state");
+        }
+        let zip = testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("plugin.wasm", &testing::wasm())]);
+        rustgis_plugins::load(Package::from_zip(&zip).unwrap(), "test").unwrap();
+    };
+    let note = |text: &str| json!({"kind": "text", "id": "note", "label": "Note", "text": text});
+    let mut s = world();
+    with_items(&[], true);
+    assert_eq!(s.plugin_panel(id).unwrap().slider("release"), 0);
+    assert!(!s.take_panel_refresh(id), "a first state: opening the panel runs the command");
+    let st = s.run("plugin.panel", &json!({"id": id, "refresh": true})).unwrap();
+    assert_eq!(st["values"]["release"], 12);
+    // The same declaration again keeps the state.
+    with_items(&[], true);
+    assert_eq!(s.plugin_panel(id).unwrap().slider("release"), 12);
+    assert!(!s.take_panel_refresh(id), "the same declaration");
+    // One more widget: the state starts again from the declaration, marked, once.
+    with_items(&[note("First")], true);
+    assert_eq!(s.plugin_panel(id).unwrap().slider("release"), 0, "made again from the declaration");
+    assert!(s.take_panel_refresh(id), "marked for the state command");
+    assert!(!s.take_panel_refresh(id), "asking clears it");
+    // Marked by another update, a refresh runs the command, which clears the mark.
+    with_items(&[note("Second")], true);
+    assert!(s.plugin_panel(id).is_some());
+    let st = s.run("plugin.panel", &json!({"id": id, "refresh": true})).unwrap();
+    assert_eq!(st["values"]["release"], 12, "the state command's values are back");
+    assert_eq!(st["items"]["selected"]["text"], "2025-12-18\nRelease 13192");
+    assert!(!s.take_panel_refresh(id), "refreshed");
+    // A panel with no state command has nothing to run again.
+    with_items(&[note("Third")], false);
+    assert!(s.plugin_panel(id).is_some());
+    assert!(!s.take_panel_refresh(id), "no state command");
+    rustgis_plugins::unload(id);
 }
 
 /// A pick's place reaches the plugin in degrees and in the map's coordinates, worked out by the
@@ -31899,7 +32364,7 @@ fn a_data_cube_summarised_over_time() {
     let before = s.map().layers.len();
     for bad in [
         json!({"layers": names}),
-        json!({"layers": names, "stat": "median"}),
+        json!({"layers": names, "stat": "percentile"}),
         json!({"layers": names, "stat": "countAbove"}),
         json!({"layers": names, "stat": "mean", "by": "week"}),
         json!({"layers": names, "stat": "mean", "minValid": 1.5}),
@@ -33542,26 +34007,129 @@ fn connections_s3_rename_cannot_inherit_a_destination_session() {
 }
 
 #[test]
-fn connection_test_rejects_xyz_templates() {
+fn connection_test_expands_xyz_templates() {
     let mut s = Session::new(Project::default());
-    for (kind, address) in [
-        ("service", "http://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"),
-        ("wmts", "https://tiles.example/{z}/{x}/{y}.png"),
-        ("wcs", "https://tiles.example/{z}/{x}/{y}.png"),
-        ("ogcapi", "https://tiles.example/tile.png?z={z}&x={x}&y={y}"),
-        ("service", "https://tiles.example/{zoom}/{x}/{-y}.png"),
+    for (kind, address, expected, zoom) in [
+        ("service", "https://tiles.example/vt/lyrs=s&x={x}&y={y}&z={z}", "https://tiles.example/vt/lyrs=s&x=0&y=0&z=0", 0),
+        ("wmts", "https://tiles.example/{z}/{x}/{y}.png", "https://tiles.example/0/0/0.png", 0),
+        ("ogcapi", "https://tiles.example/tile.png?z={z}&x={x}&y={y}", "https://tiles.example/tile.png?z=0&x=0&y=0", 0),
+        ("service", "https://{s}.tiles.example/{zoom}/{x}/{-y}.png", "https://a.tiles.example/0/0/0.png", 0),
+        ("service", "https://tiles.example/{q}.jpg", "https://tiles.example/0.jpg", 1),
+        ("service", "https://tiles.example/tile.jpg?tile={quadkey}", "https://tiles.example/tile.jpg?tile=0", 1),
     ] {
-        let error = s.run("connection.test", &json!({"kind":kind,"address":address,"probe":true})).unwrap_err();
-        assert!(error.contains("XYZ tile URL template") && error.contains("Add Tile Layer"), "{kind}: {error}");
+        let result = s.run("connection.test", &json!({"kind":kind,"address":address,"probe":true})).unwrap();
+        assert_eq!(result["fetch"], expected, "{kind}");
+        assert_eq!(result["tile"]["zoom"], zoom);
     }
-
-    let saved =
-        s.run("connection.new", &json!({"kind":"service","name":"Tiles","address":"https://tiles.example/{z}/{x}/{y}.png"})).unwrap();
-    let error = s.run("connection.test", &json!({"id":saved["id"],"answer":"{}"})).unwrap_err();
-    assert!(error.contains("Add Tile Layer"), "{error}");
-
     let ordinary = json!({"kind":"ogcapi","address":"https://tiles.example/collections#{z}/{x}/{y}","probe":true});
     assert_eq!(s.run("connection.test", &ordinary).unwrap()["fetch"], "https://tiles.example/collections?f=json");
+}
+
+#[test]
+fn connection_xyz_default_name_and_path_key_notice() {
+    let mut s = Session::new(Project::default());
+    let mark = s.notice_mark();
+    let url = "https://tiles.example/{z}/{x}/{y}.png";
+    let added = s.run("connection.new", &json!({"kind":"service","address":url})).unwrap();
+    assert_eq!(added["name"], "tiles.example");
+    let subdomains = "https://{s}.basemaps.example/{z}/{x}/{y}.png";
+    let added = s.run("connection.new", &json!({"kind":"service","address":subdomains})).unwrap();
+    assert_eq!(added["name"], "basemaps.example");
+    assert_eq!(added["address"], subdomains);
+    assert!(s.notices_since(mark).is_empty());
+    let with_key = "https://tiles.example/services;key=fixture/tiles/{z}/{x}/{y}.png";
+    let added = s.run("connection.new", &json!({"kind":"service","address":with_key,"name":"Relief"})).unwrap();
+    assert_eq!(added["name"], "Relief");
+    assert_eq!(added["address"], with_key);
+    let notices = s.notices_since(mark);
+    assert!(notices.iter().any(|n| n.text.contains("URL path is saved as typed")));
+    assert!(notices.iter().all(|n| !n.text.contains("fixture")));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn connection_test_fetches_one_xyz_tile_with_the_selected_login() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let png = tiny_skia::Pixmap::new(1, 1).unwrap().encode_png().unwrap();
+    for (status, body, expected) in [
+        ("200 OK", png.as_slice(), Ok("received")),
+        ("204 No Content", &[][..], Ok("missing")),
+        ("404 Not Found", &[][..], Ok("missing")),
+        ("401 Unauthorized", &[][..], Err("http status: 401")),
+        ("200 OK", b"<html>Login required</html>", Err("not a usable tile")),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = body.to_vec();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(2)); // test-wait: pace accepts until the fixture deadline
+                    }
+                    Err(e) => panic!("sample request did not reach the fixture: {e}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() != 0 && line != "\r\n" {
+                line.clear();
+            }
+            let mut stream = reader.into_inner();
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            stream.write_all(&body).unwrap();
+            request
+        });
+        let mut s = Session::new(Project::default());
+        let url = format!("http://127.0.0.1:{port}/services;key=xyz-path-fixture/{{z}}/{{x}}/{{y}}.png");
+        let c = s.run("connection.new", &json!({"kind":"service","address":url,"auth":"query","keyName":"rg_xyz_key"})).unwrap();
+        let params = json!({"id":c["id"],"apiKey":"sample+key","allowInsecure":true});
+        let mark = s.notice_mark();
+        let result = s.run("connection.test", &params);
+        match expected {
+            Ok(expected) => assert_eq!(result.unwrap()["result"], json!({"kind":"xyz","tile":[0,0,0],"status":expected})),
+            Err(expected) => {
+                let error = result.unwrap_err();
+                assert!(error.contains(expected) && !error.contains("sample") && !error.contains("xyz-path-fixture"), "{error}");
+                let history = s.diagnostics.report(rustgis_data::diagnostics::Filter::All);
+                assert!(history.contains(expected), "{history}");
+                for key in ["xyz-path-fixture", "sample+key", "sample%2Bkey"] {
+                    assert!(!history.contains(key), "{history}");
+                }
+            }
+        }
+        for notice in s.notices_since(mark) {
+            for key in ["xyz-path-fixture", "sample+key", "sample%2Bkey"] {
+                assert!(!notice.text.contains(key), "{notice:?}");
+            }
+        }
+        assert_eq!(server.join().unwrap(), "GET /services;key=xyz-path-fixture/0/0/0.png?rg_xyz_key=sample%2Bkey HTTP/1.1\r\n");
+    }
+}
+
+#[test]
+fn connection_xyz_test_refuses_a_text_answer_and_an_unexpanded_placeholder() {
+    use crate::connections::tile_test::{TEXT_ANSWER, UNEXPANDED};
+    let mut s = Session::new(Project::default());
+    let answer = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}.png","answer":"<html></html>"});
+    let text = s.run("connection.test", &answer).unwrap_err();
+    assert_eq!(text, TEXT_ANSWER);
+    let unknown = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}/{foo}.png","probe":true});
+    let unexpanded = s.run("connection.test", &unknown).unwrap_err();
+    assert_eq!(unexpanded, UNEXPANDED);
+    // Clean input still passes: the same template without the unknown placeholder probes.
+    let clean = json!({"kind":"service","address":"https://tiles.example/{z}/{x}/{y}.png","probe":true});
+    assert_eq!(s.run("connection.test", &clean).unwrap()["tile"]["zoom"], 0);
 }
 
 #[test]
@@ -47627,6 +48195,23 @@ fn a_pdf_says_which_frames_it_doesnt_georeference() {
     assert!(said.contains("(Main on pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 3 more: it is tilted)"), "{said}");
 }
 
+/// A downloaded GRIB file is read off the frame, as a PDF's page is drawn: by its name, or by its
+/// first bytes when the address has none; never as a scan.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_grib_download_is_read_off_the_frame() {
+    use crate::cmd::raster::download_page;
+    let asked = json!({"url": "x"});
+    // A GRIB1 message of 52 octets: "GRIB", its length, its edition.
+    let message = b"GRIB\0\0\x34\x01";
+    let found = download_page("https://example.org/bam/PREC.grb", &asked, message);
+    assert_eq!(found, Some(("PREC.grb".to_string(), None, true)));
+    let (sniffed, ..) = download_page("https://example.org/record?id=7", &asked, message).unwrap();
+    assert!(rustgis_data::raster::grib::is_grib_name(&sniffed), "{sniffed}");
+    assert!(download_page("https://example.org/PREC.grb", &json!({"as": "scan"}), message).is_none());
+    assert!(download_page("https://example.org/a.tif", &asked, message).is_none());
+}
+
 /// Each page of a map series is georeferenced with its own view, not the first page's (#1191).
 #[test]
 fn a_map_series_pdf_georeferences_each_page_with_its_view() {
@@ -53958,7 +54543,9 @@ fn serve_ranged_files(files: Vec<(String, Vec<u8>)>) -> (String, std::sync::Arc<
                 };
                 let (status, part) = match range.as_deref().and_then(|r| r.split_once('-')) {
                     Some(("", n)) => ("206 Partial Content", &body[body.len() - n.parse::<usize>().unwrap().min(body.len())..]),
-                    Some((a, b)) => ("206 Partial Content", &body[a.parse::<usize>().unwrap()..=b.parse::<usize>().unwrap()]),
+                    Some((a, b)) => {
+                        ("206 Partial Content", &body[a.parse::<usize>().unwrap()..=b.parse::<usize>().unwrap().min(body.len() - 1)])
+                    }
                     None => ("200 OK", &body[..]),
                 };
                 let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
