@@ -508,10 +508,15 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
 /// "Enter an address instead" / "Use the form instead": what the form composed goes into the
 /// address box, and the address box's address fills the form. A form with a server typed that
 /// can't make an address stays, and why is the error; so does an address the form can't show.
-/// A form with no server has nothing to lose: the address box is left as it was.
+/// A form with nothing typed has nothing to lose: the address box is left as it was.
 fn swap_form(st: &mut State) -> Result<(), String> {
     if st.form {
-        if !st.server.trim().is_empty() {
+        let empty = st.server.trim().is_empty()
+            && st.user.trim().is_empty()
+            && st.database.trim().is_empty()
+            && st.form_options.trim().is_empty()
+            && !st.trust_cert;
+        if !empty {
             st.address = form_address(st)?;
         }
         st.form = false;
@@ -624,7 +629,9 @@ pub(crate) fn fill_from_sde(app: &mut RustGisApp, path: &str) -> Result<(), Stri
     st.kind = "sqlserver".into();
     st.form = true;
     // The certificate choice and the address's options were for the server before.
-    let cleared = !st.server.trim().eq_ignore_ascii_case(text("server").trim()) && (st.trust_cert || !st.form_options.is_empty());
+    let cleared = !st.server.trim().is_empty()
+        && !st.server.trim().eq_ignore_ascii_case(text("server").trim())
+        && (st.trust_cert || !st.form_options.is_empty());
     if cleared {
         st.trust_cert = false;
         st.form_options.clear();
@@ -649,7 +656,7 @@ pub(crate) fn fill_from_sde(app: &mut RustGisApp, path: &str) -> Result<(), Stri
         tl!("Type the password, then Save.")
     };
     app.dialogs.info = Some(if cleared {
-        format!("{} {next}", tl!("The certificate choice and the options were for the previous server, and were cleared."))
+        i18n::fmt("The certificate choice and the options were for the previous server, and were cleared. {next}", &[("next", next)])
     } else {
         next.to_string()
     });
@@ -2361,6 +2368,14 @@ mod tests {
         assert!(app.ui.connection.form_options.is_empty());
         // … and says so.
         assert!(app.dialogs.info.as_deref().is_some_and(|i| i.contains("previous server")), "{:?}", app.dialogs.info);
+        // With no server typed there was no previous server: what was ticked or typed stays.
+        app.ui.connection.server.clear();
+        app.ui.connection.trust_cert = true;
+        app.ui.connection.form_options = "encrypt=strict".into();
+        fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
+        assert!(app.ui.connection.trust_cert);
+        assert_eq!(app.ui.connection.form_options, "encrypt=strict");
+        assert!(!app.dialogs.info.as_deref().unwrap_or("").contains("previous server"));
     }
 
     #[test]
@@ -2422,6 +2437,12 @@ mod tests {
         assert!(st.form);
         assert_eq!(st.address, "mssql://sde@gis-db/utility?instance=GIS");
         assert_eq!(st.server, "bad host!");
+        // A form with no server but something else typed stays, so nothing typed is lost.
+        let mut half =
+            State { kind: "sqlserver".into(), form: true, user: "gis".into(), address: "mssql://h/d".into(), ..Default::default() };
+        assert!(swap_form(&mut half).is_err());
+        assert!(half.form);
+        assert_eq!(half.user, "gis");
         // An empty form goes to the address box as it was: nothing was typed to lose.
         let mut empty = State { kind: "sqlserver".into(), form: true, address: "mssql://h/d".into(), ..Default::default() };
         swap_form(&mut empty).unwrap();
