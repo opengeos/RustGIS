@@ -176,7 +176,7 @@ impl Session {
                 | "layer.sizeBy"
         ) && crate::cmd::edit::table_edit_in_background(command).is_none()
         {
-            return Err("only Add Data, Load All, Repair/Reload Data, Convert To Annotation, models, scripts, tile archives, service reads, topology, Source File State, Column Statistics, Similar and Size by Field prepare background work".into());
+            return Err("only Add Data, Load All, Repair/Reload Data, Convert To Annotation, models, scripts, tile archives, service reads, topology, Source File State, Read Original Image Grid, Preview Shape Conversion, Column Statistics, Similar and Size by Field prepare background work".into());
         }
         let mut params = params.as_object().cloned().ok_or("read parameters must be an object")?;
         // Scoped previews retain the raw invocation that was approved. Their admitted owner
@@ -991,8 +991,8 @@ impl Session {
                 };
                 let result = match txn {
                     Txn::Own => self.guarded(spec.label, spec.mutates, run),
-                    Txn::Shared if spec.id == "edit.applyShapeConversion" => self.savepoint(spec.label, run),
-                    Txn::Shared => run(self),
+                    Txn::Shared if spec.id == "edit.applyShapeConversion" => self.shared_step(&spec, |s| s.savepoint(spec.label, run)),
+                    Txn::Shared => self.shared_step(&spec, run),
                 };
                 self.url_completion_landed(spec.id, &params, &result);
                 if result.is_ok() && (spec.mutates || spec.effects.contains(crate::policy::Effect::History)) && spec.id != "data.similar" {

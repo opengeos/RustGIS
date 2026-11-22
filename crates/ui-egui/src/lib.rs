@@ -16,6 +16,7 @@ mod arcgisui;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
+mod assistantpictures;
 mod autosave;
 mod backstage;
 mod bookmarkpane;
@@ -208,6 +209,14 @@ pub const SCRIPT_PICK: &str = "\u{1}script:";
 /// `<id>:`: it goes to the marker whose «Image…» asked for it, and only a file so marked, for the
 /// request still waiting, does.
 pub const MARKER_PICK: &str = "\u{1}marker:";
+
+/// Starts the name of a picture the shell's `"assistantPicture"` picker put in the inbox: it is
+/// attached to the AI Assistant's next message, not opened on the map.
+pub const ASSISTANT_PICK: &str = "\u{1}assistantPicture:";
+
+/// The largest picture file the AI Assistant takes; the browser's and the phone's shells refuse a
+/// larger one before reading it.
+pub const ASSISTANT_FILE_MAX_BYTES: usize = rustgis_assistant::attach::MAX_FILE_BYTES;
 
 /// The largest image file a marker takes: one whose base64 fits the engine's limit
 /// ([`rustgis_engine::map::symbology::MAX_PICTURE_BYTES`]). The browser's and the phone's shells
@@ -1493,6 +1502,7 @@ impl RustGisApp {
     /// The Ctrl (⌘) shortcuts the keymap takes, as (Alt, Shift, key), the clipboard's left out:
     /// in a browser, what the web app keeps from the browser's own shortcuts (⌘D bookmarking
     /// the page, ⌘Y opening its history, ⌘= zooming it), as design tools in the browser do.
+    /// While Command Search is open, ⌘1 … ⌘9 and ⌘0 too: they run its rows, not switch tabs.
     pub fn command_keys(&self) -> Vec<(bool, bool, egui::Key)> {
         let mut keys: Vec<(bool, bool, egui::Key)> = self
             .ui
@@ -1503,6 +1513,9 @@ impl RustGisApp {
             .filter(|c| c.command && !keymap::is_clipboard(*c))
             .map(|c| (c.alt, c.shift, c.key))
             .collect();
+        if self.ui.command_search.is_some() {
+            keys.extend(chrome::NUMBER_KEYS.iter().map(|&key| (false, false, key)));
+        }
         keys.sort_by_key(|k| (k.0, k.1, k.2 as u32));
         keys.dedup();
         keys
@@ -1537,8 +1550,8 @@ impl RustGisApp {
 
     /// A fingerprint of the keymap's key combinations and what they run: cheap to take every
     /// frame (no allocation), it changes when a shortcut is added, removed or rebound (to
-    /// another key or another command), so a caller can rebuild [`RustGisApp::command_keys`]
-    /// only then.
+    /// another key or another command), or Command Search opens or closes, so a caller can
+    /// rebuild [`RustGisApp::command_keys`] only then.
     pub fn shortcuts_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1562,6 +1575,8 @@ impl RustGisApp {
             }
         }
         self.ui.keymap.bindings.len().hash(&mut h);
+        // Command Search takes the number keys while it is open.
+        self.ui.command_search.is_some().hash(&mut h);
         h.finish()
     }
 
@@ -2163,6 +2178,13 @@ impl RustGisApp {
         }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);
+            return Ok(Value::Null);
+        }
+        if let Some(name) = name.strip_prefix(ASSISTANT_PICK) {
+            // An answer with no name is a cancelled picker.
+            if !name.is_empty() {
+                assistantpictures::received(self, name, bytes.to_vec());
+            }
             return Ok(Value::Null);
         }
         if let Some(name) = name.strip_prefix(SHAPEFILE_PICK) {
@@ -4450,6 +4472,8 @@ impl RustGisApp {
                             "grb2",
                             "grib2",
                         ][..],
+                        // SRTM height tiles and DTED, read natively.
+                        &rustgis_engine::data::raster::ELEVATION_EXTENSIONS[..],
                         // Rasters GDAL reads (every one it is asked to read).
                         #[cfg(not(target_arch = "wasm32"))]
                         rustgis_engine::data::raster::gdal::EXTENSIONS,
@@ -5191,6 +5215,7 @@ impl RustGisApp {
                     dbf_notes.push(format!("{name}: {} rows couldn't be read and were left out", lost.rows));
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
+                // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
                 dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
                 drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {

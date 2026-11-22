@@ -810,6 +810,8 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     // The mapping's own where it is of the same field, else the field's range.
     let had = l.size_by.as_ref().filter(|h| l.dataset.field_index(&h.field) == Some(fi));
     let (min, max) = (min.or(had.map(|h| h.min)), max.or(had.map(|h| h.max)));
+    // Both bounds from the field's own range: a field with one value has no spread to scale over.
+    let both_from_range = min.is_none() && max.is_none();
     let range = if min.is_none() || max.is_none() {
         // A streamed layer holds the view's features only, so their range would be the view's.
         if l.is_streamed() {
@@ -832,6 +834,9 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     };
     let min = min.or(range.map(|r| r.0)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
     let max = max.or(range.map(|r| r.1)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    if max <= min && both_from_range {
+        return Err(format!("'{field}' has the same value ({min}) in every row, so give min and max"));
+    }
     if max <= min {
         return Err(format!("max ({max}) must be above min ({min})"));
     }
@@ -2025,7 +2030,9 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::raster::is_raster_name(path) {
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty());
         let page = super::raster::pdf_page(path, p)?;
-        return super::raster::add_path(s, path, name, page.as_deref(), scan);
+        // An SRTM tile or DTED file has no subdataset or coordinate system to choose: said.
+        let ignored = rustgis_data::raster::elevation_ignores(path, ps(p, "layer"), ps(p, "crs"));
+        return super::raster::add_path(s, path, name, page.as_deref(), scan, ignored);
     }
     // A Zarr store's folder: its first variable, or the one "layer" names.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3248,7 +3255,7 @@ fn add_source_read(
         .into_iter()
         .map(|(kind, count)| {
             if kind == "attributes" {
-                format!("{count} attribute-only tables not added: GeoPackage attribute tables are not supported")
+                format!("{count} attribute-only table(s) not added: GeoPackage attribute tables are not supported")
             } else if kind == "features" {
                 format!("{count} feature table(s) not added: no geometry column is registered")
             } else {
@@ -4688,7 +4695,16 @@ fn read_delimited(
 /// which may be a sidecar of the requested file.
 fn whole_read_error(path: &str, error: rustgis_data::DataError) -> String {
     let message = error.to_string();
-    if rustgis_data::io::file_size_error_args(&message).is_some() { message } else { format!("{path}: {message}") }
+    if rustgis_data::io::file_size_error_args(&message).is_some() || message.starts_with(&format!("{path}:")) {
+        return message;
+    }
+    // A reader that names the file by its name alone (the delimited and gzip readers) is named
+    // once, by the path given.
+    let file = Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
+    match message.strip_prefix(file).filter(|rest| rest.starts_with(':')) {
+        Some(rest) => format!("{path}{rest}"),
+        None => format!("{path}: {message}"),
+    }
 }
 
 /// Reads local/uploaded delimited bytes with the same options and CRS notices on every path.
@@ -5607,7 +5623,11 @@ pub(crate) fn cog_tile_where(t: &rustgis_map::tiles::TileLayer, address: &str) -
         Some((_, rest)) => rest.split_once('/').map_or("", |(_, path)| path),
         None => address,
     };
-    let file: String = path.rsplit(['/', '\\']).next().unwrap_or_default().chars().take(80).collect();
+    let whole = path.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mut file: String = whole.chars().take(80).collect();
+    if whole.chars().nth(80).is_some() {
+        file.push('…');
+    }
     if file.is_empty() { t.name.clone() } else { format!("{} ({file})", t.name) }
 }
 
@@ -5741,7 +5761,7 @@ const WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// The bands of a window read together, at most: their tiles asked for at once.
 #[cfg(not(target_arch = "wasm32"))]
-const WINDOW_BATCH: usize = 16;
+pub(crate) const WINDOW_BATCH: usize = 16;
 
 /// How long a window's band may be waited for: a batch of bands has this much a band.
 #[cfg(not(target_arch = "wasm32"))]
@@ -6935,8 +6955,9 @@ fn square_labels_follow_removal(s: &mut Session, names: &[String]) {
     }
     if !squared.is_empty() {
         let (count, names) = (squared.len(), squared.join(", "));
+        let layers = if count == 1 { "line layer" } else { "line layers" };
         s.notify(
-            format!("Labels: {count} perpendicular labels' line layer(s) {names} removed, so their labels are placed as auto until a layer of that name comes back"),
+            format!("Labels: {count} perpendicular labels' {layers} {names} removed, so their labels are placed as auto until a layer of that name comes back"),
             false,
         );
     }
@@ -7106,12 +7127,26 @@ fn move_layer(s: &mut Session, p: &Value, d: i32) -> CmdResult {
 }
 
 /// Moves a layer to a position in the drawing order: 0 is the top, anything past the end the
-/// bottom. One command (and one undo step) however far the layer travels.
+/// bottom. One command (and one undo step) however far the layer travels; none when the layers
+/// are already where they were asked to go, which a script setting the order can't know beforehand.
 fn move_to(s: &mut Session, p: &Value) -> CmdResult {
     let ids = layer_ids(s, p)?;
     let to = uint(p, "to").ok_or("to is required: the position in the drawing order, 0 at the top")?;
+    let before = s.map().layer_mark();
+    move_layers(s, ids, to)?;
+    // The order is compared, not each layer's index: a move within a group can end where it
+    // started, and a layer already in place leaves the order as it was.
+    if s.map().layer_mark() == before {
+        s.request_only = true;
+    }
+    Ok(Value::Null)
+}
+
+fn move_layers(s: &mut Session, ids: Vec<u32>, to: u64) -> Result<(), String> {
     if let [id] = ids[..] {
-        return move_one(s, id, to);
+        let m = s.map_mut();
+        let to = usize::try_from(to).unwrap_or(usize::MAX).min(m.layers.len().saturating_sub(1));
+        return move_to_index(m, id, to);
     }
     // Several: to the top or the bottom, keeping their order among themselves. A layer in a group
     // stays in it, going to the top or the bottom of its group.
@@ -7145,7 +7180,7 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
         let t = if top { lo + k } else { hi.saturating_sub(k) };
         move_to_index(m, id, t)?;
     }
-    Ok(Value::Null)
+    Ok(())
 }
 
 /// Moves a layer to index `t` of the drawing order, if it isn't there already.
@@ -7155,17 +7190,6 @@ fn move_to_index(m: &mut rustgis_map::Map, id: u32, t: usize) -> Result<(), Stri
         m.move_layer(i, t)?;
     }
     Ok(())
-}
-
-fn move_one(s: &mut Session, id: u32, to: u64) -> CmdResult {
-    let m = s.map_mut();
-    let i = m.layer_index(id).ok_or("no such layer")?;
-    let to = usize::try_from(to).unwrap_or(usize::MAX).min(m.layers.len().saturating_sub(1));
-    if to == i {
-        return Err("the layer is already there".into());
-    }
-    m.move_layer(i, to)?;
-    Ok(Value::Null)
 }
 
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {
