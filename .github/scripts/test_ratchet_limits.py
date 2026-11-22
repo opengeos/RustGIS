@@ -1,6 +1,7 @@
 """Checks for ratchet-limits.py on limits files cut down from xtask/row-uses.txt and xtask/memory-limits.txt."""
 
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 import unittest.mock
@@ -20,12 +21,10 @@ def person(body, association="MEMBER", bot=False):
 
 class RatchetLimits(unittest.TestCase):
     def problems(self, base, head):
-        found, notices = MODULE.compare("xtask/x.txt", base, head)
-        self.assertEqual(notices, [])
-        return [message for message, _ in found]
+        return [message for message, _ in MODULE.compare("xtask/x.txt", base, head)]
 
     def tokens(self, base, head):
-        return [token for _, token in MODULE.compare("xtask/x.txt", base, head)[0]]
+        return [token for _, token in MODULE.compare("xtask/x.txt", base, head)]
 
     def test_a_raised_row_count_is_refused(self):
         found = self.problems(ROWS, ROWS.replace("782", "783"))
@@ -72,19 +71,20 @@ class RatchetLimits(unittest.TestCase):
         self.assertEqual(len(self.problems(ROWS, "count\n")), 1)
         self.assertEqual(len(self.problems(ROWS, "count = nan\n")), 1)
         # An unreadable base can't be compared, so it needs a maintainer's say, not a pass.
-        found, notices = MODULE.compare("xtask/x.txt", "count = many\n", ROWS)
-        self.assertEqual(([token for _, token in found], notices), (["xtask/x.txt unreadable on base"], []))
+        self.assertEqual(self.tokens("count = many\n", ROWS), ["xtask/x.txt unreadable on base"])
+        # Nothing approves a head that doesn't parse, whatever the base is.
+        self.assertEqual(self.tokens("count = many\n", "count = oops\n"), [None])
 
     def test_the_row_count_is_read_as_cargo_xtask_rows_reads_it(self):
         path = MODULE.ROWS_FILE
         note = "see AGENTS.md\nsome = thing\n" + ROWS
         # A line without an `=`, and a key other than `count`, are ignored there, so they are here.
-        self.assertEqual(MODULE.compare(path, note, note), ([], []))
-        self.assertEqual(MODULE.compare(path, note, ROWS), ([], []))
-        found, _ = MODULE.compare(path, note, ROWS.replace("782", "900"))
+        self.assertEqual(MODULE.compare(path, note, note), [])
+        self.assertEqual(MODULE.compare(path, note, ROWS), [])
+        found = MODULE.compare(path, note, ROWS.replace("782", "900"))
         self.assertEqual([message for message, _ in found], [f"{path}: `count` rose from 782 to 900"])
         # `cargo xtask memory` rejects such a line, and so does the check on that file.
-        found, _ = MODULE.compare(MODULE.LIMIT_FILES[1], "see AGENTS.md\n" + MEMORY, MEMORY)
+        found = MODULE.compare(MODULE.LIMIT_FILES[1], "see AGENTS.md\n" + MEMORY, MEMORY)
         self.assertEqual(len(found), 1)
         self.assertIn("unreadable on base", found[0][1])
 
@@ -99,6 +99,14 @@ class RatchetLimits(unittest.TestCase):
             found = MODULE.messages("o/r", 7)
         self.assertEqual(asked, ["repos/o/r/issues/7/comments", "repos/o/r/pulls/7/reviews"])
         self.assertEqual([m["body"] for m in found], ["a", "b", "a", "b"])
+
+    def test_gh_output_may_be_compact_or_indented(self):
+        compact = '{"body": "a", "association": "MEMBER", "bot": false}\n{"body": "b", "association": "NONE", "bot": true}\n'
+        indented = json.dumps(MODULE.objects(compact), indent=2)[1:-1].replace("},", "}\n")
+        self.assertEqual(MODULE.objects(compact), MODULE.objects(indented))
+        self.assertEqual(len(MODULE.objects(indented)), 2)
+        self.assertEqual(MODULE.objects(""), [])
+        self.assertEqual(MODULE.objects("  \n"), [])
 
     def test_the_pull_request_number_comes_from_the_environment_first(self):
         ref = "refs/heads/gh-readonly-queue/main/pr-2655-76a6cd2823b4431c363e30a8023c7f69bccae938"

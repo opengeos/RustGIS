@@ -84,31 +84,33 @@ def marker(token):
 
 
 def compare(path, base_text, head_text):
-    """The raised or removed limits of one file, as (message, approval token) pairs, and notices.
+    """The raised or removed limits of one file, as (message, approval token) pairs.
 
     `base_text` is None when the file didn't exist on the base (nothing to compare), `head_text` None
     when the change deletes it. A token of None means nothing can approve the problem: fix the file.
     """
     if base_text is None:
-        return [], []
+        return []
+    head = None
+    if head_text is not None:
+        try:
+            head = parse(head_text, path == ROWS_FILE)
+        except ValueError as error:
+            return [(f"{path}: {error}", None)]
     try:
         base = parse(base_text, path == ROWS_FILE)
     except ValueError as error:
         # The limits can't be compared, so a raise could hide behind this: it needs a maintainer's say.
-        return [(f"{path}: can't be read on the base ({error}), so its limits can't be compared", f"{path} unreadable on base")], []
-    if head_text is None:
-        return [(f"{path}: deleted, but it holds {len(base)} limit(s) that only go down", f"{path} deleted")], []
-    try:
-        head = parse(head_text, path == ROWS_FILE)
-    except ValueError as error:
-        return [(f"{path}: {error}", None)], []
+        return [(f"{path}: can't be read on the base ({error}), so its limits can't be compared", f"{path} unreadable on base")]
+    if head is None:
+        return [(f"{path}: deleted, but it holds {len(base)} limit(s) that only go down", f"{path} deleted")]
     problems = []
     for name, (old, old_text) in base.items():
         if name not in head:
             problems.append((f"{path}: the limit `{name}` ({old_text}) was removed", f"{path} {name} removed"))
         elif head[name][0] > old:
             problems.append((f"{path}: `{name}` rose from {old_text} to {head[name][1]}", f"{path} {name}={head[name][1]}"))
-    return problems, []
+    return problems
 
 
 def run(args):
@@ -143,6 +145,18 @@ def head_file(path):
         return None
 
 
+def objects(text):
+    """Every JSON value in `text`, whether `gh` prints them one to a line or indented."""
+    decoder, at, found = json.JSONDecoder(), 0, []
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at >= len(text):
+            return found
+        value, at = decoder.raw_decode(text, at)
+        found.append(value)
+
+
 def messages(repo, number):
     """Every comment and review on the pull request, as (body, author association, is a bot)."""
     found = []
@@ -151,7 +165,7 @@ def messages(repo, number):
             ["gh", "api", "--paginate", endpoint, "--jq",
              ".[] | {body, association: .author_association, bot: (.user.type == \"Bot\")}"]
         )
-        found += [json.loads(line) for line in out.splitlines() if line.strip()]
+        found += objects(out)
     return found
 
 
@@ -194,10 +208,7 @@ def main():
         if is_link(path) or base_mode(base_sha, path) == "120000":
             problems.append((f"{path}: is a symbolic link, but the limits must be in a regular file", None))
             continue
-        found, notices = compare(path, base_file(base_sha, path), head_file(path))
-        problems += found
-        for notice in notices:
-            print(f"::notice::{escape(notice)}")
+        problems += compare(path, base_file(base_sha, path), head_file(path))
     if not problems:
         print("No limit that only goes down has risen.")
         return 0
