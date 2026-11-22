@@ -30,19 +30,24 @@ fn line_of(newlines: &[usize], at: usize) -> usize {
 
 /// The first two top-level arguments of a macro call, from the token after its opening delimiter
 /// (`index`) to the comma or closing delimiter that ends each. `None` when it has fewer than two.
+/// The commas of a turbofish (`get::<u8, u8>()`) don't split an argument.
 fn first_two_arguments<'a, 'b>(tokens: &'b [Token<'a>], index: usize) -> Option<(&'b [Token<'a>], &'b [Token<'a>])> {
     let mut depth = 0usize;
+    let mut angles = 0usize;
     let mut starts = vec![index];
     let mut end = None;
     for (at, t) in tokens.iter().enumerate().skip(index) {
+        let before = |n: usize| at.checked_sub(n).and_then(|i| tokens.get(i)).map_or("", |t| t.text);
         match t.text {
+            "<" if angles > 0 || (before(1) == ":" && before(2) == ":") => angles += 1,
+            ">" if angles > 0 && !matches!(before(1), "-" | "=") => angles -= 1,
             "(" | "[" | "{" => depth += 1,
             ")" | "]" | "}" if depth == 0 => {
                 end = Some(at);
                 break;
             }
             ")" | "]" | "}" => depth -= 1,
-            "," if depth == 0 => starts.push(at + 1),
+            "," if depth == 0 && angles == 0 => starts.push(at + 1),
             _ => {}
         }
         if starts.len() > 2 {
@@ -440,6 +445,8 @@ mod tests {
             "#[test] fn t() { debug_assert_eq!(a.b[0].c(1, 2), a.b[0].c(1, 2),); }",
             "#[test] fn t() { assert_eq!(\n  add(f64::MAX, Unit::Year, 1),\n  add(f64::MAX, Unit::Year, 1)\n); }",
             "#[test] fn t() { assert_eq![x, x]; }",
+            "#[test] fn t() { assert_eq!(get::<u8, Vec<u8>>(1), get::<u8, Vec<u8>>(1)); }",
+            "#[test] fn t() { assert_eq!(f::<(u8, u8)>(), f::<(u8, u8)>(), \"m\"); }",
             "#[test] fn t() { assert_eq!(1, 1); }",
         ] {
             let errors = scan(Path::new("src/lib.rs"), text, false).0;
@@ -453,6 +460,7 @@ mod tests {
             "#[test] fn t() { assert_eq!(x, x + 1); }",
             "#[test] fn t() { assert_eq!(x, expected, \"{x}\"); }",
             // The first argument is the whole left side, however many commas it holds inside.
+            "#[test] fn t() { assert_eq!(get::<u8, Vec<u8>>(), get::<u8, Vec<i8>>()); }",
             "#[test] fn t() { assert_eq!(g(1, 2), g(1, 3)); }",
             "#[test] fn t() { assert_eq!(v[0], v[1]); assert_ne!(\"a\", \"b\"); }",
             // A message that repeats the first side is not a second side.
