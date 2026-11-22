@@ -2037,9 +2037,9 @@ impl UnknownKeys {
         // those of the maps it takes.
         let seen = self.counted.entry((part, map)).or_default();
         if *seen < MAX_UNKNOWN_NAMED {
-            // A key from the file is shown on one line of plain text: control characters escaped.
-            let shown: String =
-                place.chars().flat_map(|c| if c.is_control() { c.escape_debug().collect::<Vec<_>>() } else { vec![c] }).collect();
+            // A key from the file is shown on one line of plain text: controls and directional
+            // marks flattened, as field names are.
+            let shown: String = place.chars().map(rustgis_data::io::dbf_notice_char).collect();
             self.named.push((part, map, crate::project::short_name(&shown)));
         }
         *seen += 1;
