@@ -995,9 +995,10 @@ impl Session {
                     Txn::Shared => run(self),
                 };
                 self.url_completion_landed(spec.id, &params, &result);
-                if result.is_ok() && spec.mutates && spec.id != "data.similar" {
-                    // Some edits replace selections without going through select::set. A pending
-                    // read must preserve the later intent, even when this edit touched another layer.
+                if result.is_ok() && (spec.mutates || spec.effects.contains(crate::policy::Effect::History)) && spec.id != "data.similar" {
+                    // Edits and history moves can replace selections without select::set. History
+                    // commands are non-mutating to avoid an extra Undo snapshot, but still express
+                    // later selection intent. Pending reads must preserve it, on any layer.
                     // Similar's own result is derived output, not a new external selection intent.
                     let epoch = selection_epoch.unwrap_or_else(|| self.selection_epoch());
                     self.selection_intent = self.selection_intent.max(epoch);

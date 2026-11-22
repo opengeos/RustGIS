@@ -57355,6 +57355,31 @@ fn prepared_similar_preserves_newer_selection_on_any_layer() {
 }
 
 #[test]
+fn prepared_similar_preserves_selection_after_undo_and_redo() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use rustgis_analysis::control::Control;
+    for redo in [false, true] {
+        let (mut s, id) = similar_lifecycle_session();
+        s.run("select.rows", &json!({"layer":id,"rows":[0]})).unwrap();
+        s.run("select.rows", &json!({"layer":id,"rows":[2]})).unwrap();
+        if redo {
+            s.run("edit.undo", &Value::Null).unwrap();
+        }
+        // History changes only selection, so the ranking's shared rows still match.
+        let p = json!({"layer":id,"row":0,"fields":["n"],"count":1});
+        let read = read_ahead(&mut s, "data.similar", &p).unwrap().run(&Control::stoppable()).unwrap();
+        let command = if redo { "edit.redo" } else { "edit.undo" };
+        s.run(command, &Value::Null).unwrap();
+        let expected = if redo { vec![2] } else { vec![0] };
+        assert_eq!(s.map().layer(id).unwrap().selection, expected, "{command} restores selection before completion");
+        let mark = s.notice_mark();
+        assert_eq!(read_land(&mut s, read).unwrap()["similar"][0]["row"], 1);
+        assert_eq!(s.map().layer(id).unwrap().selection, expected, "{command} owns the later selection");
+        assert!(s.notices_since(mark).iter().any(|n| n.text.contains("without replacing the current selection")));
+    }
+}
+
+#[test]
 fn queued_similar_results_preserve_later_requests_and_user_intent() {
     use crate::cmd::reads::{read_ahead, read_land};
     use rustgis_analysis::control::Control;
