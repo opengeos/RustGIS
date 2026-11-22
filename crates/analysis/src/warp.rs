@@ -524,6 +524,13 @@ pub struct Burned {
 /// goes by each shape's cells and crossings, with no cap on their total; a run under a
 /// [`crate::control::Control`] stops between shapes and counts them.
 pub fn rasterize(g: &Grid, shapes: &[Shape], nodata: f32) -> Result<Burned, String> {
+    rasterize_in(g, Crs::LonLat, shapes, nodata)
+}
+
+/// [`rasterize`] of shapes in `from`: longitude/latitude, or the system their layer holds its
+/// coordinates in, converted into the grid's (none of it when that is the grid's own), by the
+/// direct operation between two datums.
+pub fn rasterize_in(g: &Grid, from: Crs, shapes: &[Shape], nodata: f32) -> Result<Burned, String> {
     let max = max_samples();
     let too_big =
         || format!("{} × {} cells are more than this computer's {max}: give a larger cellSize or a smaller extent", g.width, g.height);
@@ -535,6 +542,8 @@ pub fn rasterize(g: &Grid, shapes: &[Shape], nodata: f32) -> Result<Burned, Stri
     }
     let size = (u32::try_from(g.width).map_err(|_| too_big())?, u32::try_from(g.height).map_err(|_| too_big())?);
     let tr = g.crs.transformer()?;
+    let own = if from == Crs::LonLat { None } else { Some(crate::tools::ToGrid::new(from, g.crs)?) };
+    let to = own.as_ref().map_or(crate::rasterops::ToWorld::LonLat(&tr), crate::rasterops::ToWorld::Own);
     let t = g.transform();
     let mut data = crate::rasterops::new_band(g.width, g.height, nodata)?;
     let mut unplaced = Vec::new();
@@ -545,7 +554,7 @@ pub fn rasterize(g: &Grid, shapes: &[Shape], nodata: f32) -> Result<Burned, Stri
         crate::control::check()?;
         crate::control::reached(i);
         failed.clear();
-        let placed = crate::rasterops::Placed::new(crate::rasterops::ToWorld::LonLat(&tr), &t, size, &shape.parts, &mut failed);
+        let placed = crate::rasterops::Placed::new(to, &t, size, &shape.parts, &mut failed);
         if !failed.is_empty() {
             unplaced.push(i);
         }

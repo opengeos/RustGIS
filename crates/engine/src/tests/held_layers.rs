@@ -647,12 +647,18 @@ fn camera_over_parcels(projection: &str) -> rustgis_map::Camera {
     s.map().camera
 }
 
-/// Rasterizing a held layer gives the grid of the same layer held in longitude/latitude (cells
-/// off the parcels' edges, which may read a hair either side of a cell's through UTM).
+/// Rasterizing a held layer onto a grid in longitude/latitude gives the grid of the same layer held
+/// in longitude/latitude (cells off the parcels' edges, which may read a hair either side of a
+/// cell's through UTM). Without a `crs`, a held layer is burned in its own system
+/// (`a_held_layer_is_burned_in_its_own_system`).
 #[test]
 fn a_held_layer_is_rasterized_alike() {
     let mut ss = both();
-    let [a, b] = run_both(&mut ss, "raster.rasterize", &json!({"layer": "Parcels", "field": "n", "cellSize": 0.0007, "nodata": -1}));
+    let [a, b] = run_both(
+        &mut ss,
+        "raster.rasterize",
+        &json!({"layer": "Parcels", "field": "n", "cellSize": 0.0007, "nodata": -1, "crs": "EPSG:4326"}),
+    );
     assert_eq!(a, b);
     // And the same cells: every value, the no-data ones too.
     let [ga, gb] = [(&ss[0], &a), (&ss[1], &b)]
@@ -945,7 +951,7 @@ fn raster_cells(s: &Session, answer: &Value) -> (u32, u32, Vec<Option<f32>>) {
 #[test]
 fn a_held_polygon_layer_reads_rasters_alike() {
     let mut ss = both();
-    run_both(&mut ss, "raster.rasterize", &json!({"layer": "Parcels", "field": "n", "cellSize": 0.0007, "nodata": -1}));
+    run_both(&mut ss, "raster.rasterize", &json!({"layer": "Parcels", "field": "n", "cellSize": 0.0007, "nodata": -1, "crs": "EPSG:4326"}));
     let raster = "Parcels raster";
     let [a, b] = run_both(&mut ss, "raster.spectral", &json!({"layer": raster, "zone": "Parcels"}));
     assert_eq!(a["pixels"], b["pixels"], "spectral zone");
@@ -2122,13 +2128,12 @@ fn a_grid_in_another_system_takes_the_direct_operation() {
     assert_eq!((g.transform.origin_x, g.transform.origin_y), (west, north));
 }
 
-/// Zonal Statistics and Tabulate Area place zones held in another system than the raster's by the
-/// direct operation between the two: a square held in Gauss-Krüger zone 3 on DHDN covers the cells
-/// of a raster in UTM 32N on ETRS89 that the same square converted there by [`Crs::to`] covers,
-/// on cells of 10 cm (and in their metre-square classes), where the way through WGS 84 is 0.44 m
-/// off.
-#[test]
-fn zones_reach_a_raster_by_the_direct_operation() {
+/// A session with rasters `grid` (10 m by 10 m of 10 cm cells in UTM 32N on ETRS89, each holding
+/// its column and row, col + 1000 × row) and `blocks` (the same cells in 100 classes of a metre
+/// square), and two layers of one 6 m square: `Zone`, held in Gauss-Krüger zone 3 on DHDN, and
+/// `Converted`, the same square converted into UTM by [`Crs::to`] and held there. Through WGS 84
+/// the square lands 0.44 m from where the direct operation puts it.
+fn datum_pair() -> Session {
     use rustgis_data::raster::{ColorHint, GeoTransform, Raster};
     let mut s = Session::new(Project::default());
     // 10 m by 10 m of 10 cm cells, each holding its column and row (col + 1000 × row).
@@ -2149,6 +2154,17 @@ fn zones_reach_a_raster_by_the_direct_operation() {
     let there: Vec<Coord> = ring.iter().map(|c| to.point(*c).unwrap()).collect();
     add_in(&mut s, "Zone", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![ring]])], GK3);
     add_in(&mut s, "Converted", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![there]])], ETRS_UTM);
+    s
+}
+
+/// Zonal Statistics and Tabulate Area place zones held in another system than the raster's by the
+/// direct operation between the two: a square held in Gauss-Krüger zone 3 on DHDN covers the cells
+/// of a raster in UTM 32N on ETRS89 that the same square converted there by [`Crs::to`] covers,
+/// on cells of 10 cm (and in their metre-square classes), where the way through WGS 84 is 0.44 m
+/// off.
+#[test]
+fn zones_reach_a_raster_by_the_direct_operation() {
+    let mut s = datum_pair();
     let mut stats = Vec::new();
     let mut tables = Vec::new();
     for zone in ["Zone", "Converted"] {
@@ -2244,4 +2260,47 @@ fn a_held_layers_places_another_system_cant_hold_are_said() {
         assert!(said.iter().any(|t| t.contains("1 polygon part(s) could not be projected onto the raster grid")), "{tool}: {said:?}");
     }
     assert!(field_numbers(&s, "SplitStats", "south_count")[0] > 100.0, "{:?}", field_numbers(&s, "SplitStats", "south_count"));
+}
+
+/// Rasterize, raster clip and a spectral zone burn, cut and read a polygon held in its own system
+/// from its coordinates there: a square held in Gauss-Krüger zone 3 on DHDN burned onto, cut out
+/// of and read on a raster in UTM 32N on ETRS89 gives the cells the same square converted there
+/// by [`Crs::to`] gives, on cells of 10 cm, where the way through WGS 84 is 0.44 m off.
+#[test]
+fn a_raster_takes_a_held_polygon_by_the_direct_operation() {
+    let mut s = datum_pair();
+    let mut got = Vec::new();
+    for zone in ["Zone", "Converted"] {
+        let burned = s
+            .run("raster.rasterize", &json!({"layer": zone, "value": 5, "grid": "grid", "nodata": 0, "name": format!("{zone} burned")}))
+            .unwrap();
+        let clipped = s
+            .run("raster.process", &json!({"layer": "grid", "operation": "clip", "polygon": zone, "name": format!("{zone} clip")}))
+            .unwrap();
+        let read = s.run("raster.spectral", &json!({"layer": "grid", "zone": zone})).unwrap();
+        got.push((raster_cells(&s, &burned), raster_cells(&s, &clipped), read["pixels"].clone(), read["values"].clone()));
+    }
+    // About 60 × 60 cells.
+    assert!(got[0].2.as_u64().unwrap() > 3000, "{:?}", got[0].2);
+    assert!(got[0].0.2.iter().filter(|v| v.is_some()).count() > 3000);
+    assert_eq!(got[0], got[1]);
+}
+
+/// A held layer is burned in its own system by default, from its coordinates as they are: a
+/// 100 m square whose edges run through cell centres (a cell's west and south edge taken in, its
+/// east and north left out) covers exactly 10 × 10 cells of 10 m, in UTM, where a run through
+/// longitude/latitude moved its edges a hair off those centres. The square lies 1500 km east of
+/// the zone's central meridian, where that round trip doesn't come back to the same bits.
+#[test]
+fn a_held_layer_is_burned_in_its_own_system() {
+    let (x0, y0) = (2_000_005.0, 5_401_305.0);
+    let ring: Vec<Coord> =
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect();
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Square", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![ring]])], UTM);
+    let a = s.run("raster.rasterize", &json!({"layer": "Square", "cellSize": 10, "name": "Burned"})).unwrap();
+    let g = grid_of(&s, "Burned");
+    assert_eq!(g.crs, UTM);
+    assert_eq!((g.transform.origin_x, g.transform.origin_y), (2_000_000.0, 5_401_410.0), "{:?}", g.transform);
+    assert_eq!(a["cells"], 100, "{a}");
 }

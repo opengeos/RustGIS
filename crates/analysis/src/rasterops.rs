@@ -1012,21 +1012,85 @@ pub fn classify_min_distance(r: &Raster, bands: &[usize], means: &[(f32, Vec<f64
 /// means are the same on every machine.
 pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Result<Option<(Vec<f64>, usize)>, crate::control::Cancelled> {
     crate::control::begin(r.height as usize);
-    means_under(r, bands, rings, |rows| {
+    means_under(r, &ZoneIn::LonLat, bands, rings, |rows| {
         crate::control::check()?;
         crate::control::advance(rows);
         Ok(())
     })
 }
 
+/// [`zonal_means`] of a polygon whose rings are in `from`: longitude/latitude, or the system its
+/// layer holds its coordinates in. A cell's centre is converted into that system to be tested
+/// (none of it when it is the raster's own), by the direct operation between two datums.
+pub fn zonal_means_in(r: &Raster, from: Crs, bands: &[usize], rings: &[Vec<Coord>]) -> Result<Option<(Vec<f64>, usize)>, String> {
+    let zone = ZoneIn::new(r, from)?;
+    crate::control::begin(r.height as usize);
+    Ok(means_under(r, &zone, bands, rings, |rows| {
+        crate::control::check()?;
+        crate::control::advance(rows);
+        Ok(())
+    })?)
+}
+
+/// The system a zone's rings are in, and how a raster's cells and the zone meet there: in
+/// longitude/latitude through the raster's transformer, or in a layer's own system
+/// ([`crate::tools::ToGrid`] both ways).
+pub(crate) enum ZoneIn {
+    LonLat,
+    Own { to_zone: crate::tools::ToGrid, to_grid: crate::tools::ToGrid },
+}
+
+impl ZoneIn {
+    pub(crate) fn new(r: &Raster, from: Crs) -> Result<Self, String> {
+        Ok(if from == Crs::LonLat {
+            Self::LonLat
+        } else {
+            Self::Own { to_zone: crate::tools::ToGrid::new(r.crs, from)?, to_grid: crate::tools::ToGrid::new(from, r.crs)? }
+        })
+    }
+
+    /// A place in the raster's system in the zone's.
+    fn zone(&self, r: &Raster, w: Coord) -> Option<Coord> {
+        match self {
+            Self::LonLat => r.transformer().to_lonlat(w),
+            Self::Own { to_zone, .. } => to_zone.place(w),
+        }
+    }
+
+    /// A place in the zone's system in the raster's.
+    fn grid(&self, r: &Raster, c: Coord) -> Option<Coord> {
+        match self {
+            Self::LonLat => r.transformer().from_lonlat(c),
+            Self::Own { to_grid, .. } => to_grid.place(c),
+        }
+    }
+}
+
+/// [`polygon_mask_with_failures`] for polygons in `from`: longitude/latitude, or the system their
+/// layer holds its coordinates in, converted into the raster's (none of it when that is the
+/// raster's own), by the direct operation between two datums.
+pub fn polygon_mask_in(
+    r: &Raster,
+    from: Crs,
+    polygons: &[Vec<Vec<Coord>>],
+    failed_parts: &mut Vec<usize>,
+) -> Result<Option<(Range<u32>, Range<u32>, Vec<bool>)>, String> {
+    if from == Crs::LonLat {
+        return polygon_mask_with_failures(r, polygons, failed_parts);
+    }
+    let to = crate::tools::ToGrid::new(from, r.crs)?;
+    polygon_mask_on(ToWorld::Own(&to), &r.transform, (r.width, r.height), polygons, failed_parts)
+}
+
 /// [`zonal_means`], `each_rows(n)` asked as the raster's rows go by, `n` at a time (each row
 /// once, all of them): an error stops it.
 ///
-/// A cell counts when its centre, in longitude/latitude, lies in the zone (inside the outer ring
-/// and in no hole). Only the cells in the zone's window are tested ([`zone_window`]), not every
+/// A cell counts when its centre, in the zone's system (`zone`), lies in the zone (inside the
+/// outer ring and in no hole). Only the cells in the zone's window are tested ([`zone_window`]), not every
 /// cell of the raster, in the same row-major order, so the sums are those of testing them all.
 fn means_under(
     r: &Raster,
+    zone: &ZoneIn,
     bands: &[usize],
     rings: &[Vec<Coord>],
     mut each_rows: impl FnMut(usize) -> Result<(), crate::control::Cancelled>,
@@ -1037,13 +1101,13 @@ fn means_under(
     }
     let mut sums = vec![0.0; bands.len()];
     let mut n = 0usize;
-    let (cols, rows) = zone_window(r, &e);
+    let (cols, rows) = zone_window(r, &e, |c| zone.grid(r, c));
     each_rows((r.height - (rows.end - rows.start)) as usize)?;
     for row in rows {
         each_rows(1)?;
         for col in cols.clone() {
             let w = r.transform.to_world(f64::from(col) + 0.5, f64::from(row) + 0.5);
-            let Some(ll) = r.transformer().to_lonlat(w) else { continue };
+            let Some(ll) = zone.zone(r, w) else { continue };
             if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(rings, ll) {
                 continue;
             }
@@ -1057,8 +1121,9 @@ fn means_under(
     Ok((n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n)))
 }
 
-/// The columns and rows of `r` whose cell centres can fall in the longitude/latitude extent `e`:
-/// its outline placed on the raster's grid, with two cells to spare. Each side is sampled, and
+/// The columns and rows of `r` whose cell centres can fall in the extent `e`, in the zone's system
+/// (`to_grid` places it in the raster's): its outline placed on the raster's grid, with two cells
+/// to spare. Each side is sampled, and
 /// each stretch between samples near the raster is halved until its ends are at most a cell
 /// apart, so a side that curves on the grid (a parallel on a polar raster) bows only a fraction
 /// of a cell between them, whatever the zone's size. A stretch whose ends are farther from the
@@ -1066,7 +1131,7 @@ fn means_under(
 /// within one stretch (a sixty-fourth of the side at first), which a projection's smooth image of
 /// a parallel or meridian doesn't. The whole raster when a point can't be placed; none when `e` is
 /// empty.
-fn zone_window(r: &Raster, e: &Extent) -> (Range<u32>, Range<u32>) {
+fn zone_window(r: &Raster, e: &Extent, to_grid: impl Fn(Coord) -> Option<Coord>) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
     }
@@ -1076,7 +1141,7 @@ fn zone_window(r: &Raster, e: &Extent) -> (Range<u32>, Range<u32>) {
     let whole = (0..r.width, 0..r.height);
     let (w, h) = (f64::from(r.width), f64::from(r.height));
     let place = |ll: Coord| {
-        let (col, row) = r.transform.to_pixel(r.transformer().from_lonlat(ll)?);
+        let (col, row) = r.transform.to_pixel(to_grid(ll)?);
         (col.is_finite() && row.is_finite()).then_some((col, row))
     };
     let sides: [(Coord, Coord); 4] = [
@@ -1133,7 +1198,7 @@ pub fn class_means(r: &Raster, bands: &[usize], polygons: &[(String, Vec<Vec<Coo
             crate::control::advance(rows);
             Ok(())
         };
-        let Some((m, n)) = means_under(r, bands, rings, counted)? else { continue };
+        let Some((m, n)) = means_under(r, &ZoneIn::LonLat, bands, rings, counted)? else { continue };
         match classes.iter_mut().find(|c| c.0 == *key) {
             Some(c) => {
                 let total = c.2 + n;
