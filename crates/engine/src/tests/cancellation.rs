@@ -171,7 +171,6 @@ pub(super) fn long_commands(boundaries: bool) {
     // The Add Service dialog replays supplied metadata off the desktop frame too.
     let params = json!({"url":"https://maps.example.org/dataset","type":"ogcapi","text":"{\"collections\":[]}"});
     for command in ["service.layers", "service.add"] {
-        covered.borrow_mut().insert(command);
         // Adding a service needs a real collection and remote features to succeed. An empty
         // listing is useful only for the original first-check cancellation test.
         if !boundaries || command == "service.layers" {
@@ -181,8 +180,8 @@ pub(super) fn long_commands(boundaries: bool) {
     // Shape fitting uses the same cancellable read queue, without modifying its source. Its
     // fixture is an editing session of its own, which the boundary sweep's sessions don't carry,
     // so it keeps first-check coverage.
-    covered.borrow_mut().insert("edit.previewShapeConversion");
     if !boundaries {
+        covered.borrow_mut().insert("edit.previewShapeConversion");
         let mut shapes = Session::new(Project::default());
         let id = shapes.map_mut().add_dataset(rustgis_data::Dataset::new("Conversion", rustgis_data::GeometryType::Polygon, vec![]));
         shapes.active_layer = Some(id);
@@ -384,7 +383,11 @@ pub(super) fn long_commands(boundaries: bool) {
         .chain(crate::cmd::edit::TABLE_EDITS.iter().map(|(c, ..)| *c))
         .collect::<std::collections::BTreeSet<_>>();
     let known = covered.iter().copied().chain(exempt.iter().map(|(c, _)| *c)).collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(known, registered, "a command read ahead (reads::IN_BACKGROUND) is run here, or exempted with the reason it isn't");
+    // The boundary sweep leaves out the reads that keep first-check coverage only, so the first-check
+    // run is the one that must reach every read.
+    if !boundaries {
+        assert_eq!(known, registered, "a command read ahead (reads::IN_BACKGROUND) is run here, or exempted with the reason it isn't");
+    }
 }
 
 #[derive(Clone, Copy)]
