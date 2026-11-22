@@ -52,9 +52,10 @@ pub(super) fn run_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Resu
     }
     let index: HashMap<u32, usize> = classes.iter().enumerate().map(|(i, &v)| (class_key(v), i)).collect();
     let areas = CellAreas::new(r, count);
-    // The largest grouped geometry's copies in lon/lat and on the grid, the largest raster
-    // mask and its trimmed copy, plus each zone's dense class totals. Conservatively include
-    // the shared row cache in each worker's estimate so it stays within the scratch allowance.
+    // The largest grouped geometry's copies (taken as four, in any system) and on the grid, the
+    // largest raster mask and its trimmed copy, plus each zone's dense class totals.
+    // Conservatively include the shared row cache in each worker's estimate so it stays within
+    // the scratch allowance.
     let geometry_bytes = groups
         .iter()
         .map(|group| {

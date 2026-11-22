@@ -1404,7 +1404,7 @@ impl ToWorld<'_> {
     fn world(&self, c: Coord) -> Option<Coord> {
         match self {
             Self::LonLat(tr) => tr.from_lonlat(c),
-            Self::Own(to) => to.place(c),
+            Self::Own(to) => to.vertex(c),
         }
     }
 }
