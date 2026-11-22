@@ -448,10 +448,28 @@ const NO_FIELD_WORDS: &[(&str, &[&str])] = &[
 
 /// What a notice says in its own words, lower case: without the file it names before its first
 /// ": " and without quoted names (`'geometry'`), so a field or file named like a kind of change
-/// isn't taken for a notice of it.
+/// isn't taken for a notice of it. A quoted name opens with a quote at the start or after a space
+/// or "(", and closes with one followed by the end, a space or punctuation; an apostrophe inside
+/// a word ("don't") is text.
 fn prose(notice: &str) -> String {
     let text = notice.split_once(": ").map_or(notice, |(_, rest)| rest);
-    text.split('\'').step_by(2).collect::<String>().to_lowercase()
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        let opens = c == '\'' && (i == 0 || chars.get(i - 1).is_some_and(|p| p.is_whitespace() || *p == '('));
+        let close = opens
+            .then(|| (i + 1..chars.len()).find(|&j| chars[j] == '\'' && chars.get(j + 1).is_none_or(|n| !n.is_alphanumeric())))
+            .flatten();
+        match close {
+            Some(j) => i = j + 1,
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out.to_lowercase()
 }
 
 /// Whether `change`, in `field` if any, is said by a notice of its kind, the export's or the
@@ -682,6 +700,9 @@ fn a_change_in_no_field_needs_a_notice_of_its_kind() {
     // Nor by a notice of a field or a file named like one.
     let named = said("/tmp/geometry.shp: 1 value of 'geometry' was cut to at most 254 bytes");
     assert!(!is_said("geometry changed", None, &named, &[]));
+    // An apostrophe in a word is text, not a quoted name.
+    assert!(is_said("geometry changed", None, &said("l.gpx: 2 features don't keep their geometry"), &[]));
+    assert!(!is_said("geometry changed", None, &said("l.gpx: 2 values don't fit in 'geometry'"), &[]));
     // Words are matched whole: "converted", "string" and "borrow" aren't "vert", "ring", "row".
     let words = said("l.csv: 1 value converted to a string during the borrow");
     assert!(!is_said("geometry changed", None, &words, &[]));

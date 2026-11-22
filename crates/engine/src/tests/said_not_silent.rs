@@ -111,6 +111,9 @@ fn a_downloaded_layer_named_from_a_long_address_says_the_cut() {
     let long_zip = format!("https://example.org/{}.zip", "z".repeat(150));
     assert_eq!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"PK\x03\x04rest"), None);
     assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"not a zip").is_some());
+    // A .shp address's zip is made of its parts and named from the address: said.
+    let long_shp = format!("https://example.org/{}.shp", "s".repeat(150));
+    assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_shp, &json!({}), b"PK\x03\x04rest").is_some());
     // A long "extension" that isn't one is dropped, the short stem kept whole: nothing cut.
     let odd = format!("https://example.org/a.{}", "x".repeat(121));
     assert_eq!(

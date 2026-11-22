@@ -4722,14 +4722,16 @@ const MAX_URL_FILE_NAME: usize = 120;
 
 /// The notice to give when [`url_file_name`] cut `url`'s file name, which names the layer unless
 /// `p` gives a `name` (#2639); `command` is the command's title. None when it wasn't cut, a name
-/// is given, or the download (`bytes`) is a zip, whose layers are named by the files in it.
+/// is given, or the download (`bytes`) is a zip, whose layers are named by the files in it. A
+/// `.shp` address's zip is the one made of its parts, named from the address, so it counts.
 pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value, bytes: &[u8]) -> Option<String> {
-    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || is_zip(bytes) {
+    let full = url_last_segment(url);
+    let shp = Path::new(&full).extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"));
+    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || (is_zip(bytes) && !shp) {
         return None;
     }
     // Decided by the stem the layer is named from: a long extension that isn't one (`a.xxx…`)
     // is dropped, not cut.
-    let full = url_last_segment(url);
     let kept = url_file_name(url, bytes).ok()?;
     let stem = |name: &str| Path::new(name).file_stem().and_then(|s| s.to_str()).map_or(0, |s| s.chars().count());
     let n = full.chars().count();
@@ -5158,7 +5160,12 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
             let label = ps(p, "name").map(str::to_string).unwrap_or_else(|| crate::sources::address_in_message(url));
             let bounds = super::service::bounds_of(p.get("bounds"))?;
             let file = |bytes: &[u8]| url_file_name(url, bytes);
-            return super::service::add_service_layer(s, p, &label, url, bounds, public, b(p, "zoom"), file).map_err(named);
+            let r = super::service::add_service_layer(s, p, &label, url, bounds, public, b(p, "zoom"), file).map_err(named)?;
+            // (Its pages aren't kept here: the name is judged from the address alone.)
+            if let Some(cut) = url_name_cut("Add Data From URL", url, p, &[]) {
+                s.notify(cut, false);
+            }
+            return Ok(r);
         }
         // An address without a file name may be a GeoTIFF too: its first bytes are read to see,
         // and anything that doesn't answer as one is downloaded whole, as before.
@@ -6522,7 +6529,8 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
         url_file_name(&url, &bytes).map_err(|e| crate::sources::message_with_address(&url, &e))?
     };
     let left_out = parts_left_out(&url, &bytes, p);
-    let cut = if service || coverage { None } else { url_name_cut("Add Downloaded Data", &url, p, &bytes) };
+    // A coverage is named coverage.tif; a service's features are named from the address too.
+    let cut = if coverage { None } else { url_name_cut("Add Downloaded Data", &url, p, &bytes) };
     // A PDF's page the app drew off the frame as it landed (#2336).
     #[cfg(not(target_arch = "wasm32"))]
     let drawn = s.landed_pages.iter().position(|(d, _)| *d == id).map(|i| s.landed_pages.remove(i).1);
