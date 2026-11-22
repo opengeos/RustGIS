@@ -1236,8 +1236,9 @@ systems, chosen with **System**, so the same place can be compared in several gr
   the same cell whatever layer or extent it's gridded with. Its ids only mean something in that
   projection, which the `plane` field names. In a projection local to the area (a national or UTM
   system), every cell has about the same area on the ground; in Web Mercator, cells shrink on the
-  ground away from the equator. A cell whose corners the projection can't take back to longitudes
-  and latitudes is left out, and counted in the run's message.
+  ground away from the equator, and stop at 85.05° north and south: an area past it is cut there,
+  and a point past it left out, each said in the run's message. A cell whose corners the
+  projection can't take back to longitudes and latitudes is left out, and counted too.
 - **Areas and counts:** every layer writes the cell's id, `resolution` and `area_km2`, the cell's
   own area on the ground; **Aggregate Points to Grid** adds `count`, `density_per_km2` (by that
   cell's area, since H3, S2 and hexagon cells differ in size) and a field's `_sum` and `_mean`, as

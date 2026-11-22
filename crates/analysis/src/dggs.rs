@@ -81,8 +81,8 @@ impl System {
         }
     }
 
-    /// The finest resolution. The hexagon grid stops at 24 (cells of about 0.15 m², sides of
-    /// 24 cm), which keeps a cell's axial coordinates anywhere on a world-wide plane well within
+    /// The finest resolution. The hexagon grid stops at 24 (cells of about 0.12 m², sides of
+    /// about 22 cm), which keeps a cell's axial coordinates anywhere on a world-wide plane well within
     /// the 32 bits each has in its id ([`pack`]).
     fn finest(self) -> i32 {
         match self {
@@ -219,6 +219,13 @@ fn clip(ring: &[Coord], x: f64, west: bool) -> Vec<Coord> {
     out
 }
 
+/// The part of a closed ring south (`south`) or north of the parallel at `y`, closed: [`clip`]
+/// across the other axis.
+fn clip_lat(ring: &[Coord], y: f64, south: bool) -> Vec<Coord> {
+    let flipped: Vec<Coord> = ring.iter().map(|c| Coord::new(c.y, c.x)).collect();
+    clip(&flipped, y, south).into_iter().map(|c| Coord::new(c.y, c.x)).collect()
+}
+
 /// A [`drawable`] ring as a polygon for the map: itself, or, for one across the antimeridian
 /// (and one round a pole), its two sides of ±180°, each within −180° to 180°, as the parts of one
 /// polygon, the way Natural Earth splits a country there.
@@ -277,7 +284,11 @@ fn on_the_globe_sides(shape: Vec<Vec<Coord>>) -> Vec<Vec<Vec<Coord>>> {
 /// (within ±90°, and ±360° so a ring that runs on past the antimeridian is kept).
 fn usable(ring: &[Coord]) -> bool {
     let closed = ring.len() > 1 && ring.first() == ring.last();
-    ring.len() - usize::from(closed) >= 3 && ring.iter().all(|c| c.is_finite() && c.y.abs() <= 90.0 && c.x.abs() <= 360.0)
+    let (lo, hi) = ring.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+    // Wider than a turn, it isn't a ring on the globe: its sides past ±180° would overlap.
+    ring.len() - usize::from(closed) >= 3
+        && hi - lo <= 360.0
+        && ring.iter().all(|c| c.is_finite() && c.y.abs() <= 90.0 && c.x.abs() <= 360.0)
 }
 
 /// A longitude folded into −180° to 180°, for a point.
@@ -451,6 +462,21 @@ impl<'a> Plane<'a> {
         Plane { inp, map: inp.projection_name() }
     }
 
+    /// How far north and south the plane reaches, when it stops short of the poles: Web
+    /// Mercator's 85.05°, past which it clamps latitudes rather than refusing them.
+    fn lat_limit(&self) -> Option<f64> {
+        (self.name() == "Web Mercator").then_some(rustgis_geom::MAX_LAT)
+    }
+
+    /// A point on the plane, only where the plane takes it back to the same place: a
+    /// projection that clamps or folds a point (Web Mercator past 85.05°) would put it in a cell
+    /// that doesn't hold it.
+    fn holding_point(&self, c: Coord) -> Option<Coord> {
+        let m = self.forward(c)?;
+        let back = self.inverse(m)?;
+        ((back.y - c.y).abs() < 1e-6 && ((back.x - c.x + 180.0).rem_euclid(360.0) - 180.0).abs() < 1e-6).then_some(m)
+    }
+
     fn name(&self) -> String {
         self.map.clone().unwrap_or_else(|| "Web Mercator".into())
     }
@@ -543,11 +569,13 @@ struct Grid<'a> {
     res: i32,
     plane: Plane<'a>,
     hex: Hex,
+    /// Whether a covering cut its area at the plane's [`Plane::lat_limit`], to say so.
+    cut: std::cell::Cell<bool>,
 }
 
 impl<'a> Grid<'a> {
     fn new(system: System, res: i32, inp: &'a dyn Inputs) -> Self {
-        Grid { system, res, plane: Plane::of(inp), hex: Hex::at(res) }
+        Grid { system, res, plane: Plane::of(inp), hex: Hex::at(res), cut: std::cell::Cell::new(false) }
     }
 
     /// The cell holding a longitude/latitude point.
@@ -564,7 +592,7 @@ impl<'a> Grid<'a> {
                 Some(id.parent(u64::try_from(self.res).ok()?).0)
             }
             System::Hexagon => {
-                let (q, r) = self.hex.holding(self.plane.forward(Coord::new(lon, c.y))?)?;
+                let (q, r) = self.hex.holding(self.plane.holding_point(Coord::new(lon, c.y))?)?;
                 Some(pack(q, r))
             }
         }
@@ -573,7 +601,7 @@ impl<'a> Grid<'a> {
     /// A cell's outline, [`drawable`].
     fn ring(&self, id: u64) -> Option<Vec<Coord>> {
         match self.system {
-            System::A5 => ring(id),
+            System::A5 => self::ring(id),
             System::H3 => {
                 let cell = h3o::CellIndex::try_from(id).ok()?;
                 drawable(cell.boundary().iter().map(|ll| Coord::new(ll.lng(), ll.lat())))
@@ -703,7 +731,16 @@ impl<'a> Grid<'a> {
             let lonlat = |s: &Vec<Vec<Coord>>| -> Vec<Vec<a5::LonLat>> {
                 s.iter().map(|r| r.iter().map(|c| a5::LonLat::new(c.x, c.y)).collect()).collect()
             };
-            return cells_of(shapes.iter().map(|s| a5::polygon_to_cells(&lonlat(s), res, Some(options))), res);
+            let mut pace = Pace::default();
+            return cells_of(
+                shapes.iter().map(|s| {
+                    if pace.stop(s.iter().map(Vec::len).sum::<usize>().saturating_mul(64)) {
+                        return Err(control::Cancelled.into());
+                    }
+                    a5::polygon_to_cells(&lonlat(s), res, Some(options))
+                }),
+                res,
+            );
         }
         let mut cells: HashSet<u64> = HashSet::new();
         let mut work = Work::default();
@@ -767,7 +804,7 @@ impl<'a> Grid<'a> {
             } else {
                 // A cell whose outline can't be worked out is kept: it's counted as left out
                 // when the layer is made, never dropped here unsaid.
-                self.ring(cell.id.0).and_then(split).is_none_or(|p| prepared.relate(&geo_multi(&p)).is_intersects())
+                self.ring(cell.id.0).and_then(split).is_none_or(|p| overlaps(&prepared.relate(&geo_multi(&p))))
             };
             if keep {
                 gather(cells, [cell.id.0], self.res)?;
@@ -782,6 +819,17 @@ impl<'a> Grid<'a> {
     fn hex_cover(&self, side: &[Vec<Coord>], center: bool, cells: &mut HashSet<u64>, work: &mut Work) -> Result<(), String> {
         let res = self.res;
         let reach = || format!("The map's projection ({}) doesn't reach the whole area: choose a smaller area", self.plane.name());
+        // Web Mercator stops at 85.05°: the area past it is cut off there, and said to be.
+        let mut side: Vec<Vec<Coord>> = side.to_vec();
+        if let Some(limit) = self.plane.lat_limit()
+            && side.iter().flatten().any(|c| c.y.abs() > limit)
+        {
+            self.cut.set(true);
+            side = side.into_iter().map(|r| clip_lat(&clip_lat(&r, limit, true), -limit, false)).filter(|r| r.len() >= 4).collect();
+            if side.first().is_none_or(|outer| outer.len() < 4) {
+                return Ok(());
+            }
+        }
         let rings: Vec<Vec<Coord>> = side
             .iter()
             .map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>())
@@ -847,7 +895,7 @@ impl<'a> Grid<'a> {
                     prepared.relate(&geo::Point::new(c.x, c.y)).is_intersects()
                 } else {
                     let corners: Vec<(f64, f64)> = self.hex.corners(q, j, 1).iter().map(|c| (c.x, c.y)).collect();
-                    prepared.relate(&geo::Polygon::new(corners.into(), vec![])).is_intersects()
+                    overlaps(&prepared.relate(&geo::Polygon::new(corners.into(), vec![])))
                 };
                 if keep {
                     gather(cells, [pack(q, j)], res)?;
@@ -856,6 +904,12 @@ impl<'a> Grid<'a> {
         }
         Ok(())
     }
+}
+
+/// Whether a cell overlaps an area: they share more than an edge or a corner, so a cell beside the
+/// area, touching it, isn't taken.
+fn overlaps(m: &geo::relate::IntersectionMatrix) -> bool {
+    m.is_intersects() && !m.is_touches()
 }
 
 /// What a run's coverings look at, over all its polygons: the cells tested (S2's and the hexagon
@@ -885,6 +939,15 @@ fn too_much_work(res: i32) -> String {
     format!("Covering the area at resolution {res} means looking at more than {MAX_WORK} cells: use a coarser resolution or a smaller area")
 }
 
+/// The system a tool's `system` parameter names: H3 when it's left out.
+fn system_of(p: &Json) -> Result<System, String> {
+    match p.get("system") {
+        None | Some(Json::Null) => Ok(System::H3),
+        Some(Json::String(s)) => System::parse(s),
+        Some(other) => Err(format!("System is H3, S2, A5 or Hexagon, not {}", other.to_string().chars().take(40).collect::<String>())),
+    }
+}
+
 /// The A5 Grid tool: [`tessellate`] in A5.
 pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     tessellate(inp, p, System::A5)
@@ -892,7 +955,7 @@ pub fn grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
 /// The Generate Tessellation tool: [`tessellate`] in the system the `system` parameter names.
 pub fn tessellation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    tessellate(inp, p, System::parse(text(p, "system"))?)
+    tessellate(inp, p, system_of(p)?)
 }
 
 /// The cells at a resolution over the map's extent, a layer's polygons (or its extent, for
@@ -906,8 +969,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
         a => return Err(format!("Area is Map Extent, Input Layer or World, not {}", a.chars().take(40).collect::<String>())),
     };
     let g = Grid::new(system, res, inp);
-    // Polygons left out for want of a usable outline.
-    let mut skipped = 0usize;
+    // Polygons left out for want of a usable outline, and holes for want of one: the area a
+    // hole left out would have kept out is covered.
+    let (mut skipped, mut holes) = (0usize, 0usize);
     let off = "is outside the globe's longitudes and latitudes (−180° to 180°, −90° to 90°)";
     let cells: Vec<u64> = if area == "World" {
         g.world(center)?
@@ -929,6 +993,7 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
                                 skipped += 1;
                                 continue;
                             }
+                            holes += poly.iter().skip(1).filter(|r| !usable(r)).count();
                             shapes.push(poly.iter().filter(|r| usable(r)).cloned().collect());
                         }
                     }
@@ -992,6 +1057,16 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
     if skipped > 0 {
         msg.push_str(&format!("; {}", left_out(skipped, "polygon part", "outline")));
     }
+    if holes > 0 {
+        msg.push_str(&format!("; {}, and the area inside is covered", left_out(holes, "hole", "outline")));
+    }
+    if g.cut.get() {
+        msg.push_str(&format!(
+            "; the area beyond {:.2}° north and south, which {} doesn't reach, was left out",
+            rustgis_geom::MAX_LAT,
+            g.plane.name()
+        ));
+    }
     if undrawn > 0 {
         msg.push_str(&format!("; {}", undrawable(undrawn, &g)));
     }
@@ -1005,7 +1080,7 @@ pub fn aggregate(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
 /// The Aggregate Points to Grid tool: [`aggregate_in`] the system the `system` parameter names.
 pub fn aggregate_to_grid(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    aggregate_in(inp, p, System::parse(text(p, "system"))?)
+    aggregate_in(inp, p, system_of(p)?)
 }
 
 /// A layer's points counted by the cell holding them (and a numeric field summed and averaged),
@@ -1423,6 +1498,12 @@ mod tests {
             for (x, y) in places {
                 let polar = y.abs() > 85.0;
                 if polar && system == "Hexagon" {
+                    // Web Mercator doesn't reach it: the point is left out, and said to be,
+                    // never put in the edge cell its latitude would be clamped to.
+                    let inp = One(points(&[(x, y, 1.0), (-74.08, 4.6, 1.0)]), None);
+                    let r = aggregate_to_grid(&inp, &serde_json::json!({"system": system, "resolution": res, "input": "pts"})).unwrap();
+                    assert!(r.messages[0].contains("1 point without a usable position was left out"), "{x},{y}: {:?}", r.messages);
+                    assert_eq!(layer(r).features.len(), 1);
                     continue;
                 }
                 let inp = One(points(&[(x, y, 1.0)]), None);
@@ -1505,7 +1586,25 @@ mod tests {
             let expected = if system == "S2" { "too many" } else { "looking at more than" };
             assert!(e.contains(expected), "{system}: {one} cells, {n} copies: {e}");
         }
+        // Past 85.05° Web Mercator doesn't reach: the hexagon grid's area is cut there, and said to be.
+        let north = tessellation(
+            &One(points(&[]), Some(Extent::new(-10.0, 80.0, 10.0, 89.0))),
+            &serde_json::json!({"system": "Hexagon", "resolution": 6}),
+        )
+        .unwrap();
+        assert!(
+            north.messages[0].contains("the area beyond 85.05° north and south, which Web Mercator doesn't reach, was left out"),
+            "{:?}",
+            north.messages
+        );
+        let cells = layer(north);
+        assert!(!cells.features.is_empty());
+        assert!(cells.features.iter().all(|f| match &f.geometry {
+            Some(Geometry::Polygon(p)) => p.iter().flatten().flatten().all(|c| c.y < 86.0),
+            _ => false,
+        }));
         for bad in [
+            serde_json::json!({"system": 5}),
             serde_json::json!({"system": "H3", "resolution": 16}),
             serde_json::json!({"system": "Hexagon", "resolution": 25}),
             serde_json::json!({"system": "S2", "resolution": 31}),
