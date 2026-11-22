@@ -386,6 +386,8 @@ notebook.removeCell notebook? cell
 notebook.run notebook? cell?
 notebook.save notebook? path
 offline.bringBack path? data? legacyArea?
+offline.conflicts name
+offline.dismissConflicts name conflicts? state?
 offline.download name? extent?
 offline.keepRows
 offline.open name
