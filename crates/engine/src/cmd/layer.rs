@@ -4709,24 +4709,47 @@ pub(crate) fn read_delimited_bytes(
     Ok((ds, report))
 }
 
+/// The last segment of `url`'s path, without its query, control characters, backslashes or colons:
+/// the file name [`url_file_name`] starts from.
+fn url_last_segment(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let path = path.split_once("://").map_or(path, |(_, rest)| rest.split_once('/').map_or("", |(_, p)| p));
+    path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("").chars().filter(|c| !c.is_control() && !matches!(c, '\\' | ':')).collect()
+}
+
+/// The longest file name [`url_file_name`] keeps.
+const MAX_URL_FILE_NAME: usize = 120;
+
+/// The notice to give when [`url_file_name`] cut `url`'s file name, which names the layer unless
+/// `p` gives a `name` (#2639); `command` is the command's title. None when it wasn't cut, or a
+/// name is given.
+pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value) -> Option<String> {
+    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) {
+        return None;
+    }
+    let n = url_last_segment(url).chars().count();
+    (n > MAX_URL_FILE_NAME).then(|| {
+        format!(
+            "{command}: the address's file name is {n} characters, so the layer's is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
+        )
+    })
+}
+
 /// The file name for data downloaded from `url`: its last path segment when that has an extension
 /// RustGIS reads, else `<segment or "data">.<ext>` with the extension its contents suggest
 /// (an error when they suggest none). The name is cut to 120 characters, keeping an extension
 /// shorter than 60; a `.shp` address whose download is a zip of its parts is named `<stem>.zip`.
 /// JPEG 2000 named or recognised by its contents is refused where GDAL can't run (the browser).
 pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
-    let path = url.split(['?', '#']).next().unwrap_or(url);
-    let path = path.split_once("://").map_or(path, |(_, rest)| rest.split_once('/').map_or("", |(_, p)| p));
-    let full: String =
-        path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("").chars().filter(|c| !c.is_control() && !matches!(c, '\\' | ':')).collect();
+    let full = url_last_segment(url);
     let raw_ext = Path::new(&full).extension().and_then(|e| e.to_str());
     let ext = raw_ext.map(str::to_ascii_lowercase).unwrap_or_default();
     // At most 120 characters, keeping an extension shorter than 60 (a long `.shp` name is still one).
     let last: String = match raw_ext {
-        Some(e) if full.chars().count() > 120 && e.chars().count() < 60 => {
-            format!("{}.{e}", full.chars().take(119 - e.chars().count()).collect::<String>())
+        Some(e) if full.chars().count() > MAX_URL_FILE_NAME && e.chars().count() < 60 => {
+            format!("{}.{e}", full.chars().take(MAX_URL_FILE_NAME - 1 - e.chars().count()).collect::<String>())
         }
-        _ => full.chars().take(120).collect(),
+        _ => full.chars().take(MAX_URL_FILE_NAME).collect(),
     };
     // JPEG 2000 (Sentinel-2's imagery) is read through GDAL, which the browser can't run.
     let jpeg2000_only_on_desktop = |name: String| {
@@ -5163,6 +5186,9 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
         let r = super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom")).map_err(named)?;
         if let Some(n) = left_out {
             s.notify(n, false);
+        }
+        if let Some(cut) = url_name_cut("Add Data From URL", url, p) {
+            s.notify(cut, false);
         }
         Ok(r)
     }
@@ -6498,6 +6524,11 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let r = super::raster::add_named_bytes_read(s, p, name, bytes, b(p, "zoom"), drawn)?;
     if let Some(n) = left_out {
         s.notify(n, false);
+    }
+    if !(service || coverage)
+        && let Some(cut) = url_name_cut("Add Downloaded Data", &url, p)
+    {
+        s.notify(cut, false);
     }
     added_download(s, p, r, service || coverage, &url)
 }

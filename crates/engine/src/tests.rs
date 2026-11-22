@@ -7,6 +7,10 @@ use crate::{Project, Session, sample};
 mod scene_losses;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/said_not_silent.rs"]
+mod said_not_silent;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/cancellation.rs"]
 mod cancellation;
 
@@ -7894,7 +7898,13 @@ fn labels_take_a_distance_from_the_line() {
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": "-2.5"})).unwrap();
     assert_eq!(class(&s).0, -2.5, "below the line");
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 200})).unwrap();
-    assert!(s.notices_since(mark).is_empty(), "a distance within its range says nothing: {:?}", s.notices_since(mark));
+    // (Kept on a class not placed along its line, which is said: #2639.)
+    let unused = |t: &str| t.starts_with("Rivers: lineOffset kept, but");
+    assert!(
+        s.notices_since(mark).iter().all(|n| unused(&n.text)),
+        "a distance within its range says nothing of its range: {:?}",
+        s.notices_since(mark)
+    );
     let mark = s.notice_mark();
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
     assert_eq!(class(&s).0, 200.0, "within its range");

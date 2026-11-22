@@ -435,6 +435,8 @@ fn environments(s: &mut Session, p: &Value) -> CmdResult {
     // Both read before either is set, so a bad one changes nothing and says nothing; a cell size
     // given with a system is in its units.
     let mut note = None;
+    // A cell size another system had, which a new one doesn't take (in that system's units).
+    let mut dropped = None;
     let projected = match p.get("crs") {
         None => s.project.gp_env.projected,
         Some(Value::Null) => None,
@@ -444,6 +446,7 @@ fn environments(s: &mut Session, p: &Value) -> CmdResult {
             note = compatibility;
             // The same system again keeps its cell size; another one starts without one.
             let cell_size = s.project.gp_env.projected.filter(|g| g.crs == crs).and_then(|g| g.cell_size);
+            dropped = s.project.gp_env.projected.filter(|g| g.crs != crs).and_then(|g| Some((g.crs, g.cell_size?)));
             Some(crate::project::ProjectedCells { crs, cell_size })
         }
         Some(_) => return Err("crs is a projected coordinate system (such as \"EPSG:32616\"), or null".into()),
@@ -458,6 +461,16 @@ fn environments(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(note) = note {
         s.notify(format!("Environments: its coordinate system: {note}"), false);
+    }
+    // Said, unless this call gives the new system its own cell size (#2639).
+    if let (Some((crs, cell)), None) = (dropped, size) {
+        s.notify(
+            format!(
+                "Environments: the cell size {cell} was in {}'s units, so it was dropped with that system: give cellSize for the new one, or each run picks its own",
+                crs.label()
+            ),
+            false,
+        );
     }
     s.project.gp_env.projected = projected;
     if let Some(size) = size {
