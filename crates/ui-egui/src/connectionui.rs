@@ -379,7 +379,8 @@ pub(crate) struct Mssql {
     pub database: String,
     /// `trust-server-certificate=true` (or `yes`) is in the address.
     pub trust_cert: bool,
-    /// The address has a password in it (`user:password@`), which the form doesn't show.
+    /// The address has a password, token or key in it (`user:password@`, `pwd=`, …), which the
+    /// form doesn't show.
     pub password: bool,
     /// The query's other options, as written and in order (`encrypt=strict&ca=…`).
     pub options: String,
@@ -388,16 +389,18 @@ pub(crate) struct Mssql {
 /// The server, user, database and certificate choice of an
 /// `mssql://user@host:port/database?instance=name` address; `None` for any other address.
 pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
-    use rustgis_engine::data::address::percent_decode;
-    let rest = address.trim().strip_prefix("mssql://")?;
+    use rustgis_engine::data::{address::percent_decode, source::msconn};
+    // The engine's own reading takes any password, token or key out (one with an unencoded `/`,
+    // `?` or `@` too); the rest is read from what is left.
+    let address = address.trim();
+    let (public, _) = msconn::split_password(address)?;
+    let password = public != address;
+    let rest = public.strip_prefix("mssql://")?;
     let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
-    let (user, password, hostport) = match authority.rsplit_once('@') {
-        Some((userinfo, hostport)) => {
-            let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
-            (Some(percent_decode(user)), !password.is_empty(), hostport)
-        }
-        None => (None, false, authority),
+    let (user, hostport) = match authority.rsplit_once('@') {
+        Some((user, hostport)) => (Some(percent_decode(user)), hostport),
+        None => (None, authority),
     };
     let (host, port) = match hostport.rsplit_once(':') {
         Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, Some(port)),
@@ -479,7 +482,7 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
     if let Some(m) = parsed {
         if m.password {
             return Err(tl!(
-                "This address has a password in it, which the form doesn't show: take it out of the address and type it in the Password box, or keep using the address."
+                "This address has a password or key in it, which the form doesn't show: take it out of the address and type the password in the Password box, or keep using the address."
             )
             .into());
         }
@@ -621,6 +624,11 @@ pub(crate) fn fill_from_sde(app: &mut RustGisApp, path: &str) -> Result<(), Stri
     let st = &mut app.ui.connection;
     st.kind = "sqlserver".into();
     st.form = true;
+    // The certificate choice and the address's options were for the server before.
+    if !st.server.trim().eq_ignore_ascii_case(text("server").trim()) {
+        st.trust_cert = false;
+        st.form_options.clear();
+    }
     st.server = text("server");
     st.database = text("database");
     st.sign_in = if windows { "windows" } else { "sql" }.into();
@@ -2326,6 +2334,19 @@ mod tests {
         fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
         assert_eq!(app.ui.connection.name, "Utility");
         assert!(app.session.connections.connections.is_empty());
+        // The certificate choice and the options were for the server before: a file for
+        // another server leaves them behind, one for the same server keeps them.
+        let server = app.ui.connection.server.clone();
+        app.ui.connection.trust_cert = true;
+        app.ui.connection.form_options = "ca=C:/certs/ca.pem".into();
+        fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
+        assert!(app.ui.connection.trust_cert);
+        assert_eq!(app.ui.connection.form_options, "ca=C:/certs/ca.pem");
+        app.ui.connection.server = "elsewhere".into();
+        fill_from_sde(&mut app, &sde_fixture("sqlserver-dbauth-nosave.sde")).unwrap();
+        assert_eq!(app.ui.connection.server, server);
+        assert!(!app.ui.connection.trust_cert);
+        assert!(app.ui.connection.form_options.is_empty());
     }
 
     #[test]
@@ -2447,6 +2468,23 @@ mod tests {
         assert!(why.contains("password"), "{why}");
         assert!(!secret.form);
         assert!(secret.server.is_empty());
+        // However the address carries it: an unencoded `/` or `?` in the password, or a
+        // password, token or key in the query (the engine reads them all).
+        for address in [
+            "mssql://sde:pa/ss@gis-db/utility",
+            "mssql://sde:pa?ss@gis-db/utility",
+            "mssql://sde@gis-db/utility?pwd=hunter2",
+            "mssql://sde@gis-db/utility?encrypt=strict&PASSWD=hunter2",
+            "mssql://sde@gis-db/utility?password=hunter2",
+            "mssql://gis-db/utility?token=abc",
+        ] {
+            let mut st = State { kind: "sqlserver".into(), address: address.into(), ..Default::default() };
+            assert!(swap_form(&mut st).is_err(), "{address}");
+            assert!(!st.form && st.form_options.is_empty(), "{address}");
+        }
+        // The rest of such an address is still read as the engine reads it.
+        let m = parse_mssql("mssql://sde:pa/ss@gis-db/utility").unwrap();
+        assert_eq!((m.server.as_str(), m.user.as_deref(), m.database.as_str(), m.password), ("gis-db", Some("sde"), "utility", true));
     }
 
     #[test]
