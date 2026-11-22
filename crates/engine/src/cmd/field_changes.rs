@@ -354,7 +354,8 @@ pub(crate) fn keep_ahead(s: &mut Session) -> Option<super::reads::ReadWork> {
 /// ([`keep_base`]), so Send Field Package can tell what changed. Opening the package asks for it;
 /// in the app it runs on a thread of its own, with progress and Cancel. Cancelled or failed, the
 /// rows aren't kept, the next opening of the package keeps them, and meanwhile Send Field Package
-/// sends the whole map and says so. `kept` says whether there were rows to keep.
+/// sends the whole map and says so. `kept` says whether there were rows to keep and they are on
+/// this device: not when the package has gone back already.
 pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdResult {
     let ahead = super::reads::take::<KeptAhead>(s, KEEP_KEY);
     #[cfg(not(target_arch = "wasm32"))]
@@ -380,10 +381,12 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
             )
         }
     })?;
+    // A package gone back already keeps nothing, though its rows were waiting.
+    let kept = had && notes.iter().all(|(text, _)| text != ALREADY_SENT);
     for (text, error) in notes {
         s.notify(text, error);
     }
-    Ok(json!({"kept": had}))
+    Ok(json!({"kept": kept}))
 }
 
 /// Keeps the rows `given` holds on this device under its package's identity, unless it keeps them
@@ -1114,6 +1117,11 @@ mod tests {
         let notes = keep_base(&given).unwrap();
         assert!(!base_dir(&id).unwrap().exists());
         assert!(notes.iter().any(|(text, error)| !error && text.contains("had already gone back")), "{notes:?}");
+        // The command says so: its rows were waiting, and none were kept.
+        let mut s = Session::new(Project::new("Field"));
+        s.project.given = Some(std::sync::Arc::new(GivenRows::of(&project, &id)));
+        assert_eq!(keep_rows(&mut s, &json!({})).unwrap()["kept"], json!(false));
+        assert!(s.notices.iter().any(|n| n.text.contains("had already gone back")));
         // A package not sent is kept as before.
         let other = crate::project::field_id().unwrap();
         assert!(!is_spent(&other) && keep_base(&GivenRows::of(&project, &other)).unwrap().is_empty());

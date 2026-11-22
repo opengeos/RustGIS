@@ -170,12 +170,12 @@ pub(super) fn long_commands(boundaries: bool) {
     }
 
     // Opening a field package from home keeps the rows it gave on a read of its own
-    // (`offline.keepRows`), which has no registry; each run starts with none kept.
+    // (`offline.keepRows`); each run starts with none kept.
     let seed = std::fs::read(out("seed.rgisfield")).unwrap();
     let unpacked = dir.0.join("field package");
     let (text, _) = crate::cmd::field::unpack_into(&seed, &unpacked).unwrap();
     let phone = Session::new(crate::cmd::field::project_in(&text, &unpacked).unwrap());
-    exercise(&phone, "offline.keepRows", &json!({}), Kind::Read, &dir.0, boundaries);
+    read(&phone, "offline.keepRows", &json!({}));
 
     // The Add Service dialog replays supplied metadata off the desktop frame too.
     let params = json!({"url":"https://maps.example.org/dataset","type":"ogcapi","text":"{\"collections\":[]}"});
