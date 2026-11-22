@@ -423,6 +423,14 @@ const NO_FIELD_WORDS: &[(&str, &[&str])] = &[
     ("feature count changed", &["feature", "waypoint", "track", "row"]),
 ];
 
+/// What a notice says in its own words, lower case: without the file it names before its first
+/// ": " and without quoted names (`'geometry'`), so a field or file named like a kind of change
+/// isn't taken for a notice of it.
+fn prose(notice: &str) -> String {
+    let text = notice.split_once(": ").map_or(notice, |(_, rest)| rest);
+    text.split('\'').step_by(2).collect::<String>().to_lowercase()
+}
+
 /// Whether `change`, in `field` if any, is said by a notice of its kind, the export's or the
 /// reading's (#2639): a rename by a notice of that rename (`'a' → 'a_1'`, or `renamed`, the names
 /// a format's own rules give, such as KML's `name`); a change in a field's type or values by a
@@ -432,7 +440,10 @@ fn is_said(change: &str, field: Option<&str>, said: &Said, renamed: &[(String, S
     let mut notices = said.export.iter().chain(&said.read);
     let Some(f) = field else {
         let words = NO_FIELD_WORDS.iter().find(|(start, _)| change.starts_with(start)).map_or(&[][..], |(_, words)| *words);
-        return notices.any(|n| words.iter().any(|w| n.to_lowercase().contains(w)));
+        return notices.any(|n| {
+            let n = prose(n);
+            words.iter().any(|w| n.contains(w))
+        });
     };
     if let Some((old, new)) = change.strip_prefix("field renamed (").and_then(|c| c.strip_suffix(')')).and_then(|c| c.split_once(" → ")) {
         return renamed.iter().any(|(o, n)| o == old && n == new);
@@ -644,6 +655,9 @@ fn a_change_in_no_field_needs_a_notice_of_its_kind() {
     assert!(!is_said("geometry changed", None, &cut, &[]));
     assert!(!is_said("feature count changed (3 → 2)", None, &cut, &[]));
     assert!(!is_said("not read back: no layer", None, &cut, &[]));
+    // Nor by a notice of a field or a file named like one.
+    let named = said("/tmp/geometry.shp: 1 value of 'geometry' was cut to at most 254 bytes");
+    assert!(!is_said("geometry changed", None, &named, &[]));
     assert!(is_said("geometry dropped", None, &said("l.gpx: 1 geometry part written as a track"), &[]));
     assert!(is_said("feature count changed (3 → 2)", None, &said("l.kml: 1 feature without geometry left out"), &[]));
 }

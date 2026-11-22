@@ -99,10 +99,18 @@ fn a_downloaded_layer_named_from_a_long_address_says_the_cut() {
     let mark = s.notice_mark();
     s.run("layer.addDownload", &json!({"id": id, "url": long})).unwrap();
     assert!(
-        says(&s, mark, "Add Downloaded Data: the address's file name is 154 characters, so the layer's is cut to 120"),
+        says(
+            &s,
+            mark,
+            "Add Downloaded Data: the address's file name is 154 characters, so the file name the layer is named from is cut to 120"
+        ),
         "{:?}",
         said(&s, mark)
     );
+    // A zip's layers are named by the files in it: nothing to say of its address.
+    let long_zip = format!("https://example.org/{}.zip", "z".repeat(150));
+    assert_eq!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"PK\x03\x04rest"), None);
+    assert!(crate::cmd::layer::url_name_cut("Add Downloaded Data", &long_zip, &json!({}), b"not a zip").is_some());
     // Named, or a short address: nothing to say.
     for (url, name) in [(long.as_str(), Some("Named")), ("https://example.org/short.csv", None)] {
         let id = s.download_started();
@@ -232,9 +240,19 @@ fn gp_env_says_a_cell_size_dropped_with_its_system() {
     s.run("gp.env", &json!({"crs": "EPSG:3857"})).unwrap();
     assert!(says(&s, mark, "the cell size 50 was in"), "{:?}", said(&s, mark));
     assert_eq!(s.project.gp_env.projected.and_then(|g| g.cell_size), None);
+    // The system cleared, with null or blank text: said; cleared with no cell size: nothing.
+    for clear in [json!(null), json!(" ")] {
+        s.run("gp.env", &json!({"crs": "EPSG:32616", "cellSize": 100})).unwrap();
+        let mark = s.notice_mark();
+        s.run("gp.env", &json!({"crs": clear})).unwrap();
+        assert!(says(&s, mark, "the cell size 100 in"), "{:?}", said(&s, mark));
+    }
+    let mark = s.notice_mark();
+    s.run("gp.env", &json!({"crs": null})).unwrap();
+    assert!(!says(&s, mark, "cell size"), "{:?}", said(&s, mark));
 }
 
-/// Every project fixture, of each format and capability, has only keys this version reads.
+/// Every project fixture, of each format and capability, opens with only keys this version reads.
 #[test]
 fn the_schema_fixtures_have_no_keys_left_out() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures");
@@ -245,7 +263,7 @@ fn the_schema_fixtures_have_no_keys_left_out() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        let Ok(mut p) = Project::from_json(&text) else { continue };
+        let mut p = Project::from_json(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let notes = format!("{:?}", p.take_read_notices(&crate::project::ALL_PARTS));
         assert!(!notes.contains("doesn't read"), "{}: {notes}", path.display());
         read += 1;

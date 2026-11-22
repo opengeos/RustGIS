@@ -4721,16 +4721,16 @@ fn url_last_segment(url: &str) -> String {
 const MAX_URL_FILE_NAME: usize = 120;
 
 /// The notice to give when [`url_file_name`] cut `url`'s file name, which names the layer unless
-/// `p` gives a `name` (#2639); `command` is the command's title. None when it wasn't cut, or a
-/// name is given.
-pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value) -> Option<String> {
-    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) {
+/// `p` gives a `name` (#2639); `command` is the command's title. None when it wasn't cut, a name
+/// is given, or the download (`bytes`) is a zip, whose layers are named by the files in it.
+pub(crate) fn url_name_cut(command: &str, url: &str, p: &Value, bytes: &[u8]) -> Option<String> {
+    if ps(p, "name").is_some_and(|n| !n.trim().is_empty()) || is_zip(bytes) {
         return None;
     }
     let n = url_last_segment(url).chars().count();
     (n > MAX_URL_FILE_NAME).then(|| {
         format!(
-            "{command}: the address's file name is {n} characters, so the layer's is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
+            "{command}: the address's file name is {n} characters, so the file name the layer is named from is cut to {MAX_URL_FILE_NAME} (give a name to choose it)"
         )
     })
 }
@@ -5183,11 +5183,12 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
         };
         let name = url_file_name(url, &bytes).map_err(named)?;
         let left_out = parts_left_out(url, &bytes, p);
+        let cut = url_name_cut("Add Data From URL", url, p, &bytes);
         let r = super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom")).map_err(named)?;
         if let Some(n) = left_out {
             s.notify(n, false);
         }
-        if let Some(cut) = url_name_cut("Add Data From URL", url, p) {
+        if let Some(cut) = cut {
             s.notify(cut, false);
         }
         Ok(r)
@@ -6516,6 +6517,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
         url_file_name(&url, &bytes).map_err(|e| crate::sources::message_with_address(&url, &e))?
     };
     let left_out = parts_left_out(&url, &bytes, p);
+    let cut = if service || coverage { None } else { url_name_cut("Add Downloaded Data", &url, p, &bytes) };
     // A PDF's page the app drew off the frame as it landed (#2336).
     #[cfg(not(target_arch = "wasm32"))]
     let drawn = s.landed_pages.iter().position(|(d, _)| *d == id).map(|i| s.landed_pages.remove(i).1);
@@ -6525,9 +6527,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(n) = left_out {
         s.notify(n, false);
     }
-    if !(service || coverage)
-        && let Some(cut) = url_name_cut("Add Downloaded Data", &url, p)
-    {
+    if let Some(cut) = cut {
         s.notify(cut, false);
     }
     added_download(s, p, r, service || coverage, &url)

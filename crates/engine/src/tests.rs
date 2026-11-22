@@ -7898,13 +7898,11 @@ fn labels_take_a_distance_from_the_line() {
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": "-2.5"})).unwrap();
     assert_eq!(class(&s).0, -2.5, "below the line");
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 200})).unwrap();
-    // (Kept on a class not placed along its line, which is said: #2639.)
-    let unused = |t: &str| t.starts_with("Rivers: lineOffset kept, but");
-    assert!(
-        s.notices_since(mark).iter().all(|n| unused(&n.text)),
-        "a distance within its range says nothing of its range: {:?}",
-        s.notices_since(mark)
-    );
+    // Kept on a class not placed along its line, which each call says (#2639), and nothing of its
+    // range.
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(said.iter().all(|t| t.starts_with("Rivers: lineOffset kept, but")), "{said:?}");
     let mark = s.notice_mark();
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
     assert_eq!(class(&s).0, 200.0, "within its range");
