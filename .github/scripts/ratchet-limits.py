@@ -7,13 +7,18 @@ check compares each limit with the one in the commit the change was made on and 
 is higher or has been removed. A new line (a new memory scenario) is fine. Lowering a limit is what
 the files are for.
 
-A limit may need to rise for a reason a maintainer accepts. A maintainer overrides the check by
-commenting on the pull request, or reviewing it, with a message that ends with
-`<!-- ratchet-raise-approved -->`, then running the check again. The marker counts only at the end
-of the message, so a message that mentions it does not approve. A maintainer here is the
+A limit may need to rise for a reason a maintainer accepts. A maintainer overrides the check for
+one change by commenting on the pull request, or reviewing it, with a line of its own that the
+failure prints for that change, such as `<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`.
+The line names the file, the limit and the value it was approved at, so a later push that raises
+the limit further, or another limit, needs its own approval. A removed limit is approved the same
+way (`... memory-limits.txt save removed -->`), as is a deleted file. A maintainer here is the
 repository's owner, a member of its organization or a collaborator, as GitHub labels the message;
 the pull request's author may be that maintainer: the override is a deliberate, recorded decision.
-One approval covers every raise in the pull request as it stands when the check runs.
+
+The check compares the two data files with their base. It does not look at the code that reads
+them (`xtask/src/rows.rs`, `xtask/src/memory.rs`), and it runs from the pull request's own
+checkout, like the other checks here, so a pull request that loosens those is for review to catch.
 
 Only these two files are checked. The other hand-kept lists (the commands the hostile tests skip,
 the known-silent reader cases, the cancellation exemptions) grow for good reasons, and AGENTS.md
@@ -32,7 +37,7 @@ import subprocess
 import sys
 
 LIMIT_FILES = ["xtask/row-uses.txt", "xtask/memory-limits.txt"]
-APPROVE = "<!-- ratchet-raise-approved -->"
+APPROVE = "ratchet-raise-approved"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 QUEUE_REF = re.compile(r"/pr-(\d+)-[0-9a-f]{40}$")
 
@@ -43,8 +48,10 @@ def parse(text):
     The xtask readers take the first line of a name too, so a later one can't move the limit.
     """
     limits = {}
-    for n, line in enumerate(text.splitlines(), 1):
-        line = line.split("#", 1)[0].strip()
+    # Lines end at LF or CRLF only, as in Rust's `str::lines`: `splitlines` would also split at a
+    # vertical tab, form feed or bare CR, which the xtask readers keep inside the line.
+    for n, line in enumerate(text.split("\n"), 1):
+        line = line.removesuffix("\r").split("#", 1)[0].strip()
         if not line:
             continue
         name, sep, value = line.partition("=")
@@ -60,11 +67,16 @@ def parse(text):
     return limits
 
 
+def marker(token):
+    """The line a maintainer's message carries to approve the change named by `token`."""
+    return f"<!-- {APPROVE}: {token} -->"
+
+
 def compare(path, base_text, head_text):
-    """The raised or removed limits of one file, as messages; ([], notices) when nothing is wrong.
+    """The raised or removed limits of one file, as (message, approval token) pairs, and notices.
 
     `base_text` is None when the file didn't exist on the base (nothing to compare), `head_text` None
-    when the change deletes it.
+    when the change deletes it. A token of None means nothing can approve the problem: fix the file.
     """
     if base_text is None:
         return [], []
@@ -73,36 +85,47 @@ def compare(path, base_text, head_text):
     except ValueError as error:
         return [], [f"{path} on the base can't be read ({error}), so its limits aren't compared"]
     if head_text is None:
-        return [f"{path}: deleted, but it holds {len(base)} limit(s) that only go down"], []
+        return [(f"{path}: deleted, but it holds {len(base)} limit(s) that only go down", f"{path} deleted")], []
     try:
         head = parse(head_text)
     except ValueError as error:
-        return [f"{path}: {error}"], []
+        return [(f"{path}: {error}", None)], []
     problems = []
     for name, (old, old_text) in base.items():
         if name not in head:
-            problems.append(f"{path}: the limit `{name}` ({old_text}) was removed")
+            problems.append((f"{path}: the limit `{name}` ({old_text}) was removed", f"{path} {name} removed"))
         elif head[name][0] > old:
-            problems.append(f"{path}: `{name}` rose from {old_text} to {head[name][1]}")
+            problems.append((f"{path}: `{name}` rose from {old_text} to {head[name][1]}", f"{path} {name}={head[name][1]}"))
     return problems, []
 
 
 def run(args):
-    """Runs a command and returns its standard output, raising if it fails."""
-    return subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True, timeout=120).stdout
+    """Runs a command and returns its standard output as it is, line endings included; raises if it fails."""
+    return subprocess.run(args, check=True, stdout=subprocess.PIPE, timeout=120).stdout.decode("utf-8", "replace")
+
+
+def base_mode(base_sha, path):
+    """The file's git mode on the base commit (`120000` is a symbolic link), or None when it has no such file."""
+    listing = run(["git", "ls-tree", base_sha, "--", path]).split()
+    return listing[0] if listing else None
 
 
 def base_file(base_sha, path):
     """The file's text on the base commit, or None when the base has no such file."""
-    if not run(["git", "ls-tree", "--name-only", base_sha, "--", path]).strip():
+    if base_mode(base_sha, path) is None:
         return None
     return run(["git", "show", f"{base_sha}:{path}"])
 
 
+def is_link(path):
+    """Whether the checkout has a symbolic link at the path."""
+    return os.path.islink(path)
+
+
 def head_file(path):
-    """The file's text in the checkout, or None when it isn't there."""
+    """The file's text in the checkout, with its line endings, or None when it isn't there."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", newline="") as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -120,10 +143,13 @@ def messages(repo, number):
     return found
 
 
-def approved(found):
-    """Whether a maintainer's message ends with the override."""
+def approved(found, token):
+    """Whether a maintainer's message has the approval line for `token` on a line of its own."""
+    line = marker(token)
     return any(
-        (m.get("body") or "").rstrip().endswith(APPROVE) and not m.get("bot") and m.get("association") in MAINTAINERS
+        not m.get("bot")
+        and m.get("association") in MAINTAINERS
+        and any(row.strip() == line for row in (m.get("body") or "").splitlines())
         for m in found
     )
 
@@ -151,6 +177,11 @@ def main():
     run(["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha])
     problems = []
     for path in LIMIT_FILES:
+        # A link reads as its target here and as its own text in git, so the two sides would not
+        # be the same file: neither is accepted.
+        if is_link(path) or base_mode(base_sha, path) == "120000":
+            problems.append((f"{path}: is a symbolic link, but the limits must be in a regular file", None))
+            continue
         found, notices = compare(path, base_file(base_sha, path), head_file(path))
         problems += found
         for notice in notices:
@@ -159,17 +190,25 @@ def main():
         print("No limit that only goes down has risen.")
         return 0
     number = pr_number()
-    if approved(messages(os.environ["GITHUB_REPOSITORY"], number)):
-        for problem in problems:
-            print(f"::notice::{escape(problem)}: approved by a maintainer on #{number}")
+    found = messages(os.environ["GITHUB_REPOSITORY"], number)
+    refused = []
+    for message, token in problems:
+        if token is not None and approved(found, token):
+            print(f"::notice::{escape(message)}: approved by a maintainer on #{number}")
+        else:
+            refused.append((message, token))
+            print(f"::error::{escape(message)}")
+    if not refused:
         return 0
-    for problem in problems:
-        print(f"::error::{escape(problem)}")
     print(
-        f"#{number} raises {len(problems)} limit(s) that only go down. Fix the code so the old limit holds, "
-        "or, if the rise is deliberate, a maintainer comments on the pull request with a message ending "
-        f"in {APPROVE} and the check is run again (re-run the job, or queue the pull request again)."
+        f"#{number} raises {len(refused)} limit(s) that only go down. Fix the code so the old limit holds, "
+        "or, if the change is deliberate, a maintainer comments on the pull request with each of these "
+        "lines on a line of its own, and the check is run again (re-run the job, or queue the pull request "
+        "again). A removed memory scenario needs its line too."
     )
+    for _, token in refused:
+        if token is not None:
+            print(marker(token))
     return 1
 
 
