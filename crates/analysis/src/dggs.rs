@@ -1226,7 +1226,7 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
         msg.push_str(&format!("; {}", left_out(outside, "point", "position")));
     }
     if undrawn > 0 {
-        msg.push_str(&format!("; {}, with {unplaced} of the points", undrawable(undrawn, &g)));
+        msg.push_str(&format!("; {}, and so were the {unplaced} points in them", undrawable(undrawn, &g)));
     }
     Ok(ToolResult { losses: Vec::new(), output: Output::Layer(out), messages: vec![msg] })
 }
@@ -1787,6 +1787,11 @@ mod tests {
             "{:?}",
             edge.messages
         );
+        // Points in such a cell are left out with it, and said to be.
+        let at_edge = Flat(points(&[(174.999, 1.0, 1.0), (174.998, 1.2, 1.0), (172.5, 1.0, 1.0)]), None);
+        let by = aggregate(&at_edge, &serde_json::json!({"system": "Hexagon", "input": "pts", "resolution": 9})).unwrap();
+        assert!(by.messages[0].contains("reaches, and so were the 2 points in them"), "{:?}", by.messages);
+        assert_eq!(layer(by).features.len(), 1);
         let kept = layer(edge);
         assert!(!kept.features.is_empty());
         assert!(kept.features.iter().all(|f| match &f.geometry {

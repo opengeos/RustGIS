@@ -6770,8 +6770,8 @@ fn tessellations_and_points_by_cell_in_every_system() {
     }
     let plane = |s: &Session, name: &str| s.map().layer_by_name(name).unwrap().dataset.value(0, 3).to_string();
     assert_eq!(plane(&s, "Hexagon cells"), "Web Mercator");
-    // On an equal-area map the hexagons are laid on its plane: every city still counted, in a
-    // cell the projection can draw, or said to be left out.
+    // On an equal-area map the hexagons are laid on its plane: no city is near a pole, so every
+    // one is counted, in a cell the projection can draw.
     s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
     let r = s
         .run(
@@ -6780,8 +6780,7 @@ fn tessellations_and_points_by_cell_in_every_system() {
         )
         .unwrap();
     assert!(plane(&s, "moll").contains("ollweide"), "{}", plane(&s, "moll"));
-    let n = counted(&s, "moll");
-    assert!(n == cities || r.to_string().contains("left out"), "{n} of {cities}: {r}");
+    assert_eq!(counted(&s, "moll"), cities, "{r}");
     // The world on it reaches both poles, where its plane loses the longitude.
     let r = s
         .run(
