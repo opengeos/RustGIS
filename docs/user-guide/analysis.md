@@ -1309,6 +1309,31 @@ How each problem is repaired:
 - Lines may cross themselves, so only their repeated vertices and their parts with fewer than 2
   distinct points are repaired. Points have nothing to repair but non-finite coordinates.
 
+**Rule** (`rule`) chooses what the rebuild takes to be inside, when rings cross, overlap or sit in
+the wrong place. A valid polygon, or one fixed without moving a coordinate, comes out the same
+either way.
+
+- **Shells Minus Holes** (the default) is the rebuild above: rings keep the roles the data gives
+  them.
+- **Even-Odd** reads each ring's own area the same way, so a bowtie keeps both triangles and a ring
+  traced twice counts once, then keeps what lies inside an odd number of rings, whatever their
+  roles. This is close to the "linework" method of make-valid tools. Where two parts overlap is left
+  out, a ring listed as a part inside another is a hole, and what of a hole lies outside its
+  exterior ring is a part. It suits data whose ring roles may be wrong, such as a hole stored as a
+  part of its own: Shells Minus Holes fills it, Even-Odd keeps it a hole. Each part is combined
+  first, then the parts together, so a hole two parts both have stays out of both, and a part
+  whose exterior ring has no area is dropped with its holes, as under Shells Minus Holes. Duplicates,
+  a hole repeated in its own part or a part repeated whole (the same corners in the same order,
+  from any vertex and either way round, a vertex in the middle of a straight edge aside), are left
+  out first, since each pair would cancel out, and the tool says how many. Features rebuilt under Even-Odd have
+  `even_odd` in `repairs` after the codes.
+
+| Shape | Shells Minus Holes | Even-Odd |
+| --- | --- | --- |
+| Two overlapping squares | one merged polygon | two pieces, the overlap left out |
+| A square with a ring listed as a part inside it | the square, filled | the square with a hole |
+| A hole partly outside its square | the square with a notch | the square with a notch, and the part outside as its own piece |
+
 When a ring of a part crosses itself, Check Geometry doesn't check that part against its other
 rings or the other parts; Repair Geometry checks the feature again after the fixes that move no
 coordinate, and adds `hole_outside_shell`, `rings_intersect` and `parts_overlap` when the rebuild
@@ -2058,9 +2083,34 @@ rustgis-cli run --cmd 'cube.trend={"url":"https://data.inpe.br/bdc/stac/v1","col
 
 **Summarise a Data Cube over Time** (`cube.reduce`) makes rasters of one statistic of each cell
 over the dates of any of the series Trend Analysis takes (layers, a raster's bands, a Zarr
-variable, a STAC collection's band): **mean**, **min**, **max**, **sum**, **std** (the population
-standard deviation), **count** of values, or **countAbove** a threshold (`"above"`), as Summarise
-over time does for a Zarr variable (see [Data](data.md)).
+variable, a STAC collection's band): **mean**, **median** (the mean of the two middle values for
+an even count), **min**, **max**, **sum**, **std** (the population standard deviation), **count**
+of values, or **countAbove** a threshold (`"above"`), as Summarise over time does for a Zarr
+variable (see [Data](data.md)); or **first**, each cell's value at its first date with one, in the
+order `"order"` gives: `"date"` (the earliest first, the default without a mask), `"-date"` (the
+latest first) or `"clear"` (below). The median holds every date's value of the cells being read,
+within the run's 64 million values on the desktop and 16 million in the web app (cells × dates,
+4 bytes each: up to 256 MB; a STAC collection is read in pieces that keep to it), and like first
+is the data cube summary's only.
+
+- **Cloud-free composites:** a STAC collection's dates can be masked by each item's own quality band
+  with `"mask"`: `{"asset": "SCL", "keep": [4, 5, 6]}` takes a cell at a date only where the same
+  item's SCL has one of those classes, `"drop": [0, 1, 3, 8, 9, 10]` every class but those, and
+  `"bits": {"set": [6], "unset": [1, 3, 4]}` the cells of a bit mask (Landsat's `qa_pixel`) with
+  every bit of `set` on and every bit of `unset` off. Classes are whole numbers. A cell with no-data
+  in the mask (its header's, or the value its STAC metadata names) is never taken, nor one outside
+  the mask's file (said, with how many). The mask is read onto the band's grid by nearest neighbour
+  (SCL at 20 m under a 10 m band), at its overview nearest the band's cells, and an item without the
+  mask's asset is left out and said. With a mask, **first** takes the dates by their clear share of
+  the area by default (`"order": "clear"`): each date's masks are read over the area first,
+  overlapping tiles counted once (at an overview of about a million pixels for a large area), and
+  the clearest date gives each cell its value, the next clearest the cells still empty, and so on
+  (the best pixel). A tile's `eo:cloud_cover` says little about a small area, so it isn't used.
+  **median** of the masked dates gives a smoother composite, with no seams between dates, where
+  several dates are clear. Any statistic takes a mask, and so does a trend (`cube.trend`). With
+  first and median, a cell no date has clear is left empty; the counts give 0 there (see Missing
+  values below). The example below keeps SCL's dark areas (2) and unclassified pixels (7), which a
+  hilly area needs (they can hold shadows or low cloud): drop them for a stricter mask.
 
 - **Classes:** a series of categorical rasters, such as yearly land-cover maps (MapBiomas, ESA
   WorldCover), is summarised as classes with eight more statistics:
@@ -2113,6 +2163,7 @@ over time does for a Zarr variable (see [Data](data.md)).
 rustgis-cli run --cmd 'cube.reduce={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"stat":"max"}'
 rustgis-cli run --data cobertura_1985.tif --data cobertura_1986.tif --data cobertura_1987.tif --cmd 'cube.reduce={"layers":["cobertura_1985","cobertura_1986","cobertura_1987"],"stat":"changes"}'
 rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-44.8,-7.5,-44.3,-7.0],"start":"2001","end":"2025","cellSize":1000,"stat":"mean","by":"year","minValid":0.5,"name":"NDVI"}' --save urucui.rgis
+rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"S2-16D-2","asset":"B04","mask":{"asset":"SCL","keep":[2,4,5,6,7]},"bbox":[-43.003,-20.838,-42.754,-20.655],"start":"2025-06-01","end":"2025-08-31","stat":"first","name":"B04 cloud-free"}' --save vicosa.rgis
 ```
 
 ## Categorical raster area by zone
