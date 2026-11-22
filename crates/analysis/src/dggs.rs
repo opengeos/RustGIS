@@ -973,7 +973,7 @@ fn too_much_work(res: i32) -> String {
     format!("Covering the area at resolution {res} means looking at more than {MAX_WORK} cells: use a coarser resolution or a smaller area")
 }
 
-/// The system a tool's `system` parameter names: H3 when it's left out.
+/// The system a tool's `system` parameter names: A5 when it's left out, as the tools were before.
 fn system_of(p: &Json) -> Result<System, String> {
     match p.get("system") {
         // A5 when it names none: the tools were A5's before they took a system.
