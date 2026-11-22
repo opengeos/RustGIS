@@ -1853,6 +1853,23 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"pixels": n}))
 }
 
+/// The ground distance on the WGS 84 ellipsoid from the start of a path to the point `along`
+/// metres along it as the sphere measures it (as `rasterops::profile` spaces its samples), given
+/// each leg's length on the sphere and on the ellipsoid: the legs before it at their ellipsoid
+/// length, and the same share of the leg it falls in.
+fn ellipsoid_along(legs: &[(f64, f64)], along: f64) -> f64 {
+    let (mut sphere, mut ground) = (0.0, 0.0);
+    for &(on_sphere, on_ellipsoid) in legs {
+        if along <= sphere + on_sphere {
+            let share = if on_sphere > 0.0 { ((along - sphere) / on_sphere).clamp(0.0, 1.0) } else { 0.0 };
+            return ground + on_ellipsoid * share;
+        }
+        sphere += on_sphere;
+        ground += on_ellipsoid;
+    }
+    ground
+}
+
 /// The most points `raster.measure` takes.
 const MAX_MEASURE_POINTS: usize = 10_000;
 
@@ -1885,19 +1902,31 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             if pts.len() < 2 {
                 return Err("a distance needs two or more points".into());
             }
+            // On the Earth, each leg's length on the sphere (as the profile below spaces its
+            // samples) and on the ellipsoid; the flat length is the ellipsoid's.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the sphere spaces the profile's samples, as `rasterops::profile` does; the lengths are the ellipsoid's"
+            )]
+            let legs: Vec<(f64, f64)> = if earth {
+                pts.windows(2)
+                    .map(|w| match w {
+                        [a, c] => (rustgis_geom::haversine_m(*a, *c), rustgis_geom::wgs84_distance_m(*a, *c)),
+                        _ => (0.0, 0.0),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             #[expect(clippy::disallowed_methods, reason = "another body measures on its sphere, scaled by `Body`")]
-            let flat = if earth { rustgis_geom::wgs84_length_m(&pts) } else { body.length(rustgis_geom::geodesic_length_m(&pts)) };
-            // Along the surface when there's an elevation raster. The profile measures along the
-            // path as the flat length does (on the Earth the ellipsoid, on another body its sphere,
-            // scaled), so level ground gives the flat length exactly.
+            let flat = if earth { legs.iter().map(|l| l.1).sum() } else { body.length(rustgis_geom::geodesic_length_m(&pts)) };
+            // Along the surface when there's an elevation raster. The profile spaces its samples
+            // along the path on the sphere; on the Earth each step's ground run is taken from the
+            // legs it covers at their length on the ellipsoid, so level ground gives the flat
+            // length exactly.
             let surface = dem.as_ref().map(|d| {
-                let ground = |along: f64| if earth { along } else { body.length(along) };
-                #[expect(clippy::disallowed_methods, reason = "another body measures on its sphere, scaled by `Body`")]
-                let prof = if earth {
-                    rasterops::profile(d, 0, &pts, 500)
-                } else {
-                    rasterops::profile_by(d, 0, &pts, 500, rustgis_geom::haversine_m)
-                };
+                let ground = |along: f64| if earth { ellipsoid_along(&legs, along) } else { body.length(along) };
+                let prof = rasterops::profile(d, 0, &pts, 500);
                 prof.windows(2)
                     .map(|w| match w {
                         [a, c] => {

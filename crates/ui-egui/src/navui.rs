@@ -153,29 +153,27 @@ impl State {
 }
 
 fn fetch(url: &str) -> Answer {
-    let slot: Answer = Slot::default();
+    fetch_read(url, |r| r)
+}
+
+/// Downloads `url`; the slot gets the answer as `read` reads it where it lands.
+fn fetch_read<T: Send + 'static>(url: &str, read: impl FnOnce(Result<Vec<u8>, String>) -> T + Send + 'static) -> Slot<T> {
+    let slot: Slot<T> = Slot::default();
     let land = slot.clone();
-    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(read(r))));
     slot
 }
 
 /// Asks for routes at `url`. The answer is read where it lands, on the download's thread on the
 /// desktop, not on the frame: measuring a long route's line on the ellipsoid takes a while.
 fn fetch_routes(url: &str) -> Routed {
-    let slot: Routed = Slot::default();
-    let land = slot.clone();
-    cache::download(
-        url,
-        Box::new(move |r| {
-            let router = Router { base: routing::VALHALLA.into() };
-            let read = r.map_err(|e| routing::explain(&e)).and_then(|b| Ok((router.parse(&b)?, String::from_utf8_lossy(&b).into_owned())));
-            *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(read);
-        }),
-    );
-    slot
+    fetch_read(url, |r| {
+        let router = Router { base: routing::VALHALLA.into() };
+        r.map_err(|e| routing::explain(&e)).and_then(|b| Ok((router.parse(&b)?, String::from_utf8_lossy(&b).into_owned())))
+    })
 }
 
-fn take(slot: &Answer) -> Option<Result<Vec<u8>, String>> {
+fn take<T>(slot: &Slot<T>) -> Option<T> {
     slot.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
@@ -329,8 +327,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     // A route answered.
     if let Some((slot, key)) = &st.pending {
-        let read = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
-        match read {
+        match take(slot) {
             Some(r) => {
                 let key = key.clone();
                 st.pending = None;
