@@ -317,7 +317,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     gap between columns follow in proportion, and so do a web layer's legend pictures and the length
     and height of line and polygon swatches, whose lines keep the width the map draws them at (a
     swatch's line or outline that reaches past its row is cut at the row's top and bottom, so it
-    doesn't cover the rows beside it; its sides keep their width). A
+    doesn't cover the rows beside it, and at its sides where the text starts, so it doesn't cover
+    its label). A
     point symbol keeps the size the map draws it at, its row growing only when the symbol needs it,
     so a legend of proportional symbols still matches the map. `"textSize": null` gives the default
     back. A size its box no longer holds says what the legend loses, and so does a box made too

@@ -2822,7 +2822,8 @@ fn legend_column(
             LegendRow::Plain(l, name) => {
                 let s = l.renderer.symbol_for(&l.dataset, 0);
                 let sym = (&s, l.line_strokes.as_slice(), l.fill_layers.as_slice());
-                swatch(pm, (r.x(), y, sw, height), l, sym, map.layer_opacity(l), opts.scale, (ppp, across));
+                let gap = LEGEND_INDENT * size * ppp;
+                swatch(pm, (r.x(), y, sw, height), l, sym, map.layer_opacity(l), opts.scale, (ppp, across, gap));
                 let (x, pt) = (r.x() + sw + LEGEND_INDENT * size * ppp, LEGEND_NAME_PT * size * 1.33 * ppp);
                 text::text_at(pm, name, x, y + height / 2.0, pt, dark, false, text::Align::Left, false);
             }
@@ -2837,7 +2838,7 @@ fn legend_column(
                     (&en.symbol, row_strokes(l, en), row_fills(l, en)),
                     map.layer_opacity(l),
                     opts.scale,
-                    (ppp, across),
+                    (ppp, across, (LEGEND_LABEL_INDENT - LEGEND_INDENT) * size * ppp),
                 );
                 text::text_at(
                     pm,
@@ -3161,10 +3162,11 @@ pub fn frame_plain_under(
 /// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`), with its stacked
 /// `strokes` and `fills` (#2490): a point as [`point_swatch`] draws it, or a line or a filled box a
 /// swatch wide in the middle of the box (`across` pixels: [`LEGEND_SWATCH`] in the legend's size),
-/// by the paths the map draws its features with, its widths at `ppp`. A line or polygon swatch
-/// stacked, see-through (`opacity`), grown with the layer's reference scale at 1:`scale` or reaching
-/// past its row is composited as one and cut to its row's top and bottom, its sides as wide as its
-/// ink ([`swatch_ink`]).
+/// by the paths the map draws its features with, its widths at `ppp`. A line or polygon swatch's
+/// ink ([`swatch_ink`]) is held to its row's top and bottom and, at its sides, to `gap` pixels past
+/// its column, the room its row leaves before its text: stacked, see-through (`opacity`), grown
+/// with the layer's reference scale at 1:`scale` or reaching past that, it is composited as one and
+/// cut there.
 fn swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
@@ -3172,7 +3174,7 @@ fn swatch(
     (s, strokes, fills): (&rustgis_map::Symbol, &[rustgis_map::LineStroke], &[rustgis_map::fills::FillLayer]),
     opacity: f32,
     scale: f64,
-    (ppp, across): (f32, f32),
+    (ppp, across, gap): (f32, f32, f32),
 ) {
     let gt = l.geometry_type();
     let k = l.size_factor(scale);
@@ -3181,17 +3183,19 @@ fn swatch(
         return;
     }
     // Every line or polygon swatch is cut to its row's top and bottom, so a line wider than its row,
-    // or shifted off it, doesn't paint over the rows beside it (#2518); its sides keep their ink, as
-    // wide as the map draws it, into the gap before the text (#2581).
+    // or shifted off it, doesn't paint over the rows beside it (#2518), and at its sides to the gap
+    // before its text, so it doesn't paint over its label; within those it keeps its ink, as wide
+    // as the map draws it (#2581).
     let plain = if gt == GeometryType::Polyline { strokes.is_empty() } else { fills.is_empty() };
     let ink = swatch_ink((x, y, w, h), gt, (s, strokes, fills), (across, ppp * k));
-    let within = ink.is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01);
+    let (lo, hi) = (x - gap, x + w + gap);
+    let within = ink.is_none_or(|b| b.top() >= y - 0.01 && b.bottom() <= y + h + 0.01 && b.left() >= lo - 0.01 && b.right() <= hi + 0.01);
     if plain && opacity >= 0.999 && k == 1.0 && within {
         // A layer with no stack, within its row: the swatch it always had.
         flat_swatch(pm, (x, y, w, h), gt, s, (across, ppp));
         return;
     }
-    let (left, right) = ink.map_or((x, x + w), |b| (x.min(b.left()), (x + w).max(b.right())));
+    let (left, right) = ink.map_or((x, x + w), |b| (x.min(b.left()).max(lo), (x + w).max(b.right()).min(hi)));
     composited(pm, (left, y, right - left, h), opacity, |c, (cl, ct)| {
         let cell = (x - cl, y - ct, w, h);
         if plain {
@@ -3207,8 +3211,8 @@ fn swatch(
 /// line's `strokes` the map draws, as it strokes them ([`crate::line_stroke`]), an offset one as
 /// wide as its width and twice its offset, mitred, as its shifted line's corners are
 /// (`offset_polyline`), a marked one as far as [`crate::line_markers::reach`]; a stacked polygon's
-/// box and its outline. `None` for no shape. [`swatch`] keeps its sides when it cuts the swatch to
-/// its row.
+/// box and its outline. `None` for no shape. [`swatch`] keeps it within its row and the gap before
+/// its text.
 fn swatch_ink(
     cell: (f32, f32, f32, f32),
     gt: GeometryType,
@@ -8711,6 +8715,15 @@ Elaboração: RustGIS",
         let pm = point_legend(&map);
         assert!(inked(&pm, 0..16, 0..15, red) > 50);
         assert_eq!(inked(&pm, 0..200, 15..200, red), 0, "a wide stroke: nothing below its row");
+        // Its round ends reach into the gap before the text, 6 points, and no further (#2581): a
+        // label beside it keeps its own pixels. The same for a plain polygon's wide outline.
+        assert!(inked(&pm, 16..22, 0..15, red) > 0, "into the gap");
+        assert_eq!(inked(&pm, 22..200, 0..200, red), 0, "nothing where the text starts");
+        let outline = rustgis_map::Symbol { stroke: red, stroke_width: 30.0, ..rustgis_map::Symbol::default_for(GeometryType::Polygon, 0) };
+        let map = shape_legend_map(GeometryType::Polygon, |l| l.renderer = rustgis_map::Renderer::Single(outline));
+        let pm = point_legend(&map);
+        assert!(inked(&pm, 16..22, 0..15, red) > 0, "a plain outline into the gap");
+        assert_eq!(inked(&pm, 22..200, 0..200, red), 0, "a plain outline: nothing where the text starts");
     }
 
     /// A polygon's stacked fills show in its swatch: a hatch over a fill, and a class's own fills
