@@ -404,6 +404,11 @@ impl<O: Offered> List<O> {
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
+        // Page Up / Page Down scroll the help, not the box, while a list with one is open: the
+        // keyboard's way to read a help longer than its box.
+        if offer.has_help() {
+            self.scroll.page = (self.scroll.page + page_keys(ui)).clamp(-MAX_PAGES, MAX_PAGES);
+        }
         if close {
             self.open = None;
             self.dismissed = Some(offer);
@@ -424,7 +429,8 @@ impl<O: Offered> List<O> {
     /// After the box (`out`, its id `id`): the offer `work` gives for its cursor (a char index;
     /// None with text selected), a new offer keeping the highlight on the same item when it is
     /// still there, drawn just under the cursor, each item after its `icon`, the highlighted
-    /// item's `help` beside it (or under it, in a narrow window). `visible` is the part of the box
+    /// item's `help` beside it (or under it, in a narrow window), and what each says (`describe`)
+    /// for a screen reader, the highlighted one read as the box's. `visible` is the part of the box
     /// that shows (its scroll's viewport: the text edit's own clip rect is its whole text).
     /// Returns an item clicked, to accept. The list closes when the box loses focus or nothing
     /// matches.
@@ -436,6 +442,7 @@ impl<O: Offered> List<O> {
         visible: egui::Rect,
         work: impl FnOnce(Option<usize>) -> Option<O>,
         icon: impl Fn(&O, &str) -> Option<&'static str>,
+        describe: impl Fn(&O, &str) -> Option<String>,
         help: impl FnOnce(&mut Ui, &O, &str, f32),
     ) -> Option<(O, String)> {
         // The window left (another app took the focus, the box keeps its own): the list closes, as a
@@ -495,8 +502,12 @@ impl<O: Offered> List<O> {
         }
         let pointer_leads = self.pointer_leads;
         // A new list starts from its top: its scroll is the old list's otherwise.
+        // A page pressed this frame (`keys`) is the new list's.
         if self.open.as_ref().is_none_or(|(o, _)| o.items() != offer.items()) {
-            self.scroll = Scroll::default();
+            self.scroll = Scroll { page: self.scroll.page, ..Scroll::default() };
+        } else if self.open.as_ref().is_some_and(|(o, _)| *o != offer) {
+            // The same items, but what they say may not be (a field's type, read again).
+            self.scroll.described.clear();
         }
         let kept = self.open.as_ref().and_then(|(o, s)| o.items().get(*s));
         let selected = kept.and_then(|item| offer.items().iter().position(|i| i == item)).unwrap_or(0);
@@ -508,6 +519,7 @@ impl<O: Offered> List<O> {
         let screen = ui.ctx().content_rect();
         let (corner, room) = place(cursor, size, screen, row * 3.0, Side::Below);
         let mut clicked = None;
+        let mut highlighted = None;
         let has_help = offer.has_help();
         let scroll = &mut self.scroll;
         let items = offer.items();
@@ -522,13 +534,21 @@ impl<O: Offered> List<O> {
                 false,
                 has_help,
                 |item| icon(&offer, item),
-                |_| None,
+                |i| items.get(i).and_then(|item| describe(&offer, item)),
                 |ui, item, width| {
                     help(ui, &offer, item, width);
                 },
             );
             clicked = picked.clicked.and_then(|i| items.get(i)).map(|item| (offer.clone(), item.clone()));
+            highlighted = picked.highlighted;
         });
+        // The focus stays on the box, the highlighted row its active descendant: a screen reader
+        // reads that row (and what it says, `describe`) as the highlight moves, as it would a
+        // focused one, while typing goes on in the box (#2619). Set each frame the list shows, so
+        // gone with it.
+        if let Some(row) = highlighted.filter(|_| clicked.is_none() && out.response.response.has_focus()) {
+            ui.ctx().accesskit_node_builder(out.response.response.id, |node| node.set_active_descendant(row.accesskit_id()));
+        }
         if clicked.is_some() {
             self.open = None;
             self.drawn = None;
@@ -565,6 +585,12 @@ struct Scroll {
     /// Where the help's box was, the gap before it included: with the pointer there, the help
     /// stays the one shown (the item the pointer left, to read or scroll its help).
     help_at: Option<egui::Rect>,
+    /// What each row says to a screen reader, worked out once (`rows`).
+    described: std::collections::HashMap<usize, Option<String>>,
+    /// Page Up (-1) or Page Down (1) pressed for the help, not yet applied (`rows`).
+    page: i32,
+    /// How far the help's box scrolled at most last frame: a page down stops there.
+    help_max: f32,
 }
 
 /// What a list's rows gave this frame.
@@ -574,6 +600,9 @@ struct Rows {
     clicked: Option<usize>,
     /// The row with the focus (a screen reader put it there, or `focus` moved it).
     focused: Option<usize>,
+    /// The highlighted row's widget, when it's drawn: a box's list names it to a screen reader as
+    /// the box's active descendant (`List::show`).
+    highlighted: Option<Id>,
 }
 
 /// The widest of `items`' rows, each after its `icon`, as `item_row` draws them; the list's
@@ -628,12 +657,16 @@ fn rows(
         let spacing = ui.spacing().item_spacing.y;
         // At most `MAX_ROWS` rows show: the list scrolls beyond (a long one mustn't fill the screen).
         let area = egui::ScrollArea::vertical().id_salt("rows").max_height(row * MAX_ROWS as f32 - spacing).auto_shrink([true, true]);
+        let mut described = std::mem::take(&mut scroll.described);
         let mut draw = |ui: &mut Ui, i: usize, item: &str| {
             let r = item_row(ui, item, i == selected, icon(item));
-            // What the help says, for a screen reader (worked out only when one is there).
+            // What the help says, for a screen reader: worked out only when one is there, and once
+            // per row while the list is the same (`Scroll::described`), not for each of some 600
+            // rows each frame.
             if ui.ctx().has_accesskit_node(r.id)
-                && let Some(d) = describe(i)
+                && let Some(d) = described.entry(i).or_insert_with(|| describe(i).filter(|d| !d.is_empty()))
             {
+                let d = d.clone();
                 ui.ctx().accesskit_node_builder(r.id, |node| node.set_description(d));
             }
             // Taken as the button goes down, as in a code editor: the press already takes the
@@ -644,6 +677,9 @@ fn rows(
             }
             if r.hovered() {
                 hovered = Some(i);
+            }
+            if i == selected {
+                out.highlighted = Some(r.id);
             }
             if r.has_focus() {
                 out.focused = Some(i);
@@ -687,6 +723,7 @@ fn rows(
                 });
             }
         });
+        scroll.described = described;
         if !has_help {
             return;
         }
@@ -710,20 +747,39 @@ fn rows(
             // Its id worked out here as `ScrollArea::begin` does: egui keeps that state after the
             // list closes, and a list opened again starts with no `Scroll`, so it drops it too.
             let id = ui.make_persistent_id(egui::IdSalt::new(HELP_SCROLL));
-            if scroll.help_for != Some(shown) {
+            let changed = scroll.help_for != Some(shown);
+            if changed {
                 ui.data_mut(|d| d.remove::<egui::scroll_area::State>(id));
                 scroll.help_for = Some(shown);
             }
-            let area = egui::ScrollArea::vertical().id_salt(HELP_SCROLL).max_height(size.y).auto_shrink([false, false]);
-            area.show(ui, |ui| {
+            let mut area = egui::ScrollArea::vertical().id_salt(HELP_SCROLL).max_height(size.y).auto_shrink([false, false]);
+            // A page from the keyboard: the box's height less a line, kept in the help (as far as
+            // it scrolled last frame: on the frame another item's help comes, it waits a frame).
+            if scroll.page != 0 && !changed {
+                let at = egui::scroll_area::State::load(ui.ctx(), id).map_or(0.0, |s| s.clamped_offset().y);
+                let page = (size.y - row).max(row);
+                area = area.vertical_scroll_offset((at + scroll.page as f32 * page).clamp(0.0, scroll.help_max));
+                scroll.page = 0;
+            }
+            let shown_area = area.show(ui, |ui| {
                 if let Some(item) = items.get(shown) {
                     help(ui, item, help_width);
                 }
             });
+            scroll.help_max = (shown_area.content_size.y - shown_area.inner_rect.height()).max(0.0);
         });
         scroll.help_at = Some(boxed.response.rect.expand(GAP));
     });
     out
+}
+
+/// The most pages pressed ahead of the help's scroll (one waits a frame for a new help).
+const MAX_PAGES: i32 = 10;
+
+/// Page Down (1) or Page Up (-1) pressed, taken for a list's help (egui's `TextEdit` uses
+/// neither).
+fn page_keys(ui: &Ui) -> i32 {
+    ui.input_mut(|i| i32::from(i.consume_key(Modifiers::NONE, Key::PageDown)) - i32::from(i.consume_key(Modifiers::NONE, Key::PageUp)))
 }
 
 /// The keys a widget of an `open` list keeps from egui: the arrows and Escape are the list's
@@ -834,6 +890,10 @@ pub(crate) fn menu(
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
+        // Page Up / Page Down scroll the help, as in a box's list (`List::keys`).
+        if has_help {
+            s.scroll.page = (s.scroll.page + page_keys(ui)).clamp(-MAX_PAGES, MAX_PAGES);
+        }
         let selected = s.selected.min(n - 1);
         if up || down {
             s.selected = if up { (selected + n - 1) % n } else { (selected + 1) % n };
@@ -868,6 +928,11 @@ pub(crate) fn menu(
         let drawn = popup(ui, id, corner, room, |ui| {
             got = rows(ui, &items, selected, pointer_leads, scroll, follow, has_help, icon, describe, help)
         });
+        // The arrows move the highlight with the focus on the button: the highlighted row is the
+        // button's active descendant, read as a box's list's is (`List::show`).
+        if let Some(row) = got.highlighted.filter(|_| got.clicked.is_none() && ui.memory(|m| m.has_focus(button.id))) {
+            ui.ctx().accesskit_node_builder(button.id, |node| node.set_active_descendant(row.accesskit_id()));
+        }
         // Placed by a guess (its first frame): place it again by what it holds now.
         if drawn.1 != size {
             ui.ctx().request_repaint();
@@ -1569,6 +1634,106 @@ mod tests {
         assert!(h.state().0.is_open(), "the list stays as it was");
     }
 
+    /// Page Down scrolls a help longer than its box by a page, kept in the help, and Page Up
+    /// back (#2619): the keyboard's way to read it, in a box's list and in a button's.
+    #[test]
+    fn page_keys_scroll_the_help() {
+        use egui_kittest::kittest::Queryable;
+        let long = format!("first line {}", "a long help that wraps over several lines ".repeat(60));
+        let help = |long: String| {
+            move |ui: &mut egui::Ui, _: &str, width: f32| {
+                ui.set_max_width(width);
+                ui.label(&long);
+            }
+        };
+        fn check<S>(h: &mut egui_kittest::Harness<'_, S>, long: &str, what: &str) {
+            let top = h.get_by_label(long).rect().top();
+            h.key_press(egui::Key::PageDown);
+            h.run();
+            let down = h.get_by_label(long).rect().top();
+            assert!(down < top - 50.0, "{what}: a page down: {down} from {top}");
+            for _ in 0..30 {
+                h.key_press(egui::Key::PageDown);
+                h.run();
+            }
+            let last = h.get_by_label(long).rect();
+            assert!(last.bottom() > top, "{what}: kept in the help: {last:?}");
+            h.key_press(egui::Key::PageDown);
+            h.run();
+            assert_eq!(h.get_by_label(long).rect(), last, "{what}: no further than the help's end");
+            for _ in 0..31 {
+                h.key_press(egui::Key::PageUp);
+                h.run();
+            }
+            let back = h.get_by_label(long).rect().top();
+            assert!((back - top).abs() < 0.5, "{what}: back to the top: {back} for {top}");
+        }
+        // A box's list.
+        let shown = help(long.clone());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+            move |ui, (text, list): &mut (String, super::List<Words>)| {
+                let id = egui::Id::unique("box");
+                let _ = list.keys(ui, id);
+                let label = ui.label("Expression");
+                let out = egui::TextEdit::singleline(text).id(id).show(ui);
+                let _ = out.response.response.clone().labelled_by(label.id);
+                out.response.response.request_focus();
+                let visible = ui.clip_rect();
+                let offer = Words(vec!["one".into(), "two".into()]);
+                list.show(
+                    ui,
+                    egui::Id::unique("list"),
+                    &out,
+                    visible,
+                    |_| Some(offer),
+                    |_, _| None,
+                    |_, _| None,
+                    |ui, _, item, width| shown(ui, item, width),
+                );
+            },
+            (String::new(), super::List::default()),
+        );
+        h.run_steps(3);
+        check(&mut h, &long, "a box's list");
+        // A button's list.
+        let shown = help(long.clone());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui(move |ui| {
+            let _ = super::menu(ui, "Open", || vec!["one".into(), "two".into()], |_| None, |_| None, true, &shown);
+        });
+        h.run();
+        h.get_by_label("Open").click();
+        h.run();
+        check(&mut h, &long, "a button's list");
+    }
+
+    /// A button's list opened from the keyboard keeps the focus on the button, its highlighted
+    /// row the button's active descendant with what it says: a screen reader follows the arrows
+    /// (#2619).
+    #[test]
+    fn a_screen_reader_reads_a_button_s_highlighted_entry() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui(|ui| {
+            let describe = |i: usize| Some(format!("about {i}"));
+            let _ = super::menu(ui, "Open", || vec!["one".into(), "two".into()], |_| None, describe, true, |_, _, _| {});
+        });
+        h.run();
+        h.get_by_label("Open").focus();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let read = |h: &egui_kittest::Harness<'_>| {
+            let node = h.get_by_label("Open");
+            node.accesskit_node().active_descendant().map(|row| (row.label().unwrap_or_default(), row.description().unwrap_or_default()))
+        };
+        assert_eq!(read(&h), Some(("one".into(), "about 0".into())));
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert_eq!(read(&h), Some(("two".into(), "about 1".into())), "it follows the highlight");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(read(&h), None, "closed: no row named");
+    }
+
     /// An offer with items opens the list under a focused box; one with none opens nothing.
     #[test]
     fn an_empty_offer_opens_no_list() {
@@ -1582,7 +1747,7 @@ mod tests {
                     out.response.response.request_focus();
                     let visible = ui.clip_rect();
                     let offer = Words(offered.clone());
-                    list.show(ui, egui::Id::unique("list"), &out, visible, |_| Some(offer), |_, _| None, |_, _, _, _| {});
+                    list.show(ui, egui::Id::unique("list"), &out, visible, |_| Some(offer), |_, _| None, |_, _| None, |_, _, _, _| {});
                 },
                 (String::new(), super::List::default()),
             );

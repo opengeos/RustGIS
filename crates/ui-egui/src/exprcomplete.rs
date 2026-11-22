@@ -334,8 +334,9 @@ pub(crate) fn expr_edit_lines(
         offer
     };
     let icon = |offer: &Offer, item: &str| names_field(offer, item).then_some("field");
+    let describe = |offer: &Offer, item: &str| describe_item(offer, item, ds);
     let draw = |ui: &mut Ui, offer: &Offer, item: &str, width: f32| draw_item(ui, offer, item, ds, width);
-    let clicked = state.list.show(ui, id.with("expr_list"), &out, visible, work, icon, draw);
+    let clicked = state.list.show(ui, id.with("expr_list"), &out, visible, work, icon, describe, draw);
     // The call the cursor is in, kept with the offer `work` worked out for the list this frame
     // (it works one out for the cursor whenever the box has the focus). Shown while no list is open: one open only hides
     // it, so what Escape closed stays closed until the cursor leaves the call.
@@ -514,6 +515,33 @@ pub(crate) fn draw_item(ui: &mut Ui, offer: &Offer, item: &str, ds: Option<&Data
     }
 }
 
+/// What the help of `item` of `offer` says, for a screen reader (`describe`): the expression
+/// box's list and the Script's say the same.
+pub(crate) fn describe_item(offer: &Offer, item: &str, ds: Option<&Dataset>) -> Option<String> {
+    find(offer, item).map(|of| spoken(of, ds))
+}
+
+/// What the help beside the list says about `item` (`draw_help`), as text for a screen reader:
+/// the signature and what a function gives (the example left out, as code to read); a field's
+/// type and alias; what a variable reads or a keyword does; whose value a value is.
+fn spoken(item: &Item, ds: Option<&Dataset>) -> String {
+    match item {
+        Item::Function(f) => format!("{}\n{}", f.signature, tl!(f.description)),
+        Item::Field(name) => {
+            let f = ds.and_then(|d| d.fields.iter().find(|f| f.name == *name));
+            let ty = f.map(|f| tl!(f.ty.label()).to_string());
+            let alias = f.and_then(|f| f.alias.clone()).filter(|a| !a.is_empty());
+            [ty, alias].into_iter().flatten().collect::<Vec<_>>().join("\n")
+        }
+        Item::Variable(i, _) => VARS.get(*i).map(|v| tl!(v.description).to_string()).unwrap_or_default(),
+        Item::Keyword(k) => tl!(k.description()).to_string(),
+        Item::Value(_, field, read) => {
+            let of = crate::i18n::fmt("A value of {field}", &[("field", &field_ref(field))]);
+            read.note().map_or(of.clone(), |note| format!("{of}\n{note}"))
+        }
+    }
+}
+
 /// The help beside the list: a function's signature, coloured as the Script colours one, what
 /// it gives and an example; a field's type and alias; what a variable reads or a keyword does.
 fn draw_help(ui: &mut Ui, item: &Item, ds: Option<&Dataset>, width: f32) {
@@ -595,11 +623,7 @@ pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) 
             draw_help(ui, of, None, width);
         }
     };
-    let describe = |i: usize| match &catalog.get(i)?.1 {
-        Item::Function(f) => Some(format!("{}\n{}", f.signature, tl!(f.description))),
-        Item::Variable(i, _) => VARS.get(*i).map(|v| tl!(v.description).to_string()),
-        _ => None,
-    };
+    let describe = |i: usize| catalog.get(i).map(|(_, item)| spoken(item, None));
     let items = || catalog.iter().map(|(s, _)| s.clone()).collect();
     let (_, accepted) = crate::completion::menu(ui, label, items, |_| None, describe, true, help);
     find(&accepted?).map(|item| match item {
@@ -1290,6 +1314,44 @@ mod tests {
         h.step();
         h.event(button(at, false));
         h.run();
+    }
+
+    /// While a list is open the box keeps the focus, and its highlighted row is the box's active
+    /// descendant, with what its help says: a screen reader reads the entry the highlight is on,
+    /// and follows it (#2619). A function says its signature and what it gives, a field its type.
+    /// Closed, the box names no row.
+    #[test]
+    fn a_screen_reader_reads_the_highlighted_entry() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let id = Id::unique("expr");
+        let mut h = boxed(id, Some(ds()), "");
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        let read = |h: &egui_kittest::Harness<'_, String>| {
+            let node = h.get_by_label("Expression");
+            node.accesskit_node().active_descendant().map(|row| (row.label().unwrap_or_default(), row.description().unwrap_or_default()))
+        };
+        h.event(egui::Event::Text("ro".into()));
+        h.run();
+        let (label, said) = read(&h).expect("a row named");
+        assert_eq!(label, "round()");
+        assert!(said.starts_with("round("), "its signature: {said}");
+        assert!(h.ctx.memory(|m| m.has_focus(id)), "the box keeps the focus");
+        h.key_press(egui::Key::Backspace);
+        h.key_press(egui::Key::Backspace);
+        h.event(egui::Event::Text("po".into()));
+        h.run();
+        let (first, said) = read(&h).expect("a row named");
+        assert_eq!(first, "pop");
+        assert_eq!(said, tl!(FieldType::Integer.label()), "a field's type");
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        let (second, _) = read(&h).expect("a row named");
+        assert_eq!(second, "\"Pop Est\"", "it follows the highlight");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(read(&h), None, "closed: no row named");
     }
 
     /// A function clicked in the list is written, and the box keeps the focus (the list is under
