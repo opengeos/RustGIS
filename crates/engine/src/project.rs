@@ -1933,6 +1933,16 @@ pub(crate) fn picture_notices<'a>(
     layers: impl IntoIterator<Item = &'a rustgis_map::Layer>,
     styles: impl IntoIterator<Item = (&'a str, &'a rustgis_map::Renderer)>,
 ) -> Vec<NoticeText> {
+    picture_notices_by(layers, styles, &|p| rustgis_render::picture_marker_kept_check(p).err())
+}
+
+/// [`picture_notices`], each kept image's refusal given by `check` (the renderer's; a test's own,
+/// to say what a run past its budget says without spending the process's).
+pub(crate) fn picture_notices_by<'a>(
+    layers: impl IntoIterator<Item = &'a rustgis_map::Layer>,
+    styles: impl IntoIterator<Item = (&'a str, &'a rustgis_map::Renderer)>,
+    check: &dyn Fn(rustgis_map::Picture) -> Option<rustgis_render::MarkerRefusal>,
+) -> Vec<NoticeText> {
     use rustgis_map::Picture;
     use rustgis_map::symbology::{MAX_PICTURE_BYTES, MAX_PICTURES, MAX_PICTURES_BYTES};
     use rustgis_render::MarkerRefusal;
@@ -1941,7 +1951,7 @@ pub(crate) fn picture_notices<'a>(
         if p.is_default() {
             return None;
         }
-        *seen.borrow_mut().entry(p).or_insert_with(|| rustgis_render::picture_marker_kept_check(p).err())
+        *seen.borrow_mut().entry(p).or_insert_with(|| check(p))
     };
     // The names with an image refused so, by each refusal in `WHY`, in the order their notices go.
     const WHY: [MarkerRefusal; 3] = [MarkerRefusal::NotAnImage, MarkerRefusal::TooManyPixels, MarkerRefusal::PastRunPixels];

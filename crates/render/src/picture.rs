@@ -28,8 +28,9 @@ const MARKER_SIDE: u32 = 700;
 /// The most pixels a picture marker's image may declare (2048 × 2048, by area, so a long strip
 /// passes): past it, it isn't decoded and is drawn as a circle. What a marker costs to check and
 /// draw is its pixels (decoding and scaling one takes some 19 ns a pixel), not its bytes: a PNG of
-/// a few kilobytes can declare hundreds of megapixels. A marker is drawn from [`MARKER_SIDE`]
-/// pixels at most, so more than this adds nothing it shows.
+/// a few kilobytes can declare hundreds of megapixels. So the cap is set by that cost, one at it
+/// taking some 80 ms; a marker is drawn from at most [`MARKER_SIDE`] pixels a side whatever its
+/// image's size.
 pub const MARKER_PIXELS: u64 = MARKER_PIXELS_SIDE as u64 * MARKER_PIXELS_SIDE as u64;
 /// The side of the square [`MARKER_PIXELS`] is, for messages (theirs, written out, a test pins).
 pub const MARKER_PIXELS_SIDE: u32 = 2048;
@@ -237,8 +238,10 @@ fn marker_in(store: &mut Store, b64: &str) -> Marker {
     let found = decode_bytes(&bytes, MARKER_SIDE)
         .map(|(image, aspect)| Arc::new(Decoded { image: Arc::new(image), aspect, packed: OnceLock::new() }))
         .ok_or(NotAnImage);
-    // Settled to what it holds: nothing for one that doesn't decode. Its pixels stay charged, as
-    // decoding it took the time they stand for.
+    // Settled to what it holds: nothing for one that doesn't decode. Its pixels stay charged: one
+    // can fail at its last row, having taken the time they stand for, and charging less would let
+    // such images take that time again and again. One that fails sooner charges as much, as a
+    // valid image declaring as many pixels would; the cap bounds the time either way.
     let holds = found.as_ref().map_or(0, |d| d.image.data().len() as u64);
     store.budget.bytes = store.budget.bytes.saturating_sub(held).saturating_add(holds);
     store.images.insert(id, found.clone());
