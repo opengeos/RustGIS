@@ -575,6 +575,8 @@ fn draw(map: &mut Map, view: &View, max_side: u32, key: DrapeKey, tiles: u64, ti
     let ppp = view.pixels_per_point as f32;
     let archives = render::archive_revisions([&*map]);
     let patches = render::render_tilt_drape(map, view, MARGIN, max_side);
+    // What its bands approximated, for the map view to say (Never silent): drawn on a worker.
+    render::relay_approximations();
     if patches.is_empty() {
         return Drawn {
             key,

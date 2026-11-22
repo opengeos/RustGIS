@@ -2835,7 +2835,7 @@ fn drape_terrain(
     let block = ground.block(map);
     // Ground in it with no height is taken as 0 (see `approximations`).
     if let Some(said) = block.as_ref().and_then(terrain::Block::without_height_notice) {
-        approximations::note(said);
+        approximations::ground_without_height(said);
     }
     for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
         if rustgis_data::progress::check().is_err() || cancel::requested() {
@@ -8043,11 +8043,18 @@ fn take_said() -> ShadowsSaid {
     ShadowsSaid { notices, to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
 }
 
-/// What frames drawn on this thread approximated since the last call, each once: what the map
-/// view says after each of its frames (see `approximations`). Exports and pages read it through
-/// [`shadows_said`] instead.
-pub fn take_approximations() -> Vec<String> {
-    approximations::take()
+/// What frames drawn on this thread approximated since the last call, and what map view frames
+/// drawn on worker threads handed over ([`relay_approximations`]), each kind once, as (kind,
+/// notice): what the map view says after each frame it shows, each kind once a project (see
+/// `approximations`). Exports and pages read it through [`shadows_said`] instead.
+pub fn take_approximations() -> Vec<(String, String)> {
+    approximations::take_keyed()
+}
+
+/// Hands what frames drawn on this thread approximated over to [`take_approximations`]: called
+/// by a worker thread once it has drawn a frame for the map view.
+pub fn relay_approximations() {
+    approximations::relay();
 }
 
 fn take_shadow_notices() -> Vec<String> {
@@ -8281,7 +8288,7 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     // what frames before it said is kept for `shadows_said`.
     let (before, before_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(false)));
     // So is what it approximated: its own, said with it.
-    let approximated_before = approximations::take();
+    let approximated_before = approximations::keep();
     let r = render_exported(map, view);
     let (shadows, to_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(before_come)));
     SHADOW_NOTICES.with(|n| *n.borrow_mut() = before);
@@ -11341,11 +11348,11 @@ mod tests {
         let cut = render(&mut m, &view).expect("a frame");
         // Ground with a height everywhere in it: nothing said of it (#2639). Half off the DEM:
         // said, with how much.
-        assert!(!take_approximations().iter().any(|e| e.starts_with("Block diagram")));
+        assert!(!take_approximations().iter().any(|(_, e)| e.starts_with("Block diagram")));
         m.view.terrain = terrain(Some(block(Some([4000.0, -1000.0, 6000.0, 1000.0]))));
         render(&mut m, &view).expect("a frame");
         let said = take_approximations();
-        assert!(said.iter().any(|e| e.starts_with("Block diagram: about 49%") && e.contains("no height")), "{said:?}");
+        assert!(said.iter().any(|(_, e)| e.starts_with("Block diagram: about 49%") && e.contains("no height")), "{said:?}");
         m.view.terrain = terrain(None);
         let whole = render(&mut m, &view).expect("a frame");
         // The near edge's middle, on the ground and at the base.
@@ -14136,10 +14143,10 @@ mod tests {
         // Drawn solid, it says so once for the layer, however many frames draw it (#2639).
         dark(&mut m);
         let said = take_approximations();
-        assert!(said.len() == 1 && said.iter().all(|e| e.starts_with("road: dashed lines are drawn solid")), "{said:?}");
+        assert!(said.len() == 1 && said.iter().all(|(_, e)| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
         // An export reads it too.
         let (_, said) = shadows_said(|| render_png(&mut m, &view));
-        assert!(said.notices.iter().any(|e| e.starts_with("road: dashed lines are drawn solid")), "{said:?}");
+        assert!(said.notices.iter().any(|e| e.starts_with("road: 1 dashed line(s) drawn solid")), "{said:?}");
     }
 
     #[test]

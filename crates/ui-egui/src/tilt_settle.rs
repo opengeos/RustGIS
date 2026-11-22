@@ -76,6 +76,8 @@ fn draw(mut map: Map, view: View, backend: Backend, stop: Stop) -> Done {
     };
     #[cfg(not(target_arch = "wasm32"))]
     let (rendered, incomplete) = (render::render_backend(&mut map, &view, backend), false);
+    // What it approximated, for the map view to say (Never silent): this is its worker's thread.
+    render::relay_approximations();
     // Stopped only if it came back without a picture: a stop after the renderer's last look
     // leaves a finished frame.
     let cancelled = rendered.is_none() && stop.load(std::sync::atomic::Ordering::Relaxed);

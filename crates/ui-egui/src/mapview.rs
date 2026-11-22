@@ -1834,14 +1834,19 @@ fn show_frame(
     app.map.key = Some(key);
 }
 
-/// Says a tile layer's error ("{layer}: {why}") once a project for each layer and kind of error:
-/// the count of tiles in the view it may carry ("12 tiles left out: …") changes with every pan
-/// or zoom, so it is said under its kind ([`tile_error_kind`]), with the count it had then, rather
-/// than again for each new count. Another kind of error, or another layer's, is said all the same.
-/// `said` is the map view's [`MapView::tile_errors`].
+/// Says a tile layer's error ("{layer}: {why}", its kinds joined by "; ") once a project for each
+/// layer and kind of error, each kind a notice of its own: the count of tiles in the view a kind
+/// may carry ("12 tiles left out: …") changes with every pan or zoom, so it is said under its kind
+/// ([`tile_error_kind`]), with the count it had then, rather than again for each new count.
+/// Another kind of error, or another layer's, is said all the same. `said` is the map view's
+/// [`MapView::tile_errors`].
 pub(crate) fn say_tile_error(said: &mut std::collections::HashSet<String>, session: &mut rustgis_engine::Session, error: String) {
-    if said.insert(tile_error_kind(&error)) {
-        session.notify(error, true);
+    let (layer, why) = error.split_once(": ").map_or(("", error.as_str()), |(l, w)| (l, w));
+    for kind in why.split("; ") {
+        let notice = if layer.is_empty() { kind.to_string() } else { format!("{layer}: {kind}") };
+        if said.insert(tile_error_kind(&notice)) {
+            session.notify(notice, true);
+        }
     }
 }
 
@@ -1870,11 +1875,11 @@ fn tile_error_kind(e: &str) -> String {
 
 /// Says, once a project each, what the map view's frames drew otherwise than their layers ask
 /// (a dashed line drawn solid, a fill left off a block diagram's walls, see
-/// [`rustgis_engine::render::take_approximations`]): read after each frame it shows, on the
-/// thread that drew it.
+/// [`rustgis_engine::render::take_approximations`]), each kind with the count it had when first
+/// seen: read after each frame it shows, with what its workers' frames handed over.
 fn say_approximations(app: &mut RustGisApp) {
-    for e in rustgis_engine::render::take_approximations() {
-        if app.map.tile_errors.insert(e.clone()) {
+    for (kind, e) in rustgis_engine::render::take_approximations() {
+        if app.map.tile_errors.insert(format!("approximated\0{kind}")) {
             app.session.warn(e);
         }
     }
@@ -4991,6 +4996,10 @@ mod tile_redraw_tests {
         say_tile_error(&mut app.map.tile_errors, &mut app.session, "Tiles: 4 tiles left out: HTTP 500".into());
         say_tile_error(&mut app.map.tile_errors, &mut app.session, "Roads: 4 tiles left out: refused".into());
         assert_eq!(said(&app, mark).len(), 3, "{:?}", said(&app, mark));
+        // A layer's kinds joined in one error are each said once, under the layer.
+        let mark = app.session.notice_mark();
+        say_tile_error(&mut app.map.tile_errors, &mut app.session, "Tiles: 9 tiles left out: refused; sprite left out".into());
+        assert_eq!(said(&app, mark), ["Tiles: sprite left out"]);
     }
 
     /// What the map view's frames approximated is said once a project each (#2639).
@@ -5017,7 +5026,7 @@ mod tile_redraw_tests {
             super::say_approximations(&mut app);
         }
         let said: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(said.len() == 1 && said[0].starts_with("road: dashed lines are drawn solid"), "{said:?}");
+        assert!(said.len() == 1 && said[0].starts_with("road: 1 dashed line(s) drawn solid"), "{said:?}");
     }
 
     #[test]

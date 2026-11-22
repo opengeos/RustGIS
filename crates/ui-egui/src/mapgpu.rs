@@ -1214,8 +1214,7 @@ impl SceneBuffers {
             .map(|(name, spec, opacity)| match rustgis_engine::render::live_tiles(spec, *opacity, &view) {
                 Some(l) => {
                     pending |= l.pending;
-                    // One error a kind, each said once for the layer (see `say_tile_error`).
-                    for error in l.error.iter().flat_map(|e| e.split("; ")) {
+                    if let Some(error) = l.error {
                         tile_errors.push(format!("{name}: {error}"));
                     }
                     l.quads
