@@ -9024,6 +9024,35 @@ Elaboração: RustGIS",
         assert_eq!((0..y.saturating_sub(8)).map(|row| count(ink, row)).sum::<usize>(), 0, "no ink labels");
     }
 
+    /// A detailed scale bar's box (#1379) is the narrowest that draws the same bar with all it
+    /// has: its unit after the bar written in full, its label before zero, and nothing past the
+    /// box's side but its padding. A plain bar's is the one it always had.
+    #[test]
+    fn a_detailed_scale_bars_box_holds_all_it_draws() {
+        let mut bar = ElementKind::scale_bar(0);
+        if let ElementKind::ScaleBar { unit_label, unit_label_position, divisions_before_zero, .. } = &mut bar {
+            (*unit_label, *unit_label_position, *divisions_before_zero) = (Some("Kilometres".into()), UnitLabelPosition::AfterBar, 1);
+        }
+        let options = BarOptions::of(&bar).unwrap();
+        let w = scale_bar_box_width_pt(100.0, 300.0, &bar, false, 4.0).unwrap();
+        assert!(w < 300.0, "{w}");
+        let at = |w: f64| bar_layout(Rect::from_xywh(0.0, 0.0, w as f32, 60.0).unwrap(), 100.0, &options, 1.0, false).unwrap();
+        let (wide, narrow) = (at(300.0), at(w));
+        assert_eq!((narrow.total, narrow.divs, narrow.len), (wide.total, wide.divs, wide.len), "the same bar");
+        assert_eq!(narrow.unit.as_ref().map(|u| u.text.as_str()), Some("Kilometres"), "its unit in full");
+        assert!(f64::from(narrow.right) + 4.0 <= w + 1e-6, "{} in {w}", narrow.right);
+        // A little narrower, it would draw another bar or cut what it writes.
+        let less = at(w * 0.98);
+        let cut = less.total != wide.total || less.unit.as_ref().map(|u| u.text.as_str()) != Some("Kilometres");
+        assert!(cut || f64::from(less.right) + 4.0 > w * 0.98, "the narrowest");
+        let plain = ElementKind::scale_bar(0);
+        assert_eq!(
+            scale_bar_box_width_pt(100.0, 300.0, &plain, false, 4.0),
+            scale_bar_width_pt(100.0, 300.0, (ScaleUnits::Auto, 4, SCALE_BAR_TEXT_PT), false, 4.0)
+        );
+        assert_eq!(scale_bar_box_width_pt(0.0, 300.0, &bar, false, 4.0), None);
+    }
+
     /// A scale bar's labels at their text size (#2581): at 16 points their room over the bar and
     /// between them is twice the default's and the bar keeps its length and height; 8 points draws
     /// as the bar always did; the width a box needs counts its last label at that size.
