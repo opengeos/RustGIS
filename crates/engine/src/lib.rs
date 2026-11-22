@@ -394,6 +394,13 @@ fn clip(s: &str, n: usize) -> String {
 /// stays well within what a notice keeps.
 const NAMES_SAID: usize = 5;
 
+/// The first ten of `v` for a notice, separated by `; `, then how many more.
+pub(crate) fn listed(v: &[String]) -> String {
+    let more = v.len().saturating_sub(10);
+    let shown = v.iter().take(10).cloned().collect::<Vec<_>>().join("; ");
+    if more > 0 { format!("{shown}; and {more} more") } else { shown }
+}
+
 /// Layer names for a notice: the first [`NAMES_SAID`], each clipped, and how many more.
 fn names_said(names: &[String]) -> String {
     let shown: Vec<String> = names.iter().take(NAMES_SAID).map(|n| clip(n, 80)).collect();
@@ -2700,7 +2707,7 @@ impl Session {
                 }
                 if let Some(note) = layer.source.as_mut().and_then(|source| source.take_not_utf8()) {
                     not_utf8.push(notice_text::NoticeText::format(
-                        "{name}: some text values in it aren't valid UTF-8 (Load All Features counts them all); so far, {note}",
+                        "{name}: so far, {note} (Load All Features counts them all)",
                         [("name", layer.name.clone().into()), ("note", note.into())],
                     ));
                 }
@@ -2839,9 +2846,8 @@ impl Session {
     /// Says once a session that native HTTPS trusts the bundled Mozilla roots, as a Linux or BSD
     /// system with no CA certificates and no `SSL_CERT_FILE` or `SSL_CERT_DIR` makes it
     /// ([`rustgis_data::http::bundled_roots`]): the trust source was assumed, not the system's.
-    /// Checked after each command and each frame, as the clients are first made when a request is.
-    /// Says, once a session, that native HTTPS fell back to the bundled CA roots, if it did. Run
-    /// with [`Session::notice_landed_rasters`]; a reader of the notices that runs no command (the
+    /// Checked after each command and each frame (with [`Session::notice_landed_rasters`]), as the
+    /// clients are first made when a request is; a reader of the notices that runs no command (the
     /// Python package) calls it first, as a client made on a background thread chooses the trust.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn notice_trust(&mut self) {
@@ -2943,9 +2949,9 @@ impl Session {
     /// A notice about a file or database write that has committed, not a pending delivery or
     /// an in-memory edit. It follows the ordinary redaction, bounds and diagnostics path, but
     /// survives a later enclosing command's rollback.
-    pub(crate) fn notify_written(&mut self, text: impl Into<String>, error: bool) {
+    pub(crate) fn notify_written(&mut self, text: impl Into<String>) {
         let mark = self.notice_mark();
-        self.notify(text, error);
+        self.notify(text, false);
         self.retain_written_notices(mark);
     }
 
@@ -3229,11 +3235,6 @@ impl Session {
         }
         // Layers gone are forgotten, so the map stays as small as the project.
         self.unplaced_checked.retain(|id, _| seen.contains(id));
-        let listed = |v: &[String]| {
-            let more = v.len().saturating_sub(10);
-            let shown = v.iter().take(10).cloned().collect::<Vec<_>>().join("; ");
-            if more > 0 { format!("{shown}; and {more} more") } else { shown }
-        };
         if features > 0 {
             let text = format!(
                 "{features} feature(s) have a place that can't be given in longitude/latitude: the map and the globe draw them without it, and labels' lines, block diagrams and terrain water leave them out ({})",
