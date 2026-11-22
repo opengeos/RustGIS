@@ -30,6 +30,7 @@ commit, or the queue entry's parent), GH_TOKEN (read access to pull requests, us
 limit has risen), GITHUB_REPOSITORY, and PR_NUMBER or, in the merge queue, MERGE_GROUP_REF.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -100,8 +101,10 @@ def compare(path, base_text, head_text):
     try:
         base = parse(base_text, path == ROWS_FILE)
     except ValueError as error:
-        # The limits can't be compared, so a raise could hide behind this: it needs a maintainer's say.
-        return [(f"{path}: can't be read on the base ({error}), so its limits can't be compared", f"{path} unreadable on base")]
+        # The limits can't be compared, so a raise could hide behind this: it needs a maintainer's say,
+        # for the head as it is (its digest is in the token), not for whatever is pushed next.
+        digest = hashlib.sha256((head_text or "").encode("utf-8")).hexdigest()[:12]
+        return [(f"{path}: can't be read on the base ({error}), so its limits can't be compared", f"{path} unreadable on base, head {digest}")]
     if head is None:
         return [(f"{path}: deleted, but it holds {len(base)} limit(s) that only go down", f"{path} deleted")]
     problems = []

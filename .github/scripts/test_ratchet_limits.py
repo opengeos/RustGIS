@@ -71,7 +71,12 @@ class RatchetLimits(unittest.TestCase):
         self.assertEqual(len(self.problems(ROWS, "count\n")), 1)
         self.assertEqual(len(self.problems(ROWS, "count = nan\n")), 1)
         # An unreadable base can't be compared, so it needs a maintainer's say, not a pass.
-        self.assertEqual(self.tokens("count = many\n", ROWS), ["xtask/x.txt unreadable on base"])
+        self.assertEqual(len(self.tokens("count = many\n", ROWS)), 1)
+        # The approval is for the head it was given on: another head needs another line.
+        [first] = self.tokens("count = many\n", ROWS)
+        [second] = self.tokens("count = many\n", ROWS.replace("782", "900"))
+        self.assertTrue(first.startswith("xtask/x.txt unreadable on base, head ") and first != second)
+        self.assertEqual(self.tokens("count = many\n", ROWS), [first])
         # Nothing approves a head that doesn't parse, whatever the base is.
         self.assertEqual(self.tokens("count = many\n", "count = oops\n"), [None])
 
