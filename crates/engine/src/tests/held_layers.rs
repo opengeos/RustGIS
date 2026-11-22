@@ -2304,3 +2304,31 @@ fn a_held_layer_is_burned_in_its_own_system() {
     assert_eq!((g.transform.origin_x, g.transform.origin_y), (2_000_000.0, 5_401_410.0), "{:?}", g.transform);
     assert_eq!(a["cells"], 100, "{a}");
 }
+
+/// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,
+/// and says how many vertices it couldn't place there, left out of that box: a polygon held in UTM
+/// with a vertex far beyond any place UTM holds, burned onto a grid in degrees. With an extent
+/// given, the box isn't used, and nothing is said of it.
+#[test]
+fn rasterize_says_the_vertices_left_out_of_its_extent() {
+    let (x0, y0) = (784_000.0, 5_401_300.0);
+    let square: Vec<Coord> =
+        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect();
+    let far = vec![Coord::new(x0, y0), Coord::new(1e12, 1e12), Coord::new(x0, y0 + 500.0), Coord::new(x0, y0)];
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Plots", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square]]), Geometry::Polygon(vec![vec![far]])], UTM);
+    let left_out = "vertices that can't be placed in longitude/latitude were left out of the grid's extent";
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    let mark = s.notice_mark();
+    s.run("raster.rasterize", &json!({"layer": "Plots", "crs": "EPSG:4326", "cellSize": 0.001, "name": "A"})).unwrap();
+    let a = said(&s, mark);
+    assert!(a.iter().any(|t| t.contains(&format!("Plots: 1 {left_out}"))), "{a:?}");
+    let mark = s.notice_mark();
+    s.run(
+        "raster.rasterize",
+        &json!({"layer": "Plots", "crs": "EPSG:4326", "cellSize": 0.001, "extent": [12.8, 48.6, 12.9, 48.8], "name": "B"}),
+    )
+    .unwrap();
+    let b = said(&s, mark);
+    assert!(!b.iter().any(|t| t.contains(left_out)), "{b:?}");
+}

@@ -1034,7 +1034,12 @@ pub fn zonal_means_in(r: &Raster, from: Crs, bands: &[usize], rings: &[Vec<Coord
 
 /// The system a zone's rings are in, and how a raster's cells and the zone meet there: in
 /// longitude/latitude through the raster's transformer, or in a layer's own system
-/// ([`crate::tools::ToGrid`] both ways).
+/// ([`crate::tools::ToGrid`] both ways). A cell's centre goes into the zone's system as a point
+/// ([`crate::tools::ToGrid::place`]): a cell centre the zone's system can't hold is outside the
+/// zone, so it isn't counted. The zone's extent goes onto the raster's grid as a polygon's vertices do
+/// ([`crate::tools::ToGrid::vertex`]), Web Mercator taking a latitude past 85.05° as 85.05°, as
+/// it takes a place in longitude/latitude, so a zone reaching past it is still read within its
+/// window.
 pub(crate) enum ZoneIn {
     LonLat,
     Own { to_zone: Box<crate::tools::ToGrid>, to_grid: Box<crate::tools::ToGrid> },
@@ -1064,7 +1069,7 @@ impl ZoneIn {
     fn grid(&self, r: &Raster, c: Coord) -> Option<Coord> {
         match self {
             Self::LonLat => r.transformer().from_lonlat(c),
-            Self::Own { to_grid, .. } => to_grid.place(c),
+            Self::Own { to_grid, .. } => to_grid.vertex(c),
         }
     }
 }
