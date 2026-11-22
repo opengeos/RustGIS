@@ -2242,17 +2242,26 @@ struct BarFit {
 
 /// A scale bar of `before` divisions before zero and `after` after it, counting in a unit `unit_m`
 /// metres long, fitted to `room_m` ground metres by `fit`: the roundest length divided as asked
-/// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit
-/// (`AdjustDivision`), or the asked divisions each a round length (`AdjustWidth`). `None` when it
+/// (`AdjustDivisionValue`, the length [`bar_plan`] takes), as many round divisions as fit, at most
+/// ten (`AdjustDivision`), or the asked divisions each a round length (`AdjustWidth`). `None` when it
 /// draws none.
 fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usize) -> Option<BarFit> {
     let count = (before + after) as f64;
     let (total, after) = match fit {
         ScaleBarFit::AdjustDivisionValue => (rustgis_geom::nice_distance(room_m / unit_m), after),
         ScaleBarFit::AdjustDivision => {
-            let value = rustgis_geom::nice_distance(room_m / unit_m / count);
-            let fits = (room_m / unit_m / value + 1e-9).floor() - before as f64;
-            let after = fits.clamp(1.0, rustgis_map::layout::MAX_SCALE_DIVISIONS as f64) as usize;
+            let most = rustgis_map::layout::MAX_SCALE_DIVISIONS as f64;
+            let fits = |value: f64| (room_m / unit_m / value + 1e-9).floor() - before as f64;
+            // More than ten would fit: the next round division (1, 2, 5, 10 …) until ten do, so
+            // the bar fills its room as far as a round value allows rather than stopping short.
+            let mut value = rustgis_geom::nice_distance(room_m / unit_m / count);
+            for _ in 0..64 {
+                if !(fits(value) > most && value.is_finite() && value > 0.0) {
+                    break;
+                }
+                value = rustgis_geom::nice_distance(value * 2.5);
+            }
+            let after = fits(value).clamp(1.0, most) as usize;
             (value * (before + after) as f64, after)
         }
         ScaleBarFit::AdjustWidth => (rustgis_geom::nice_distance(room_m / unit_m / count) * count, after),
@@ -8656,6 +8665,10 @@ Elaboração: RustGIS",
         assert!((width(ScaleBarFit::AdjustDivisionValue) as i32 - 50).abs() <= 2, "a round 5 km in four 1.25 km divisions");
         assert!((width(ScaleBarFit::AdjustDivision) as i32 - 70).abs() <= 2, "seven round 1 km divisions");
         assert!((width(ScaleBarFit::AdjustWidth) as i32 - 40).abs() <= 2, "four 1 km divisions, narrower than the box");
+        // Ten asked: fifteen 0.5 km divisions would fit, so the division steps up to 1 km, seven.
+        let bar = BarOptions { units: ScaleUnits::Kilometers, fit: ScaleBarFit::AdjustDivision, divisions: 10, ..BarOptions::default() };
+        let (a, b) = marked_span(&draw_bar(&bar, 93), 37).unwrap();
+        assert!(((b - a) as i32 - 70).abs() <= 2, "seven 1 km divisions, not ten of 0.5 km: {}", b - a);
         // Extreme grounds, every fit, divisions before zero: never past the box, never empty.
         for ground in [1e-4, 0.37, 100.0, 1e5, 1e7] {
             for fit in ScaleBarFit::ALL {

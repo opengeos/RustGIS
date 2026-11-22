@@ -280,7 +280,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   or below), **Decimals** (Automatic, or 0 to 3 fixed with the thousands set apart; Automatic gives each
   label the decimals it needs, as before; the layout's decimal comma applies; `"auto"` or a number, as a chart's), a **Label size** (4 to 24 points, default 8) and a **Fit** for when round divisions
   don't fill the box: *Adjust division value* (the default) divides the roundest length that fits, so a
-  division may not be round; *Adjust number of divisions* keeps a round division and adds or drops divisions;
+  division may not be round; *Adjust number of divisions* keeps a round division and adds or drops divisions, at most ten, to fill the width;
   *Adjust width* keeps the divisions and draws the bar only as wide as they need
   (`"subdivisions":4,"divisionsBeforeZero":1,"labelPosition":"below","unitLabel":"Kilometres","unitLabelPosition":"afterBar","decimals":1,"labelSize":9,"fit":"adjustWidth"`).
   Each change is one undo step, and a value set back to its default is no longer saved. A project that uses
