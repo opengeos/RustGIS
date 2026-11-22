@@ -227,7 +227,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   the left and right; the bottom and left to start with), the side labels horizontal or
   running along the edge, and their **Label size** (`"labelSize"`, 4 to 100 points, 8 by default;
   their room from the frame's edge and a measured grid's MGRS square names follow in proportion,
-  labels that would then touch are left out, and `null` gives the default back). From a command:
+  labels that would then touch, or that reach further in than the frame is across, are left out,
+  and `null` gives the default back). From a command:
   `layout.addElement={"kind":"grid","step":0.5,"style":"ticks","format":"dms","edges":["top","bottom","left","right"],"labelOrientation":"vertical"}`
   (given again, it changes only the options it names), or `layout.update` with
   `"grid": {…}` (`false` removes the grid). On a map on the globe the lines are drawn on the
@@ -278,10 +279,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   length and height and moves down, and right, in its box to make room for larger labels, which
   reach no further past its top and left than the default size's, and `null` gives the default
   back) (`"style":"line","units":"miles","divisions":2,"color":"#1F4E79","textSize":12`). A box too
-  small for its labels and bar (too short, which draws the bar below it, or too narrow for its last
-  label), or a label that runs off the page, is said when its size, text size, units, divisions or
-  details change or its frame is drawn at another scale, and an export reports it as cut off, as it
-  does a text. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
+  small for its labels and bar (too short, which draws the bar below it, too narrow for its last
+  label, or so narrow that a larger last label runs into the first), or a label that runs off the
+  page, is said when its place, size, text size, units, divisions or details change or its frame is
+  drawn at another scale, and an export reports it as cut off, as it does a text. A locked scale bar
+  refuses a new text size, `null` included. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
   division after zero cut into unlabelled parts), **Divisions before zero** (0 to 2, labelled with
   negatives), **Label position** (above or below the bar), a **Unit label** (the unit's name as
   printed: its abbreviation unless set; untick **Show unit label** for none) and its **Unit label

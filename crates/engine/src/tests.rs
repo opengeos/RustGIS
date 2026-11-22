@@ -2,6 +2,11 @@ use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
 
+#[path = "tests/formats_out.rs"]
+mod formats_out;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/held_databases.rs"]
+mod held_databases;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
@@ -417,36 +422,76 @@ fn shared_step_measures_the_layers_a_step_changes() {
     let mut s = world();
     let spec = *s.registry.get("map.zoomFull").unwrap();
     let (count, ds) = (s.map().layers.len(), s.map().layers[0].dataset.clone());
-    let quiet_layer = |s: &mut Session| -> crate::CmdResult {
+    let add_layer = |s: &mut Session| -> crate::CmdResult {
         crate::cmd::layer::add_dataset(s, ds);
         Ok(Value::Null)
     };
-    s.shared_step(&spec, quiet_layer).unwrap();
+    s.shared_step(&spec, add_layer).unwrap();
     assert_eq!((s.shared_steps.edited, s.map().layers.len()), (true, count + 1));
 }
 
+/// A command declared as not mutating that adds a layer, marks the project unsaved, makes an edit
+/// on the way and then fails: none of it excuses the layer it added.
+fn quiet_layer() -> crate::CommandSpec {
+    crate::CommandSpec::new("test.quietLayer", "Quiet layer", "Test", |s, _| {
+        let ds = s.map().layers[0].dataset.clone();
+        crate::cmd::layer::add_dataset(s, ds);
+        s.mark_unsaved();
+        s.guarded("Rename", true, |s| {
+            s.map_mut().name = "Renamed on the way".into();
+            Ok(Value::Null)
+        })?;
+        Err("failed after adding it".into())
+    })
+    .view()
+}
+
 /// A command declared as not mutating that adds, removes or reorders layers fails the tests
-/// (#2645), by itself or as a script's line; an edit it makes on the way, marking the project
-/// unsaved or failing afterwards doesn't excuse it. A layer's name, look or features aren't
-/// measured.
+/// (#2645). A layer's name, look or features aren't measured.
 #[test]
 #[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
 fn a_command_that_changes_layers_must_say_it_mutates() {
     let mut s = world();
-    s.registry.commands.push(
-        crate::CommandSpec::new("test.quietLayer", "Quiet layer", "Test", |s, _| {
-            let ds = s.map().layers[0].dataset.clone();
-            crate::cmd::layer::add_dataset(s, ds);
-            s.mark_unsaved();
-            s.guarded("Rename", true, |s| {
-                s.map_mut().name = "Renamed on the way".into();
-                Ok(Value::Null)
-            })?;
-            Err("failed after adding it".into())
-        })
-        .view(),
-    );
+    s.registry.commands.push(quiet_layer());
     let _ = s.run("test.quietLayer", &Value::Null);
+}
+
+/// The same as a task's step, whose panics the task catches: the check is raised when the command
+/// the user ran returns, not inside the step (#2696).
+#[test]
+#[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
+fn a_task_step_that_changes_layers_must_say_it_mutates() {
+    let mut s = world();
+    s.registry.commands.push(quiet_layer());
+    let steps = json!([{"title": "Quiet", "command": "test.quietLayer", "params": {}}]);
+    s.run("task.new", &json!({"name": "Quiet", "steps": steps})).unwrap();
+    let _ = s.run("task.run", &json!({"task": "Quiet"}));
+}
+
+/// And as a script's line (#2696).
+#[test]
+#[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
+fn a_script_line_that_changes_layers_must_say_it_mutates() {
+    let mut s = world();
+    s.registry.commands.push(quiet_layer());
+    let _ = s.run("script.run", &json!({"script": "test.quietLayer {}"}));
+}
+
+/// And as a line of a script an agent or the assistant runs, which doesn't go through
+/// `command_epilogue` (#2696).
+#[test]
+#[should_panic(expected = "test.quietLayer doesn't mutate but changed the layers")]
+fn a_scoped_script_line_that_changes_layers_must_say_it_mutates() {
+    struct Live;
+    impl crate::policy::Revocation for Live {
+        fn allows(&self, _: crate::policy::Effects) -> bool {
+            true
+        }
+    }
+    let mut s = world();
+    s.registry.commands.push(quiet_layer());
+    let scope = crate::policy::Scope::agent(crate::policy::AgentAccess::Full, true, "declared", None, std::sync::Arc::new(Live));
+    let _ = s.run_scoped(scope, &crate::policy::Call::script("test.quietLayer {}"));
 }
 
 /// A task's steps are counted as a script's lines: an undo step only when one edited (#2621).
@@ -12291,6 +12336,25 @@ fn publication_layouts_fit_their_pages() {
     assert!(widths.iter().any(|w| (w - first).abs() > 0.5), "the box changed: {first} mm, then {widths:?}");
     // Its bar's labels at 40 points need a wider box for the last one, and 8 gives the width back.
     assert!(widths[2] > widths[1] + 0.5 && (widths[3] - widths[1]).abs() < 1e-9, "{widths:?}");
+    // A text naming the frame's centre and map follows them: a new centre or map, each measured
+    // from its own, leaves the box as wide as it is automatically then.
+    let scale_text = id_in(&s, "Scale");
+    s.run("map.new", &json!({"name": "The second map, longer"})).unwrap();
+    let mut followed = Vec::new();
+    for (text, change) in [
+        ("{scale} {center}", json!({"element": frame, "center": [-120.5, -45.25]})),
+        ("{scale} {map}", json!({"element": frame, "map": "The second map, longer"})),
+    ] {
+        s.run("layout.update", &json!({"layout": li, "element": scale_text, "text": text})).unwrap();
+        let mut change = change;
+        change["layout"] = json!(li);
+        let before = width(&s);
+        s.run("layout.update", &change).unwrap();
+        let auto = crate::cmd::layout::scale_box_auto(&s, li).unwrap();
+        assert!((width(&s) - auto).abs() < 1e-9, "{change}: {} mm, {auto} mm automatic", width(&s));
+        followed.push(width(&s) - before);
+    }
+    assert!(followed.iter().all(|d| d.abs() > 0.1), "each changed the box: {followed:?}");
     // A long title wraps within the frame, and pushes the map down; the result names every
     // element for layout.update.
     let r = s.run("layout.publication", &json!({"extent": piaui, "title": long})).unwrap();
@@ -14465,6 +14529,14 @@ fn scale_bars_and_grids_take_a_label_size() {
         s.run(change.0, &change.1).unwrap();
         assert!(said(&s, mark).contains("its box is too small"), "{change:?}: {}", said(&s, mark));
     }
+    // Moved off the page's edge, its labels are told too; a locked bar takes no size, null too.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": bar, "x": 250})).unwrap();
+    assert!(said(&s, mark).contains("runs off the page"), "{}", said(&s, mark));
+    s.run("layout.update", &json!({"element": bar, "x": 10, "locked": true})).unwrap();
+    assert!(s.run("layout.update", &json!({"element": bar, "textSize": null})).is_err());
+    assert_eq!(bar_size(&s, bar), 40.0, "the locked bar keeps its size");
+    s.run("layout.update", &json!({"element": bar, "locked": false})).unwrap();
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": bar, "textSize": null})).unwrap();
     assert_eq!(said(&s, mark), "", "the default fits");
@@ -26332,6 +26404,18 @@ fn geopackage_omission_counts_match_unregistered_tables_with_bounded_kinds() {
         "{}",
         notice.text
     );
+    let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
+    for stream in [false, true] {
+        for selected in [false, true] {
+            let mut uploaded = Session::new(Project::default());
+            let params = json!({"stream": stream, "layer": selected.then_some("A")});
+            crate::cmd::layer::add_source(&mut uploaded, &params, crate::cmd::layer::Origin::Bytes("kinds.gpkg", bytes.clone()), None)
+                .unwrap();
+            assert_eq!(uploaded.map().layers.len(), 1);
+            let notes: Vec<_> = uploaded.notices.iter().filter(|n| n.text.contains("the first of 2 feature tables")).collect();
+            assert_eq!(notes.len(), usize::from(!selected), "stream={stream}, selected={selected}");
+        }
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -44401,7 +44485,9 @@ fn geopackage_edits_save_back() {
     {
         let r2 = row_of(&s, 2);
         let l = s.map_mut().layer_mut(id).unwrap();
-        l.dataset.features[r2].geometry = Some(Geometry::Line(vec![moved.clone()]));
+        // The layer holds the table's own Web Mercator coordinates.
+        assert_eq!(l.dataset.coord_crs(), Crs::from_epsg(3857).unwrap());
+        l.dataset.features[r2].geometry = Some(Geometry::Line(vec![moved.iter().copied().map(rustgis_geom::lonlat_to_merc).collect()]));
         l.touch_geometry();
     }
     let r3 = row_of(&s, 3);
@@ -50034,7 +50120,8 @@ fn a_pdf_is_added_back_as_a_raster() {
         // An address without a file name: a PDF by its contents.
         let (sniffed, ..) = crate::cmd::raster::download_page("https://example.org/download?id=42", &asked, &bytes).unwrap();
         assert!(rustgis_data::raster::is_pdf_name(&sniffed), "{sniffed}");
-        let drawn = crate::cmd::raster::read_download_page(&name, &bytes, page.as_deref(), place).unwrap();
+        let drawn =
+            crate::cmd::raster::read_download_shared_page(&name, std::sync::Arc::new(bytes.clone()), page.as_deref(), place).unwrap();
         let id = s.download_started();
         assert!(s.download_landed_page(id, bytes, drawn));
         let r = s.run("layer.addDownload", &json!({"id": id, "url": url, "layer": "2"})).unwrap();
