@@ -356,6 +356,7 @@ pub(super) fn long_commands(boundaries: bool) {
         ("dggsGrid", json!({"system": "S2", "resolution": 4, "area": "Input Layer", "input": "Countries"})),
         ("dggsGrid", json!({"system": "Hexagon", "resolution": 3, "area": "Input Layer", "input": "Countries"})),
         ("dggsAggregate", json!({"system": "H3", "input": "Cities", "resolution": 3})),
+        ("dggsGrid", json!({"system": "H3", "resolution": 3, "area": "Input Layer", "input": "Countries"})),
     ];
     for (tool, params) in &tools {
         exercise(&s, tool, params, Kind::Tool, &dir.0, boundaries);

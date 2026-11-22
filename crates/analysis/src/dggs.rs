@@ -183,10 +183,10 @@ fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
     (out.len() >= 4).then_some(out)
 }
 
-/// An open ring with its corners on a pole (S2's face cells have them, and A5's cells round a
-/// pole: without this, a point near the pole fell outside the outline of the cell holding it) made one a map of
-/// longitudes and latitudes draws: such a corner has no longitude of its own, and the pole there
-/// is a line, from the longitude of the corner before it to that of the one after.
+/// An open ring with corners on a pole (S2's face cells have them, and so do A5's cells round a
+/// pole) as a map of longitudes and latitudes draws it. Such a corner has no longitude of its own,
+/// so without this a point near the pole fell outside the outline of its cell: the pole becomes a
+/// line along it, from the longitude of the corner before to that of the one after.
 fn pole_as_line(open: Vec<Coord>) -> Vec<Coord> {
     let n = open.len();
     if n < 3 || open.iter().all(|c| c.y.abs() < 90.0 - 1e-9) {
@@ -857,7 +857,9 @@ impl<'a> Grid<'a> {
         };
         let rings: Vec<Vec<Coord>> = side
             .iter()
-            .map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>())
+            // Only where the plane takes a corner back where it was: one it folds (a transverse
+            // Mercator far from its meridian) would cover the wrong cells.
+            .map(|r| r.iter().map(|c| self.plane.holding_point(*c)).collect::<Option<Vec<Coord>>>())
             .collect::<Option<_>>()
             .ok_or_else(reach)?;
         let Some(outer) = rings.first() else { return Ok(()) };
@@ -1068,7 +1070,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
     let mut out = Dataset::new(output_name(p, &format!("{} r{res}", system.name())), GeometryType::Polygon, g.fields());
     let (mut total, mut undrawn) = (0.0, 0usize);
     let mut pace = Pace::default();
-    for c in &cells {
+    control::begin(cells.len());
+    for (i, c) in cells.iter().enumerate() {
+        control::reached(i);
         if pace.stop(64) {
             return Err(control::Cancelled.into());
         }
@@ -1080,6 +1084,7 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
             None => undrawn += 1,
         }
     }
+    control::finish();
     let n = out.features.len();
     let mut msg = match system {
         System::A5 => format!("A5 grid: {n} cells at resolution {res}, each {:.6} km²", a5::cell_area(res) / 1e6),
@@ -1141,7 +1146,9 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
     let mut outside = 0usize;
     control::check()?;
     let mut pace = Pace::default();
-    for r in rows {
+    control::begin(rows.len());
+    for (i, r) in rows.into_iter().enumerate() {
+        control::reached(i);
         if pace.stop(16) {
             return Err(control::Cancelled.into());
         }
@@ -1175,6 +1182,7 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
             }
         }
     }
+    control::finish();
     if by.is_empty() {
         let why = if outside > 0 { format!(": {}", left_out(outside, "point", "position")) } else { String::new() };
         return Err(format!("{name} has no points to count{why}"));
@@ -1473,9 +1481,12 @@ mod tests {
         fn projection_name(&self) -> Option<String> {
             Some("Plate Carrée".into())
         }
-        // It reaches 175° east and west, as a projection of part of the world does.
+        // It reaches 175° east and west, as a projection of part of the world does, and folds
+        // past it, as a transverse Mercator far from its meridian does: a finite point, but not
+        // where the place is.
         fn project(&self, c: Coord) -> Option<Coord> {
-            (c.x.abs() <= 175.0).then(|| Coord::new(c.x * M, c.y * M))
+            let x = if c.x.abs() <= 175.0 { c.x } else { c.x.signum() * (350.0 - c.x.abs()) };
+            c.is_finite().then(|| Coord::new(x * M, c.y * M))
         }
         fn unproject(&self, m: Coord) -> Option<Coord> {
             (m.x.abs() <= 175.0 * M).then(|| Coord::new(m.x / M, m.y / M))
