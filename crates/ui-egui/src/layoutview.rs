@@ -1571,23 +1571,9 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
             return;
         }
         // Its labels' points; their room from the edge and MGRS squares' names follow (#2581).
-        let input_label = ui.label(tl!("Label size"));
-        let mut pt = g.label_size;
-        let drag = Dragged::lend(ui, key("labelSize"), &mut pt);
-        let r = ui
-            .add(
-                egui::DragValue::new(&mut pt)
-                    .update_while_editing(false)
-                    .range(LAYOUT_TEXT_SIZE)
-                    .speed(0.1)
-                    .max_decimals(1)
-                    .suffix(" pt"),
-            )
-            .labelled_by(input_label.id);
-        if drag.settled(ui, &r, &mut pt) && (pt - g.label_size).abs() > 1e-6 {
+        if let Some(pt) = text_size_row(ui, tl!("Label size"), key("labelSize"), g.label_size) {
             set(app, json!({"labelSize": pt}));
         }
-        ui.end_row();
         if measured {
             let input_label = ui.label(tl!("MGRS labels"));
             let mut mgrs = g.mgrs;
@@ -1861,23 +1847,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                         ui.end_row();
                         // Its names' and labels' points; the title, rows and swatches follow (#2581).
-                        let input_label = ui.label(tl!("Text size"));
-                        let mut pt = *text_size;
-                        let drag = Dragged::lend(ui, drag_key("textSize"), &mut pt);
-                        let r = ui
-                            .add(
-                                egui::DragValue::new(&mut pt)
-                                    .update_while_editing(false)
-                                    .range(LAYOUT_TEXT_SIZE)
-                                    .speed(0.1)
-                                    .max_decimals(1)
-                                    .suffix(" pt"),
-                            )
-                            .labelled_by(input_label.id);
-                        if drag.settled(ui, &r, &mut pt) && (pt - text_size).abs() > 1e-6 {
+                        if let Some(pt) = text_size_row(ui, tl!("Text size"), drag_key("textSize"), *text_size) {
                             update(app, json!({"textSize": pt}));
                         }
-                        ui.end_row();
                     }
                     ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse, .. } => {
                         let input_label = ui.label(tl!("Title"));
@@ -2066,23 +2038,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                         ui.end_row();
                         // Its labels' points; their room follows, the bar keeping its size (#2581).
-                        let input_label = ui.label(tl!("Text size"));
-                        let mut pt = *text_size;
-                        let drag = Dragged::lend(ui, drag_key("textSize"), &mut pt);
-                        let r = ui
-                            .add(
-                                egui::DragValue::new(&mut pt)
-                                    .update_while_editing(false)
-                                    .range(LAYOUT_TEXT_SIZE)
-                                    .speed(0.1)
-                                    .max_decimals(1)
-                                    .suffix(" pt"),
-                            )
-                            .labelled_by(input_label.id);
-                        if drag.settled(ui, &r, &mut pt) && (pt - text_size).abs() > 1e-6 {
+                        if let Some(pt) = text_size_row(ui, tl!("Text size"), drag_key("textSize"), *text_size) {
                             update(app, json!({"textSize": pt}));
                         }
-                        ui.end_row();
                         // The fill is the alternating bar's light divisions: the other styles draw none.
                         let colors = [("Color", "color", *color), ("Fill", "fill", *fill)];
                         let shown = if *style == ScaleBarStyle::Alternating { 2 } else { 1 };
@@ -2749,6 +2707,20 @@ fn first_ink(background: Option<&Background>) -> rustgis_engine::map::Rgba {
     let shown = Color32::from_rgb(over(fill.r()), over(fill.g()), over(fill.b()));
     let white = rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF);
     if crate::theme::contrast(shown, Color32::WHITE) > crate::theme::contrast(shown, crate::theme::c32(INK)) { white } else { INK }
+}
+
+/// A row of a layout element's text size in points, within [`LAYOUT_TEXT_SIZE`], labelled `label`
+/// (#2581): the size it settles on when it differs from `current`.
+fn text_size_row(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, key: egui::Id, current: f64) -> Option<f64> {
+    let input_label = ui.label(label);
+    let mut pt = current;
+    let drag = Dragged::lend(ui, key, &mut pt);
+    let r = ui
+        .add(egui::DragValue::new(&mut pt).update_while_editing(false).range(LAYOUT_TEXT_SIZE).speed(0.1).max_decimals(1).suffix(" pt"))
+        .labelled_by(input_label.id);
+    let settled = drag.settled(ui, &r, &mut pt) && (pt - current).abs() > 1e-6;
+    ui.end_row();
+    settled.then_some(pt)
 }
 
 #[cfg(test)]

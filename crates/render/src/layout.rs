@@ -9,7 +9,7 @@ use rustgis_data::query::{Env, SeriesPage};
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
     ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout, LineHead, MAX_LEGEND_COLUMNS,
-    Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarStyle, ScaleUnits, TextAlign, TickSide, frame_camera,
+    Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarStyle, ScaleUnits, TextAlign, TickSide, frame_camera, layout_text_scale,
 };
 use rustgis_map::symbology::LegendEntry;
 use rustgis_map::{Map, Rgba};
@@ -290,6 +290,24 @@ pub fn text_loss(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, id: u
     losses(layout, maps, dpi, info, Some(id)).pop()
 }
 
+/// Whether a scale bar `e` drawn in `r` puts a label's ink past the page's `size` in pixels,
+/// its labels placed by [`bar_layout`] as the drawing places them: their line's middle at
+/// `label_y`, each centred on its advance as `text_at` draws it. `None` when it draws no bar.
+fn bar_labels_cut(layout: &Layout, maps: &[Map], e: &rustgis_map::layout::Element, r: Rect, ppp: f32, size: (f32, f32)) -> Option<bool> {
+    let ElementKind::ScaleBar { frame, units, divisions, text_size, .. } = &e.kind else { return None };
+    let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(*frame)?.kind else { return None };
+    let m = maps.get(map_index(maps, map)?)?;
+    let ground = m.ground_res_at(&frame_camera(m, *center, *scale, *bearing, *pitch));
+    let bar = bar_layout(r, ground, (*units, *divisions, *text_size), f64::from(ppp), layout.decimal_comma)?;
+    let (w, h) = size;
+    Some(bar.labels.iter().any(|(x, s)| {
+        let pen = x - text::measure(s, bar.px / 1.33, false) / 2.0;
+        text::styled_bounds(s, bar.px, text::Face::default(), 0.0).is_some_and(|ink| {
+            pen + ink.left() < 0.0 || bar.label_y + ink.top() < 0.0 || pen + ink.right() > w || bar.label_y + ink.bottom() > h
+        })
+    }))
+}
+
 /// The texts cut off, of the whole page or of the element `only`.
 fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option<u32>) -> Vec<TextLoss> {
     let (w, h, k) = page_geometry(layout, dpi);
@@ -306,21 +324,9 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
         .filter_map(|e| {
             // At least a pixel each way, as the page draws it.
             let r = Rect::from_xywh((e.x * k) as f32, (e.y * k) as f32, ((e.w * k) as f32).max(1.0), ((e.h * k) as f32).max(1.0))?;
-            // A scale bar's labels where it draws them ([`bar_layout`]), at their size (#2581).
-            if let ElementKind::ScaleBar { frame, units, divisions, text_size, .. } = &e.kind {
-                let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &layout.element(*frame)?.kind else { return None };
-                let m = maps.get(map_index(maps, map)?)?;
-                let ground = m.ground_res_at(&frame_camera(m, *center, *scale, *bearing, *pitch));
-                let bar = bar_layout(r, ground, (*units, *divisions, *text_size), f64::from(ppp), layout.decimal_comma)?;
-                let face = text::Face::default();
-                let cut = bar.labels.iter().any(|(x, y, s)| {
-                    // Centred on `x`, about the line's middle at `y`, as `text_at` draws it.
-                    text::styled_bounds(s, bar.px, face, 0.0).is_some_and(|ink| {
-                        let half = ink.width() / 2.0;
-                        x - half < 0.0 || y + ink.top() < 0.0 || x + half > w as f32 || y + ink.bottom() > h as f32
-                    })
-                });
-                return cut.then(|| TextLoss {
+            // A scale bar's labels where it draws them, at their size (#2581).
+            if matches!(e.kind, ElementKind::ScaleBar { .. }) {
+                return bar_labels_cut(layout, maps, e, r, ppp, (w as f32, h as f32)).filter(|cut| *cut).map(|_| TextLoss {
                     id: e.id,
                     name: e.name.clone(),
                     left_out: 0,
@@ -1725,7 +1731,7 @@ fn draw_grid(pm: &mut Canvas, map: &Map, view: &View, g: &Grid, comma: bool) -> 
     let ppp = view.pixels_per_point as f32;
     // Its labels' size against the default (#2581): their room from the edge and between them,
     // and MGRS squares' names, follow in proportion, a point at the default being `unit` pixels.
-    let k = (rustgis_map::layout::layout_text_in_range(g.label_size, GRID_LABEL_PT) / GRID_LABEL_PT) as f32;
+    let k = layout_text_scale(g.label_size, GRID_LABEL_PT) as f32;
     let unit = ppp * k;
     let (w, h) = (view.width, view.height);
     // On a globe, through the globe as the frame draws it (#2337): through the flat camera the
@@ -2138,11 +2144,6 @@ const BAR_SHARE: f64 = 0.85;
 /// size, as their room does (#2581).
 const BAR_INSET: f32 = 2.0;
 
-/// A scale bar's labels' size against their default (#2581), its `text_size` brought into range.
-fn bar_text_k(text_size: f64) -> f64 {
-    rustgis_map::layout::layout_text_in_range(text_size, SCALE_BAR_TEXT_PT) / SCALE_BAR_TEXT_PT
-}
-
 /// What a scale bar counts: its whole length in its unit, that unit in metres and its abbreviation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BarPlan {
@@ -2175,7 +2176,7 @@ fn bar_label(total: f64, divisions: usize, i: usize, abbr: &str, comma: bool) ->
 /// that bar; `None` when it draws none.
 pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, usize, f64), comma: bool, pad_pt: f64) -> Option<f64> {
     let (units, divisions, text_size) = bar;
-    let k = bar_text_k(text_size);
+    let k = layout_text_scale(text_size, SCALE_BAR_TEXT_PT);
     let plan = bar_plan(ground_per_pt, width_pt, units)?;
     let divisions = divisions.clamp(1, rustgis_map::layout::MAX_SCALE_DIVISIONS);
     let len = plan.total * plan.unit_m / ground_per_pt;
@@ -2190,17 +2191,16 @@ pub fn scale_bar_width_pt(ground_per_pt: f64, width_pt: f64, bar: (ScaleUnits, u
 
 /// Where a scale bar draws its bar and labels, from [`bar_layout`].
 struct BarLayout {
-    divisions: usize,
-    /// Where the bar starts, its top, its length and a division's, and its height, in pixels.
+    /// Where the bar starts, its top, its length and its height, in pixels.
     x0: f32,
     y0: f32,
     len: f32,
-    seg: f32,
     bar_h: f32,
-    /// Its labels' size in pixels, and each drawn: its centre and text. One that would touch its
-    /// neighbour is left out, never the ends.
+    /// Its labels' size in pixels, the middle of their line, and each drawn: its centre across
+    /// and its text. One that would touch its neighbour is left out, never the ends.
     px: f32,
-    labels: Vec<(f32, f32, String)>,
+    label_y: f32,
+    labels: Vec<(f32, String)>,
 }
 
 /// Where a scale bar in `r` draws, at `ground_per_pt` ground metres a point of paper, in `units`
@@ -2208,7 +2208,7 @@ struct BarLayout {
 /// ([`losses`]) take the same, so they agree. `None` when it draws no bar.
 fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f64, comma: bool) -> Option<BarLayout> {
     let (units, divisions, text_size) = bar;
-    let k = bar_text_k(text_size) as f32;
+    let k = layout_text_scale(text_size, SCALE_BAR_TEXT_PT) as f32;
     let divisions = divisions.clamp(1, rustgis_map::layout::MAX_SCALE_DIVISIONS);
     let BarPlan { total, unit_m, abbr } = bar_plan(ground_per_pt, f64::from(r.width()) / ppp, units)?;
     let len = (total * unit_m / ground_per_pt * ppp) as f32;
@@ -2217,7 +2217,7 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
     let seg = len / divisions as f32;
     // Labels at the divisions, the last with the unit, over the bar; their room follows their size.
     let px = SCALE_BAR_TEXT_PT as f32 * k * 1.33 * ppp as f32;
-    let ty = y0 - px * 0.7;
+    let label_y = y0 - px * 0.7;
     let gap = 3.0 * k * ppp as f32;
     let all: Vec<(f32, String)> = (0..=divisions).map(|i| (x0 + seg * i as f32, bar_label(total, divisions, i, abbr, comma))).collect();
     let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
@@ -2230,9 +2230,9 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
             continue;
         }
         right = x + half(&s);
-        labels.push((x, ty, s));
+        labels.push((x, s));
     }
-    Some(BarLayout { divisions, x0, y0, len, seg, bar_h, px, labels })
+    Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels })
 }
 
 /// A scale bar filling most of the element's width, in `units`, with `divisions` labelled steps,
@@ -2250,11 +2250,13 @@ fn scale_bar(
 ) {
     let (units, divisions, style, text_size) = bar;
     let (dark, light) = colors;
-    let Some(BarLayout { divisions, x0, y0, len, seg, bar_h, px, labels }) =
+    let Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels }) =
         bar_layout(r, ground_per_pt, (units, divisions, text_size), ppp, comma)
     else {
         return;
     };
+    let divisions = divisions.clamp(1, rustgis_map::layout::MAX_SCALE_DIVISIONS);
+    let seg = len / divisions as f32;
     let line = Stroke { width: 0.6 * ppp as f32, ..Stroke::default() };
     let stroke = |pm: &mut Canvas, pts: &[(f32, f32)], w: &Stroke| {
         let mut pb = PathBuilder::new();
@@ -2297,8 +2299,8 @@ fn scale_bar(
             }
         }
     }
-    for (x, y, s) in &labels {
-        text::text_at(pm, s, *x, *y, px, dark, false, text::Align::Center, false);
+    for (x, s) in &labels {
+        text::text_at(pm, s, *x, label_y, px, dark, false, text::Align::Center, false);
     }
 }
 
@@ -2466,7 +2468,7 @@ struct LegendOptions<'a> {
 /// gaps (#2581): 1 at [`rustgis_map::layout::LEGEND_TEXT_PT`], as legends have always been drawn.
 /// A point symbol keeps the size the map draws it at, so a legend of sizes still matches the map.
 fn legend_size(text_size: f64) -> f32 {
-    (rustgis_map::layout::layout_text_in_range(text_size, rustgis_map::layout::LEGEND_TEXT_PT) / rustgis_map::layout::LEGEND_TEXT_PT) as f32
+    layout_text_scale(text_size, rustgis_map::layout::LEGEND_TEXT_PT) as f32
 }
 
 impl<'a> LegendOptions<'a> {
@@ -8371,7 +8373,7 @@ Elaboração: RustGIS",
         assert_eq!((small.len, small.bar_h, small.y0), (big.len, big.bar_h, big.y0), "the bar keeps its size");
         assert!((big.px - 2.0 * small.px).abs() < 1e-3, "{} against {}", big.px, small.px);
         assert!((big.x0 - 2.0 * BAR_INSET - (small.x0 - BAR_INSET)).abs() < 1e-3, "its inset follows");
-        let over = |b: &BarLayout| b.y0 - b.labels[0].1;
+        let over = |b: &BarLayout| b.y0 - b.label_y;
         assert!((over(&big) - 2.0 * over(&small)).abs() < 1e-3, "its room over the bar follows");
         // The default draws the bar as before: an 8-point label 1.33 pixels a point, 2 pixels in.
         assert_eq!((small.px, small.x0), (8.0 * 1.33, BAR_INSET));
@@ -8381,7 +8383,7 @@ Elaboração: RustGIS",
         // Labels that would touch at the larger size are left out, never the ends.
         let crowded = bar_layout(Rect::from_xywh(0.0, 0.0, 120.0, 80.0).unwrap(), 100.0, (ScaleUnits::Auto, 10, 40.0), 1.0, false).unwrap();
         assert!(crowded.labels.len() < 11, "{} labels", crowded.labels.len());
-        assert_eq!(crowded.labels.first().map(|l| l.2.as_str()), Some("0"));
+        assert_eq!(crowded.labels.first().map(|l| l.1.as_str()), Some("0"));
         let width = |pt| scale_bar_width_pt(100.0, 300.0, (ScaleUnits::Auto, 4, pt), false, 4.0).unwrap();
         assert!(width(40.0) > width(SCALE_BAR_TEXT_PT), "{} against {}", width(40.0), width(SCALE_BAR_TEXT_PT));
     }

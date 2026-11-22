@@ -866,6 +866,13 @@ pub fn layout_text_in_range(pt: f64, default: f64) -> f64 {
     finite_or(pt, default).clamp(*LAYOUT_TEXT_SIZE.start(), *LAYOUT_TEXT_SIZE.end())
 }
 
+/// How many times its `default` a text of `pt` points is drawn, `pt` brought into range as
+/// [`layout_text_in_range`] does: what a legend's rows, a scale bar's or a grid's labels and
+/// their room are scaled by (#2581).
+pub fn layout_text_scale(pt: f64, default: f64) -> f64 {
+    layout_text_in_range(pt, default) / default
+}
+
 fn legend_text_pt() -> f64 {
     LEGEND_TEXT_PT
 }
@@ -1508,15 +1515,11 @@ impl ElementKind {
         }
     }
 
-    /// Whether it is a legend whose text isn't the default size (#2581).
-    pub fn has_custom_legend_text(&self) -> bool {
-        matches!(self, ElementKind::Legend { text_size, .. } if !is_legend_text_pt(text_size))
-    }
-
-    /// Whether it is a scale bar whose labels, or a map frame whose grid's labels, aren't the
-    /// default size (#2581).
-    pub fn has_custom_scale_or_grid_text(&self) -> bool {
+    /// Whether it is a legend whose text, a scale bar whose labels or a map frame whose grid's
+    /// labels aren't their default size (#2581).
+    pub fn has_custom_text_size(&self) -> bool {
         match self {
+            ElementKind::Legend { text_size, .. } => !is_legend_text_pt(text_size),
             ElementKind::ScaleBar { text_size, .. } => !is_scale_bar_text_pt(text_size),
             ElementKind::MapFrame { grid: Some(g), .. } => !is_grid_label_pt(&g.label_size),
             _ => false,
@@ -3646,12 +3649,12 @@ mod tests {
         };
         let old: Layout = serde_json::from_str(&page(r#"{"frame":1,"title":"L"}"#)).unwrap();
         assert_eq!(size(&old), LEGEND_TEXT_PT);
-        assert!(!old.elements[1].kind.has_custom_legend_text());
+        assert!(!old.elements[1].kind.has_custom_text_size());
         assert!(!serde_json::to_string(&old).unwrap().contains("text_size"), "the default isn't written");
         let mut big: Layout = serde_json::from_str(&page(r#"{"frame":1,"title":"L","text_size":1e9}"#)).unwrap();
         assert_eq!(big.clamp().elements_adjusted, 1);
         assert_eq!(size(&big), *LAYOUT_TEXT_SIZE.end());
-        assert!(big.elements[1].kind.has_custom_legend_text());
+        assert!(big.elements[1].kind.has_custom_text_size());
         let saved = serde_json::to_string(&big).unwrap();
         assert!(saved.contains(r#""text_size":100.0"#), "{saved}");
         assert_eq!(serde_json::from_str::<Layout>(&saved).unwrap(), big);
@@ -3672,7 +3675,7 @@ mod tests {
         };
         let old: Layout = serde_json::from_str(&page(r#"{"step":10,"color":[0,0,0,255]}"#, r#"{"frame":1}"#)).unwrap();
         assert_eq!(sizes(&old), (GRID_LABEL_PT, SCALE_BAR_TEXT_PT));
-        assert!(old.elements.iter().all(|e| !e.kind.has_custom_scale_or_grid_text()));
+        assert!(old.elements.iter().all(|e| !e.kind.has_custom_text_size()));
         let text = serde_json::to_string(&old).unwrap();
         assert!(!text.contains("text_size") && !text.contains("label_size"), "the defaults aren't written: {text}");
         assert_eq!(ElementKind::scale_bar(1), old.elements[1].kind, "a new bar is the default one");
@@ -3685,7 +3688,7 @@ mod tests {
             .unwrap();
             assert_eq!(l.clamp().elements_adjusted, 2, "{bad}");
             assert_eq!(sizes(&l), (grid, bar), "{bad}");
-            assert!(l.elements.iter().all(|e| e.kind.has_custom_scale_or_grid_text()), "{bad}");
+            assert!(l.elements.iter().all(|e| e.kind.has_custom_text_size()), "{bad}");
             assert!(l.clamp().is_empty(), "{bad}: a repaired layout needs nothing more");
         }
         let mut sized: Layout =

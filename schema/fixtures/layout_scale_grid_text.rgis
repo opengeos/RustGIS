@@ -2,7 +2,7 @@
   "format": 2,
   "name": "Scale bar and grid text sizes",
   "requires": [
-    "layout-scale-grid-text"
+    "layout-text-size"
   ],
   "active_map": 0,
   "maps": [

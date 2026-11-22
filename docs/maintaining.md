@@ -218,22 +218,15 @@ too, since an older reader warns that it ignores the key; `"border": null` only 
 back and needs nothing. A saved `layout.import` whose `text` has such a frame requires it as well.
 Layout files are not covered, as for backgrounds (#2277).
 
-Projects with a legend whose text isn't the default 9 points (`text_size` on a legend) require
-`layout-legend-text`, so an older reader refuses them instead of drawing the legend at 9 points
-and saving it again without its size (#2581). A saved `layout.addElement` for a legend or
-`layout.update` that gives `textSize` another size requires it too; `null` or 9 only give the
-default and need nothing. A saved `layout.import` whose `text` has such a legend requires it as
-well. Layout files are not covered, as for backgrounds (#2277).
-
-Projects with a scale bar or a grid whose labels aren't the default 8 points (`text_size` on a
-scale bar, `label_size` on a frame's grid) require `layout-scale-grid-text`, so an older reader
-refuses them instead of drawing those labels at 8 points and saving them again without their size
-(#2581). A saved `layout.addElement` for a scale bar with `textSize` or a grid with `labelSize`
-of another size, a `layout.update` with such a `textSize` or `"grid": {"labelSize": …}`, and a
-`layout.import` whose `text` has such an element require it too; `null` or 8 need nothing. A
-saved `layout.update` isn't told which element it changes, so its `textSize` requires both this
-and `layout-legend-text` unless it is the other's default: 9 requires this one only, and 8 the
-legend's only.
+Projects with a legend, a scale bar or a grid whose text isn't its default size (`text_size` on
+a legend, 9 points by default, or on a scale bar, 8; `label_size` on a frame's grid, 8) require
+`layout-text-size`, so an older reader refuses them instead of drawing that text at the default
+and saving it again without its size (#2581). A saved `layout.addElement` that gives a legend or
+a scale bar `textSize`, or a grid `labelSize`, of another size requires it too, and so does a
+`layout.update` with `"grid": {"labelSize": …}` of another size; `null` or the default need
+nothing. A saved `layout.update` isn't told which element it changes, so any `textSize` but
+`null` requires it there. A saved `layout.import` whose `text` has such an element requires it
+as well. Layout files are not covered, as for backgrounds (#2277).
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,
