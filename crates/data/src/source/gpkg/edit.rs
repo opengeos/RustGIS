@@ -608,22 +608,20 @@ impl EditTable {
         };
         let id = || row.map(|(k, _)| k.cast_signed().to_string()).unwrap_or_else(|| "new".into());
         let unconverted = || DataError::Format(format!("row {}: its geometry can't be converted to {}", id(), self.src.reproject.label()));
+        // A coordinate that isn't a number can't be stored (it reads back as an empty or
+        // unreadable geometry), nor converted: an infinite one could convert to a finite pole.
+        let mut finite = true;
+        g.for_each_coord(|c| finite &= c.is_finite());
+        if !finite {
+            return Err(DataError::Format(format!(
+                "row {}: its geometry has a coordinate that isn't a number, so it can't be saved",
+                id()
+            )));
+        }
         let native = match how {
             Held::LonLat => self.src.reproject.to_native(g).ok_or_else(unconverted)?,
             Held::Other { to_table, .. } => to_table.whole_geometry(g).ok_or_else(unconverted)?,
-            // In the table's own system, as conversion would: a coordinate that isn't a number
-            // can't be stored, since it reads back as an empty or unreadable geometry.
-            Held::Own => {
-                let mut finite = true;
-                g.for_each_coord(|c| finite &= c.is_finite());
-                if !finite {
-                    return Err(DataError::Format(format!(
-                        "row {}: its geometry has a coordinate that isn't a number, so it can't be saved",
-                        id()
-                    )));
-                }
-                g.clone()
-            }
+            Held::Own => g.clone(),
         };
         let body = match (self.geometry_type.as_str(), &native) {
             ("POINT", Geometry::Point(_) | Geometry::MultiPoint(_))
@@ -1866,6 +1864,12 @@ mod tests {
         edits.updates[0].0.geometry = Some(line(f64::NAN));
         let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
         let e = table.save(&edits, &[], std::iter::empty(), &revision, crs).unwrap_err().to_string();
+        assert!(e.contains("row 1") && e.contains("isn't a number"), "{e}");
+        assert_eq!(blob_at(&path, 1), stored, "nothing written");
+        // In another system too, before converting: an infinite coordinate could convert to a pole.
+        let mut edits = update(&table, None);
+        edits.updates[0].0.geometry = Some(Geometry::Point(Coord::new(0.0, f64::INFINITY)));
+        let e = table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap_err().to_string();
         assert!(e.contains("row 1") && e.contains("isn't a number"), "{e}");
         assert_eq!(blob_at(&path, 1), stored, "nothing written");
         let edits = update(&table, None);

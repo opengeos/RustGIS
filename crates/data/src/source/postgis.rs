@@ -1440,35 +1440,35 @@ impl PostgisSource {
         };
         let (to_held, to_table) =
             if other { (Some(self.held.to(held).map_err(failed)?), Some(held.to(self.held).map_err(failed)?)) } else { (None, None) };
-        // Each edited geometry checked before anything is written: one that can't be converted to
-        // the system the table is read in, or one in that system with a coordinate that isn't a
-        // number, refuses the save. Nothing is kept: it is converted again as it is written.
+        // Each edited geometry checked before anything is written, in every system: one with a
+        // coordinate that isn't a number, or one that can't be converted to the system the table
+        // is read in, refuses the save. Nothing is kept: it is converted again as it is written.
         // Longitude/latitude goes to the server as before.
         let what = |n: usize, update: bool, f: &Feature| {
             if update { format!("row {}", f.id.cast_signed()) } else { format!("new feature {}", n + 1) }
         };
-        if own {
+        {
             let updates = edits.updates.iter().map(|(f, _)| f).enumerate().map(|(n, f)| (true, n, f));
             for (update, n, f) in updates.chain(edits.inserts.iter().enumerate().map(|(n, f)| (false, n, f))) {
                 crate::progress::check()?;
                 let Some(g) = &f.geometry else { continue };
-                if let Some(to) = &to_table {
-                    if to.whole_geometry(g).is_none() {
-                        return Err(DataError::Format(format!(
-                            "{}: its geometry can't be converted to {}",
-                            what(n, update, f),
-                            self.held.label()
-                        )));
-                    }
-                } else {
-                    let mut finite = true;
-                    g.for_each_coord(|c| finite &= c.is_finite());
-                    if !finite {
-                        return Err(DataError::Format(format!(
-                            "{}: its geometry has a coordinate that isn't a number, so it can't be saved",
-                            what(n, update, f)
-                        )));
-                    }
+                // Checked before converting: an infinite coordinate could convert to a pole.
+                let mut finite = true;
+                g.for_each_coord(|c| finite &= c.is_finite());
+                if !finite {
+                    return Err(DataError::Format(format!(
+                        "{}: its geometry has a coordinate that isn't a number, so it can't be saved",
+                        what(n, update, f)
+                    )));
+                }
+                if let Some(to) = &to_table
+                    && to.whole_geometry(g).is_none()
+                {
+                    return Err(DataError::Format(format!(
+                        "{}: its geometry can't be converted to {}",
+                        what(n, update, f),
+                        self.held.label()
+                    )));
                 }
             }
         }
@@ -1837,8 +1837,8 @@ mod tests {
 
     /// A table in a system RustGIS converts itself is written as the layer holds it, in that
     /// system; a layer held in longitude/latitude (saved by an older release) is converted by the
-    /// server as before; edits in another system are refused, and converted to longitude/latitude
-    /// in place by [`Edits::to_lonlat`].
+    /// server as before; edits in another system are converted to the table's as they are
+    /// written, and refused when one can't be converted or has a coordinate that isn't a number.
     #[test]
     fn edits_are_written_in_the_system_the_layer_holds_them_in() {
         let mut held = source("GEOMETRY");
@@ -1858,11 +1858,16 @@ mod tests {
         // table's, a new feature named by its place, not its id; in the table's own, a coordinate
         // that isn't a number refused.
         let point = |x, y| Some(crate::Geometry::Point(rustgis_geom::Coord::new(x, y)));
-        let bad = Edits { inserts: vec![Feature { id: 7, geometry: point(f64::NAN, 0.0), attrs: Vec::new() }], ..Edits::default() };
-        let e = held.save(&bad, &[], Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
+        let far = Edits { inserts: vec![Feature { id: 7, geometry: point(1e20, 1e20), attrs: Vec::new() }], ..Edits::default() };
+        let e = held.save(&far, &[], Crs::from_epsg(32632).unwrap()).unwrap_err().to_string();
         assert!(e.starts_with("new feature 1:") && e.contains("EPSG:2056"), "{e}");
-        let e = held.save(&bad, &[], lv95).unwrap_err().to_string();
-        assert!(e.starts_with("new feature 1:") && e.contains("isn't a number"), "{e}");
+        // A coordinate that isn't a number, in the table's system or another (where an infinite
+        // one could convert to a pole), refused before converting.
+        let bad = Edits { inserts: vec![Feature { id: 7, geometry: point(0.0, f64::INFINITY), attrs: Vec::new() }], ..Edits::default() };
+        for crs in [lv95, Crs::WebMercator, Crs::LonLat] {
+            let e = held.save(&bad, &[], crs).unwrap_err().to_string();
+            assert!(e.starts_with("new feature 1:") && e.contains("isn't a number"), "{crs:?}: {e}");
+        }
     }
 
     #[test]

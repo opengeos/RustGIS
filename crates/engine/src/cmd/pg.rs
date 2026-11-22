@@ -127,7 +127,7 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
         // In the system the layer holds its geometry in: the table's own, longitude/latitude for
         // a layer a project saved before RustGIS kept a table's own coordinates, or another (the
         // column given another SRID since), converted straight to the table's.
-        let held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
+        let held = s.map().layer(id).ok_or("no such layer")?.dataset.coord_crs();
         let saved = match src.save(&edits, &fields, held).map_err(err)? {
             Ok(saved) => saved,
             Err(conflicts) => {
