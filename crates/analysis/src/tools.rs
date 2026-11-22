@@ -5189,13 +5189,6 @@ fn in_projected(crs: Crs, to: &Transformer, c: Coord) -> Option<Coord> {
     held.then(|| to.from_lonlat(c)).flatten().filter(|p| p.is_finite() && to.to_lonlat(*p).is_some_and(|back| (back.y - c.y).abs() < 1e-4))
 }
 
-/// Places in a run's own system converted to a grid's system `crs`, as [`in_projected`] takes
-/// them from longitude/latitude: a place `crs` can't hold is `None`. From longitude/latitude, that
-/// conversion; from the grid's own system, the place as it is; from another, through
-/// longitude/latitude for the check, then the direct operation between the two where it lands
-/// near that ([`Reprojection::point_near`]), so a datum pair takes its best operation.
-///
-/// [`Reprojection::point_near`]: rustgis_data::raster::Reprojection::point_near
 /// Which system a place failed in ([`ToGrid::try_place`]).
 pub(crate) enum Miss {
     /// The run's own: it can't give the place in longitude/latitude.
@@ -5204,6 +5197,13 @@ pub(crate) enum Miss {
     Grid,
 }
 
+/// Places in a run's own system converted to a grid's system `crs`, as [`in_projected`] takes
+/// them from longitude/latitude: a place `crs` can't hold is `None`. From longitude/latitude, that
+/// conversion; from the grid's own system, the place as it is; from another, through
+/// longitude/latitude for the check, then the direct operation between the two where it lands
+/// near that ([`Reprojection::point_near`]), so a datum pair takes its best operation.
+///
+/// [`Reprojection::point_near`]: rustgis_data::raster::Reprojection::point_near
 pub(crate) struct ToGrid {
     crs: Crs,
     same: bool,
@@ -5225,8 +5225,9 @@ impl ToGrid {
         self.try_place(c).ok()
     }
 
-    /// [`ToGrid::place`], with whose system failed: the run's, which can't give the place in
-    /// longitude/latitude (or a place that isn't finite), or the grid's, which can't hold it.
+    /// [`ToGrid::place`], saying which system failed: the run's, which can't give the place in
+    /// longitude/latitude (a place that isn't finite counts as such, in any run), or the grid's,
+    /// which can't hold it.
     pub(crate) fn try_place(&self, c: Coord) -> Result<Coord, Miss> {
         if !c.is_finite() {
             return Err(Miss::Source);
