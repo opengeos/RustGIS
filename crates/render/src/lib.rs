@@ -4266,6 +4266,7 @@ fn render_frame(
     };
     // A screen scene keeps each layer's mesh for the next of the same view, and takes those still
     // standing (see `layer_meshes`): the map's projection, which the meshes are in, when it does.
+    layer_meshes::let_go();
     let mesh_projection = (gpu && !full_res_rasters && matches!(labels_to, Labels::Own)).then(|| map.projection.clone());
     // The meshes this scene takes and keeps stay kept while it is drawn.
     let _mesh_scene = mesh_projection.is_some().then(layer_meshes::Scene::begin);

@@ -185,6 +185,17 @@ impl Scene {
     }
 }
 
+/// Lets go of the meshes of layers gone (removed, their map or project closed, their rows edited
+/// since: what they were made of no longer exists), which no scene can take again. Every frame
+/// calls it, on the GPU or not, so a closed map's meshes go with the next frame drawn.
+pub(crate) fn let_go() {
+    with_meshes(|m| {
+        if m.kept.iter().any(|k| !k.look.rows_held()) {
+            m.kept.retain(|k| k.look.rows_held());
+        }
+    });
+}
+
 impl Drop for Scene {
     fn drop(&mut self) {
         let n = self.0;
@@ -565,5 +576,24 @@ mod tests {
         keep_at(&other, 0.0, 400);
         keep_at(&other, 1.0, 400);
         assert_eq!((has(&la, 0.0), has(&other, 0.0)), (Some(500), Some(400)));
+    }
+
+    /// A map closed lets go of its layers' meshes with the next frame drawn, of any map and on
+    /// any renderer; a layer edited lets go of the mesh of its rows before the edit.
+    #[test]
+    fn a_closed_map_lets_go_of_its_meshes() {
+        clear();
+        let (mut m, a, _, view) = two_layers();
+        let _ = scene(&mut m, &view);
+        let both = kept_bytes();
+        assert!(both > 0);
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == a) {
+            l.dataset.push(Some(square(0.2, 0.5)), vec![]);
+        }
+        let _ = crate::render(&mut Map::new("Other"), &view);
+        assert!(kept_bytes() < both, "the edited layer's old mesh went");
+        drop(m);
+        let _ = crate::render(&mut Map::new("Other"), &view);
+        assert_eq!(kept_bytes(), 0);
     }
 }
