@@ -773,7 +773,8 @@ impl<'a> Grid<'a> {
         let mut cells: HashSet<u64> = HashSet::new();
         let mut work = Work::default();
         for side in shapes.into_iter().flat_map(on_the_globe_sides) {
-            work.spend(0, side.iter().map(Vec::len).sum(), res)?;
+            // Weighted as A5's polygons are: H3's tiler is one step per polygon.
+            work.spend(0, side.iter().map(Vec::len).sum::<usize>().saturating_mul(64), res)?;
             match self.system {
                 System::H3 => self.h3_cover(&side, center, &mut cells)?,
                 System::S2 => self.s2_cover(&side, center, &mut cells, &mut work)?,
