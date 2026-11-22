@@ -407,8 +407,6 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
         _ => (hostport, None),
     };
     let key = |kv: &str| kv.split('=').next().unwrap_or("").to_ascii_lowercase().replace('_', "-");
-    let param =
-        |name: &str| query.split('&').filter_map(|kv| kv.split_once('=')).find(|(k, _)| key(k) == name).map(|(_, v)| percent_decode(v));
     // The certificate choice, read as the engine reads it: `Some` for a value it takes.
     let trust = |kv: &str| match key(kv).as_str() {
         "trust-server-certificate" | "trustservercertificate" => {
@@ -424,14 +422,23 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     // for Test to say why) is kept as written.
     let options =
         query.split('&').filter(|kv| !kv.is_empty() && key(kv) != "instance" && trust(kv).is_none()).collect::<Vec<_>>().join("&");
-    let instance = param("instance").filter(|v| !v.is_empty());
+    // The last `instance` is the one, as the engine reads it.
+    let instance = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .filter(|(k, _)| key(k) == "instance")
+        .map(|(_, v)| percent_decode(v))
+        .next_back()
+        .filter(|v| !v.is_empty());
     let trust_cert = query.split('&').filter_map(trust).next_back().unwrap_or(false);
     let mut server = percent_decode(host);
+    let named_instance = instance.is_some();
     if let Some(instance) = instance {
         server.push('\\');
         server.push_str(&instance);
     }
-    if let Some(port) = port.filter(|p| *p != "1433") {
+    // 1433, the default port, is left out; with an instance a port given is the route, and kept.
+    if let Some(port) = port.filter(|p| *p != "1433" || named_instance) {
         server.push(',');
         server.push_str(port);
     }
@@ -2268,6 +2275,14 @@ mod tests {
         assert_eq!(f("mssql://sde@gis-db/utility?instance=GIS"), Some(("gis-db\\GIS".into(), Some("sde".into()), "utility".into(), false)));
         assert_eq!(f("mssql://gis-db:1444/util%20ity"), Some(("gis-db,1444".into(), None, "util ity".into(), false)));
         assert_eq!(f("mssql://gis-db:1433/u"), Some(("gis-db".into(), None, "u".into(), false)));
+        // With an instance, a port given is the route and is kept, even 1433; the last
+        // `instance` is the one, as the engine reads it.
+        assert_eq!(f("mssql://gis-db:1433/u?instance=GIS"), Some((r"gis-db\GIS,1433".into(), None, "u".into(), false)));
+        assert_eq!(f("mssql://gis-db/u?instance=OLD&instance=GIS"), Some((r"gis-db\GIS".into(), None, "u".into(), false)));
+        let st = State { server: r"gis-db\GIS,1433".into(), ..gdb_form("windows") };
+        let composed = form_address(&st).unwrap();
+        assert_eq!(composed, "mssql://gis-db:1433/utility?instance=GIS");
+        assert_eq!(parse_mssql(&composed).unwrap().server, r"gis-db\GIS,1433");
         assert_eq!(f("postgres:host=x"), None);
         // The scheme is read without case, as the engine reads it.
         assert_eq!(f(" MSSQL://gis-db/utility "), Some(("gis-db".into(), None, "utility".into(), false)));
