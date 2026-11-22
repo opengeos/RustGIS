@@ -241,12 +241,12 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             let kv = conninfo(head);
             // What QGIS always writes and RustGIS reads or needn't.
             const READ_OR_HARMLESS: [&str; 7] = ["dbname", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity"];
-            let ignored = kv
-                .iter()
-                .filter(|(k, _)| !READ_OR_HARMLESS.iter().any(|r| r.eq_ignore_ascii_case(k)))
-                .take(32)
-                .map(|(k, v)| noted_option(&format!("{k}={v}")))
-                .collect();
+            let ignored = named_options(
+                kv.iter()
+                    .filter(|(k, _)| !READ_OR_HARMLESS.iter().any(|r| r.eq_ignore_ascii_case(k)))
+                    .map(|(k, v)| noted_option(&format!("{k}={v}"))),
+                0,
+            );
             match (kv.iter().find(|(k, _)| k == "dbname"), table_of(head)) {
                 (Some((_, db)), Some(t)) => Source::File { path: absolute(db, dir), layer: Some(t), subset, ignored },
                 _ => Source::Other { provider: provider.into() },
@@ -516,13 +516,14 @@ fn file(datasource: &str, dir: &str) -> Source {
     let mut parts = datasource.split('|');
     let path = parts.next().unwrap_or_default().trim();
     let (mut layer, mut subset, mut ignored) = (None, None, Vec::new());
-    // Every part is read for the layer and the filter; at most 32 others are kept for the note.
+    // Every part is read for the layer and the filter; at most 32 others are named in the note,
+    // the rest counted.
     for p in parts {
         if let Some(v) = p.strip_prefix("layername=") {
             layer = Some(v.to_string());
         } else if let Some(v) = p.strip_prefix("subset=") {
             subset = Some(v.to_string()).filter(|s| !s.trim().is_empty());
-        } else if !p.trim().is_empty() && p.trim() != "layerid=0" && ignored.len() < 32 {
+        } else if !p.trim().is_empty() && p.trim() != "layerid=0" {
             // (layerid=0 is the first layer, which is what opens.)
             ignored.push(noted_option(p.trim()));
         }
@@ -531,7 +532,24 @@ fn file(datasource: &str, dir: &str) -> Source {
     if layer.is_some() {
         ignored.retain(|o: &String| !o.starts_with("layerid="));
     }
-    Source::File { path: absolute(path, dir), layer, subset, ignored }
+    Source::File { path: absolute(path, dir), layer, subset, ignored: named_options(ignored.into_iter(), 0) }
+}
+
+/// At most 32 of a file source's unread `options`, as its note names them, and the rest, with
+/// `unread` more the source holds past what was read, counted in a last entry ("and 3 more").
+fn named_options(options: impl Iterator<Item = String>, unread: usize) -> Vec<String> {
+    let (mut named, mut more) = (Vec::new(), unread);
+    for o in options {
+        if named.len() < 32 {
+            named.push(o);
+        } else {
+            more += 1;
+        }
+    }
+    if more > 0 {
+        named.push(format!("and {more} more"));
+    }
+    named
 }
 
 /// A source option as the import notes it: with its value only for the options known to carry
@@ -1193,7 +1211,12 @@ mod tests {
         // The layer and the filter are read past the options kept for the note.
         let many = format!("./m.gpkg|{}|layername=late|subset=a = 1", vec!["x=1"; 40].join("|"));
         let Source::File { layer, subset, ignored, .. } = read("ogr", &many, dir) else { panic!() };
-        assert_eq!((layer.as_deref(), subset.as_deref(), ignored.len()), (Some("late"), Some("a = 1"), 32));
+        assert_eq!((layer.as_deref(), subset.as_deref(), ignored.len()), (Some("late"), Some("a = 1"), 33));
+        assert_eq!(ignored.last().map(String::as_str), Some("and 8 more"), "past 32, the rest counted");
+        let many =
+            format!("dbname='/a.sqlite' {} table=\"t\" (geom) sql=", (0..40).map(|i| format!("o{i}=1")).collect::<Vec<_>>().join(" "));
+        let Source::File { ignored, .. } = read("spatialite", &many, dir) else { panic!() };
+        assert_eq!((ignored.len(), ignored.last().map(String::as_str)), (33, Some("and 8 more")), "{ignored:?}");
         assert_eq!(
             read("gdal", "GPKG:./m.gpkg:relief", dir),
             Source::File { path: "/data/project/m.gpkg".into(), layer: Some("relief".into()), subset: None, ignored: Vec::new() }

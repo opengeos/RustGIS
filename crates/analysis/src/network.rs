@@ -46,6 +46,25 @@ struct Network {
     adj: Vec<Vec<Edge>>,
     segs: Vec<Segment>,
     skipped_segments: usize,
+    /// Lines whose cost times a segment's length is past the largest number: closed, as a
+    /// search would never take an edge of infinite cost.
+    overflowing: usize,
+}
+
+/// Whether a segment of a line in `parts` costs no finite number at `weight` a metre. Segments
+/// left out for their coordinates don't count.
+fn cost_overflows(parts: &[Vec<Coord>], weight: f64) -> bool {
+    // No segment is longer than half the Earth's circumference: a weight finite at that length
+    // is finite on every segment, so the segments are measured only past it.
+    if (weight * 2.1e7).is_finite() {
+        return false;
+    }
+    parts.iter().flat_map(|part| part.windows(2)).any(|w| match (w.first(), w.get(1)) {
+        (Some(a), Some(b)) if a.is_finite() && b.is_finite() && a.y.abs() <= 90.0 && b.y.abs() <= 90.0 => {
+            !(wgs84_distance_m(*a, *b) * weight).is_finite()
+        }
+        _ => false,
+    })
 }
 
 impl Network {
@@ -53,6 +72,7 @@ impl Network {
     fn build(ds: &Dataset, rows: &[usize], cost_field: Option<usize>) -> Result<Self, String> {
         let route_error = |reason, skipped| route_error(ds, reason, skipped);
         let mut skipped_segments = 0;
+        let mut overflowing = 0;
         let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
         let mut nodes: Vec<Coord> = Vec::new();
         let mut adj: Vec<Vec<Edge>> = Vec::new();
@@ -77,6 +97,10 @@ impl Network {
                 Some(Some(_)) => continue,
                 _ => 1.0,
             };
+            if cost_overflows(parts, weight) {
+                overflowing += 1;
+                continue;
+            }
             for part in parts {
                 for w in part.windows(2) {
                     if pace.stop(4096) {
@@ -109,7 +133,7 @@ impl Network {
             return Err(route_error("no usable network remains".into(), skipped_segments));
         }
         crate::control::finish();
-        Ok(Self { nodes, adj, segs, skipped_segments })
+        Ok(Self { nodes, adj, segs, skipped_segments, overflowing })
     }
 
     /// Heap storage retained by the cache, including spare capacity in every adjacency list.
@@ -487,6 +511,12 @@ impl Graph {
     /// Segments left out of the network for invalid coordinates.
     pub(crate) fn skipped_segments(&self) -> usize {
         self.0.skipped_segments
+    }
+
+    /// Lines left out of the network as their cost times a segment's length is past the largest
+    /// number.
+    pub(crate) fn overflowing(&self) -> usize {
+        self.0.overflowing
     }
 
     /// Segment `i`, in the order the lines and their vertices were read; None past the last.

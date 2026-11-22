@@ -277,13 +277,20 @@ fn hostile_files_are_refused_or_bounded() {
     for i in 0..(MAX_NOTES + 500) {
         r.approximated("a", format!("note {i}"));
     }
-    assert_eq!(r.notes.len(), MAX_NOTES);
+    // Those past it are counted in one closing note, after the kept ones.
+    assert_eq!(r.notes.len(), MAX_NOTES + 1);
+    let last = r.notes.last().unwrap();
+    assert_eq!((last.text.as_str(), last.kind, last.layer.as_str()), ("501 more note(s) not listed", NoteKind::Skipped, ""));
     r.approximated("a", "note 7");
     r.approximated("b", "note 7");
     r.skipped("a", "note 7");
     let at = r.notes.iter().position(|n| n.text == "note 7").unwrap();
     assert_eq!((r.notes[at].count, r.notes[at].kind), (2, NoteKind::Approximated));
     assert!(!r.notes.iter().any(|n| n.layer == "b"), "past the cap, a new note isn't kept");
+    assert_eq!(r.notes.last().map(|n| n.text.as_str()), Some("503 more note(s) not listed"));
+    let mut few = Report::default();
+    few.skipped("a", "one");
+    assert!(!few.notes.iter().any(|n| n.text.contains("not listed")), "under the cap, nothing is counted apart");
 }
 
 #[test]

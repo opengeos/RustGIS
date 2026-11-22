@@ -810,6 +810,8 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     // The mapping's own where it is of the same field, else the field's range.
     let had = l.size_by.as_ref().filter(|h| l.dataset.field_index(&h.field) == Some(fi));
     let (min, max) = (min.or(had.map(|h| h.min)), max.or(had.map(|h| h.max)));
+    // Both bounds read from the field: one with a single value has no range to scale over.
+    let both_read = min.is_none() && max.is_none();
     let range = if min.is_none() || max.is_none() {
         // A streamed layer holds the view's features only, so their range would be the view's.
         if l.is_streamed() {
@@ -824,6 +826,7 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
         }
         match ahead {
             Some(a) if a.field == fi && a.dataset.fields == l.dataset.fields && a.dataset.features.shares(&l.dataset.features) => a.range?,
+            Some(a) if a.field != fi => return Err("the range read was for another field: ask again".into()),
             Some(_) => return Err("the layer changed while its size range was read: ask again".into()),
             None => size_range(&l.dataset, fi)?,
         }
@@ -832,6 +835,9 @@ fn size_by(s: &mut Session, p: &Value) -> CmdResult {
     };
     let min = min.or(range.map(|r| r.0)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
     let max = max.or(range.map(|r| r.1)).ok_or_else(|| format!("'{field}' has no numeric values: give min and max"))?;
+    if max <= min && both_read {
+        return Err(format!("'{field}' has one value ({min}): give min and max"));
+    }
     if max <= min {
         return Err(format!("max ({max}) must be above min ({min})"));
     }
@@ -3505,6 +3511,7 @@ pub(crate) fn gdal_parts(mut converted: Vec<rustgis_data::source::gdal::Converte
             path: c.path,
             name: c.name,
             unprojected: c.unprojected,
+            zm_dropped: false,
             origin: ConvertedOrigin::Gdal(rustgis_map::source::GdalOrigin {
                 path: original.to_string(),
                 layer: c.layer,
@@ -4264,6 +4271,11 @@ pub(crate) fn duckdb_parts(
     if out.skipped > 0 {
         s.notify(format!("{name}: {} rows without a geometry were left out", out.skipped), false);
     }
+    // Z and M values are dropped as DuckDB writes the result: one notice for all its parts.
+    let zm = out.parts.iter().fold(0u64, |n, p| n.saturating_add(p.zm_dropped));
+    if zm > 0 {
+        s.notify(format!("{name}: {}", rustgis_data::zm_note(Some(zm))), false);
+    }
     let mixed = out.parts.len() > 1;
     out.parts.sort_by_key(|p| bottom_first(p.family));
     out.parts
@@ -4274,6 +4286,7 @@ pub(crate) fn duckdb_parts(
             // A geometry that says no coordinate system is usually longitude/latitude: only
             // coordinates past it are pointed out (in add_converted).
             unprojected: false,
+            zm_dropped: part.zm_dropped > 0,
             origin: ConvertedOrigin::Duckdb(origin(part.family)),
         })
         .collect()
@@ -4286,6 +4299,9 @@ pub(crate) struct Converted {
     name: String,
     /// Its coordinates are the source's own, in a coordinate system it doesn't say.
     unprojected: bool,
+    /// The conversion dropped Z or M values (said as it ran), kept with the layer so an export
+    /// says so too.
+    zm_dropped: bool,
     origin: ConvertedOrigin,
 }
 
@@ -4345,6 +4361,7 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
         for id in r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()) {
             if let Some(l) = s.map_mut().layer_mut(id) {
                 l.dataset.source = Some(original.to_string());
+                l.dataset.zm_dropped |= c.zm_dropped;
                 if let Some(src) = &mut l.source {
                     match &c.origin {
                         ConvertedOrigin::Gdal(g) => src.gdal = Some(g.clone()),
@@ -6938,7 +6955,7 @@ fn square_labels_follow_removal(s: &mut Session, names: &[String]) {
     if !squared.is_empty() {
         let (count, names) = (squared.len(), squared.join(", "));
         s.notify(
-            format!("Labels: {count} perpendicular labels' line layer(s) {names} removed, so their labels are placed as auto until a layer of that name comes back"),
+            format!("Labels: the line layer(s) {names} that perpendicular labels turn to ({count}) were removed; those labels are placed as auto until a layer of that name comes back"),
             false,
         );
     }

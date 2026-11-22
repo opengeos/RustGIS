@@ -80,6 +80,14 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
         }
     }
     let graph = Graph::of(ds, &rows, cost_field)?;
+    if graph.overflowing() > 0 {
+        let field = cost_field.and_then(|fi| ds.fields.get(fi)).map_or("", |f| f.name.as_str());
+        notes.push(format!(
+            "{tool}: {} line(s) of '{}' cost so much in {field} that a segment's cost is past the largest number, and are closed",
+            graph.overflowing(),
+            ds.name
+        ));
+    }
     if graph.skipped_segments() > 0 {
         notes.push(format!(
             "{tool}: {} segment(s) of '{}' with invalid coordinates were left out of the network",
@@ -696,6 +704,18 @@ mod tests {
         assert!(r.messages.iter().any(|m| m.contains("1 line(s) of 'roads' have no number in cost")), "{:?}", r.messages);
         assert!(
             r.messages.iter().any(|m| m.contains("1 line(s) of 'roads' cost zero or less (or no finite number) in cost, and are closed")),
+            "{:?}",
+            r.messages
+        );
+        assert!(!r.messages.iter().any(|m| m.contains("past the largest number")), "{:?}", r.messages);
+        // A cost so large its segments' costs overflow closes the line too, counted apart.
+        let mut huge = roads();
+        huge.features[3].attrs[0] = Value::Float(1e306);
+        let inputs = map(vec![huge, points("shops", &[Some(c(0.005, 0.0))])]);
+        let r = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "5", "costField": "cost"})).unwrap();
+        assert!(
+            r.messages.iter().any(|m| m
+                .contains("1 line(s) of 'roads' cost so much in cost that a segment's cost is past the largest number, and are closed")),
             "{:?}",
             r.messages
         );

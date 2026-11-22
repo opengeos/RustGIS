@@ -56,6 +56,9 @@ pub struct Report {
     /// thousands of different notes, and a repeat is found without going through them all.
     #[serde(skip)]
     index: HashMap<(String, NoteKind, String), usize>,
+    /// Different notes past [`MAX_NOTES`], not kept but counted in a last note.
+    #[serde(skip)]
+    more: usize,
     /// Raster image markers' images by their `imageFile`, read before the symbols showing them
     /// (`symbol::read_images`): each kept picture with its height over its width, or why it isn't
     /// drawn. Carried here because every symbol reader already takes the report; passing them
@@ -100,6 +103,15 @@ impl Report {
             self.index.insert(key.clone(), self.notes.len());
             let (layer, kind, text) = key;
             self.notes.push(Note { layer, kind, text, count: 1 });
+        } else {
+            // Past the cap, a new note is counted in one closing note, never listed itself. The
+            // closing note stays last: nothing is added after it.
+            let text = format!("{} more note(s) not listed", self.more.saturating_add(1));
+            match self.notes.last_mut().filter(|_| self.more > 0) {
+                Some(last) => last.text = text,
+                None => self.notes.push(Note { layer: String::new(), kind: NoteKind::Skipped, text, count: 1 }),
+            }
+            self.more = self.more.saturating_add(1);
         }
     }
 
