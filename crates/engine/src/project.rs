@@ -1927,7 +1927,8 @@ pub const MAX_ITEMS: usize = 1000;
 /// What a read made of the image markers of `layers` and saved `styles` (by name): those not
 /// kept, which saving loses, and those the renderer draws as circles, by why (not a PNG or JPEG
 /// that decodes, past `render::MARKER_PIXELS`, or past what the run has left of
-/// `render::RUN_MARKER_PIXELS`; each image checked once); both are drawn as circles.
+/// `render::RUN_MARKER_PIXELS`; each image checked once); both are drawn as circles. Checking
+/// decodes each new image, on the UI thread: at most what the run decodes, once.
 pub(crate) fn picture_notices<'a>(
     layers: impl IntoIterator<Item = &'a rustgis_map::Layer>,
     styles: impl IntoIterator<Item = (&'a str, &'a rustgis_map::Renderer)>,

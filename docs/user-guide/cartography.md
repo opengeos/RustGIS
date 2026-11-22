@@ -103,8 +103,8 @@ once until RustGIS restarts, and kept decoded, at most 700 pixels a side: in all
 256 megapixels of different marker images and 128 MiB once decoded (as many images as it keeps,
 at 177 × 177 each), so that a crafted file can't hold it for minutes; past it a new image is
 refused, or drawn as a circle, with a notice saying so, until RustGIS is restarted. A vector
-export keeps a compressed copy of each image it draws, at most about as much again, which counts
-too and leaves less for new images.
+export keeps a compressed copy of each image it draws, at most about as much again (some 256 MiB
+in all), which counts too and leaves less for new images.
 Its size is its width, and it is as tall as its proportions make it, as QGIS draws a raster image
 marker; the symbol's fill and outline don't show. It turns with **Rotation**, is ringed when
 selected, and is kept in the project file. A project that has one opens only in a RustGIS that

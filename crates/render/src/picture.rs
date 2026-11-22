@@ -33,10 +33,9 @@ const MARKER_SIDE: u32 = 700;
 pub const MARKER_PIXELS: u64 = MARKER_PIXELS_SIDE as u64 * MARKER_PIXELS_SIDE as u64;
 /// The side of the square [`MARKER_PIXELS`] is, for messages (theirs, written out, a test pins).
 pub const MARKER_PIXELS_SIDE: u32 = 2048;
-/// The most pixels of different picture markers' images a run decodes, about 5 s of decoding, and
-/// the most memory they then hold decoded (their copies compressed for exports, at most about as
-/// much again, count too): past either, a new one is drawn as a circle. A run is
-/// the process, until RustGIS restarts, as the images it keeps ([`Picture`]) are. A cap per image
+/// The most pixels of different picture markers' images a run decodes, about 5 s of decoding;
+/// with [`RUN_MARKER_BYTES`], past either, a new one is drawn as a circle. A run is the process,
+/// until RustGIS restarts, as the images it keeps ([`Picture`]) are. A cap per image
 /// alone isn't enough: a run keeps [`rustgis_map::symbology::MAX_PICTURES`] images, and that many
 /// at [`MARKER_PIXELS`] take some 80 s. Each image is decoded once for the whole run, on whichever
 /// thread meets it first, and kept ([`Store`]): none is decoded again, however many threads, frames
@@ -44,6 +43,9 @@ pub const MARKER_PIXELS_SIDE: u32 = 2048;
 /// fit when each is at most 177 × 177 pixels once decoded (a larger one is scaled down to
 /// [`MARKER_SIDE`]).
 pub const RUN_MARKER_PIXELS: u64 = 256_000_000;
+/// The most memory picture markers' images hold decoded before a new one is drawn as a circle.
+/// Their copies compressed for vector exports are charged to it too, leaving less for new images,
+/// but never refused ([`Decoded::packed`]): at most about as much again, some 256 MiB in all.
 pub const RUN_MARKER_BYTES: u64 = 128 << 20;
 /// What each image is charged at least (an icon's decoding costs about the same whatever its
 /// size), so the images charged are at most [`RUN_MARKER_PIXELS`] / this many.
@@ -227,8 +229,8 @@ fn marker_in(store: &mut Store, b64: &str) -> Marker {
     if pixels > MARKER_PIXELS {
         return Err(TooManyPixels);
     }
-    // What it holds once decoded, scaled down to fit `MARKER_SIDE` (to within a pixel of what
-    // `decode_bytes` makes: settled below).
+    // What it holds once decoded, scaled down to fit `MARKER_SIDE` as `decode_bytes` does (settled
+    // below to what it does hold, should the data not be what the header says).
     let (fw, fh) = fitted(w, h, MARKER_SIDE);
     let held = u64::from(fw) * u64::from(fh) * 4;
     store.budget.take(pixels, held, (RUN_MARKER_PIXELS, RUN_MARKER_BYTES))?;
@@ -313,7 +315,8 @@ fn fitted(w: u32, h: u32, side: u32) -> (u32, u32) {
 }
 
 /// Decodes image `bytes`, whose declared size the caller has checked, scaled down to at most
-/// `side` pixels per side, with their height for their width from before.
+/// `side` pixels per side ([`fitted`], which a marker's charge is reckoned with), with their height
+/// for their width from before.
 fn decode_bytes(bytes: &[u8], side: u32) -> Option<(Pixmap, f32)> {
     let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
@@ -321,7 +324,8 @@ fn decode_bytes(bytes: &[u8], side: u32) -> Option<(Pixmap, f32)> {
     r.limits(limits);
     let img = r.decode().ok()?;
     let aspect = img.height() as f32 / img.width().max(1) as f32;
-    let img = if img.width() > side || img.height() > side { img.thumbnail(side, side) } else { img };
+    let (w, h) = fitted(img.width(), img.height(), side);
+    let img = if (w, h) != (img.width(), img.height()) { img.thumbnail_exact(w, h) } else { img };
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let mut pm = Pixmap::new(w, h)?;
@@ -557,6 +561,8 @@ mod tests {
         assert_eq!(fitted(1400, 700, 700), (700, 350));
         assert_eq!(fitted(700, 2048, 700), (239, 700));
         assert_eq!(fitted(4096, 1, 700), (700, 1));
+        // 31.5 rows, rounded up here and by the decoding alike.
+        assert_eq!(fitted(2000, 90, 700), (700, 32));
         assert_eq!(fitted(300, 200, 700), (300, 200));
         let mut store = Store::default();
         let wide = png(1400, 700);
@@ -567,6 +573,12 @@ mod tests {
         let mut store = Store::default();
         store.budget.bytes = RUN_MARKER_BYTES - 700 * 350 * 4;
         assert!(marker_in(&mut store, &wide).is_ok());
+        assert_eq!(store.budget.bytes, RUN_MARKER_BYTES);
+        // So does one whose height rounds at half a pixel: decoded the size it was charged.
+        let mut store = Store::default();
+        store.budget.bytes = RUN_MARKER_BYTES - 700 * 32 * 4;
+        let found = marker_in(&mut store, &png(2000, 90)).unwrap();
+        assert_eq!((found.image.width(), found.image.height()), (700, 32));
         assert_eq!(store.budget.bytes, RUN_MARKER_BYTES);
     }
 
