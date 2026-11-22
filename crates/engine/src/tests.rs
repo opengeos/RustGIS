@@ -3,6 +3,9 @@ use serde_json::{Value, json};
 use crate::{Project, Session, sample};
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/held_databases.rs"]
+mod held_databases;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
 
@@ -43482,7 +43485,9 @@ fn geopackage_edits_save_back() {
     {
         let r2 = row_of(&s, 2);
         let l = s.map_mut().layer_mut(id).unwrap();
-        l.dataset.features[r2].geometry = Some(Geometry::Line(vec![moved.clone()]));
+        // The layer holds the table's own Web Mercator coordinates.
+        assert_eq!(l.dataset.coord_crs(), Crs::from_epsg(3857).unwrap());
+        l.dataset.features[r2].geometry = Some(Geometry::Line(vec![moved.iter().copied().map(rustgis_geom::lonlat_to_merc).collect()]));
         l.touch_geometry();
     }
     let r3 = row_of(&s, 3);

@@ -63,3 +63,29 @@ pub struct Saved {
     /// holds instants: taken as UTC.
     pub assumed_utc: Vec<usize>,
 }
+
+/// `edits` with their geometry converted from `held` to longitude/latitude, for a source that
+/// takes them so; fails on a geometry that can't be, naming its row.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn in_lonlat(edits: &Edits, held: crate::raster::Crs) -> crate::Result<Edits> {
+    let to = held.to(crate::raster::Crs::LonLat).map_err(crate::DataError::Format)?;
+    let convert = |f: &Feature| -> crate::Result<Feature> {
+        let mut f = f.clone();
+        if let Some(g) = f.geometry.take() {
+            let placed = to.whole_geometry(&g).ok_or_else(|| {
+                crate::DataError::Format(format!(
+                    "row {}: its geometry can't be converted from {} to longitude/latitude",
+                    f.id,
+                    held.label()
+                ))
+            })?;
+            f.geometry = Some(placed);
+        }
+        Ok(f)
+    };
+    Ok(Edits {
+        updates: edits.updates.iter().map(|(f, v)| Ok((convert(f)?, *v))).collect::<crate::Result<_>>()?,
+        deletes: edits.deletes.clone(),
+        inserts: edits.inserts.iter().map(convert).collect::<crate::Result<_>>()?,
+    })
+}
