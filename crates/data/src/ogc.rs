@@ -4141,14 +4141,13 @@ impl Pages {
         };
         if let Phase::Offsets { first, start: None, smaller, .. } = &mut self.phase {
             // Why the pages failed, and the retries made, said with whatever is read instead.
-            let mut said = format!("the layer couldn't be read in pages from its start, so it is read as its query answers: {note}");
-            if *smaller > 0 {
-                said.push_str(&format!("; {smaller} failed page request(s) retried with smaller pages"));
-            }
+            let retried =
+                if *smaller > 0 { format!("; {smaller} failed page request(s) retried with smaller pages") } else { String::new() };
+            let said = |what: &str| format!("the layer couldn't be read in pages from its start, so {what}: {note}{retried}");
             return match first.take() {
-                Some(first) => Step::Done(first, Some(said)),
+                Some(first) => Step::Done(first, Some(said("only its first page is read"))),
                 None => {
-                    self.paging_failed = Some(said);
+                    self.paging_failed = Some(said("it is read as its query answers"));
                     self.ask_as_it_is(None)
                 }
             };
@@ -5947,7 +5946,8 @@ mod tests {
         assert_eq!(joined, page(0, 2));
         assert!(
             note.as_deref()
-                .is_some_and(|n| n.starts_with("the layer couldn't be read in pages from its start") && n.contains("earlier page")),
+                .is_some_and(|n| n.starts_with("the layer couldn't be read in pages from its start, so only its first page is read")
+                    && n.contains("earlier page")),
             "{note:?}"
         );
         let (joined, note) =
@@ -6117,7 +6117,10 @@ mod tests {
                 assert_eq!(sizes, [8, 4, 2, 1]);
                 assert_eq!(bytes, first.to_vec());
                 let note = note.unwrap();
-                assert!(note.starts_with("the layer couldn't be read in pages from its start"), "{note}");
+                assert!(
+                    note.starts_with("the layer couldn't be read in pages from its start, so it is read as its query answers"),
+                    "{note}"
+                );
                 assert!(note.contains("MapServer/28") && note.contains("offset 0") && note.contains("http status: 503"), "{note}");
                 assert!(note.contains("3 failed page request(s) retried with smaller pages"), "{note}");
             } else {

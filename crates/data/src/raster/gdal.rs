@@ -238,7 +238,12 @@ fn observe_ers(src: &Path, header: Option<&Result<ErsHeader>>) {
     }
     for name in &header.data_files {
         if beside(name) {
-            crate::provenance::path(&src.with_file_name(name));
+            let data = src.with_file_name(name);
+            if data.is_file() {
+                crate::provenance::path(&data);
+            } else {
+                crate::provenance::incomplete(src, "the data file the ER Mapper header names isn't there");
+            }
         } else {
             crate::provenance::incomplete(src, "the ER Mapper header names a data file not beside it, which isn't named");
         }
@@ -916,6 +921,11 @@ mod tests {
         std::fs::write(&src, "DatasetHeader Begin\nDataSetType = Translated\nDataFile = \"../far.dat\"\nDatasetHeader End\n").unwrap();
         let found = marks(&cached(&src));
         assert!(found.iter().any(|m| m.contains("not beside it")) && found.iter().any(|m| m.contains("linked")), "{found:?}");
+        // A data file that isn't there isn't named as read: the header is marked.
+        std::fs::write(&src, "DatasetHeader Begin\nDataFile = \"gone.dat\"\nDatasetHeader End\n").unwrap();
+        let inputs = cached(&src);
+        assert!(!inputs.iter().any(|i| i.path.ends_with("gone.dat")), "{inputs:?}");
+        assert!(marks(&inputs).iter().any(|m| m.contains("isn't there")), "{inputs:?}");
         // A header whose type and data file are its own: its data file, no mark.
         std::fs::write(&src, "DatasetHeader Begin\nDataSetType = ERStorage\nDataFile = \"plain\"\nDatasetHeader End\n").unwrap();
         let inputs = cached(&src);

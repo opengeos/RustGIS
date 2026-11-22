@@ -123,47 +123,70 @@ pub const MAX_FOLDER_FILES: usize = 1000;
 /// Most folders down a folder input is walked before it is marked incomplete.
 pub const MAX_FOLDER_DEPTH: usize = 8;
 
+/// Most entries (files and folders) a folder input looks at in all, so a tree of countless
+/// empty folders costs a bounded walk too, before it is marked incomplete.
+pub const MAX_FOLDER_ENTRIES: usize = 10_000;
+
 /// Records the regular files inside `root` by metadata alone, in name order, bounded by
-/// [`MAX_FOLDER_FILES`] and [`MAX_FOLDER_DEPTH`]. Linked folders aren't followed (they could
-/// loop). Whatever can't be listed leaves one mark on `root` saying why.
+/// [`MAX_FOLDER_FILES`], [`MAX_FOLDER_DEPTH`] and [`MAX_FOLDER_ENTRIES`]; a folder inside is read
+/// up to [`MAX_FOLDER_FILES`] + 1 entries. Linked folders aren't followed (they could loop).
+/// Whatever can't be listed leaves one mark on `root` giving each reason once. The walk is
+/// bounded rather than cancellable: at most [`MAX_FOLDER_ENTRIES`] entries looked at.
 fn folder(root: &Path) {
-    let mut gap: Option<String> = None;
-    let mut files = 0usize;
+    let mut gaps: Vec<String> = Vec::new();
+    let mut gap = |why: String| {
+        if !gaps.contains(&why) {
+            gaps.push(why);
+        }
+    };
+    let (mut files, mut looked) = (0usize, 0usize);
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     'walk: while let Some((dir, depth)) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
+        let mut entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) => {
-                gap.get_or_insert_with(|| format!("a folder inside couldn't be listed ({e}); its files aren't named"));
+                gap(format!("a folder inside couldn't be listed ({e}); its files aren't named"));
                 continue;
             }
         };
         // One more than may be kept, so a folder of millions isn't listed whole to be cut.
         let mut paths = Vec::new();
-        for entry in entries.take(MAX_FOLDER_FILES.saturating_add(1)) {
+        for entry in entries.by_ref().take(MAX_FOLDER_FILES.saturating_add(1)) {
             match entry {
                 Ok(entry) => paths.push(entry.path()),
-                Err(e) => {
-                    gap.get_or_insert_with(|| format!("a folder inside couldn't be listed in full ({e})"));
-                }
+                Err(e) => gap(format!("a folder inside couldn't be listed in full ({e})")),
             }
+        }
+        if entries.next().is_some() {
+            gap(format!("a folder inside holds more than {} entries; the rest aren't named", MAX_FOLDER_FILES + 1));
         }
         paths.sort();
         let mut folders = Vec::new();
         for p in paths {
+            looked += 1;
+            if looked > MAX_FOLDER_ENTRIES {
+                gap(format!("more than {MAX_FOLDER_ENTRIES} files and folders; the rest aren't named"));
+                break 'walk;
+            }
             let linked = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink());
-            let Ok(metadata) = std::fs::metadata(&p) else { continue };
+            let metadata = match std::fs::metadata(&p) {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    gap(format!("an entry inside couldn't be looked at ({e}); it isn't named"));
+                    continue;
+                }
+            };
             if metadata.is_dir() {
                 if linked {
-                    gap.get_or_insert_with(|| "a linked folder inside isn't followed; its files aren't named".into());
+                    gap("a linked folder inside isn't followed; its files aren't named".into());
                 } else if depth >= MAX_FOLDER_DEPTH {
-                    gap.get_or_insert_with(|| format!("folders more than {MAX_FOLDER_DEPTH} deep aren't listed"));
+                    gap(format!("folders more than {MAX_FOLDER_DEPTH} deep aren't listed"));
                 } else {
                     folders.push((p, depth + 1));
                 }
             } else if metadata.is_file() {
                 if files >= MAX_FOLDER_FILES {
-                    gap = Some(format!("more than {MAX_FOLDER_FILES} files; only the first {MAX_FOLDER_FILES} are named"));
+                    gap(format!("more than {MAX_FOLDER_FILES} files; only the first {MAX_FOLDER_FILES} are named"));
                     break 'walk;
                 }
                 files += 1;
@@ -173,8 +196,8 @@ fn folder(root: &Path) {
         // Popped in name order.
         stack.extend(folders.into_iter().rev());
     }
-    if let Some(why) = gap {
-        incomplete(root, &why);
+    if !gaps.is_empty() {
+        incomplete(root, &gaps.join("; "));
     }
 }
 
@@ -485,7 +508,8 @@ mod tests {
         assert!(json.get("incomplete").is_some());
         assert!(serde_json::to_value(inputs.last().unwrap()).unwrap().get("incomplete").is_none());
         drop(scope);
-        // A linked folder inside isn't followed (it could loop back), and says so.
+        // A linked folder inside isn't followed (it could loop back), and says so, its reason
+        // kept beside a later one.
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&gdb, gdb.join("loop")).unwrap();
@@ -494,7 +518,51 @@ mod tests {
             let inputs = scope.inputs();
             assert_eq!(inputs.iter().filter(|i| i.incomplete.is_none()).count(), 3);
             assert!(inputs.iter().any(|i| i.incomplete.as_deref().is_some_and(|w| w.contains("linked folder"))), "{inputs:?}");
+            drop(scope);
+            let mixed = dir.path().join("mixed.gdb");
+            let deep = (0..=MAX_FOLDER_DEPTH).fold(mixed.clone(), |p, i| p.join(format!("d{i}")));
+            std::fs::create_dir_all(&deep).unwrap();
+            std::fs::write(deep.join("far.dat"), b"far").unwrap();
+            std::os::unix::fs::symlink(&gdb, mixed.join("loop")).unwrap();
+            let scope = Capture::start();
+            path(&mixed);
+            let mark = scope.inputs().into_iter().find_map(|i| i.incomplete).unwrap();
+            assert!(mark.contains("linked folder") && mark.contains("8 deep"), "{mark}");
         }
+        // Exactly as many entries as are read: no mark. One more, a folder holding a file, past
+        // them: marked, though no file limit was reached.
+        let full = dir.path().join("full.gdb");
+        std::fs::create_dir(&full).unwrap();
+        for i in 0..MAX_FOLDER_FILES {
+            std::fs::create_dir(full.join(format!("{i:05}"))).unwrap();
+        }
+        let scope = Capture::start();
+        path(&full);
+        assert!(scope.inputs().is_empty(), "{:?}", scope.inputs());
+        drop(scope);
+        for i in MAX_FOLDER_FILES..MAX_FOLDER_FILES + 2 {
+            std::fs::create_dir(full.join(format!("{i:05}"))).unwrap();
+        }
+        std::fs::write(full.join("zz.dat"), b"z").unwrap();
+        let scope = Capture::start();
+        path(&full);
+        let inputs = scope.inputs();
+        assert!(inputs.iter().any(|i| i.incomplete.as_deref().is_some_and(|w| w.contains("more than 1001 entries"))), "{inputs:?}");
+        drop(scope);
+        // Countless empty folders: the walk stops at its entry limit, and says so.
+        let wide = dir.path().join("wide.gdb");
+        for i in 0..=MAX_FOLDER_ENTRIES / 1000 {
+            for j in 0..1000 {
+                std::fs::create_dir_all(wide.join(format!("{i:03}")).join(format!("{j:04}"))).unwrap();
+            }
+        }
+        let scope = Capture::start();
+        path(&wide);
+        let inputs = scope.inputs();
+        assert!(
+            inputs.iter().any(|i| i.incomplete.as_deref().is_some_and(|w| w.contains("more than 10000 files and folders"))),
+            "{inputs:?}"
+        );
     }
 
     /// A DuckDB database's write-ahead log is an input when it is there, and only then.

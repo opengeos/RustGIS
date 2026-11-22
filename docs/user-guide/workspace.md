@@ -173,8 +173,8 @@ isn't itself an entry in the log, as a saved file is). **Clear Log** empties it 
   headers include their `DataFile` beside the header, or, when they name none, GDAL's default
   (the header's name without `.ers`) when it is there; observing them never adds a validation
   requirement to conversion. A folder another program opens (a File Geodatabase read through GDAL)
-  lists the files inside it, up to 1,000 files 8 folders deep. Where a list can't be complete (a
-  larger folder, a header that couldn't be read, a data file elsewhere, a linked ER Mapper
+  lists the files inside it, up to 1,000 files 8 folders deep and 10,000 files and folders looked at. Where a list can't be complete (a
+  larger folder, a header that couldn't be read, a data file elsewhere or missing, a linked ER Mapper
   dataset), a fingerprint of that path carries `incomplete`, saying why, and has no size, time or
   digest; these marks are kept when an entry's list is cut to 100.
   Older exported entries lack these optional fields, so their version and inputs are unknown.
