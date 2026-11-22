@@ -871,7 +871,7 @@ mod tests {
         let mut padded = TileLayer::new("  Streets  ", TileKind::Raster, "  https://a.tile.example.com/{z}/{x}/{y}.png ");
         assert_eq!(padded.repair_counted().map(|r| r.text), Ok(0));
         assert_eq!((padded.name.as_str(), padded.url.as_str()), ("Streets", "https://a.tile.example.com/{z}/{x}/{y}.png"));
-        let mut long = TileLayer::new(&format!(" {} ", "n".repeat(121)), TileKind::Raster, "https://a.tile.example.com/{z}/{x}/{y}.png");
+        let mut long = TileLayer::new(format!(" {} ", "n".repeat(121)), TileKind::Raster, "https://a.tile.example.com/{z}/{x}/{y}.png");
         assert_eq!(long.repair_counted().map(|r| r.text), Ok(1));
         assert_eq!(long.name.chars().count(), 120);
     }

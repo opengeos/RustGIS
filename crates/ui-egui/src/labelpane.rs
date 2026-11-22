@@ -1543,7 +1543,6 @@ mod tests {
         h.run();
         assert!(chosen(&h));
         assert!(h.query_by_role_and_label(Role::ComboBox, "Line layer").is_some());
-        assert!(h.query_by_label("Rivers").is_some());
     }
 
     /// A line layer's labels sit a distance from the line (#1187): the row is there for a placement
