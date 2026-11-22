@@ -384,6 +384,9 @@ pub(crate) struct Mssql {
     pub password: bool,
     /// The query's other options, as written and in order (`encrypt=strict&ca=…`).
     pub options: String,
+    /// The last `instance` is empty (`?instance=` or a bare `?instance`), which the engine reads
+    /// as a route of its own and the form can't show.
+    pub empty_instance: bool,
 }
 
 /// The server, user, database and certificate choice of an
@@ -422,14 +425,11 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     // for Test to say why) is kept as written.
     let options =
         query.split('&').filter(|kv| !kv.is_empty() && key(kv) != "instance" && trust(kv).is_none()).collect::<Vec<_>>().join("&");
-    // The last `instance` is the one, as the engine reads it.
-    let instance = query
-        .split('&')
-        .filter_map(|kv| kv.split_once('='))
-        .filter(|(k, _)| key(k) == "instance")
-        .map(|(_, v)| percent_decode(v))
-        .next_back()
-        .filter(|v| !v.is_empty());
+    // The last `instance` is the one, as the engine reads it; a bare key is an empty one.
+    let last_instance =
+        query.split('&').filter(|kv| key(kv) == "instance").map(|kv| percent_decode(kv.split_once('=').map_or("", |(_, v)| v))).next_back();
+    let empty_instance = last_instance.as_deref().is_some_and(str::is_empty);
+    let instance = last_instance.filter(|v| !v.is_empty());
     let trust_cert = query.split('&').filter_map(trust).next_back().unwrap_or(false);
     let mut server = percent_decode(host);
     let named_instance = instance.is_some();
@@ -442,7 +442,15 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
         server.push(',');
         server.push_str(port);
     }
-    Some(Mssql { server, user: user.filter(|u| !u.is_empty()), database: percent_decode(database), trust_cert, password, options })
+    Some(Mssql {
+        server,
+        user: user.filter(|u| !u.is_empty()),
+        database: percent_decode(database),
+        trust_cert,
+        password,
+        options,
+        empty_instance,
+    })
 }
 
 /// The address the geodatabase form makes, or why it can't.
@@ -507,6 +515,12 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
         .into());
     }
     if let Some(m) = parsed {
+        if m.empty_instance {
+            return Err(tl!(
+                "This address names an empty instance, which the form can't show: name the instance or take it out, or keep using the address."
+            )
+            .into());
+        }
         if m.password {
             return Err(tl!(
                 "This address has a password or key in it, which the form doesn't show: take it out of the address and type the password in the Password box, or keep using the address."
@@ -2541,6 +2555,16 @@ mod tests {
         st.address = "mssl://gis-db/utility".into();
         let why = swap_form(&mut st).unwrap_err();
         assert!(why.contains("mssql://"), "{why}");
+        // An empty instance is a route of its own to the engine (no default port): the form
+        // can't show it, so the address stays as typed and why is said.
+        for empty in
+            ["mssql://gis-db/utility?instance=", "mssql://gis-db/utility?instance", "mssql://gis-db/utility?instance=GIS&instance="]
+        {
+            let mut kept = State { kind: "sqlserver".into(), address: empty.into(), ..Default::default() };
+            let why = swap_form(&mut kept).unwrap_err();
+            assert!(why.contains("instance"), "{empty}: {why}");
+            assert!(!kept.form && kept.server.is_empty(), "{empty}");
+        }
         assert!(!st.form);
         assert_eq!(st.address, "mssl://gis-db/utility");
         assert_eq!(st.server, "other");
