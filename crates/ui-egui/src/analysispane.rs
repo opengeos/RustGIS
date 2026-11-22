@@ -380,6 +380,22 @@ fn background(id: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Starts a command that makes a raster (`workflows::runs_in_background`) asked for outside the
+/// pane (Command Search, the Assistant through the app): on a thread of its own, the Workflows pane
+/// opened to show its progress and Cancel, as from a section; its layer is added when it lands, a
+/// failure then said in the status bar. The answer says it started; one that can't start (another
+/// is under way) is an error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn start_from_dispatch(app: &mut RustGisApp, command: &'static str, name: &'static str, p: Value) -> Result<Value, String> {
+    // Opened, not toggled: a pane already open stays so.
+    app.ui.open_right(crate::RightPane::Workflows);
+    start(app, command, name, p);
+    match &app.workflow.job {
+        Some(job) if job.name == name && app.workflow.error.is_none() => Ok(json!({"started": name})),
+        _ => Err(app.workflow.error.clone().unwrap_or_else(|| crate::i18n::fmt("{tool} didn't start", &[("tool", tl_raw!(name))]))),
+    }
+}
+
 /// Starts `command` on a thread of its own; [`land_job`] applies what it made. One at a time: a
 /// second waits for the first to finish or be cancelled.
 #[cfg(not(target_arch = "wasm32"))]
@@ -3025,6 +3041,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A command that makes a raster, asked for through the app's dispatch (Command Search, the
+    /// assistant) rather than a section, runs on a thread of its own too: Polygons to Raster from a
+    /// text field answers that it started, the pane shows it running, and its layer and class table
+    /// land with it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_raster_command_from_the_dispatch_runs_on_a_thread() {
+        let mut app = RustGisApp::with_sample();
+        // As the app runs, a frame at a time.
+        app.reads_off_frame = true;
+        let (layers, tables) = (app.session.map().layers.len(), app.session.project.tables.len());
+        let started = app.run("raster.rasterize", json!({"layer": "Countries", "field": "name", "cellSize": 5})).unwrap();
+        assert_eq!(started, json!({"started": "Polygons to Raster"}));
+        assert!(app.workflow.job.is_some(), "{:?}", app.workflow.error);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while land_job(&mut app) {
+            assert!(std::time::Instant::now() < end, "the run never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5)); // test-wait: polling for the workflow to land, as above
+        }
+        assert!(app.workflow.job.is_none() && app.workflow.error.is_none(), "{:?}", app.workflow.error);
+        assert_eq!(app.session.map().layers.len(), layers + 1);
+        assert_eq!(app.session.project.tables.len(), tables + 1);
     }
 
     /// Interpolate runs on a thread of its own from the pane (#1291 step 3): the pane goes on while

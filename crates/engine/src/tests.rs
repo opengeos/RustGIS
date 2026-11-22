@@ -51239,6 +51239,8 @@ fn raster_tools_run_on_another_thread() {
         ("raster.process", json!({"layer": dem, "operation": "clip", "extent": [10.005, 45.005, 10.02, 45.02]})),
         ("raster.process", json!({"layer": dem, "operation": "resample", "factor": 4})),
         ("imagery.mosaic", json!({"name": "Valley"})),
+        ("raster.rasterize", json!({"layer": "Training", "value": 3, "cellSize": 0.0005})),
+        ("raster.rasterize", json!({"layer": "Training", "field": "name", "cellSize": 0.0005})),
     ] {
         assert!(runs_in_background(command).is_some(), "{command}");
         let here = s.run(command, &p).unwrap();
@@ -51250,10 +51252,22 @@ fn raster_tools_run_on_another_thread() {
         with["ran"] = json!(id);
         let there = s.run(command, &with).unwrap();
         assert_eq!(pixels(&s, &here), pixels(&s, &there), "{command} {p}");
+        // The layer, and the names that follow its own (the first run's layer holds the one asked
+        // for): a class table named after it is there.
+        let named = ["layer", "name", "classTable"];
         let besides = |v: &Value| {
-            v.as_object().map(|o| o.iter().filter(|(k, _)| *k != "layer").map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
+            v.as_object()
+                .map(|o| o.iter().filter(|(k, _)| !named.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
         };
         assert_eq!(besides(&here), besides(&there), "{command} {p}");
+        // A name said is the one the layer got.
+        if let Some(name) = there["name"].as_str() {
+            let id = there["layer"].as_u64().unwrap() as u32;
+            assert_eq!(Some(name), s.map().layer(id).map(|l| l.name.as_str()), "{command}: {there}");
+        }
+        if let Some(table) = there["classTable"].as_str() {
+            assert!(s.project.tables.iter().any(|t| t.name == table), "{command}: {table}");
+        }
         // The answer is the added layer's, whatever else the command says.
         assert!(there["width"].is_u64() && there["bands"].is_u64(), "{command}: {there}");
         let run = raster_start(&mut s, command, &p).unwrap();

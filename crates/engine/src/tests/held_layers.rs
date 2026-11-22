@@ -2435,6 +2435,22 @@ fn rasterize_sizes_its_grid_by_the_operation_that_burns() {
     assert!((16..=36).contains(&a["cells"].as_u64().unwrap()), "{a}");
 }
 
+/// Rasterize's default grid is the system a layer holds its coordinates in only when that is a
+/// projected one: a layer held in ETRS89 degrees (EPSG:4258), read from a file in UTM 32N, is
+/// burned onto a grid in UTM 32N.
+#[test]
+fn a_layer_held_in_degrees_is_burned_in_the_system_it_was_read_in() {
+    let geographic = Crs::Epsg(4258);
+    let ring: Vec<Coord> =
+        [(11.0, 48.0), (11.01, 48.0), (11.01, 48.01), (11.0, 48.01), (11.0, 48.0)].iter().map(|(x, y)| Coord::new(*x, *y)).collect();
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Plot", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![ring]])], geographic);
+    let id = s.map().layer_by_name("Plot").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().dataset.crs = Some(UTM);
+    s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 10, "name": "Burned"})).unwrap();
+    assert_eq!(grid_of(&s, "Burned").crs, UTM);
+}
+
 /// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,
 /// and says how many vertices it couldn't place there, left out of that box: a polygon held in UTM
 /// with a vertex far beyond any place UTM holds, burned onto a grid in degrees. With an extent

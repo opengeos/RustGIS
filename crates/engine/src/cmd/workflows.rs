@@ -237,6 +237,7 @@ pub(crate) const IN_BACKGROUND: &[(&str, &str, Start)] = &[
     ("stac.addBands", "Add STAC Bands", super::stac_bands::bands_work),
     ("stac.addIndex", "Add STAC Index", super::stac_bands::index_work),
     ("raster.process", "Process", super::imagery::process_work),
+    ("raster.rasterize", "Polygons to Raster", super::imagery::rasterize_work),
     ("imagery.mosaic", "Build Mosaic", super::imagery::mosaic_work),
     ("dl.classify", "Deep Learning", super::deeplearning::classify_work),
     ("embeddings.similarity", "Satellite Embedding Similarity", super::embeddings::similarity_work),

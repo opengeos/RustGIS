@@ -1167,7 +1167,13 @@ pub(super) fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Res
 }
 
 /// Builds the band instruction before combining the note with any caller-supplied path or name.
-fn write_geotiff_with_guidance(r: &Raster, bi: usize, cog: bool, path: &str, band_hint: &str) -> Result<super::exports::Wrote, String> {
+pub(super) fn write_geotiff_with_guidance(
+    r: &Raster,
+    bi: usize,
+    cog: bool,
+    path: &str,
+    band_hint: &str,
+) -> Result<super::exports::Wrote, String> {
     let cog = if cog {
         // Tiles go to the file as they are made: the whole file is never held in memory.
         Some(raster::cogwrite::write_file(r, bi, Path::new(path)).map_err(|e| format!("{path}: {e}"))?)
