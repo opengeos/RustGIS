@@ -917,14 +917,17 @@ fn square_to(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         .map()
         .layers
         .iter()
-        .filter(|o| o.id != l.id && matches!(o.geometry_type(), GeometryType::Polyline | GeometryType::Polygon))
+        // As `labels.placement` takes them: a layer with any line or polygon.
+        .filter(|o| o.id != l.id && (o.has_geometry(GeometryType::Polyline) || o.has_geometry(GeometryType::Polygon)))
         .map(|o| o.name.clone())
         .collect();
     let on = c.it.placement == LabelPlacement::Perpendicular;
     let to = c.it.square_to.as_ref();
     ui.add_space(4.0);
     ui.label(RichText::new(tl!("Square to a line")).size(11.5));
-    let first = to.map(|t| t.layer.clone()).or_else(|| lines.first().cloned());
+    // The layer kept from before when it can still be one (with its distance), else the first.
+    let kept = to.filter(|t| lines.iter().any(|n| n.eq_ignore_ascii_case(&t.layer)));
+    let first = kept.map(|t| t.layer.clone()).or_else(|| lines.first().cloned());
     let button = egui::Button::selectable(on, tl!(LabelPlacement::Perpendicular.label())).truncate();
     let clicked = ui
         .add_enabled_ui(first.is_some(), |ui| ui.add_sized(vec2(124.0, 22.0), button))
@@ -936,7 +939,8 @@ fn square_to(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         && !on
         && let Some(layer) = first
     {
-        run(app, "labels.placement", c.params(json!({"position": "perpendicular", "to": {"layer": layer}})));
+        let within = kept.map(|t| t.within);
+        run(app, "labels.placement", c.params(json!({"position": "perpendicular", "to": {"layer": layer, "within": within}})));
     }
     if !on {
         return;

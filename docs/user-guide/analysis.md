@@ -1365,8 +1365,8 @@ at an angle. So before the overlay takes out a part's holes or merges the parts,
 that narrow in any direction is dropped: `no_area` is added after the other codes in `repairs`, and
 the tool says how many holes and parts were dropped this way, from how many features.
 
-A feature that can't be repaired stays in the output without geometry, with its attributes, and
-`repairs` says why. A feature the tool can't repair is written as the table says, never dropped:
+A feature that can't be repaired stays in the output with its attributes, without its geometry
+or with it unchanged as the table says, and `repairs` says why; none is dropped:
 
 | Code | Written | Why |
 | --- | --- | --- |

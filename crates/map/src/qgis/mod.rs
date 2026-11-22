@@ -108,7 +108,10 @@ impl Report {
             // closing note stays last: nothing is added after it.
             let text = format!("{} more note(s) not listed", self.more.saturating_add(1));
             match self.notes.last_mut().filter(|_| self.more > 0) {
-                Some(last) => last.text = text,
+                Some(last) => {
+                    last.text = text;
+                    last.count = last.count.saturating_add(1);
+                }
                 None => self.notes.push(Note { layer: String::new(), kind: NoteKind::Skipped, text, count: 1 }),
             }
             self.more = self.more.saturating_add(1);

@@ -925,7 +925,7 @@ fn run_selected_in(dir: &Path, q: &Query<'_>, confined: bool, selected: Option<F
         .flatten()
         .filter_map(|c| Some(Column { name: c.get("column_name")?.as_str()?.to_string(), ty: c.get("column_type")?.as_str()?.to_string() }))
         .collect();
-    if let Some(c) = columns.iter().find(|c| c.name == DIM || c.name == ZM) {
+    if let Some(c) = columns.iter().find(|c| c.name.eq_ignore_ascii_case(DIM) || c.name.eq_ignore_ascii_case(ZM)) {
         return Err(DataError::Format(format!("the query returns a column named {}", c.name)));
     }
     let (select, geom) = select(&columns, q.crs, &from)?;

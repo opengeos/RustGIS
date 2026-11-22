@@ -96,7 +96,9 @@ fn network<'a>(inp: &'a dyn Inputs, p: &Json, tool: &str) -> Result<Network<'a>,
         ));
     }
     if graph.segments() == 0 {
-        return Err(format!("'{}' has no lines to search", ds.name));
+        // What left no lines is said with it: the notes would be lost with the run.
+        let why = if notes.is_empty() { String::new() } else { format!(" ({})", notes.join("; ")) };
+        return Err(format!("'{}' has no lines to search{why}", ds.name));
     }
     Ok(Network { ds, graph, unit_m, snap_m, notes })
 }
@@ -719,6 +721,14 @@ mod tests {
             "{:?}",
             r.messages
         );
+        // Every line closed so: the refusal says why.
+        let mut all = roads();
+        for f in all.features.iter_mut() {
+            f.attrs[0] = Value::Float(1e306);
+        }
+        let inputs = map(vec![all, points("shops", &[Some(c(0.005, 0.0))])]);
+        let e = service_area(&inputs, &json!({"network": "roads", "facilities": "shops", "breaks": "5", "costField": "cost"})).unwrap_err();
+        assert!(e.contains("has no lines to search") && e.contains("4 line(s) of 'roads' cost so much"), "{e}");
     }
 
     /// A point just across ±180° from a line is moved onto it, about 110 m away, not left out as

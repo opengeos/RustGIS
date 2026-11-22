@@ -238,15 +238,13 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
             // any, runs to the end.
             let (head, sql) = datasource.rsplit_once(" sql=").unwrap_or((datasource, ""));
             let subset = Some(sql.trim().to_string()).filter(|q| !q.is_empty());
-            let kv = conninfo(head);
             // What QGIS always writes and RustGIS reads or needn't.
             const READ_OR_HARMLESS: [&str; 7] = ["dbname", "table", "key", "srid", "type", "estimatedmetadata", "checkPrimaryKeyUnicity"];
-            let ignored = named_options(
-                kv.iter()
-                    .filter(|(k, _)| !READ_OR_HARMLESS.iter().any(|r| r.eq_ignore_ascii_case(k)))
-                    .map(|(k, v)| noted_option(&format!("{k}={v}"))),
-                0,
-            );
+            let harmless = |k: &str| READ_OR_HARMLESS.iter().any(|r| r.eq_ignore_ascii_case(k));
+            // Options past the 100 pairs read are counted with those not named (the table is read
+            // from the text itself).
+            let (kv, past, _) = conninfo_counted(head, |k| !harmless(k));
+            let ignored = named_options(kv.iter().filter(|(k, _)| !harmless(k)).map(|(k, v)| noted_option(&format!("{k}={v}"))), past);
             match (kv.iter().find(|(k, _)| k == "dbname"), table_of(head)) {
                 (Some((_, db)), Some(t)) => Source::File { path: absolute(db, dir), layer: Some(t), subset, ignored },
                 _ => Source::Other { provider: provider.into() },
@@ -919,12 +917,20 @@ fn conninfo(s: &str) -> Vec<(String, String)> {
 /// [`conninfo`], and how many pairs it doesn't keep: those past the 100 it reads, and one for text
 /// it can't read as a pair (which stops it).
 fn conninfo_rest(s: &str) -> (Vec<(String, String)>, usize) {
+    let (out, past, stopped) = conninfo_counted(s, |_| true);
+    (out, past + usize::from(stopped))
+}
+
+/// [`conninfo`], with the pairs past the 100 it reads whose name `counts`, apart from whether it
+/// stopped at text it can't read as a pair (as a SpatiaLite source's `(geom)` after its table).
+fn conninfo_counted(s: &str, counts: impl Fn(&str) -> bool) -> (Vec<(String, String)>, usize, bool) {
     let mut out = Vec::new();
     let mut unread = 0usize;
+    let mut stopped = false;
     let mut rest = s.trim();
     while !rest.is_empty() {
         let Some((k, after)) = rest.split_once('=') else {
-            unread += 1;
+            stopped = true;
             break;
         };
         let k = k.trim().to_string();
@@ -950,12 +956,12 @@ fn conninfo_rest(s: &str) -> (Vec<(String, String)>, usize) {
         };
         if out.len() < 100 {
             out.push((k, v));
-        } else {
+        } else if counts(&k) {
             unread += 1;
         }
         rest = next.trim_start();
     }
-    (out, unread)
+    (out, unread, stopped)
 }
 
 /// A connection text's `table="schema"."table" (geom)`, as `schema.table` (or `table`).
@@ -1217,6 +1223,11 @@ mod tests {
             format!("dbname='/a.sqlite' {} table=\"t\" (geom) sql=", (0..40).map(|i| format!("o{i}=1")).collect::<Vec<_>>().join(" "));
         let Source::File { ignored, .. } = read("spatialite", &many, dir) else { panic!() };
         assert_eq!((ignored.len(), ignored.last().map(String::as_str)), (33, Some("and 8 more")), "{ignored:?}");
+        // Past the 100 pairs a connection text is read to, the rest are counted too.
+        let many =
+            format!("dbname='/a.sqlite' {} table=\"t\" (geom) sql=", (0..110).map(|i| format!("o{i}=1")).collect::<Vec<_>>().join(" "));
+        let Source::File { ignored, .. } = read("spatialite", &many, dir) else { panic!() };
+        assert_eq!(ignored.last().map(String::as_str), Some("and 78 more"), "{ignored:?}");
         assert_eq!(
             read("gdal", "GPKG:./m.gpkg:relief", dir),
             Source::File { path: "/data/project/m.gpkg".into(), layer: Some("relief".into()), subset: None, ignored: Vec::new() }

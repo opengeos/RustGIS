@@ -16,6 +16,8 @@ pub struct Route {
     pub rows: Vec<usize>,
     /// Segments omitted because an endpoint has non-finite coordinates or an invalid latitude.
     pub skipped_segments: usize,
+    /// Lines closed because their cost times a segment's length is past the largest number.
+    pub overflowing: usize,
 }
 
 #[derive(PartialEq)]
@@ -52,25 +54,35 @@ struct Network {
 }
 
 /// Whether a segment of a line in `parts` costs no finite number at `weight` a metre. Segments
-/// left out for their coordinates don't count.
-fn cost_overflows(parts: &[Vec<Coord>], weight: f64) -> bool {
+/// left out for their coordinates don't count. It looks at Cancel as `build` does, every 4096
+/// segments measured.
+fn cost_overflows(parts: &[Vec<Coord>], weight: f64, pace: &mut crate::control::Pace) -> Result<bool, String> {
     // No segment is longer than half the Earth's circumference: a weight finite at that length
     // is finite on every segment, so the segments are measured only past it.
     if (weight * 2.1e7).is_finite() {
-        return false;
+        return Ok(false);
     }
-    parts.iter().flat_map(|part| part.windows(2)).any(|w| match (w.first(), w.get(1)) {
-        (Some(a), Some(b)) if a.is_finite() && b.is_finite() && a.y.abs() <= 90.0 && b.y.abs() <= 90.0 => {
-            !(wgs84_distance_m(*a, *b) * weight).is_finite()
+    for w in parts.iter().flat_map(|part| part.windows(2)) {
+        if pace.stop(4096) {
+            return Err(crate::control::Cancelled.into());
         }
-        _ => false,
-    })
+        if let (Some(a), Some(b)) = (w.first(), w.get(1))
+            && a.is_finite()
+            && b.is_finite()
+            && a.y.abs() <= 90.0
+            && b.y.abs() <= 90.0
+            && !(wgs84_distance_m(*a, *b) * weight).is_finite()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl Network {
     /// Builds edges in source order, preserving shortest-path tie breaking and arithmetic.
     fn build(ds: &Dataset, rows: &[usize], cost_field: Option<usize>) -> Result<Self, String> {
-        let route_error = |reason, skipped| route_error(ds, reason, skipped);
+        let route_error = |reason, skipped, overflowing| route_error(ds, reason, skipped, overflowing);
         let mut skipped_segments = 0;
         let mut overflowing = 0;
         let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
@@ -97,7 +109,7 @@ impl Network {
                 Some(Some(_)) => continue,
                 _ => 1.0,
             };
-            if cost_overflows(parts, weight) {
+            if cost_overflows(parts, weight, &mut pace)? {
                 overflowing += 1;
                 continue;
             }
@@ -124,13 +136,13 @@ impl Network {
                     segs.push((ia, ib, weight, *r));
                     // Checked per segment, so one huge feature can't grow the network unbounded.
                     if segs.len() > 10_000_000 || nodes.len() > 5_000_000 {
-                        return Err(route_error("the network is too large".into(), skipped_segments));
+                        return Err(route_error("the network is too large".into(), skipped_segments, overflowing));
                     }
                 }
             }
         }
         if segs.is_empty() && skipped_segments > 0 {
-            return Err(route_error("no usable network remains".into(), skipped_segments));
+            return Err(route_error("no usable network remains".into(), skipped_segments, overflowing));
         }
         crate::control::finish();
         Ok(Self { nodes, adj, segs, skipped_segments, overflowing })
@@ -203,13 +215,20 @@ fn network_keyed(
     Ok(graph)
 }
 
-/// Preserve clean-network errors; failed partial routes must still disclose omissions.
-fn route_error(ds: &Dataset, reason: String, skipped_segments: usize) -> String {
-    if skipped_segments == 0 {
-        reason
-    } else {
-        format!("{reason}; {skipped_segments} segments with invalid coordinates were omitted from '{}'", ds.name)
+/// Preserve clean-network errors; failed partial routes must still disclose omissions: segments
+/// with invalid coordinates and lines closed for a cost past the largest number.
+fn route_error(ds: &Dataset, reason: String, skipped_segments: usize, overflowing: usize) -> String {
+    let mut said = reason;
+    if skipped_segments > 0 {
+        said.push_str(&format!("; {skipped_segments} segments with invalid coordinates were omitted from '{}'", ds.name));
     }
+    if overflowing > 0 {
+        said.push_str(&format!(
+            "; {overflowing} lines of '{}' cost so much that a segment's cost is past the largest number, and were closed",
+            ds.name
+        ));
+    }
+    said
 }
 
 /// The shortest route between two points over the lines of `rows`, joining where vertices
@@ -356,7 +375,7 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
     let mut adj = graph.adj.clone();
     let segs = &graph.segs;
     let skipped_segments = graph.skipped_segments;
-    let route_error = |reason, skipped| route_error(ds, reason, skipped);
+    let route_error = |reason, skipped| route_error(ds, reason, skipped, graph.overflowing);
     let nearest = |p: Coord, nodes: &[Coord]| nearest_segment(segs, nodes, p, None);
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<Edge>>| -> Result<(usize, usize, f64), String> {
@@ -462,7 +481,7 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
     used.reverse();
     used.dedup();
     crate::control::finish();
-    Ok(Route { path, length_m: length, cost, rows: used, skipped_segments })
+    Ok(Route { path, length_m: length, cost, rows: used, skipped_segments, overflowing: graph.overflowing })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1545,6 +1564,15 @@ mod tests {
         let cheap =
             shortest_route(&ds, &rows, Coord::new(0.0, 0.0), Coord::new(1.0, 1.0), Some(0), 1000.0).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(cheap.rows, vec![0, 1], "by cost the two sides win");
+        assert_eq!((short.overflowing, cheap.overflowing), (0, 0));
+        // A cost whose segments' costs overflow closes its line, and the route says so.
+        let mut huge = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("cost", FieldType::Double)]);
+        huge.push(l((0.0, 0.0), (1.0, 0.0)), vec![Value::Float(1.0)]);
+        huge.push(l((1.0, 0.0), (1.0, 1.0)), vec![Value::Float(1.0)]);
+        huge.push(l((0.0, 0.0), (1.0, 1.0)), vec![Value::Float(1e306)]);
+        let around =
+            shortest_route(&huge, &rows, Coord::new(0.0, 0.0), Coord::new(1.0, 1.0), Some(0), 1000.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((around.rows, around.overflowing), (vec![0, 1], 1));
         assert!(shortest_route(&ds, &rows, Coord::new(5.0, 5.0), Coord::new(1.0, 1.0), None, 1000.0).is_err());
         let mut poly = Dataset::new("p", GeometryType::Polygon, vec![]);
         poly.push(
