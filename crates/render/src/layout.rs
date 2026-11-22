@@ -2500,13 +2500,21 @@ fn last_label(v: &str, unit: &str, room: f32, measure: impl Fn(&str) -> f32) -> 
 }
 
 /// `t` as it fits `room` pixels measured by `measure`: whole, or cut a character at a time and
-/// ended with an ellipsis, keeping at least one character. `None` when not even that fits.
+/// ended with an ellipsis, keeping at least one character. `None` when not even that fits. A
+/// longer prefix measures no less, so the longest that fits is found by halving.
 fn shortened(t: &str, room: f32, measure: impl Fn(&str) -> f32) -> Option<String> {
     if measure(t) <= room {
         return Some(t.to_string());
     }
     let chars: Vec<char> = t.chars().collect();
-    (1..chars.len()).rev().map(|n| format!("{}…", chars.iter().take(n).collect::<String>().trim_end())).find(|s| measure(s) <= room)
+    let cut = |n: usize| format!("{}…", chars.iter().take(n).collect::<String>().trim_end());
+    // The fewest characters, from 1, that don't fit: `chars.len()` when all shorter ones do.
+    let (mut lo, mut hi) = (1, chars.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if measure(&cut(mid)) <= room { lo = mid + 1 } else { hi = mid }
+    }
+    (lo > 1).then(|| cut(lo - 1))
 }
 
 /// The text lines a scale bar has above and below it, and the line its unit takes on its side
@@ -8924,6 +8932,15 @@ Elaboração: RustGIS",
         assert_eq!(shortened("Kilometres", 20.0, measure).as_deref(), Some("K…"));
         assert_eq!(shortened("Kilometres", 19.0, measure), None, "nothing when not even a letter fits");
         assert_eq!(shortened("", -1.0, measure), None);
+        // A long unit takes a handful of measurements, not one a character.
+        let calls = std::cell::Cell::new(0);
+        let counted = |s: &str| {
+            calls.set(calls.get() + 1);
+            measure(s)
+        };
+        let long = "k".repeat(100);
+        assert_eq!(shortened(&long, 105.0, counted).as_deref(), Some("kkkkkkkkk…"));
+        assert!(calls.get() <= 9, "{} measurements", calls.get());
         // After the last label, only the unit is shortened, never the number.
         assert_eq!(last_label("25", "Kilometres", 130.0, measure), "25 Kilometres");
         assert_eq!(last_label("25", "Kilometres", 80.0, measure), "25 Kilo…");
