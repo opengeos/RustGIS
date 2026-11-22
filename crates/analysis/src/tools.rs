@@ -1317,7 +1317,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the layer's CRS when projected, or required when the layer has none or is in degrees.",
+                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the projected system the layer is held in, or else was read in; required when the layer has none or is in degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output raster layer name." },
         ],
