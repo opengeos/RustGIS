@@ -92,6 +92,10 @@ A result is right, or RustGIS says what it lost or assumed
   through reader and tool results today; the remaining notices are to migrate). Then
   `rustgis-cli run --strict`, which exits non-zero on a disallowed loss, and the codes exposed
   to Python and MCP ([#2371](https://github.com/opengeos/RustGIS/issues/2371)).
+- NTv2 grid shifts named in a file's own definition (a WKT or PROJ string that binds NAD27 to
+  WGS 84 through a `.gsb` grid), which are said but not applied today (the grids PROJ's
+  operations use are applied when present and downloaded on request). _Coordinate first_ (needs
+  an issue).
 - Data without a coordinate system: one written rule per format (assumed with a notice, or
   refused), tested. Custom coordinate systems saved by name
   ([#1702](https://github.com/opengeos/RustGIS/issues/1702)).
@@ -164,7 +168,9 @@ Big layers work, or say plainly where they stop
 What plugin authors have asked for. An addition that plugins declare through
 `minRustgisVersion` needs two maintainers ([docs/maintaining.md](docs/maintaining.md)).
 - Panels: a text box ([#1260](https://github.com/opengeos/RustGIS/issues/1260)).
-- Host requests for session plugins:
+- Host requests: a file or folder chosen by the user in a panel (a process plugin's file
+  parameter hands it a path today; [#1438](https://github.com/opengeos/RustGIS/issues/1438)); for
+  session plugins,
   symbology and raster tile requests and a view in a page layout (asked on
   [#1518](https://github.com/opengeos/RustGIS/issues/1518), which session plugins closed).
 - The WebAssembly plugin memory limit raised or made configurable
