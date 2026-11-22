@@ -577,6 +577,7 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
     match (v, ty) {
         (Value::Null, _) => (Value::Null, Cut::None, None),
         (Value::Int(i), FieldType::Integer) => (Value::Int(i), Cut::None, None),
+        (Value::Float(f), FieldType::Integer) if f.is_infinite() => (Value::Null, Cut::NotFinite, None),
         (Value::Float(f), FieldType::Integer) => whole(f),
         (Value::Float(f), FieldType::Double) => (Value::Float(f), Cut::None, None),
         (Value::Int(i), FieldType::Double) => (Value::Float(i as f64), Cut::None, None),
@@ -1836,7 +1837,7 @@ mod tests {
     fn coerce_takes_not_a_number_as_null() {
         assert_eq!(coerce_cut(Value::Float(f64::NAN), FieldType::Integer), (Value::Null, Cut::NotANumber));
         assert_eq!(coerce(Value::Float(f64::NAN), FieldType::Integer), Value::Null);
-        assert_eq!(coerce_cut(Value::Float(f64::INFINITY), FieldType::Integer), (Value::Null, Cut::Range));
+        assert_eq!(coerce_cut(Value::Float(f64::INFINITY), FieldType::Integer), (Value::Null, Cut::NotFinite));
         assert_eq!(coerce(Value::Float(-1e30), FieldType::Integer), Value::Int(i64::MIN));
         assert_eq!(coerce(Value::Float(0.1 + 0.2), FieldType::Double), Value::Float(0.1 + 0.2));
         // Text past the range, whole or decimal: null where it's said, at the range's end elsewhere.

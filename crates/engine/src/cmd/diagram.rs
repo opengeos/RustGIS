@@ -580,10 +580,7 @@ mod tests {
         let mark = full.notices.len();
         full.run("map.import", &json!({"text": map})).unwrap();
         let said: Vec<&str> = full.notices[mark..].iter().map(|n| n.text.as_str()).collect();
-        assert!(
-            said.iter().any(|t| t.contains("1 layout(s) beyond the 200 a project holds removed while checking the project")),
-            "{said:?}"
-        );
+        assert!(said.iter().any(|t| t.contains("1 layout(s) beyond the 200 a project holds removed while importing the map")), "{said:?}");
         // A map import takes the layers' diagrams, so says what reading them changed.
         let mut damaged_map: serde_json::Value = serde_json::from_str(&map).unwrap();
         let layer = damaged_map["layers"].as_array_mut().unwrap().iter_mut().find(|l| l["id"] == json!(id)).unwrap();
