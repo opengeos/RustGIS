@@ -2355,10 +2355,13 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
         rustgis_data::progress::check().map_err(|_| "the topology check was cancelled".to_string())?;
         // In longitude/latitude, a copy only of a layer held in another system; refused, naming
         // the layer, rather than checked on coordinates of another system.
-        // A cancel while converting is the check's cancel, said as the rules' is.
+        // A cancel while converting is the check's cancel, said as the rules' is. A conversion's
+        // error already starts with its layer's name; it isn't given twice.
         let named = |e: String| {
             if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) {
                 "the topology check was cancelled".to_string()
+            } else if e.starts_with(&format!("{}:", i.layer)) {
+                e
             } else {
                 format!("{}: {e}", i.layer)
             }
@@ -2635,6 +2638,22 @@ mod tests {
         }
         assert_eq!(errors[0], errors[1]);
         assert!(errors[0] > 0, "the overlap is found");
+    }
+
+    /// A held layer with a place that can't be given in longitude/latitude is refused, naming
+    /// the layer once.
+    #[test]
+    fn a_topology_refusal_names_its_layer_once() {
+        let mut ds = rustgis_data::Dataset::new("Parcels", GeometryType::Polyline, vec![]);
+        ds.hold_in(rustgis_data::raster::Crs::Epsg(32632)).unwrap();
+        // Far beyond any place UTM 32N holds.
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(1e12, 1e12), Coord::new(1e12 + 1.0, 1e12)]])), vec![]);
+        let mut s = Session::new(crate::Project::default());
+        s.map_mut().add_dataset(ds);
+        s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Parcels"}})).unwrap();
+        let e = check_topology(&topology_checks(&s), 1.0).unwrap_err();
+        assert!(e.starts_with("Parcels: feature"), "{e}");
+        assert_eq!(e.matches("Parcels").count(), 1, "{e}");
     }
 
     #[test]

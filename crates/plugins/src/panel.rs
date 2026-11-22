@@ -39,7 +39,6 @@ pub const MAX_FORM_FIELD_ID: usize = 64;
 pub const MAX_FORM_CHOICES: usize = 256;
 /// The most options a dropdown (`choice`) holds.
 pub const MAX_CHOICES: usize = 1_000;
-/// The widget kinds.
 /// Whether a kind takes its value from a list of `options`: a dropdown, or a tab row, which is the
 /// same thing drawn as a row of labels instead of a menu. They differ only in how they look, so
 /// everything from `options` to the value they keep is shared.
@@ -48,6 +47,7 @@ pub fn picks_an_option(kind: &str) -> bool {
     matches!(kind, "choice" | "tabs")
 }
 
+/// The widget kinds.
 pub const KINDS: &[&str] = &["text", "checkbox", "slider", "button", "tree", "form", "choice", "tabs", "date", "range", "pick"];
 /// What a pick asks for on the map: a point (the default) or a box.
 pub const PICK_SHAPES: &[&str] = &["point", "box"];
@@ -311,7 +311,7 @@ impl PanelDecl {
             }
             if options.len() != item.options.len() {
                 return Err(what(&format!(
-                    "a dropdown's options are at most {MAX_CHOICES} objects, each with a unique id of 1 to {MAX_TREE_ID} characters"
+                    "options (dropdown or tab row) are at most {MAX_CHOICES} objects, each with a unique id of 1 to {MAX_TREE_ID} characters"
                 )));
             }
             if kind != "text" && !item.text.is_empty() {
