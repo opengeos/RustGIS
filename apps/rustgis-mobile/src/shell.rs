@@ -134,6 +134,8 @@ enum Problem {
     MarkerTooLarge,
     /// The picture `name`, picked for the AI Assistant's message, is over `ASSISTANT_FILE_MAX_BYTES`.
     PictureTooLarge { name: String },
+    /// The pictures `names`, picked for the AI Assistant's message, are past what a message takes.
+    PicturesLeftOut { names: Vec<String> },
     /// The file `name` is over the size a pick reads into memory ([`PICK_MAX_BYTES`]), by
     /// itself or `together` with the files picked with it and already read.
     TooLarge { name: String, together: bool },
@@ -223,6 +225,10 @@ impl<P: Phone> App<P> {
                 Problem::ScriptTooLarge { name } => i18n::fmt("{file} is larger than 1 MB", &[("file", &name)]),
                 Problem::MarkerTooLarge => rustgis_ui_egui::marker_file_too_large().to_string(),
                 Problem::PictureTooLarge { name } => i18n::note(&rustgis_ui_egui::rustgis_assistant::attach::too_large(name)),
+                Problem::PicturesLeftOut { names } => i18n::fmt(
+                    "{names} weren't attached: a message takes at most {n} pictures",
+                    &[("names", &names.join(", ")), ("n", &rustgis_ui_egui::rustgis_assistant::attach::MAX_PER_MESSAGE.to_string())],
+                ),
                 Problem::TooLarge { name, together } => {
                     let limit = (PICK_MAX_BYTES >> 20).to_string();
                     let template = if together {
@@ -356,9 +362,18 @@ const PICK_MAX_BYTES: u64 = rustgis_engine::data::io::BYTES_FLOOR;
 /// Reads one folder's files of a pick (name, copy) into `inbox`, marked for the dialog that
 /// asked, and removes the copies: their bytes are all that was wanted of them. `held` counts the
 /// bytes the pick has read so far, across its folders.
-fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems, held: &mut u64) {
+fn read_batch(purpose: &str, mut files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems, held: &mut u64) {
     let mark = crate::mark(purpose);
     let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
+    // No more of the assistant's pictures are read than a message takes; the rest are said.
+    let most = rustgis_ui_egui::rustgis_assistant::attach::MAX_PER_MESSAGE;
+    if mark == rustgis_ui_egui::ASSISTANT_PICK && files.len() > most {
+        let left: Vec<(String, PathBuf)> = files.drain(most..).collect();
+        for (_, path) in &left {
+            remove_copy(path);
+        }
+        say(Problem::PicturesLeftOut { names: left.into_iter().map(|(name, _)| name).collect() });
+    }
     let max = PICK_MAX_BYTES;
     let mut read = Vec::new();
     for (name, path) in files {

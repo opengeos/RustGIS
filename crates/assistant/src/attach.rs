@@ -37,6 +37,9 @@ const MAX_NAME: usize = 80;
 /// The file types a picture is read from, for a picker's filter.
 pub const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 
+/// How a picture's caption starts ([`Picture::caption`]).
+pub const CAPTION: &str = "[a picture the user attached, ";
+
 /// A picture ready to go with the user's message.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Picture {
@@ -55,7 +58,7 @@ pub struct Picture {
 impl Picture {
     /// What stands in its place in the conversation once it's no longer sent.
     pub fn caption(&self) -> String {
-        format!("[a picture the user attached, {}, {} × {}, no longer attached]", self.name, self.width, self.height)
+        format!("{CAPTION}{}, {} × {}, no longer attached]", self.name, self.width, self.height)
     }
 
     /// Whether it is sent smaller than it was given.
@@ -81,6 +84,11 @@ impl Picture {
 /// photo): the desktop runs it off the window's thread. It holds the file, the decoded picture
 /// (at most [`MAX_DECODE_BYTES`]) and the picture drawn small, never another full copy.
 pub fn prepare(name: &str, bytes: &[u8]) -> Result<Picture, Note> {
+    prepare_within(name, bytes, MAX_DECODE_BYTES)
+}
+
+/// [`prepare`] decoding in at most `memory` bytes.
+pub(crate) fn prepare_within(name: &str, bytes: &[u8], memory: u64) -> Result<Picture, Note> {
     let name = clean_name(name);
     if bytes.len() > MAX_FILE_BYTES {
         return Err(too_large(name));
@@ -94,16 +102,30 @@ pub fn prepare(name: &str, bytes: &[u8]) -> Result<Picture, Note> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_DECODED_SIDE);
     limits.max_image_height = Some(MAX_DECODED_SIDE);
-    limits.max_alloc = Some(MAX_DECODE_BYTES);
+    limits.max_alloc = Some(memory);
     reader.limits(limits);
+    // Past the limits: too many pixels a side, or, within them, more memory than a picture may
+    // take to read (16 bits a channel, say), each said as it is.
+    let too_deep = || {
+        Note::with(
+            "{name}: the picture needs more than {limit} MiB to read",
+            [("name", name.clone()), ("limit", (memory >> 20).to_string())],
+        )
+    };
     let unreadable = |e: image::ImageError| match e {
-        image::ImageError::Limits(_) => too_many_pixels(name.clone()),
+        image::ImageError::Limits(_) if !header_fits(bytes) => too_many_pixels(name.clone()),
+        image::ImageError::Limits(_) => too_deep(),
         e => Note::with("{name}: the picture can't be read ({why})", [("name", name.clone()), ("why", e.to_string())]),
     };
     let mut decoder = reader.into_decoder().map_err(unreadable)?;
     // A photo taken with the phone on its side says so. A note that can't be read leaves the
     // picture as it was stored, which is how it is shown without the note.
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    // The pixels' buffer is allocated whole before they are read, outside the decoder's limits:
+    // its size is checked here (a 16-bit picture takes twice an 8-bit one's).
+    if decoder.total_bytes() > memory {
+        return Err(too_deep());
+    }
     let img = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
     finish(name, img, orientation)
 }
@@ -118,6 +140,12 @@ pub fn from_rgba(name: &str, width: u32, height: u32, rgba: Vec<u8>) -> Result<P
     let img = image::RgbaImage::from_raw(width, height, rgba)
         .ok_or_else(|| Note::with("{name}: the picture's pixels don't match its size", [("name", name.clone())]))?;
     finish(name, DynamicImage::ImageRgba8(img), Orientation::NoTransforms)
+}
+
+/// Whether the picture whose file is `bytes` says it has at most [`MAX_DECODED_SIDE`] pixels a
+/// side (read from its header alone); one whose header can't be read doesn't.
+fn header_fits(bytes: &[u8]) -> bool {
+    ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).is_some_and(|(w, h)| fits(w, h))
 }
 
 /// Whether a picture of `width` × `height` pixels is taken.

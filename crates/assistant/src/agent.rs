@@ -969,6 +969,18 @@ impl Agent {
         }
         let agent = call.args.get("agent").and_then(serde_json::Value::as_str).unwrap_or("subagent");
         let thread = call.args.get("thread").and_then(serde_json::Value::as_str).filter(|t| !t.trim().is_empty());
+        // A delegate gets the task's text: the user's pictures stay here, which is said.
+        if compact::has_pictures(&self.turns) {
+            // A follow-up goes to its thread's agent.
+            let label = match thread {
+                Some(id) => self.threads.iter().find(|t| t.id == id).map(|t| t.agent.label),
+                None => acp::AgentSpec::from_id(agent).map(|h| h.label),
+            };
+            self.transcript.push(Entry::Note(match label.map(str::to_string) {
+                Some(label) => Note::with("Pictures you attached don't go to {agent}: it gets the task's text only.", [("agent", label)]),
+                _ => Note::new("Pictures you attached don't go to a subagent: it gets the task's text only."),
+            }));
+        }
         if agent != "subagent" || thread.is_some() {
             let (result, error) = self.delegate_to_thread(agent, thread, task);
             self.record_front(result.clone(), result, error);

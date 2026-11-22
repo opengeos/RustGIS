@@ -60,8 +60,10 @@ at most 1,568 pixels on its longest side, and saved again as a JPEG (a PNG when 
 parts). Saving it again leaves out what the file carried besides its pixels, such as where a photo
 was taken. The conversation says each picture attached, and the size it was sent at when that is
 smaller than the file's. The latest eight pictures go with every request; older ones are replaced
-by a line naming them. A model that doesn't read images gets the pictures' names instead, and the
-conversation says so.
+by a line naming them, and so are those in the part of a long conversation that is summarised.
+A model that doesn't read images gets the pictures' names instead, and the conversation says so;
+switching to a model that reads images afterwards doesn't bring them back. Attach a picture again
+when the assistant needs to see it once more.
 
 A picture shows the model what you mean; it doesn't give coordinates. To place a scanned map, use
 georeferencing with control points rather than asking the model where things are.

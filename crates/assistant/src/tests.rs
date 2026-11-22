@@ -5191,3 +5191,29 @@ fn only_the_newest_pictures_are_sent_again() {
     let text = crate::compact::as_text(&[Turn::User("look".into(), vec![picture("map.jpg")])], 1);
     assert!(text.contains("User attached a picture: map.jpg (64 × 40)"), "{text}");
 }
+
+#[test]
+fn a_picture_that_needs_too_much_memory_says_so() {
+    // 16 bits a channel: within the pixels a side, past the memory a picture may take to read.
+    let img = image::ImageBuffer::<image::Rgba<u16>, _>::from_pixel(400, 400, image::Rgba([1000, 2000, 3000, 65535]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba16(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let e = crate::attach::prepare_within("deep.png", &png, 1 << 20).unwrap_err().to_string();
+    assert_eq!(e, "deep.png: the picture needs more than 1 MiB to read");
+    assert!(crate::attach::prepare_within("deep.png", &png, 64 << 20).is_ok());
+}
+
+#[test]
+fn a_delegated_task_says_the_pictures_stay_behind() {
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(matches!(a.ask_with("style it like this", vec![picture("ref.jpg")], &s), Step::Send(_)));
+    let _ = a.receive(a.generation(), ok(calls("delegate", json!({"task": "Style the countries"}))), &mut s);
+    let said = "Pictures you attached don't go to a subagent: it gets the task's text only.";
+    assert!(a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == said)));
+    // Without pictures, nothing is said.
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(matches!(a.ask("style it", &s), Step::Send(_)));
+    let _ = a.receive(a.generation(), ok(calls("delegate", json!({"task": "Style the countries"}))), &mut s);
+    assert!(!a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string() == said)));
+}

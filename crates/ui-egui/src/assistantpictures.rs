@@ -18,6 +18,10 @@ pub struct Pictures {
     /// Being read, with their names.
     #[cfg(not(target_arch = "wasm32"))]
     reading: Vec<(String, crate::Slot<Result<Picture, Note>>)>,
+    /// Pictures not attached since the last notice, said together ([`say_refused`]): those past
+    /// [`attach::MAX_PER_MESSAGE`], by name, and those that couldn't be read, with why.
+    left_out: Vec<String>,
+    refused: Vec<Note>,
 }
 
 impl Pictures {
@@ -75,12 +79,18 @@ pub fn button(app: &mut RustGisApp, ui: &mut Ui) {
         open(PURPOSE);
         return;
     }
+    // Only as many files are read as the message has room for; the rest are named.
     #[cfg(not(target_arch = "wasm32"))]
-    for path in pick_files().unwrap_or_default() {
-        match attach::read(&path) {
-            Ok(bytes) => received(app, &path, bytes),
-            Err(e) => app.session.notify(e, true),
+    {
+        let mut paths = pick_files().unwrap_or_default();
+        let room = attach::MAX_PER_MESSAGE.saturating_sub(app.assistant.pictures.count()).min(paths.len());
+        app.assistant.pictures.left_out.extend(paths.drain(room..));
+        // Each file is read on the worker too: a slow disk doesn't hold the window.
+        for path in paths {
+            let name = path.clone();
+            start(app, name, move || attach::prepare(&path, &attach::read(&path).map_err(Note::text)?));
         }
+        say_refused(app);
     }
 }
 
@@ -98,21 +108,43 @@ fn pick_files() -> Option<Vec<String>> {
     None
 }
 
-/// A notice for a picture that can't be attached, in the interface's language.
-fn refused(app: &mut RustGisApp, why: &Note) {
-    app.session.notify(crate::i18n::note(why), true);
+/// Says the pictures not attached since it last did: one notice for those past
+/// [`attach::MAX_PER_MESSAGE`], with their names, and one for each kind of refusal, with a count.
+fn say_refused(app: &mut RustGisApp) {
+    let pictures = &mut app.assistant.pictures;
+    let (left_out, refused) = (std::mem::take(&mut pictures.left_out), std::mem::take(&mut pictures.refused));
+    if !left_out.is_empty() {
+        let text = crate::i18n::fmt(
+            "{names} weren't attached: a message takes at most {n} pictures",
+            &[("names", &left_out.join(", ")), ("n", &attach::MAX_PER_MESSAGE.to_string())],
+        );
+        app.session.notify(text, true);
+    }
+    let mut kinds: Vec<(&'static str, Vec<Note>)> = Vec::new();
+    for why in refused {
+        match kinds.iter_mut().find(|(t, _)| *t == why.template) {
+            Some((_, notes)) => notes.push(why),
+            None => kinds.push((why.template, vec![why])),
+        }
+    }
+    for (_, notes) in kinds {
+        let Some(first) = notes.first().map(crate::i18n::note) else { continue };
+        let text = if notes.len() == 1 {
+            first
+        } else {
+            crate::i18n::fmt("{n} pictures weren't attached, such as {first}", &[("n", &notes.len().to_string()), ("first", &first)])
+        };
+        app.session.notify(text, true);
+    }
 }
 
-/// Whether the message has room for another picture; says so when it hasn't.
+/// Whether the message has room for another picture; one it hasn't is named in the next notice
+/// ([`say_refused`]).
 fn room(app: &mut RustGisApp, name: &str) -> bool {
     if app.assistant.pictures.count() < attach::MAX_PER_MESSAGE {
         return true;
     }
-    let text = crate::i18n::fmt(
-        "{name} wasn't attached: a message takes at most {n} pictures",
-        &[("name", name), ("n", &attach::MAX_PER_MESSAGE.to_string())],
-    );
-    app.session.notify(text, true);
+    app.assistant.pictures.left_out.push(name.to_string());
     false
 }
 
@@ -136,10 +168,13 @@ fn pasted(app: &mut RustGisApp, image: &egui::ColorImage) {
     let [w, h] = image.size;
     let (w, h) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
     if !attach::fits(w, h) {
-        refused(app, &attach::too_many_pixels(name));
+        app.assistant.pictures.refused.push(attach::too_many_pixels(name));
         return;
     }
-    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+    let mut rgba = Vec::with_capacity(image.pixels.len().saturating_mul(4));
+    for c in &image.pixels {
+        rgba.extend_from_slice(&c.to_srgba_unmultiplied());
+    }
     start(app, name.clone(), move || attach::from_rgba(&name, w, h, rgba));
 }
 
@@ -151,12 +186,18 @@ fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Pictu
     #[cfg(not(target_arch = "wasm32"))]
     {
         let slot: crate::Slot<Result<Picture, Note>> = Default::default();
+        let label = name.clone();
         let out = slot.clone();
         let read = std::sync::Arc::new(std::sync::Mutex::new(Some(read)));
         let work = read.clone();
         let spawned = std::thread::Builder::new().name("assistant picture".into()).spawn(move || {
             let Some(read) = work.lock().ok().and_then(|mut r| r.take()) else { return };
-            let picture = read();
+            // One picture is decoded at a time, so pictures picked together hold one decode's
+            // memory, not one each. A decoder that panics is said, not waited on forever.
+            let _turn = DECODING.lock().unwrap_or_else(|e| e.into_inner());
+            let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| {
+                Err(Note::with("{name}: the picture can't be read ({why})", [("name", label), ("why", "the decoder failed".into())]))
+            });
             if let Ok(mut out) = out.lock() {
                 *out = Some(picture);
             }
@@ -180,9 +221,13 @@ fn start(app: &mut RustGisApp, name: String, read: impl FnOnce() -> Result<Pictu
 fn finished(app: &mut RustGisApp, picture: Result<Picture, Note>) {
     match picture {
         Ok(p) => app.assistant.pictures.ready.push(p),
-        Err(why) => refused(app, &why),
+        Err(why) => app.assistant.pictures.refused.push(why),
     }
 }
+
+/// Held while a picture is decoded ([`start`]).
+#[cfg(not(target_arch = "wasm32"))]
+static DECODING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Takes in the pictures read since the last frame, and a picture pasted into the focused message
 /// box (`focused`).
@@ -200,7 +245,8 @@ pub fn poll(app: &mut RustGisApp, ui: &Ui, focused: bool) {
     }
 }
 
-/// Takes in the pictures read since it was last asked; says whether others are still being read.
+/// Takes in the pictures read since it was last asked, and says those that couldn't be
+/// attached; says whether others are still being read.
 fn take_read(app: &mut RustGisApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -216,6 +262,7 @@ fn take_read(app: &mut RustGisApp) -> bool {
             finished(app, r);
         }
     }
+    say_refused(app);
     app.assistant.pictures.reading()
 }
 
@@ -313,6 +360,15 @@ mod tests {
         read_all(&mut app);
         assert_eq!(app.assistant.pictures.ready.len(), 1);
         assert!(app.session.notices_since(0).iter().any(|n| n.text.contains("PNG, JPEG or WebP")));
+        // Past the four a message takes: the rest are named, together, in one notice.
+        let before = app.session.notice_mark();
+        for name in ["b.png", "c.png", "d.png", "e.png", "f.png"] {
+            received(&mut app, name, png());
+        }
+        read_all(&mut app);
+        assert_eq!(app.assistant.pictures.ready.len(), 4);
+        let said: Vec<String> = app.session.notices_since(before).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(said, ["e.png, f.png weren't attached: a message takes at most 4 pictures"]);
         // Sent with the message, and gone from the composer.
         let agent = app.assistant.agent.as_mut().unwrap();
         let step = agent.ask_with("like this", app.assistant.pictures.take(), &app.session);
@@ -321,6 +377,7 @@ mod tests {
         let Some(rustgis_assistant::provider::Turn::User(_, sent)) = app.assistant.agent.as_ref().unwrap().turns().last() else {
             panic!("message")
         };
-        assert_eq!(sent.iter().map(|p| (p.name.as_str(), p.width, p.height)).collect::<Vec<_>>(), [("map.png", 3, 2)]);
+        assert_eq!(sent.len(), 4);
+        assert_eq!((sent[0].name.as_str(), sent[0].width, sent[0].height), ("map.png", 3, 2));
     }
 }

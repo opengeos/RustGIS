@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use crate::attach::Picture;
+use crate::attach::{CAPTION as PICTURE_CAPTION, Picture};
 use crate::provider::{Api, ToolImage, ToolResult, Turn};
 
 /// UTF-8 bytes past which the conversation is compacted. This conservative heuristic is about
@@ -252,6 +252,14 @@ fn render_turns(turns: &[Turn], upto: usize) -> String {
                 let rest = text.get(end..).unwrap_or_default();
                 if !rest.is_empty() || !pictures.is_empty() {
                     out.push_str(&format!("User: {}\n", clip(rest, 4_000)));
+                }
+                // Pictures no longer attached are named at the message's end: kept when the
+                // message is cut.
+                if rest.chars().count() > 4_000 {
+                    for line in rest.lines().filter(|l| l.starts_with(PICTURE_CAPTION)) {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
                 }
                 for p in pictures {
                     let name = escape_user(&p.name);

@@ -732,7 +732,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 
 /// Starts a user request with the selected provider's current session configuration.
 fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
-    if key_loading(app) {
+    // A message waits for the key, and for a picture still being read, which goes with it (a
+    // suggestion clicked meanwhile, say).
+    if key_loading(app) || app.assistant.pictures.reading() {
         app.assistant.queued = Some(text);
         return;
     }
