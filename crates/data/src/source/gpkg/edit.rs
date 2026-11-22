@@ -173,7 +173,7 @@ impl EditTable {
             let mut rows = st.query([limit.clamp(1, MAX_EDITABLE) as i64]).map_err(err)?;
             while let Some(row) = rows.next().map_err(err)? {
                 let id = row.get::<_, i64>(key).map_err(err)?.cast_unsigned();
-                let Some(geometry) = self.geometry(row.get_ref(geom).map_err(err)?, false) else {
+                let Some(geometry) = self.geometry(row.get_ref(geom).map_err(err)?, &Held::Own) else {
                     out.skipped += 1;
                     continue;
                 };
@@ -202,9 +202,10 @@ impl EditTable {
     /// unreadable or trigger-removed row aborts the whole transaction.
     ///
     /// `held` is the system the edits' geometry is in, which the rows returned are given in too:
-    /// the table's own ([`Self::coord_crs`]), or longitude/latitude, as a layer a project saved
-    /// before RustGIS kept a table's own coordinates holds it; edits in another are refused:
-    /// convert them first ([`Edits::to_lonlat`]).
+    /// the table's own ([`Self::coord_crs`]); longitude/latitude, as a layer a project saved
+    /// before RustGIS kept a table's own coordinates holds it; or another, converted straight to
+    /// and from the table's. A geometry is written only when it differs from the stored one in
+    /// `held`, so an attribute edit leaves it as stored.
     pub fn save(
         &self,
         edits: &Edits,
@@ -213,15 +214,7 @@ impl EditTable {
         expected_revision: &str,
         held: Crs,
     ) -> Result<std::result::Result<SavedRows, Vec<Conflict>>> {
-        let lonlat = held != self.coord_crs();
-        if lonlat && held != Crs::LonLat {
-            return Err(DataError::Format(format!(
-                "{}: the edits are in {}, and the table is in {}; convert them to longitude/latitude first",
-                self.table(),
-                held.label(),
-                self.coord_crs().label()
-            )));
-        }
+        let how = &self.held(held)?;
         let mut conn =
             Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).map_err(err)?;
@@ -322,10 +315,11 @@ impl EditTable {
                 }
             }
             let old = ValueRef::from(row.get(geom).ok_or_else(|| self.shape_error())?);
-            let geometry_changed = self.geometry(old, lonlat).ok_or_else(|| self.shape_error())? != f.geometry;
+            let stored = self.geometry(old, how).ok_or_else(|| self.unread(f.id, how))?;
+            let geometry_changed = stored != f.geometry;
             spatial_changed |= geometry_changed;
             if geometry_changed {
-                let blob = self.geometry_blob(f.geometry.as_ref(), Some((f.id, old)), lonlat)?;
+                let blob = self.geometry_blob(f.geometry.as_ref(), Some((f.id, old)), how)?;
                 sets.push(format!("{} = ?", quote(self.geometry_column())));
                 args.push(blob);
             }
@@ -373,7 +367,7 @@ impl EditTable {
             let mut names = vec![pk.clone()];
             let mut args = vec![Sql::Integer(new_key)];
             if let Some(g) = &f.geometry {
-                let blob = self.geometry_blob(Some(g), None, lonlat)?;
+                let blob = self.geometry_blob(Some(g), None, how)?;
                 names.push(quote(self.geometry_column()));
                 args.push(blob);
             }
@@ -428,9 +422,14 @@ impl EditTable {
             .chain(additional.iter().filter(|k| rows.contains_key(*k)).map(|k| (None, *k)));
         for (original, k) in originals {
             let row = rows.get(&k).ok_or_else(|| DataError::Format(format!("row {k}: it was removed while saving")))?;
-            let geometry = self
-                .geometry(ValueRef::from(row.get(geom).ok_or_else(|| self.shape_error())?), lonlat)
-                .ok_or_else(|| DataError::Format(format!("row {k}: its stored geometry can't be read, so nothing was saved")))?;
+            let geometry =
+                self.geometry(ValueRef::from(row.get(geom).ok_or_else(|| self.shape_error())?), how).ok_or_else(|| match how {
+                    Held::Other { crs, .. } => DataError::Format(format!(
+                        "row {k}: its stored geometry can't be converted to {}, so nothing was saved",
+                        crs.label()
+                    )),
+                    _ => DataError::Format(format!("row {k}: its stored geometry can't be read, so nothing was saved")),
+                })?;
             let mut feature = Feature { id: k.cast_unsigned(), geometry, attrs: vec![Value::Null; fields.len()] };
             if let Some(original) = original {
                 for &i in &unstored_fields {
@@ -535,23 +534,57 @@ impl EditTable {
         key.zip(geom).ok_or_else(|| self.shape_error())
     }
 
-    // Outer None is unreadable; inner None is a valid NULL or empty geometry. As the table holds
-    // it, or in longitude/latitude when `lonlat` (for a layer a project saved before RustGIS kept
-    // a table's own coordinates).
-    fn geometry(&self, v: ValueRef<'_>, lonlat: bool) -> Option<Option<Geometry>> {
+    /// How edits held in `held` meet the table's coordinates.
+    fn held(&self, held: Crs) -> Result<Held> {
+        let own = self.coord_crs();
+        Ok(if held == own {
+            Held::Own
+        } else if held == Crs::LonLat {
+            Held::LonLat
+        } else {
+            let failed = |e: String| {
+                DataError::Format(format!(
+                    "{}: the edits are in {}, which can't be converted to {}: {e}",
+                    self.table(),
+                    held.label(),
+                    own.label()
+                ))
+            };
+            Held::Other { crs: held, to_held: own.to(held).map_err(failed)?, to_table: held.to(own).map_err(failed)? }
+        })
+    }
+
+    /// A stored geometry that can't be read, or given in `how`'s system.
+    fn unread(&self, id: u64, how: &Held) -> DataError {
+        match how {
+            Held::Other { crs, .. } => {
+                DataError::Format(format!("row {}: its stored geometry can't be converted to {}", id.cast_signed(), crs.label()))
+            }
+            _ => self.shape_error(),
+        }
+    }
+
+    // Outer None is unreadable (or, in another system, can't be converted); inner None is a valid
+    // NULL or empty geometry. As the table holds it, in longitude/latitude (for a layer a project
+    // saved before RustGIS kept a table's own coordinates), or in another system.
+    fn geometry(&self, v: ValueRef<'_>, how: &Held) -> Option<Option<Geometry>> {
         match v {
             ValueRef::Null => Some(None),
             ValueRef::Blob(b) if is_empty_blob(b) => Some(None),
             ValueRef::Blob(b) => {
                 let (_, body) = split_blob(b)?;
                 let g = wkb::decode(body)?;
-                if lonlat { self.src.reproject.to_lonlat_geometry(g).map(Some) } else { Some(Some(g)) }
+                match how {
+                    Held::Own => Some(Some(g)),
+                    Held::LonLat => self.src.reproject.to_lonlat_geometry(g).map(Some),
+                    Held::Other { to_held, .. } => to_held.whole_geometry(&g).map(Some),
+                }
             }
             _ => None,
         }
     }
 
-    fn geometry_blob(&self, g: Option<&Geometry>, row: Option<(u64, ValueRef<'_>)>, lonlat: bool) -> Result<Sql> {
+    fn geometry_blob(&self, g: Option<&Geometry>, row: Option<(u64, ValueRef<'_>)>, how: &Held) -> Result<Sql> {
         // Check before returning NULL: removing geometry must not silently drop existing Z/M.
         let has_zm = row.is_some_and(|(_, v)| match v {
             ValueRef::Blob(b) => split_blob(b).is_some_and(|(_, body)| wkb::has_zm(body)),
@@ -573,13 +606,24 @@ impl EditTable {
         let Some(g) = g else {
             return Ok(Sql::Null);
         };
-        let native = if lonlat {
-            self.src.reproject.to_native(g).ok_or_else(|| {
-                let id = row.map(|(k, _)| k.cast_signed().to_string()).unwrap_or_else(|| "new".into());
-                DataError::Format(format!("row {id}: its geometry can't be converted to {}", self.src.reproject.label()))
-            })?
-        } else {
-            g.clone()
+        let id = || row.map(|(k, _)| k.cast_signed().to_string()).unwrap_or_else(|| "new".into());
+        let unconverted = || DataError::Format(format!("row {}: its geometry can't be converted to {}", id(), self.src.reproject.label()));
+        let native = match how {
+            Held::LonLat => self.src.reproject.to_native(g).ok_or_else(unconverted)?,
+            Held::Other { to_table, .. } => to_table.whole_geometry(g).ok_or_else(unconverted)?,
+            // In the table's own system, as conversion would: a coordinate that isn't a number
+            // can't be stored, since it reads back as an empty or unreadable geometry.
+            Held::Own => {
+                let mut finite = true;
+                g.for_each_coord(|c| finite &= c.is_finite());
+                if !finite {
+                    return Err(DataError::Format(format!(
+                        "row {}: its geometry has a coordinate that isn't a number, so it can't be saved",
+                        id()
+                    )));
+                }
+                g.clone()
+            }
         };
         let body = match (self.geometry_type.as_str(), &native) {
             ("POINT", Geometry::Point(_) | Geometry::MultiPoint(_))
@@ -890,6 +934,16 @@ fn maintain_rtree(conn: &Connection, rtree: Option<&str>, key: i64, extent: &Ext
         .map_err(err)?;
     }
     Ok(())
+}
+
+/// How the edits' coordinates meet the table's ([`EditTable::save`]).
+enum Held {
+    /// The table's own.
+    Own,
+    /// Longitude/latitude, through the table's reprojection.
+    LonLat,
+    /// Another system, converted straight to and from the table's.
+    Other { crs: Crs, to_held: crate::raster::Reprojection, to_table: crate::raster::Reprojection },
 }
 
 #[cfg(test)]
@@ -1788,27 +1842,32 @@ mod tests {
         given.for_each_coord(|c| close &= c.x.abs() <= 180.0);
         assert!(close, "{given:?}");
         assert_eq!(wkb::decode(split_blob(&blob_at(&path, 1)).unwrap().1), table.src.reproject.to_native(&back));
-        // Held in another system: refused as given, and written once converted in place.
+        // Held in another system: written straight from it, and given back in it.
         let utm = Crs::from_epsg(32632).unwrap();
         let mut edits = update(&table, None);
         let there = Crs::LonLat.to(utm).unwrap().geometry(&back);
-        edits.updates[0].0.geometry = Some(there);
+        edits.updates[0].0.geometry = Some(there.clone());
         let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
-        let e = table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap_err().to_string();
-        assert!(e.contains("EPSG:32632") && e.contains("convert them"), "{e}");
-        edits.to_lonlat(utm).unwrap();
-        table.save(&edits, &[], std::iter::empty(), &revision, Crs::LonLat).unwrap().unwrap();
-        let stored = wkb::decode(split_blob(&blob_at(&path, 1)).unwrap().1).unwrap();
-        let mut near = true;
-        let want = table.src.reproject.to_native(&back).unwrap();
-        let mut w = Vec::new();
-        want.for_each_coord(|c| w.push(c));
-        let mut i = 0;
-        stored.for_each_coord(|c| {
-            near &= w.get(i).is_some_and(|d| (c.x - d.x).abs() < 1e-6 && (c.y - d.y).abs() < 1e-6);
-            i += 1;
-        });
-        assert!(near, "{stored:?} vs {want:?}");
+        let saved = table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap().unwrap();
+        let stored = blob_at(&path, 1);
+        let want = utm.to(crs).unwrap().whole_geometry(&there).unwrap();
+        assert_eq!(wkb::decode(split_blob(&stored).unwrap().1), Some(want.clone()));
+        assert_eq!(saved.features[0].geometry, crs.to(utm).unwrap().whole_geometry(&want));
+        // A row held there whose geometry wasn't edited leaves the stored one as it is, bit for bit.
+        let mut edits = update(&table, None);
+        edits.updates[0].0.geometry = saved.features[0].geometry.clone();
+        let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
+        let again = table.save(&edits, &[], std::iter::empty(), &revision, utm).unwrap().unwrap();
+        assert_eq!(blob_at(&path, 1), stored, "unchanged");
+        assert_eq!(again.changes.unchanged, 1);
+        // In the table's own system, a coordinate that isn't a number is refused, as conversion
+        // refuses it.
+        let mut edits = update(&table, None);
+        edits.updates[0].0.geometry = Some(line(f64::NAN));
+        let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
+        let e = table.save(&edits, &[], std::iter::empty(), &revision, crs).unwrap_err().to_string();
+        assert!(e.contains("row 1") && e.contains("isn't a number"), "{e}");
+        assert_eq!(blob_at(&path, 1), stored, "nothing written");
         let edits = update(&table, None);
         let revision = table.read_editable(MAX_EDITABLE).unwrap().revision;
         let mut edits = edits;

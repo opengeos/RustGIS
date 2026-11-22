@@ -123,16 +123,11 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
         let t = postgis::find_table(&conn, &table).map_err(err)?;
         let src = postgis::PostgisSource::open(conn, t, edit.origin.family, edit.origin.crs.as_deref()).map_err(err)?;
         let rows = changes.insert_rows.clone();
-        let mut edits = rustgis_data::source::edits::Edits { updates: changes.updates, deletes: changes.deletes, inserts: changes.inserts };
-        // In the system the layer holds its geometry in: the table's own, or longitude/latitude
-        // for a layer a project saved before RustGIS kept a table's own coordinates. Edits held
-        // in another (the column given another SRID since) go in longitude/latitude, converted
-        // in place.
-        let mut held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
-        if held != rustgis_data::source::FeatureSource::coord_crs(&src) && held != rustgis_data::raster::Crs::LonLat {
-            edits.to_lonlat(held).map_err(|e| format!("{name}: {e}; nothing was saved"))?;
-            held = rustgis_data::raster::Crs::LonLat;
-        }
+        let edits = rustgis_data::source::edits::Edits { updates: changes.updates, deletes: changes.deletes, inserts: changes.inserts };
+        // In the system the layer holds its geometry in: the table's own, longitude/latitude for
+        // a layer a project saved before RustGIS kept a table's own coordinates, or another (the
+        // column given another SRID since), converted straight to the table's.
+        let held = s.map().layer(id).map_or(rustgis_data::raster::Crs::LonLat, |l| l.dataset.coord_crs());
         let saved = match src.save(&edits, &fields, held).map_err(err)? {
             Ok(saved) => saved,
             Err(conflicts) => {

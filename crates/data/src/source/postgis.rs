@@ -1421,19 +1421,56 @@ impl PostgisSource {
     /// unless it changed). `fields` are the layer's, matched to the table's columns by name.
     /// `held` is the system the edits' geometry is in: the one the table is read in
     /// ([`FeatureSource::coord_crs`]), or longitude/latitude, as a layer a project saved before
-    /// RustGIS kept a table's own coordinates holds it, which the server converts. Edits in
-    /// another (a table whose column was given another SRID since the layer was loaded) are
-    /// refused: convert them first ([`Edits::to_lonlat`]). Needs a connection from
-    /// [`connect_writable`].
+    /// RustGIS kept a table's own coordinates holds it, which the server converts; or another (a
+    /// table whose column was given another SRID since the layer was loaded), converted here
+    /// straight to the one the table is read in. A geometry is written only when it differs from
+    /// the stored one in `held`, so an attribute edit leaves it as stored. Needs a connection
+    /// from [`connect_writable`].
     pub fn save(&self, edits: &Edits, fields: &[Field], held: Crs) -> Result<std::result::Result<Saved, Vec<Conflict>>> {
-        let own = held == self.held;
-        if !own && held != Crs::LonLat {
-            return Err(DataError::Format(format!(
-                "{}: the edits are in {}, and the table is read in {}; convert them to longitude/latitude first",
+        let other = held != self.held && held != Crs::LonLat;
+        // Read and written as the table is read: in its own system, or in another converted here.
+        let own = held == self.held || other;
+        let failed = |e: String| {
+            DataError::Format(format!(
+                "{}: the edits are in {}, which can't be converted to {}: {e}",
                 self.table.label(),
                 held.label(),
                 self.held.label()
-            )));
+            ))
+        };
+        let (to_held, to_table) =
+            if other { (Some(self.held.to(held).map_err(failed)?), Some(held.to(self.held).map_err(failed)?)) } else { (None, None) };
+        // Each edited geometry checked before anything is written: one that can't be converted to
+        // the system the table is read in, or one in that system with a coordinate that isn't a
+        // number, refuses the save. Nothing is kept: it is converted again as it is written.
+        // Longitude/latitude goes to the server as before.
+        let what = |n: usize, update: bool, f: &Feature| {
+            if update { format!("row {}", f.id.cast_signed()) } else { format!("new feature {}", n + 1) }
+        };
+        if own {
+            let updates = edits.updates.iter().map(|(f, _)| f).enumerate().map(|(n, f)| (true, n, f));
+            for (update, n, f) in updates.chain(edits.inserts.iter().enumerate().map(|(n, f)| (false, n, f))) {
+                crate::progress::check()?;
+                let Some(g) = &f.geometry else { continue };
+                if let Some(to) = &to_table {
+                    if to.whole_geometry(g).is_none() {
+                        return Err(DataError::Format(format!(
+                            "{}: its geometry can't be converted to {}",
+                            what(n, update, f),
+                            self.held.label()
+                        )));
+                    }
+                } else {
+                    let mut finite = true;
+                    g.for_each_coord(|c| finite &= c.is_finite());
+                    if !finite {
+                        return Err(DataError::Format(format!(
+                            "{}: its geometry has a coordinate that isn't a number, so it can't be saved",
+                            what(n, update, f)
+                        )));
+                    }
+                }
+            }
         }
         let key = self.key.as_deref().ok_or_else(|| {
             DataError::Format(format!(
@@ -1532,6 +1569,12 @@ impl PostgisSource {
             // Updates: the columns whose values differ from the rows as they are (as they were
             // read, since their versions match).
             let mut written: Vec<i64> = Vec::new();
+            // As checked above, so it converts; were it not to, nothing is saved (rolled back),
+            // the row given as a conflict, rather than writing it unconverted.
+            let encode = |g: &crate::Geometry| match &to_table {
+                Some(to) => to.whole_geometry(g).map(|placed| wkb::encode(&placed)),
+                None => Some(wkb::encode(g)),
+            };
             let ids: Vec<i64> = edits.updates.iter().map(|(f, _)| f.id.cast_signed()).collect();
             // In the system the edits are in, so an unchanged geometry compares equal.
             let cols: Vec<String> = self
@@ -1544,7 +1587,14 @@ impl PostgisSource {
                 .query(format!("SELECT {} FROM {from} WHERE {k} = ANY($1::int8[])", cols.join(", ")).as_str(), &[&ids])?
                 .iter()
                 .filter_map(|r| self.feature(r, &mut Vec::new()))
-                .map(|f| (f.id, f))
+                .map(|mut f| {
+                    // In the edits' system; one that can't be converted there differs, and the
+                    // edit's is written.
+                    if let Some(to) = &to_held {
+                        f.geometry = f.geometry.as_ref().and_then(|g| to.whole_geometry(g));
+                    }
+                    (f.id, f)
+                })
                 .collect();
             for (f, _) in &edits.updates {
                 let was = current.get(&f.id);
@@ -1562,7 +1612,8 @@ impl PostgisSource {
                 if let Some(g) = &f.geometry
                     && was.and_then(|w| w.geometry.as_ref()) != Some(g)
                 {
-                    params.push(Box::new(wkb::encode(g)));
+                    let Some(bytes) = encode(g) else { return Ok(Err(vec![Conflict::Changed(f.id)])) };
+                    params.push(Box::new(bytes));
                     sets.push(format!("{column} = {}", self.geometry_in(params.len(), dims, own)));
                 }
                 if sets.is_empty() {
@@ -1595,7 +1646,8 @@ impl PostgisSource {
                     values.push(format!("CAST(${}::text AS {})", params.len(), tg.ty));
                 }
                 if let Some(g) = &f.geometry {
-                    params.push(Box::new(wkb::encode(g)));
+                    let Some(bytes) = encode(g) else { return Ok(Err(vec![Conflict::Changed(f.id)])) };
+                    params.push(Box::new(bytes));
                     names.push(column.clone());
                     values.push(self.geometry_in(params.len(), dims, own));
                 }
@@ -1802,18 +1854,15 @@ mod tests {
         server.table.srid = 2056;
         assert_eq!(server.geometry_in(1, 2, true), "ST_Transform(ST_SetSRID(ST_GeomFromWKB($1::bytea), 4326), 2056)");
         assert_eq!(server.coord_crs(), Crs::LonLat);
-        let e = held.save(&Edits::default(), &[], Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
-        assert!(e.contains("EPSG:21781") && e.contains("EPSG:2056") && e.contains("convert them"), "{e}");
-        // Converted in place; a new feature that can't be is named by its place, not its id.
+        // Checked before anything is written: in another system, each geometry converted to the
+        // table's, a new feature named by its place, not its id; in the table's own, a coordinate
+        // that isn't a number refused.
         let point = |x, y| Some(crate::Geometry::Point(rustgis_geom::Coord::new(x, y)));
-        let mut edits =
-            Edits { inserts: vec![Feature { id: 1, geometry: point(600_000.0, 200_000.0), attrs: Vec::new() }], ..Edits::default() };
-        edits.to_lonlat(Crs::from_epsg(21781).unwrap()).unwrap();
-        let Some(crate::Geometry::Point(c)) = &edits.inserts[0].geometry else { panic!() };
-        assert!((c.x - 7.4386).abs() < 1e-3 && (c.y - 46.9511).abs() < 1e-3, "{c:?}");
-        let mut bad = Edits { inserts: vec![Feature { id: 1, geometry: point(f64::NAN, 0.0), attrs: Vec::new() }], ..Edits::default() };
-        let e = bad.to_lonlat(Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
-        assert!(e.starts_with("new feature 1:"), "{e}");
+        let bad = Edits { inserts: vec![Feature { id: 7, geometry: point(f64::NAN, 0.0), attrs: Vec::new() }], ..Edits::default() };
+        let e = held.save(&bad, &[], Crs::from_epsg(21781).unwrap()).unwrap_err().to_string();
+        assert!(e.starts_with("new feature 1:") && e.contains("EPSG:2056"), "{e}");
+        let e = held.save(&bad, &[], lv95).unwrap_err().to_string();
+        assert!(e.starts_with("new feature 1:") && e.contains("isn't a number"), "{e}");
     }
 
     #[test]

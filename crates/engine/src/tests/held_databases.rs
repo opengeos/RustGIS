@@ -110,6 +110,35 @@ fn postgis_lv95_live() {
     assert_eq!(text(&mut db, 2), before, "the server's lon/lat compares equal, so the geometry isn't rewritten");
     let name: String = db.query_one(format!("SELECT name FROM public.{table} WHERE id = 2").as_str(), &[]).unwrap().get(0);
     assert_eq!(name, "Thoune");
+
+    // Held in a third system (UTM 32N): converted straight to LV95 and back, so an attribute
+    // edit leaves the stored geometry as it is, byte for byte, and a moved point lands where
+    // LV95 puts it.
+    s.run("pg.discardEdits", &json!({"layer": "T"})).unwrap();
+    let utm = rustgis_data::raster::Crs::from_epsg(32632).unwrap();
+    {
+        let l = s.map_mut().layer_mut(id).unwrap();
+        l.dataset = rustgis_data::io::project(&l.dataset, utm).unwrap();
+        l.touch_geometry();
+    }
+    let baseline = s.map().layer(id).unwrap().dataset.features.clone();
+    if let Some(pg) = s.map_mut().layer_mut(id).unwrap().postgis.as_mut() {
+        pg.versions = rustgis_map::source::versions_of(&baseline, &pg.versions, &Default::default());
+    }
+    let bytes = |db: &mut postgres::Client, id: i32| -> String {
+        db.query_one(
+            format!("SELECT encode(ST_AsBinary(geom), 'hex') || ' ' || ST_SRID(geom) FROM public.{table} WHERE id = $1").as_str(),
+            &[&id],
+        )
+        .unwrap()
+        .get(0)
+    };
+    let before = bytes(&mut db, 1);
+    s.run("edit.setValue", &json!({"layer": "T", "row": row_of(&s, 1), "field": "name", "value": "Berne"})).unwrap();
+    let r = s.run("pg.saveEdits", &json!({"layer": "T"})).unwrap();
+    assert_eq!(r["updated"].as_u64(), Some(1), "{r}");
+    assert_eq!(bytes(&mut db, 1), before, "an attribute edit leaves the geometry as the table holds it");
+    assert_eq!(s.map().layer(id).unwrap().dataset.coord_crs(), utm);
 }
 
 /// A GeoPackage table in LV95 loaded for editing is held in LV95 with its stored coordinates; an
@@ -196,8 +225,8 @@ fn a_geopackage_edit_session_works_in_the_tables_own_system() {
 }
 
 /// A GeoPackage layer held in a system that is neither the table's nor longitude/latitude saves
-/// through longitude/latitude, and the rows read back go into the layer in its own system again,
-/// so a second save writes them where they were.
+/// straight from it, and the rows read back come in it too, so two attribute saves leave the
+/// stored geometry and the layer's as they were, byte for byte.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_geopackage_layer_held_in_a_third_system_saves_twice_in_place() {
@@ -213,11 +242,6 @@ fn a_geopackage_layer_held_in_a_third_system_saves_twice_in_place() {
     ds.crs = Some(lv95);
     ds.held_in = lv95;
     rustgis_data::io::write_path_in(&ds, &path, lv95).unwrap();
-    let stored = || -> Coord {
-        let (back, _) = rustgis_data::io::read_path(&path).unwrap();
-        let Some(Geometry::Point(c)) = back.features.iter().next().unwrap().geometry.clone() else { panic!() };
-        c
-    };
     let mut s = Session::new(Project::default());
     let loaded = s.run("gpkg.addLayer", &json!({"path": path, "table": "towns", "name": "T"})).unwrap();
     let id = loaded["layer"].as_u64().unwrap() as u32;
@@ -233,18 +257,21 @@ fn a_geopackage_layer_held_in_a_third_system_saves_twice_in_place() {
         let Some(Geometry::Point(c)) = features[0].geometry.clone() else { panic!() };
         c
     };
-    // Within 1 cm, not exactly: the layer's point went LV95 → UTM directly, the read-back goes
-    // LV95 → longitude/latitude → UTM, and the two paths differ by about a millimetre.
+    let blob = || -> Vec<u8> {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.query_row("SELECT geom FROM towns WHERE fid = 1", [], |r| r.get(0)).unwrap()
+    };
+    let bern = blob();
+    // Converted straight from LV95 and back, as the layer was: an attribute edit leaves the
+    // stored geometry as it is, byte for byte, and the layer keeps its point.
     for name in ["Bärn", "Berne"] {
         s.run("edit.setValue", &json!({"layer": "T", "row": 0, "field": "name", "value": name})).unwrap();
         let r = s.run("gpkg.saveEdits", &json!({"layer": "T"})).unwrap();
         assert_eq!(r["saved"], true, "{r}");
         let l = s.map().layer(id).unwrap();
         assert_eq!(l.dataset.coord_crs(), utm);
-        let Some(Geometry::Point(c)) = l.dataset.features.iter().next().unwrap().geometry.clone() else { panic!() };
-        assert!((c.x - in_utm.x).abs() < 1e-2 && (c.y - in_utm.y).abs() < 1e-2, "{name}: the layer keeps it in UTM: {c:?} vs {in_utm:?}");
-        let c = stored();
-        assert!((c.x - 2_600_000.123).abs() < 1e-2 && (c.y - 1_200_000.456).abs() < 1e-2, "{name}: the table keeps it in place: {c:?}");
+        assert_eq!(l.dataset.features.iter().next().unwrap().geometry, Some(Geometry::Point(in_utm)), "{name}");
+        assert_eq!(blob(), bern, "{name}: the table keeps it as stored");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

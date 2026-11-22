@@ -626,7 +626,7 @@ database live, talking to the server itself: see [MySQL and MariaDB](data.md#mys
 
 | Source | How to add it | Notes |
 | --- | --- | --- |
-| MySQL or MariaDB table or view | Home › Add › Add Data › Database… (`layer.addDatabase`) with a `mysql://user@host:3306/database` or `mariadb://…` address | Large tables read a view at a time by their spatial index, others loaded whole. Kept in the column's own coordinate system when RustGIS knows its SRID, else treated as longitude/latitude (said); `"crs"` for an SRID of 0. A column of mixed types becomes a layer per type. `ssl-mode` sets the encryption. The password is kept for the session only. |
+| MySQL or MariaDB table or view | Home › Add › Add Data › Database… (`layer.addDatabase`) with a `mysql://user@host:3306/database` or `mariadb://…` address | Large tables read a view at a time by their spatial index, others loaded whole. Kept in the column's own coordinate system when RustGIS knows its SRID, else treated as longitude/latitude, with a notice; `"crs"` for an SRID of 0. A column of mixed types becomes a layer per type. `ssl-mode` sets the encryption. The password is kept for the session only. |
 
 ## SQL Server and Azure SQL
 
@@ -635,7 +635,7 @@ external client: see [SQL Server and Azure SQL](data.md#sql-server-and-azure-sql
 
 | Source | How to add it | Notes |
 | --- | --- | --- |
-| SQL Server table or view | Home › Add › Add Data › Database… (`layer.addDatabase`) with an `mssql://user@host:1433/database` address | Read only; large tables read a view at a time. Geometry and geography, including curves, are kept in the column's own coordinate system when RustGIS knows its SRID, else treated as longitude/latitude (said). `"crs"` supplies SRID 0; mixed types become separate layers. TLS and certificate checking are on by default. SQL Server logins on every desktop platform; Windows logins on Windows only. Passwords are kept for the session, never in projects. |
+| SQL Server table or view | Home › Add › Add Data › Database… (`layer.addDatabase`) with an `mssql://user@host:1433/database` address | Read only; large tables read a view at a time. Geometry and geography, including curves, are kept in the column's own coordinate system when RustGIS knows its SRID, else treated as longitude/latitude, with a notice. `"crs"` supplies SRID 0; mixed types become separate layers. TLS and certificate checking are on by default. SQL Server logins on every desktop platform; Windows logins on Windows only. Passwords are kept for the session, never in projects. |
 
 ## SQL queries and DuckDB databases
 

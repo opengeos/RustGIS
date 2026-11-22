@@ -63,37 +63,3 @@ pub struct Saved {
     /// holds instants: taken as UTC.
     pub assumed_utc: Vec<usize>,
 }
-
-impl Edits {
-    /// Converts the geometry of the rows changed and added from `held` to longitude/latitude, in
-    /// place (no copy), for a table that takes them so: a layer held in a system other than the
-    /// table's (its column given another SRID since it was loaded). Fails on a geometry that can't
-    /// be converted, naming its row, or the new feature, and stops once the run is cancelled; the
-    /// edits are then left part converted, for the caller to drop.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn to_lonlat(&mut self, held: crate::raster::Crs) -> crate::Result<()> {
-        let to = held.to(crate::raster::Crs::LonLat).map_err(crate::DataError::Format)?;
-        let convert = |f: &mut Feature, what: &dyn Fn() -> String| -> crate::Result<()> {
-            crate::progress::check()?;
-            if let Some(g) = &f.geometry {
-                let placed = to.whole_geometry(g).ok_or_else(|| {
-                    crate::DataError::Format(format!(
-                        "{}: its geometry can't be converted from {} to longitude/latitude",
-                        what(),
-                        held.label()
-                    ))
-                })?;
-                f.geometry = Some(placed);
-            }
-            Ok(())
-        };
-        for (f, _) in &mut self.updates {
-            let id = f.id.cast_signed();
-            convert(f, &|| format!("row {id}"))?;
-        }
-        for (n, f) in self.inserts.iter_mut().enumerate() {
-            convert(f, &|| format!("new feature {}", n + 1))?;
-        }
-        Ok(())
-    }
-}
