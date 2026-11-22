@@ -104,9 +104,13 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
                     crate::Value::Text(text) if fd.name == "description" && fd.ty == crate::FieldType::Text => {
                         xml(text, "KML", || feature_place(&ds.name, f.id, "description"))?
                     }
-                    _ => xml(&v.to_file_text(), "KML", || feature_place(&ds.name, f.id, &format!("field '{}'", fd.name)))?,
+                    _ => xml(&v.to_file_text(), "KML", || feature_place(&ds.name, f.id, &format!("field '{}'", fd.name.escape_debug())))?,
                 };
-                let name = xml(&fd.name, "KML", || format!("{}, field name '{}'", ds.name, fd.name.escape_debug()))?;
+                // In an attribute, where a reader turns tabs and line breaks into spaces unless
+                // they are written as references.
+                let name = xml(&fd.name, "KML", || format!("{}, field name '{}'", ds.name, fd.name.escape_debug()))?
+                    .replace('\t', "&#9;")
+                    .replace('\n', "&#10;");
                 Ok(format!("<Data name=\"{name}\"><value>{value}</value></Data>"))
             })
             .collect::<crate::Result<String>>()?;

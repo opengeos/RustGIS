@@ -643,7 +643,7 @@ fn where_clauses_compare_dates() {
     for e in ["ts >= '2026/03/05 14:30'", "ts >= '2026-03-05 14:30:00 +02:00'", "ts < '2026-03-05T14:30:00.1234567'"] {
         let error = parse(e, &d).err().unwrap_or_default();
         assert!(
-            error.contains("write the date-time as ISO 8601 ('2026-03-05T14:30:00+02:00')") && !error.contains("YYYY-MM-DD"),
+            error.contains("write the date-time as ISO 8601 ('2026-03-05T14:30:00+02:00'") && !error.contains("YYYY-MM-DD"),
             "{e}: {error}"
         );
     }

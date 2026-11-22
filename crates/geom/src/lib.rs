@@ -150,8 +150,9 @@ impl Extent {
         c.x >= self.min_x && c.x <= self.max_x && c.y >= self.min_y && c.y <= self.max_y
     }
     /// Whether a box that isn't empty reaches past longitude/latitude: beyond ±180.5° in x or
-    /// ±90.5° in y, the half degree allowing for rounding, as the readers check. Such coordinates
-    /// aren't longitude/latitude (they are projected, or in no known system).
+    /// ±90.5° in y, the half degree allowing for rounding, as the readers check. A hint, not proof,
+    /// that the coordinates are projected or in no known system: longitudes unwrapped across the
+    /// antimeridian (181°) reach past it too.
     pub fn beyond_lonlat(&self) -> bool {
         !self.is_empty() && (self.min_x < -180.5 || self.max_x > 180.5 || self.min_y < -90.5 || self.max_y > 90.5)
     }

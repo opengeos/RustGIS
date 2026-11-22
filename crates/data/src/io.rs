@@ -799,12 +799,13 @@ pub struct GpkgWritten {
 /// As [`write_path`], in the coordinate system `crs` (a GeoPackage, Shapefile or FlatGeobuf; see
 /// [`write_bytes_in`]).
 pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
-    write_path_to(ds, path, crs, &GpkgTable::default()).map(|(left_out, _)| left_out)
+    write_path_to(ds, path, crs, &GpkgTable::default()).map(|(left_out, _, _)| left_out)
 }
 
 /// As [`write_path_in`], a GeoPackage's table placed as `gpkg` says (other formats ignore it):
-/// also returns the table written.
-pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>)> {
+/// also returns the table written, and notes to give with the export (a Shapefile's old parts it
+/// couldn't remove once the new ones landed, [`kept_backups_note`]).
+pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>, Vec<String>)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if crs != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()) {
         check_projected(&ext, crs)?;
@@ -826,7 +827,7 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
                 // Every feature is written: a layer of several kinds of geometry gets a GEOMETRY
                 // column, and one that declares no type takes its geometry's.
                 let table = crate::source::gpkg::write_table_in(ds, path, crs, gpkg)?;
-                Ok((0, Some(table)))
+                Ok((0, Some(table), Vec::new()))
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -838,10 +839,8 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
             crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let parts: Vec<(std::path::PathBuf, Vec<u8>)> = parts.into_iter().map(|(e, bytes)| (shapefile_part(path, e), bytes)).collect();
-            // Not said yet: an export returns no notes, so old parts it couldn't remove (hidden
-            // copies beside the file) go unreported here, unlike a publish.
-            let _kept = place_shapefile(path, &stage_shapefile(&parts)?)?;
-            Ok((left_out, None))
+            let kept = place_shapefile(path, &stage_shapefile(&parts)?)?;
+            Ok((left_out, None, kept_backups_note(path, &kept).into_iter().collect()))
         }
         _ if crs != Crs::LonLat && !PROJECTED_FORMATS.contains(&ext.as_str()) => {
             Err(DataError::Unsupported(format!(".{ext} in {} (it holds longitude/latitude only)", crs.label())))
@@ -849,7 +848,7 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
         _ => {
             let (bytes, left_out) = projected_bytes(ds, &ext, crs)?;
             write_atomic(path, &bytes)?;
-            Ok((left_out, None))
+            Ok((left_out, None, Vec::new()))
         }
     }
 }
@@ -938,11 +937,14 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
         placed.push(target.clone());
     }
     if let Err(e) = result {
+        // A new part that can't be removed, where no old one is put back over it, is named.
+        let mut kept = Vec::new();
         for p in &placed {
-            let _ = std::fs::remove_file(p);
+            if std::fs::remove_file(p).is_err() && !backups.iter().any(|(_, target)| target == p) {
+                kept.push(format!("the new {} is left", p.display()));
+            }
         }
         // An old part that can't be put back is named, so it isn't lost under its temporary name.
-        let mut kept = Vec::new();
         for (bak, target) in &backups {
             if std::fs::rename(bak, target).is_err() {
                 kept.push(format!("{} is kept as {}", target.display(), bak.display()));
@@ -953,16 +955,15 @@ pub(crate) fn place_shapefile(path: &Path, staged: &[(std::path::PathBuf, std::p
         sync_folder(path);
         let e = DataError::from(e);
         if kept.is_empty() {
+            // With no old file, there was nothing to put back.
+            let outcome = if backups.is_empty() { "nothing was written" } else { "the old file was put back, nothing changed" };
             // Its kind kept, for a caller that tells failures apart by it.
             return Err(match e {
-                DataError::Io(e) => DataError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("{}: {e}; the old file was put back, nothing changed", path.display()),
-                )),
+                DataError::Io(e) => DataError::Io(std::io::Error::new(e.kind(), format!("{}: {e}; {outcome}", path.display()))),
                 e => e,
             });
         }
-        return Err(DataError::Format(format!("{e}; putting the old file back failed: {}", kept.join(", "))));
+        return Err(DataError::Format(format!("{}: {e}; undoing the write failed: {}", path.display(), kept.join(", "))));
     }
     // A copy that can't be removed is returned, to be said: it holds an old part beside the file.
     let left: Vec<std::path::PathBuf> = backups.into_iter().filter(|(bak, _)| remove_backup(bak).is_err()).map(|(bak, _)| bak).collect();
@@ -1000,9 +1001,7 @@ fn remove_backup(bak: &Path) -> std::io::Result<()> {
 }
 
 /// What is said of the old parts of the Shapefile at `path` that [`place_shapefile`] couldn't
-/// remove once the new ones landed; `None` when there are none. Publishing, its one user, is the
-/// desktop's.
-#[cfg(not(target_arch = "wasm32"))]
+/// remove once the new ones landed; `None` when there are none.
 pub(crate) fn kept_backups_note(path: &Path, kept: &[std::path::PathBuf]) -> Option<String> {
     (!kept.is_empty()).then(|| {
         let copies: Vec<String> = kept.iter().map(|k| k.display().to_string()).collect();
@@ -5520,6 +5519,25 @@ mod tests {
         assert_eq!(std::fs::read(&shp)?, b"newer shp");
         assert_eq!(std::fs::read(&dbf)?, b"newer dbf");
         assert_eq!(entries()?, 2);
+
+        // A new file that fails to land had nothing to put back, and says so.
+        let fresh = dir.path().join("fresh.shp");
+        let parts = vec![(fresh.clone(), b"shp".to_vec()), (fresh.with_extension("dbf"), b"dbf".to_vec())];
+        let staged = stage_shapefile(&parts)?;
+        let (gone, _) = staged.iter().find(|(_, target)| *target == fresh).ok_or("no staged .shp")?;
+        std::fs::remove_file(gone)?;
+        let error = place_shapefile(&fresh, &staged).err().ok_or("placed")?.to_string();
+        assert!(error.ends_with("nothing was written") && !error.contains("put back"), "{error}");
+        assert_eq!(entries()?, 2);
+
+        // An export over the file says the old parts it keeps.
+        let mut ds = Dataset::new("parcels", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![]);
+        KEEP_BACKUPS.set(true);
+        let written = write_path_to(&ds, &shp, Crs::LonLat, &GpkgTable::default());
+        KEEP_BACKUPS.set(false);
+        let (_, _, notes) = written?;
+        assert!(notes.len() == 1 && notes.iter().all(|n| n.contains("couldn't be removed")), "{notes:?}");
         Ok(())
     }
 
