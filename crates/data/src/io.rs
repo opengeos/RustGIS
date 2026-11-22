@@ -3776,23 +3776,27 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // can't be found, so the pairing stops there, and the records after it are said.
     let records = dbf.header().num_records as usize;
     let indexed = shapes.shape_count().is_ok();
+    let mut lost_extra = false;
     let (mut shape_iter, mut record_iter) = (shapes.iter_shapes(), dbf.iter_records());
-    let (mut pairs, mut extra_shapes, mut extra_unreadable, mut lost_track) = (0usize, 0usize, false, false);
+    let (mut pairs, mut extra_shapes, mut extra_unreadable, mut lost_track) = (0usize, 0usize, 0usize, false);
     while let Some(shape) = shape_iter.next() {
         let Some(record) = record_iter.next() else {
-            // Counted up to the first that can't be read (counted too): past it, the file can't
-            // be followed.
-            extra_shapes = 1;
-            if shape.is_ok() {
-                for s in shape_iter.by_ref() {
-                    extra_shapes += 1;
-                    if s.is_err() {
-                        extra_unreadable = true;
+            // Counted, those that can't be read too; without a `.shx` up to the first of those,
+            // past which the file can't be followed.
+            let mut shape = shape;
+            loop {
+                extra_shapes += 1;
+                if shape.is_err() {
+                    extra_unreadable += 1;
+                    if !indexed {
+                        lost_extra = true;
                         break;
                     }
                 }
-            } else {
-                extra_unreadable = true;
+                match shape_iter.next() {
+                    Some(next) => shape = next,
+                    None => break,
+                }
             }
             break;
         };
@@ -3876,7 +3880,11 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     ds.drop_zm(&mut report, zm_shapes);
     report.messages.extend(deleted_records_note(name, left_out, true));
     if extra_shapes > 0 {
-        let unreadable = if extra_unreadable { " (the last of them can't be read, and the .shp isn't followed past it)" } else { "" };
+        let unreadable = match (extra_unreadable, lost_extra) {
+            (0, _) => String::new(),
+            (_, true) => " (the last of them can't be read, and without a .shx the .shp isn't followed past it)".to_string(),
+            (n, false) => format!(" ({n} of them can't be read)"),
+        };
         report
             .messages
             .push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out{unreadable}"));
@@ -9045,6 +9053,26 @@ mod tests {
             assert_eq!(names, [Value::Text("b".into()), Value::Text("c".into())], "deleted: {deleted}");
             assert_eq!(report.skipped, usize::from(!deleted), "{:?}", report.messages);
         }
+    }
+
+    /// With a `.shx`, the shapes past the `.dbf`'s last record are all counted, those that can't
+    /// be read too.
+    #[test]
+    fn shapes_past_the_last_record_are_all_counted_with_an_shx() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = three_named_points(dir.path());
+        let dbf_path = path.with_extension("dbf");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        dbf[4..8].copy_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&dbf_path, &dbf).unwrap();
+        // The second shape's type: each point record is 8 + 20 bytes.
+        let mut shp = std::fs::read(&path).unwrap();
+        shp[136..140].copy_from_slice(&99i32.to_le_bytes());
+        std::fs::write(&path, &shp).unwrap();
+        let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+        assert_eq!(ds.features.len(), 1);
+        let want = "pts: 2 shape(s) past the .dbf's last record have no attributes and were left out (1 of them can't be read)";
+        assert!(report.messages.iter().any(|m| m == want), "{:?}", report.messages);
     }
 
     /// Without a `.shx`, a shape that can't be read ends the pairing: the shapes after it can't be
