@@ -231,9 +231,9 @@ nothing. A saved `layout.update` isn't told which element it changes, so any `te
 as well. Layout files are not covered, as for backgrounds (#2277).
 
 Projects with a scale bar that has subdivisions, divisions before zero, labels below, a unit
-label of its own or placed elsewhere, decimals, a label size or a fit other than the defaults
+label of its own or placed elsewhere, decimals or a fit other than the defaults
 (`subdivisions`, `divisions_before_zero`, `label_position`, `unit_label`, `unit_label_position`,
-`decimals`, `label_size`, `fit` on a scale bar element) require `layout-scale-bar-details`, so
+`decimals`, `fit` on a scale bar element) require `layout-scale-bar-details`, so
 an older reader refuses them instead of drawing a plain bar and saving it again without them.
 Saved `layout.addElement` and `layout.update` commands that set one require it too, since an
 older reader ignores the keys; giving the defaults, `"decimals": "auto"` or `"unitLabel": null`,
@@ -241,7 +241,8 @@ needs nothing. Decimals fixed at any number, 0 included, are a detail. A chart t
 too: a saved `layout.update` can't tell whose they are, so a number there requires both this and
 `layout-chart-look`, while a `layout.addElement` says which kind it adds. A saved
 `layout.import` whose `text` has such a bar requires it as well. Layout files are not covered,
-as for backgrounds (#2277).
+as for backgrounds (#2277). A scale bar's text size isn't one of its details: it requires
+`layout-text-size`, as above.
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,

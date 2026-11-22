@@ -7628,10 +7628,10 @@ fn hostile_junk() -> Vec<Value> {
         json!({"kind": "legend", "element": 1, "exclude": [null, 7, "", {"x": 1}]}),
         json!({"kind": "text", "element": 1, "font": {"family": "serif"}, "italic": [], "align": 7}),
         json!({"kind": "scaleBar", "element": 1, "subdivisions": [null], "divisionsBeforeZero": {}, "labelPosition": 7, "unitLabel": 7}),
-        json!({"kind": "scaleBar", "element": 1, "unitLabelPosition": "", "decimals": "x", "labelSize": "NaN", "fit": {"x": 1}}),
-        json!({"kind": "scaleBar", "element": 1, "subdivisions": 1e308, "divisionsBeforeZero": -1e308, "decimals": f64::MAX, "labelSize": -1e308, "unitLabel": null}),
+        json!({"kind": "scaleBar", "element": 1, "unitLabelPosition": "", "decimals": "x", "textSize": "NaN", "fit": {"x": 1}}),
+        json!({"kind": "scaleBar", "element": 1, "subdivisions": 1e308, "divisionsBeforeZero": -1e308, "decimals": f64::MAX, "textSize": -1e308, "unitLabel": null}),
         json!({"kind": "scaleBar", "element": 1, "unitLabel": "x".repeat(5000), "fit": "adjustWidth", "labelPosition": "below", "unitLabelPosition": "afterBar"}),
-        json!({"kind": "legend", "element": 1, "decimals": 2, "labelSize": 9, "fit": "adjustDivision", "unitLabel": "m"}),
+        json!({"kind": "legend", "element": 1, "decimals": 2, "textSize": f64::INFINITY, "fit": "adjustDivision", "unitLabel": "m"}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
@@ -11621,7 +11621,7 @@ fn layout_surrounds_take_cartographic_options() {
 /// before anything changes, refused for other elements, one undo step, saved with the layout.
 #[test]
 fn layout_scale_bars_take_their_details() {
-    use rustgis_map::layout::{ElementKind, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
+    use rustgis_map::layout::{ElementKind, LAYOUT_TEXT_SIZE, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
     let mut s = world();
     s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
     let find = |s: &Session, code: &str| s.project.layouts[0].elements.iter().find(|e| e.kind.code() == code).unwrap().clone();
@@ -11634,20 +11634,20 @@ fn layout_scale_bars_take_their_details() {
             unit_label,
             unit_label_position,
             decimals,
-            label_size,
+            text_size,
             fit,
             ..
         } => {
-            (*subdivisions, *divisions_before_zero, *label_position, unit_label.clone(), *unit_label_position, *decimals, *label_size, *fit)
+            (*subdivisions, *divisions_before_zero, *label_position, unit_label.clone(), *unit_label_position, *decimals, *text_size, *fit)
         }
         k => panic!("{k:?}"),
     };
-    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, None, 8.0, ScaleBarFit::AdjustDivisionValue);
+    let plain = (0, 0, ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, None, SCALE_BAR_TEXT_PT, ScaleBarFit::AdjustDivisionValue);
     assert_eq!(details(&s, bar), plain);
     s.run(
         "layout.update",
         &json!({"element": bar, "subdivisions": 3, "divisionsBeforeZero": 1, "labelPosition": "below", "unitLabel": "Feet",
-            "unitLabelPosition": "afterBar", "decimals": 2, "labelSize": 10.5, "fit": "adjustDivision"}),
+            "unitLabelPosition": "afterBar", "decimals": 2, "textSize": 10.5, "fit": "adjustDivision"}),
     )
     .unwrap();
     let all = (
@@ -11667,7 +11667,7 @@ fn layout_scale_bars_take_their_details() {
     s.run("edit.redo", &Value::Null).unwrap();
     assert_eq!(details(&s, bar), all);
     // One changed keeps the others; names ignore case and spaces; a count may come as text.
-    s.run("layout.update", &json!({"element": bar, "units": "feet", "labelSize": "12", "fit": " AdjustWidth "})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "units": "feet", "textSize": 12, "fit": " AdjustWidth "})).unwrap();
     assert_eq!((details(&s, bar).6, details(&s, bar).7), (12.0, ScaleBarFit::AdjustWidth));
     // Null keeps a value, except a unit label's: the abbreviation again. "" prints none. 1 subdivision is none.
     s.run("layout.update", &json!({"element": bar, "decimals": null, "fit": null, "unitLabel": "", "subdivisions": 1})).unwrap();
@@ -11688,10 +11688,11 @@ fn layout_scale_bars_take_their_details() {
     // The limits themselves are taken.
     s.run(
         "layout.update",
-        &json!({"element": bar, "subdivisions": 10, "divisionsBeforeZero": 2, "decimals": 3, "labelSize": 4, "unitLabel": "x".repeat(100)}),
+        &json!({"element": bar, "subdivisions": 10, "divisionsBeforeZero": 2, "decimals": 3, "textSize": 4, "unitLabel": "x".repeat(100)}),
     )
     .unwrap();
-    s.run("layout.update", &json!({"element": bar, "labelSize": 24})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "textSize": 100})).unwrap();
+    assert_eq!(details(&s, bar).6, *LAYOUT_TEXT_SIZE.end());
     // A bad value changes nothing, not even the good values given with it.
     let before = details(&s, bar);
     for bad in [
@@ -11706,10 +11707,11 @@ fn layout_scale_bars_take_their_details() {
         json!({"decimals": 2.5}),
         json!({"decimals": "two"}),
         json!({"decimals": {}}),
-        json!({"labelSize": 3.9}),
-        json!({"labelSize": 24.1}),
-        json!({"labelSize": "big"}),
-        json!({"labelSize": "1e309"}),
+        json!({"textSize": 3.9}),
+        json!({"textSize": 100.1}),
+        json!({"textSize": "12"}),
+        json!({"textSize": "big"}),
+        json!({"textSize": "1e309"}),
         json!({"labelPosition": "left"}),
         json!({"labelPosition": 7}),
         json!({"unitLabelPosition": "beside"}),
@@ -11740,7 +11742,7 @@ fn layout_scale_bars_take_their_details() {
         .run(
             "layout.addElement",
             &json!({"kind": "scaleBar", "subdivisions": 2, "divisionsBeforeZero": 2, "labelPosition": "below",
-                "unitLabel": "Kilometres", "unitLabelPosition": "above", "decimals": 1, "labelSize": 9, "fit": "adjustWidth"}),
+                "unitLabel": "Kilometres", "unitLabelPosition": "above", "decimals": 1, "textSize": 9, "fit": "adjustWidth"}),
         )
         .unwrap()["element"]
         .as_u64()
@@ -11799,7 +11801,7 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
     let (bar, frame) = (named(&s, "Scale Bar").id, s.project.layouts[li].first_frame().unwrap());
     assert!(crate::cmd::layout::scale_box_auto(&s, li).is_some());
-    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 14, "unitLabelPosition": "afterBar"})).unwrap();
+    s.run("layout.update", &json!({"layout": li, "element": bar, "unitLabelPosition": "afterBar"})).unwrap();
     assert_eq!(crate::cmd::layout::scale_box_auto(&s, li), None, "a detailed bar has no automatic box");
     let w = named(&s, "Scale Box").w;
     let scale = match &s.project.layouts[li].element(frame).unwrap().kind {
@@ -11808,7 +11810,7 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     };
     s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
     assert!((named(&s, "Scale Box").w - w).abs() < 1e-9, "kept, not measured for a plain bar");
-    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 8, "unitLabelPosition": "afterLabels"})).unwrap();
+    s.run("layout.update", &json!({"layout": li, "element": bar, "unitLabelPosition": "afterLabels"})).unwrap();
     let auto = crate::cmd::layout::scale_box_auto(&s, li).expect("plain again, an automatic box");
     assert!((named(&s, "Scale Box").w - auto).abs() < 0.01, "plain again, measured again: {} vs {auto}", named(&s, "Scale Box").w);
     // Its frame drawn at another scale once more: the plain bar's box is refitted.
@@ -11821,9 +11823,9 @@ fn a_publication_scale_box_keeps_a_detailed_bar() {
     for n in ["Scale Box", "Scale Bar", "Scale"] {
         s.run("layout.update", &json!({"layout": li, "element": named(&s, n).id, "w": hand})).unwrap();
     }
-    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 14})).unwrap();
+    s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 4})).unwrap();
     assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "kept while detailed");
-    s.run("layout.update", &json!({"layout": li, "element": bar, "labelSize": 8})).unwrap();
+    s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 0})).unwrap();
     assert!((named(&s, "Scale Box").w - hand).abs() < 1e-9, "set by hand, kept: {} vs {hand}", named(&s, "Scale Box").w);
     assert_eq!(s.project.layouts[li].scale_box_measured, None, "a plain bar's layout saves no measure");
 }

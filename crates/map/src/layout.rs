@@ -846,22 +846,8 @@ pub const MAX_SCALE_BEFORE_ZERO: usize = 2;
 /// The most decimal places a scale bar's numbers show.
 pub const MAX_SCALE_DECIMALS: usize = 3;
 
-/// The sizes a scale bar's labels have, in points.
-pub const SCALE_LABEL_SIZE: std::ops::RangeInclusive<f64> = 4.0..=24.0;
-
-/// The size a scale bar's labels have unless set, in points.
-pub const DEFAULT_SCALE_LABEL_SIZE: f64 = 8.0;
-
 /// The most characters a scale bar's unit label has.
 pub const MAX_UNIT_LABEL_CHARS: usize = 100;
-
-fn scale_label_size() -> f64 {
-    DEFAULT_SCALE_LABEL_SIZE
-}
-
-fn is_scale_label_size(v: &f64) -> bool {
-    *v == DEFAULT_SCALE_LABEL_SIZE
-}
 
 /// Where a scale bar's numbers sit against the bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1174,9 +1160,6 @@ pub enum ElementKind {
         /// none (auto), the decimals each label needs, as bars always printed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decimals: Option<u8>,
-        /// The numbers' size in points, within [`SCALE_LABEL_SIZE`].
-        #[serde(default = "scale_label_size", skip_serializing_if = "is_scale_label_size")]
-        label_size: f64,
         /// What gives way when the bar's length does not fit its box.
         #[serde(default, skip_serializing_if = "is_default")]
         fit: ScaleBarFit,
@@ -1607,13 +1590,13 @@ impl ElementKind {
             unit_label: None,
             unit_label_position: UnitLabelPosition::default(),
             decimals: None,
-            label_size: DEFAULT_SCALE_LABEL_SIZE,
             fit: ScaleBarFit::default(),
         }
     }
 
     /// Whether this is a scale bar with any of the details set: subdivisions, divisions before
-    /// zero, a label or unit label placement, a unit label, decimals, a label size or a fit.
+    /// zero, a label or unit label placement, a unit label, decimals or a fit. Its text size
+    /// isn't one: [`ElementKind::has_custom_text_size`] tells that.
     pub fn scale_bar_uses_details(&self) -> bool {
         let ElementKind::ScaleBar {
             frame,
@@ -1623,7 +1606,6 @@ impl ElementKind {
             unit_label,
             unit_label_position,
             decimals,
-            label_size,
             fit,
             ..
         } = self
@@ -1637,15 +1619,14 @@ impl ElementKind {
             unit_label: u0,
             unit_label_position: up0,
             decimals: d0,
-            label_size: ls0,
             fit: f0,
             ..
         } = ElementKind::scale_bar(*frame)
         else {
             return false;
         };
-        (*subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *label_size, *fit)
-            != (s0, z0, lp0, &u0, up0, d0, ls0, f0)
+        (*subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *fit)
+            != (s0, z0, lp0, &u0, up0, d0, f0)
     }
 
     pub fn code(&self) -> &'static str {
@@ -2819,15 +2800,13 @@ impl Layout {
                     text.truncate(end);
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
-                ElementKind::ScaleBar { divisions, text_size, subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. } => {
+                ElementKind::ScaleBar { divisions, text_size, subdivisions, divisions_before_zero, decimals, unit_label, .. } => {
                     *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
                     *text_size = layout_text_in_range(*text_size, SCALE_BAR_TEXT_PT);
                     // One part is the whole division: saved as none, it asks for no details.
                     *subdivisions = if *subdivisions == 1 { 0 } else { (*subdivisions).min(MAX_SCALE_SUBDIVISIONS) };
                     *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
                     *decimals = decimals.map(|d| d.min(MAX_SCALE_DECIMALS as u8));
-                    *label_size =
-                        finite_or(*label_size, DEFAULT_SCALE_LABEL_SIZE).clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end());
                     // The label is one line: a break in a hand-edited file is a space.
                     if let Some(label) = unit_label {
                         *label = label.replace("\r\n", " ").replace(['\n', '\r'], " ");
@@ -4451,14 +4430,14 @@ mod tests {
             unit_label,
             unit_label_position,
             decimals,
-            label_size,
+            text_size,
             fit,
             ..
         } = &bar
         else {
             panic!("a scale bar")
         };
-        assert_eq!((*subdivisions, *divisions_before_zero, *decimals, *label_size), (0, 0, None, 8.0));
+        assert_eq!((*subdivisions, *divisions_before_zero, *decimals, *text_size), (0, 0, None, SCALE_BAR_TEXT_PT));
         assert_eq!(
             (*label_position, unit_label.clone(), *unit_label_position, *fit),
             (ScaleLabelPosition::Above, None, UnitLabelPosition::AfterLabels, ScaleBarFit::AdjustDivisionValue)
@@ -4472,16 +4451,22 @@ mod tests {
             unit_label,
             unit_label_position,
             decimals,
-            label_size,
+            text_size,
             fit,
             ..
         } = &mut all
         {
             (*subdivisions, *divisions_before_zero, *label_position) = (4, 1, ScaleLabelPosition::Below);
             (*unit_label, *unit_label_position) = (Some("Kilometres".into()), UnitLabelPosition::AfterBar);
-            (*decimals, *label_size, *fit) = (Some(2), 10.5, ScaleBarFit::AdjustWidth);
+            (*decimals, *text_size, *fit) = (Some(2), 10.5, ScaleBarFit::AdjustWidth);
         }
         assert!(all.scale_bar_uses_details());
+        // Its text size alone is no detail: the text size capability covers it.
+        let mut sized = bar.clone();
+        if let ElementKind::ScaleBar { text_size, .. } = &mut sized {
+            *text_size = 16.0;
+        }
+        assert!(!sized.scale_bar_uses_details() && sized.has_custom_text_size());
         let s = serde_json::to_string(&all).unwrap();
         // The middle fit saves as the camelCase of its variant.
         let mut middle = all.clone();
@@ -4497,7 +4482,7 @@ mod tests {
             r#""unit_label":"Kilometres""#,
             r#""unit_label_position":"afterBar""#,
             r#""decimals":2"#,
-            r#""label_size":10.5"#,
+            r#""text_size":10.5"#,
             r#""fit":"adjustWidth""#,
         ] {
             assert!(s.contains(part), "{part} in {s}");
@@ -4521,26 +4506,26 @@ mod tests {
         let text = format!(
             r#"{{"name":"x","width":200,"height":100,"elements":[
             {{"id":1,"name":"a","x":0,"y":0,"w":10,"h":10,"kind":{{"MapFrame":{{"map":"m","center":{{"x":0,"y":0}},"scale":1000}}}}}},
-            {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"label_size":1e9,"unit_label":"{}"}}}}}},
-            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}},
+            {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"text_size":1e9,"unit_label":"{}"}}}}}},
+            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"text_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}},
             {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
         let repairs = l.clamp();
         let got = |id| match l.element(id).map(|e| &e.kind) {
-            Some(ElementKind::ScaleBar { subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. }) => {
-                (*subdivisions, *divisions_before_zero, *decimals, *label_size, unit_label.clone().unwrap_or_default())
+            Some(ElementKind::ScaleBar { subdivisions, divisions_before_zero, decimals, text_size, unit_label, .. }) => {
+                (*subdivisions, *divisions_before_zero, *decimals, *text_size, unit_label.clone().unwrap_or_default())
             }
             _ => (0, 0, None, 0.0, String::new()),
         };
         assert_eq!(
             got(2),
-            (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, Some(MAX_SCALE_DECIMALS as u8), 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS))
+            (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, Some(MAX_SCALE_DECIMALS as u8), *LAYOUT_TEXT_SIZE.end(), "x".repeat(MAX_UNIT_LABEL_CHARS))
         );
-        assert_eq!(got(3), (0, 0, None, 4.0, "a b c d".to_string()));
+        assert_eq!(got(3), (0, 0, None, *LAYOUT_TEXT_SIZE.start(), "a b c d".to_string()));
         // One subdivision is the division whole: it loads as none, quietly, and asks for no details.
-        assert_eq!(got(4), (0, 0, None, 8.0, String::new()));
+        assert_eq!(got(4), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
         assert!(l.element(4).is_some_and(|e| !e.kind.scale_bar_uses_details()));
         assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
         for v in ScaleLabelPosition::ALL {

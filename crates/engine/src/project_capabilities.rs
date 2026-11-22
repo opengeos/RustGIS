@@ -406,7 +406,7 @@ fn bar_details(e: &rustgis_map::layout::Element) -> bool {
 /// keys and draws a plain bar. Giving the defaults, `"decimals": "auto"`, or `"unitLabel": null`
 /// (the abbreviation an older reader's bar prints), keeps a bar as an older reader draws it.
 fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
-    use rustgis_map::layout::{DEFAULT_SCALE_LABEL_SIZE, ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
+    use rustgis_map::layout::{ScaleBarFit, ScaleLabelPosition, UnitLabelPosition};
     // A fixed number of decimals, 0 included, not "auto". A chart takes decimals too: a
     // `layout.addElement` says which kind it adds, but a `layout.update` doesn't say what it
     // changes, so a chart's decimals there require this as well, as a scale bar's require
@@ -426,7 +426,6 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
                 || params.get("unitLabel").is_some_and(Value::is_string)
                 || name("unitLabelPosition").and_then(UnitLabelPosition::from_name).is_some_and(|v| v != UnitLabelPosition::default())
                 || fixed_decimals(id)
-                || num("labelSize").is_some_and(|n| n != DEFAULT_SCALE_LABEL_SIZE)
                 || name("fit").and_then(ScaleBarFit::from_name).is_some_and(|v| v != ScaleBarFit::default())
         }
         "layout.import" => [
@@ -436,7 +435,6 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
             "\"unit_label\"",
             "\"unit_label_position\"",
             "\"decimals\"",
-            "\"label_size\"",
             "\"fit\"",
         ]
         .iter()
@@ -1346,7 +1344,8 @@ mod tests {
         use rustgis_map::layout::ElementKind;
         let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_scale_bar_details.rgis")).unwrap();
         let saved = serde_json::to_value(&fixture).unwrap();
-        assert_eq!(saved["requires"], json!(["layout-scale-bar-details"]));
+        // Its sized bar's text size is the text size capability's, as for any scale bar.
+        assert_eq!(saved["requires"], json!(["layout-text-size", "layout-scale-bar-details"]));
         let reread = Project::from_json(&saved.to_string()).unwrap();
         assert!(reread.layouts[0].elements[1].kind.scale_bar_uses_details());
         assert!(!reread.layouts[0].elements[2].kind.scale_bar_uses_details());
@@ -1369,7 +1368,7 @@ mod tests {
             "unit_label",
             "unit_label_position",
             "decimals",
-            "label_size",
+            "text_size",
             "\"fit\"",
         ] {
             assert!(!base["layouts"].to_string().contains(key), "nor writes {key}");
@@ -1382,7 +1381,9 @@ mod tests {
             ("layout.update", json!({"element": 2, "labelPosition": "below"}), true),
             ("layout.update", json!({"element": 2, "unitLabel": ""}), true),
             ("layout.update", json!({"element": 2, "fit": "adjustWidth"}), true),
-            ("layout.update", json!({"element": 2, "labelSize": 9}), true),
+            // A text size is no detail: the text size capability covers it.
+            ("layout.update", json!({"element": 2, "textSize": 9}), false),
+            ("layout.addElement", json!({"kind": "scaleBar", "textSize": 12}), false),
             ("layout.update", json!({"element": 2, "unitLabel": null}), false),
             // Fixed decimals, none too, are a detail; "auto" isn't. An update's may be a chart's,
             // which it can't tell apart; an addElement's for a chart is the chart's alone.
@@ -1395,7 +1396,7 @@ mod tests {
             ("layout.update", json!({"element": 2, "decimals": "auto"}), false),
             (
                 "layout.update",
-                json!({"element": 2, "subdivisions": 1, "divisionsBeforeZero": 0, "labelPosition": "above", "unitLabelPosition": "afterLabels", "decimals": "auto", "labelSize": 8, "fit": "adjustDivisionValue"}),
+                json!({"element": 2, "subdivisions": 1, "divisionsBeforeZero": 0, "labelPosition": "above", "unitLabelPosition": "afterLabels", "decimals": "auto", "textSize": null, "fit": "adjustDivisionValue"}),
                 false,
             ),
             ("layout.update", json!({"element": 2, "divisions": 3}), false),
@@ -1412,10 +1413,11 @@ mod tests {
                 let mut document = base.clone();
                 document["tasks"] = value;
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
-                // Decimals a chart takes too may require its capability as well.
+                // Decimals a chart takes too may require its capability as well, and a text size
+                // its own.
                 let requires = saved.get("requires").and_then(Value::as_array).cloned().unwrap_or_default();
                 assert_eq!(requires.contains(&json!("layout-scale-bar-details")), required, "{id} {params}");
-                assert!(requires.iter().all(|r| r == "layout-scale-bar-details" || r == "layout-chart-look"), "{id} {params}");
+                assert!(requires.iter().all(|r| ["layout-scale-bar-details", "layout-chart-look", "layout-text-size"].contains(&r.as_str().unwrap_or(""))), "{id} {params}");
             }
         }
     }

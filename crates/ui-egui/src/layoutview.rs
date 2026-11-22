@@ -9,7 +9,7 @@ use rustgis_engine::map::layout::{
     Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LAYOUT_TEXT_SIZE,
     Layout, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
     MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS,
-    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, SCALE_LABEL_SIZE, ScaleBarFit,
+    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarFit,
     ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle,
     line_length,
 };
@@ -2038,7 +2038,6 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         unit_label,
                         unit_label_position,
                         decimals,
-                        label_size,
                         fit,
                         ..
                     } => {
@@ -2111,23 +2110,6 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let current = decimals.map_or(auto.to_string(), |d| d.to_string());
                         if let Some(v) = choice(ui, ("scale_decimals", id), input_label.id, &current, &items) {
                             update(app, json!({"decimals": v}));
-                        }
-                        ui.end_row();
-                        let input_label = ui.label(tl!("Label size"));
-                        let mut size = *label_size;
-                        let drag = Dragged::lend(ui, drag_key("labelSize"), &mut size);
-                        let r = ui
-                            .add(
-                                egui::DragValue::new(&mut size)
-                                    .update_while_editing(false)
-                                    .range(SCALE_LABEL_SIZE)
-                                    .speed(0.25)
-                                    .max_decimals(1)
-                                    .suffix(" pt"),
-                            )
-                            .labelled_by(input_label.id);
-                        if drag.settled(ui, &r, &mut size) && (size - *label_size).abs() > 1e-6 {
-                            update(app, json!({"labelSize": size}));
                         }
                         ui.end_row();
                         let input_label = ui.label(tl!("Label position"));
@@ -3944,7 +3926,7 @@ mod tests {
             "Subdivisions",
             "Divisions before zero",
             "Decimals",
-            "Label size",
+            "Text size",
             "Label position",
             "Unit label",
             "Unit label position",

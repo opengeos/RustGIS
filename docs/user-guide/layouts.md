@@ -281,20 +281,22 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   small for its labels and bar (too short, which draws the bar below it, or too narrow for its last
   label), or a label that runs off the page, is said when its size, text size, units or divisions
   change or its frame is drawn at another scale, and an export reports it as cut off, as it does a
-  text. It also takes the details
-  printed maps commonly use: **Subdivisions** (0 to 10: the first division after zero cut into unlabelled
-  parts), **Divisions before zero** (0 to 2, labelled with negatives), **Label position** (above or below the
-  bar), a **Unit label** (the unit's name as printed: its abbreviation unless set; untick **Show unit label**
-  for none) and its **Unit label position** (after the labels, after the bar, or on a line of its own above
-  or below), **Decimals** (Automatic, or 0 to 3 fixed with the thousands set apart; Automatic gives each
-  label the decimals it needs, as before; the layout's decimal comma applies; `"auto"` or a number, as a chart's), a **Label size** (4 to 24 points, default 8) and a **Fit** for when round divisions
-  don't fill the box: *Adjust division value* (the default) divides the roundest length that fits, so a
-  division may not be round; *Adjust number of divisions* keeps a round division and adds or drops divisions, at most ten, to fill the width;
+  text. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
+  division after zero cut into unlabelled parts), **Divisions before zero** (0 to 2, labelled with
+  negatives), **Label position** (above or below the bar), a **Unit label** (the unit's name as
+  printed: its abbreviation unless set; untick **Show unit label** for none) and its **Unit label
+  position** (after the labels, after the bar, or on a line of its own above or below),
+  **Decimals** (Automatic, or 0 to 3 fixed with the thousands set apart; Automatic gives each label
+  the decimals it needs, as before; the layout's decimal comma applies; `"auto"` or a number, as a
+  chart's) and a **Fit** for when round divisions don't fill the box: *Adjust division value* (the
+  default) divides the roundest length that fits, so a division may not be round; *Adjust number of
+  divisions* keeps a round division and adds or drops divisions, at most ten, to fill the width;
   *Adjust width* keeps the divisions and draws the bar only as wide as they need
-  (`"subdivisions":4,"divisionsBeforeZero":1,"labelPosition":"below","unitLabel":"Kilometres","unitLabelPosition":"afterBar","decimals":1,"labelSize":9,"fit":"adjustWidth"`).
-  Each change is one undo step, and a value set back to its default is no longer saved. A project that uses
-  them can't be opened by an older RustGIS; an older RustGIS importing a layout file (`.rgislayout`) with them
-  draws a plain bar (#2277). A legend's
+  (`"subdivisions":4,"divisionsBeforeZero":1,"labelPosition":"below","unitLabel":"Kilometres","unitLabelPosition":"afterBar","decimals":1,"fit":"adjustWidth"`).
+  Their labels and unit label are drawn at its **Text size**. Each change is one undo step, and a
+  value set back to its default is no longer saved. A project that uses them can't be opened by an
+  older RustGIS; an older RustGIS importing a layout file (`.rgislayout`) with them draws a plain
+  bar (#2277). A legend's
   parts:
   - **What a legend lists**: what its frame draws: only layers with a feature at the frame's
     scale (through their definition query, display filters and scale range) and, for Unique

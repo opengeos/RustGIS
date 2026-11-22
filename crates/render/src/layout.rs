@@ -8,7 +8,7 @@ use rustgis_data::GeometryType;
 use rustgis_data::query::{Env, SeriesPage};
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
-    ArrowStyle, ChartLook, ColorScale, DEFAULT_SCALE_LABEL_SIZE, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout,
+    ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout,
     LineHead, MAX_LEGEND_COLUMNS, Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits,
     TextAlign, TickSide, UnitLabelPosition, frame_camera, layout_text_scale,
 };
@@ -2204,8 +2204,6 @@ fn bar_number(v: f64, step: f64, decimals: Option<usize>, comma: bool) -> String
 
 /// The share of its element's width a scale bar's length may take.
 const BAR_SHARE: f64 = 0.85;
-/// A scale bar's labels' size, in points.
-const BAR_LABEL_PT: f32 = DEFAULT_SCALE_LABEL_SIZE as f32;
 /// How far a scale bar starts in from the element's left edge at its labels' default size, in
 /// pixels. [`scale_bar_width_pt`] counts that inset as as many points: when a point is a pixel or
 /// more, a pixel is no larger than a point, so the box is never too narrow. It follows the labels'
@@ -2349,7 +2347,7 @@ struct BarOptions<'a> {
     unit_label: Option<&'a str>,
     unit_label_position: UnitLabelPosition,
     decimals: Option<u8>,
-    label_size: f64,
+    text_size: f64,
     fit: ScaleBarFit,
 }
 
@@ -2366,7 +2364,7 @@ impl<'a> BarOptions<'a> {
             unit_label,
             unit_label_position,
             decimals,
-            label_size,
+            text_size,
             fit,
             ..
         } = kind
@@ -2383,7 +2381,7 @@ impl<'a> BarOptions<'a> {
             unit_label: unit_label.as_deref(),
             unit_label_position: *unit_label_position,
             decimals: *decimals,
-            label_size: *label_size,
+            text_size: *text_size,
             fit: *fit,
         })
     }
@@ -2441,7 +2439,7 @@ fn bar_fit(room_m: f64, unit_m: f64, fit: ScaleBarFit, before: usize, after: usi
 /// then the alternating bar's light divisions.
 fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>, colors: (Rgba, Rgba), ppp: f64, comma: bool) {
     use rustgis_map::layout::{
-        MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS, SCALE_LABEL_SIZE,
+        MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_UNIT_LABEL_CHARS,
     };
     if !(ground_per_pt.is_finite() && ground_per_pt > 0.0 && ppp.is_finite() && ppp > 0.0) {
         return;
@@ -2454,11 +2452,7 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     let width_pt = f64::from(r.width()) / ppp;
     let Some(BarPlan { unit_m, abbr, .. }) = bar_plan(ground_per_pt, width_pt, bar.units) else { return };
     let decimals = bar.decimals.map(|d| usize::from(d).min(MAX_SCALE_DECIMALS));
-    let label_pt = if bar.label_size.is_finite() {
-        bar.label_size.clamp(*SCALE_LABEL_SIZE.start(), *SCALE_LABEL_SIZE.end())
-    } else {
-        DEFAULT_SCALE_LABEL_SIZE
-    };
+    let label_pt = rustgis_map::layout::layout_text_in_range(bar.text_size, SCALE_BAR_TEXT_PT);
     // The unit's words: its abbreviation unless the bar names it, on one line.
     let unit: String = match bar.unit_label {
         None => abbr.to_string(),
@@ -2474,12 +2468,12 @@ fn scale_bar(pm: &mut Canvas, r: Rect, ground_per_pt: f64, bar: &BarOptions<'_>,
     // A bar with a line of its own for its unit or another label size: its lines written smaller
     // (never under 4 pt) where they and the bar need more than the box's height, and kept inside
     // it. The plain bar, one line at the default size, draws as it always has.
-    let kept_inside = rows.up + rows.down > 1 || label_pt != DEFAULT_SCALE_LABEL_SIZE;
+    let kept_inside = rows.up + rows.down > 1 || label_pt != SCALE_BAR_TEXT_PT;
     let full_px = label_pt as f32 * 1.33 * ppp as f32;
     let per_px = reach(rows.up, 1.0) + reach(rows.down, 1.0);
     let squeezed = kept_inside && per_px > 0.0 && bar_h + per_px * full_px > r.height();
     let px = if squeezed {
-        let least = (*SCALE_LABEL_SIZE.start() as f32 * 1.33 * ppp as f32).min(full_px);
+        let least = (*rustgis_map::layout::LAYOUT_TEXT_SIZE.start() as f32 * 1.33 * ppp as f32).min(full_px);
         ((r.height() - bar_h) / per_px).clamp(least, full_px)
     } else {
         full_px
@@ -8794,15 +8788,15 @@ Elaboração: RustGIS",
             let dark: Vec<bool> = (0..pm.width()).map(|x| pm.pixel(x, y).is_some_and(ink)).collect();
             dark.windows(2).filter(|w| !w[0] && w[1]).count() + usize::from(dark.first() == Some(&true))
         };
-        let four = draw((ScaleUnits::Auto, 4, ScaleBarStyle::Alternating, SCALE_BAR_TEXT_PT));
-        let five = draw((ScaleUnits::Auto, 5, ScaleBarStyle::Alternating, SCALE_BAR_TEXT_PT));
+        let four = draw((ScaleUnits::Auto, 4, ScaleBarStyle::Alternating));
+        let five = draw((ScaleUnits::Auto, 5, ScaleBarStyle::Alternating));
         assert_eq!(runs(&four), 2, "two dark divisions");
         assert_eq!(runs(&five), 3, "three dark divisions, the last at the end");
         // Miles and kilometres give bars of different lengths and labels.
-        assert_ne!(draw((ScaleUnits::Miles, 4, ScaleBarStyle::Alternating, SCALE_BAR_TEXT_PT)).data(), four.data());
+        assert_ne!(draw((ScaleUnits::Miles, 4, ScaleBarStyle::Alternating)).data(), four.data());
         // A line or a stepped line fills no division.
         for style in [ScaleBarStyle::Line, ScaleBarStyle::Stepped] {
-            let pm = draw((ScaleUnits::Auto, 4, style, SCALE_BAR_TEXT_PT));
+            let pm = draw((ScaleUnits::Auto, 4, style));
             let dark = (0..300).filter(|&x| pm.pixel(x, 37).is_some_and(ink)).count();
             assert!(dark < 20, "{style:?}: {dark} dark pixels across the bar");
             assert_ne!(pm.data(), four.data());
@@ -8848,7 +8842,7 @@ Elaboração: RustGIS",
     /// half the bar's room, reaching left of the box past that.
     #[test]
     fn a_scale_bar_before_zero_draws_where_its_first_label_leaves_no_room() {
-        let bar = BarOptions { label_size: 24.0, divisions_before_zero: 2, divisions: 10, ..BarOptions::default() };
+        let bar = BarOptions { text_size: 24.0, divisions_before_zero: 2, divisions: 10, ..BarOptions::default() };
         let mut pm = Pixmap::new(40, 60).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         let r = Rect::from_xywh(0.0, 0.0, 40.0, 60.0).unwrap();
@@ -9160,7 +9154,7 @@ Elaboração: RustGIS",
         let cut = with(&|b| b.subdivisions = 3);
         assert_eq!(bar_ink_rows(&cut).first(), bar_ink_rows(&above).first());
         // A bigger label is taller; decimals change the labels.
-        assert!(bar_ink_rows(&with(&|b| b.label_size = 16.0)).len() > rows.len() + 4);
+        assert!(bar_ink_rows(&with(&|b| b.text_size = 16.0)).len() > rows.len() + 4);
         assert_ne!(with(&|b| b.decimals = Some(2)).data(), above.data());
         assert_ne!(with(&|b| b.divisions_before_zero = 1).data(), above.data());
     }
@@ -9336,7 +9330,7 @@ Elaboração: RustGIS",
             unit_label: Some("Kilometres"),
             unit_label_position: UnitLabelPosition::Above,
             label_position: ScaleLabelPosition::Above,
-            label_size: 24.0,
+            text_size: 24.0,
             units: ScaleUnits::Kilometers,
             ..BarOptions::default()
         };
