@@ -21,9 +21,11 @@ Each lossy file changes just one thing:
 | `hole-unclosed.osm.pbf` | Way 20 references [4,5,6], without its closing node. |
 | `hole-outside.osm.pbf` | Move nodes 4–6 to (21,21), (22,21), (21,22). |
 
-The native reader currently produces one polygon with two rings for the clean file and one
-ring for each lossy file, without a loss notice. The command corpus records these existing
-bugs as `Silent`; this contribution does not fix the reader or certify other OSM loss kinds.
+The native reader produces one polygon with two rings for the clean file and one ring for
+each lossy file. Each lossy file reports its omitted member way, ring with missing nodes,
+unclosed ring chain or inner ring without an outer host. Native tests check the retained
+outer geometry and exact counted notices; the command corpus requires successful imports
+and delivery of these notices. Other OSM loss kinds are not certified by these fixtures.
 
 | File | SHA-256 |
 |---|---|
