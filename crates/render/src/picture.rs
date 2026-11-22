@@ -3,8 +3,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::hash::{BuildHasher, Hash, Hasher, RandomState};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::Canvas;
 use crate::vector::Pixels;
@@ -25,10 +25,68 @@ const CACHE_BYTES: usize = 256 << 20;
 /// Picture markers are drawn from at most this many pixels per side: an 80 pt marker printed at
 /// 600 dpi.
 const MARKER_SIDE: u32 = 700;
-/// Decoded picture markers kept between frames, and the most pixel memory they may hold together.
-/// As many as a layer's classes can show ([`rustgis_map::symbology::MAX_PICTURES`] are kept).
-const MARKERS: usize = 1024;
-const MARKERS_BYTES: usize = 128 << 20;
+/// The most pixels a picture marker's image may declare (2048 × 2048, by area, so a long strip
+/// passes): past it, it isn't decoded and is drawn as a circle. What a marker costs to check and
+/// draw is its pixels (decoding and scaling one takes some 19 ns a pixel), not its bytes: a PNG of
+/// a few kilobytes can declare hundreds of megapixels. A marker is drawn from [`MARKER_SIDE`]
+/// pixels at most, so more than this adds nothing it shows.
+pub const MARKER_PIXELS: u64 = MARKER_PIXELS_SIDE as u64 * MARKER_PIXELS_SIDE as u64;
+/// The side of the square [`MARKER_PIXELS`] is, for messages (theirs, written out, a test pins).
+pub const MARKER_PIXELS_SIDE: u32 = 2048;
+/// The most pixels of different picture markers' images a run decodes, about 5 s of decoding, and
+/// the most memory they then hold decoded: past either, a new one is drawn as a circle. A run is
+/// the process, until RustGIS restarts, as the images it keeps ([`Picture`]) are. A cap per image
+/// alone isn't enough: a run keeps [`rustgis_map::symbology::MAX_PICTURES`] images, and that many
+/// at [`MARKER_PIXELS`] take some 80 s. Each image is decoded once for the whole run, on whichever
+/// thread meets it first, and kept ([`Store`]): none is decoded again, however many threads, frames
+/// or checks meet it, so these bound all the decoding markers do. As many images as a run keeps
+/// fit when each is at most 177 × 177 pixels once decoded (a larger one is scaled down to
+/// [`MARKER_SIDE`]).
+pub const RUN_MARKER_PIXELS: u64 = 256_000_000;
+pub const RUN_MARKER_BYTES: u64 = 128 << 20;
+/// What each image is charged at least (an icon's decoding costs about the same whatever its
+/// size), so the images charged are at most [`RUN_MARKER_PIXELS`] / this many.
+const MARKER_CHARGE: u64 = 64 * 64;
+
+/// Why a picture marker's image is drawn as a circle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerRefusal {
+    /// It isn't a PNG or JPEG image that decodes.
+    NotAnImage,
+    /// It declares more than [`MARKER_PIXELS`].
+    TooManyPixels,
+    /// It would take the run past [`RUN_MARKER_PIXELS`] or [`RUN_MARKER_BYTES`].
+    PastRunPixels,
+}
+
+/// Each refusal's phrase, written once for both its forms.
+macro_rules! refusal_phrases {
+    ($($refusal:ident => $what:literal),* $(,)?) => {
+        impl MarkerRefusal {
+            /// What is wrong with the image, after "the image" or "this one":
+            /// `"has more pixels than 2048 × 2048"`.
+            pub const fn what(self) -> &'static str {
+                match self {
+                    $(MarkerRefusal::$refusal => $what),*
+                }
+            }
+
+            /// [`MarkerRefusal::what`] after "whose image", for a list of what an import couldn't
+            /// carry over.
+            pub const fn whose(self) -> &'static str {
+                match self {
+                    $(MarkerRefusal::$refusal => concat!("whose image ", $what)),*
+                }
+            }
+        }
+    };
+}
+
+refusal_phrases! {
+    NotAnImage => "isn't a PNG or JPEG RustGIS reads",
+    TooManyPixels => "has more pixels than 2048 × 2048",
+    PastRunPixels => "is past what RustGIS decodes of marker images until it restarts (256 megapixels, 128 MiB)",
+}
 
 /// Decoded pictures (with the base64 they came from, compared on every hit so pictures whose
 /// cheap keys collide never swap), and their keys oldest first (for eviction).
@@ -39,23 +97,149 @@ struct Cache {
     order: std::collections::VecDeque<u64>,
 }
 
-/// Decoded picture markers (none: the image doesn't decode), by the [`Picture`] (where its image
-/// is kept, so a hit compares no bytes), the pixel memory they hold, and their pictures oldest
-/// first (for eviction).
-#[derive(Default)]
-struct Markers {
-    /// Each image as drawn, and its height for its width.
-    images: HashMap<Picture, Option<(Arc<Pixmap>, f32)>>,
-    /// The images compressed, for recording canvases (vector exports), done the first time one
-    /// records it: every point then shares them, and a writer keeps them once.
-    packed: HashMap<Picture, Option<Arc<Pixels>>>,
-    bytes: usize,
-    order: std::collections::VecDeque<Picture>,
-}
-
 thread_local! {
     static DECODED: RefCell<Cache> = RefCell::new(Cache::default());
-    static MARKERS_DECODED: RefCell<Markers> = RefCell::new(Markers::default());
+    /// The picture markers this thread has met, each with its image in the [`Store`] or why it is
+    /// drawn as a circle, so a frame finds it with no lock. Never emptied: only pictures a run keeps
+    /// ([`rustgis_map::symbology::MAX_PICTURES`]) are met, and each entry shares the store's image.
+    static MARKERS_MET: RefCell<HashMap<Picture, Marker>> = RefCell::new(HashMap::new());
+}
+
+/// A picture marker's image, decoded once for the run and shared by every thread.
+struct Decoded {
+    /// At most [`MARKER_SIDE`] pixels a side. Shared, so a frame drawn in bands keeps it, not a
+    /// copy ([`Canvas::draw_shared`]).
+    image: Arc<Pixmap>,
+    /// Its height for its width, from before it was scaled down (a one-pixel side can't keep a very
+    /// narrow image's).
+    aspect: f32,
+    /// The image compressed for recording canvases (vector exports), the first time one records
+    /// it: every point then shares it, and a writer keeps it once. Smaller than `image`, and not
+    /// counted in [`RUN_MARKER_BYTES`].
+    packed: OnceLock<Option<Arc<Pixels>>>,
+}
+
+/// A picture marker's decoded image, or why it is drawn as a circle.
+type Marker = Result<Arc<Decoded>, MarkerRefusal>;
+
+/// What the run has decoded of picture markers' images: the pixels they declared and the bytes
+/// they hold decoded ([`RUN_MARKER_PIXELS`], [`RUN_MARKER_BYTES`]).
+#[derive(Default)]
+struct Budget {
+    pixels: u64,
+    bytes: u64,
+}
+
+impl Budget {
+    /// Charges an image declaring `pixels` (at least [`MARKER_CHARGE`]) and holding `bytes`
+    /// decoded, within `limits`; refused, charging nothing, past either.
+    fn take(&mut self, pixels: u64, bytes: u64, (max_pixels, max_bytes): (u64, u64)) -> Result<(), MarkerRefusal> {
+        let pixels = pixels.max(MARKER_CHARGE);
+        if self.pixels.saturating_add(pixels) > max_pixels || self.bytes.saturating_add(bytes) > max_bytes {
+            return Err(MarkerRefusal::PastRunPixels);
+        }
+        self.pixels += pixels;
+        self.bytes += bytes;
+        Ok(())
+    }
+}
+
+/// The picture markers' images decoded this run, by their whole base64 ([`content_id`]): each one
+/// charged to the [`Budget`], decoded or not, so it is never decoded again. One kept
+/// ([`Picture`]) and one only checked (before a command keeps it) are the same image here.
+#[derive(Default)]
+struct Store {
+    images: HashMap<u128, Marker>,
+    /// What each kept picture met so far came to, by where it is kept: found with no hashing of
+    /// its image. A frame drawn in bands runs on threads made for that frame
+    /// ([`crate::bands`]), whose [`MARKERS_MET`] start empty, so each thread's first look at a
+    /// picture comes here, every frame. At most the pictures a run keeps. A refusal is kept too: a
+    /// picture past the run's budget stays a circle for the run, even if a later image that
+    /// doesn't decode gives back bytes, so a map doesn't change with what else was met.
+    pictures: HashMap<Picture, Marker>,
+    budget: Budget,
+}
+
+/// The [`Store`]. Its lock is held while an image is decoded, so two threads meeting the same new
+/// image decode it once; another waits at most one image's decoding (80 ms at [`MARKER_PIXELS`]).
+fn store() -> std::sync::MutexGuard<'static, Store> {
+    static STORE: OnceLock<Mutex<Store>> = OnceLock::new();
+    STORE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Base64 `b64`'s identity in the [`Store`]: two random hashes of all of it, 128 bits together.
+/// Not the cheap [`key`] of the graphics' cache, which a crafted image could share with one
+/// decoded already to pass free; and not a single 64-bit hash, whose key the web may not
+/// randomize, in reach of a birthday search.
+fn content_id(b64: &str) -> u128 {
+    static HASHERS: OnceLock<(RandomState, RandomState)> = OnceLock::new();
+    let (a, b) = HASHERS.get_or_init(|| (RandomState::new(), RandomState::new()));
+    (u128::from(a.hash_one(b64)) << 64) | u128::from(b.hash_one(b64))
+}
+
+/// Picture marker image `b64` from the [`Store`], decoded there the first time; or why it is drawn
+/// as a circle: not a PNG or JPEG, past [`MARKER_PIXELS`] or what the run has left of
+/// [`RUN_MARKER_PIXELS`] or [`RUN_MARKER_BYTES`], or one that doesn't decode. Every path to a
+/// marker's image (checking one, drawing it, a preview's) comes here, so the caps hold for all of
+/// them; graphics' pictures ([`decode`]) keep their own. What is refused before decoding (from its
+/// first bytes or its header) isn't kept: finding that again costs as little.
+fn marker(b64: &str) -> Marker {
+    marker_in(&mut store(), b64)
+}
+
+/// [`marker`] in `store`, locked.
+fn marker_in(store: &mut Store, b64: &str) -> Marker {
+    use MarkerRefusal::*;
+    let b64 = b64.trim();
+    if !png_or_jpeg(b64) {
+        return Err(NotAnImage);
+    }
+    let id = content_id(b64);
+    if let Some(found) = store.images.get(&id) {
+        return found.clone();
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| NotAnImage)?;
+    let (w, h) = declared(&bytes).ok_or(NotAnImage)?;
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels > MARKER_PIXELS {
+        return Err(TooManyPixels);
+    }
+    // What it holds once decoded, at most: scaled down to fit `MARKER_SIDE`.
+    let held = u64::from(w.min(MARKER_SIDE)) * u64::from(h.min(MARKER_SIDE)) * 4;
+    store.budget.take(pixels, held, (RUN_MARKER_PIXELS, RUN_MARKER_BYTES))?;
+    let found = decode_bytes(&bytes, MARKER_SIDE)
+        .map(|(image, aspect)| Arc::new(Decoded { image: Arc::new(image), aspect, packed: OnceLock::new() }))
+        .ok_or(NotAnImage);
+    if found.is_err() {
+        // Nothing is held for one that doesn't decode; its pixels stay charged, as decoding it
+        // took the time they stand for.
+        store.budget.bytes = store.budget.bytes.saturating_sub(held);
+    }
+    store.images.insert(id, found.clone());
+    found
+}
+
+/// Picture marker `p` as this thread met it ([`MARKERS_MET`]), from the [`Store`] the first time.
+fn marker_met(p: Picture) -> Marker {
+    if p.is_default() {
+        return Err(MarkerRefusal::NotAnImage);
+    }
+    if let Some(found) = MARKERS_MET.with(|met| met.borrow().get(&p).cloned()) {
+        return found;
+    }
+    let found = {
+        let mut store = store();
+        match store.pictures.get(&p) {
+            Some(found) => found.clone(),
+            None => {
+                let found = marker_in(&mut store, p.base64());
+                store.pictures.insert(p, found.clone());
+                found
+            }
+        }
+    };
+    MARKERS_MET.with(|met| met.borrow_mut().insert(p, found.clone()));
+    found
 }
 
 /// A cheap key for a picture: its length and its first and last bytes (hashing megabytes of
@@ -69,33 +253,34 @@ fn key(b64: &str) -> u64 {
     h.finish()
 }
 
-/// The pixel size of base64 PNG or JPEG bytes, read from the header without decoding the image.
+/// The pixel size of base64 PNG or JPEG bytes, read from the header without decoding the image;
+/// `None` if it doesn't say, or says 0.
 pub fn size(b64: &str) -> Option<(u32, u32)> {
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
-    image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+    declared(&base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?)
 }
 
-/// Decodes base64 PNG or JPEG bytes into a premultiplied pixmap. Pictures come from project
-/// files, so their declared size is checked before decoding and the decoder's memory is capped.
+/// Decodes base64 PNG or JPEG bytes into a premultiplied pixmap, scaled down to at most
+/// [`MAX_SIDE`] pixels per side. Pictures come from project files, so their declared size is
+/// checked before decoding and the decoder's memory is capped.
 pub fn decode(b64: &str) -> Option<Pixmap> {
-    decode_within(b64, MAX_SIDE)
-}
-
-/// [`decode`], scaled down to at most `side` pixels per side.
-fn decode_within(b64: &str, side: u32) -> Option<Pixmap> {
-    decode_sized(b64, side).map(|(pm, _)| pm)
-}
-
-/// [`decode_within`], with the image's height for its width before it was scaled down (a
-/// thumbnail's one-pixel side can't keep a very narrow image's).
-fn decode_sized(b64: &str, side: u32) -> Option<(Pixmap, f32)> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
-    let reader = || image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok();
-    let (w, h) = reader()?.into_dimensions().ok()?;
-    if w == 0 || h == 0 || w > MAX_DECLARED || h > MAX_DECLARED {
+    let (w, h) = declared(&bytes)?;
+    if w > MAX_DECLARED || h > MAX_DECLARED {
         return None;
     }
-    let mut r = reader()?;
+    decode_bytes(&bytes, MAX_SIDE).map(|(pm, _)| pm)
+}
+
+/// The pixel size image `bytes` declare, from their header; `None` if they don't say or say 0.
+fn declared(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Decodes image `bytes`, whose declared size the caller has checked, scaled down to at most
+/// `side` pixels per side, with their height for their width from before.
+fn decode_bytes(bytes: &[u8], side: u32) -> Option<(Pixmap, f32)> {
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(MAX_ALLOC);
     r.limits(limits);
@@ -142,60 +327,39 @@ pub fn draw(pm: &mut Canvas, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
 }
 
 /// Runs `f` on picture marker `p`'s decoded image, its height for its width and, with `pack`, the
-/// image compressed (see [`Markers::packed`]); `None` if it has none or it doesn't decode.
-fn with_marker<R>(p: Picture, pack: bool, f: impl FnOnce(&Arc<Pixmap>, f32, Option<&Arc<Pixels>>) -> R) -> Option<R> {
-    if p.is_default() {
-        return None;
-    }
-    MARKERS_DECODED.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let cache = &mut *cache;
-        if !cache.images.contains_key(&p) {
-            let img = marker_image(p, MARKER_SIDE).map(|(i, aspect)| (Arc::new(i), aspect));
-            let size = img.as_ref().map_or(0, |(i, _)| i.data().len());
-            // Evict the oldest (not all of them) to stay within the count and memory budget.
-            while cache.images.len() >= MARKERS || (cache.bytes + size > MARKERS_BYTES && !cache.images.is_empty()) {
-                let Some(old) = cache.order.pop_front() else { break };
-                if let Some(Some((gone, _))) = cache.images.remove(&old) {
-                    cache.bytes = cache.bytes.saturating_sub(gone.data().len());
-                }
-                if let Some(Some(gone)) = cache.packed.remove(&old) {
-                    cache.bytes = cache.bytes.saturating_sub(gone.cost());
-                }
-            }
-            cache.bytes += size;
-            cache.images.insert(p, img);
-            cache.order.push_back(p);
-        }
-        let (img, aspect) = cache.images.get(&p)?.as_ref()?;
-        let packed = if pack {
-            cache
-                .packed
-                .entry(p)
-                .or_insert_with(|| {
-                    let px = Pixels::new(Pixmap::as_ref(img)).map(Arc::new);
-                    cache.bytes += px.as_ref().map_or(0, |px| px.cost());
-                    px
-                })
-                .as_ref()
-        } else {
-            None
-        };
-        Some(f(img, *aspect, packed))
-    })
+/// image compressed (see [`Decoded::packed`]); or why it is drawn as a circle.
+fn with_marker<R>(p: Picture, pack: bool, f: impl FnOnce(&Arc<Pixmap>, f32, Option<&Arc<Pixels>>) -> R) -> Result<R, MarkerRefusal> {
+    let found = marker_met(p)?;
+    let packed = if pack { found.packed.get_or_init(|| Pixels::new(Pixmap::as_ref(&found.image)).map(Arc::new)).as_ref() } else { None };
+    Ok(f(&found.image, found.aspect, packed))
 }
 
-/// Picture marker `p`'s image at most `side` pixels per side, and its height for its width; `None`
-/// where it's drawn as a circle (no image, whose base64 is empty, not a PNG or JPEG, or one that
-/// doesn't decode).
+/// Picture marker `p`'s image at most `side` pixels per side (a preview's), and its height for its
+/// width; `None` where it's drawn as a circle. Scaled from the run's decoded copy by averaging
+/// (the image isn't decoded again), so a much smaller side doesn't alias; a new copy each call.
 pub(crate) fn marker_image(p: Picture, side: u32) -> Option<(Pixmap, f32)> {
-    png_or_jpeg(p.base64()).then(|| decode_sized(p.base64(), side)).flatten()
+    let found = marker_met(p).ok()?;
+    let (w, h) = (found.image.width(), found.image.height());
+    if w <= side && h <= side {
+        return Some(((*found.image).clone(), found.aspect));
+    }
+    let scale = side.max(1) as f32 / w.max(h) as f32;
+    let (sw, sh) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+    // Averaging premultiplied pixels keeps them premultiplied.
+    let view = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(w, h, found.image.data())?;
+    let small = image::imageops::thumbnail(&view, sw, sh);
+    let pm = Pixmap::from_vec(small.into_raw(), tiny_skia::IntSize::from_wh(sw, sh)?)?;
+    Some((pm, found.aspect))
 }
 
-/// Picture marker `p`'s height for its width; `None` if its image doesn't decode (it's drawn as a
-/// circle).
+/// Picture marker `p`'s height for its width; or why it is drawn as a circle.
+pub(crate) fn marker_drawn(p: Picture) -> Result<f32, MarkerRefusal> {
+    marker_met(p).map(|found| found.aspect)
+}
+
+/// [`marker_drawn`], `None` where it is drawn as a circle.
 pub(crate) fn marker_aspect(p: Picture) -> Option<f32> {
-    with_marker(p, false, |_, aspect, _| aspect)
+    marker_drawn(p).ok()
 }
 
 /// Draws picture marker `p` `width` pixels wide (as tall as its proportions make it), centred at
@@ -209,12 +373,17 @@ pub(crate) fn draw_marker(pm: &mut Canvas, p: Picture, width: f32, t: Transform,
         let paint = PixmapPaint { opacity, quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
         pm.draw_shared(img, packed, &paint, at);
     })
-    .is_some()
+    .is_ok()
 }
 
-/// Whether base64 `b64` is a PNG or JPEG image that decodes (a picture marker's, before it's set).
-pub fn readable(b64: &str) -> bool {
-    png_or_jpeg(b64) && decode_within(b64, MARKER_SIDE).is_some()
+/// Base64 `b64` as a picture marker's image (one already kept, or one before it's set): its
+/// height for its width, or why it would be drawn as a circle. Decoded into the run's store, where
+/// drawing it finds it.
+pub fn check(b64: &str) -> Result<f32, MarkerRefusal> {
+    match Picture::kept(b64) {
+        Some(kept) => marker_drawn(kept),
+        None => marker(b64).map(|found| found.aspect),
+    }
 }
 
 /// Whether base64 `b64` starts as a PNG or a JPEG does. Picture markers take only those, on every
@@ -244,11 +413,11 @@ mod tests {
         };
         let (png, jpeg) = (encoded(image::ImageFormat::Png), encoded(image::ImageFormat::Jpeg));
         assert!(png_or_jpeg(&png) && png_or_jpeg(&format!(" {jpeg}\n")));
-        assert!(readable(&png) && readable(&jpeg));
+        assert!(check(&png).is_ok() && check(&jpeg).is_ok());
         // A 1x1 GIF; a multi-byte character where the signature is read; text; base64 of text.
         let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
         for not in [gif, "iVBORw0KGgoAAAAé", "", "%%%", "bm90IGFuIGltYWdl"] {
-            assert!(!png_or_jpeg(not) && !readable(not), "{not}");
+            assert!(!png_or_jpeg(not) && check(not) == Err(MarkerRefusal::NotAnImage), "{not}");
         }
     }
 
@@ -271,6 +440,106 @@ mod tests {
         }
     }
 
+    fn png(w: u32, h: u32) -> String {
+        let mut bytes = Vec::new();
+        image::GrayImage::from_pixel(w, h, image::Luma([90]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    }
+
+    /// A one-pixel PNG whose header says `w` × `h`: the size of a crafted image whose few bytes
+    /// would decode to far more.
+    fn declaring(w: u32, h: u32) -> String {
+        let mut bytes = base64::engine::general_purpose::STANDARD.decode(png(1, 1)).unwrap();
+        // The header chunk: its length, "IHDR", width and height, …, and its CRC over type and data.
+        bytes[16..20].copy_from_slice(&w.to_be_bytes());
+        bytes[20..24].copy_from_slice(&h.to_be_bytes());
+        let crc = bytes[12..29].iter().fold(!0u32, |mut c, &b| {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+            }
+            c
+        });
+        bytes[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    }
+
+    /// A marker's image is taken up to 2048 × 2048 pixels by area (a long strip too), and one past
+    /// it is refused from its header, before it is decoded: one declaring 11,000 × 11,000 with a
+    /// pixel's bytes says so, not that it doesn't decode. Graphics' pictures keep their own limit.
+    #[test]
+    fn a_marker_image_past_its_pixels_is_refused_before_it_is_decoded() {
+        assert_eq!(check(&png(2048, 2048)), Ok(1.0));
+        assert_eq!(check(&png(4096, 1024)), Ok(0.25));
+        assert_eq!(check(&png(2049, 2048)), Err(MarkerRefusal::TooManyPixels));
+        let crafted = declaring(11_000, 11_000);
+        assert_eq!(size(&crafted), Some((11_000, 11_000)));
+        assert_eq!(check(&crafted), Err(MarkerRefusal::TooManyPixels));
+        assert!(marker_image(Picture::new(&crafted), 64).is_none());
+        // A picture graphic as large is still drawn.
+        assert_eq!(decode(&png(2049, 2048)).map(|p| (p.width(), p.height())), Some((2049, 2048)));
+    }
+
+    /// The run's budget: an image charged at least an icon's worth, refused (charging nothing) past
+    /// its pixels or its bytes, so a smaller one still fits.
+    #[test]
+    fn a_run_decodes_marker_images_within_its_pixels_and_bytes() {
+        let mut b = Budget::default();
+        let limits = (10 * MARKER_CHARGE, 1000);
+        assert_eq!(b.take(8 * MARKER_CHARGE, 100, limits), Ok(()));
+        assert_eq!(b.take(3 * MARKER_CHARGE, 100, limits), Err(MarkerRefusal::PastRunPixels));
+        assert_eq!(b.take(MARKER_CHARGE, 901, limits), Err(MarkerRefusal::PastRunPixels), "past its bytes");
+        assert_eq!((b.pixels, b.bytes), (8 * MARKER_CHARGE, 100), "a refused one charges nothing");
+        // Two icons of a pixel are charged an icon's worth each, the second filling the run.
+        assert_eq!(b.take(1, 4, limits), Ok(()));
+        assert_eq!(b.take(1, 4, limits), Ok(()));
+        assert_eq!(b.take(1, 4, limits), Err(MarkerRefusal::PastRunPixels));
+        // What a run keeps fits, at 177 × 177 each.
+        let keeps = rustgis_map::symbology::MAX_PICTURES as u64;
+        assert!(keeps * 177 * 177 <= RUN_MARKER_PIXELS && keeps * 177 * 177 * 4 <= RUN_MARKER_BYTES);
+    }
+
+    /// A marker's image is decoded once for the run: the same image met on another thread, or
+    /// checked as base64, is the same decoded copy, and a preview is scaled from it.
+    #[test]
+    fn a_marker_image_is_decoded_once_for_every_thread() {
+        let p = Picture::new(&png(300, 150));
+        let here = marker_met(p).unwrap();
+        let there = std::thread::spawn(move || marker_met(p).unwrap()).join().unwrap();
+        assert!(Arc::ptr_eq(&here, &there));
+        assert!(Arc::ptr_eq(&here, &marker(p.base64()).unwrap()));
+        assert_eq!(marker_image(p, 96).map(|(i, a)| (i.width(), i.height(), a)), Some((96, 48, 0.5)));
+    }
+
+    /// An image whose header is fine but whose data doesn't decode keeps its pixels charged (its
+    /// decoding took that time) and gives back its bytes (it holds none); met again, it is found
+    /// refused, charging nothing more.
+    #[test]
+    fn a_marker_image_that_does_not_decode_gives_back_its_bytes() {
+        let mut store = Store::default();
+        // A pixel's data under a header saying 100 × 100.
+        let broken = declaring(100, 100);
+        assert!(marker_in(&mut store, &broken).is_err_and(|r| r == MarkerRefusal::NotAnImage));
+        assert_eq!((store.budget.pixels, store.budget.bytes), (100 * 100, 0));
+        assert!(marker_in(&mut store, &broken).is_err());
+        assert_eq!(store.budget.pixels, 100 * 100, "found, not charged again");
+        let fine = png(100, 50);
+        assert_eq!(marker_in(&mut store, &fine).map(|m| m.aspect), Ok(0.5));
+        assert_eq!(store.budget.bytes, 100 * 50 * 4);
+    }
+
+    /// The refusals' phrases name the caps they are about.
+    #[test]
+    fn refusals_name_their_caps() {
+        let side = MARKER_PIXELS_SIDE.to_string();
+        assert!(MarkerRefusal::TooManyPixels.what().contains(&format!("{side} × {side}")));
+        let run = format!("({} megapixels, {} MiB)", RUN_MARKER_PIXELS / 1_000_000, RUN_MARKER_BYTES >> 20);
+        assert!(MarkerRefusal::PastRunPixels.what().contains(&run));
+        assert_eq!(MarkerRefusal::NotAnImage.whose(), "whose image isn't a PNG or JPEG RustGIS reads");
+    }
+
     /// Graphics' pictures don't check the signature: they keep what the decoder reads.
     #[test]
     fn graphics_pictures_still_decode_what_the_decoder_reads() {
@@ -284,6 +553,6 @@ mod tests {
         // drawn as a graphic, though not taken as a marker.
         let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
         assert_eq!(decode(gif).is_some(), image::ImageFormat::Gif.reading_enabled());
-        assert!(!readable(gif));
+        assert!(check(gif).is_err());
     }
 }
