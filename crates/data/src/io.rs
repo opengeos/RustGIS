@@ -3889,12 +3889,12 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
             .messages
             .push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out{unreadable}"));
     }
-    if lost_track {
+    if lost_track && records > pairs {
         report.messages.push(format!(
             "{name}: shape {pairs} can't be read and the Shapefile has no .shx to find the next one by: the {} record(s) after it were left out",
             records.saturating_sub(pairs)
         ));
-    } else if records > pairs && extra_shapes == 0 {
+    } else if records > pairs && extra_shapes == 0 && !lost_track {
         report
             .messages
             .push(format!("{name}: {} dBASE record(s) past the .shp's last shape have no shape and were left out", records - pairs));
@@ -9096,6 +9096,18 @@ mod tests {
             }
             let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
             assert!(ds.features.is_empty(), "deleted: {deleted}");
+            let last = {
+                let dir = tempfile::tempdir().unwrap();
+                let path = three_named_points(dir.path());
+                std::fs::remove_file(path.with_extension("shx")).unwrap();
+                let mut shp = std::fs::read(&path).unwrap();
+                // The third shape's type: each point record is 8 + 20 bytes.
+                shp[164..168].copy_from_slice(&99i32.to_le_bytes());
+                std::fs::write(&path, &shp).unwrap();
+                read_shapefile_in(&path, "pts", None).unwrap()
+            };
+            assert_eq!((last.0.features.len(), last.1.skipped), (2, 1));
+            assert!(last.1.messages.iter().all(|m| !m.contains("no .shx") && !m.contains("past the")), "{:?}", last.1.messages);
             assert!(
                 report.messages.iter().any(|m| m.contains("no .shx to find the next one by: the 2 record(s) after it were left out")),
                 "{:?}",
