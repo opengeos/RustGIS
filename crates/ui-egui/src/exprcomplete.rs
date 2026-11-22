@@ -526,18 +526,18 @@ pub(crate) fn describe_item(offer: &Offer, item: &str, ds: Option<&Dataset>) -> 
 /// type and alias; what a variable reads or a keyword does; whose value a value is.
 fn spoken(item: &Item, ds: Option<&Dataset>) -> String {
     match item {
-        Item::Function(f) => format!("{}\n{}", f.signature, tl!(f.description)),
+        Item::Function(f) => crate::completion::spoken(f.signature, Some(tl!(f.description))),
         Item::Field(name) => {
             let f = ds.and_then(|d| d.fields.iter().find(|f| f.name == *name));
             let ty = f.map(|f| tl!(f.ty.label()).to_string());
             let alias = f.and_then(|f| f.alias.clone()).filter(|a| !a.is_empty());
-            [ty, alias].into_iter().flatten().collect::<Vec<_>>().join("\n")
+            ty.map_or_else(|| alias.clone().unwrap_or_default(), |ty| crate::completion::spoken(&ty, alias.as_deref()))
         }
         Item::Variable(i, _) => VARS.get(*i).map(|v| tl!(v.description).to_string()).unwrap_or_default(),
         Item::Keyword(k) => tl!(k.description()).to_string(),
         Item::Value(_, field, read) => {
             let of = crate::i18n::fmt("A value of {field}", &[("field", &field_ref(field))]);
-            read.note().map_or(of.clone(), |note| format!("{of}\n{note}"))
+            crate::completion::spoken(&of, read.note().as_deref())
         }
     }
 }

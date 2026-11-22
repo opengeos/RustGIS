@@ -405,8 +405,9 @@ impl<O: Offered> List<O> {
             )
         });
         // Page Up / Page Down scroll the help, not the box, while a list with one is open: the
-        // keyboard's way to read a help longer than its box.
-        if offer.has_help() {
+        // keyboard's way to read a help longer than its box. Not when the list closes this frame:
+        // the next list mustn't open scrolled.
+        if offer.has_help() && !close && !accept {
             self.scroll.page = (self.scroll.page + page_keys(ui)).clamp(-MAX_PAGES, MAX_PAGES);
         }
         if close {
@@ -445,6 +446,10 @@ impl<O: Offered> List<O> {
         describe: impl Fn(&O, &str) -> Option<String>,
         help: impl FnOnce(&mut Ui, &O, &str, f32),
     ) -> Option<(O, String)> {
+        // A page pressed this frame (`keys`) is for the list drawn this frame: taken now and given
+        // back only once it's drawn, so a frame that draws none (closed, the cursor out of view)
+        // drops it.
+        let page = std::mem::take(&mut self.scroll.page);
         // The window left (another app took the focus, the box keeps its own): the list closes, as a
         // code editor's does, and comes back only once what's typed or the cursor changes.
         if !ui.input(|i| i.focused) {
@@ -502,9 +507,8 @@ impl<O: Offered> List<O> {
         }
         let pointer_leads = self.pointer_leads;
         // A new list starts from its top: its scroll is the old list's otherwise.
-        // A page pressed this frame (`keys`) is the new list's.
         if self.open.as_ref().is_none_or(|(o, _)| o.items() != offer.items()) {
-            self.scroll = Scroll { page: self.scroll.page, ..Scroll::default() };
+            self.scroll = Scroll::default();
         } else if self.open.as_ref().is_some_and(|(o, _)| *o != offer) {
             // The same items, but what they say may not be (a field's type, read again).
             self.scroll.described.clear();
@@ -521,6 +525,7 @@ impl<O: Offered> List<O> {
         let mut clicked = None;
         let mut highlighted = None;
         let has_help = offer.has_help();
+        self.scroll.page = page;
         let scroll = &mut self.scroll;
         let items = offer.items();
         let (area, drawn) = popup(ui, id, corner, room, |ui| {
@@ -771,6 +776,15 @@ fn rows(
         scroll.help_at = Some(boxed.response.rect.expand(GAP));
     });
     out
+}
+
+/// What a list's row says to a screen reader: its `head`, then its `detail` on a line of its own
+/// when there's one (the Script's commands and keys, the expression's items).
+pub(crate) fn spoken(head: &str, detail: Option<&str>) -> String {
+    match detail.filter(|d| !d.is_empty()) {
+        Some(detail) => format!("{head}\n{detail}"),
+        None => head.to_string(),
+    }
 }
 
 /// The most pages pressed ahead of the help's scroll (one waits a frame for a new help).
@@ -1704,6 +1718,68 @@ mod tests {
         h.get_by_label("Open").click();
         h.run();
         check(&mut h, &long, "a button's list");
+    }
+
+    /// A page pressed on the frame a list closes (Escape, Enter) is dropped with it: the next
+    /// list's help opens at its top.
+    #[test]
+    fn a_page_pressed_as_a_list_closes_is_dropped() {
+        use egui_kittest::kittest::Queryable;
+        let long = format!("first line {}", "a long help that wraps over several lines ".repeat(60));
+        for close in [egui::Key::Escape, egui::Key::Enter] {
+            let shown = long.clone();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+                move |ui, (text, list): &mut (String, super::List<Words>)| {
+                    let id = egui::Id::unique("box");
+                    if let Some((_, item)) = list.keys(ui, id) {
+                        text.push_str(&item);
+                    }
+                    let label = ui.label("Expression");
+                    // As the boxes do: Escape is the list's while one is open, the focus stays.
+                    let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true };
+                    let out = egui::TextEdit::singleline(text).id(id).event_filter(filter).show(ui);
+                    let _ = out.response.response.clone().labelled_by(label.id);
+                    // Asked for once: asked every frame, egui would drop the filter and let
+                    // Escape take the focus.
+                    if !out.response.response.has_focus() {
+                        out.response.response.request_focus();
+                    }
+                    let visible = ui.clip_rect();
+                    // Another list for each text: a new one opens once something's typed.
+                    let offer = Words(vec![format!("one{}", text.len()), "two".into()]);
+                    list.show(
+                        ui,
+                        egui::Id::unique("list"),
+                        &out,
+                        visible,
+                        |_| Some(offer),
+                        |_, _| None,
+                        |_, _| None,
+                        |ui, _, _, width| {
+                            ui.set_max_width(width);
+                            ui.label(&shown);
+                        },
+                    );
+                },
+                (String::new(), super::List::default()),
+            );
+            h.run_steps(3);
+            let top = h.get_by_label(&long).rect().top();
+            // Both keys in one frame (kittest's `key_press` gives each its own).
+            for key in [egui::Key::PageDown, close] {
+                let event = egui::Event::Key { key, pressed: true, modifiers: egui::Modifiers::NONE, repeat: false, physical_key: None };
+                h.input_mut().events.push(event);
+            }
+            h.run();
+            // Enter opened the next list (more to offer after the item); Escape needs a key typed.
+            if close == egui::Key::Escape {
+                h.event(egui::Event::Text("x".into()));
+                h.run();
+            }
+            h.run_steps(4);
+            let at = h.get_by_label(&long).rect().top();
+            assert!((at - top).abs() < 0.5, "{close:?}: the next list's help at its top: {at} for {top}");
+        }
     }
 
     /// A button's list opened from the keyboard keeps the focus on the button, its highlighted

@@ -1197,7 +1197,7 @@ impl Help {
     /// What the help says, for a screen reader: the command's name and what it does (the
     /// signature and parameters left out, as code to read).
     fn spoken(&self) -> String {
-        if self.about.is_empty() { self.label.clone() } else { format!("{}\n{}", self.label, self.about) }
+        crate::completion::spoken(&self.label, Some(&self.about))
     }
 }
 
@@ -1503,7 +1503,7 @@ pub fn show(
             let ds = e.data.as_ref().and_then(|of| data_of(session, of));
             crate::exprcomplete::describe_item(&e.offer, item, ds)
         }
-        Some(of) => item_help(session, of, item).map(|(text, about)| about.map_or(text.clone(), |about| format!("{text}\n{about}"))),
+        Some(of) => item_help(session, of, item).map(|(text, about)| crate::completion::spoken(&text, about.as_deref())),
     };
     let clicked = state.list.show(ui, box_id.with("complete_list"), out, visible, work, icon, describe, draw);
     store(ui, box_id, state);
