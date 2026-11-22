@@ -927,7 +927,7 @@ fn square_to(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let first = to.map(|t| t.layer.clone()).or_else(|| lines.first().cloned());
     let button = egui::Button::selectable(on, tl!(LabelPlacement::Perpendicular.label())).truncate();
     let clicked = ui
-        .add_enabled_ui(first.is_some(), |ui| ui.add_sized(vec2(92.0, 22.0), button))
+        .add_enabled_ui(first.is_some(), |ui| ui.add_sized(vec2(124.0, 22.0), button))
         .inner
         .on_hover_text(tl!("The label starts at the point and runs square to the nearest line of the layer chosen below."))
         .on_disabled_hover_text(tl!("The map has no line or polygon layer to be square to."))
