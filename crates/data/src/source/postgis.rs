@@ -1201,6 +1201,8 @@ impl PostgisSource {
         if let Some(r) = &self.reproject {
             return r.extent_to_lonlat(e);
         }
+        // The layer's extent is only shown: a box the server can't give, or a lost connection
+        // (which the next read reports), leaves it empty.
         self.server_transform(e, self.srid, 4326).ok().flatten().unwrap_or(Extent::EMPTY)
     }
 
@@ -1228,8 +1230,10 @@ impl PostgisSource {
                  (SELECT ST_Transform(ST_Segmentize(ST_MakeEnvelope($1, $2, $3, $4, $5), $6), $7)::box2d AS b) s",
                 &[&e.min_x, &e.min_y, &e.max_x, &e.max_y, &from, &step, &to],
             ) {
-                // The server's own refusal (a box its projection can't take): no box there.
-                Err(e) if e.as_db_error().is_some() => Ok(None),
+                // The server's own refusal (a box its projection can't take): no box there. Not a
+                // connection ending (08), the server stopping it (57) or running out of resources
+                // (53): those stay errors, so the connection is tried again.
+                Err(e) if e.as_db_error().is_some_and(|d| !matches!(d.code().code().get(..2), Some("08" | "57" | "53"))) => Ok(None),
                 r => r,
             }
         })?;

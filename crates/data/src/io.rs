@@ -3700,13 +3700,12 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     use shapefile::Shape;
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
-    let DbfRead { reader: dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref(), name)?;
-    let shapes = match parts.shx {
+    let DbfRead { reader: mut dbf, fields, decimals, mut report, not_utf8, deleted } = dbf_reader(parts.dbf, parts.cpg.as_deref(), name)?;
+    let mut shapes = match parts.shx {
         Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
         None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
     }
     .map_err(fmt)?;
-    let mut reader = shapefile::Reader::new(shapes, dbf);
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let to_lonlat = match crs {
         Some(c) => {
@@ -3727,12 +3726,14 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     let pt = |x: f64, y: f64| Coord::new(x, y);
     // Paired by position: a record marked deleted is read as any other, and left out with its shape.
     let (mut is_deleted, mut left_out) = (deleted_by_position(&deleted), 0);
-    for (k, item) in reader.iter_shapes_and_records().enumerate() {
+    // Each shape is read with its record, a shape that can't be read too: `shapefile`'s own pairing
+    // returns a shape's error before reading its record, which shifts every later record.
+    for (k, (shape, record)) in shapes.iter_shapes().zip(dbf.iter_records()).enumerate() {
         if is_deleted(k) {
             left_out += 1;
             continue;
         }
-        let Ok((shape, record)) = item else {
+        let (Ok(shape), Ok(record)) = (shape, record) else {
             report.skipped += 1;
             continue;
         };
@@ -8859,6 +8860,32 @@ mod tests {
             report.messages
         );
         assert_eq!(report.skipped, 0);
+    }
+
+    /// A shape that can't be read is left out with its own record, counted: the later shapes keep
+    /// theirs (`shapefile`'s pairing read no record for it, shifting every later one), whether or
+    /// not the record is also marked deleted.
+    #[test]
+    fn an_unreadable_shape_leaves_its_own_record_out() {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = three_named_points(dir.path());
+            // The first record's shape type (after the 100-byte header and 8-byte record header).
+            let mut shp = std::fs::read(&path).unwrap();
+            shp[108..112].copy_from_slice(&99i32.to_le_bytes());
+            std::fs::write(&path, &shp).unwrap();
+            if deleted {
+                let dbf_path = path.with_extension("dbf");
+                let mut dbf = std::fs::read(&dbf_path).unwrap();
+                let at = dbf_record_at(&dbf, 0);
+                dbf[at] = b'*';
+                std::fs::write(&dbf_path, &dbf).unwrap();
+            }
+            let (ds, report) = read_shapefile_in(&path, "pts", None).unwrap();
+            let names: Vec<_> = ds.features.iter().map(|f| f.attrs[0].clone()).collect();
+            assert_eq!(names, [Value::Text("b".into()), Value::Text("c".into())], "deleted: {deleted}");
+            assert_eq!(report.skipped, usize::from(!deleted), "{:?}", report.messages);
+        }
     }
 
     /// A standalone table: a record marked deleted is left out and counted, and one dBASE can't

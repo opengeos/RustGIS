@@ -48,14 +48,18 @@ impl ReloadWorkspace {
     /// Whether a saved conversion belongs to a disposable workspace rather than a durable cache:
     /// in a folder named as a workspace that holds its owner lock, marked as one. A user's cache
     /// folder that only has such a name (`RUSTGIS_GDAL_CACHE=/data/reload-2024`) isn't one. A lock
-    /// that can't be read is held by a live owner (Windows refuses reads of a locked range).
+    /// that is there but can't be opened or read is held by a live owner (Windows refuses reads of
+    /// a locked range).
     pub fn contains_file(path: &Path) -> bool {
         use std::io::Read;
         let Some(parent) = path.parent() else { return false };
         if !parent.file_name().is_some_and(|name| name.to_string_lossy().starts_with(RELOAD_PREFIX)) {
             return false;
         }
-        let Ok(mut lock) = std::fs::File::open(parent.join("owner.lock")) else { return false };
+        let mut lock = match std::fs::File::open(parent.join("owner.lock")) {
+            Ok(lock) => lock,
+            Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+        };
         let mut marker = [0; RELOAD_OWNER_MARKER.len()];
         match lock.read_exact(&mut marker) {
             Ok(()) => marker.as_slice() == RELOAD_OWNER_MARKER,
