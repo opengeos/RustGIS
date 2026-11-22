@@ -66,7 +66,7 @@ pub mod tiles;
 pub mod time;
 pub mod view;
 pub mod webdata;
-pub(crate) mod whole;
+pub mod whole;
 pub mod workflows;
 pub mod workspace;
 pub mod zarr;
