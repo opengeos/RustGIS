@@ -1370,9 +1370,15 @@ mod tests {
         only_ids.offline_areas[0].returned.clear();
         only_ids.offline_areas[0].ids = [(1, 120)].into();
         assert_eq!(serde_json::to_value(&only_ids).unwrap()["requires"], json!(["field-origin", "field-package"]));
-        let mut hostile = saved.clone();
-        hostile["offline_areas"][0]["ids"] = json!({"1": u64::MAX});
-        assert!(Project::from_json(&hostile.to_string()).unwrap_err().contains("identity"));
+        // The same bound for an area's: refused from `i64::MAX` up, the one below it kept.
+        for bad in [json!(u64::MAX), json!(i64::MAX.unsigned_abs())] {
+            let mut hostile = saved.clone();
+            hostile["offline_areas"][0]["ids"] = json!({"1": bad});
+            assert!(Project::from_json(&hostile.to_string()).unwrap_err().contains("identity"), "{bad}");
+        }
+        let mut largest = saved.clone();
+        largest["offline_areas"][0]["ids"] = json!({"1": i64::MAX.unsigned_abs() - 1});
+        assert!(Project::from_json(&largest.to_string()).is_ok());
         let mut invalid = saved;
         invalid["offline_areas"][0]["returned"] = json!(["nope"]);
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));

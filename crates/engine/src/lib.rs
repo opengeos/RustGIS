@@ -1359,8 +1359,9 @@ impl Session {
 
     /// Keeps the ids new features are given above those field packages hold, in every layer they
     /// apply to ([`Project::keep_field_floors`]). Run when a project is opened, after every command
-    /// (those landed from a copy too) and after Undo and Redo: a floor lives with a layer's rows,
-    /// which a reload, a renewal or a restored snapshot replaces.
+    /// wherever it runs (`invoke`: run, landed from a copy or a read, or a line of a script or task),
+    /// after an export lands, and after Undo and Redo: a floor lives with a layer's rows, which a
+    /// reload, a renewal or a restored snapshot replaces.
     pub(crate) fn keep_field_floors(&mut self) {
         self.project.keep_field_floors();
     }
@@ -1867,8 +1868,6 @@ impl Session {
             let history_before = self.history_position();
             let res = self.with_unread_bools(source, run);
             self.beyond_said = None;
-            // Whatever the command replaced, new features stay above the ids packages hold.
-            self.keep_field_floors();
             // Whichever command took its last layer away (removed, undone, the project closed):
             // the file can now be moved or replaced, so what was read of it is forgotten too.
             #[cfg(not(target_arch = "wasm32"))]

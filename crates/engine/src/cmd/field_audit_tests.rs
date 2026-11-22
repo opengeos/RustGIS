@@ -1256,6 +1256,59 @@ fn a_projection_defined_on_the_offline_map_counts_as_unsynced() {
     assert!(refused.unwrap_err().contains("aren't synced yet"));
 }
 
+/// The package gave the highest id a floor can be, so the phone's new point takes `i64::MAX`, which
+/// no GeoPackage or PostGIS table holds: Bring Back refuses it with nothing changed, and the area
+/// can still be packaged.
+#[test]
+fn a_return_needing_an_id_no_table_holds_is_refused_and_the_area_stays_packageable() {
+    let temp = Temp::new("no-table-id");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    let fields = home.map().layer(hc).unwrap().dataset.fields.len();
+    let inside = || Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(10.0, 5.0)));
+    let top = i64::MAX.unsigned_abs() - 1;
+    home.map_mut().layer_mut(hc).unwrap().dataset.features.push_parts(top, inside(), vec![rustgis_data::Value::Null; fields]);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    assert_eq!(add_point(&mut a, cities, &name, "Captured", [11.0, 5.0]), i64::MAX.unsigned_abs());
+    let before = count(&home, hc);
+    let (refused, _) = try_bring_back(&temp, &mut a, &mut home, "a");
+    assert!(refused.unwrap_err().contains("none is left"));
+    assert_eq!(count(&home, hc), before);
+    assert!(home.project.offline_areas[0].returned.is_empty());
+    package(&mut home, &json!({"name": "Day"})).unwrap();
+}
+
+/// The top road is deleted and saved, then a script discards the layer's edits, reading its rows
+/// again, and adds a feature: the new feature still takes an id above those the package out holds,
+/// as the floor is kept after each line, not only once the script ends.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_scripts_later_line_never_takes_an_id_a_package_holds() {
+    let temp = Temp::new("script-floor");
+    let gpkg = roads_gpkg(&temp.0);
+    let mut home = Session::new(crate::project::Project::default());
+    home.path = Some(temp.0.join("home.rgis"));
+    home.run("gpkg.addLayer", &json!({"path": gpkg, "table": "roads", "name": "R"})).unwrap();
+    package(&mut home, &json!({"name": "Roads", "extent": [0.5, 19.0, 11.5, 21.0]})).unwrap();
+    let r = layer(&home, "R");
+    let floor = home.project.offline_areas[0].ids[&r];
+    // The top road goes from the file too, so rereading it no longer shows the id the package holds.
+    let rows = &home.map().layer(r).unwrap().dataset.features;
+    let top = rows.iter().position(|f| f.id == floor).unwrap();
+    home.run("select.rows", &json!({"layer": r, "rows": [top]})).unwrap();
+    home.run("edit.delete", &Value::Null).unwrap();
+    home.run("gpkg.saveEdits", &json!({"layer": "R"})).unwrap();
+    let script = format!(
+        "gpkg.discardEdits {{\"layer\": \"R\"}}\nedit.addFeature {{\"layer\": {r}, \"geometry\": {{\"type\": \"Point\", \"coordinates\": [5, 20]}}, \"attributes\": {{}}}}"
+    );
+    home.run("script.run", &json!({"script": script})).unwrap();
+    let added = home.map().layer(r).unwrap().dataset.features.iter().map(|f| f.id).max().unwrap();
+    assert!(added > floor, "the script's new feature took id {added}, at or below {floor}");
+}
+
 /// A layer removed on the phone is said on sending: its features go back unchanged.
 #[test]
 fn a_layer_removed_in_the_field_is_said_on_sending() {
