@@ -52,6 +52,14 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
     let g = grid(bytes, sheet)?;
     let title = if g.names.len() > 1 { format!("{name} {}", g.pick) } else { name.to_string() };
     let (ds, mut report) = read_rows(&g.headers, &g.rows, 0, &title, opts, Some((&g.dates, &g.phantom_dates)))?;
+    let errors: usize = g.error_cells.iter().sum();
+    if errors > 0 {
+        let fields: Vec<Field> = g.headers.iter().map(|h| Field::new(h, FieldType::Text)).collect();
+        let what = if errors == 1 { "1 spreadsheet error cell was".to_string() } else { format!("{errors} spreadsheet error cells were") };
+        report
+            .messages
+            .push(format!("{what} read as empty (Null for attributes), in {}", crate::io::named_fields(&fields, &g.error_cells)));
+    }
     let rounded: usize = g.rounded_dates.iter().sum();
     if rounded > 0 {
         let fields: Vec<Field> = g.headers.iter().map(|h| Field::new(h, FieldType::Text)).collect();
@@ -82,6 +90,8 @@ struct Grid {
     rows: Vec<Vec<String>>,
     dates: Vec<Option<FieldType>>,
     rounded_dates: Vec<usize>,
+    /// Data cells whose spreadsheet error value became empty text, per source column.
+    error_cells: Vec<usize>,
     /// Per column that isn't one of dates, the serial-60 cells read as empty.
     phantom_dates: Vec<usize>,
 }
@@ -173,10 +183,17 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
     // as one that isn't a date (null, and counted); in a column of other things it is read as
     // empty and counted here, as it would not be text of a day.
     let mut phantom_dates = vec![0usize; w];
-    let mut rows = range.rows().map(|r| {
+    let mut error_cells = vec![0usize; w];
+    let mut rows = range.rows().enumerate().map(|(row, r)| {
         r.iter()
             .enumerate()
             .map(|(k, d)| match (d, dates.get(k)) {
+                (Data::Error(_), _) if row > header_at => {
+                    if let Some(n) = error_cells.get_mut(k) {
+                        *n += 1;
+                    }
+                    String::new()
+                }
                 (Data::DateTime(t), Some(None)) if is_phantom_day(t) => {
                     if let Some(n) = phantom_dates.get_mut(k) {
                         *n += 1;
@@ -201,7 +218,7 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         .map(|(i, h)| if h.trim().is_empty() { column_letter(first_col + i) } else { h.trim().to_string() })
         .collect();
     let rows: Vec<Vec<String>> = rows.filter(|r| r.iter().any(|c| !c.trim().is_empty())).collect();
-    Ok(Grid { names, pick, headers, rows, dates, rounded_dates, phantom_dates })
+    Ok(Grid { names, pick, headers, rows, dates, rounded_dates, error_cells, phantom_dates })
 }
 
 /// Check every ZIP member before calamine opens it, without suffix or case filters. ODS
@@ -745,6 +762,19 @@ mod tests {
         );
         let (_, report) = book("POINT (3 4)");
         assert!(!report.messages.iter().any(|m| m.contains("isn't a date")), "{:?}", report.messages);
+    }
+
+    /// Multiple errors in one column and another column count once each; blank cells don't.
+    #[test]
+    fn error_cells_are_counted_without_changing_other_values() {
+        let error = r#"<c t="e"><v>#DIV/0!</v></c>"#;
+        let book = xlsx(&[("S", &[&["id", "note", "other"], &["7", error, "kept"], &["8", error, error], &["9", "", ""]])]);
+        let (ds, report) = read(&book, "book", None, &CsvOptions::default()).unwrap();
+        assert_eq!(report.messages, ["3 spreadsheet error cells were read as empty (Null for attributes), in 'note', 'other'"]);
+        assert_eq!(report.skipped, 0);
+        let attrs: Vec<_> = ds.features.iter().map(|f| f.attrs.clone()).collect();
+        use crate::Value::{Int, Null, Text};
+        assert_eq!(attrs, [vec![Int(7), Null, Text("kept".into())], vec![Int(8), Null, Null], vec![Int(9), Null, Null]]);
     }
 
     #[test]
