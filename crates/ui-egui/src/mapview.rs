@@ -512,10 +512,12 @@ impl MapView {
             self.callout_map.clear();
             self.attribution.clear();
             self.tile_errors.clear();
-            // What the old project's frames approximated on workers isn't the new one's.
-            rustgis_engine::render::forget_relayed_approximations();
             self.drape = Default::default();
+            // With their relays: what the old project's frames approximated on workers isn't the
+            // new one's.
             self.tilt_drape = Default::default();
+            self.tilt_settle.relay = Default::default();
+            self.motion_frame.relay = Default::default();
             self.filling = false;
         }
         self.project = Some(opened);
@@ -1881,7 +1883,8 @@ fn tile_error_kind(e: &str) -> String {
 /// [`rustgis_engine::render::take_approximations`]), each kind with the count it had when first
 /// seen: read after each frame it shows, with what its workers' frames handed over.
 fn say_approximations(app: &mut RustGisApp) {
-    for (kind, e) in rustgis_engine::render::take_approximations() {
+    let relays = [&app.map.tilt_settle.relay, &app.map.motion_frame.relay, &app.map.tilt_drape.relay];
+    for (kind, e) in rustgis_engine::render::take_approximations(&relays) {
         if app.map.tile_errors.insert(format!("approximated\0{kind}")) {
             app.session.warn(e);
         }
@@ -5014,7 +5017,7 @@ mod tile_redraw_tests {
     #[test]
     fn approximations_are_said_once_a_project() {
         let mut app = crate::RustGisApp::with_sample();
-        rustgis_engine::render::take_approximations();
+        rustgis_engine::render::take_approximations(&[]);
         let mark = app.session.notice_mark();
         super::say_approximations(&mut app);
         assert!(!app.session.notices_since(mark).iter().any(|n| n.text.starts_with("road: ")), "nothing approximated, nothing said");
@@ -5033,7 +5036,6 @@ mod tile_redraw_tests {
             rustgis_engine::render::render(&mut m, &view).unwrap();
             super::say_approximations(&mut app);
         }
-        // Other tests' map view workers may hand theirs over meanwhile: only this map's are looked at.
         let said: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.starts_with("road: ")).collect();
         assert!(said.len() == 1 && said[0].starts_with("road: 1 dashed line(s) drawn solid"), "{said:?}");
     }

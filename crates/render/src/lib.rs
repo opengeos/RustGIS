@@ -8062,31 +8062,14 @@ fn take_said() -> ShadowsSaid {
 }
 
 /// What frames drawn on this thread approximated since the last call, and what map view frames
-/// drawn on worker threads handed over ([`relay_approximations`]), each kind once, as (kind,
-/// notice): what the map view says after each frame it shows, each kind once a project (see
-/// `approximations`). Exports and pages read it through [`shadows_said`] instead.
-pub fn take_approximations() -> Vec<(String, String)> {
-    approximations::take_keyed()
+/// drawn on worker threads handed over to `relays` ([`ApproximationRelay::hand_over`]), each kind
+/// once, as (kind, notice): what the map view says after each frame it shows, each kind once a
+/// project (see `approximations`). Exports and pages read it through [`shadows_said`] instead.
+pub fn take_approximations(relays: &[&ApproximationRelay]) -> Vec<(String, String)> {
+    approximations::take_keyed(relays)
 }
 
-/// Hands what frames drawn on this thread approximated over to [`take_approximations`]: called
-/// by a worker thread once it has drawn a frame for the map view, started at `epoch`
-/// ([`approximations_epoch`]). Nothing is handed over once the map view has forgotten what was
-/// ([`forget_relayed_approximations`]) since.
-pub fn relay_approximations(epoch: u64) {
-    approximations::relay(epoch);
-}
-
-/// The epoch a worker's frame for the map view starts at (see [`relay_approximations`]).
-pub fn approximations_epoch() -> u64 {
-    approximations::epoch()
-}
-
-/// Forgets what workers handed over for [`take_approximations`], and what frames started before
-/// hand over later: the map view opened another project.
-pub fn forget_relayed_approximations() {
-    approximations::forget_relayed();
-}
+pub use approximations::Relay as ApproximationRelay;
 
 fn take_shadow_notices() -> Vec<String> {
     SHADOW_NOTICES.with(|n| std::mem::take(&mut *n.borrow_mut()))

@@ -8,8 +8,8 @@
 //! gives them among its notices, which every export, page and preview the engine or the
 //! interface draws goes through; [`crate::render_placed`] among its gaps; and the map view takes
 //! what its frames said ([`take_keyed`]) after each frame it shows, saying each kind once a
-//! project. A map view's frame drawn on a worker thread hands what it approximated over
-//! ([`relay`]) for the map view to take with its own.
+//! project. A map view's frame drawn on a worker thread hands what it approximated over to the
+//! map view's [`Relay`] for the map view to take with its own.
 
 use std::cell::{Cell, RefCell};
 
@@ -31,13 +31,37 @@ thread_local! {
     static TURNED_AWAY: Cell<usize> = const { Cell::new(0) };
 }
 
-/// What map view frames drawn on worker threads approximated ([`relay`]), each kind once, the
-/// kinds turned away as it was full, and the epoch they are for ([`forget_relayed`]).
-static RELAYED: std::sync::Mutex<(Vec<Entry>, usize)> = std::sync::Mutex::new((Vec::new(), 0));
+/// Where a worker drawing frames for the map view hands what they approximated ([`Relay::hand_over`]),
+/// for the map view to take with its own ([`take_keyed`]): each kind once, and the number of kinds
+/// turned away as it was full. Shared by the map view and its workers; the map view replaces it
+/// when it opens another project, so what its old frames hand over goes nowhere.
+#[derive(Clone, Default)]
+pub struct Relay(std::sync::Arc<std::sync::Mutex<(Vec<Entry>, usize)>>);
 
-/// Goes up each time the map view forgets what was relayed ([`forget_relayed`]): a worker's frame
-/// drawn for an epoch before it hands nothing over.
-static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+impl Relay {
+    /// Hands what frames drawn on this thread approximated over (see [`Relay`]): called by the
+    /// worker thread that drew them. The kinds turned away carry over as a count.
+    pub fn hand_over(&self) {
+        let (mine, n) = keep();
+        if mine.is_empty() && n == 0 {
+            return;
+        }
+        if let Ok(mut relayed) = self.0.lock() {
+            let mut turned = n;
+            for e in mine {
+                if !add(&mut relayed.0, e) {
+                    turned = turned.saturating_add(1);
+                }
+            }
+            relayed.1 = relayed.1.saturating_add(turned);
+        }
+    }
+
+    /// What was handed over, and forgets it.
+    fn take(&self) -> (Vec<Entry>, usize) {
+        self.0.lock().map(|mut r| std::mem::take(&mut *r)).unwrap_or_default()
+    }
+}
 
 /// Adds `entry` to `to`, unless its kind is there already; `false` when `to` holds [`KEPT`] and
 /// the kind is turned away.
@@ -61,87 +85,63 @@ fn turned_away(n: usize) -> Entry {
 /// it is counted as turned away instead, and the count said when they are taken.
 pub(crate) fn note(key: String, text: String) {
     if !SAID.with(|s| add(&mut s.borrow_mut(), (key, text))) {
-        TURNED_AWAY.with(|c| c.set(c.get().saturating_add(1)));
+        turn_away(1);
     }
 }
 
-/// What frames drawn on this thread approximated since the last call, each kind once, and forgets
-/// it.
-pub(crate) fn take() -> Vec<String> {
-    take_entries().into_iter().map(|(_, t)| t).collect()
+/// Counts `n` more kinds this thread turned away.
+fn turn_away(n: usize) {
+    TURNED_AWAY.with(|c| c.set(c.get().saturating_add(n)));
 }
 
-fn take_entries() -> Vec<Entry> {
-    let mut out = SAID.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    let n = TURNED_AWAY.with(|c| c.replace(0));
+/// What frames drawn on this thread approximated since the last call, each kind once (and how
+/// many kinds were turned away, as one more notice), and forgets it.
+pub(crate) fn take() -> Vec<String> {
+    let (entries, n) = keep();
+    entries.into_iter().chain((n > 0).then(|| turned_away(n))).map(|(_, t)| t).collect()
+}
+
+/// What frames drawn on this thread approximated so far, with their kinds, and how many kinds were
+/// turned away; forgotten here, for [`restore`] or to say.
+pub(crate) fn keep() -> (Vec<Entry>, usize) {
+    (SAID.with(|s| std::mem::take(&mut *s.borrow_mut())), TURNED_AWAY.with(|c| c.replace(0)))
+}
+
+/// [`take`] with each notice's kind, and what workers handed over to `relays` ([`Relay`]), the
+/// kinds turned away by all said in one more notice: for the map view, which says each kind once
+/// a project.
+pub(crate) fn take_keyed(relays: &[&Relay]) -> Vec<Entry> {
+    let (mut out, mut n) = keep();
+    for relay in relays {
+        let (entries, m) = relay.take();
+        for e in entries {
+            if !add(&mut out, e) {
+                n = n.saturating_add(1);
+            }
+        }
+        n = n.saturating_add(m);
+    }
     if n > 0 {
         out.push(turned_away(n));
     }
     out
 }
 
-/// [`take`] with each notice's kind, and what frames on worker threads handed over ([`relay`]):
-/// for the map view, which says each kind once a project.
-pub(crate) fn take_keyed() -> Vec<Entry> {
-    let mut out = take_entries();
-    if let Ok(mut relayed) = RELAYED.lock() {
-        let (entries, n) = std::mem::take(&mut *relayed);
-        out.extend(entries.into_iter().chain((n > 0).then(|| turned_away(n))));
-    }
-    out
-}
-
-/// The epoch a worker's frame is drawn for: read as it starts, handed to [`relay`].
-pub(crate) fn epoch() -> u64 {
-    EPOCH.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-/// Forgets what workers handed over, and turns away what frames started before hand over later:
-/// the map view's project changed, and what its old frames approximated isn't the new one's.
-pub(crate) fn forget_relayed() {
-    EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if let Ok(mut relayed) = RELAYED.lock() {
-        *relayed = (Vec::new(), 0);
-    }
-}
-
-/// Hands what frames drawn on this thread approximated over to the map view ([`take_keyed`]):
-/// called by a worker thread drawing the map view's frames, which the map view reads on its own,
-/// for the frame started at `epoch` ([`epoch`]); nothing when the map view has since forgotten
-/// what was relayed ([`forget_relayed`]).
-pub(crate) fn relay(epoch: u64) {
-    let mine = take_entries();
-    if mine.is_empty() {
-        return;
-    }
-    if let Ok(mut relayed) = RELAYED.lock()
-        && EPOCH.load(std::sync::atomic::Ordering::SeqCst) == epoch
-    {
-        for e in mine {
-            if !add(&mut relayed.0, e) {
-                relayed.1 = relayed.1.saturating_add(1);
-            }
-        }
-    }
-}
-
-/// Puts `kept` (from [`take`]'s kinds, see [`keep`]) back in front of what frames said since:
-/// what a caller took to read on its own ([`crate::render_placed`]) leaves the rest for whoever
+/// Puts what [`keep`] took back in front of what frames said since: what a caller took to read on
+/// its own ([`crate::render_placed`]) leaves the rest, and the count turned away, for whoever
 /// reads after it.
-pub(crate) fn restore(kept: Vec<Entry>) {
-    let since = take_entries();
+pub(crate) fn restore((kept, n): (Vec<Entry>, usize)) {
+    let (since, m) = keep();
+    let mut turned = n.saturating_add(m);
     SAID.with(|s| {
         let mut s = s.borrow_mut();
         for e in kept.into_iter().chain(since) {
-            add(&mut s, e);
+            if !add(&mut s, e) {
+                turned = turned.saturating_add(1);
+            }
         }
-        // `take_entries` gave what was turned away as an entry: it was taken with them.
     });
-}
-
-/// What frames drawn on this thread approximated so far, with their kinds, taken for [`restore`].
-pub(crate) fn keep() -> Vec<Entry> {
-    take_entries()
+    turn_away(turned);
 }
 
 /// Starts drawing the map layer `name` (`None`: between layers): what the layer before it
@@ -288,27 +288,52 @@ mod tests {
         assert!(said.first().is_some_and(|s| s.contains("under 1%")), "{said:?}");
     }
 
-    /// The only test in this crate that reads the relay (the others read their thread's own
-    /// list), so nothing else takes what it relays.
     #[test]
-    fn a_workers_frames_are_handed_to_the_map_view_of_their_epoch() {
-        take_keyed();
-        let relay_from_a_worker = |at: u64| {
+    fn restoring_keeps_the_count_turned_away() {
+        take();
+        for i in 0..KEPT + 5 {
+            walls_left_plain(&format!("Layer {i}"), 1);
+        }
+        let kept = keep();
+        walls_left_plain("Later", 1);
+        restore(kept);
+        let said = take();
+        // The 5 turned away before, and the one since that no longer fits.
+        assert!(said.len() == KEPT + 1 && said.last().is_some_and(|s| s.starts_with("6 more kind(s)")), "{said:?}");
+    }
+
+    #[test]
+    fn a_workers_frames_are_handed_over_whole() {
+        take();
+        let relay = Relay::default();
+        let from_a_worker = |work: &(dyn Fn() + Sync)| {
             std::thread::scope(|s| {
                 s.spawn(|| {
-                    walls_left_plain("Geology", 3);
-                    relay(at);
+                    work();
+                    relay.hand_over();
                 });
             });
         };
-        relay_from_a_worker(epoch());
-        let said = take_keyed();
+        from_a_worker(&|| walls_left_plain("Geology", 3));
+        let said = take_keyed(&[&relay]);
         assert!(said.len() == 1 && said[0].0 == "Geology\0walls", "{said:?}");
-        assert!(take_keyed().is_empty(), "taken once");
-        // A frame started before the map view forgot (its project changed) hands nothing over.
-        let before = epoch();
-        forget_relayed();
-        relay_from_a_worker(before);
-        assert!(take_keyed().is_empty());
+        assert!(take_keyed(&[&relay]).is_empty(), "taken once");
+        // A worker that turned kinds away hands their number over whole.
+        from_a_worker(&|| {
+            for i in 0..KEPT * 2 {
+                walls_left_plain(&format!("Layer {i}"), 1);
+            }
+        });
+        let said = take_keyed(&[&relay]);
+        assert!(said.len() == KEPT + 1 && said.last().is_some_and(|(_, t)| t.starts_with(&format!("{KEPT} more kind(s)"))), "{said:?}");
+        // What a worker hands to a relay the map view let go of reaches no other.
+        let old = Relay::default();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                walls_left_plain("Geology", 3);
+                old.hand_over();
+            });
+        });
+        assert!(take_keyed(&[&relay]).is_empty());
     }
 }
