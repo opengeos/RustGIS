@@ -3123,7 +3123,10 @@ mod tests {
             assert!(std::time::Instant::now() < end, "the run never finished");
             std::thread::sleep(std::time::Duration::from_millis(5)); // test-wait: polling for the worker to fill its slot
         }
-        app.workflow.job.as_ref().unwrap().control.cancel();
+        // It made its raster (and wrote its file beside the destination): looked at, not taken.
+        let Some(Job { kind: JobKind::Raster { slot, .. }, control, .. }) = &app.workflow.job else { panic!("no raster job") };
+        assert!(matches!(&*slot.lock().unwrap(), Some(Ok(_))), "the run failed");
+        control.cancel();
         assert!(!land_job(&mut app));
         assert!(app.workflow.job.is_none());
         assert!(app.workflow.error.as_deref().is_some_and(|e| e.contains("was cancelled")), "{:?}", app.workflow.error);

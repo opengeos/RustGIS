@@ -526,7 +526,8 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
     }
     let extent_given = p.get("extent").is_some_and(|v| !v.is_null());
     // The layer's rows are shared, not copied: every pass over the polygons runs on the work's
-    // thread, which looks at Cancel as it sizes the grid and between shapes as it burns.
+    // thread, which looks at Cancel every few thousand features or vertices in each, and between
+    // shapes as it burns.
     let ds = ds.clone();
     let ln = ln.to_string();
     Ok(Box::new(move || {
@@ -571,8 +572,11 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let key =
                 |v: &rustgis_data::Value| if temporal { v.temporal_key().map(ClassKey::Instant) } else { text_of(v).map(ClassKey::Text) };
             let mut labels = std::collections::BTreeMap::new();
+            // Each pass over the features looks at Cancel every few thousand, as the first.
+            let look = |k: usize| if k.is_multiple_of(4096) { rustgis_data::progress::check().map_err(|e| e.to_string()) } else { Ok(()) };
             if text {
-                for (_, v) in &burns {
+                for (n, (_, v)) in burns.iter().enumerate() {
+                    look(n)?;
                     if let (Some(k), Some(label)) = (key(v), text_of(v)) {
                         labels.entry(k).or_insert(label);
                     }
@@ -585,7 +589,8 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let what = field.and_then(|(i, _)| ds.fields.get(i)).map_or("value", |f| f.name.as_str()).to_string();
             let mut shapes = Vec::with_capacity(burns.len());
             let mut rounded = 0;
-            for (parts, v) in burns {
+            for (k, (parts, v)) in burns.into_iter().enumerate() {
+                look(k)?;
                 let x = if text { key(&v).and_then(|k| keys.binary_search(&k).ok()).map(|i| i as f64 + 1.0) } else { v.as_f64() };
                 let Some(x) = x else {
                     no_value += 1;
@@ -612,10 +617,11 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             }
             // By default, the projected system the layer holds its coordinates in (else the one it was read in) and
             // the polygons' bounds.
-            let held_bounds = shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).fold(Extent::EMPTY, |mut e, c| {
-                e.expand(*c);
-                e
-            });
+            let mut held_bounds = Extent::EMPTY;
+            for (k, c) in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).enumerate() {
+                look(k)?;
+                held_bounds.expand(*c);
+            }
             let mut unsized_by = 0usize;
             let grid = spec.finish(|crs| {
                 if crs == held && projected {
@@ -743,17 +749,20 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
                 rl.style.renderer = rustgis_map::raster::unique_values(&d, 0, rustgis_map::Ramp::Harbour);
             }
             // A text field's table of codes, made here (one row a class); named as it is added.
-            let table = text.then(|| {
+            let table = if text {
                 let mut table = rustgis_data::Dataset::new(
                     String::new(),
                     GeometryType::None,
                     vec![rustgis_data::Field::new("code", FieldType::Integer), rustgis_data::Field::new("value", FieldType::Text)],
                 );
                 for (i, c) in classes.iter().enumerate() {
+                    look(i)?;
                     table.push_next(None, vec![rustgis_data::Value::Int(i as i64 + 1), rustgis_data::Value::Text(c.clone())]);
                 }
-                table
-            });
+                Some(table)
+            } else {
+                None
+            };
             // All the codes are in the table; in the answer, as many as a unique-value legend shows.
             let listed: Vec<Value> = classes.iter().take(256).enumerate().map(|(i, c)| json!({"code": i + 1, "value": c})).collect();
             let class_count = classes.len();
