@@ -385,8 +385,9 @@ impl<O: Offered> List<O> {
 
     /// Before the box (its id `id`) sees the keys, with the list open and the box focused: ↑/↓
     /// move the highlight, Enter or Tab accept it (so Enter doesn't break the line, nor Tab indent
-    /// or move the focus), Escape closes the list (and the box keeps the focus). Returns the item
-    /// to accept, if any. Without the focus the keys are another widget's: none is taken.
+    /// or move the focus), Escape closes the list (and the box keeps the focus), Page Up / Page Down
+    /// scroll its help when it has one. Returns the item to accept, if any. Without the focus the
+    /// keys are another widget's: none is taken.
     pub fn keys(&mut self, ui: &Ui, id: Id) -> Option<(O, String)> {
         let (offer, selected) = self.open.clone()?;
         if !ui.memory(|m| m.has_focus(id)) {
@@ -1673,6 +1674,7 @@ mod tests {
             move |ui: &mut egui::Ui, _: &str, width: f32| {
                 ui.set_max_width(width);
                 ui.label(&long);
+                ui.label("the end");
             }
         };
         fn check<S>(h: &mut egui_kittest::Harness<'_, S>, long: &str, what: &str) {
@@ -1681,12 +1683,23 @@ mod tests {
             h.run();
             let down = h.get_by_label(long).rect().top();
             assert!(down < top - 50.0, "{what}: a page down: {down} from {top}");
+            h.key_press(egui::Key::PageDown);
+            h.run();
+            let further = h.get_by_label(long).rect().top();
+            assert!(further < down - 50.0, "{what}: a page further: {further} from {down}");
             for _ in 0..30 {
                 h.key_press(egui::Key::PageDown);
                 h.run();
             }
+            // At the help's end: its last line inside the popup.
+            let row = h.get_by_label("one").rect().center();
+            let popup = h.ctx.memory(|m| m.layer_ids().filter_map(|l| m.area_rect(l.id)).find(|r| r.contains(row)));
+            let end = h.get_by_label("the end").rect();
+            assert!(
+                popup.is_some_and(|p| p.top() <= end.top() && end.bottom() <= p.bottom()),
+                "{what}: the end shown: {end:?} in {popup:?}"
+            );
             let last = h.get_by_label(long).rect();
-            assert!(last.bottom() > top, "{what}: kept in the help: {last:?}");
             h.key_press(egui::Key::PageDown);
             h.run();
             assert_eq!(h.get_by_label(long).rect(), last, "{what}: no further than the help's end");
