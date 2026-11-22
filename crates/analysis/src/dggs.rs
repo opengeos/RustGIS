@@ -34,9 +34,10 @@ pub const MAX_RESOLUTION: i32 = 30;
 /// How far over [`MAX_CELLS`] an area's [`estimate`] may go before it's refused without being
 /// covered: the estimate is rough, and the exact count still applies after.
 const ESTIMATE_MARGIN: f64 = 2.0;
-/// The most cells (and rows) a run's coverings look at before keeping those in the area (S2's
-/// descent, the hexagon grid's rows), over all its polygons ([`Work`]): past it the run is
-/// refused, as one over the cap.
+/// The most cells a run's coverings test, and rows they cross, before keeping those in the area
+/// (S2's descent, the hexagon grid's rows), over all its polygons ([`Work`]): past it the run is
+/// refused, as one over the cap. S2's coarser cells on the way down are paced, not counted: there
+/// are a third as many of them as of the cells tested.
 const MAX_WORK: u64 = 4 * MAX_CELLS;
 
 /// A grid system.
@@ -149,23 +150,11 @@ fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
     if open.len() > 1 && open.first() == open.last() {
         open.pop();
     }
-    // A corner on a pole has no longitude of its own (S2's face cells have one): on a map of
-    // longitudes and latitudes the pole is a line, from the longitude of the corner before it to
-    // that of the one after.
-    let n = open.len();
-    let mut out: Vec<Coord> = Vec::with_capacity(n + 8);
-    for (i, c) in open.iter().enumerate() {
-        if c.y.abs() >= 90.0 - 1e-9 && n > 2 {
-            let around = |k: usize| open.get(k % n).copied().unwrap_or(*c);
-            let (prev, next) = (around(i + n - 1), around(i + 1));
-            out.push(Coord::new(prev.x, c.y.signum() * 90.0));
-            out.push(Coord::new(next.x, c.y.signum() * 90.0));
-        } else {
-            out.push(*c);
-        }
-    }
+    let mut out = pole_as_line(open);
     let start = *out.first()?;
-    out.push(start);
+    if out.last() != Some(&start) {
+        out.push(start);
+    }
     let mut prev: Option<f64> = None;
     for c in &mut out {
         if let Some(p) = prev {
@@ -188,6 +177,29 @@ fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
         out.push(first);
     }
     (out.len() >= 4).then_some(out)
+}
+
+/// An open ring with its corners on a pole (S2's face cells have them, and A5's cells round a
+/// pole: without this, a point near the pole fell outside the outline of the cell holding it) made one a map of
+/// longitudes and latitudes draws: such a corner has no longitude of its own, and the pole there
+/// is a line, from the longitude of the corner before it to that of the one after.
+fn pole_as_line(open: Vec<Coord>) -> Vec<Coord> {
+    let n = open.len();
+    if n < 3 || open.iter().all(|c| c.y.abs() < 90.0 - 1e-9) {
+        return open;
+    }
+    let mut out: Vec<Coord> = Vec::with_capacity(n + 4);
+    for (i, c) in open.iter().enumerate() {
+        if c.y.abs() >= 90.0 - 1e-9 {
+            let around = |k: usize| open.get(k % n).copied().unwrap_or(*c);
+            let (prev, next) = (around(i + n - 1), around(i + 1));
+            out.push(Coord::new(prev.x, c.y.signum() * 90.0));
+            out.push(Coord::new(next.x, c.y.signum() * 90.0));
+        } else {
+            out.push(*c);
+        }
+    }
+    out
 }
 
 /// An A5 cell's outline as a [`drawable`] longitude/latitude ring.
@@ -230,17 +242,7 @@ fn clip_lat(ring: &[Coord], y: f64, south: bool) -> Vec<Coord> {
 /// (and one round a pole), its two sides of ±180°, each within −180° to 180°, as the parts of one
 /// polygon, the way Natural Earth splits a country there.
 fn split(r: Vec<Coord>) -> Option<Vec<Vec<Vec<Coord>>>> {
-    let (lo, hi) = r.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
-    if lo >= -180.0 && hi <= 180.0 {
-        return Some(vec![vec![r]]);
-    }
-    // The side past the meridian is moved back by a turn.
-    let (edge, turn) = if hi > 180.0 { (180.0, -360.0) } else { (-180.0, 360.0) };
-    let near = clip(&r, edge, edge > 0.0);
-    let far: Vec<Coord> = clip(&r, edge, edge < 0.0).into_iter().map(|c| Coord::new(c.x + turn, c.y)).collect();
-    // A side that only touches the meridian (a corner on it, so fewer than four points) has no
-    // area and is left out.
-    let out: Vec<Vec<Vec<Coord>>> = [near, far].into_iter().filter(|p| p.len() >= 4).map(|p| vec![p]).collect();
+    let out = on_the_globe_sides(vec![r]);
     (!out.is_empty()).then_some(out)
 }
 
@@ -714,7 +716,8 @@ impl<'a> Grid<'a> {
                 Ok(cells)
             }
             System::Hexagon => {
-                self.cover(vec![vec![extent_ring(Extent::new(-180.0, -rustgis_geom::MAX_LAT, 180.0, rustgis_geom::MAX_LAT))]], center)
+                // The whole globe: a plane that stops short of the poles cuts it there and says so.
+                self.cover(vec![vec![extent_ring(Extent::new(-180.0, -90.0, 180.0, 90.0))]], center)
             }
         }
     }
@@ -820,16 +823,18 @@ impl<'a> Grid<'a> {
         let res = self.res;
         let reach = || format!("The map's projection ({}) doesn't reach the whole area: choose a smaller area", self.plane.name());
         // Web Mercator stops at 85.05°: the area past it is cut off there, and said to be.
-        let mut side: Vec<Vec<Coord>> = side.to_vec();
-        if let Some(limit) = self.plane.lat_limit()
-            && side.iter().flatten().any(|c| c.y.abs() > limit)
-        {
-            self.cut.set(true);
-            side = side.into_iter().map(|r| clip_lat(&clip_lat(&r, limit, true), -limit, false)).filter(|r| r.len() >= 4).collect();
-            if side.first().is_none_or(|outer| outer.len() < 4) {
-                return Ok(());
+        let cut: Vec<Vec<Coord>>;
+        let side: &[Vec<Coord>] = match self.plane.lat_limit() {
+            Some(limit) if side.iter().flatten().any(|c| c.y.abs() > limit) => {
+                self.cut.set(true);
+                let mut rings = side.iter().map(|r| clip_lat(&clip_lat(r, limit, true), -limit, false));
+                // Nothing of the outer ring within reach, nothing to cover: its holes aren't one.
+                let Some(outer) = rings.next().filter(|r| r.len() >= 4) else { return Ok(()) };
+                cut = std::iter::once(outer).chain(rings.filter(|r| r.len() >= 4)).collect();
+                &cut
             }
-        }
+            _ => side,
+        };
         let rings: Vec<Vec<Coord>> = side
             .iter()
             .map(|r| r.iter().map(|c| self.plane.forward(*c)).collect::<Option<Vec<Coord>>>())
@@ -1025,6 +1030,13 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
         }
         let cells = g.cover(shapes, center)?;
         if cells.is_empty() {
+            if g.cut.get() {
+                return Err(format!(
+                    "The area is beyond {:.2}° north or south, which {} doesn't reach: choose an area within it",
+                    rustgis_geom::MAX_LAT,
+                    g.plane.name()
+                ));
+            }
             return Err(format!("No cell at resolution {res} has its centre in the area: choose Cells: Overlapping or a finer resolution"));
         }
         cells
@@ -1058,7 +1070,7 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
         msg.push_str(&format!("; {}", left_out(skipped, "polygon part", "outline")));
     }
     if holes > 0 {
-        msg.push_str(&format!("; {}, and the area inside is covered", left_out(holes, "hole", "outline")));
+        msg.push_str(&format!("; {}, so the area inside is covered too", left_out(holes, "hole", "outline")));
     }
     if g.cut.get() {
         msg.push_str(&format!(
