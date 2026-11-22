@@ -582,6 +582,8 @@ mod tests {
         // A rect without rounded corners is a path of four corners, which a marker sits on too.
         let rects = r#"<rect width="1" height="1"/>"#.repeat(1000);
         assert_eq!(doc(&format!(r#"<marker id="m">{rects}</marker>{rects}"#)), None);
+        let marked = r#"<rect width="1" height="1" marker-mid="url(#m)"/>"#.repeat(1000);
+        assert_eq!(read(&svg(&format!(r#"<marker id="m">{rects}</marker>{marked}"#))).err(), Some(Refusal::TooMuch));
         let deep = format!("{}{}", "<g>".repeat(DEPTH as usize + 1), "</g>".repeat(DEPTH as usize + 1));
         assert_eq!(doc(&deep), None);
         // A path of 20,000 segments draws; used ten times its numbers are counted ten times, past
