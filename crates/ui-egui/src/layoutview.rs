@@ -2163,9 +2163,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let shows_unit = unit_label.as_deref() != Some("");
                         let mut on = shows_unit;
                         if ui.checkbox(&mut on, "").labelled_by(input_label.id).changed() {
-                            // Kept per project too, so another project's bar with the same ids
-                            // never gets this one's text.
-                            let kept = egui::Id::unique(("scale_unit_label_kept", app.session.opened, li, id));
+                            // Kept per project and per layout name too, so another project's
+                            // bar, or another layout's once a layout before it is deleted, never
+                            // gets this one's text; a renamed layout forgets it.
+                            let kept = egui::Id::unique(("scale_unit_label_kept", app.session.opened, li, layout.name.as_str(), id));
                             // The label being typed is dropped, so the field losing its focus
                             // doesn't write it back; hidden, it is the text kept.
                             let draft = app.layout.typing.remove(&(li, id, "unitLabel"));
