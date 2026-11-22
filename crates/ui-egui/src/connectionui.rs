@@ -400,7 +400,7 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
     let password = public != address;
     let rest = public.get(..8).filter(|scheme| scheme.eq_ignore_ascii_case("mssql://")).and_then(|_| public.get(8..))?;
     let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
+    let (authority, _path) = rest.split_once('/').unwrap_or((rest, ""));
     let (user, hostport) = match authority.rsplit_once('@') {
         Some((user, hostport)) => (Some(percent_decode(user)), hostport),
         None => (None, authority),
@@ -442,15 +442,9 @@ pub(crate) fn parse_mssql(address: &str) -> Option<Mssql> {
         server.push(',');
         server.push_str(port);
     }
-    Some(Mssql {
-        server,
-        user: user.filter(|u| !u.is_empty()),
-        database: percent_decode(database),
-        trust_cert,
-        password,
-        options,
-        empty_instance,
-    })
+    // The database as the engine reads it: boundary slashes aren't part of it.
+    let database = msconn::database_name(&public).unwrap_or_default();
+    Some(Mssql { server, user: user.filter(|u| !u.is_empty()), database, trust_cert, password, options, empty_instance })
 }
 
 /// The address the geodatabase form makes, or why it can't.
@@ -527,12 +521,25 @@ pub(crate) fn use_form(st: &mut State, server: Option<&str>, database: Option<&s
             )
             .into());
         }
-        st.sign_in = if m.user.is_some() { "sql" } else { "windows" }.into();
-        st.user = m.user.unwrap_or_default();
-        st.server = m.server;
-        st.database = m.database;
-        st.trust_cert = m.trust_cert;
-        st.form_options = m.options;
+        // Filled only when the form can write the address back (an IPv6 server it can't).
+        let mut filled = State {
+            sign_in: if m.user.is_some() { "sql" } else { "windows" }.into(),
+            user: m.user.unwrap_or_default(),
+            server: m.server,
+            database: m.database,
+            trust_cert: m.trust_cert,
+            form_options: m.options,
+            ..Default::default()
+        };
+        if let Err(why) = form_address(&filled) {
+            return Err(i18n::fmt("The form can't show this address ({why}): keep using the address.", &[("why", &why)]));
+        }
+        st.sign_in = std::mem::take(&mut filled.sign_in);
+        st.user = std::mem::take(&mut filled.user);
+        st.server = std::mem::take(&mut filled.server);
+        st.database = std::mem::take(&mut filled.database);
+        st.trust_cert = filled.trust_cert;
+        st.form_options = std::mem::take(&mut filled.form_options);
     }
     st.form = true;
     if st.sign_in.is_empty() {
@@ -2330,6 +2337,10 @@ mod tests {
         assert_eq!(composed, "mssql://gis-db:1433/utility?instance=GIS");
         assert_eq!(parse_mssql(&composed).unwrap().server, r"gis-db\GIS,1433");
         assert_eq!(f("postgres:host=x"), None);
+        // The database is read as the engine reads it: boundary slashes aren't part of it, an
+        // encoded one is.
+        assert_eq!(f("mssql://reader@gis-db/utility/"), Some(("gis-db".into(), Some("reader".into()), "utility".into(), false)));
+        assert_eq!(f("mssql://gis-db/util%2Fity"), Some(("gis-db".into(), None, "util/ity".into(), false)));
         // The scheme is read without case, as the engine reads it.
         assert_eq!(f(" MSSQL://gis-db/utility "), Some(("gis-db".into(), None, "utility".into(), false)));
         // What the form composes comes back as it was typed.
@@ -2555,6 +2566,11 @@ mod tests {
         st.address = "mssl://gis-db/utility".into();
         let why = swap_form(&mut st).unwrap_err();
         assert!(why.contains("mssql://"), "{why}");
+        // A server the form can't write back (an IPv6 address) stays in the address box.
+        let mut v6 = State { kind: "sqlserver".into(), address: "mssql://reader@[::1]:1500/gis".into(), ..Default::default() };
+        assert!(swap_form(&mut v6).is_err());
+        assert!(!v6.form && v6.server.is_empty());
+        assert_eq!(v6.address, "mssql://reader@[::1]:1500/gis");
         // An empty instance is a route of its own to the engine (no default port): the form
         // can't show it, so the address stays as typed and why is said.
         for empty in
