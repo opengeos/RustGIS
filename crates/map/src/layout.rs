@@ -2663,6 +2663,12 @@ impl Layout {
                     *pitch = 0.0;
                 }
             }
+            // One subdivision is the division whole, as none: it draws the same.
+            if let ElementKind::ScaleBar { subdivisions, .. } = &mut before.kind
+                && *subdivisions == 1
+            {
+                *subdivisions = 0;
+            }
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
             // first element with that id, as they did when the file was written.
@@ -2760,7 +2766,8 @@ impl Layout {
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
                 ElementKind::ScaleBar { divisions, subdivisions, divisions_before_zero, decimals, label_size, unit_label, .. } => {
                     *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
-                    *subdivisions = (*subdivisions).min(MAX_SCALE_SUBDIVISIONS);
+                    // One part is the whole division: saved as none, it asks for no details.
+                    *subdivisions = if *subdivisions == 1 { 0 } else { (*subdivisions).min(MAX_SCALE_SUBDIVISIONS) };
                     *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
                     *decimals = decimals.map(|d| d.min(MAX_SCALE_DECIMALS as u8));
                     *label_size =
@@ -4416,7 +4423,8 @@ mod tests {
             r#"{{"name":"x","width":200,"height":100,"elements":[
             {{"id":1,"name":"a","x":0,"y":0,"w":10,"h":10,"kind":{{"MapFrame":{{"map":"m","center":{{"x":0,"y":0}},"scale":1000}}}}}},
             {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"label_size":1e9,"unit_label":"{}"}}}}}},
-            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}}]}}"#,
+            {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"label_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}},
+            {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4432,6 +4440,9 @@ mod tests {
             (MAX_SCALE_SUBDIVISIONS, MAX_SCALE_BEFORE_ZERO, Some(MAX_SCALE_DECIMALS as u8), 24.0, "x".repeat(MAX_UNIT_LABEL_CHARS))
         );
         assert_eq!(got(3), (0, 0, None, 4.0, "a b c d".to_string()));
+        // One subdivision is the division whole: it loads as none, quietly, and asks for no details.
+        assert_eq!(got(4), (0, 0, None, 8.0, String::new()));
+        assert!(l.element(4).is_some_and(|e| !e.kind.scale_bar_uses_details()));
         assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
