@@ -118,7 +118,9 @@ measures.
   catalogs in `crates/ui-egui/src/i18n/*.tsv`: a missing entry shows in English, and the
   maintainer translates them before each release (format in `docs/i18n.md`). Command ids, data
   and the CLI are never translated.
-- **Layering** is enforced by `cargo xtask layers`: nothing below L6 depends on egui/eframe/rfd.
+- **Layering** is enforced by `cargo xtask layers`: nothing below L6 depends on egui/eframe/rfd, a crate
+  depends only on lower layers (`[target.…]` dependencies count, dev- and build-dependencies don't), and a
+  new crate under `crates/` gets its layer in `LAYERS` (`xtask/src/main.rs`).
 - **The expression language has one vocabulary**: a new function, variable or keyword goes in
   the catalogs in `crates/data/src/query.rs` (`Func::spec`, `VARS`, `Kw`), which the parser
   reads, and in `docs/user-guide/expressions.md`; the `query` tests fail when the guide misses
@@ -139,7 +141,8 @@ the pull request which of these it reaches and why the rest don't apply:
 
 ## Assets
 - No third-party vendor icons, images, styles, fonts, help text or code. Icons are drawn in
-  code (`icons.rs`). Every asset file has a row in `ATTRIBUTION.md`.
+  code (`icons.rs`). Every asset file has a row in `ATTRIBUTION.md`; `cargo xtask attribution` (in CI) fails an image or
+  font file that no row names, by path, directory or pattern.
 - Never copy or translate code from GPL, LGPL or other copyleft projects (such as GRASS, QGIS or
   GEOS) into RustGIS, by hand or with an AI tool. Implementing a published algorithm is fine: cite
   the paper or standard. Name in the pull request any project whose code you followed (see
