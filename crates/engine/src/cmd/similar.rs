@@ -44,9 +44,12 @@ impl Input {
     fn resolve(s: &Session, p: &Value) -> Result<Self, String> {
         let id = s.layer_id(p)?;
         let l = s.map().layer(id).ok_or("no such layer")?;
-        let row = match p.get("row").and_then(Value::as_u64) {
-            Some(r) => r as usize,
-            None => *l.selection.first().ok_or("select a feature (or give row)")?,
+        let row = match p.get("row") {
+            None | Some(Value::Null) => *l.selection.first().ok_or("select a feature (or give row)")?,
+            Some(value) => {
+                let row = value.as_u64().ok_or("row must be a non-negative whole number")?;
+                usize::try_from(row).map_err(|_| "no such row")?
+            }
         };
         if row >= l.dataset.features.len() {
             return Err("no such row".into());
@@ -55,7 +58,12 @@ impl Input {
         if fields.is_empty() {
             return Err("the layer has no numeric fields to compare".into());
         }
-        let count = p.get("count").and_then(Value::as_u64).unwrap_or(10).clamp(1, 1000) as usize;
+        let count = match p.get("count") {
+            None | Some(Value::Null) => 10,
+            Some(value) => {
+                value.as_u64().filter(|count| (1..=1000).contains(count)).ok_or("count must be a whole number from 1 to 1000")?
+            }
+        } as usize;
         let select = super::b(p, "select").unwrap_or(true);
         let visibility = select.then(|| Visibility {
             query: l.definition_query.clone(),

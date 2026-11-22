@@ -1515,7 +1515,10 @@ click them on the map:
 
 Data Engineering and Exploratory Analysis use every resident row, independently of the
 layer's selection and map filters. Embeddings also compares and standardizes numeric values
-over every resident row; the selection supplies its reference when no explicit row is given.
+over every resident row; the selection supplies its reference when `row` is omitted or null.
+An explicit `row` must be a zero-based whole number in the layer. `count` must be a whole number
+from 1 to 1000; omitting it or passing null uses 10. Invalid values are refused without changing
+selection.
 Its returned matches can include hidden rows. With the default `select: true`, only matches
 and the reference that pass the layer's definition query, time window and display filters
 are selected; one notice counts those excluded. Unreadable definition queries or active

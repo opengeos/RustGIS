@@ -162,8 +162,8 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   caller's thread; when they cannot be cancelled, they stop after a fixed amount of work,
   saying which rules weren't checked completely (a gaps rule's join has no such limit).
   A desktop window requires the background queue instead of running the check inline. A line or
-  ring too complex to check for self-intersections within the limit is listed at its first point, to be looked
-  at, and its rule is said to be incomplete.
+  ring too complex to check for self-intersections within the limit is listed at its first point,
+  to be looked at, and its rule is said to be incomplete.
   Beyond 85.05° they follow the geometry tools (see
   [Geoprocessing tools](analysis.md#geoprocessing-tools), **Near the poles**).
 - **Status**: features added, changed and deleted per layer since the last save.
