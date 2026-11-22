@@ -34,7 +34,18 @@ naming, wording, a refactor, an extra test for code that works) can be left for 
 quality pass**: before each release, maintainers gather these from the merged pull requests and fix
 them together. Reply on the comment that it's left for the release quality pass (agents end the
 reply with `<!-- quality-sweep -->`), so it can be found. Bugs, crashes, silent data loss and
-breaks of the rules in AGENTS.md are fixed in the pull request.
+breaks of the rules in AGENTS.md are fixed in the pull request, even when the problem predates it,
+the input that triggers it is rare, the fix needs a wider change or earlier code does the same. A
+defect too large for the pull request gets an issue, filed and linked from the reply, instead of
+the marker.
+
+The Claude review gives each inline comment a hidden category (bug, security, performance,
+quality or AGENTS.md). CI's **Review deferrals** check, which runs on each push and again in the
+merge queue, fails when a reply leaves a bug, security or AGENTS.md finding for the release quality
+pass. If the review misclassified a finding, a maintainer other than the pull request's author
+replies in its thread with `<!-- deferral-approved -->` and runs the check again. Comments from
+other reviewers carry no category, so the check lets them through: those reviewers answer the
+reply themselves.
 
 Changes to saved or generated output must classify each new owning field: address, executable
 parameters, generated text or user data. Use the shared durable-output transaction and keep
