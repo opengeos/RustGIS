@@ -272,7 +272,9 @@ pub struct TextLoss {
     /// the line past the 200 drawn ([`wrapped`]).
     pub at_least: bool,
     /// Some of them are left out below its box, among the first 200: a taller box or a smaller
-    /// text draws them.
+    /// text draws them. For a scale bar, its box is too small for its labels and bar
+    /// ([`BarLayout::cramped`]): its bar drawn below it, or its end label past its side or over
+    /// its first label.
     pub below_box: bool,
     /// Some of them come past the 200 lines a text draws, whatever its box: only splitting the
     /// text draws them.
@@ -2204,6 +2206,8 @@ const BAR_INSET: f32 = 2.0;
 /// How far a scale bar label's digits rise above the middle of their line, in label sizes: what
 /// the room over the bar holds.
 const BAR_LABEL_RISE: f32 = 0.5;
+/// How far the middle of a scale bar's labels' line sits over the bar's top, in label sizes.
+const BAR_LABEL_MID: f32 = 0.7;
 
 /// What a scale bar counts: its whole length in its unit, that unit in metres and its abbreviation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2274,7 +2278,8 @@ struct BarLayout {
     label_y: f32,
     labels: Vec<(f32, String)>,
     /// Its box is too small for its labels and bar: too short, the bar drawn below it, or too
-    /// narrow, an end label reaching past its side further than the default size's does.
+    /// narrow, an end label reaching past its side further than the default size's does or, above
+    /// the default size, over its first label.
     cramped: bool,
 }
 
@@ -2296,13 +2301,13 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
     // short for both has the bar below it ([`BarLayout::cramped`]). At the default size the bar is
     // where it always was.
     let px = SCALE_BAR_TEXT_PT as f32 * k * 1.33 * ppp as f32;
-    let rise = |px: f32| px * (0.7 + BAR_LABEL_RISE);
+    let rise = |px: f32| px * (BAR_LABEL_MID + BAR_LABEL_RISE);
     let at = r.y() + r.height() * 0.62 - bar_h / 2.0;
     let top = r.y().min(at - rise(SCALE_BAR_TEXT_PT as f32 * 1.33 * ppp as f32));
     let first = bar_label(total, divisions, 0, abbr, comma);
     let (x0, y0) = (r.x() + bar_inset(&first, k, ppp as f32), at.max(top + rise(px)));
     let seg = len / divisions as f32;
-    let label_y = y0 - px * 0.7;
+    let label_y = y0 - px * BAR_LABEL_MID;
     let gap = 3.0 * k * ppp as f32;
     let all: Vec<(f32, String)> = (0..=divisions).map(|i| (x0 + seg * i as f32, bar_label(total, divisions, i, abbr, comma))).collect();
     let half = |s: &str| text::measure(s, px / 1.33, false) / 2.0;
@@ -2324,7 +2329,14 @@ fn bar_layout(r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usize, f64), ppp: f
     let half8 = |s: &str| text::measure(s, SCALE_BAR_TEXT_PT as f32 * ppp as f32, false) / 2.0;
     let x8 = r.x() + bar_inset(&first, 1.0, ppp as f32);
     let past_side = labels.last().is_some_and(|(x, s)| x + half(s) > r.right().max(x8 + (x - x0) + half8(s)) + 0.01);
-    let cramped = y0 + bar_h > r.bottom() + 0.01 || past_side;
+    // Its end label is drawn as its first is, whatever the room: above the default size, running
+    // into the first, the box is too narrow for them too.
+    let clash = k > 1.0
+        && match (labels.first(), labels.last()) {
+            (Some((fx, fs)), Some((ex, es))) if labels.len() > 1 => ex - half(es) < fx + half(fs),
+            _ => false,
+        };
+    let cramped = y0 + bar_h > r.bottom() + 0.01 || past_side || clash;
     Some(BarLayout { x0, y0, len, bar_h, px, label_y, labels, cramped })
 }
 
@@ -8509,6 +8521,20 @@ Elaboração: RustGIS",
             |pt: f64| bar_layout(Rect::from_xywh(0.0, 0.0, 90.0, 400.0).unwrap(), 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false).unwrap();
         let (n8, n40) = (narrow(8.0), narrow(40.0));
         assert!(!n8.cramped && n40.cramped && n40.y0 + n40.bar_h < 400.0 && n40.len == n8.len, "{} {}", n40.y0, n40.len);
+        // Its end label, always drawn as its first is, running into the first above the default
+        // size reaches past the box's side too: the box is too small, and said.
+        for pt in [9.0, 12.0, 20.0, 40.0, 100.0] {
+            for w in (20..400).step_by(7) {
+                let Some(b) = bar_layout(Rect::from_xywh(0.0, 0.0, w as f32, 400.0).unwrap(), 100.0, (ScaleUnits::Auto, 4, pt), 1.0, false)
+                else {
+                    continue;
+                };
+                let half = |s: &str| text::measure(s, b.px / 1.33, false) / 2.0;
+                let ((fx, fs), (ex, es)) = (&b.labels[0], &b.labels[b.labels.len() - 1]);
+                let clash = b.labels.len() > 1 && ex - half(es) < fx + half(fs);
+                assert!(!clash || b.cramped, "{pt} pt in {w} px: its end label over its first, not said");
+            }
+        }
         // A publication's short box (17 pixels): the default reaches over it, as it always did,
         // and a larger size reaches no higher.
         let (short8, short12) = (in_box(17.0, 8.0), in_box(17.0, 12.0));
