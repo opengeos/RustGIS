@@ -989,11 +989,18 @@ impl Session {
                         result
                     })
                 };
+                // A command run by itself, however it lands (a read ahead, a download, a URL
+                // read in place), may add the layer the project takes its system from.
+                let first_layer =
+                    (matches!(txn, Txn::Own) && self.depth == 0).then(|| crate::cmd::project::first_layer_watch(self, spec.id)).flatten();
                 let result = match txn {
                     Txn::Own => self.guarded(spec.label, spec.mutates, run),
                     Txn::Shared if spec.id == "edit.applyShapeConversion" => self.shared_step(&spec, |s| s.savepoint(spec.label, run)),
                     Txn::Shared => self.shared_step(&spec, run),
                 };
+                if let (Ok(_), Some(before)) = (&result, first_layer) {
+                    crate::cmd::project::take_first_layer_system(self, &before);
+                }
                 self.url_completion_landed(spec.id, &params, &result);
                 if result.is_ok() && (spec.mutates || spec.effects.contains(crate::policy::Effect::History)) && spec.id != "data.similar" {
                     // Edits and history moves can replace selections without select::set. History
