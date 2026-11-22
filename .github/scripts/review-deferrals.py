@@ -15,6 +15,10 @@ removed or changed it; the override below settles a harmless edit.
 `performance` is left out on purpose: a faster path may wait. A performance finding that is also a
 crash path or breaks "Size for real data" carries `bug` or `agents-md`, the more serious category.
 
+Both markers err towards refusing. The deferral marker counts wherever it sits in a reply, as the
+release quality pass collects it, so a reply that only mentions it is refused too: reword it. The
+override counts only when it ends its reply, so a mention doesn't approve.
+
 A maintainer overrides the check for a finding, misclassified or accepted as it is, by replying in
 its thread with `<!-- deferral-approved -->`. A maintainer here is the repository's owner, a member
 of its organization or a collaborator, as GitHub labels the reply. The author may be that maintainer: the
@@ -32,11 +36,10 @@ import subprocess
 import sys
 
 DEFER = "<!-- quality-sweep -->"
-HIDDEN = re.compile(r"<!--.*?-->", re.S)
 APPROVE = "<!-- deferral-approved -->"
 # Visible text on a line of its own: the review's inline-comment tool strips hidden comments.
 # Markdown emphasis and code marks around the label or the value, and capitals, are let through.
-CATEGORY = re.compile(r"^[*_`]*Category[*_`]*:[*_` \t]*([A-Za-z-]+)[*_`]*[ \t]*$", re.M)
+CATEGORY = re.compile(r"^[*_`]*Category[*_`]*:[*_` \t]*([A-Za-z-]+)[*_`]*\.?[ \t\r]*$", re.M)
 MUST_FIX = {"bug", "security", "agents-md"}
 REVIEWER = "github-actions"
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -78,12 +81,6 @@ def category(opening):
     return (serious or found or [None])[0]
 
 
-def ends_with(reply, marker):
-    """Whether a reply ends with a marker; only other hidden comments (a tool's bookkeeping) may follow it."""
-    _, found, after = (reply.get("body") or "").rpartition(marker)
-    return bool(found) and not HIDDEN.sub("", after).strip()
-
-
 def edited_by_someone_else(opening):
     """Whether a human or other account edited the reviewer's comment, which may have changed its category."""
     if not opening.get("lastEditedAt"):
@@ -96,7 +93,7 @@ def approved(replies):
     for reply in replies:
         author = reply.get("author") or {}
         if (
-            ends_with(reply, APPROVE)
+            (reply.get("body") or "").rstrip().endswith(APPROVE)
             and author.get("__typename") != "Bot"
             and reply.get("authorAssociation") in MAINTAINERS
         ):
@@ -112,7 +109,7 @@ def check(threads):
         if not comments:
             continue
         opening, replies = comments[0], comments[1:]
-        deferral = next((r for r in replies if ends_with(r, DEFER)), None)
+        deferral = next((r for r in replies if DEFER in (r.get("body") or "")), None)
         if deferral is None:
             continue
         where = f"{thread.get('path')}:{thread.get('line') or thread.get('originalLine') or '?'}"
@@ -138,7 +135,7 @@ def graphql(query, **variables):
     args = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         args += ["-F" if isinstance(value, int) else "-f", f"{key}={value}"]
-    out = subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
+    out = subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True, timeout=120).stdout
     return json.loads(out)["data"]
 
 

@@ -87,18 +87,14 @@ class ReviewDeferrals(unittest.TestCase):
         self.assertEqual(refused, [])
         self.assertEqual(len(unclassified), 3)
 
-    def test_the_marker_ends_the_reply_apart_from_other_hidden_comments(self):
-        mention = reply("No <!-- quality-sweep --> here; fixed in this push.")
+    def test_the_marker_counts_wherever_it_sits_as_the_sweep_collects_it(self):
+        trailing = reply("Left for the release quality pass. <!-- quality-sweep --> Will do after the merge.")
         tracked = reply("Left for the release quality pass. <!-- quality-sweep -->\n<!-- followup:inline:42 -->\n")
-        self.assertEqual(self.check(thread(finding(BUG, "bug"), mention)), ([], []))
-        self.assertEqual(len(self.check(thread(finding(BUG, "bug"), tracked))[0]), 1)
-
-    def test_many_hidden_comments_after_the_marker_are_read_in_linear_time(self):
-        crowded = reply("Left. <!-- quality-sweep -->" + "<!-- a -->" * 5000 + "x")
-        self.assertEqual(self.check(thread(finding(BUG, "bug"), crowded)), ([], []))
+        for deferral in (trailing, tracked):
+            self.assertEqual(len(self.check(thread(finding(BUG, "bug"), deferral))[0]), 1)
 
     def test_a_category_line_may_be_emphasised_or_capitalised(self):
-        for line in ("**Category:** bug", "Category: `bug`", "Category: Bug", "_Category_: BUG"):
+        for line in ("**Category:** bug", "Category: `bug`", "Category: Bug", "_Category_: BUG", "Category: bug.", "Category: bug\r"):
             refused, _ = self.check(thread(comment(REVIEWER, BUG + "\n\n" + line), DEFER))
             self.assertEqual(len(refused), 1, line)
 
