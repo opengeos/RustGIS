@@ -60,20 +60,20 @@ struct PendingSave {
     document: Option<String>,
 }
 
-/// The document the open project is written back to on Save: where its last save decided, or else
-/// the one it was opened from. A field package is never written over by Save: it goes back with
-/// Send Field Package.
-fn document(app: &RustGisApp) -> Option<String> {
+/// The document the open project is written back to on Save, and whether it is the one the project
+/// was opened from: where its last save decided, or else the one it was opened from. A field
+/// package is never written over by Save: it goes back with Send Field Package.
+fn document(app: &RustGisApp) -> Option<(String, bool)> {
     let prompt = &app.save_prompt;
     if let Some(target) = prompt.targets.get(&app.session.file_identity()) {
-        return target.clone();
+        return target.clone().map(|document| (document, false));
     }
     if app.session.opened_package().is_some() {
         return None;
     }
     // Only a project file: a package opened (`.rgispkg`) isn't written over by its project's text.
     let project = app.session.path.as_ref().filter(|p| rustgis_engine::project::is_project_file(&p.to_string_lossy()));
-    project.and_then(|path| prompt.documents.get(path)).cloned()
+    project.and_then(|path| prompt.documents.get(path)).map(|document| (document.clone(), true))
 }
 
 /// Whether running command `id` from the interface asks first: it replaces the project, which
@@ -89,17 +89,27 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     if app.save_prompt.pending.is_some() {
         return Err(tl!("A project save is already in progress.").into());
     }
-    let target = if in_place { document(app) } else { None };
+    let (target, opened_from) = match document(app).filter(|_| in_place) {
+        Some((document, opened_from)) => (Some(document), opened_from),
+        None => (None, false),
+    };
     let save = app.services.save_project.as_ref().ok_or(tl!("This build cannot save through the native picker."))?;
     let name = app.session.project.name.replace(['/', '\\'], "-");
     let file = format!("{name}.rgis");
     let notes = app.session.construction_output_notes()?;
-    // Written back, its paths are written relative to the folder of the copy it was opened from:
-    // a file linked beside the original (`./terrain.tif`) stays so, where the original is. A
-    // picker save keeps them whole, as the download does.
-    let copy_dir = target.as_ref().and(app.session.path.as_deref()).and_then(std::path::Path::parent).map(std::path::Path::to_path_buf);
+    // Written back to the document it was opened from, its paths are written relative to the folder
+    // of the copy it was opened from: a file linked beside the original (`./terrain.tif`) stays so,
+    // where the original is. A picker save, and a write-back to a document saved as since (whose
+    // folder isn't the copy's), keep them whole, as the download does.
+    let copy_dir = app.session.path.as_deref().filter(|_| opened_from).and_then(std::path::Path::parent).map(std::path::Path::to_path_buf);
     let (text, report) = app.session.project.saved_text(copy_dir.as_deref())?;
-    save(&file, text.into_bytes(), target.as_deref())?;
+    if let Err(error) = save(&file, text.into_bytes(), target.as_deref()) {
+        // Refused before it started: the next Save asks where, as after a failed write-back.
+        if target.is_some() {
+            app.save_prompt.targets.insert(app.session.file_identity(), None);
+        }
+        return Err(error);
+    }
     app.save_prompt.reported = None;
     app.save_prompt.pending =
         Some(PendingSave { snapshot: app.session.save_snapshot(), after: None, project: app.session.file_identity(), document: target });
@@ -590,6 +600,25 @@ mod tests {
         assert_eq!(last(&asked).as_deref(), Some("content://kept"));
     }
 
+    /// A write-back the phone refuses before it starts makes the next Save ask where.
+    #[test]
+    fn a_refused_write_back_makes_the_next_save_ask_where() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut h = launch();
+        let asked: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        let seen = asked.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |_, _, document| {
+            seen.borrow_mut().push(document.map(str::to_string));
+            if document.is_some() { Err("the phone can't reach it".into()) } else { Ok(()) }
+        }));
+        let copy = std::path::PathBuf::from("/picked/2/0/site.rgis");
+        h.state_mut().picked_document(copy.clone(), "content://site".into());
+        h.state_mut().session.path = Some(copy);
+        assert!(h.state_mut().run("ui.save", Value::Null).is_err());
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), None]);
+    }
+
     /// Written back, a project names a file beside its copy as beside itself (`./…`), so the
     /// original still finds a file linked beside it; a picker save keeps the path whole.
     #[test]
@@ -616,12 +645,18 @@ mod tests {
         h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("site.rgis".into()));
         h.state_mut().run("ui.saveAs", Value::Null).unwrap();
+        h.state_mut().project_document("content://copy".into());
+        h.state_mut().complete_project_save(Ok("copy.rgis".into()));
+        // Written back to the document saved as, whose folder isn't the copy's: whole.
+        h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("copy.rgis".into()));
         let written = written.borrow();
         assert_eq!(written[0].0.as_deref(), Some("content://site"));
         assert!(written[0].1.contains("\"./roads.geojson\""), "written back with the link beside it");
         assert_eq!(written[1].0, None);
         assert!(written[1].1.contains(&serde_json::to_string(&roads.display().to_string()).unwrap()), "a picker save keeps it whole");
+        assert_eq!(written[2].0.as_deref(), Some("content://copy"));
+        assert!(written[2].1.contains(&serde_json::to_string(&roads.display().to_string()).unwrap()), "and so does Save after it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

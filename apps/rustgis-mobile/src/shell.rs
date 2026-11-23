@@ -213,6 +213,7 @@ impl<P: Phone> App<P> {
                     let reason = write_back_reason(&reason);
                     // Save again only helps while the project saved is the one open.
                     let open = self.app.saving_the_open_project();
+                    let damaged = kept.is_some();
                     let text = match (kept, open) {
                         (None, true) => i18n::fmt(
                             "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed: Save again to choose where to save it.",
@@ -232,6 +233,11 @@ impl<P: Phone> App<P> {
                         ),
                     };
                     self.app.complete_project_save(Err(text));
+                    // The file may hold part of the project: what is open no longer matches any
+                    // saved file, so it counts as unsaved (and asks before it is closed).
+                    if damaged && open {
+                        self.app.session.mark_unsaved();
+                    }
                 }
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
                 // A fix that was on its way when positioning was turned off.
