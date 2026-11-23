@@ -2600,7 +2600,7 @@ fn numbers_rows(layer: &rustgis_map::Layer) -> bool {
         || layer.display_filters.iter().any(|f| says(&f.where_))
         || layer.renderer.expression().is_some_and(says)
         || layer.size_by.as_ref().is_some_and(|b| says(&b.field))
-        || serde_json::to_string(&layer.symbol_by).is_ok_and(|t| says(&t))
+        || (!layer.symbol_by.is_empty() && serde_json::to_string(&layer.symbol_by).is_ok_and(|t| says(&t)))
 }
 
 /// A label waiting to be placed: the label, its priority and its key, and where else it may go

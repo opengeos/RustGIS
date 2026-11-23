@@ -68,6 +68,24 @@ pub struct ShpSource {
     table: Table,
     encoding: crate::dbf::DbfEncoding,
     reproject: Reproject,
+    /// Whether every record's stored box holds its shape, as reads by area take the boxes on
+    /// trust: [`BOXES_UNKNOWN`] until a whole read has looked, then [`BOXES_HOLD`] or
+    /// [`BOXES_DONT`]. A file of points holds from the start: each point is its own box.
+    boxes: std::sync::atomic::AtomicU8,
+}
+
+/// Not yet looked at ([`ShpSource::boxes`]).
+const BOXES_UNKNOWN: u8 = 0;
+/// Every stored box holds its shape.
+const BOXES_HOLD: u8 = 1;
+/// Some stored box misses part of its shape: reads by area leave that shape out.
+const BOXES_DONT: u8 = 2;
+
+/// Whether `b`, a stored box (to f32), holds `e`, allowing for the rounding to f32.
+fn holds(b: [f32; 4], e: &Extent) -> bool {
+    let slack = |v: f64| v.abs().max(1.0) * 1e-6;
+    let [x0, y0, x1, y1] = b.map(f64::from);
+    x0 <= e.min_x + slack(e.min_x) && y0 <= e.min_y + slack(e.min_y) && x1 >= e.max_x - slack(e.max_x) && y1 >= e.max_y - slack(e.max_y)
 }
 
 /// Bytes read ahead from the files: shapes and rows near each other in a read share a fill.
@@ -205,7 +223,8 @@ impl ShpSource {
         if matches!(shape_type, 11 | 13 | 15 | 18 | 21 | 23 | 25 | 28) {
             info.drop_zm(Some(index.count));
         }
-        Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject })
+        let boxes = std::sync::atomic::AtomicU8::new(if matches!(shape_type, 1 | 11 | 21) { BOXES_HOLD } else { BOXES_UNKNOWN });
+        Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes })
     }
 }
 
@@ -350,10 +369,12 @@ impl FeatureSource for ShpSource {
     fn streams_chunks(&self) -> bool {
         true
     }
-    /// Every record but those without a usable box, which reads by area leave out (said when
-    /// the file is opened).
+    /// Once a whole read has found every stored box holding its shape, and the index placed every
+    /// record (those without a usable box are left out of reads by area, said when the file is
+    /// opened). Until then, and for a file whose boxes miss their shapes, reads by area may leave
+    /// shapes out.
     fn finds_all_by_area(&self) -> bool {
-        self.index.unboxed == 0
+        self.index.unboxed == 0 && self.boxes.load(std::sync::atomic::Ordering::Relaxed) == BOXES_HOLD
     }
     /// Visits located shapes in a spatial request; geometry-less rows belong only to whole reads.
     /// Counts scanned records and checks Cancel before filtering them.
@@ -368,6 +389,9 @@ impl FeatureSource for ShpSource {
         let bounds = extent.map(|e| [e.min_x as f32, e.min_y as f32, e.max_x as f32, e.max_y as f32]);
         // As in `read`, an extent the file's system couldn't bound (#1925) visits every record.
         let late = req.extent.is_some() && bounds.is_none();
+        // A whole read looks at whether the stored boxes hold their shapes, once.
+        let checking = req.extent.is_none() && self.boxes.load(std::sync::atomic::Ordering::Relaxed) == BOXES_UNKNOWN;
+        let mut missed = false;
         let mut shp = Cursor::open(&self.shp)?;
         let mut dbf = Cursor::open(&self.dbf)?;
         let mut buf = Vec::new();
@@ -401,13 +425,20 @@ impl FeatureSource for ShpSource {
                     boxed_off += u64::from(index::usable(record_box(&buf, u64::from(place.len))));
                     return Ok(());
                 }
-                Ok(Some(g)) => match self.reproject.read(g) {
-                    Some(placed) => Some(placed),
-                    None => {
-                        skipped += 1;
-                        return Ok(());
+                Ok(Some(g)) => {
+                    // A box the index took as stored (one in order) that misses part of the shape.
+                    if checking && !missed {
+                        let stored = record_box(&buf, u64::from(place.len));
+                        missed = index::usable(stored) && !holds(stored, &g.extent());
                     }
-                },
+                    match self.reproject.read(g) {
+                        Some(placed) => Some(placed),
+                        None => {
+                            skipped += 1;
+                            return Ok(());
+                        }
+                    }
+                }
                 Ok(None) => None,
                 Err(()) => {
                     skipped += 1;
@@ -437,6 +468,9 @@ impl FeatureSource for ShpSource {
             chunks.push(Feature { id: u64::from(i) + 1, geometry, attrs })
         })?;
         chunks.flush()?;
+        if checking && complete {
+            self.boxes.store(if missed { BOXES_DONT } else { BOXES_HOLD }, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(Batch {
             features: Vec::new(),
             matched,

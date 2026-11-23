@@ -1839,6 +1839,7 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
         let mut actual = m.clone();
         let mut layer = streamed(&m.layers[0], usize::MAX);
         let info = layer.source.as_ref().unwrap().info().unwrap().clone();
+        let features = ds.features.clone();
         let chunks = Chunks { info, ds, size: usize::MAX };
         layer.source = Some(SourceLayer::from_path("near.shp", None, Box::new(Near { chunks, asked: asked.clone(), all_by_area: true })));
         layer.selection = m.layers[0].selection.clone();
@@ -1851,7 +1852,7 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
         let drawn = asked.last().copied().flatten();
         if near {
             let e = drawn.unwrap_or_else(|| panic!("case {n}: the whole source was read"));
-            let read = squares.features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&e))).count();
+            let read = features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&e))).count();
             assert!(read * 10 < total, "case {n}, {view:?}: {read} of {total} features read for a view of a few");
         } else {
             assert_eq!(drawn, None, "case {n}: a layer reaching in from beyond the view reads everything");

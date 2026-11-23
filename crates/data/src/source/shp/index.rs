@@ -7,8 +7,8 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Mutex;
 
-/// A complete read by area takes the record directory in one pass, rather than id by id, once
-/// more than one record in this many matches.
+/// A complete read by area takes the record directory in one pass, rather than id by id, once at
+/// least one record in this many matches.
 const PASS_ABOVE: u64 = 8;
 
 /// How many index rows a read by area goes through between looks at Cancel (few in tests, so
