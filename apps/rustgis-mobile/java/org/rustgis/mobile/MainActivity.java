@@ -490,7 +490,7 @@ public class MainActivity extends NativeActivity {
      * A complete copy is written to the app's storage first: if the document can't be opened for
      * writing, it is left as it was and the copy goes; if writing it fails partway, it may be
      * damaged, and the copy is kept and named. The result is a project-saved or write-back-failed
-     * event (project-save-failed when another save is under way).
+     * event (with the code DocumentWrite.BUSY when another save is under way).
      */
     public void writeBack(final String document, final String name, final byte[] bytes) {
         // Counted before anything is posted: the Rust side keeps looking until the answer comes,
