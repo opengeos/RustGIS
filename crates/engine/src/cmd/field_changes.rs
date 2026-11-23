@@ -322,9 +322,8 @@ pub(crate) fn marks(dir: &Path, package: &str) -> bool {
         package: String,
     }
     !package.is_empty()
-        && std::fs::read(dir.join(GIVEN))
+        && crate::project::read_file(&dir.join(GIVEN), 4096)
             .ok()
-            .filter(|b| b.len() <= 4096)
             .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
             .is_some_and(|m| m.package == package)
 }

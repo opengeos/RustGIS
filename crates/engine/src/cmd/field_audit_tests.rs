@@ -604,7 +604,7 @@ fn a_feature_with_a_photo_deleted_in_the_field_is_deleted_at_home() {
     home.run("map.activate", &json!({"name": home.project.offline_areas[0].map.clone()})).unwrap();
     // The photo goes with its feature, and the phone names it where it was unpacked: the
     // deletion's old value still matches home's, which names it where it is at home.
-    assert!(rustgis_data::zip::read(&out).unwrap().iter().any(|(n, b)| n == "photos/at-home.jpg" && b == b"home photo"));
+    assert!(rustgis_data::zip::read(&out).unwrap().iter().any(|(n, b)| n == "photos/home-00001.jpg" && b == b"home photo"));
     let mut a = phone(&temp, &out, "a");
     let cities = layer(&a, "Cities");
     let r = a.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
