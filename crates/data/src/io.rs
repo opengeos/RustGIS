@@ -619,30 +619,58 @@ pub fn csv_system_note(path: &str, geometry_type: GeometryType, crs: Crs) -> Opt
 /// `.prj`; one WKT can't describe goes into a Shapefile (without a `.prj`, said) and not into the
 /// others ([`default_export_note`] says which system is written instead).
 pub fn default_export_crs(ds: &Dataset, ext: &str) -> Crs {
+    default_export_crs_in(ds, ext, None)
+}
+
+/// [`default_export_crs`] in a project with a coordinate system of its own (`project`, #2032 C3a):
+/// a dataset with no system of its own is written in the project's, where the format can say it.
+pub fn default_export_crs_in(ds: &Dataset, ext: &str, project: Option<Crs>) -> Crs {
     let ext = ext.to_ascii_lowercase();
-    ds.crs.filter(|&c| PROJECTED_FORMATS.contains(&ext.as_str()) && check_projected(&ext, c).is_ok()).unwrap_or(Crs::LonLat)
+    let fits = |c: &Crs| PROJECTED_FORMATS.contains(&ext.as_str()) && check_projected(&ext, *c).is_ok();
+    match ds.crs {
+        Some(own) => Some(own).filter(fits),
+        None => project.filter(fits),
+    }
+    .unwrap_or(Crs::LonLat)
 }
 
 /// What is said when an export to `path` is written in WGS 84 where the layer has a system of
 /// its own that the format can't hold ([`default_export_crs`]); `None` when it keeps its system
 /// or has none to keep.
 pub fn default_export_note(ds: &Dataset, path: &str) -> Option<String> {
+    default_export_note_in(ds, path, None)
+}
+
+/// [`default_export_note`] in a project with a coordinate system of its own
+/// ([`default_export_crs_in`]): also said when a dataset with none of its own is written in the
+/// project's, or in WGS 84 as the format can't hold the project's.
+pub fn default_export_note_in(ds: &Dataset, path: &str, project: Option<Crs>) -> Option<String> {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    let own = ds.crs.filter(|&c| c != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()))?;
-    (default_export_crs(ds, &ext) == Crs::LonLat).then(|| {
-        let why = if !matches!(ext.as_str(), "parquet" | "geoparquet") {
-            "has no EPSG code and no WKT definition RustGIS can write"
-        } else if own.epsg() == 0 {
-            "has no EPSG code"
-        } else {
-            "has no PROJJSON definition RustGIS can write"
-        };
-        format!(
-            "{path}: the coordinate system of {} ({}) {why}, so it is written in WGS 84 (EPSG:4326); give a \"crs\" to write another",
-            ds.name,
-            own.label()
-        )
-    })
+    let (own, whose) = match (ds.crs, project) {
+        (Some(own), _) => (own, format!("of {}", ds.name)),
+        (None, Some(p)) => (p, format!("of the project, which {} takes as it has none of its own,", ds.name)),
+        (None, None) => return None,
+    };
+    if own == Crs::LonLat || !PROJECTED_FORMATS.contains(&ext.as_str()) {
+        return None;
+    }
+    if default_export_crs_in(ds, &ext, project) != Crs::LonLat {
+        return ds
+            .crs
+            .is_none()
+            .then(|| format!("{path}: written in {}, the project's coordinate system, as {} has none of its own", own.label(), ds.name));
+    }
+    let why = if !matches!(ext.as_str(), "parquet" | "geoparquet") {
+        "has no EPSG code and no WKT definition RustGIS can write"
+    } else if own.epsg() == 0 {
+        "has no EPSG code"
+    } else {
+        "has no PROJJSON definition RustGIS can write"
+    };
+    Some(format!(
+        "{path}: the coordinate system {whose} ({}) {why}, so it is written in WGS 84 (EPSG:4326); give a \"crs\" to write another",
+        own.label()
+    ))
 }
 
 /// The dataset in `crs`'s coordinates, from the system it holds them in ([`Dataset::coord_crs`]),
