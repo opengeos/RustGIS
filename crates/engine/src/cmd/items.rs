@@ -1290,16 +1290,16 @@ impl Mesh {
     }
 }
 
-/// A feature layer as a mesh.
 /// The longitude/latitude box of a held layer's features without those with a place that can't
 /// be given there, when it has any (`None` otherwise, and for a layer in longitude/latitude,
-/// whose box is the layer's).
+/// whose box is the layer's). It converts each geometry once more than the mesh does, rather than
+/// keep a converted copy of the layer.
 fn placed_extent(ds: &Dataset, to: &rustgis_data::raster::Reprojection) -> Result<Option<rustgis_geom::Extent>, String> {
     if to.is_identity() {
         return Ok(None);
     }
     let (mut kept, mut left_out) = (rustgis_geom::Extent::EMPTY, false);
-    for (row, g) in ds.features.iter().filter_map(|f| f.geometry.as_ref()).enumerate() {
+    for (row, g) in ds.features.rows().filter_map(|r| r.geometry()).enumerate() {
         if row.is_multiple_of(256) {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
         }
@@ -1315,6 +1315,7 @@ fn placed_extent(ds: &Dataset, to: &rustgis_data::raster::Reprojection) -> Resul
     Ok(left_out.then_some(kept))
 }
 
+/// A feature layer as a mesh.
 fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
@@ -1325,6 +1326,9 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
     // Placed by the features it holds: a feature left out below (a place that can't be given in
     // longitude/latitude) doesn't move the origin or the scale, through a place of it that can.
     let e = match placed_extent(&l.dataset, &to)? {
+        Some(kept) if kept.is_empty() => {
+            return Err(format!("no feature of {} has a place that can be given in longitude/latitude", l.name));
+        }
         Some(kept) => kept,
         None => l.extent(),
     };

@@ -125,3 +125,25 @@ fn a_missing_coordinate_stays_missing_and_isnt_counted() {
     assert_eq!(unplaced, 1);
     assert!(out.features[1].geometry.is_some() && out.features[2].geometry.is_none());
 }
+
+#[test]
+fn an_infinite_coordinate_stays_as_it_is_and_isnt_placed() {
+    // A latitude of +infinity has no place: Web Mercator would take it to 85.05°, so the export
+    // keeps it as it is, beside a NaN, and counts nothing.
+    let mut ds = Dataset::new("lines", crate::GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    ds.push(
+        Some(Geometry::Line(vec![vec![
+            Coord::new(2.0, 48.0),
+            Coord::new(f64::NAN, f64::NAN),
+            Coord::new(40.0, f64::INFINITY),
+            Coord::new(3.0, 49.0),
+        ]])),
+        vec![Value::Text("gaps".into())],
+    );
+    let (out, unplaced) = crate::io::project_leaving_out(&ds, Crs::WebMercator).unwrap();
+    assert_eq!(unplaced, 0);
+    let Some(Geometry::Line(parts)) = &out.features[0].geometry else { panic!("kept") };
+    assert!(parts[0][1].x.is_nan());
+    assert_eq!(parts[0][2].y, f64::INFINITY);
+    assert!(parts[0][0].is_finite() && parts[0][3].is_finite());
+}

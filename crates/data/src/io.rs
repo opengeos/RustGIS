@@ -695,7 +695,13 @@ pub(crate) fn project_each_leaving_out(features: &mut [crate::Feature], to: &cra
             crate::progress::check()?;
         }
         if let Some(g) = f.geometry.take() {
-            let out = to.geometry(&g);
+            // A coordinate that isn't a number is kept as it is: converting it could give it a
+            // place (Web Mercator takes an infinite latitude to 85.05°).
+            let out = if to.is_identity() {
+                g.clone()
+            } else {
+                g.map_coords(&|c| if c.is_finite() { to.point(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)) } else { c })
+            };
             if lost_a_place(&g, &out) {
                 unplaced += 1;
             } else {
@@ -706,8 +712,8 @@ pub(crate) fn project_each_leaving_out(features: &mut [crate::Feature], to: &cra
     Ok(unplaced)
 }
 
-/// Whether `out`, `g` converted place for place ([`crate::raster::Reprojection::geometry`]), lost
-/// a place: one that was a number in `g` and isn't in `out`.
+/// Whether `out`, `g` converted place for place, lost a place: one that was a number in `g` and
+/// isn't in `out`.
 fn lost_a_place(g: &Geometry, out: &Geometry) -> bool {
     let mut was = Vec::new();
     g.for_each_coord(|c| was.push(c.is_finite()));
