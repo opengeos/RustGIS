@@ -2672,6 +2672,8 @@ fn a_moved_label_the_layers_system_cant_hold_is_said() {
         } else {
             assert_eq!(a.labels.default.moved.len(), 1);
         }
+    }
+}
 
 /// Topology is checked in a held layer's own system (#2032 C2e-5): overlapping squares, a
 /// bow-tie, dangling ends (a tolerance of a metre, flat in UTM) and a point outside the blocks are
@@ -2747,9 +2749,9 @@ fn a_covering_layers_conversion_is_said() {
     // A degree-wide box: its east–west edges follow their parallels in longitude/latitude, and are
     // chords in UTM, some 120 m away.
     let bent = said(box_of(11.0, 48.0, 12.0, 49.0), Crs::LonLat, UTM);
-    assert!(bent.len() == 1 && bent[0].contains("edge(s) of 'Cover', converted into"), "{bent:?}");
+    assert!(bent.len() == 1 && bent[0].contains("edge(s) of covering layers converted") && bent[0].contains("'Cover' for"), "{bent:?}");
     assert!(said(box_of(11.0, 48.0, 12.0, 49.0), UTM, UTM).is_empty(), "the same system: nothing to say");
     // Reaching the South Pole, which the NSIDC north polar stereographic system can't hold.
     let fell_back = said(box_of(0.0, -90.0, 10.0, -89.0), Crs::LonLat, Crs::Epsg(3413));
-    assert!(fell_back.len() == 1 && fell_back[0].contains("checked in longitude/latitude"), "{fell_back:?}");
+    assert!(fell_back.len() == 1 && fell_back[0].starts_with("1 topology rule(s) checked in longitude/latitude"), "{fell_back:?}");
 }
