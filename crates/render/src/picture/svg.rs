@@ -105,6 +105,9 @@ pub(super) fn read(text: &str) -> Result<usvg::Tree, Refusal> {
     };
     usvg::Tree::from_xmltree(&doc, &opt).map_err(|e| match e {
         usvg::Error::ElementsLimitReached => Refusal::TooMuch,
+        // usvg checks the depth of every node, a comment or a line break too, which the count
+        // doesn't walk.
+        usvg::Error::ParsingFailed(roxmltree::Error::NodesLimitReached) => Refusal::TooNested,
         _ => Refusal::NotSvg,
     })
 }
@@ -888,6 +891,14 @@ mod tests {
         assert_eq!(read(&svg(&format!(r#"<marker id="m">{rects}</marker>{marked}"#))).err(), Some(Refusal::TooMuch));
         let deep = format!("{}{}", "<g>".repeat(DEPTH as usize + 1), "</g>".repeat(DEPTH as usize + 1));
         assert_eq!(doc(&deep), None);
+        // usvg checks the depth of every node, a comment or a line break too, which the count
+        // doesn't walk: past it is too nested, never "not an SVG". One level less draws.
+        let at = |levels: usize, inner: &str| read(&svg(&format!("{}{inner}{}", "<g>".repeat(levels), "</g>".repeat(levels))));
+        let deepest = (1..=DEPTH as usize).rev().find(|&l| at(l, "").is_ok()).unwrap_or_default();
+        for inner in ["<!-- -->", "\n"] {
+            assert_eq!(at(deepest, inner).err(), Some(Refusal::TooNested), "{inner:?}");
+            assert!(at(deepest - 1, inner).is_ok(), "{inner:?}");
+        }
         // A path of 20,000 segments draws; used ten times its numbers are counted ten times, past
         // what reading takes.
         let long = format!(r#"<defs><path id="p" d="M0 0{}"/></defs>"#, " L1 1".repeat(20_000));
