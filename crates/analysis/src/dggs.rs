@@ -58,7 +58,7 @@ impl System {
             "" | "a5" => Ok(System::A5),
             "h3" => Ok(System::H3),
             "s2" => Ok(System::S2),
-            "hexagon" | "hex" => Ok(System::Hexagon),
+            "hexagon" => Ok(System::Hexagon),
             _ => Err(System::unknown(s)),
         }
     }
@@ -189,18 +189,18 @@ fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
     (out.len() >= 4).then_some(out)
 }
 
-/// An open ring with corners on a pole (S2's face cells have them, and so do A5's cells round a
-/// pole) as a map of longitudes and latitudes draws it. Such a corner has no longitude of its own,
+/// An open ring with corners on a pole (S2's cells that meet at a cube face's centre, from level
+/// 1 on, have them, and so do A5's cells round a pole) as a map of longitudes and latitudes draws it. Such a corner has no longitude of its own,
 /// so without this a point near the pole fell outside the outline of its cell: the pole becomes a
 /// line along it, from the longitude of the corner before to that of the one after.
 fn pole_as_line(open: Vec<Coord>) -> Vec<Coord> {
     let n = open.len();
-    if n < 3 || open.iter().all(|c| c.y.abs() < 90.0 - 1e-9) {
+    if n < 3 || open.iter().all(|c| c.y.abs() < 90.0 - rustgis_geom::POLE_TOLERANCE) {
         return open;
     }
     let mut out: Vec<Coord> = Vec::with_capacity(n + 4);
     for (i, c) in open.iter().enumerate() {
-        if c.y.abs() >= 90.0 - 1e-9 {
+        if c.y.abs() >= 90.0 - rustgis_geom::POLE_TOLERANCE {
             let around = |k: usize| open.get(k % n).copied().unwrap_or(*c);
             let (prev, next) = (around(i + n - 1), around(i + 1));
             out.push(Coord::new(prev.x, c.y.signum() * 90.0));
@@ -492,7 +492,7 @@ impl<'a> Plane<'a> {
         // A pole is one place whatever its longitude, which a plane that draws it as a point
         // (Mollweide) can't give back: any finite place for it holds it, on a plane that reaches
         // the poles (Web Mercator's would be its edge, 85.05°).
-        if c.y.abs() >= 90.0 - 1e-9 && self.lat_limit().is_none() {
+        if c.y.abs() >= 90.0 - rustgis_geom::POLE_TOLERANCE && self.lat_limit().is_none() {
             return Some(m);
         }
         let back = self.inverse(m)?;
@@ -1424,6 +1424,9 @@ mod tests {
     /// Rings across the antimeridian run on past ±180°; those round a pole close along it.
     #[test]
     fn rings_across_the_antimeridian_and_round_the_poles() {
+        // A corner that rounding left a hair short of the pole is still taken as the pole.
+        let near = pole_as_line(vec![Coord::new(-10.0, 89.0), Coord::new(10.0, 89.0), Coord::new(0.0, 90.0 - 5e-8)]);
+        assert_eq!(near.iter().filter(|c| c.y == 90.0).map(|c| c.x).collect::<Vec<_>>(), vec![10.0, -10.0], "{near:?}");
         for (lon, lat) in [(179.99, 10.0), (-179.99, -40.0), (0.0, 89.99), (120.0, -89.99)] {
             let c = a5::lonlat_to_cell(a5::LonLat::new(lon, lat), 3).unwrap();
             let r = ring(c).unwrap();
