@@ -2056,7 +2056,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let layers = read("a.dxf", text.as_bytes(), &Options { crs: Some(Crs::from_epsg(4269).unwrap()), ..Options::default() }).unwrap();
-        let messages: Vec<&str> = layers.iter().flat_map(|(_, report)| &report.messages).map(String::as_str).collect();
+        let messages: Vec<&str> = layers.iter().flat_map(|(_, report)| &report.messages).map(|m| m.as_str()).collect();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].starts_with("1 features couldn't be converted from "));
         assert!(!messages[0].contains("without Y"));
@@ -2925,7 +2925,7 @@ mod tests {
             );
         }
         let notes: Vec<&str> =
-            layers.iter().flat_map(|(_, r)| &r.messages).filter(|m| m.contains("POLYLINE")).map(String::as_str).collect();
+            layers.iter().flat_map(|(_, r)| &r.messages).filter(|m| m.contains("POLYLINE")).map(|m| m.as_str()).collect();
         assert_eq!(notes, ["4 unreadable POLYLINE vertices were left out of their lines"]);
         let no_blocks = read("placed.dxf", text.as_bytes(), &Options { blocks: false, ..opts }).unwrap();
         assert_eq!(no_blocks.len(), 1);
