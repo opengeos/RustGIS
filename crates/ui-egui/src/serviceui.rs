@@ -300,7 +300,10 @@ pub(crate) fn add_layer_from(
 
 /// Whether the document a listed layer `l` comes from (its `source_url`) was read from the
 /// internet, as the app's fetch or the service's discovery recorded it: what the layer needs is
-/// then fetched only from there, wherever its names point.
+/// then fetched only from there, wherever its names point. Every layer `service.layers` lists has
+/// a `source_url` (`layer_source` sets it for each one, which is the only way a listed layer
+/// reaches here), so `false` for one without it is never a document's layer passed off as the
+/// user's.
 pub(crate) fn from_public(l: &Value) -> bool {
     l.get("source_url").and_then(Value::as_str).is_some_and(|source| cache::ceiling_for(source) == Reach::Public)
 }
@@ -534,7 +537,10 @@ pub struct PageRead {
     /// The bytes the answers still to come may take (the download's budget, less the features
     /// read).
     left: usize,
-    slot: Slot<Result<Vec<u8>, String>>,
+    /// The widest network reach the answer was asked within; once it lands, where it was read
+    /// ([`go_on`]).
+    reach: Reach,
+    slot: Slot<Result<(Vec<u8>, Reach), String>>,
     /// When the answer was asked for: a layer's description that hangs is given up on.
     asked: web_time::Instant,
 }
@@ -544,7 +550,7 @@ pub struct PageRead {
 /// them, in pages.
 pub(crate) fn read_pages(app: &mut RustGisApp, landed: Landed) {
     let step = ogc::begin_with_pbf(&landed.url, ogc::max_paged_features());
-    go_on(app, landed, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD, step);
+    go_on(app, landed, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD, Reach::Local, step);
 }
 
 /// How its ArcGIS service draws the layer being read, from its description, goes with it to be
@@ -564,27 +570,18 @@ fn drawn(app: &mut RustGisApp, landed: &mut Landed, step: &mut Step) {
 }
 
 /// A bounded description or feature page fetched off the frame. Native downloads end at the
-/// timeout, if it has one; the browser's late answer is discarded by the polling read. A page read
-/// from the internet is recorded under `page`, the address the next page is found from
-/// ([`Pages::next_url`]), so that one is fetched only from there ([`next_request`]); a page read
-/// from the local network leads anywhere, as before.
-fn fetch_page(url: &str, page: &str, max: usize, timeout: Option<std::time::Duration>) -> Slot<Result<Vec<u8>, String>> {
-    let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+/// timeout, if it has one; the browser's late answer is discarded by the polling read. It connects
+/// no wider than `ceiling`, and lands with the reach it was read at, which the next page is
+/// fetched within ([`go_on`]). Nothing is recorded for a page's address, so a long read adds
+/// nothing to the restricted addresses ([`cache::restrict_to_public`]).
+fn fetch_page(url: &str, max: usize, timeout: Option<std::time::Duration>, ceiling: Reach) -> Slot<Result<(Vec<u8>, Reach), String>> {
+    let slot: Slot<Result<(Vec<u8>, Reach), String>> = Slot::default();
     let land = slot.clone();
-    let page = page.to_string();
     let done: cache::FetchedDone = Box::new(move |r| {
-        let r = r.map(|fetched| {
-            if fetched.origin.reach() == Reach::Public {
-                cache::restrict_to_public(&page);
-            }
-            fetched.bytes
-        });
+        let r = r.map(|fetched| (fetched.bytes, fetched.origin.reach()));
         *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
     });
-    match timeout {
-        Some(timeout) => cache::download_within_with_origin(url, max, timeout, done),
-        None => cache::download_limited_with_origin(url, max, done),
-    }
+    cache::download_limited_reaching_with_origin(url, max, timeout, ceiling, done);
     slot
 }
 
@@ -614,9 +611,11 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
         match answer {
             Some(answer) => {
                 // The description isn't the features: it leaves them the whole budget.
-                let left = if describing { read.left } else { read.left.saturating_sub(answer.as_ref().map_or(0, Vec::len)) };
-                let step = (*read.pages).land(answer);
-                go_on(app, read.landed, left, step);
+                let left = if describing { read.left } else { read.left.saturating_sub(answer.as_ref().map_or(0, |(b, _)| b.len())) };
+                // Where the answer was read; one that failed leaves the reach it was asked within.
+                let reach = answer.as_ref().map_or(read.reach, |(_, reach)| *reach);
+                let step = (*read.pages).land(answer.map(|(bytes, _)| bytes));
+                go_on(app, read.landed, left, reach, step);
             }
             None => app.ui.service_pages.push(read),
         }
@@ -631,10 +630,6 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
 /// back at the first page's origin.
 fn next_request(app: &mut RustGisApp, params: &Value, pages: &Pages) -> Result<String, String> {
     rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer()))?;
-    // A page that may reach only the internet leads only there.
-    if cache::ceiling_for(pages.referrer()) == Reach::Public {
-        cache::restrict_to_public(pages.next_url());
-    }
     if params.get("anonymous").and_then(Value::as_bool) == Some(true) {
         return Ok(rustgis_engine::data::login_address::inner(pages.next_url()).to_string());
     }
@@ -642,8 +637,10 @@ fn next_request(app: &mut RustGisApp, params: &Value, pages: &Pages) -> Result<S
 }
 
 /// The next answer fetched, or the collection added (with a note when some features were left
-/// unread), or why it couldn't be fetched said.
-pub(crate) fn go_on(app: &mut RustGisApp, mut landed: Landed, left: usize, mut step: Step) {
+/// unread), or why it couldn't be fetched said. Each answer is fetched within `reach`, where the
+/// one before it was read (the first within the user's own reach), and within the layer's record:
+/// a page read from the internet leads only there, as the engine's paging does.
+pub(crate) fn go_on(app: &mut RustGisApp, mut landed: Landed, left: usize, reach: Reach, mut step: Step) {
     if let Err(e) = app.session.download_continues(landed.id) {
         app.session.request_failed(&landed.params, &e);
         app.landed_in_dialog(&landed.params, Err(&e));
@@ -669,15 +666,16 @@ pub(crate) fn go_on(app: &mut RustGisApp, mut landed: Landed, left: usize, mut s
             }
             Step::Fetch(pages) => {
                 let next = next_request(app, &landed.params, &pages);
+                let reach = reach.min(cache::ceiling_for(&landed.url));
                 let slot = match next {
                     // A layer's description: small, and soon given up on.
                     Ok(url) if pages.describing() => {
-                        fetch_page(&url, pages.next_url(), left.min(ogc::DESCRIPTION_MAX), Some(ogc::DESCRIPTION_TIMEOUT))
+                        fetch_page(&url, left.min(ogc::DESCRIPTION_MAX), Some(ogc::DESCRIPTION_TIMEOUT), reach)
                     }
-                    Ok(url) => fetch_page(&url, pages.next_url(), left, pages.page_timeout()),
+                    Ok(url) => fetch_page(&url, left, pages.page_timeout(), reach),
                     Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
                 };
-                app.ui.service_pages.push(PageRead { landed, pages, left, slot, asked: web_time::Instant::now() });
+                app.ui.service_pages.push(PageRead { landed, pages, left, reach, slot, asked: web_time::Instant::now() });
             }
             Step::Done(bytes, note) => {
                 noted(app, &landed, note);
@@ -787,6 +785,43 @@ mod tests {
             let layer = app.session.map().layers.iter().find(|l| l.name == "Parcels");
             assert_eq!(layer.map(|l| l.dataset.features.len()), Some(2), "{:?}", app.dialogs.error);
         }
+    }
+
+    /// A long paged read carries its reach from page to page instead of recording each page's
+    /// address: every page after one read from the internet is asked only from there, and none of
+    /// the pages' addresses is added to the restricted addresses, however many pages there are.
+    #[test]
+    fn feature_pages_record_none_of_their_addresses() {
+        use rustgis_engine::render::rustgis_tiles::address::{Origin, Reach};
+        const PAGES: usize = 40;
+        let page = |n: usize| format!("https://pages-many.example/collections/parcels/items?page={n}");
+        let _turn = crate::fetching::turn();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let clean = cache::split_download_limit(&url).0.to_string();
+            log.lock().unwrap().push((clean.clone(), ceiling));
+            let n = clean.rsplit_once("page=").and_then(|(_, n)| n.parse::<usize>().ok()).unwrap_or(1);
+            let links = if n < PAGES { json!([{"rel":"next","type":"application/geo+json","href":page(n + 1)}]) } else { json!([]) };
+            let body = json!({"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}],"links":links});
+            // Every page is on the internet; a fetch connects no wider than its ceiling.
+            let origin = Origin::with_observed_reach(&clean, Reach::Public.min(ceiling)).unwrap();
+            done(Ok(cache::Fetched { bytes: body.to_string().into_bytes(), origin }));
+        });
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        app.run("ui.addUrl", json!({"url": page(1), "name": "Many", "service": true})).unwrap();
+        for _ in 0..PAGES + 4 {
+            poll_pages(&mut app, &egui::Context::default());
+        }
+        let asked = asked.lock().unwrap();
+        assert_eq!(asked.len(), PAGES, "{asked:?}");
+        assert_eq!(asked[0].1, Reach::Local, "the first page is the user's own address");
+        assert!(asked[1..].iter().all(|(_, ceiling)| *ceiling == Reach::Public), "{asked:?}");
+        for n in 2..=PAGES {
+            assert_eq!(cache::ceiling_for(&page(n)), Reach::Local, "page {n} was recorded");
+        }
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Many");
+        assert_eq!(layer.map(|l| l.dataset.features.len()), Some(PAGES), "{:?}", app.dialogs.error);
     }
 
     /// An OGC API layer's tile set documents, read by the dialog, hold what they name to where

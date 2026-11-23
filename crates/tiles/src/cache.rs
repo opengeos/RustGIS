@@ -1764,10 +1764,21 @@ pub fn download_within_with_origin(url: &str, max: usize, timeout: std::time::Du
     download_fetched_reaching(url, max, timeout, &[], Reaching::Any, Box::new(move |r| done(r.map_err(|f| f.message))));
 }
 
-/// Like [`download_limited`], preserving the final post-redirect [`crate::address::Origin`] and
-/// observed network reach alongside the bytes.
-pub fn download_limited_with_origin(url: &str, max: usize, done: FetchedDone) {
-    download_within_with_origin(url, max, DOWNLOAD_TIMEOUT, done);
+/// Like [`download_limited`], connecting no wider than `ceiling` and giving up after `timeout`
+/// natively (the usual download's when none), preserving the final post-redirect
+/// [`crate::address::Origin`] and observed network reach alongside the bytes: a paged read's
+/// next page is held to where the page before it was read, without recording its address
+/// ([`restrict_to_public`]).
+pub fn download_limited_reaching_with_origin(
+    url: &str,
+    max: usize,
+    timeout: Option<std::time::Duration>,
+    ceiling: crate::address::Reach,
+    done: FetchedDone,
+) {
+    let reaching = if ceiling == crate::address::Reach::Public { Reaching::Public } else { Reaching::Any };
+    let timeout = timeout.unwrap_or(DOWNLOAD_TIMEOUT);
+    download_fetched_reaching(url, max, timeout, &[], reaching, Box::new(move |r| done(r.map_err(|f| f.message))));
 }
 
 /// Like [`download`], preserving the final post-redirect [`crate::address::Origin`] and observed

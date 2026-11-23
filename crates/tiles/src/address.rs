@@ -119,16 +119,16 @@ fn host(url: &str) -> Option<String> {
     Some(host.trim_end_matches('.').to_ascii_lowercase())
 }
 
-/// Cloud instance metadata services answering outside the link-local ranges, which are forbidden
-/// already: one unique-local IPv6 and one carrier-grade NAT address. Only these two: the ranges
-/// around them stay local, for self-hosted servers there.
+/// Cloud instance metadata services at addresses outside the link-local ranges (every link-local
+/// address is forbidden on its own): one unique-local IPv6 and one carrier-grade NAT address. Only
+/// these two: the ranges around them stay local, for self-hosted servers there.
 const METADATA: [IpAddr; 2] =
     [IpAddr::V6(Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)), IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))];
 
 /// How far an IP address reaches.
 pub fn ip_reach(ip: IpAddr) -> Reach {
-    // The IPv6 metadata address; `v4_reach` checks the IPv4 one, however it is spelled (mapped,
-    // NAT64, the `inet_aton` forms in `reach`).
+    // For the IPv6 metadata address. The IPv4 one is also checked in `v4_reach`, which every
+    // spelling of it reaches (mapped, NAT64, the `inet_aton` forms in `reach`).
     if METADATA.contains(&ip) {
         return Reach::Forbidden;
     }

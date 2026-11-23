@@ -397,10 +397,11 @@ fn read_documents_with(
                 dataset = Some(plan);
             }
         }
-        histories.insert(address.clone(), crossed_origin);
-        // A repeated dataset document is not read again: it keeps the reach its read observed,
-        // which the documents it links to are fetched within.
+        // A repeated dataset document is not read again: it keeps the crossed-origin record and
+        // the reach of its read, which the documents it links to inherit, wherever the repeat
+        // falls among them.
         if !repeated {
+            histories.insert(address.clone(), crossed_origin);
             reaches.insert(crate::render::rustgis_tiles::logins::inner(&address).to_string(), reach);
         }
         seen.insert(address.clone());
@@ -421,8 +422,8 @@ fn read_documents_with(
                 && let Offer::Style { url } = &layer.offer
                 && let Some(&style_crossed) = histories.get(url)
             {
-                // A stylesheet with no recorded reach (none: one in `histories` was read, which
-                // records its reach) is held to the internet, the narrower choice.
+                // Every document in `histories` has its reach recorded with it; were one missing,
+                // the stylesheet would be held to the internet, the narrower choice.
                 let public = reaches.get(crate::render::rustgis_tiles::logins::inner(url)).is_none_or(|r| *r == Reach::Public);
                 CapabilitySource { address: url.as_str().into(), crossed_origin: style_crossed, public }
             } else {
@@ -1401,6 +1402,10 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
             }
             // Count pictures left out because their addresses fail the layer's checks.
             let legends = rustgis_map::tiles::checked_legends(layer.legends.iter().cloned());
+            // Fetched later by the Layers pane and the print layout, each within its own record.
+            for legend in &legends {
+                restrict(&legend.url);
+            }
             let offered = layer.legends.len().min(rustgis_data::ogc::MAX_LEGENDS);
             s.notify_counted(
                 Some(rustgis_data::loss::LossCode::DroppedLegend),
@@ -2182,6 +2187,85 @@ mod tests {
             assert!(found.service.notes.iter().any(|n| n.contains("repeated addresses")), "{:?}", found.service.notes);
             assert_eq!(found.service.layers.len(), 1, "{:?}", found.service.layers);
             assert_eq!(found.sources.iter().map(|source| source.public).collect::<Vec<_>>(), [map_reach == Reach::Public]);
+        }
+    }
+
+    /// A repeated dataset document keeps its crossed-origin record: the documents its read linked
+    /// to, read after the repeat, get the saved login only when the path that read it never left
+    /// the service's origin, whatever path repeated it. Here a landing lists a vector tile list
+    /// on another origin and a map tile list; the vector list links back to the map list, which
+    /// links on to its metadata.
+    #[test]
+    fn a_repeated_dataset_document_keeps_its_crossed_origin_record() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let vector = "https://vector-elsewhere.example/tiles?f=json";
+        let metadata_json = |map: &str| {
+            let metadata = map.replace("/tiles?f=json", "/metadata?f=json");
+            let tiles = map.replace("/tiles?f=json", "/map/{tileMatrix}/{tileRow}/{tileCol}.png");
+            (metadata, json!({"tileMatrixSetId":"WebMercatorQuad","links":[{"rel":"item","type":"image/png","href":tiles}]}))
+        };
+        // The map list on the service's own origin, read without leaving it; then on another.
+        for (map, crossed) in
+            [("https://crossed-record.example/maps/tiles?f=json", false), ("https://maps-elsewhere.example/tiles?f=json", true)]
+        {
+            let (metadata, map_metadata) = metadata_json(map);
+            let landing = json!({"links":[{"rel":"tilesets-vector","href":vector},{"rel":"tilesets-map","href":map}]});
+            let vector_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"vector","links":[
+                {"rel":"self","type":"application/json","href":map}]}]});
+            let map_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"map","links":[
+                {"rel":"self","type":"application/json","href":metadata}]}]});
+            let mut asked = Vec::new();
+            let mut s = Session::new(crate::Project::default());
+            let p = json!({"url": "https://crossed-record.example/dataset", "type": "ogcapi"});
+            let found = read_documents_with(&mut s, &p, false, None, &mut |url, ceiling| {
+                asked.push(url.to_string());
+                let body = match url {
+                    u if u == vector => &vector_list,
+                    u if u == map => &map_list,
+                    u if u == metadata => &map_metadata,
+                    _ => &landing,
+                };
+                let origin = Origin::with_observed_reach(url, Reach::Local.min(ceiling))?;
+                Ok(cache::Fetched { bytes: serde_json::to_vec(body).unwrap_or_default(), origin })
+            })
+            .unwrap();
+            assert_eq!(
+                asked,
+                ["https://crossed-record.example/dataset?f=json", vector, map, metadata.as_str()],
+                "the repeat is not fetched"
+            );
+            assert!(found.service.notes.iter().any(|n| n.contains("repeated addresses")), "{:?}", found.service.notes);
+            assert_eq!(found.service.layers.len(), 1, "{:?}", found.service.layers);
+            assert_eq!(found.sources.iter().map(|source| source.crossed_origin).collect::<Vec<_>>(), [crossed], "{map}");
+        }
+    }
+
+    /// The legend pictures a layer from a document read from the internet lists are fetched only
+    /// from there, as its tiles are, whatever their names resolve to: the Layers pane and the print
+    /// layout fetch them later, each within its address's record. One from the local network's
+    /// document leaves them as they were.
+    #[test]
+    fn legends_listed_by_a_document_read_from_the_internet_are_held_there() {
+        for public in [true, false] {
+            let host = if public { "legend-public" } else { "legend-local" };
+            let wms = format!("https://{host}.example/wms");
+            let legend = format!("https://{host}-legend.example/legend.png");
+            if public {
+                cache::restrict_to_public(&rustgis_data::ogc::capabilities_url(&wms, Some("wms")));
+            }
+            let text = format!(
+                r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://{host}.example/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
+<Style><Name>default</Name><Title>Default</Title><LegendURL width="20" height="20"><Format>image/png</Format><OnlineResource xlink:type="simple" xlink:href="{legend}"/></LegendURL></Style>
+</Layer></Layer></Capability></WMS_Capabilities>"#
+            );
+            let mut s = Session::new(crate::Project::default());
+            s.run("service.add", &json!({"url": wms, "type": "wms", "layer": "roads", "text": text})).unwrap();
+            let legends = s.map().tiles.last().map(|t| t.legends.iter().map(|l| l.url.clone()).collect::<Vec<_>>()).unwrap_or_default();
+            assert_eq!(legends, [legend.as_str()], "{host}");
+            assert_eq!(cache::ceiling_for(&legend) == Reach::Public, public, "{legend}");
         }
     }
 
