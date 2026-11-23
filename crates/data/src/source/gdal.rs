@@ -341,19 +341,15 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         // The features of each part that had Z or M values, which the conversion drops (`-dim
         // XY`), as a fresh conversion counts them: counted once, with the conversion, and kept
         // beside it, so a cache hit doesn't scan the source again. A count that fails is said
-        // without a code: the layer may hold only x and y.
+        // without a code (the layer may hold only x and y) and isn't kept: its cause may pass, and
+        // a query GDAL refuses fails before scanning anything.
         if l.has_zm || l.family.is_none() {
             for part in out.iter_mut().skip(before) {
-                let count = kept_zm_count(&part.path).unwrap_or_else(|| match count_zm_features(src, &l, part.family) {
-                    // A count, or that this GDAL can't take it, which it won't next time either.
+                let count = kept_zm_count(&part.path).or_else(|| {
+                    let count = count_zm_features(src, &l, part.family).ok().flatten()?;
                     // Not kept, it is counted again next time.
-                    Ok(count) => {
-                        let kept = count.map_or_else(|| UNCOUNTED.to_string(), |n| format!("{n}\n"));
-                        let _ = std::fs::write(part.path.with_extension("zm"), kept);
-                        count
-                    }
-                    // A program missing, a timeout: tried again next time.
-                    Err(_) => None,
+                    let _ = std::fs::write(part.path.with_extension("zm"), format!("{count}\n"));
+                    Some(count)
                 });
                 match count {
                     Some(n) => part.zm_dropped = n,
@@ -823,9 +819,9 @@ fn count_geometry_filter(src: &Path, layer: &str, filter: &str) -> Result<u64> {
 }
 
 /// The count of Z/M features kept beside the conversion at `path` ([`convert_in`]), when there is
-/// one: the count, or `None` when it couldn't be taken. Written whole, with its line's end, or
-/// not taken; read no further than a count's length, so a damaged file costs nothing.
-fn kept_zm_count(path: &Path) -> Option<Option<u64>> {
+/// one: written whole, with its line's end, or not taken. Read no further than a count's length,
+/// so a damaged file costs nothing.
+fn kept_zm_count(path: &Path) -> Option<u64> {
     use std::io::Read;
     let mut text = String::new();
     // The longest a count is (`u64::MAX` and its line's end), and a byte more to tell a longer file.
@@ -834,14 +830,8 @@ fn kept_zm_count(path: &Path) -> Option<Option<u64>> {
     if text.len() as u64 > LONGEST {
         return None;
     }
-    if text == UNCOUNTED {
-        return Some(None);
-    }
-    text.strip_suffix('\n')?.parse().ok().map(Some)
+    text.strip_suffix('\n')?.parse().ok()
 }
-
-/// What a kept Z/M count says when the count couldn't be taken ([`kept_zm_count`]).
-const UNCOUNTED: &str = "unknown\n";
 
 /// Generic layers don't declare the dimensions of their features. Count the selected family's
 /// actual Z/M geometries that conversion flattens; SQLite's spatial functions aren't present in every
@@ -969,9 +959,9 @@ mod tests {
             std::fs::write(fgb.with_extension("zm"), text).unwrap();
             kept_zm_count(&fgb)
         };
-        assert_eq!(kept("7\n"), Some(Some(7)));
-        assert_eq!(kept(&format!("{}\n", u64::MAX)), Some(Some(u64::MAX)));
-        assert_eq!(kept(UNCOUNTED), Some(None));
+        assert_eq!(kept("7\n"), Some(7));
+        assert_eq!(kept(&format!("{}\n", u64::MAX)), Some(u64::MAX));
+        assert_eq!(kept("unknown\n"), None);
         assert_eq!(kept("7"), None, "cut short");
         assert_eq!(kept(&format!("{}\n", "0".repeat(30))), None, "longer than any count");
         assert_eq!(kept("18446744073709551616\n"), None, "past u64");
@@ -1365,12 +1355,13 @@ mod tests {
                 }
                 let (hit, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
                 assert_eq!(hit.iter().map(|p| p.zm_dropped).collect::<Vec<_>>(), vec![7; parts.len()]);
-                // A count that couldn't be taken is kept as such, and said again without a scan.
+                // A kept count that can't be read is counted again, and kept.
                 for part in &parts {
-                    std::fs::write(part.path.with_extension("zm"), UNCOUNTED).unwrap();
+                    std::fs::write(part.path.with_extension("zm"), "junk").unwrap();
                 }
                 let (hit, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
-                assert!(hit.iter().all(|p| p.zm_dropped == 0 && p.zm_unknown), "{hit:?}");
+                assert_eq!(hit.iter().map(|p| p.zm_dropped).sum::<u64>(), 1, "{hit:?}");
+                assert!(parts.iter().all(|p| std::fs::read_to_string(p.path.with_extension("zm")).is_ok_and(|t| t != "junk")));
             }
             let source = crate::source::open_path(&fresh.path, None).unwrap();
             let batch = source.read(&crate::source::Request { extent: None, limit: 10 }).unwrap();
