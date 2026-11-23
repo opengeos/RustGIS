@@ -1970,4 +1970,8 @@ fn a_kept_view_draws_the_frames_inside_it_without_reading_the_source() {
     assert_eq!(frame(&mut base, &mut actual, &view, "back"), [false; 0], "the Web Mercator view is still kept");
     actual.layers[0].source.as_mut().unwrap().reset();
     assert_eq!(frame(&mut base, &mut actual, &view, "reset"), [false, true], "a reset source reads again");
+    // A view of nowhere in the layer, past the grid's east edge, is kept with nothing in it.
+    view.camera.center = rustgis_geom::lonlat_to_merc(Coord::new(30.0, 0.3));
+    assert_eq!(frame(&mut base, &mut actual, &view, "empty"), [true], "an empty view is read");
+    assert_eq!(frame(&mut base, &mut actual, &view, "empty again"), [false; 0], "and kept, with nothing in it");
 }

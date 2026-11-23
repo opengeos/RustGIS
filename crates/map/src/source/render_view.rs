@@ -55,8 +55,9 @@ impl KeptView {
             self.drop_chunks();
         }
         let r = &self.read;
-        let holds =
-            !self.chunks.is_empty() && r.min_x <= near.min_x && r.min_y <= near.min_y && r.max_x >= near.max_x && r.max_y >= near.max_y;
+        // A view read with nothing in it is kept too (no chunks): its frames draw nothing. With
+        // nothing kept, `read` is empty and holds no box.
+        let holds = r.min_x <= near.min_x && r.min_y <= near.min_y && r.max_x >= near.max_x && r.max_y >= near.max_y;
         holds.then(|| Arc::clone(&self.chunks))
     }
 
