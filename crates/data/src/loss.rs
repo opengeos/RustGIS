@@ -100,8 +100,10 @@ pub struct LossMessage {
 /// Something a reader, writer or tool says, and the loss it reports, if any: the code travels
 /// with the text wherever the text goes, to the notice that says it.
 ///
-/// It has no `Display` and turns into no `String`, so a code can't be dropped by formatting the
-/// note: [`Note::text`] is the words alone, and [`Note::prefixed`] keeps the code.
+/// It has no `Display` and turns into no `String`, so a code isn't dropped by formatting the note
+/// or passing it on as text: [`Note::prefixed`] and [`Note::map_text`] keep it. The words alone
+/// ([`Note::text`], [`Note::as_str`], [`Notes::texts`]) are for sinks that show or store text
+/// only, such as a manifest or a refusal's message; a note read through them loses its code.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Note {
     pub text: String,
@@ -231,7 +233,7 @@ impl Notes {
         self.0.pop()
     }
 
-    /// Their words alone, for a consumer that shows text only.
+    /// Their words alone, without their codes: for a sink that shows or stores text only.
     pub fn texts(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(Note::as_str)
     }
@@ -323,6 +325,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plain note equals its words and a coded one no plain words; prefixing, rewording,
+    /// collecting and extending keep a code; `says` matches by wording alone.
+    #[test]
+    fn notes_keep_their_codes() {
+        let plain = Note::plain("3 rows left out");
+        let coded = Note::loss(LossCode::DroppedRing, "1 ring left out");
+        assert_eq!(plain, "3 rows left out");
+        assert_ne!(coded, "1 ring left out");
+        assert_eq!(coded.clone().prefixed("a.rss"), Note::loss(LossCode::DroppedRing, "a.rss: 1 ring left out"));
+        assert_eq!(coded.clone().map_text(|t| format!("{t}, in the view")).loss, Some(LossCode::DroppedRing));
+        let mut notes: Notes = ["first"].into_iter().collect();
+        notes.push(coded.clone());
+        notes.extend([plain.clone()]);
+        assert_eq!(notes.iter().map(|n| n.loss).collect::<Vec<_>>(), [None, Some(LossCode::DroppedRing), None]);
+        assert!(notes.says("1 ring left out") && !notes.says("1 ring"));
+        assert_eq!(notes.clone().prefixed("x")[1], Note::loss(LossCode::DroppedRing, "x: 1 ring left out"));
+        assert_ne!(notes, ["first", "1 ring left out", "3 rows left out"]);
+        assert_eq!(Notes::from(vec![String::from("a")]), ["a"]);
+    }
 
     #[test]
     fn codes_are_unique_and_named_after_their_kind() {
