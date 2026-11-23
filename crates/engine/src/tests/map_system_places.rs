@@ -171,6 +171,18 @@ fn fit_to_view_places_the_raster_in_the_maps_system() {
     let v = s.run("raster.georeference", &json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0]})).unwrap();
     assert_eq!(out_raster(&s, &v).crs, rustgis_data::raster::Crs::LonLat);
     assert!(s.run("raster.georeference", &json!({"layer": "scan", "extent": "view", "crs": "EPSG:2056"})).is_err());
+    // What an extent doesn't use is refused, not passed over: control points' system, and an
+    // extent beside a transform.
+    let e =
+        s.run("raster.georeference", &json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0], "pointsCrs": "EPSG:2056"})).unwrap_err();
+    assert!(e.contains("pointsCrs goes with control points"), "{e}");
+    let e = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0], "transform": "affine", "points": [[0, 0, 7.0, 47.0], [10, 0, 8.0, 47.0], [0, 10, 7.0, 46.0]]}),
+        )
+        .unwrap_err();
+    assert!(e.contains("not both"), "{e}");
     // An entry that isn't a number is refused, not passed over, and nothing is placed.
     let before = s.map().layers.len();
     for extent in [json!([0, 0, null, 10, 10]), json!([7, 46, 8, 47, "x"]), json!([7, 46, 8, "47"])] {
