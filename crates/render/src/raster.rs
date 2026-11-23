@@ -6,7 +6,7 @@
 //! and well under a pixel off for projected ones. Values are then sampled (nearest or bilinear),
 //! optionally re-stretched from the pixels in view (DRA), and coloured.
 
-use rustgis_data::raster::{BandStats, ColorHint, Raster};
+use rustgis_data::raster::{BandStats, ColorHint, Crs, Raster};
 use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::Globe;
 use rustgis_map::projection::Flat;
@@ -36,16 +36,44 @@ fn source(r: &Raster, view: &View, place: Place, k: f64, dx: f64, dy: f64) -> Op
         Place::Flat(Flat::Mercator, _) => r.transformer().from_merc(view.camera.to_map(sx, sy, view.width, view.height))?,
         Place::Flat(flat, key) => {
             let m = view.camera.to_map(sx, sy, view.width, view.height);
+            let map = flat.direct_system();
             // A raster already in the map's coordinate system needs no reprojection.
-            if key.strip_prefix("EPSG:").and_then(|c| c.parse::<u16>().ok()) == Some(r.crs.epsg()) {
+            if map == Some(r.crs) || key.strip_prefix("EPSG:").and_then(|c| c.parse::<u16>().ok()) == Some(r.crs.epsg()) {
                 m
             } else {
-                r.transformer().from_lonlat(flat.inverse(m)?)?
+                // Through longitude/latitude, where the map shows the place; on a map in a
+                // coordinate system, then by the direct operation between the two (the datum
+                // transformation PROJ picks for the pair), as a held layer's features are drawn.
+                let via = r.transformer().from_lonlat(flat.inverse(m)?)?;
+                match map {
+                    Some(map) => direct_near(map, r.crs, m, via),
+                    None => via,
+                }
             }
         }
     };
     let (c, row) = r.transform.to_pixel(n);
     (c.is_finite() && row.is_finite()).then_some((c, row))
+}
+
+/// `m`, a place in the map's system `map`, in the raster's `crs` by the direct operation between
+/// the two where it lands near `via`, its place through WGS 84 ([`Reprojection::point_near`]);
+/// else `via`. The conversion is built once per thread for each pair, as every pixel of a frame
+/// asks for the same one; it follows grids that arrive by itself.
+///
+/// [`Reprojection::point_near`]: rustgis_data::raster::Reprojection::point_near
+fn direct_near(map: Crs, crs: Crs, m: Coord, via: Coord) -> Coord {
+    use rustgis_data::raster::Reprojection;
+    thread_local! {
+        static PAIR: std::cell::RefCell<Option<((Crs, Crs), Option<Reprojection>)>> = const { std::cell::RefCell::new(None) };
+    }
+    PAIR.with(|pair| {
+        let mut pair = pair.borrow_mut();
+        if pair.as_ref().is_none_or(|(k, _)| *k != (map, crs)) {
+            *pair = Some(((map, crs), map.to(crs).ok()));
+        }
+        pair.as_ref().and_then(|(_, to)| to.as_ref()).map_or(via, |to| to.point_near(m, via))
+    })
 }
 
 /// A whole geographic turn has exactly this many columns. Compare the grid's span rather
@@ -1633,6 +1661,26 @@ mod tests {
         // 100°W is column 26 (260°), lighter than column 8 (80°E); 5°W is the last column, 5°E the first.
         assert!(at(-100.0).1 > at(80.0).1, "{:?} vs {:?}", at(-100.0), at(80.0));
         assert!(at(-5.0).1 > at(-100.0).1 && at(5.0).1 < at(80.0).1, "{:?} {:?}", at(-5.0), at(5.0));
+    }
+
+    /// A raster in Gauss-Krüger zone 3 on DHDN (EPSG:31467) on a map in ETRS89 UTM 32N
+    /// (EPSG:25832): each map place is looked up in the raster by the direct operation between the
+    /// two, as a held layer's features are drawn, not through WGS 84 (0.37 m off there). PROJ 9.9.0:
+    ///   echo "513223.740371 5403015.206314" | cs2cs -f %.6f EPSG:25832 EPSG:31467
+    ///     ->  5404737.597295 3513304.512454   ("DHDN to ETRS89 (2)", northing first)
+    #[test]
+    fn a_raster_on_a_datum_pair_is_drawn_by_the_direct_operation() {
+        let gt = GeoTransform { origin_x: 3_513_000.0, origin_y: 5_405_000.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r = Raster::new("gk", 1000, 1000, vec![vec![1.0; 1_000_000]], gt, Crs::Epsg(31467), None, ColorHint::Gray, "Float32").unwrap();
+        let flat = Flat::of(&rustgis_map::Projection::Custom("EPSG:25832".into()));
+        let camera = Camera { center: Coord::new(513_223.740371, 5_403_015.206314), res: 1.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 2.0, height: 2.0, pixels_per_point: 1.0, camera, sky: false };
+        let (c, row) = source(&r, &view, Place::Flat(&flat, "EPSG:25832"), 1.0, 1.0, 1.0).unwrap();
+        let (x, y) = (3_513_000.0 + c, 5_405_000.0 - row);
+        assert!((x - 3_513_304.512454).abs() < 1e-3 && (y - 5_404_737.597295).abs() < 1e-3, "{x} {y}");
+        // The way through WGS 84 lands elsewhere.
+        let via = r.transformer().from_lonlat(flat.inverse(camera.center).unwrap()).unwrap();
+        assert!((via.x - x).hypot(via.y - y) > 0.1, "{via:?}");
     }
 
     /// A lon/lat grid on a map centred on the Pacific: across 180°, where the source longitude
