@@ -216,7 +216,8 @@ class _Embedded(_Api):
             self._sent_keys = keys
         except RustGISError as e:
             self._hold([(f"couldn't show the project in the app: {e}", True)])
-            _warn_losses(engine, e)
+            # The error is held, not raised: its losses are raised themselves.
+            _warn_losses(engine)
             return
         except BaseException as failure:
             _warn_losses(engine, failure)
@@ -257,7 +258,8 @@ class _Embedded(_Api):
                 engine._open_peer_text(text)
             except RustGISError as e:
                 self._hold([(f"the app's project couldn't be read: {e}", True)])
-                _warn_losses(engine, e)
+                # The error is held, not raised: its losses are raised themselves.
+                _warn_losses(engine)
                 return
             except BaseException as failure:
                 # Whatever else stopped it, its losses are raised with it, not by a later call.
