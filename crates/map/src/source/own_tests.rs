@@ -10,6 +10,9 @@ use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
 struct Recording {
     inner: Box<dyn FeatureSource>,
     asked: Arc<Mutex<Vec<Request>>>,
+    /// Whether it says it reads by a box in its own system, as its inner source does, or not
+    /// (as a database read by its longitude/latitude extent).
+    own_box: bool,
 }
 
 impl FeatureSource for Recording {
@@ -18,6 +21,9 @@ impl FeatureSource for Recording {
     }
     fn coord_crs(&self) -> Crs {
         self.inner.coord_crs()
+    }
+    fn reads_own_box(&self) -> bool {
+        self.own_box && self.inner.reads_own_box()
     }
     fn read(&self, req: &Request) -> rustgis_data::Result<Batch> {
         self.asked.lock().unwrap().push(*req);
@@ -41,7 +47,7 @@ fn lines() -> (Box<dyn FeatureSource>, Arc<Mutex<Vec<Request>>>) {
     let (bytes, _) = rustgis_data::io::write_bytes_in(&ds, "fgb", utm31()).unwrap();
     let inner = rustgis_data::source::open_bytes("lines.fgb", bytes, None).unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
-    (Box::new(Recording { inner, asked: asked.clone() }), asked)
+    (Box::new(Recording { inner, asked: asked.clone(), own_box: true }), asked)
 }
 
 fn names(layer: &crate::Layer) -> Vec<String> {
@@ -133,7 +139,7 @@ fn points(crs: Crs, at: &[(f64, f64, &str)]) -> (Box<dyn FeatureSource>, Arc<Mut
     let (bytes, _) = rustgis_data::io::write_bytes_in(&ds, "fgb", crs).unwrap();
     let inner = rustgis_data::source::open_bytes("points.fgb", bytes, None).unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
-    (Box::new(Recording { inner, asked: asked.clone() }), asked)
+    (Box::new(Recording { inner, asked: asked.clone(), own_box: true }), asked)
 }
 
 #[test]
@@ -165,7 +171,7 @@ fn a_window_read_in_map_units_holds_everything_only_when_its_box_does() {
     .unwrap();
     let inner = Box::new(rustgis_data::source::geojson::GeoJsonSource::open_path(&path, "points").unwrap());
     let asked = Arc::new(Mutex::new(Vec::new()));
-    let source: Box<dyn FeatureSource> = Box::new(Recording { inner, asked: asked.clone() });
+    let source: Box<dyn FeatureSource> = Box::new(Recording { inner, asked: asked.clone(), own_box: true });
     let id = map.add_streamed("points", SourceLayer::from_path("points.fgb", None, source));
     let view = Extent::new(-1_000_000.0, -1_000_000.0, 1_000_000.0, 1_000_000.0);
     let lonlat = Extent::new(-180.0, -90.0, 180.0, -80.0);
@@ -240,7 +246,7 @@ fn far_lines() -> (Box<dyn FeatureSource>, Arc<Mutex<Vec<Request>>>) {
     let (bytes, _) = rustgis_data::io::write_bytes_in(&ds, "fgb", utm31()).unwrap();
     let inner = rustgis_data::source::open_bytes("far.fgb", bytes, None).unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
-    (Box::new(Recording { inner, asked: asked.clone() }), asked)
+    (Box::new(Recording { inner, asked: asked.clone(), own_box: true }), asked)
 }
 
 #[test]
@@ -281,4 +287,79 @@ fn a_window_read_in_longitude_latitude_isnt_reused_for_a_view_in_map_units() {
     sync(&mut map, &lonlat, &utm);
     assert_eq!(asked.lock().unwrap().len(), reads + 1);
     assert_eq!(names(map.layer(id).unwrap()), ["far east", "paris"]);
+}
+
+#[test]
+fn a_source_that_reads_by_longitude_latitude_keeps_its_window_there() {
+    // A source in the map's system that reads by the longitude/latitude extent whatever it is given
+    // (another database, a service) gets no box in map units, and its window is kept in
+    // longitude/latitude, where "everything read" holds and panning past it reads nothing more.
+    let (lonlat, utm) = around_paris();
+    let mut map = crate::Map::new("utm");
+    map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
+    let (source, asked) = lines();
+    let source: Box<dyn FeatureSource> = {
+        let inner = source;
+        Box::new(Recording { inner, asked: asked.clone(), own_box: false })
+    };
+    let id = map.add_streamed("lines", SourceLayer::from_path("lines.fgb", None, source));
+    sync(&mut map, &Extent::new(-6.0, 41.0, 10.0, 52.0), &Extent::new(-500_000.0, 4_500_000.0, 1_500_000.0, 5_800_000.0));
+    let read = asked.lock().unwrap().last().copied().unwrap();
+    assert_eq!(read.own, None);
+    let layer = map.layer(id).unwrap();
+    assert_eq!(layer.source.as_ref().unwrap().window().unwrap().own, None);
+    assert!(layer.source.as_ref().unwrap().window().unwrap().complete);
+    let reads = asked.lock().unwrap().len();
+    sync(&mut map, &lonlat, &utm);
+    sync(&mut map, &Extent::new(2.0, 44.5, 3.0, 45.5), &Extent::new(420_000.0, 4_930_000.0, 500_000.0, 5_040_000.0));
+    assert_eq!(asked.lock().unwrap().len(), reads);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_layer_opened_as_it_syncs_reads_in_map_units_from_its_first_window() {
+    // A layer of a project just opened has no source yet: opened in the sync that waits for it (an
+    // export), its first read is in map units already, so no second read follows.
+    let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    ds.push(
+        Some(Geometry::Line(vec![vec![Coord::new(451_000.0, 5_411_000.0), Coord::new(452_000.0, 5_412_000.0)]])),
+        vec![Value::Text("paris".into())],
+    );
+    ds.held_in = utm31();
+    let path = std::env::temp_dir().join(format!("rustgis-own-opened-{}.fgb", std::process::id()));
+    rustgis_data::io::write_path_in(&ds, &path, utm31()).unwrap();
+    let mut map = crate::Map::new("utm");
+    map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
+    let src = SourceLayer { path: Some(path.display().to_string()), ..SourceLayer::default() };
+    let id = map.add_streamed("lines", src);
+    assert!(!map.layer(id).unwrap().source.as_ref().unwrap().is_open());
+    let (lonlat, utm) = around_paris();
+    sync(&mut map, &lonlat, &utm);
+    let window = *map.layer(id).unwrap().source.as_ref().unwrap().window().unwrap();
+    assert_eq!(window.own, Some(utm.padded(0.5, 0.0)));
+    assert_eq!(names(map.layer(id).unwrap()), ["paris"]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_view_the_map_cant_place_reads_once() {
+    // On a UTM map, a view the map can't take back to longitude/latitude: read once, by the
+    // view's longitude/latitude, the window kept in map units, so the same view reads nothing more.
+    let mut map = crate::Map::new("utm");
+    map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
+    let (source, asked) = lines();
+    map.add_streamed("lines", SourceLayer::from_path("lines.fgb", None, source));
+    // A view whose longitude/latitude is known, but whose padded box reaches past where the
+    // system goes, so the map can't take that box back.
+    let (lonlat, _) = around_paris();
+    let edge = Extent::new(1e8, 1e8, 1.1e8, 1.1e8);
+    sync(&mut map, &lonlat, &edge);
+    let reads = asked.lock().unwrap().len();
+    let first = asked.lock().unwrap().last().copied().unwrap();
+    assert!(first.own.is_some());
+    assert_eq!(first.extent, Some(lonlat.padded(0.5, 0.0)), "read by the view's longitude/latitude");
+    for _ in 0..3 {
+        sync(&mut map, &lonlat, &edge);
+    }
+    assert_eq!(asked.lock().unwrap().len(), reads);
 }

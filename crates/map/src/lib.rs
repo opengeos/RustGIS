@@ -643,15 +643,11 @@ impl Layer {
         self.sync_source_with(view, None, block, &rustgis_data::query::Env::default())
     }
 
-    /// Updates the source window, using the page when its definition query depends on it; `own`
-    /// is the view in map units, given when the map is in the source's own system.
-    fn sync_source_with(
-        &mut self,
-        view: &Extent,
-        own: Option<(&projection::Flat, Extent)>,
-        block: bool,
-        env: &rustgis_data::query::Env,
-    ) -> bool {
+    /// Updates the source window, using the page when its definition query depends on it. `own`
+    /// is the view in map units with the map's system: taken when the source, once open, is in
+    /// that system and tests its features against a box there
+    /// (`FeatureSource::reads_own_box`).
+    fn sync_source_with(&mut self, view: &Extent, own: Option<&MapView<'_>>, block: bool, env: &rustgis_data::query::Env) -> bool {
         let Some(src) = &mut self.source else { return false };
         if !src.is_open() {
             // Opened once after a project loads; a failure is kept, not retried every frame.
@@ -708,6 +704,9 @@ impl Layer {
             source::Polled::Idle | source::Polled::Waiting => {}
         }
         let Some(src) = &mut self.source else { return false };
+        // Decided now that the source is open: one opened in this very call (an export waiting for
+        // it) reads in map units from its first window.
+        let own = own.filter(|m| src.reads_own_box() && src.coord_crs() == m.system).map(|m| (m.flat, m.view));
         if let Some(wanted) = src.wanted_in(view, own) {
             src.start_wanted(wanted, block);
             match src.poll(block) {
@@ -3112,10 +3111,11 @@ impl Map {
             }
         }
         let flat = self.flat();
-        let system = own.and(Self::own_system_of(&flat, &self.projection));
+        // The view in map units with the map's system, for each layer to take once its source is
+        // open and says its own system ([`Layer::sync_source_with`]).
+        let own = own.and_then(|o| Self::own_system_of(&flat, &self.projection).map(|system| MapView { flat: &flat, system, view: *o }));
         for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale) && !held.contains(&l.id)) {
-            let in_own = own.filter(|_| system.is_some() && l.source.as_ref().map(|s| s.coord_crs()) == system);
-            pending |= l.sync_source_with(view, in_own.map(|o| (&flat, *o)), block, env);
+            pending |= l.sync_source_with(view, own.as_ref(), block, env);
         }
         pending
     }
@@ -3785,6 +3785,14 @@ impl LonLatCopy {
     }
 }
 
+/// A view in map units, with the projection and the system the map's coordinates are in
+/// ([`Map::own_system`]), for a streamed layer in that system to read by
+/// ([`Map::sync_sources_in`]).
+struct MapView<'a> {
+    flat: &'a projection::Flat,
+    system: Crs,
+    view: Extent,
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1179,6 +1179,12 @@ impl SourceLayer {
         self.handle.as_ref().map_or(rustgis_data::raster::Crs::LonLat, |h| h.coord_crs())
     }
 
+    /// Whether its source tests its features against a box in its own system
+    /// ([`FeatureSource::reads_own_box`]); no until it is open.
+    pub fn reads_own_box(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| h.reads_own_box())
+    }
+
     /// A source that can be read whole a chunk at a time, for an export.
     pub fn visit_source(&self) -> Option<Arc<dyn FeatureSource>> {
         self.handle.as_ref().filter(|h| h.visits_chunks()).cloned()
@@ -1857,15 +1863,17 @@ impl SourceLayer {
         if self.pending.is_some() {
             return None;
         }
-        // In map units, the read's longitude/latitude extent is the place of its box there, for
-        // a source that reads by that; a box the map can't take back is read as without one.
+        let lonlat = clamp_world(&v.padded(0.5, 0.0));
+        // In map units, the read's longitude/latitude extent is the place of its box there. Where
+        // the map can't take that box back (a regional system zoomed far out), it is the view's,
+        // as without one; the window is still kept in map units, so the same view doesn't read
+        // again.
         if let Some((flat, o)) = own {
             let padded = o.padded(0.5, 0.0);
-            if let Some(lonlat) = lonlat_around(flat, &padded).map(|e| clamp_world(&e)).filter(|e| !e.is_empty()) {
-                return Some(Wanted { extent: lonlat, own: Some(padded) });
-            }
+            let extent = lonlat_around(flat, &padded).map(|e| clamp_world(&e)).filter(|e| !e.is_empty()).unwrap_or(lonlat);
+            return Some(Wanted { extent, own: Some(padded) });
         }
-        Some(Wanted { extent: clamp_world(&v.padded(0.5, 0.0)), own: None })
+        Some(Wanted { extent: lonlat, own: None })
     }
 
     /// Starts reading an extent: on a background thread unless `block` (or in the browser).

@@ -422,6 +422,15 @@ pub trait FeatureSource: Send + Sync {
     fn coord_crs(&self) -> crate::raster::Crs {
         crate::raster::Crs::LonLat
     }
+
+    /// Whether a read given its box in the source's own system ([`Request::own`]) tests its
+    /// features against that box (a file read in place, PostGIS), so a map in that system keeps
+    /// its window in map units for it. A source that reads by the longitude/latitude extent
+    /// whatever it is given (another database, a service, a converted copy) says no: its window is
+    /// kept in longitude/latitude, as it reads.
+    fn reads_own_box(&self) -> bool {
+        false
+    }
     /// The encoding the source's text values are read in, for the notice of those that aren't
     /// valid in it ([`not_utf8_note`]).
     fn text_encoding(&self) -> &'static str {
@@ -682,6 +691,10 @@ impl FeatureSource for Fetching {
 
     fn coord_crs(&self) -> crate::raster::Crs {
         self.0.coord_crs()
+    }
+
+    fn reads_own_box(&self) -> bool {
+        self.0.reads_own_box()
     }
 
     fn lost_to_crs(&self) -> bool {
