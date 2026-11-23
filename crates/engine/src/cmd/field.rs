@@ -321,6 +321,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
             ));
         }
     }
+    losses.extend(photos.notes.iter().cloned());
     // Photos sent out are optional: dropped below if the map needs their room.
     let carried = if coming_back { 0 } else { photos.entries.iter().filter(|(n, _)| n != INDEX).count() };
     entries.extend(photos.entries);
@@ -1207,6 +1208,14 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
         },
         go_on,
     )?;
+    for (folder, read) in &unpacked {
+        if let Err(e) = read {
+            found.notes.push(format!(
+                "The photo index of the field package this map came from couldn't be read ({}: {e}): its photos go back as copies, not as the computer's own files",
+                folder.display()
+            ));
+        }
+    }
     if !index.is_empty() {
         found.entries.push((INDEX.to_string(), index.into_bytes()));
     }
@@ -1224,7 +1233,7 @@ fn some_of(names: &[String]) -> String {
 }
 
 /// The [`INDEX`] of each folder of photos a package unpacked, read once: entry → path at home.
-type Unpacked = std::collections::HashMap<PathBuf, std::collections::HashMap<String, String>>;
+type Unpacked = std::collections::HashMap<PathBuf, Result<std::collections::HashMap<String, String>, String>>;
 
 /// The path a photo at `path` was named by at home, when a package brought it from there (the
 /// [`INDEX`] unpacked beside it names it); otherwise `path` itself.
@@ -1234,24 +1243,28 @@ fn home_path(unpacked: &mut Unpacked, package: &str, path: &str) -> String {
         .zip(file.file_name())
         .and_then(|(folder, own)| {
             let index = unpacked.entry(folder.to_path_buf()).or_insert_with(|| unpacked_index(folder, package));
-            index.get(&format!("{PHOTOS}/{}", own.to_string_lossy())).cloned()
+            index.as_ref().ok()?.get(&format!("{PHOTOS}/{}", own.to_string_lossy())).cloned()
         })
         .unwrap_or_else(|| path.to_string())
 }
 
 /// The [`INDEX`] a package unpacked into `folder` (its `photos` folder), as entry → path named
-/// by where it was packaged; empty where there is none, or it can't be read.
-fn unpacked_index(folder: &Path, package: &str) -> std::collections::HashMap<String, String> {
+/// by where it was packaged; empty where there is none. One that is there but can't be read is an
+/// error, said by the caller: its photos can't be told from the field's.
+fn unpacked_index(folder: &Path, package: &str) -> Result<std::collections::HashMap<String, String>, String> {
     // Only this field project's package from home: one that went out names itself beside its
     // photos (`given.v1.json`). A return opened elsewhere has none, and another package's photos
     // aren't this one's, so their photos go back as they are.
     if folder.file_name().is_none_or(|n| n != PHOTOS) || !folder.parent().is_some_and(|dir| super::field_changes::marks(dir, package)) {
-        return std::collections::HashMap::new();
+        return Ok(std::collections::HashMap::new());
     }
-    // A package's own index, read within a bound: one line for each photo it carried.
-    let Ok(bytes) = crate::project::read_file(&folder.join(INDEX.trim_start_matches(&format!("{PHOTOS}/"))), MAX_INDEX) else {
-        return std::collections::HashMap::new();
-    };
+    // A package's own index, read within a bound: one line for each photo it carried. A package
+    // that carried no photo has none.
+    let file = folder.join(INDEX.trim_start_matches(&format!("{PHOTOS}/")));
+    if matches!(std::fs::symlink_metadata(&file), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(std::collections::HashMap::new());
+    }
+    let bytes = crate::project::read_file(&file, MAX_INDEX)?;
     let text = String::from_utf8_lossy(&bytes);
     let mut index = std::collections::HashMap::new();
     let mut twice = std::collections::HashSet::new();
@@ -1262,7 +1275,7 @@ fn unpacked_index(folder: &Path, package: &str) -> std::collections::HashMap<Str
         }
     }
     index.retain(|entry, _| !twice.contains(entry));
-    index
+    Ok(index)
 }
 
 /// The most a package's photo index is read: a line for each of many thousand photos.
@@ -1278,6 +1291,8 @@ const MARKER_ROOM: u64 = 4096;
 #[derive(Default)]
 struct Photos {
     entries: Vec<(String, Vec<u8>)>,
+    /// What couldn't be told about the photos as a whole (a package's photo index unreadable).
+    notes: Vec<String>,
     missing: Vec<String>,
     not_pictures: Vec<String>,
     too_large: Vec<String>,
@@ -1845,7 +1860,19 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     if photos.is_dir() {
         // A package from home names its photos where they are at home; its index says which entry
         // each is.
-        let index = unpacked_index(&photos, project.field_origin.as_ref().map_or("", |o| o.package.as_str()));
+        let index = match unpacked_index(&photos, project.field_origin.as_ref().map_or("", |o| o.package.as_str())) {
+            Ok(index) => index,
+            Err(e) => {
+                project.read_notices.push((
+                    crate::project::ReadPart::Maps,
+                    crate::notice_text::NoticeText::format(
+                        "The field package's photo index couldn't be read ({reason}): its photos keep the names they have at home, which may not be on this device.",
+                        [("reason", e.into())],
+                    ),
+                ));
+                Default::default()
+            }
+        };
         // An entry the index lists belongs to the home path it names, and to nothing else: a
         // feature naming the entry itself (a reference copy's, say) isn't pointed at that photo.
         let listed: std::collections::HashSet<String> = index.keys().cloned().collect();
@@ -2829,6 +2856,40 @@ mod tests {
         assert!(entries.iter().any(|n| n == "photos/plain.jpg") && !entries.iter().any(|n| n.contains("odd")), "{entries:?}");
         let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.starts_with("1 photo(s) couldn't be put") && t.contains("tab or a line break")), "{said:?}");
+    }
+
+    /// A package from home whose photo index is there but can't be read is said, on opening and
+    /// on sending back: its photos can't be told from the field's.
+    #[test]
+    fn an_unreadable_photo_index_is_said_on_opening_and_on_sending_back() {
+        let temp = Temp::new("bad-index");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let cities = layer(&home, "Cities");
+        home.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        let photo = temp.path().join("site.jpg");
+        std::fs::write(&photo, b"a picture").unwrap();
+        home.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
+        let (_, out) = package(&mut home, &json!({"name": "Bad", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap().0;
+        // The index damaged: a folder where the file was.
+        let index = unpacked.join("photos").join("index.tsv");
+        std::fs::remove_file(&index).unwrap();
+        std::fs::create_dir(&index).unwrap();
+        let mut project = project_in(&text, &unpacked).unwrap();
+        let opened_notes: Vec<String> =
+            project.take_read_notices(&[crate::project::ReadPart::Maps]).iter().map(crate::notice_text::NoticeText::english).collect();
+        assert!(opened_notes.iter().any(|t| t.starts_with("The field package's photo index couldn't be read")), "{opened_notes:?}");
+        let mut field = opened(project);
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        // The feature names the unpacked photo: sending back can't tell it was home's.
+        let there = unpacked.join("photos").join("home-00001.jpg");
+        field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": there.display().to_string()})).unwrap();
+        let mark = field.notice_mark();
+        package(&mut field, &Value::Null).unwrap();
+        let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("The photo index of the field package this map came from couldn't be read")), "{said:?}");
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:
