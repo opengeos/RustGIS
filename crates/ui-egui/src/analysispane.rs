@@ -15,7 +15,6 @@ pub struct Pick {
     pub points: Vec<rustgis_engine::geom::Coord>,
 }
 
-/// A layer's systems: the one it holds its coordinates in, and the one it was read in.
 /// The systems a layer holds its coordinates in and was read in, and the project's.
 type LayerSystems =
     (rustgis_engine::data::raster::Crs, Option<rustgis_engine::data::raster::Crs>, Option<rustgis_engine::data::raster::Crs>);

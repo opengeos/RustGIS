@@ -901,7 +901,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent and pixel size; when empty, the projected one the layer is held in, or else was read in, else degrees; EPSG:4326 for degrees.",
+                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent and pixel size; when empty, the projected one the layer is held in, or else was read in, else the project's projected one, else degrees; EPSG:4326 for degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -1067,7 +1067,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent, pixel size and range; when empty, the projected one the layer is held in, or else was read in, else degrees; EPSG:4326 for degrees.",
+                help: "A projected coordinate system (e.g. EPSG:32618) to make the raster in, its units for the extent, pixel size and range; when empty, the projected one the layer is held in, or else was read in, else the project's projected one, else degrees; EPSG:4326 for degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -1317,7 +1317,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the projected system the layer is held in, or else was read in; required when the layer has none or is in degrees.",
+                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the projected system the layer is held in, or else was read in, else the project's projected system; required when none of these is set.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output raster layer name." },
         ],
@@ -5149,7 +5149,7 @@ pub fn raster_crs_in(ds: &Dataset, work: Crs, project: Option<Crs>, p: &Json, to
     }
     if let Some(c) = project_raster_crs(ds.crs, project, p) {
         let note = format!(
-            "{tool}: made in {}, the project's coordinate system, with its units for the extent and sizes, as {} {}; set crs to EPSG:4326 to make it in degrees",
+            "{tool}: made in {}, the project's coordinate system, with its units for the extent and sizes, as '{}' {}; set crs to EPSG:4326 to make it in degrees",
             c.label(),
             ds.name,
             if ds.crs.is_some() { "is in degrees" } else { "has no coordinate system" },
@@ -5164,7 +5164,9 @@ pub fn raster_crs_in(ds: &Dataset, work: Crs, project: Option<Crs>, p: &Json, to
 /// system this version can project to.
 fn project_raster_crs(layer_crs: Option<Crs>, project: Option<Crs>, p: &Json) -> Option<Crs> {
     let unnamed = p.get("crs").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|t| t.trim().is_empty()));
-    (unnamed && layer_raster_crs(layer_crs).is_none()).then_some(())?;
+    if !unnamed || layer_raster_crs(layer_crs).is_some() {
+        return None;
+    }
     layer_raster_crs(project)?.ok()
 }
 

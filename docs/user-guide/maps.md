@@ -866,7 +866,8 @@ projected system keeps its output there. IDW, Kriging, Kernel Density and the Ge
 make a raster from a layer in degrees, or with no system, in the project's when it is projected,
 and say so (`crs: "EPSG:4326"` still makes it in degrees). An export of a layer with no system of
 its own (one drawn in longitude/latitude, say) is written in the project's system where the format
-can hold one (GeoPackage, Shapefile, FlatGeobuf, GeoParquet), and says so.
+can hold one (GeoPackage, Shapefile, FlatGeobuf, GeoParquet), and says so. A geocentric project system holds no map
+coordinates, so outputs and exports stay in longitude/latitude in it.
 
 **While it has none, take it from the first layer added** gives the project the system of the next
 layer added from data (**Home › Add**: a file, a URL, a service, a database; or a map imported, an

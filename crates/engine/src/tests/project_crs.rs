@@ -485,11 +485,28 @@ fn a_tool_output_the_project_system_cant_hold_stays_in_longitude_latitude_said()
     let out = said(&mut s, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Arctic", "output": "Out"}}));
     let l = &s.map().layer_by_name("Out").unwrap().dataset;
     assert_eq!((l.coord_crs(), l.crs), (Crs::LonLat, None));
+    // Exported, it is written in the project's system as an export into it is: at 85.05°, said.
+    let path = std::env::temp_dir().join(format!("rustgis-project-crs-{}-arctic.gpkg", std::process::id()));
+    let note = said(&mut s, "share.exportLayer", &json!({"layer": "Arctic", "path": path}));
+    assert_eq!(rustgis_data::io::read_path(&path).unwrap().0.crs, Some(Crs::WebMercator));
+    assert!(note.iter().any(|m| m.contains("written at 85.05°, where Web Mercator ends")), "{note:?}");
+    assert!(note.iter().any(|m| m.contains("written in EPSG:3857, the project's coordinate system")), "{note:?}");
+    let _ = std::fs::remove_file(&path);
     assert!(
         out.iter().any(|m| m
             == "Out is kept in longitude/latitude, not the project's EPSG:3857: feature 1 has a place that can't be held in EPSG:3857"),
         "{out:?}"
     );
+}
+
+#[test]
+fn a_geocentric_project_system_leaves_outputs_in_longitude_latitude() {
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_dataset(bern_points("Wells"));
+    s.run("project.coordinateSystem", &json!({"crs": "EPSG:4978"})).unwrap();
+    let out = said(&mut s, "gp.run", &json!({"tool": "featureToPoint", "params": {"input": "Wells", "output": "Out"}}));
+    assert_eq!(s.map().layer_by_name("Out").unwrap().dataset.coord_crs(), Crs::LonLat);
+    assert!(!out.iter().any(|m| m.contains("project's")), "{out:?}");
 }
 
 #[test]

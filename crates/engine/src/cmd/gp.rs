@@ -721,9 +721,11 @@ impl ToolRun {
                 };
                 let mut result = pin.run(&inputs, &params, control, &|| continuation.check());
                 if let Ok(r) = &mut result {
-                    inputs.hold_results(r);
                     r.messages.extend(inputs.messages.iter().cloned());
                     r.losses.extend(inputs.losses.iter().cloned());
+                }
+                if let Err(e) = result.as_mut().map_or(Ok(()), |r| inputs.hold_results(r)) {
+                    result = Err(e);
                 }
                 ToolDone { inputs: Vec::new(), result, full_ids: full_ids(&inputs.loaded) }
             })
@@ -1336,32 +1338,41 @@ impl MapInputs<'_> {
     /// (#2032 C3a): they are converted into it and hold it as theirs (`crs`), as a layer drawn in
     /// the project is; one with a place it can't hold stays in longitude/latitude, said. Tables
     /// have no coordinates to hold.
-    fn hold_results(&self, result: &mut rustgis_analysis::ToolResult) {
-        let project = self.snap.project.filter(|c| *c != Crs::LonLat);
+    fn hold_results(&self, result: &mut rustgis_analysis::ToolResult) -> Result<(), String> {
+        // A geocentric system holds no map coordinates: outputs stay in longitude/latitude then.
+        let project = self.snap.project.filter(|c| *c != Crs::LonLat && !c.is_geocentric());
         if self.work == Crs::LonLat && project.is_none() {
-            return;
+            return Ok(());
         }
-        let mut kept = Vec::new();
-        let mut hold = |ds: &mut Dataset| {
+        // The layers kept in longitude/latitude, and why the first was.
+        let (mut kept, mut why) = (0usize, None);
+        let mut hold = |ds: &mut Dataset| -> Result<(), String> {
             if ds.geometry_type == rustgis_data::GeometryType::None {
-                return;
+                return Ok(());
             }
             match (self.work, project) {
                 // A tool that holds what it made in a system of its own (XY Table To Point, in the
                 // one its coordinates are given in) keeps it there.
                 (Crs::LonLat, _) if ds.held_in != Crs::LonLat => {}
-                (Crs::LonLat, Some(p)) => {
-                    if let Err(e) = ds.hold_as(p, Some(p)) {
-                        // Its refusal starts with the layer's name, named once here.
-                        let why = e.strip_prefix(&format!("{}: ", ds.name)).unwrap_or(&e);
-                        kept.push(format!("{} is kept in longitude/latitude, not the project's {}: {why}", ds.name, p.label()));
+                (Crs::LonLat, Some(p)) => match ds.hold_as(p, Some(p)) {
+                    // A Cancel stops the run, which adds nothing.
+                    Err(e) if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) => {
+                        return Err(e);
                     }
-                }
+                    Err(e) => {
+                        kept += 1;
+                        // Its refusal starts with the layer's name, named once here.
+                        let reason = e.strip_prefix(&format!("{}: ", ds.name)).unwrap_or(&e).to_string();
+                        why.get_or_insert((ds.name.clone(), reason));
+                    }
+                    Ok(()) => {}
+                },
                 (work, _) => ds.held_in = work,
             }
+            Ok(())
         };
         match &mut result.output {
-            Output::Layer(ds) => hold(ds),
+            Output::Layer(ds) => hold(ds)?,
             // An update writes into a layer the map has, which keeps its own system.
             Output::Update { dataset: ds, .. } if self.work != Crs::LonLat && ds.geometry_type != rustgis_data::GeometryType::None => {
                 ds.held_in = self.work
@@ -1369,13 +1380,20 @@ impl MapInputs<'_> {
             Output::Layers(outputs) => {
                 for o in outputs {
                     if let rustgis_analysis::OutputLayer::Vector(ds) = o {
-                        hold(ds);
+                        hold(ds)?;
                     }
                 }
             }
             Output::Update { .. } | Output::Selection { .. } | Output::Table(_) | Output::File { .. } => {}
         }
-        result.messages.extend(kept);
+        if let (Some((name, reason)), Some(p)) = (why, project) {
+            let others = match kept {
+                1 => String::new(),
+                n => format!(" (and {} more layer{})", n - 1, if n == 2 { "" } else { "s" }),
+            };
+            result.messages.push(format!("{name}{others} is kept in longitude/latitude, not the project's {}: {reason}", p.label()));
+        }
+        Ok(())
     }
 
     /// The flat map's projection, built on first use.
@@ -3152,9 +3170,11 @@ pub(crate) fn execute(
                 pin.run(&inputs, params, control, &|| continuation.check())
             };
             if let Ok(result) = &mut res {
-                inputs.hold_results(result);
                 result.messages.extend(inputs.messages.iter().cloned());
                 result.losses.extend(inputs.losses.iter().cloned());
+            }
+            if let Err(e) = res.as_mut().map_or(Ok(()), |r| inputs.hold_results(r)) {
+                res = Err(e);
             }
             let ids = full_ids(&inputs.loaded);
             #[cfg(not(target_arch = "wasm32"))]

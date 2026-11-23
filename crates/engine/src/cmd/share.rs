@@ -710,7 +710,10 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, project: 
     let ds = chunks.as_ref().map_or(whole.as_ref(), |(_, layer)| layer);
     // GeoJSON, KML, GPX and CSV are longitude/latitude (CSV takes another when asked); the others
     // keep the layer's own system unless told another, or take the project's when it has none.
-    let crs = asked.unwrap_or_else(|| rustgis_data::io::default_export_crs_in(ds, &ext, project));
+    let (crs, default_note) = match asked {
+        Some(c) => (c, None),
+        None => rustgis_data::io::default_export_in(ds, path, project),
+    };
     // Another body's layer projected onto another ellipsoid would be wrong data, not a wrong name.
     if let Some(e) = rustgis_data::export_error(ds, crs) {
         return Err(format!("{path}: {e}"));
@@ -780,9 +783,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, project: 
     let extent = if chunks.is_some() { l.extent() } else { ds.lonlat_extent() };
     let mut notes: rustgis_data::loss::Notes = rustgis_data::export_notes([(ds, extent)], path, crs).into();
     coalesce_read_zm(&mut notes, path, ds, &unreadable);
-    if asked.is_none() {
-        notes.extend(rustgis_data::io::default_export_note_in(ds, path, project));
-    }
+    notes.extend(default_note);
     let csv_type = if csv_points { rustgis_data::GeometryType::Point } else { ds.geometry_type };
     notes.extend(rustgis_data::io::csv_system_note(path, csv_type, crs));
     notes.extend(moved);
