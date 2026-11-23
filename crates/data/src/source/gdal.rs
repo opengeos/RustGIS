@@ -339,13 +339,18 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
             }
         }
         // The features of each part that had Z or M values, which the conversion drops (`-dim
-        // XY`), as a fresh conversion counts them. A count that fails on a layer declaring them
-        // is said without a code: the layer may hold only x and y.
+        // XY`), as a fresh conversion counts them: counted once, with the conversion, and kept
+        // beside it, so a cache hit doesn't scan the source again. A count that fails is said
+        // without a code: the layer may hold only x and y.
         if l.has_zm || l.family.is_none() {
             for part in out.iter_mut().skip(before) {
-                match count_zm_features(src, &l, part.family) {
-                    Ok(n) => part.zm_dropped = n,
-                    Err(_) => part.zm_unknown = l.has_zm,
+                match kept_zm_count(&part.path).map_or_else(|| count_zm_features(src, &l, part.family), Ok) {
+                    Ok(n) => {
+                        part.zm_dropped = n;
+                        // Not kept, it is counted again next time.
+                        let _ = std::fs::write(part.path.with_extension("zm"), format!("{n}\n"));
+                    }
+                    Err(_) => part.zm_unknown = true,
                 }
             }
         }
@@ -585,6 +590,10 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionReques
         touch(&keyfile);
         return Ok(Some(Conversion { path: out, unprojected: was_unprojected, in_lonlat: was_in_lonlat, notes: Vec::new(), empty: false }));
     }
+    // A count of Z/M features kept for an earlier conversion with this tag isn't this one's.
+    if !fresh {
+        let _ = std::fs::remove_file(dir.join(format!("{tag}.zm")));
+    }
     // Unique to this conversion, even with others of the same layer running in this process.
     let tmp = dir.join(format!("{tag}.{}{n:04}.tmp.fgb", std::process::id()));
     // Kept in its own coordinate system, or the one given, which the FlatGeobuf says; one RustGIS
@@ -806,9 +815,16 @@ fn count_geometry_filter(src: &Path, layer: &str, filter: &str) -> Result<u64> {
         .ok_or_else(|| DataError::Format("GDAL: could not count features of other geometry types".into()))
 }
 
+/// The count of Z/M features kept beside the conversion at `path` ([`convert_in`]), when there is
+/// one: written whole, with its line's end, or not taken.
+fn kept_zm_count(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path.with_extension("zm")).ok()?.strip_suffix('\n')?.parse().ok()
+}
+
 /// Generic layers don't declare the dimensions of their features. Count the selected family's
 /// actual Z/M geometries that conversion flattens; SQLite's spatial functions aren't present in every
-/// GDAL build, so the caller reports possible loss if this diagnostic query fails.
+/// GDAL build, so the caller reports possible loss if this diagnostic query fails. One `ogrinfo`
+/// scan of the source, as long as the conversion's, with no Cancel check inside it.
 fn count_zm_features(src: &Path, layer: &LayerInfo, family: Option<Family>) -> Result<u64> {
     let src = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let geometry = format!("\"{}\"", layer.geometry_column.replace('"', "\"\""));
@@ -855,7 +871,7 @@ fn ours(name: &str) -> bool {
         rest.strip_suffix(".tmp.layers").is_some_and(|nonce| !nonce.is_empty() && nonce.bytes().all(|b| b.is_ascii_alphanumeric()));
     tag.len() == 16
         && tag.bytes().all(|b| b.is_ascii_hexdigit())
-        && (matches!(rest, "fgb" | "key" | "empty" | "layers") || tmp || listing_tmp)
+        && (matches!(rest, "fgb" | "key" | "empty" | "layers" | "zm") || tmp || listing_tmp)
 }
 
 #[cfg(test)]
@@ -918,7 +934,7 @@ mod tests {
         assert_eq!(version("ogrinfo: command not found"), None);
         // Pruning touches only the cache's own files.
         assert!(ours("0123456789abcdef.fgb") && ours("0123456789abcdef.key") && ours("0123456789abcdef.empty"));
-        assert!(ours("0123456789abcdef.4242.tmp.fgb"));
+        assert!(ours("0123456789abcdef.4242.tmp.fgb") && ours("0123456789abcdef.zm"));
         assert!(!ours("notes.fgb") && !ours("0123456789abcdef.txt") && !ours("photo.jpg") && !ours("0123456789abcdef.x.tmp.fgb"));
         // The cache key's hash is stable: a cached file is found again by its name, so a changed
         // hash orphans every cache already on disk. FNV-1a (64-bit) of "rustgis".
@@ -1302,6 +1318,14 @@ mod tests {
             // A first conversion, as Add Data makes it, counts them too.
             let (parts, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
             assert_eq!(parts.iter().map(|p| p.zm_dropped).sum::<u64>(), u64::from(lossy));
+            // A cache hit takes the count kept beside the conversion, without scanning the source.
+            if lossy {
+                for part in &parts {
+                    std::fs::write(part.path.with_extension("zm"), "7\n").unwrap();
+                }
+                let (hit, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
+                assert_eq!(hit.iter().map(|p| p.zm_dropped).collect::<Vec<_>>(), vec![7; parts.len()]);
+            }
             let source = crate::source::open_path(&fresh.path, None).unwrap();
             let batch = source.read(&crate::source::Request { extent: None, limit: 10 }).unwrap();
             assert_eq!(batch.features[0].geometry.as_ref().unwrap().extent().center().x, if lossy { 2.0 } else { 8.0 });

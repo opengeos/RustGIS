@@ -231,13 +231,11 @@ impl Engine {
             }
             let text = rustgis_engine::data::io::to_geojson(&ds).to_string();
             // The selected rows lack what the layer's do: said of the layer, whose system and body
-            // the copy in longitude/latitude no longer holds.
+            // the copy in longitude/latitude no longer holds, at the selected rows' places.
             let target = format!("{} as GeoJSON", ds.name);
-            for note in rustgis_engine::data::export_notes(
-                [(&found.dataset, found.dataset.lonlat_extent())],
-                &target,
-                rustgis_engine::data::raster::Crs::LonLat,
-            ) {
+            for note in
+                rustgis_engine::data::export_notes([(&found.dataset, ds.extent())], &target, rustgis_engine::data::raster::Crs::LonLat)
+            {
                 session.say(note);
             }
             Ok::<String, String>(text)
