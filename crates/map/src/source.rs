@@ -1830,34 +1830,24 @@ impl SourceLayer {
             (!clamped.is_empty()).then_some((flat, clamped))
         });
         let all = self.info().map(|i| i.extent).filter(|e| !e.is_empty());
-        // In map units, where the source says its features lie, with a margin for the curve
-        // between the places its edges are taken at.
-        let all_own = own.and_then(|(flat, _)| all.and_then(|a| map_around(flat, &a))).map(|a| a.padded(0.05, 0.0));
-        if let Some(w) = &self.window {
-            // Everything has been read: nothing more to fetch, wherever the view goes. A window
-            // read in map units is compared there, as its longitude/latitude extent holds more
-            // than was read.
-            let everything = match w.own {
-                Some(read) => all_own.is_some_and(|a| contains(&read, &a)),
-                None => all.is_some_and(|a| contains(&w.extent, &a)),
-            };
-            if w.complete && everything {
+        // A window is reused only by a view of the kind it was read for: one read in
+        // longitude/latitude lacks the features a read in map units also keeps (a place past
+        // where longitude/latitude goes), and one read in map units holds less than its
+        // longitude/latitude extent.
+        if let Some(w) = self.window.as_ref().filter(|w| w.own.is_some() == own.is_some()) {
+            // Everything has been read: nothing more to fetch, wherever the view goes. Only in
+            // longitude/latitude, where the source's extent bounds every feature it reads; in map
+            // units a feature with no place in longitude/latitude lies outside that extent.
+            if w.own.is_none() && w.complete && all.is_some_and(|a| contains(&w.extent, &a)) {
                 return None;
             }
             // The window covers the view, and is complete or not much larger (a view zoomed well
-            // inside a sampled window reads again, for the detail the sample left out): in map
-            // units when the window and the view are both there, else in longitude/latitude. A
-            // window read in map units isn't compared in longitude/latitude, where its extent
-            // holds more than was read.
-            let compared = match (own, w.own) {
-                (Some((_, o)), Some(read)) => Some((o, read)),
-                (_, None) => Some((v, w.extent)),
-                (None, Some(_)) => None,
+            // inside a sampled window reads again, for the detail the sample left out).
+            let (view, read) = match (own, w.own) {
+                (Some((_, o)), Some(read)) => (o, read),
+                _ => (v, w.extent),
             };
-            if let Some((view, read)) = compared
-                && contains(&read, &view)
-                && (w.complete || area(&view) * 6.0 > area(&read))
-            {
+            if contains(&read, &view) && (w.complete || area(&view) * 6.0 > area(&read)) {
                 return None;
             }
         }

@@ -985,10 +985,17 @@ impl Reproject {
     /// A geometry as the file holds it, kept in the source's own coordinates, and whether it is
     /// within `req`. Given the request's box in those coordinates ([`Request::own`]), its own box
     /// is tested against it, converting nothing, so a geometry with no place in
-    /// longitude/latitude is kept too. Otherwise as [`Reproject::read`]: `None` when a coordinate
+    /// longitude/latitude is kept too (`None` for one with a coordinate that isn't a number). Otherwise as [`Reproject::read`]: `None` when a coordinate
     /// can't be converted to longitude/latitude, and its box there tested against the extent.
     pub(crate) fn place(&self, g: Geometry, req: &Request) -> Option<Fitted> {
         if let Some(own) = self.own_box(req) {
+            // A coordinate that isn't a number has no place here either: left out, as `read`
+            // leaves it out, for the reader to count.
+            let mut finite = true;
+            g.for_each_coord(|c| finite &= c.is_finite());
+            if !finite {
+                return None;
+            }
             let inside = g.extent().intersects(&own);
             return Some(Fitted { geometry: g, inside });
         }
