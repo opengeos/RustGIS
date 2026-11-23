@@ -907,8 +907,16 @@ struct Ctx<'a> {
 /// A marker sprite's symbol and quarter-pixel offset.
 type SpriteKey = (Rgba, Rgba, u32, u32, Marker, u8, u8);
 
+/// Pixels and the character replaced by a circle when these pixels were drawn. Reusing the
+/// pixels must repeat the omission under the using layer's name, even if fonts have since changed.
+#[derive(Clone)]
+struct CachedSprite {
+    pixmap: std::sync::Arc<Pixmap>,
+    missing: Option<char>,
+}
+
 /// The marker sprites a frame has drawn ([`Ctx::sprites`]).
-type Sprites = std::collections::HashMap<SpriteKey, Option<std::sync::Arc<Pixmap>>>;
+type Sprites = std::collections::HashMap<SpriteKey, Option<CachedSprite>>;
 
 /// The stroke a stacked line's `st` is drawn with, `width` device pixels wide: its cap and join.
 pub(crate) fn line_stroke(st: &LineStroke, width: f32) -> Stroke {
@@ -1325,7 +1333,7 @@ impl Ctx<'_> {
         if x < -reach || y < -reach || x > pm.width() as f32 + reach || y > pm.height() as f32 + reach {
             return;
         }
-        draw_marker(pm, x, y, s, opacity, halo, self.ppp);
+        let _ = draw_marker(pm, x, y, s, opacity, halo, self.ppp);
     }
 
     /// A layer's point marker, stamped from a sprite drawn once per symbol and quarter-pixel
@@ -1345,7 +1353,7 @@ impl Ctx<'_> {
         }
         // A recording keeps the marker itself, not a sprite's pixels.
         if pm.is_recording() {
-            draw_marker(pm, x, y, s, 1.0, None, self.ppp);
+            let _ = draw_marker(pm, x, y, s, 1.0, None, self.ppp);
             return;
         }
         let key = (s.fill, s.stroke, s.stroke_width.to_bits(), s.size.to_bits(), s.marker, qx, qy);
@@ -1354,20 +1362,23 @@ impl Ctx<'_> {
             // Many symbols (sizes by value, say) would each make a sprite used once: draw directly.
             if sprites.len() >= MAX_SPRITES || reach > MAX_SPRITE_REACH {
                 drop(sprites);
-                draw_marker(pm, x, y, s, 1.0, None, self.ppp);
+                let _ = draw_marker(pm, x, y, s, 1.0, None, self.ppp);
                 return;
             }
             let side = (2 * reach + 1) as u32;
             let sprite = Canvas::new(side, side).map(|mut sp| {
                 let c = reach as f32 + qx as f32 / 4.0;
                 let d = reach as f32 + qy as f32 / 4.0;
-                draw_marker(&mut sp, c, d, s, 1.0, None, self.ppp);
-                std::sync::Arc::new(sp.into_pixmap())
+                let missing = draw_marker(&mut sp, c, d, s, 1.0, None, self.ppp);
+                CachedSprite { pixmap: std::sync::Arc::new(sp.into_pixmap()), missing }
             });
             sprites.insert(key, sprite);
         }
-        if let Some(Some(sp)) = sprites.get(&key) {
-            pm.pixel_op(bands::PixelOp::Sprite { pixmap: sp.clone(), x: ix - reach, y: iy - reach });
+        if let Some(Some(sprite)) = sprites.get(&key) {
+            if let Some(ch) = sprite.missing {
+                approximations::missing_glyphs([ch]);
+            }
+            pm.pixel_op(bands::PixelOp::Sprite { pixmap: sprite.pixmap.clone(), x: ix - reach, y: iy - reach });
         }
     }
 
@@ -1956,7 +1967,13 @@ const MAX_SPRITE_REACH: i64 = 24;
 
 /// A marker's outline at (`x`, `y`), `r` its radius in pixels.
 pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny_skia::Path> {
+    marker_path_report(x, y, r, marker).0
+}
+
+/// Keeps the omission alongside the actual outline, so a sprite records exactly what it drew.
+fn marker_path_report(x: f32, y: f32, r: f32, marker: Marker) -> (Option<tiny_skia::Path>, Option<char>) {
     let mut pb = PathBuilder::new();
+    let mut missing = None;
     match marker {
         Marker::Circle => pb.push_circle(x, y, r),
         Marker::Square => {
@@ -1989,13 +2006,14 @@ pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny
         Marker::Char(g) => match glyphs::shape(g) {
             Some(s) => {
                 let em = 2.0 * r;
-                return s.path.clone().transform(Transform::from_row(em, 0.0, 0.0, em, x, y));
+                return (s.path.clone().transform(Transform::from_row(em, 0.0, 0.0, em, x, y)), None);
             }
             // A space draws nothing; a character no font here has, a circle of its size, so the
             // point still shows.
-            None if text::invisible(g.ch) => return None,
+            None if text::invisible(g.ch) => return (None, None),
             None => {
                 approximations::missing_glyphs([g.ch]);
+                missing = Some(g.ch);
                 pb.push_circle(x, y, r);
             }
         },
@@ -2003,7 +2021,7 @@ pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny
         // circle of its size.
         Marker::Picture(_) => pb.push_circle(x, y, r),
     }
-    pb.finish()
+    (pb.finish(), missing)
 }
 
 /// Draws picture marker `p` `width` pixels wide, centred at `t`'s origin and turned with it, at
@@ -2046,15 +2064,16 @@ pub(crate) fn marker_reach(marker: Marker) -> f32 {
     }
 }
 
-/// A marker centred at (`x`, `y`) device pixels.
-fn draw_marker(pm: &mut Canvas, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) {
+/// A marker centred at (`x`, `y`) device pixels; returns the character replaced by a circle.
+fn draw_marker(pm: &mut Canvas, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) -> Option<char> {
     let r = (s.size.max(1.0) * ppp) / 2.0;
     if let Marker::Picture(p) = s.marker
         && picture_marker(pm, p, 2.0 * r, Transform::from_translate(x, y), opacity, halo, true, ppp)
     {
-        return;
+        return None;
     }
-    let Some(path) = marker_path(x, y, r, s.marker) else { return };
+    let (path, missing) = marker_path_report(x, y, r, s.marker);
+    let Some(path) = path else { return missing };
     if let Some(h) = halo {
         let st = Stroke { width: 3.5 * ppp, line_join: LineJoin::Round, ..Stroke::default() };
         pm.stroke_path(&path, &paint(h, 1.0), &st, Transform::identity(), None);
@@ -2064,6 +2083,7 @@ fn draw_marker(pm: &mut Canvas, x: f32, y: f32, s: &Symbol, opacity: f32, halo: 
         let st = Stroke { width: s.stroke_width * ppp, line_join: LineJoin::Round, ..Stroke::default() };
         pm.stroke_path(&path, &paint(s.stroke, opacity), &st, Transform::identity(), None);
     }
+    missing
 }
 
 /// Composites premultiplied `src` over `dst` with its top left corner at (`x`, `y`).
@@ -3947,7 +3967,7 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
         {
             continue;
         }
-        draw_marker(pm, x, y, &s, 1.0, halo, ppp);
+        let _ = draw_marker(pm, x, y, &s, 1.0, halo, ppp);
     }
 }
 
@@ -10831,6 +10851,55 @@ mod tests {
         let parts = clip_line(&[(-5.0, 2.0), (5.0, 2.0), (5.0, 20.0), (8.0, 20.0), (8.0, 5.0), (15.0, 5.0)], &b);
         assert_eq!(parts, vec![(5.0, vec![(0.0, 2.0), (5.0, 2.0), (5.0, 10.0)]), (41.0, vec![(8.0, 10.0), (8.0, 5.0), (10.0, 5.0)])]);
         assert!(clip_line(&[(-5.0, -5.0), (-1.0, 20.0)], &b).is_empty());
+    }
+
+    /// Reusing a missing-character sprite must keep the notice attached to every using layer.
+    #[test]
+    fn cached_character_markers_report_missing_glyphs_for_each_layer() {
+        approximations::layer(None);
+        let _ = approximations::take();
+        let view = View {
+            width: 120.0,
+            height: 80.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let symbol = Symbol {
+            fill: Rgba::rgb(200, 60, 30),
+            stroke: Rgba::rgb(20, 20, 20),
+            stroke_width: 1.2,
+            size: 9.0,
+            marker: Marker::Char(rustgis_map::Glyph::new('\u{10ffff}', "")),
+        };
+        let mut image = Pixmap::new(120, 80).unwrap();
+        for name in ["First points", "Second points"] {
+            approximations::layer(Some(name));
+            crate::canvas::with_canvas(&mut image, |canvas| ctx.stamp(canvas, Coord::new(0.0, 0.0), &symbol));
+            approximations::layer(None);
+        }
+        assert_eq!(ctx.sprites.borrow().len(), 1, "both layers must reuse the sprite");
+        let notices = approximations::take();
+        for name in ["First points", "Second points"] {
+            assert!(notices.iter().any(|n| n.starts_with(name) && n.contains("U+10FFFF")), "{name}: {notices:?}");
+        }
+        assert_eq!(notices.len(), 2);
+        approximations::layer(Some("Clean"));
+        for ch in ['A', ' ', '\u{200b}'] {
+            let clean = Symbol { marker: Marker::Char(rustgis_map::Glyph::new(ch, "")), ..symbol };
+            crate::canvas::with_canvas(&mut image, |canvas| ctx.stamp(canvas, Coord::new(0.0, 0.0), &clean));
+        }
+        approximations::layer(None);
+        assert!(approximations::take().is_empty(), "present and invisible glyphs aren't omissions");
     }
 
     #[test]

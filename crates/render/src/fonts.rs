@@ -24,8 +24,9 @@ const CANDIDATES: &[(&str, &str)] = &[
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
 ];
 
-/// Largest font file accepted (32 MiB).
-const MAX_FONT: u64 = 32 << 20;
+/// Largest regular/script font or downloaded font (32 MiB). Installed CJK collections
+/// have a separate 128 MiB budget; downloads use the smaller bound on every platform.
+pub const MAX_FONT_BYTES: usize = 32 << 20;
 
 pub struct UiFonts {
     pub regular: Vec<u8>,
@@ -48,7 +49,7 @@ fn read_bounded(path: impl AsRef<std::path::Path>, limit: u64) -> Option<Vec<u8>
 }
 
 fn read(path: &str) -> Option<Vec<u8>> {
-    let bytes = read_bounded(path, MAX_FONT)?;
+    let bytes = read_bounded(path, MAX_FONT_BYTES as u64)?;
     ab_glyph::FontRef::try_from_slice(&bytes).ok()?;
     Some(bytes)
 }
@@ -732,7 +733,7 @@ fn script_paths(candidates: &[&str]) -> Vec<String> {
 /// may have its usable face after index zero; an unsupported outline format must be skipped.
 fn find_script(candidates: &[&str], covers: fn(&[u8], u32) -> bool) -> Option<(Vec<u8>, u32)> {
     script_paths(candidates).iter().find_map(|path| {
-        let bytes = read_cjk(path)?;
+        let bytes = read_bounded(path, MAX_FONT_BYTES as u64)?;
         let count = ttf_parser::fonts_in_collection(&bytes).unwrap_or(1).min(256);
         let index = (0..count).find(|i| covers(&bytes, *i))?;
         Some((bytes, index))
@@ -808,7 +809,7 @@ fn cached_script_font(script: ScriptFont) -> Option<(Vec<u8>, u32)> {
     {
         let file = script_font_url(script)?.rsplit('/').next()?;
         let path = rustgis_data::dirs::cache_dir()?.join("fonts").join(file);
-        let bytes = read_bounded(path, MAX_FONT)?;
+        let bytes = read_bounded(path, MAX_FONT_BYTES as u64)?;
         draws_script(&bytes, 0, script).then_some((bytes, 0))
     }
     #[cfg(target_arch = "wasm32")]
@@ -1041,6 +1042,19 @@ mod tests {
             assert!(!super::draws_script(b"not a font", 0, script));
             assert!(!super::draws_script(epaint_default_fonts::HACK_REGULAR, 0, script), "{script:?}: unrelated valid font");
         }
+    }
+
+    /// A valid script face padded beyond the regular-font budget must be skipped before reading.
+    #[test]
+    fn script_candidates_keep_the_regular_font_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("padded-script.otf");
+        std::fs::write(&path, include_bytes!("../testdata/test-script-only.otf")).unwrap();
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(super::MAX_FONT_BYTES as u64 + 1).unwrap();
+        assert!(
+            super::find_script(&[path.to_str().unwrap()], super::covers_bengali_at).is_none(),
+            "oversized script candidate was admitted"
+        );
     }
 
     #[test]

@@ -165,12 +165,6 @@ pub(crate) fn invisible(c: char) -> bool {
         || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0100}'..='\u{E01EF}')
 }
 
-/// A CJK face for `region`, parsed once: an installed one, else the one the web app downloaded
-/// (`None` until it has). An installed face is looked for once; a downloaded one once it's there.
-fn cjk(region: CjkRegion) -> Option<&'static FontRef<'static>> {
-    installed_cjk(region).or_else(|| downloaded_cjk(region))
-}
-
 /// Parses an installed regional face once, independently of downloaded coverage.
 fn installed_cjk(region: CjkRegion) -> Option<&'static FontRef<'static>> {
     static FACES: [OnceLock<Option<FontRef<'static>>>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
@@ -219,21 +213,22 @@ fn cjk_order(c: char) -> [CjkRegion; 4] {
     }
 }
 
-/// Parses one shared non-CJK fallback without retaining another copy of its bytes. A downloaded
-/// face is consulted on every lookup until it arrives; an early miss must not be cached forever.
-fn script_face(script: crate::fonts::ScriptFont) -> Option<&'static FontRef<'static>> {
+/// Parses the requested script source lazily, sharing its bytes. Check for a late download
+/// before touching its parsed slot, so an early miss is not cached forever.
+fn script_face(script: crate::fonts::ScriptFont, downloaded: bool) -> Option<&'static FontRef<'static>> {
     use crate::fonts::ScriptFont;
     let slot = match script {
         ScriptFont::Latin => 0,
         ScriptFont::Arabic => 1,
         ScriptFont::Bengali => 2,
         ScriptFont::Lao => 3,
-        ScriptFont::Cjk(region) => return cjk(region),
+        ScriptFont::Cjk(_) => return None,
     };
     static DOWNLOADED: [OnceLock<Option<FontRef<'static>>>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
     static INSTALLED: [OnceLock<Option<FontRef<'static>>>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
     let parse = |data: &'static (Vec<u8>, u32)| FontRef::try_from_slice_and_index(&data.0, data.1).ok();
-    if let Some(data) = crate::fonts::downloaded_script_font(script) {
+    if downloaded {
+        let data = crate::fonts::downloaded_script_font(script)?;
         return DOWNLOADED.get(slot)?.get_or_init(|| parse(data)).as_ref();
     }
     if cfg!(test) && std::env::var_os("RUSTGIS_TEST_NO_INSTALLED_CJK").is_some() {
@@ -259,13 +254,23 @@ pub(crate) fn marker_fallback(c: char) -> Option<(&'static FontRef<'static>, Gly
 }
 
 /// The face and glyph that draw `c`: `f` when it has the glyph, else `sans` (the label font a
-/// serif text falls back to: an arrow or a script the serif lacks), else the first installed CJK
-/// font that does. `None` when nothing covers it, so no missing-glyph box is drawn.
+/// serif text falls back to), then the downloaded and installed non-CJK script faces, bundled
+/// Hack and regional CJK faces. `None` when nothing covers it, so no missing-glyph box is drawn.
 ///
 /// Every character the label font and `sans` lack but kana and Hangul (ideographs above all) tries
 /// the downloaded face the web app prefers first ([`crate::fonts::prefer_downloaded_cjk`]), so
 /// ideographs take its interface's regional forms.
 fn glyph(c: char, f: &'static FontRef<'static>, sans: Option<&'static FontRef<'static>>) -> Option<(&'static FontRef<'static>, GlyphId)> {
+    glyph_with_script_faces(c, f, sans, script_face)
+}
+
+/// Uses the same glyph selection with downloaded and installed script sources supplied lazily.
+fn glyph_with_script_faces(
+    c: char,
+    f: &'static FontRef<'static>,
+    sans: Option<&'static FontRef<'static>>,
+    script_face_from: impl Fn(crate::fonts::ScriptFont, bool) -> Option<&'static FontRef<'static>>,
+) -> Option<(&'static FontRef<'static>, GlyphId)> {
     use crate::fonts::CjkScript;
     let id = f.glyph_id(c);
     if id.0 != 0 || invisible(c) {
@@ -277,12 +282,14 @@ fn glyph(c: char, f: &'static FontRef<'static>, sans: Option<&'static FontRef<'s
             return Some((s, id));
         }
     }
-    if let Some(script) = crate::fonts::ScriptFont::of(c).filter(|s| !matches!(s, crate::fonts::ScriptFont::Cjk(_)))
-        && let Some(face) = script_face(script)
-    {
-        let id = face.glyph_id(c);
-        if id.0 != 0 {
-            return Some((face, id));
+    if let Some(script) = crate::fonts::ScriptFont::of(c).filter(|s| !matches!(s, crate::fonts::ScriptFont::Cjk(_))) {
+        for downloaded in [true, false] {
+            if let Some(face) = script_face_from(script, downloaded) {
+                let id = face.glyph_id(c);
+                if id.0 != 0 {
+                    return Some((face, id));
+                }
+            }
         }
     }
     if let Some(face) = bundled_fallback() {
@@ -1438,7 +1445,7 @@ mod coverage_tests {
         assert!(super::measure("Mixed 中英 label", 10.0, false) > super::measure("Mixed  label", 10.0, false) + 10.0);
         // And the fallback glyphs are drawn, not just measured.
         let Some(ch) = "碑林区".chars().find(|&c| {
-            let (Some(label), Some(cjk)) = (super::font(false), super::cjk(CjkRegion::SimplifiedChinese)) else { return false };
+            let (Some(label), Some(cjk)) = (super::font(false), super::installed_cjk(CjkRegion::SimplifiedChinese)) else { return false };
             label.glyph_id(c).0 == 0 && cjk.glyph_id(c).0 != 0
         }) else {
             return;
@@ -1448,6 +1455,25 @@ mod coverage_tests {
             super::text_at(c, &ch.to_string(), 40.0, 20.0, 24.0, rustgis_map::Rgba::rgb(0, 0, 0), false, super::Align::Center, false)
         });
         assert!(pm.pixels().iter().any(|p| p.alpha() > 0), "the fallback glyph was not drawn");
+    }
+
+    /// Downloaded coverage must supplement an installed face rather than hide its extra letters.
+    #[test]
+    fn downloaded_script_keeps_installed_glyphs_available() {
+        use ab_glyph::FontRef;
+        use std::sync::OnceLock;
+        static PRIMARY: OnceLock<FontRef<'static>> = OnceLock::new();
+        static DOWNLOADED: OnceLock<FontRef<'static>> = OnceLock::new();
+        static INSTALLED: OnceLock<FontRef<'static>> = OnceLock::new();
+        let primary = PRIMARY.get_or_init(|| FontRef::try_from_slice(include_bytes!("../testdata/test-cff.otf")).unwrap());
+        let downloaded = DOWNLOADED.get_or_init(|| FontRef::try_from_slice(include_bytes!("../testdata/test-fallback.otf")).unwrap());
+        let installed = INSTALLED.get_or_init(|| FontRef::try_from_slice(include_bytes!("../testdata/test-latin-catalog.otf")).unwrap());
+        let select = |c| {
+            super::glyph_with_script_faces(c, primary, None, |_, from_download| Some(if from_download { downloaded } else { installed }))
+        };
+        assert!(std::ptr::eq(select('ə').unwrap().0, downloaded), "downloaded glyphs keep priority");
+        let found = select('Ư').expect("the installed script face must remain available after a download");
+        assert!(std::ptr::eq(found.0, installed), "the installed script face must remain available after a download");
     }
 
     /// An installed Japanese probe glyph must not hide a downloaded face's other kana.

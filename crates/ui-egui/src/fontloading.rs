@@ -2,9 +2,7 @@
 //! Reuses the normal internet-only transport; the UI owns activation, failure notices and retries.
 
 use crate::{Inbox, Services};
-use rustgis_engine::render::fonts::{ScriptFont, draws_script, script_font_url};
-
-const MAX_FONT: usize = 32 << 20;
+use rustgis_engine::render::fonts::{MAX_FONT_BYTES, ScriptFont, draws_script, script_font_url};
 
 /// Installs the native counterpart of the browser's font service. Custom host services take
 /// precedence. Work, including cache reads and validation, runs on a worker; no frame waits.
@@ -47,7 +45,8 @@ fn read_or_download(script: ScriptFont, url: &str) -> Result<Vec<u8>, String> {
     {
         return Ok(bytes);
     }
-    let bytes = rustgis_engine::render::rustgis_tiles::cache::download_public_within(url, MAX_FONT, std::time::Duration::from_secs(60))?;
+    let bytes =
+        rustgis_engine::render::rustgis_tiles::cache::download_public_within(url, MAX_FONT_BYTES, std::time::Duration::from_secs(60))?;
     if !crate::valid_script_download(&bytes, script) {
         return Err("downloaded font cannot draw its script".into());
     }
@@ -73,10 +72,10 @@ fn read_or_download(script: ScriptFont, url: &str) -> Result<Vec<u8>, String> {
 /// A cache entry is accepted only within the byte budget and with readable script outlines.
 fn read_cached(path: &std::path::Path, script: ScriptFont) -> Option<Vec<u8>> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?.take(MAX_FONT as u64 + 1);
+    let mut file = std::fs::File::open(path).ok()?.take(MAX_FONT_BYTES as u64 + 1);
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    (bytes.len() <= MAX_FONT && draws_script(&bytes, 0, script)).then_some(bytes)
+    (bytes.len() <= MAX_FONT_BYTES && draws_script(&bytes, 0, script)).then_some(bytes)
 }
 
 #[cfg(test)]
@@ -94,7 +93,7 @@ mod tests {
         assert!(read_cached(&path, ScriptFont::Arabic).is_none(), "wrong-script/mixed-run coverage");
         std::fs::write(&path, b"interrupted font download").unwrap();
         assert!(read_cached(&path, ScriptFont::Bengali).is_none());
-        std::fs::File::create(&path).unwrap().set_len(MAX_FONT as u64 + 1).unwrap();
+        std::fs::File::create(&path).unwrap().set_len(MAX_FONT_BYTES as u64 + 1).unwrap();
         assert!(read_cached(&path, ScriptFont::Bengali).is_none(), "oversized cache entry");
     }
 }

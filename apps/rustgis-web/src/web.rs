@@ -1319,7 +1319,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             // Use the bounded internet-only transport, as native fallback fonts do.
             rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::download_public_limited(
                 &request,
-                32 << 20,
+                rustgis_ui_egui::rustgis_engine::render::fonts::MAX_FONT_BYTES,
                 Box::new(move |answer| {
                     let bytes = answer.unwrap_or_else(|e| {
                         log::warn!("couldn't load fallback font: {e}");
