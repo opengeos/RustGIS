@@ -14757,6 +14757,33 @@ fn a_scale_bars_unit_label_shortened_to_fit_is_said() {
     assert_eq!(said(&s, mark), "", "the abbreviation is never shortened");
 }
 
+/// A layout file whose scale bar has a unit label past the 100 characters a command takes is read
+/// with it cut, and the notice names a scale bar's unit label among what is cut.
+#[test]
+fn a_loaded_scale_bars_long_unit_label_is_cut_and_said() {
+    let mut s = Session::new(Project::default());
+    s.run("layout.new", &json!({"template": "map"})).unwrap();
+    let bar = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "scaleBar").unwrap().id;
+    s.run("layout.update", &json!({"element": bar, "unitLabel": "Kilometres"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-unit-label-cut-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("bar.rgislayout");
+    s.run("layout.save", &json!({"path": file.display().to_string()})).unwrap();
+    let mut text: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let saved = text["elements"].as_array_mut().unwrap().iter_mut().find(|e| e["id"] == json!(bar)).unwrap();
+    saved["kind"]["ScaleBar"]["unit_label"] = json!("k".repeat(150));
+    let mark = s.notice_mark();
+    s.run("layout.import", &json!({"text": text.to_string()})).unwrap();
+    let cut: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("cut to their limits")).collect();
+    assert_eq!(cut.len(), 1, "{cut:?}");
+    assert!(cut[0].contains("1 layout element(s)") && cut[0].contains("scale bar unit labels"), "{}", cut[0]);
+    assert!(matches!(
+        s.project.layouts[1].element(bar).map(|e| &e.kind),
+        Some(rustgis_map::layout::ElementKind::ScaleBar { unit_label: Some(l), .. }) if l.chars().count() == rustgis_map::layout::MAX_UNIT_LABEL_CHARS
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A scale bar's `textSize` and a grid's `labelSize` (#2581): 8 points unless given, the edges 4
 /// and 100 taken, `null` giving 8 back, refused out of range or as anything but a number with the
 /// element keeping its own, refused on other elements (where `null` is let through), undone as any
