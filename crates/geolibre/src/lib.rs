@@ -861,13 +861,37 @@ fn looks_projected(ds: &Dataset) -> bool {
     ds.extent().beyond_lonlat()
 }
 
-/// `bytes` start as a JSON object (after white space), not with a TIFF's signature.
-fn json_not_tiff(bytes: &[u8]) -> bool {
-    let tiff = [b"II*\0".as_slice(), b"MM\0*", b"II+\0", b"MM\0+"];
-    if tiff.iter().any(|t| bytes.starts_with(t)) {
-        return false;
+/// `bytes` without a byte-order mark, when they start as a JSON object (after white space) rather
+/// than with a TIFF's signature (which never starts with `{`).
+fn json_not_tiff(bytes: &[u8]) -> Option<&[u8]> {
+    let json = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(bytes);
+    (json.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')).then_some(json)
+}
+
+/// A JSON object whose `type` is one of GeoJSON's (a feature collection, a feature or a geometry)
+/// or TopoJSON's, or one that doesn't parse, so the reader's error is shown rather than its text.
+fn is_geojson(json: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Head {
+        #[serde(rename = "type")]
+        ty: Option<String>,
     }
-    bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
+    const TYPES: [&str; 10] = [
+        "FeatureCollection",
+        "Topology",
+        "Feature",
+        "Point",
+        "MultiPoint",
+        "LineString",
+        "MultiLineString",
+        "Polygon",
+        "MultiPolygon",
+        "GeometryCollection",
+    ];
+    match serde_json::from_slice::<Head>(json) {
+        Ok(h) => h.ty.is_some_and(|t| TYPES.contains(&t.as_str())),
+        Err(_) => true,
+    }
 }
 
 /// Reads one output file back as a layer, table or message. `dir` is the native working folder,
@@ -883,15 +907,16 @@ fn load(
 ) -> Option<OutputLayer> {
     let mut ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // A tool whose manifest calls its vector output a raster writes GeoJSON into the `.tif` it is
-    // given (Longest Flowpath, #2762): read by what it holds, as a `.json`, so a JSON report written
-    // so is shown as one too.
+    // given (Longest Flowpath, #2762): read by what it holds. GeoJSON as `.json`; another JSON
+    // document (a report) is shown as text.
     let renamed;
-    let file_name = if matches!(ext.as_str(), "tif" | "tiff") && json_not_tiff(bytes) {
-        ext = "json".into();
-        renamed = Path::new(file_name).with_extension("json").display().to_string();
-        renamed.as_str()
-    } else {
-        file_name
+    let (file_name, bytes) = match json_not_tiff(bytes).filter(|_| matches!(ext.as_str(), "tif" | "tiff")) {
+        Some(json) => {
+            ext = if is_geojson(json) { "json" } else { "txt" }.into();
+            renamed = Path::new(file_name).with_extension(&ext).display().to_string();
+            (renamed.as_str(), json)
+        }
+        None => (file_name, bytes),
     };
     match ext.as_str() {
         "tif" | "tiff" | "asc" => match rustgis_data::raster::read_bytes(file_name, bytes) {
@@ -949,9 +974,9 @@ fn load(
                     }
                     Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
                 }
-                // A JSON report rather than GeoJSON: show it.
-                Err(_) if ext == "json" => {
-                    text_message(bytes, layer_name, messages);
+                // A JSON report rather than GeoJSON: show it. GeoJSON that can't be read says why.
+                Err(_) if ext == "json" && !is_geojson(bytes) => {
+                    text_message(bytes, layer_name, false, messages);
                     None
                 }
                 Err(e) => {
@@ -961,7 +986,7 @@ fn load(
             }
         }
         "txt" | "html" | "htm" => {
-            text_message(bytes, layer_name, messages);
+            text_message(bytes, layer_name, ext != "txt", messages);
             None
         }
         _ => {
@@ -996,12 +1021,23 @@ fn colours_split(grey: &rustgis_data::raster::Raster, bytes: &[u8], layer_name: 
     }
 }
 
-/// The start of a text or HTML report as a message.
-fn text_message(bytes: &[u8], layer_name: &str, messages: &mut Vec<String>) {
+/// The most lines of a report shown.
+const REPORT_LINES: usize = 30;
+/// The most characters of a report's line shown (a JSON report may be one long line).
+const REPORT_LINE_CHARS: usize = 500;
+
+/// The start of a text, JSON or (`html`) HTML report as a message, its tags left out, saying how many
+/// more lines it has.
+fn text_message(bytes: &[u8], layer_name: &str, html: bool, messages: &mut Vec<String>) {
     let text = String::from_utf8_lossy(bytes);
+    let text = text.trim_start_matches('\u{feff}');
     let mut plain = String::new();
     let mut in_tag = false;
     for c in text.chars() {
+        if !html {
+            plain.push(c);
+            continue;
+        }
         match c {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -1009,9 +1045,27 @@ fn text_message(bytes: &[u8], layer_name: &str, messages: &mut Vec<String>) {
             _ => {}
         }
     }
-    let lines: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).take(30).collect();
+    let all: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let shown = all.get(..REPORT_LINES).unwrap_or(&all);
+    let mut cut = 0;
+    let lines: Vec<String> = shown
+        .iter()
+        .map(|l| match l.char_indices().nth(REPORT_LINE_CHARS) {
+            Some((at, _)) => {
+                cut += 1;
+                format!("{}…", l.get(..at).unwrap_or(l))
+            }
+            None => l.to_string(),
+        })
+        .collect();
     if !lines.is_empty() {
         messages.push(format!("{layer_name}:\n{}", lines.join("\n")));
+    }
+    if all.len() > shown.len() {
+        messages.push(format!("{layer_name}: the report's other {} non-empty lines aren't shown", all.len() - shown.len()));
+    }
+    if cut > 0 {
+        messages.push(format!("{layer_name}: {cut} of the report's lines are cut at {REPORT_LINE_CHARS} characters"));
     }
 }
 
