@@ -5292,8 +5292,8 @@ impl RustGisApp {
                 // In the layer's own coordinate system, as share.exportLayer writes a file.
                 use rustgis_engine::data::io;
                 let crs = io::default_export_crs(&ds, &ext);
-                let written = io::write_bytes_in(&ds, &ext, crs).map_err(|e| e.to_string());
-                let (bytes, left_out) = match written {
+                let written = io::write_bytes_noted(&ds, &ext, crs, &name).map_err(|e| e.to_string());
+                let (bytes, left_out, unplaced) = match written {
                     Ok(w) => w,
                     Err(e) => {
                         self.session.notify(e.clone(), true);
@@ -5306,6 +5306,7 @@ impl RustGisApp {
                 let mut notes: rustgis_engine::data::loss::Notes =
                     rustgis_engine::data::export_notes([(ds.as_ref(), ds.lonlat_extent())], &name, crs).into();
                 rustgis_engine::cmd::share::coalesce_read_zm(&mut notes, &name, &ds, &lost);
+                notes.extend(unplaced);
                 let mut dbf_notes = rustgis_engine::data::loss::Notes::new();
                 if ext == "zip" {
                     dbf_notes.extend(io::shapefile_names_note(&ds.fields, &name));

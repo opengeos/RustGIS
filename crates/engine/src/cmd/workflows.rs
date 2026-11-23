@@ -2160,6 +2160,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             if result.skipped > 0 {
                 notes.push(format!("{path}: {} rows couldn't be read and were left out", result.skipped));
             }
+            notes.extend(rustgis_data::io::unplaced_export_note(&path, &ds.name, result.unplaced, rustgis_data::raster::Crs::LonLat));
             notes.extend(
                 rustgis_data::source::unread_dates_note(&ds.fields, &result.unread_dates)
                     .map(|n| format!("{path}: {}: {n} (empty in the export)", ds.name)),
@@ -2242,7 +2243,8 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
     let format = conversion_format(p)?;
     // Every format here is longitude/latitude, whatever system the layer holds its coordinates
     // in; the notes below read the layer itself, converting as they need.
-    let lonlat = ds.in_lonlat()?;
+    // A feature with a place that can't be given there is written without its geometry, and said.
+    let (lonlat, unplaced) = ds.in_lonlat_leaving_out()?;
     let text = match format {
         "geojson" => rustgis_data::io::to_geojson_text(&lonlat).map_err(|e| e.to_string())?,
         "csv" => rustgis_data::io::to_csv(&lonlat).map_err(|e| e.to_string())?,
@@ -2252,6 +2254,7 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
     };
     let target = ps(p, "path").unwrap_or(&ds.name);
     let mut notes = rustgis_data::export_notes([(ds, ds.lonlat_extent())], target, rustgis_data::raster::Crs::LonLat);
+    notes.extend(rustgis_data::unplaced_note(target, &ds.name, unplaced));
     // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
     notes.extend(rustgis_data::io::export_losses_notes(ds, format, name_field, target).map_err(|e| e.to_string())?);
     // KML and GPX hold features with geometry only.

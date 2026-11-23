@@ -2089,8 +2089,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                     layer.postgis = None;
                     layer.synced = None;
                     // Sketched in longitude/latitude, whatever system the layer holds its
-                    // coordinates in.
-                    let lonlat = l.dataset.in_lonlat()?;
+                    // coordinates in. A feature with a place that can't be given there isn't
+                    // drawn, which the map says of the layer it draws ([`Layer::unplaced`]).
+                    let (lonlat, _) = l.dataset.in_lonlat_leaving_out()?;
                     layer.dataset.held_in = rustgis_data::raster::Crs::LonLat;
                     layer.dataset.features = lonlat
                         .features

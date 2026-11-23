@@ -17,6 +17,8 @@ mod services_own;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/sources_own.rs"]
 mod sources_own;
+#[path = "tests/unplaced_out.rs"]
+mod unplaced_out;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/said_not_silent.rs"]
