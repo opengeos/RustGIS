@@ -34,7 +34,7 @@ pub const MAX_RESOLUTION: i32 = 30;
 /// How far over [`MAX_CELLS`] an area's [`estimate`] may go before it's refused without being
 /// covered: the estimate is rough, and the exact count still applies after.
 const ESTIMATE_MARGIN: f64 = 2.0;
-/// The most cells a run's coverings test, and rows they cross, before keeping those in the area
+/// The most cells a run's coverings test, and rows an edge crosses past its own band, before keeping those in the area
 /// (S2's descent, the hexagon grid's rows), over all its polygons ([`Work`]): past it the run is
 /// refused, as one over the cap. S2's coarser cells on the way down are paced, not counted: there
 /// are a third as many of them as of the cells tested.
@@ -922,8 +922,9 @@ impl<'a> Grid<'a> {
             let (a, b) = (w[0], w[1]);
             let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
             let (j0, j1) = (((lo - size) / row_h).ceil() as i64, ((hi + size) / row_h).floor() as i64);
-            // An edge's band touches two rows at most unless the edge crosses more: those two
-            // are linear in the outline, as reading it is, so only the rows past them count.
+            // An edge's band touches two rows, or more for an edge taller than two thirds of a
+            // row: two per edge are linear in the outline, as reading it is, so only the rows
+            // past them count.
             work.spend(u64::try_from(j1 - j0 - 1).unwrap_or(0), 4, res)?;
             for j in j0..=j1 {
                 let (b0, b1) = (j as f64 * row_h - size, j as f64 * row_h + size);
@@ -1756,6 +1757,24 @@ mod tests {
         d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
         let p = serde_json::json!({"system": "Hexagon", "resolution": 2, "area": "Input Layer", "input": "pts"});
         assert!(!layer(grid(&One(d, None), &p).unwrap()).features.is_empty());
+    }
+
+    /// A zigzag outline whose edges each cross many rows is still held to the work limit, with
+    /// few candidate cells: 10,000 edges across about 100 rows, 50 hexagons wide.
+    #[test]
+    fn a_zigzag_outline_is_held_to_the_work_limit() {
+        let res = 14;
+        let side = System::Hexagon.mean_area_m2(res).sqrt() / 111_320.0;
+        let (teeth, w, h) = (5_000, 50.0 * side, 100.0 * side);
+        let mut ring: Vec<Coord> = (0..=2 * teeth)
+            .map(|i| Coord::new(-74.0 + i as f64 / (2 * teeth) as f64 * w, 1.0 + if i % 2 == 0 { 0.0 } else { h }))
+            .collect();
+        ring.extend([Coord::new(-74.0 + w, 1.0 - side), Coord::new(-74.0, 1.0 - side), Coord::new(-74.0, 1.0)]);
+        let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let p = serde_json::json!({"system": "Hexagon", "resolution": res, "area": "Input Layer", "input": "pts"});
+        let e = grid(&One(d, None), &p).unwrap_err();
+        assert!(e.contains(&format!("looking at more than {MAX_WORK} cells")), "{e}");
     }
 
     /// The world in each system, counted against the system's own count, and the cap.
