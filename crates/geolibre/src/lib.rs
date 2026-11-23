@@ -868,17 +868,29 @@ fn json_not_tiff(bytes: &[u8]) -> Option<&[u8]> {
     (json.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')).then_some(json)
 }
 
-/// A JSON object whose `type` is one of GeoJSON's (a feature collection, a feature or a geometry)
-/// or TopoJSON's, or one that doesn't parse, so the reader's error is shown rather than its text.
+/// How much of a JSON document that doesn't parse is looked at for its `type` ([`is_geojson`]).
+const JSON_HEAD_BYTES: usize = 4096;
+
+/// A JSON object (after white space; [`json_not_tiff`] has left out a byte-order mark) whose
+/// `type` is one of GeoJSON's (a feature collection, a feature or a geometry), TopoJSON's or
+/// CityJSON's, which RustGIS reads as layers; or one that doesn't parse (cut short while it was written) whose own `type`, among its
+/// members in the first [`JSON_HEAD_BYTES`] and not inside them ([`own_members`]), is one of those,
+/// so the reader's error is shown rather than its text. Anything else is a report: a list, plain
+/// text, an object with no `type` or another one, and JSON that doesn't parse otherwise (JSON
+/// Lines, `NaN`).
 fn is_geojson(json: &[u8]) -> bool {
     #[derive(serde::Deserialize)]
     struct Head {
         #[serde(rename = "type")]
-        ty: Option<String>,
+        ty: Option<Value>,
     }
-    const TYPES: [&str; 10] = [
+    if json.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+        return false;
+    }
+    const TYPES: [&str; 11] = [
         "FeatureCollection",
         "Topology",
+        "CityJSON",
         "Feature",
         "Point",
         "MultiPoint",
@@ -889,9 +901,47 @@ fn is_geojson(json: &[u8]) -> bool {
         "GeometryCollection",
     ];
     match serde_json::from_slice::<Head>(json) {
-        Ok(h) => h.ty.is_some_and(|t| TYPES.contains(&t.as_str())),
-        Err(_) => true,
+        Ok(h) => h.ty.as_ref().and_then(Value::as_str).is_some_and(|t| TYPES.contains(&t)),
+        Err(_) => {
+            let own = own_members(&String::from_utf8_lossy(json.get(..JSON_HEAD_BYTES).unwrap_or(json)));
+            TYPES.iter().any(|t| own.contains(&format!("\"type\":\"{t}\"")))
+        }
     }
+}
+
+/// The members of the JSON object `text` starts with, without white space outside strings and
+/// without what is nested in them (a `crs`, a `bbox`, the features), whatever their order and
+/// wherever `text` stops: `{"crs":{…},"type":"Feature"` gives `"crs":,"type":"Feature"`.
+fn own_members(text: &str) -> String {
+    let (mut own, mut depth, mut in_string, mut escaped) = (String::new(), 0usize, false, false);
+    for c in text.chars() {
+        if in_string {
+            if depth == 1 {
+                own.push(c);
+            }
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                if depth == 1 {
+                    own.push(c);
+                }
+            }
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 1 && !c.is_whitespace() => own.push(c),
+            _ => {}
+        }
+    }
+    own
 }
 
 /// Reads one output file back as a layer, table or message. `dir` is the native working folder,
@@ -907,15 +957,27 @@ fn load(
 ) -> Option<OutputLayer> {
     let mut ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // A tool whose manifest calls its vector output a raster writes GeoJSON into the `.tif` it is
-    // given (Longest Flowpath, #2762): read by what it holds. GeoJSON as `.json`; another JSON
-    // document (a report) is shown as text.
+    // given (Longest Flowpath, #2762): read by what it holds, GeoJSON as `.json` and another JSON
+    // document (a report) as text. A JSON object is taken without its byte-order mark, which the
+    // JSON reader refuses; whether it is a layer ([`is_geojson`]) is worked out once, as it parses
+    // the whole document, and only where it decides something (not for a `.geojson`).
+    let object = if matches!(ext.as_str(), "tif" | "tiff" | "json" | "geojson") { json_not_tiff(bytes) } else { None };
+    let layer = matches!(ext.as_str(), "tif" | "tiff" | "json") && object.is_some_and(is_geojson);
     let renamed;
-    let (file_name, bytes) = match json_not_tiff(bytes).filter(|_| matches!(ext.as_str(), "tif" | "tiff")) {
-        Some(json) => {
-            ext = if is_geojson(json) { "json" } else { "txt" }.into();
+    let (file_name, bytes) = match object {
+        Some(json) if matches!(ext.as_str(), "tif" | "tiff") => {
+            ext = if layer { "json" } else { "txt" }.into();
             renamed = Path::new(file_name).with_extension(&ext).display().to_string();
             (renamed.as_str(), json)
         }
+        // A `.json` object that isn't GeoJSON (the reader would take it for a feature without a
+        // geometry) is shown as a report, as it is from a `.tif`.
+        Some(json) if ext == "json" && !layer => {
+            ext = "txt".into();
+            (file_name, json)
+        }
+        Some(json) => (file_name, json),
+        None if matches!(ext.as_str(), "json" | "geojson") => (file_name, bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(bytes)),
         None => (file_name, bytes),
     };
     match ext.as_str() {
@@ -975,7 +1037,7 @@ fn load(
                     Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
                 }
                 // A JSON report rather than GeoJSON: show it. GeoJSON that can't be read says why.
-                Err(_) if ext == "json" && !is_geojson(bytes) => {
+                Err(_) if ext == "json" && !layer => {
                     text_message(bytes, layer_name, false, messages);
                     None
                 }
@@ -1021,6 +1083,21 @@ fn colours_split(grey: &rustgis_data::raster::Raster, bytes: &[u8], layer_name: 
     }
 }
 
+/// `html` without its tags.
+fn strip_tags(html: &str) -> String {
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => plain.push(c),
+            _ => {}
+        }
+    }
+    plain
+}
+
 /// The most lines of a report shown.
 const REPORT_LINES: usize = 30;
 /// The most characters of a report's line shown (a JSON report may be one long line).
@@ -1031,22 +1108,11 @@ const REPORT_LINE_CHARS: usize = 500;
 fn text_message(bytes: &[u8], layer_name: &str, html: bool, messages: &mut Vec<String>) {
     let text = String::from_utf8_lossy(bytes);
     let text = text.trim_start_matches('\u{feff}');
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for c in text.chars() {
-        if !html {
-            plain.push(c);
-            continue;
-        }
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => plain.push(c),
-            _ => {}
-        }
-    }
-    let all: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    let shown = all.get(..REPORT_LINES).unwrap_or(&all);
+    let plain: std::borrow::Cow<str> = if html { strip_tags(text).into() } else { text.into() };
+    // The first lines kept, the rest only counted, so a large report costs no more than its text.
+    let mut rest = plain.lines().map(str::trim).filter(|l| !l.is_empty());
+    let shown: Vec<&str> = rest.by_ref().take(REPORT_LINES).collect();
+    let more = rest.count();
     let mut cut = 0;
     let lines: Vec<String> = shown
         .iter()
@@ -1061,8 +1127,8 @@ fn text_message(bytes: &[u8], layer_name: &str, html: bool, messages: &mut Vec<S
     if !lines.is_empty() {
         messages.push(format!("{layer_name}:\n{}", lines.join("\n")));
     }
-    if all.len() > shown.len() {
-        messages.push(format!("{layer_name}: the report's other {} non-empty lines aren't shown", all.len() - shown.len()));
+    if more > 0 {
+        messages.push(format!("{layer_name}: the report's other {more} non-empty lines aren't shown"));
     }
     if cut > 0 {
         messages.push(format!("{layer_name}: {cut} of the report's lines are cut at {REPORT_LINE_CHARS} characters"));

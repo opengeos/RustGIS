@@ -826,6 +826,7 @@ fn a_vector_written_into_a_tif_comes_back_as_a_vector() {
     // With a byte-order mark, as some writers start a file.
     let marked = finish(&job, &[("output.tif".into(), [b"\xEF\xBB\xBF".as_slice(), lines.as_bytes()].concat())], &[], None);
     assert!(matches!(marked.output, Output::Layers(ref l) if matches!(l.first(), Some(OutputLayer::Vector(_)))), "{:?}", marked.messages);
+    assert!(marked.messages.is_empty() && marked.losses.is_empty(), "a clean output, no notices: {:?}", marked.messages);
     // What the reader leaves out is said, with the layer it is about: a second feature, after the
     // first, whose geometry can't be read.
     let broken =
@@ -864,6 +865,46 @@ fn a_vector_written_into_a_tif_comes_back_as_a_vector() {
         cut.messages
     );
     assert!(is_geojson(br#"{"type":"Topology","objects":{}}"#) && !is_geojson(br#"{"type":"Report"}"#) && !is_geojson(b"{}"));
+    // A `type` that isn't text, a list and plain text are reports too; a byte-order mark is skipped.
+    assert!(!is_geojson(br#"{"type": 42, "count": 2}"#) && !is_geojson(b"[1, 2]") && !is_geojson(b"done"));
+    assert!(is_geojson(br#"{"type":"CityJSON","version":"2.0","CityObjects":{}}"#));
+    // Cut short, its own `type` is found after a nested member (a `crs`, or the features of a writer
+    // that sorts its keys) and past brackets in a string, never inside a member.
+    assert!(is_geojson(br#"{"crs":{"type":"name","properties":{"name":"EPSG:2056"}},"type":"FeatureCollection","features":[{"#));
+    assert!(is_geojson(br#"{"features":[{"type":"Feature"}],"name":"Flow [m] {x}","type":"FeatureCollection","bbox":[1,"#));
+    assert!(!is_geojson(br#"{"stats":{"type":"Point"},"note":"a \"type\":\"Point\" in text","n":NaN"#));
+    assert_eq!(own_members(r#"{ "a": {"b": [1, {"c": 2}]}, "s": "x { y", "type" : "Feature" }"#), r#""a":,"s":"x { y","type":"Feature""#);
+    assert!(
+        json_not_tiff(b"\xEF\xBB\xBF{\"type\":\"Feature\"}").is_some_and(is_geojson) && is_geojson(b"{\"type\":\"Feature\",\"geometry\":{")
+    );
+    // A `.json` output that isn't GeoJSON is shown, whatever it holds (as before this change), and a
+    // GeoJSON one with a byte-order mark is read.
+    let json = Job { outputs: vec![("output.json".into(), "Flowpaths".into())], ..job.clone() };
+    for (text, shown) in [
+        (b"[1, 2]".to_vec(), "[1, 2]"),
+        (b"done in 3 s".to_vec(), "done in 3 s"),
+        (b"\xEF\xBB\xBF{\"basins\": 3}".to_vec(), "{\"basins\": 3}"),
+        (br#"{"type": 42, "count": 2}"#.to_vec(), r#"{"type": 42, "count": 2}"#),
+        // JSON Lines and Python's `NaN` don't parse as one object, but name no GeoJSON type.
+        (b"{\"step\": 1}\n{\"step\": 2}".to_vec(), "{\"step\": 1}\n{\"step\": 2}"),
+        (br#"{"mean": NaN}"#.to_vec(), r#"{"mean": NaN}"#),
+        // An object with a `type` of its own: shown, not taken for a feature without a geometry.
+        (br#"{"type":"Report","count":2}"#.to_vec(), r#"{"type":"Report","count":2}"#),
+        // A geometry type named only inside it, in JSON that doesn't parse.
+        (br#"{"mean": NaN, "shape": {"type":"Point"}}"#.to_vec(), r#"{"mean": NaN, "shape": {"type":"Point"}}"#),
+    ] {
+        let r = finish(&json, &[("output.json".into(), text)], &[], None);
+        assert_eq!(r.messages, [format!("Flowpaths:\n{shown}")]);
+    }
+    let tif_typed = finish(&job, &[("output.tif".into(), br#"{"type": 42, "count": 2}"#.to_vec())], &[], None);
+    assert_eq!(
+        tif_typed.messages,
+        [r#"Flowpaths:
+{"type": 42, "count": 2}"#]
+    );
+    let marked = finish(&json, &[("output.json".into(), [b"\xEF\xBB\xBF".as_slice(), lines.as_bytes()].concat())], &[], None);
+    assert!(matches!(marked.output, Output::Layers(ref l) if matches!(l.first(), Some(OutputLayer::Vector(_)))), "{:?}", marked.messages);
+    assert!(marked.messages.is_empty() && marked.losses.is_empty(), "a clean output, no notices: {:?}", marked.messages);
     // A GeoTIFF stays a raster, and a file that is neither still says why it can't be read.
     let tiff = finish(&job, &[("output.tif".into(), u32_tiff([1, 2, 3, 4], None, false))], &[], None);
     assert!(matches!(tiff.output, Output::Layers(ref l) if matches!(l.first(), Some(OutputLayer::Raster { .. }))));
