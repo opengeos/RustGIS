@@ -1947,6 +1947,21 @@ pub struct CoverageInfo {
     pub format: String,
     pub axes: Option<(String, String)>,
     pub bbox: Option<[f64; 4]>,
+    /// The coverage's own system, when it is a projected one RustGIS reads: it is asked for in
+    /// it, and resampled once, by the map (#2032).
+    pub native: Option<CoverageSystem>,
+}
+
+/// A coverage's own projected system, as its description gives it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CoverageSystem {
+    pub crs: crate::raster::Crs,
+    /// The system as the description names it (WCS 1.0's `CRS`).
+    pub name: String,
+    /// The coverage's envelope in it, east first: `[min x, min y, max x, max y]`.
+    pub envelope: [f64; 4],
+    /// WCS 2.0's axis labels, the east-west one first.
+    pub axes: Option<(String, String)>,
 }
 
 fn wcs(url: &str, root: &Node) -> Service {
@@ -2121,10 +2136,27 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
                 None
             }
         })();
+        let own = projected_system(&srs).and_then(|(_, crs)| {
+            let (lo, hi) = (corner("lowerCorner")?, corner("upperCorner")?);
+            let (lo0, lo1, hi0, hi1) = (*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?);
+            let (a, b) = (labels.first()?.to_string(), labels.get(1)?.to_string());
+            let ok = |s: &str| !s.is_empty() && s.len() <= 32 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+            if !ok(&a) || !ok(&b) {
+                return None;
+            }
+            // Labels naming east and north (`E N`) say the order; `x` and `y` don't (LV03 calls its
+            // east axis Y, Gauss-Krüger its north axis X), so then EPSG's order of the system's
+            // axes decides, and the names only when that isn't known.
+            let north_first =
+                north_first_labels(&a, &b, false).or_else(|| epsg_north_first(crs)).or_else(|| north_first_labels(&a, &b, true))?;
+            let (envelope, axes) = if north_first { ([lo1, lo0, hi1, hi0], (b, a)) } else { ([lo0, lo1, hi0, hi1], (a, b)) };
+            Some(CoverageSystem { crs, name: srs.clone(), envelope: ordered(envelope)?, axes: Some(axes) })
+        });
+        let bbox = bbox.or_else(|| own.as_ref().and_then(|o| lonlat_of(o.envelope, o.crs)));
         let native = root.descendants().find(|n| n.is_element() && local(n) == "nativeFormat").map(|n| text_of(&n));
         let offered: Vec<&str> =
             native.iter().map(String::as_str).filter(|f| !f.is_empty()).chain(c.formats.iter().map(String::as_str)).collect();
-        return Ok(CoverageInfo { format: tiff_format(offered), axes, bbox });
+        return Ok(CoverageInfo { format: tiff_format(offered), axes, bbox, native: own });
     }
     // WCS 1.0: the formats it answers in, and its longitude/latitude envelope.
     let formats: Vec<String> = root
@@ -2142,11 +2174,110 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             children(&e, "pos").flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>()).collect();
         lonlat_box(*pos.first()?, *pos.get(1)?, *pos.get(2)?, *pos.get(3)?)
     });
-    Ok(CoverageInfo { format: tiff_format(formats.iter().map(String::as_str)), axes: None, bbox })
+    // Its own system: its `nativeCRSs` (else its spatial domain's), when the spatial domain's
+    // envelope is in it, written east first as WCS 1.0 has it.
+    let own = (|| {
+        let domain = root.descendants().find(|n| n.is_element() && local(n) == "spatialDomain")?;
+        let envelopes: Vec<Node> = domain.descendants().filter(|n| n.is_element() && local(n) == "Envelope").take(16).collect();
+        let srs_of = |e: &Node| e.attribute("srsName").unwrap_or("").trim().to_string();
+        let native = root
+            .descendants()
+            .find(|n| n.is_element() && local(n) == "nativeCRSs")
+            .map(|n| text_of(&n))
+            .and_then(|t| t.split_whitespace().next().map(str::to_string));
+        // The native system's envelope (MapServer writes one in EPSG:4326 first); without a
+        // native system named, the first envelope in a projected one.
+        let (env, (n, crs)) = match native {
+            Some(name) => {
+                let (n, crs) = projected_system(&name)?;
+                (envelopes.into_iter().find(|e| projected_system(&srs_of(e)).map(|(_, c)| c) == Some(crs))?, (n, crs))
+            }
+            None => envelopes.into_iter().find_map(|e| projected_system(&srs_of(&e)).map(|found| (e, found)))?,
+        };
+        let name = format!("EPSG:{n}");
+        let pos: Vec<f64> = children(&env, "pos")
+            .flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>())
+            .collect();
+        let envelope = ordered([*pos.first()?, *pos.get(1)?, *pos.get(2)?, *pos.get(3)?])?;
+        Some(CoverageSystem { crs, name, envelope, axes: None })
+    })();
+    let bbox = bbox.or_else(|| own.as_ref().and_then(|o| lonlat_of(o.envelope, o.crs)));
+    Ok(CoverageInfo { format: tiff_format(formats.iter().map(String::as_str)), axes: None, bbox, native: own })
 }
 
-/// The pixel size of a coverage asked for over a longitude/latitude `area`: its longer side
-/// [`COVERAGE_MAX_PIXELS`], square degrees.
+/// Whether a coverage's axis labels name the north-south axis first (`N E`), the east-west one
+/// first, or neither; with `xy`, `x` and `y` count as east and north too.
+fn north_first_labels(a: &str, b: &str, xy: bool) -> Option<bool> {
+    let is_north = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        matches!(s.as_str(), "n" | "north" | "northing") || (xy && s == "y")
+    };
+    let is_east = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        matches!(s.as_str(), "e" | "east" | "easting") || (xy && s == "x")
+    };
+    if is_east(a) || is_north(b) {
+        Some(false)
+    } else if is_north(a) || is_east(b) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// A box `[x0, y0, x1, y1]` of finite corners, lower first; `None` for one that isn't.
+fn ordered(b: [f64; 4]) -> Option<[f64; 4]> {
+    let [x0, y0, x1, y1] = b;
+    (b.iter().all(|v| v.is_finite()) && x0 < x1 && y0 < y1).then_some(b)
+}
+
+/// A box in `crs` as a longitude/latitude one: its edges' places, sixteen along each; `None`
+/// when one has no place in longitude/latitude.
+fn lonlat_of(b: [f64; 4], crs: crate::raster::Crs) -> Option<[f64; 4]> {
+    let t = crs.transformer().ok()?;
+    let [x0, y0, x1, y1] = b;
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    const STEPS: usize = 16;
+    for i in 0..=STEPS {
+        let f = i as f64 / STEPS as f64;
+        let (x, y) = (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
+        for (px, py) in [(x, y0), (x, y1), (x0, y), (x1, y)] {
+            let c = t.to_lonlat(rustgis_geom::Coord::new(px, py)).filter(|c| c.x.is_finite() && c.y.is_finite())?;
+            out = [out[0].min(c.x), out[1].min(c.y), out[2].max(c.x), out[3].max(c.y)];
+        }
+    }
+    // A pole within it (a polar coverage): its edges miss it, so the box reaches it, at every
+    // longitude.
+    for lat in [90.0, -90.0] {
+        if t.from_lonlat(rustgis_geom::Coord::new(0.0, lat))
+            .is_some_and(|p| p.x.is_finite() && p.y.is_finite() && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
+        {
+            out = [-180.0, out[1].min(lat), 180.0, out[3].max(lat)];
+        }
+    }
+    lonlat_box(out[0], out[1], out[2], out[3])
+}
+
+/// A longitude/latitude `area` as a box in `crs` (its edges' places, sixteen along each), within
+/// `envelope`; `None` when an edge has no place there or they don't meet.
+fn area_in(area: [f64; 4], crs: crate::raster::Crs, envelope: [f64; 4]) -> Option<[f64; 4]> {
+    let t = crs.transformer().ok()?;
+    let [w, s, e, n] = area;
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    const STEPS: usize = 16;
+    for i in 0..=STEPS {
+        let f = i as f64 / STEPS as f64;
+        let (x, y) = (w + (e - w) * f, s + (n - s) * f);
+        for (lon, lat) in [(x, s), (x, n), (w, y), (e, y)] {
+            let c = t.from_lonlat(rustgis_geom::Coord::new(lon, lat)).filter(|c| c.x.is_finite() && c.y.is_finite())?;
+            out = [out[0].min(c.x), out[1].min(c.y), out[2].max(c.x), out[3].max(c.y)];
+        }
+    }
+    ordered([out[0].max(envelope[0]), out[1].max(envelope[1]), out[2].min(envelope[2]), out[3].min(envelope[3])])
+}
+
+/// The pixel size of a coverage asked for over an `area` (in longitude/latitude, or in the
+/// coverage's own system): its longer side [`COVERAGE_MAX_PIXELS`], square pixels in its units.
 pub fn coverage_size(area: [f64; 4]) -> (u32, u32) {
     let (dx, dy) = ((area[2] - area[0]).abs().max(1e-9), (area[3] - area[1]).abs().max(1e-9));
     let m = f64::from(COVERAGE_MAX_PIXELS);
@@ -2154,10 +2285,40 @@ pub fn coverage_size(area: [f64; 4]) -> (u32, u32) {
     (w.clamp(1.0, m) as u32, h.clamp(1.0, m) as u32)
 }
 
-/// The GetCoverage request of a coverage over a longitude/latitude `area`, as a GeoTIFF in
-/// EPSG:4326 (the server reprojects; WCS 2.0 through its CRS extension), scaled to fit
-/// [`COVERAGE_MAX_PIXELS`].
+/// The GetCoverage request of a coverage over a longitude/latitude `area`, as a GeoTIFF in the
+/// coverage's own system when it is a projected one RustGIS reads ([`CoverageInfo::native`]):
+/// the area's box there, within the coverage's envelope, and no conversion by the server (#2032).
+/// Otherwise, or when the area has no place there, in EPSG:4326 (the server reprojects; WCS 2.0
+/// through its CRS extension). Scaled to fit [`COVERAGE_MAX_PIXELS`].
 pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> String {
+    // An area holding the whole coverage asks for its envelope, not for that converted there and
+    // back.
+    let whole = info.bbox.is_some_and(|b| area[0] <= b[0] && area[1] <= b[1] && area[2] >= b[2] && area[3] >= b[3]);
+    if let Some(own) = &info.native
+        && let Some(b) = if whole { Some(own.envelope) } else { area_in(area, own.crs, own.envelope) }
+    {
+        let [x0, y0, x1, y1] = b;
+        let (pw, ph) = coverage_size(b);
+        let q = match (&own.axes, c.version.starts_with('2')) {
+            // Without a CRS asked for, WCS 2.0 subsets and answers in the coverage's own.
+            (Some((e, n)), true) => Some(format!(
+                "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSET={e}({x0},{x1})&SUBSET={n}({y0},{y1})&SCALESIZE={e}({pw}),{n}({ph})",
+                c.version,
+                encode(&c.id),
+                encode(&info.format)
+            )),
+            (_, false) => Some(format!(
+                "SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE={}&CRS={}&BBOX={x0},{y0},{x1},{y1}&WIDTH={pw}&HEIGHT={ph}&FORMAT={}",
+                encode(&c.id),
+                encode(&own.name),
+                encode(&info.format)
+            )),
+            (None, true) => None,
+        };
+        if let Some(q) = q {
+            return with_query(&c.endpoint, &q);
+        }
+    }
     let [w, s, e, n] = area;
     let (pw, ph) = coverage_size(area);
     let q = if c.version.starts_with('2') {
@@ -8492,6 +8653,126 @@ mod tests {
         assert!(parse("x", b"<ServiceExceptionReport>boom</ServiceExceptionReport>").unwrap_err().contains("boom"));
         assert!(parse("x", b"<html/>").is_err());
         assert!(parse("x", &[0xff]).is_err());
+    }
+
+    /// A coverage in a projected system RustGIS reads is asked for in it (#2032): WCS 2.0 by its
+    /// axis labels in either order (or EPSG's order without names), with no CRS asked for, and
+    /// WCS 1.0 by its native CRS; the area's box there stays within its envelope. A geographic
+    /// coverage, one RustGIS doesn't read, or one without axis labels is asked in EPSG:4326 as before.
+    #[test]
+    fn wcs_coverages_are_asked_for_in_their_own_system() {
+        let c2 = Coverage {
+            endpoint: "https://x.org/wcs".into(),
+            version: "2.0.1".into(),
+            id: "dem".into(),
+            formats: std::sync::Arc::from(vec![]),
+        };
+        let desc = |srs: &str, labels: &str, lo: &str, hi: &str| {
+            format!(
+                r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="{srs}" axisLabels="{labels}"><lowerCorner>{lo}</lowerCorner><upperCorner>{hi}</upperCorner></Envelope><nativeFormat>image/tiff</nativeFormat></CoverageDescription></CoverageDescriptions>"#
+            )
+        };
+        let lv95 = crate::raster::Crs::from_epsg(2056).unwrap();
+        let srs = "http://www.opengis.net/def/crs/EPSG/0/2056";
+        let east_first = parse_describe(&c2, desc(srs, "E N", "2590000 1190000", "2610000 1210000").as_bytes()).unwrap();
+        let north_first = parse_describe(&c2, desc(srs, "N E", "1190000 2590000", "1210000 2610000").as_bytes()).unwrap();
+        let own = east_first.native.clone().unwrap();
+        assert_eq!(
+            (own.crs, own.envelope, own.axes.clone()),
+            (lv95, [2_590_000.0, 1_190_000.0, 2_610_000.0, 1_210_000.0], Some(("E".into(), "N".into())))
+        );
+        assert_eq!(north_first.native.as_ref().unwrap().envelope, own.envelope);
+        assert_eq!(north_first.native.as_ref().unwrap().axes, own.axes);
+        // Its longitude/latitude bounds come from its envelope.
+        let [w, s, e, n] = east_first.bbox.unwrap();
+        assert!(
+            (7.30..7.32).contains(&w) && (7.56..7.58).contains(&e) && (46.85..46.87).contains(&s) && (47.03..47.05).contains(&n),
+            "{:?}",
+            east_first.bbox
+        );
+        // The whole coverage: its envelope, no conversion asked for.
+        let whole = get_coverage_url(&c2, &east_first, east_first.bbox.unwrap());
+        assert_eq!(
+            whole,
+            "https://x.org/wcs?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dem&FORMAT=image%2Ftiff&SUBSET=E(2590000,2610000)&SUBSET=N(1190000,1210000)&SCALESIZE=E(2048),N(2048)"
+        );
+        assert_eq!(get_coverage_url(&c2, &north_first, north_first.bbox.unwrap()), whole);
+        // Part of it: the area's box in LV95, within the envelope.
+        let part = get_coverage_url(&c2, &east_first, [7.40, 46.90, 7.50, 47.10]);
+        let subset = |get: &str, axis: &str| -> (f64, f64) {
+            let v = get.split(&format!("SUBSET={axis}(")).nth(1).unwrap().split(')').next().unwrap();
+            let (a, b) = v.split_once(',').unwrap();
+            (a.parse().unwrap(), b.parse().unwrap())
+        };
+        let ((x0, x1), (y0, y1)) = (subset(&part, "E"), subset(&part, "N"));
+        assert!(x0 > 2_590_000.0 && x1 < 2_610_000.0 && (y0, y1).1 == 1_210_000.0 && y0 > 1_190_000.0, "{part}");
+        assert!(!part.contains("OUTPUTCRS"), "{part}");
+        // EPSG's axis order decides, not the labels' names: LV03 names its east axis Y, and
+        // Gauss-Krüger zone 3 its north axis X.
+        let lv03 =
+            parse_describe(&c2, desc("http://www.opengis.net/def/crs/EPSG/0/21781", "Y X", "590000 190000", "610000 210000").as_bytes())
+                .unwrap();
+        let lv03 = lv03.native.unwrap();
+        assert_eq!((lv03.envelope, lv03.axes), ([590_000.0, 190_000.0, 610_000.0, 210_000.0], Some(("Y".into(), "X".into()))));
+        let gk = parse_describe(
+            &c2,
+            desc("http://www.opengis.net/def/crs/EPSG/0/31467", "X Y", "5420000 3480000", "5440000 3500000").as_bytes(),
+        )
+        .unwrap();
+        let gk = gk.native.unwrap();
+        assert_eq!((gk.envelope, gk.axes), ([3_480_000.0, 5_420_000.0, 3_500_000.0, 5_440_000.0], Some(("Y".into(), "X".into()))));
+        // A polar coverage: its bounds reach the pole within it.
+        let polar = parse_describe(
+            &c2,
+            desc("http://www.opengis.net/def/crs/EPSG/0/3031", "x y", "-3000000 -3000000", "3000000 3000000").as_bytes(),
+        )
+        .unwrap();
+        let [w, s, e, _] = polar.bbox.unwrap();
+        assert_eq!((w, s, e), (-180.0, -90.0, 180.0), "{:?}", polar.bbox);
+        // No axis names it knows: EPSG's order (LV95 is east first).
+        let unnamed = parse_describe(&c2, desc(srs, "i j", "2590000 1190000", "2610000 1210000").as_bytes()).unwrap();
+        assert_eq!(unnamed.native.unwrap().axes, Some(("i".into(), "j".into())));
+        // Geographic, unread, or no labels: EPSG:4326 as before.
+        for (srs, labels, lo, hi) in [
+            ("http://www.opengis.net/def/crs/EPSG/0/4258", "Lat Long", "46 7", "47 8"),
+            ("http://www.opengis.net/def/crs/EPSG/0/999999", "E N", "2590000 1190000", "2610000 1210000"),
+            (srs, "", "2590000 1190000", "2610000 1210000"),
+        ] {
+            let d = desc(srs, labels, lo, hi).replace(r#" axisLabels="""#, "");
+            let info = parse_describe(&c2, d.as_bytes()).unwrap();
+            assert!(info.native.is_none(), "{srs} {labels}");
+            assert!(
+                get_coverage_url(&c2, &info, [7.4, 46.9, 7.5, 47.0]).contains("OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326"),
+                "{srs}"
+            );
+        }
+        // WCS 1.0: its native CRS, the box east first in it.
+        let c1 = Coverage { version: "1.0.0".into(), ..c2.clone() };
+        let v1 = r#"<CoverageDescription xmlns="http://www.opengis.net/wcs" xmlns:gml="http://www.opengis.net/gml"><CoverageOffering><name>dem</name>
+            <lonLatEnvelope><gml:pos>7.3 46.8</gml:pos><gml:pos>7.6 47.1</gml:pos></lonLatEnvelope>
+            <domainSet><spatialDomain><gml:Envelope srsName="EPSG:2056"><gml:pos>2590000 1190000</gml:pos><gml:pos>2610000 1210000</gml:pos></gml:Envelope></spatialDomain></domainSet>
+            <supportedCRSs><requestResponseCRSs>EPSG:2056 EPSG:4326</requestResponseCRSs><nativeCRSs>EPSG:2056</nativeCRSs></supportedCRSs>
+            <supportedFormats><formats>GeoTIFF</formats></supportedFormats></CoverageOffering></CoverageDescription>"#;
+        let info = parse_describe(&c1, v1.as_bytes()).unwrap();
+        assert_eq!(info.native.as_ref().map(|o| (o.crs, o.envelope)), Some((lv95, [2_590_000.0, 1_190_000.0, 2_610_000.0, 1_210_000.0])));
+        assert_eq!(info.bbox, Some([7.3, 46.8, 7.6, 47.1]));
+        assert_eq!(
+            get_coverage_url(&c1, &info, [7.0, 46.0, 8.0, 48.0]),
+            "https://x.org/wcs?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=dem&CRS=EPSG:2056&BBOX=2590000,1190000,2610000,1210000&WIDTH=2048&HEIGHT=2048&FORMAT=GeoTIFF"
+        );
+        // MapServer: an envelope in EPSG:4326 before the native one; a native system named by URN
+        // is asked for as `EPSG:<code>`.
+        let mapserver = v1
+            .replace(r#"<gml:Envelope srsName="EPSG:2056">"#, r#"<gml:Envelope srsName="EPSG:4326"><gml:pos>7.3 46.8</gml:pos><gml:pos>7.6 47.1</gml:pos></gml:Envelope><gml:Envelope srsName="EPSG:2056">"#)
+            .replace("<nativeCRSs>EPSG:2056</nativeCRSs>", "<nativeCRSs>urn:ogc:def:crs:EPSG::2056</nativeCRSs>");
+        let info2 = parse_describe(&c1, mapserver.as_bytes()).unwrap();
+        assert_eq!(
+            info2.native.as_ref().map(|o| (o.name.as_str(), o.envelope)),
+            Some(("EPSG:2056", [2_590_000.0, 1_190_000.0, 2_610_000.0, 1_210_000.0]))
+        );
+        // Its envelope in another system than its native one: EPSG:4326 as before.
+        let other = parse_describe(&c1, v1.replace(r#"srsName="EPSG:2056""#, r#"srsName="EPSG:21781""#).as_bytes()).unwrap();
+        assert!(other.native.is_none());
     }
 
     #[test]

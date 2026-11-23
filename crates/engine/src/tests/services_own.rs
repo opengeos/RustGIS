@@ -1,4 +1,4 @@
-//! Services' features asked for in their own coordinate system (#2032 C2f-3b): a WFS type in its
+//! Services asked for in their own coordinate system (#2032 C2f-3b, C2f-3c): a WFS type in its
 //! default system and an ArcGIS layer in its service's, held in it as they come, with the
 //! longitude/latitude request kept where the system isn't one RustGIS reads.
 
@@ -161,4 +161,50 @@ fn an_arcgis_layer_is_asked_for_in_its_services_system() {
     assert_eq!(first_point(&s, "Unbounded"), (Crs::from_epsg(2056).unwrap(), 2_600_000.0, 1_200_000.0));
     let said = notices(&s);
     assert!(said.len() == 1 && said[0].contains("1 service answer(s) named no coordinate system"), "{said:?}");
+}
+
+/// A WCS coverage in LV95 is asked for in it, with no conversion by the server, and comes in as a
+/// raster in LV95 for the map to resample once; a geographic one is asked in EPSG:4326 as before.
+#[test]
+fn a_wcs_coverage_is_asked_for_in_its_own_system() {
+    let lv95 = Crs::from_epsg(2056).unwrap();
+    let r = rustgis_data::raster::Raster::new(
+        "dem",
+        10,
+        10,
+        vec![vec![500.0; 100]],
+        rustgis_data::raster::GeoTransform { origin_x: 2_600_000.0, origin_y: 1_200_100.0, pixel_width: 10.0, pixel_height: -10.0 },
+        lv95,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let (base, _) = super::serve_file(rustgis_data::raster::geotiff::write(&r, 0).unwrap(), false);
+    let caps = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+        <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>dem</wcs:CoverageId><ows:Title>Terrain</ows:Title>
+          <ows:WGS84BoundingBox><ows:LowerCorner>7.43 46.95</ows:LowerCorner><ows:UpperCorner>7.45 46.96</ows:UpperCorner></ows:WGS84BoundingBox>
+        </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+    let describe = r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/2056" axisLabels="E N">
+        <lowerCorner>2600000 1200000</lowerCorner><upperCorner>2600100 1200100</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#;
+    let url = format!("{base}/wcs");
+    let mut s = Session::new(Project::default());
+    let p = json!({"url": url, "layer": "dem", "text": caps, "describe": describe, "bbox": "full"});
+    let c = s.run("service.coverage", &p).unwrap();
+    let get = c["url"].as_str().unwrap();
+    assert!(
+        get.contains("&SUBSET=E(2600000,2600100)&SUBSET=N(1200000,1200100)&SCALESIZE=E(2048),N(2048)") && !get.contains("CRS="),
+        "{get}"
+    );
+    let added = s.run("service.add", &p).unwrap();
+    let l = s.map().layer(added["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(l.raster.as_ref().unwrap().data.as_ref().unwrap().crs, lv95);
+    // In EPSG:4326: asked so, as before.
+    let geographic = describe
+        .replace("EPSG/0/2056", "EPSG/0/4326")
+        .replace(r#"axisLabels="E N""#, r#"axisLabels="Lat Long""#)
+        .replace("2600000 1200000", "46.95 7.43")
+        .replace("2600100 1200100", "46.96 7.45");
+    let c = s.run("service.coverage", &json!({"url": url, "layer": "dem", "text": caps, "describe": geographic, "bbox": "full"})).unwrap();
+    assert!(c["url"].as_str().unwrap().contains("OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326&SUBSET=Long(7.43,7.45)"), "{c}");
 }
