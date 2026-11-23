@@ -213,7 +213,13 @@ impl<P: Phone> App<P> {
                     // Save again only helps while the project saved is the one open.
                     let open = self.app.saving_the_open_project();
                     let damaged = kept.is_some();
-                    self.app.complete_project_save(Err(write_back_failure(&name, &reason, kept.as_deref(), open)));
+                    let text = write_back_failure(&name, &reason, kept.as_deref(), open);
+                    // Turned down while busy with another file: the document wasn't touched.
+                    if reason == "code:busy" {
+                        self.app.project_save_refused(text);
+                    } else {
+                        self.app.complete_project_save(Err(text));
+                    }
                     // The file may hold part of the project: what is open no longer matches any
                     // saved file, so it counts as unsaved (and asks before it is closed).
                     if damaged && open {

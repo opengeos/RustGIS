@@ -124,6 +124,18 @@ impl RustGisApp {
     /// Consumes the native picker's result. Only the snapshot that reached the file is saved.
     /// A failed or cancelled write abandons any action that was waiting for it.
     pub fn complete_project_save(&mut self, result: Result<String, String>) {
+        self.finish_project_save(result, true);
+    }
+
+    /// A save the phone turned down before touching anything (it was busy with another file):
+    /// said as a failed save, while Save keeps writing back where it did.
+    pub fn project_save_refused(&mut self, error: String) {
+        self.finish_project_save(Err(error), false);
+    }
+
+    /// [`RustGisApp::complete_project_save`]; a failed write-back makes the next Save ask where
+    /// only when it may have reached the document (`reached`).
+    fn finish_project_save(&mut self, result: Result<String, String>, reached: bool) {
         let pending = self.save_prompt.pending.take();
         let reported = self.save_prompt.reported.take();
         match result {
@@ -132,7 +144,7 @@ impl RustGisApp {
                 self.session.notify(error, true);
                 // A document that couldn't be written back is asked for again: the next Save
                 // shows the picker. A picker closed with no choice changes nothing.
-                if let Some(failed) = pending.filter(|p| p.document.is_some()) {
+                if let Some(failed) = pending.filter(|p| p.document.is_some() && reached) {
                     self.save_prompt.targets.insert(failed.project, None);
                 }
                 return;
@@ -598,6 +610,27 @@ mod tests {
         h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("kept.rgis".into()));
         assert_eq!(last(&asked).as_deref(), Some("content://kept"));
+    }
+
+    /// A write-back the phone turns down while busy with another file leaves Save writing back
+    /// where it did.
+    #[test]
+    fn a_write_back_turned_down_while_busy_keeps_its_document() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut h = launch();
+        let asked: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        let seen = asked.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |_, _, document| {
+            seen.borrow_mut().push(document.map(str::to_string));
+            Ok(())
+        }));
+        let copy = std::path::PathBuf::from("/picked/3/0/site.rgis");
+        h.state_mut().picked_document(copy.clone(), "content://site".into());
+        h.state_mut().session.path = Some(copy);
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().project_save_refused("site.rgis wasn't saved: another file is being chosen or saved.".into());
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), Some("content://site".to_string())]);
     }
 
     /// A write-back the phone refuses before it starts makes the next Save ask where.
