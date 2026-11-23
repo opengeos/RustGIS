@@ -828,7 +828,12 @@ fn count_geometry_filter(src: &Path, layer: &str, filter: &str) -> Result<u64> {
 fn kept_zm_count(path: &Path) -> Option<Option<u64>> {
     use std::io::Read;
     let mut text = String::new();
-    std::fs::File::open(path.with_extension("zm")).ok()?.take(32).read_to_string(&mut text).ok()?;
+    // The longest a count is (`u64::MAX` and its line's end), and a byte more to tell a longer file.
+    const LONGEST: u64 = 21;
+    std::fs::File::open(path.with_extension("zm")).ok()?.take(LONGEST + 1).read_to_string(&mut text).ok()?;
+    if text.len() as u64 > LONGEST {
+        return None;
+    }
     if text == UNCOUNTED {
         return Some(None);
     }
@@ -953,6 +958,23 @@ mod tests {
         // Pruning touches only the cache's own files.
         assert!(ours("0123456789abcdef.fgb") && ours("0123456789abcdef.key") && ours("0123456789abcdef.empty"));
         assert!(ours("0123456789abcdef.4242.tmp.fgb") && ours("0123456789abcdef.zm"));
+    }
+
+    /// A kept Z/M count is taken only whole: a count with its line's end, or `unknown`.
+    #[test]
+    fn a_kept_zm_count_is_taken_only_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let fgb = dir.path().join("0123456789abcdef.fgb");
+        let kept = |text: &str| {
+            std::fs::write(fgb.with_extension("zm"), text).unwrap();
+            kept_zm_count(&fgb)
+        };
+        assert_eq!(kept("7\n"), Some(Some(7)));
+        assert_eq!(kept(&format!("{}\n", u64::MAX)), Some(Some(u64::MAX)));
+        assert_eq!(kept(UNCOUNTED), Some(None));
+        assert_eq!(kept("7"), None, "cut short");
+        assert_eq!(kept(&format!("{}\n", "0".repeat(30))), None, "longer than any count");
+        assert_eq!(kept("18446744073709551616\n"), None, "past u64");
         assert!(!ours("notes.fgb") && !ours("0123456789abcdef.txt") && !ours("photo.jpg") && !ours("0123456789abcdef.x.tmp.fgb"));
         // The cache key's hash is stable: a cached file is found again by its name, so a changed
         // hash orphans every cache already on disk. FNV-1a (64-bit) of "rustgis".
