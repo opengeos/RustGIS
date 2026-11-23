@@ -777,7 +777,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
     // as they're written (`e.beyond_web_mercator`), and its source's extent only serves the
     // out-of-place check. A raster layer's extent is its raster's, which the file doesn't hold.
     let extent = if chunks.is_some() { l.extent() } else { ds.lonlat_extent() };
-    let mut notes: rustgis_data::loss::Notes = rustgis_data::export_notes([(ds, extent)], path, crs).into();
+    let mut notes: rustgis_data::loss::Notes = rustgis_data::export_notes([(ds, extent)], path, crs);
     coalesce_read_zm(&mut notes, path, ds, &unreadable);
     if asked.is_none() {
         notes.extend(rustgis_data::io::default_export_note(ds, path));

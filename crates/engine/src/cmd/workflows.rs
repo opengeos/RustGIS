@@ -2125,7 +2125,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             )
             .map_err(|e| e.to_string())?;
             let mut notes: rustgis_data::loss::Notes =
-                rustgis_data::export_notes([(&ds, layer.extent())], &path, rustgis_data::raster::Crs::LonLat).into();
+                rustgis_data::export_notes([(&ds, layer.extent())], &path, rustgis_data::raster::Crs::LonLat);
             if format == "csv" {
                 notes.extend(result.csv.notes(&ds.fields, &path));
                 notes.extend(result.csv.coordinates_note(&ds.fields, &path));
@@ -2164,7 +2164,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             let report = rustgis_data::export::filter_dataset(&mut ds, query).map_err(|e| e.to_string())?;
             rustgis_data::progress::begin(ds.features.len());
             let (text, notes) = converted(&ds, &params)?;
-            let mut notes: rustgis_data::loss::Notes = notes.into();
+            let mut notes: rustgis_data::loss::Notes = notes;
             super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
             rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             if unreadable.rows > 0 {
