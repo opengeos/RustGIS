@@ -919,7 +919,10 @@ impl<'a> Grid<'a> {
                 (j, q0, q1)
             })
             .collect();
-        let n: u64 = rows.iter().map(|(_, q0, q1)| u64::try_from(q1 - q0 + 1).unwrap_or(0)).fold(0, u64::saturating_add);
+        let n: u64 = rows
+            .iter()
+            .map(|(_, q0, q1)| u64::try_from(q1.saturating_sub(*q0).saturating_add(1)).unwrap_or(0))
+            .fold(0, u64::saturating_add);
         if n > MAX_WORK {
             return Err(too_much_work(res));
         }
@@ -1227,6 +1230,12 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
             ]);
         }
         out.push(Some(polygon), attrs);
+    }
+    if out.features.is_empty() && undrawn > 0 {
+        return Err(format!(
+            "No cell holding {name}'s points could be drawn: {}, and so were the {unplaced} points in them",
+            undrawable(undrawn, &g)
+        ));
     }
     let n = out.features.len();
     let mut msg = match system {
@@ -1813,6 +1822,16 @@ mod tests {
         let by = aggregate(&at_edge, &serde_json::json!({"system": "Hexagon", "input": "pts", "resolution": 9})).unwrap();
         assert!(by.messages[0].contains("reaches, and so were the 2 points in them"), "{:?}", by.messages);
         assert_eq!(layer(by).features.len(), 1);
+        // With every point in such a cell there's no layer: refused, and said why.
+        let e = aggregate(
+            &Flat(points(&[(174.999, 1.0, 1.0), (174.998, 1.2, 1.0)]), None),
+            &serde_json::json!({"system": "Hexagon", "input": "pts", "resolution": 9}),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("No cell holding pts's points could be drawn: 2 cells were left out") && e.contains("so were the 2 points in them"),
+            "{e}"
+        );
         let kept = layer(edge);
         assert!(!kept.features.is_empty());
         assert!(kept.features.iter().all(|f| match &f.geometry {
