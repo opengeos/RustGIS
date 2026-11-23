@@ -414,6 +414,37 @@ pub fn landed_count() -> u64 {
     LANDED.load(Ordering::Relaxed)
 }
 
+/// The revision of each GeoTIFF on this computer whose header is read or kept ([`is_local_file`]),
+/// taken before its header is read: a header kept is used only while the file is still that
+/// revision, so a file written again while it is open is read again, not drawn from its old
+/// header and tiles.
+#[cfg(not(target_arch = "wasm32"))]
+fn local_revisions() -> &'static Mutex<HashMap<String, Option<rustgis_data::raster::FileRevision>>> {
+    static R: OnceLock<Mutex<HashMap<String, Option<rustgis_data::raster::FileRevision>>>> = OnceLock::new();
+    R.get_or_init(Mutex::default)
+}
+
+/// The revision a local file's header was read at ([`local_revisions`]); `None` when it wasn't
+/// recorded or couldn't be read.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn local_revision(url: &str) -> Option<rustgis_data::raster::FileRevision> {
+    local_revisions().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned().flatten()
+}
+
+/// Forgets what was read of a local file that is no longer the revision its header was read at.
+#[cfg(not(target_arch = "wasm32"))]
+fn forget_if_rewritten(url: &str) {
+    if !is_local_file(url) {
+        return;
+    }
+    let kept = local_revisions().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned();
+    if let Some(kept) = kept
+        && kept != rustgis_data::raster::FileRevision::of(std::path::Path::new(url))
+    {
+        forget_file(url);
+    }
+}
+
 /// Shares parsed headers and loading waiters, retaining retry delays only for resource failures.
 fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
     with_info_at(url, crate::cache::ceiling_for(url), then);
@@ -431,6 +462,8 @@ fn with_info_at(url: &str, ceiling: crate::address::Reach, then: Box<dyn FnOnce(
         then(Err(e.to_string()));
         return;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    forget_if_rewritten(url);
     {
         let mut i = infos().lock().unwrap_or_else(|e| e.into_inner());
         match i.get_mut(url) {
@@ -563,6 +596,12 @@ fn load(url: String, ceiling: crate::address::Reach, done: Box<dyn FnOnce(Result
         if let Err(e) = local_read_allowed(&url, ceiling) {
             done(Err(e));
             return;
+        }
+        // The revision the header is read at, taken before it is read.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let revision = rustgis_data::raster::FileRevision::of(std::path::Path::new(&url));
+            local_revisions().lock().unwrap_or_else(|e| e.into_inner()).insert(url.clone(), revision);
         }
         return read_header(url, HEAD, ceiling, done);
     }
@@ -2677,6 +2716,12 @@ mod tests {
             assert!(!is_local_file(not), "{not}");
         }
         assert!(!is_local_file(&dir.join("local.png").display().to_string()));
+        // Written again while open (another image, another file): its header is read again, not
+        // the one kept.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, cog::example(256, 128)).unwrap();
+        let sizes: Vec<u32> = info_blocking(&url).unwrap().layout.levels.iter().map(|l| l.width).collect();
+        assert_eq!(sizes, vec![256, 128]);
         forget_local_file(&url);
         let _ = std::fs::remove_dir_all(&dir);
     }

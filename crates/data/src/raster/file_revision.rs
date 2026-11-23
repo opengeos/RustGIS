@@ -4,7 +4,7 @@
 use std::{fs::Metadata, path::Path};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FileRevision {
+pub struct FileRevision {
     len: u64,
     modified: std::time::SystemTime,
     #[cfg(unix)]
@@ -16,7 +16,7 @@ pub(super) struct FileRevision {
 impl FileRevision {
     /// The path a revision was read from is not part of it: the callers check the path they hold,
     /// so a changed working directory never looks like a changed file.
-    pub(super) fn capture(metadata: &Metadata) -> std::io::Result<Self> {
+    pub fn capture(metadata: &Metadata) -> std::io::Result<Self> {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         #[cfg(windows)]
@@ -38,6 +38,13 @@ impl FileRevision {
         } else {
             Err("The image file changed since its pixels were loaded. Use Reload Data, then retry the operation.".into())
         }
+    }
+}
+
+impl FileRevision {
+    /// The revision of the file at `path` as it is now, or `None` when its metadata can't be read.
+    pub fn of(path: &Path) -> Option<Self> {
+        std::fs::metadata(path).ok().and_then(|m| Self::capture(&m).ok())
     }
 }
 

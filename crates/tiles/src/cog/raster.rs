@@ -95,9 +95,10 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
     };
     let (w, h) = (l.width, l.height);
     let i = info.clone();
-    // A file on this computer, as it is before its tiles are read: compared once they are in.
+    // A file on this computer: the revision its header was read at, which it must still be once
+    // its tiles are in.
     #[cfg(not(target_arch = "wasm32"))]
-    let before = super::is_local_file(&url).then(|| local_stamp(&url));
+    let before = super::is_local_file(&url).then(|| super::local_revision(&url));
     fetch_all(
         info,
         url.clone(),
@@ -136,7 +137,7 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                 // the file's own grid is checked against.
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(before) = before {
-                    if before.is_none() || before != local_stamp(&url) {
+                    if before.is_none() || before != rustgis_data::raster::FileRevision::of(std::path::Path::new(&url)) {
                         return Err(format!("{url}: the file changed while its overview was read: read it again"));
                     }
                     r.capture_source_file(std::path::Path::new(&url));
@@ -145,15 +146,6 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
             }))
         }),
     );
-}
-
-/// A local file's length and modification time, or `None` when they can't be read: compared before
-/// and after its overview is read, so a file written meanwhile isn't recorded as the revision of
-/// the pixels read before.
-#[cfg(not(target_arch = "wasm32"))]
-fn local_stamp(path: &str) -> Option<(u64, std::time::SystemTime)> {
-    let m = std::fs::metadata(path).ok()?;
-    Some((m.len(), m.modified().ok()?))
 }
 
 /// A file's name, from its address (without its query).
