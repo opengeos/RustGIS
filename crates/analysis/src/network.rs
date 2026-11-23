@@ -106,11 +106,6 @@ impl Network {
             crate::control::check()?;
             crate::control::reached(i);
             let Some(line @ Geometry::Line(held)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
-            let Some(line) = Dataset::converted_to_lonlat(&to, line) else {
-                skipped_segments += held.iter().map(|part| part.len().saturating_sub(1)).sum::<usize>();
-                continue;
-            };
-            let Geometry::Line(parts) = &*line else { continue };
             // A cost multiplies each edge's length; no value means 1, and zero or less closes the
             // line (impassable).
             let weight = match cost_field.map(|fi| ds.value(*r, fi).as_f64()) {
@@ -118,6 +113,11 @@ impl Network {
                 Some(Some(_)) => continue,
                 _ => 1.0,
             };
+            let Some(line) = Dataset::converted_to_lonlat(&to, line) else {
+                skipped_segments += held.iter().map(|part| part.len().saturating_sub(1)).sum::<usize>();
+                continue;
+            };
+            let Geometry::Line(parts) = &*line else { continue };
             if cost_overflows(parts, weight, &mut pace)? {
                 overflowing += 1;
                 continue;
@@ -1609,6 +1609,12 @@ mod tests {
         let Some(Geometry::Line(given)) = &lonlat.features[0].geometry else { panic!("a line") };
         assert!(graph.nodes.iter().zip(&given[0]).all(|(a, b)| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9));
         assert!(Arc::ptr_eq(&graph, &network_for(&cache, &ds, &[0], None).unwrap()), "kept under the held layer");
+        assert_eq!(graph.skipped_segments, 0);
+        // A line with a place that has no longitude/latitude (far beyond the Earth in UTM) is left
+        // out, its segments counted as ones with invalid coordinates; the others are searched.
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(1e12, 0.0), Coord::new(1e12 + 1.0, 0.0), Coord::new(1e12 + 2.0, 0.0)]])), vec![]);
+        let graph = network_for(&cache, &ds, &[0, 1], None).unwrap();
+        assert_eq!((graph.skipped_segments, graph.segs.len()), (2, 2));
     }
 
     /// Repeated pairs reuse topology without retaining endpoint edits; every graph input

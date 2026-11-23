@@ -6136,7 +6136,7 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let unplaced = unplaced.into_inner();
     if unplaced > 0 {
         messages.push(format!(
-            "Calculate Geometry Attributes: {unplaced} feature(s) of {} have a place with no longitude/latitude (beyond the poles, or one {} can't give there), and weren't measured",
+            "Calculate Geometry Attributes: {unplaced} feature(s) of {} have a place with no longitude/latitude (beyond the poles, or not convertible from {}), and weren't measured",
             ds.name,
             to.source().label()
         ));

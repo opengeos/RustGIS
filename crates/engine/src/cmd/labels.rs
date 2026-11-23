@@ -1023,9 +1023,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
             // (its class's offset leaves it).
             // One that can't be placed in the layer's own system stays at its label point, and
             // isn't moved in the annotation's labels either.
-            let was_moved = class.moved_to(ft.id()).is_some();
-            let (put, at) = match class.moved_to(ft.id()).map(|put| (put, put_at(put))) {
-                Some((put, Some(to))) => (Some(put), to),
+            let moved_to = class.moved_to(ft.id());
+            let (put, at) = match moved_to.map(|put| (put, put_at(put))) {
+                Some((put, Some(placed))) => (Some(put), placed),
                 Some((_, None)) | None => (None, at),
             };
             let e = exprs.get(i).and_then(Option::as_ref);
@@ -1042,7 +1042,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
                 attrs.push(number(e.filter(|_| turns).and_then(|e| e.angle(&l.dataset, row))));
             }
             ds.push(Some(Geometry::Point(at)), attrs);
-            let flat = !was_moved && along(class, ft.geometry());
+            let flat = moved_to.is_none() && along(class, ft.geometry());
             flattened += usize::from(flat);
             repeated += usize::from(flat && class.repeat.is_some());
             if let (Some(put), Some(new)) = (put, ds.features.last()) {
