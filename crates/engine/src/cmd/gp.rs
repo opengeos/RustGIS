@@ -1312,6 +1312,10 @@ struct MapInputs<'a> {
     /// Streamed layers the tool reads, loaded whole, and copies of layers in another system than
     /// the one it works in, converted ([`work_inputs`]), by lowercase name.
     loaded: std::collections::HashMap<String, Dataset>,
+    /// The layers read whole for the run (streamed ones) with features read without their
+    /// geometry, a place of theirs having none in longitude/latitude: an update of one is refused,
+    /// as the map holds only its window, where such a feature's stored geometry may not be.
+    left_out_whole: std::collections::HashSet<String>,
     /// The system the tool works in ([`work_system`]): the one its inputs are given in and its
     /// outputs are made in.
     work: Crs,
@@ -1339,6 +1343,15 @@ impl MapInputs<'_> {
     /// the project is; one with a place it can't hold stays in longitude/latitude, said. Tables
     /// have no coordinates to hold.
     fn hold_results(&self, result: &mut rustgis_analysis::ToolResult) -> Result<(), String> {
+        // An update writes back into the window the map holds of a streamed layer, which may not
+        // have the stored geometry of a feature read without it: refused, rather than lost.
+        if let Output::Update { layer, .. } = &result.output
+            && self.left_out_whole.contains(&layer.to_ascii_lowercase())
+        {
+            return Err(format!(
+                "{layer} is read in place and has features with a place that can't be given in longitude/latitude, which an update would lose: Load All Features (layer.loadAll) before a tool updates it"
+            ));
+        }
         // A geocentric system holds no map coordinates: outputs stay in longitude/latitude then.
         let project = self.snap.project.filter(|c| *c != Crs::LonLat && !c.is_geocentric());
         if self.work == Crs::LonLat && project.is_none() {
@@ -1448,7 +1461,8 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
             }
         }
     }
-    let work = work_inputs(&snap.map, &snap.tables, spec, params, &mut full, &mut messages)?;
+    let mut left_out_whole = std::collections::HashSet::new();
+    let work = work_inputs(&snap.map, &snap.tables, spec, params, &mut full, &mut messages, &mut left_out_whole)?;
     let mut rows = env_inputs(&snap.map, &full, &snap.env, params)?;
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
@@ -1457,6 +1471,7 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
         rows,
         loaded: full,
         work,
+        left_out_whole,
         unread,
         messages,
         losses,
@@ -1654,10 +1669,11 @@ fn work_inputs(
     params: &Value,
     full: &mut std::collections::HashMap<String, Dataset>,
     messages: &mut Vec<String>,
+    left_out_whole: &mut std::collections::HashSet<String>,
 ) -> Result<Crs, String> {
     let work = work_system(map, spec, params, full);
     if work != Crs::LonLat {
-        match inputs_in(map, tables, spec, params, full, work) {
+        match inputs_in(map, tables, spec, params, full, work, left_out_whole) {
             Ok((converted, said)) => {
                 full.extend(converted);
                 messages.extend(said);
@@ -1671,7 +1687,7 @@ fn work_inputs(
             }
         }
     }
-    let (converted, said) = inputs_in(map, tables, spec, params, full, Crs::LonLat)?;
+    let (converted, said) = inputs_in(map, tables, spec, params, full, Crs::LonLat, left_out_whole)?;
     full.extend(converted);
     messages.extend(said);
     Ok(Crs::LonLat)
@@ -1689,6 +1705,7 @@ fn inputs_in(
     params: &Value,
     full: &std::collections::HashMap<String, Dataset>,
     work: Crs,
+    left_out_whole: &mut std::collections::HashSet<String>,
 ) -> Result<(std::collections::HashMap<String, Dataset>, Vec<String>), String> {
     let mut converted = std::collections::HashMap::new();
     // The converted inputs with edges that bend ([`bent_edges`]): name, how many, how far.
@@ -1798,6 +1815,12 @@ fn inputs_in(
     }
     // One notice for them all, naming each layer.
     let mut said = Vec::new();
+    // The layers read whole (streamed ones, files) with features read without their geometry.
+    for (key, ds) in full {
+        if unplaced.iter().any(|(name, _)| *name == ds.name) {
+            left_out_whole.insert(key.to_ascii_lowercase());
+        }
+    }
     if !unplaced.is_empty() {
         let name = spec.map_or("The tool", |t| t.name);
         let n: usize = unplaced.iter().map(|(_, n)| n).sum();
@@ -3633,22 +3656,20 @@ fn apply_with(
         }
         Output::Update { layer, dataset } => {
             let l = s.map_mut().layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer)).ok_or("the input layer disappeared")?;
-            // A streamed layer holds only its window (in longitude/latitude unless the map is in
-            // the source's own system), while the tool read and updated the whole source: the
-            // result is held in the source's own system, its stored places (and the features read
-            // without geometry, kept as stored) taken from the whole source, read again.
-            let whole = if l.is_streamed() { Some(l.load_all_counted().map_err(|e| format!("{}: {e}", l.name))?.0) } else { None };
-            let base = whole.as_ref().unwrap_or(&l.dataset);
             // Made in the system the tool worked in ([`MapInputs::hold_results`]): taken as made
             // when that is the layer's own, else written back in its own coordinates from
-            // longitude/latitude.
-            let updated = if dataset.coord_crs() == base.coord_crs() {
+            // longitude/latitude. (A streamed layer whose whole read left a feature out is refused
+            // before this: [`MapInputs::hold_results`].)
+            // A streamed layer's window may be in another system than its source (longitude/latitude
+            // unless the map is in the source's own), while the tool read the whole source: a
+            // result in the source's own system is taken as made too, the layer then holding it.
+            let own = l.source.as_ref().map(|src| src.coord_crs());
+            l.dataset = if dataset.coord_crs() == l.dataset.coord_crs() || Some(dataset.coord_crs()) == own {
                 dataset
             } else {
                 let lonlat = if dataset.coord_crs() == Crs::LonLat { dataset } else { dataset.in_lonlat()?.into_owned() };
-                base.results_from_lonlat(lonlat)?
+                l.dataset.results_from_lonlat(lonlat)?
             };
-            l.dataset = updated;
             // Under the layer's name now: a background run's layer may have been renamed meanwhile.
             l.dataset.name.clone_from(&l.name);
             // A streamed layer updated by a tool holds the whole result in memory from now on.
