@@ -176,10 +176,11 @@ raise by commenting on the pull request with the line the failure prints for it,
 own (`<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`), then re-runs the job.
 The test `command_ids_in_hand_kept_lists_are_registered` (`crates/ui-egui/tests/command_ids.rs`) fails when
 non-test source holds a command id that no command has (a dotted literal in a registered namespace, such
-as `layer.add`, or a `ui.*` id with no match arm): a renamed or removed command leaves the lists that name
-it, such as `ON_A_COPY`, the policy tables and Command Search, pointing at nothing. A literal that isn't a
-command goes in its `EXEMPT` list with a reason; file and host names are told apart by their last word
-(`NOT_IDS`) and need no entry.
+as `layer.add`, or a `ui.*` id with no match arm in `crates/ui-egui/src/lib.rs`): a renamed or removed
+command leaves the lists that name it, such as `ON_A_COPY`, the policy tables and Command Search, pointing
+at nothing. A literal that isn't a command goes in its `EXEMPT` list with a reason (file and host names
+are told apart by their last word, `NOT_IDS`, and need none), and an `EXEMPT` entry the source no longer
+holds fails it too.
 While you work, `cargo xtask changed` runs the same checks on only the packages your branch changes
 and those that depend on them (and `test-hygiene` on the whole workspace, and formatting, `layers` and
 `rows` when packages are checked), or everything when a

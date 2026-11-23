@@ -6,7 +6,7 @@
 //!
 //! A literal counts as an id when it is dotted words (`layer.add`) in a namespace some registered
 //! command has, or `ui`. It must then be a command the engine registers (`cmd::all()`), or, for
-//! `ui.*`, one the app handles: a match arm `"ui.pane.catalog" => …`. The other dotted literals in
+//! `ui.*`, one the app handles: a match arm `"ui.pane.catalog" => …` in [`DISPATCH`]. The other dotted literals in
 //! those namespaces (file names, host names) are told apart by their last word ([`NOT_IDS`]) and
 //! [`EXEMPT`]. A literal in a namespace no registered command has is not looked at, so removing
 //! the last command of a namespace leaves its literals unchecked. This lives in the UI crate
@@ -40,6 +40,9 @@ const EXEMPT: &[(&str, &str)] = &[
     ("data.cityofberkeley.info", "an open-data portal's host name (it ends in a word that `time.info` also ends in)"),
     ("stac.cut_note", "a key for a widget's remembered state in the STAC pane (stacui.rs), not a command"),
 ];
+
+/// The file whose match arms handle the `ui.*` commands.
+const DISPATCH: &str = "crates/ui-egui/src/lib.rs";
 
 /// The repository's root.
 fn root() -> PathBuf {
@@ -79,7 +82,25 @@ type Lexed<'a> = (usize, Tok<'a>);
 
 /// The words [`non_test`] and [`is_arm`] look at.
 const KEPT_WORDS: &[&str] = &[
-    "cfg", "test", "if", "pub", "mod", "fn", "use", "impl", "const", "static", "struct", "enum", "trait", "type", "async", "unsafe",
+    "cfg",
+    "test",
+    "all",
+    "any",
+    "if",
+    "macro_rules",
+    "pub",
+    "mod",
+    "fn",
+    "use",
+    "impl",
+    "const",
+    "static",
+    "struct",
+    "enum",
+    "trait",
+    "type",
+    "async",
+    "unsafe",
     "extern",
 ];
 
@@ -187,29 +208,52 @@ fn line_of(text: &str, at: usize) -> usize {
     1 + text.as_bytes().iter().take(at).filter(|&&c| c == b'\n').count()
 }
 
+/// The length in tokens of the test attribute at `tokens[i]`: `#[test]`, `#[cfg(test)]` or
+/// `#[cfg(all(test, …))]`, and 0 for anything else (`#[cfg(not(test))]` and `#[cfg(any(test, …))]`
+/// also compile outside tests).
+fn test_attribute(t: &[Lexed<'_>], i: usize) -> usize {
+    let word = |i: usize, w: &str| matches!(t.get(i), Some((_, Tok::Word(x))) if *x == w);
+    let punct = |i: usize, p: char| matches!(t.get(i), Some((_, Tok::Punct(x))) if *x == p);
+    if !(punct(i, '#') && punct(i + 1, '[')) {
+        return 0;
+    }
+    if word(i + 2, "test") && punct(i + 3, ']') {
+        return 4;
+    }
+    if !(word(i + 2, "cfg") && punct(i + 3, '(')) {
+        return 0;
+    }
+    if word(i + 4, "test") && punct(i + 5, ')') && punct(i + 6, ']') {
+        return 7;
+    }
+    if !(word(i + 4, "all") && punct(i + 5, '(')) {
+        return 0;
+    }
+    // Inside `all(`: a `test` directly in it, up to the attribute's closing bracket.
+    let (mut depth, mut found) = (2, false);
+    for (k, (_, tok)) in t.iter().enumerate().skip(i + 6) {
+        match tok {
+            Tok::Punct('(') => depth += 1,
+            Tok::Punct(')') => depth -= 1,
+            Tok::Punct(']') if depth == 0 => return if found { k + 1 - i } else { 0 },
+            Tok::Word("test") if depth == 2 => found = true,
+            _ => {}
+        }
+    }
+    0
+}
+
 /// `tokens` without the test code in them: items under `#[cfg(test)]` or `#[test]` (a module, fn,
 /// use, impl or the like, up to its closing brace or semicolon). Code after a test module stays.
 fn non_test(tokens: Vec<Lexed<'_>>) -> Vec<Lexed<'_>> {
     let word = |t: &[Lexed<'_>], i: usize, w: &str| matches!(t.get(i), Some((_, Tok::Word(x))) if *x == w);
     let punct = |t: &[Lexed<'_>], i: usize, p: char| matches!(t.get(i), Some((_, Tok::Punct(x))) if *x == p);
-    let items = ["mod", "fn", "use", "impl", "const", "static", "struct", "enum", "trait", "type", "async", "unsafe", "extern"];
+    let items =
+        ["mod", "fn", "use", "impl", "const", "static", "struct", "enum", "trait", "type", "async", "unsafe", "extern", "macro_rules"];
     let (mut kept, mut i) = (Vec::new(), 0);
     while i < tokens.len() {
         let t = &tokens[..];
-        let attr = if punct(t, i, '#')
-            && punct(t, i + 1, '[')
-            && word(t, i + 2, "cfg")
-            && punct(t, i + 3, '(')
-            && word(t, i + 4, "test")
-            && punct(t, i + 5, ')')
-            && punct(t, i + 6, ']')
-        {
-            7
-        } else if punct(t, i, '#') && punct(t, i + 1, '[') && word(t, i + 2, "test") && punct(t, i + 3, ']') {
-            4
-        } else {
-            0
-        };
+        let attr = test_attribute(t, i);
         // The item after the attributes, past any more of them and a visibility such as `pub(crate)`.
         let mut j = i + attr;
         while attr > 0 && punct(t, j, '#') && punct(t, j + 1, '[') {
@@ -244,7 +288,7 @@ fn non_test(tokens: Vec<Lexed<'_>>) -> Vec<Lexed<'_>> {
                     Tok::Punct('{') => depth += 1,
                     Tok::Punct('}') => {
                         depth = depth.saturating_sub(1);
-                        if depth == 0 {
+                        if depth == 0 && open == 0 {
                             break;
                         }
                     }
@@ -339,6 +383,17 @@ mod more {
 #[cfg(test)]
 const CASES: [&str; 2] = ["a.in_array", "a.in_array_too"];
 const AFTER: &str = "a.after_array";
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gated { const Z: &str = "a.in_all"; }
+#[cfg(test)]
+macro_rules! cases { () => { "a.in_macro" }; }
+macro_rules! prod { () => { "a.prod_macro" }; }
+#[cfg(test)]
+const SIZED: [&str; { 1 }] = ["a.sized"];
+#[cfg(not(test))]
+const NOT_TEST: &str = "a.not_test";
+#[cfg(any(test, unix))]
+const ANY: &str = "a.any_test";
 #[test]
 fn alone() { let _ = "a.single_test"; }
 fn arm(id: &str) {
@@ -357,6 +412,9 @@ fn arm(id: &str) {
             "a.after_char",
             "a.after_tests",
             "a.after_array",
+            "a.prod_macro",
+            "a.not_test",
+            "a.any_test",
             "ui.one",
             "ui.two",
             "ui.three",
@@ -406,9 +464,15 @@ fn command_ids_in_hand_kept_lists_are_registered() {
     let found: Vec<(&str, &str, Vec<(usize, &str, bool)>)> =
         texts.iter().map(|(name, text)| (name.as_str(), text.as_str(), literals(text))).collect();
 
-    // The `ui.*` commands the app handles: those with a match arm.
-    let ui_arms: HashSet<&str> =
-        found.iter().flat_map(|(_, _, l)| l).filter(|(_, id, arm)| *arm && id.starts_with("ui.")).map(|(_, id, _)| *id).collect();
+    // The `ui.*` commands the app handles: those with a match arm in its dispatch (`run_ui` is in
+    // `crates/ui-egui/src/lib.rs`; an arm elsewhere, such as one that picks an icon, handles nothing).
+    let ui_arms: HashSet<&str> = found
+        .iter()
+        .filter(|(file, _, _)| *file == DISPATCH)
+        .flat_map(|(_, _, l)| l)
+        .filter(|(_, id, arm)| *arm && id.starts_with("ui."))
+        .map(|(_, id, _)| *id)
+        .collect();
     assert!(ui_arms.len() > 100, "the scan found {} ui commands with an arm", ui_arms.len());
 
     let (mut seen, mut exempt_seen, mut dangling) = (0, HashSet::new(), Vec::new());
