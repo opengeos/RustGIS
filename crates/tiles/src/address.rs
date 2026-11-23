@@ -304,9 +304,14 @@ pub fn check_reach(url: &str, ceiling: Reach) -> Result<(), String> {
 /// Whether a fetch's error is a refusal for where its address reaches ([`check_reach`], or where
 /// the address resolved when it was fetched), not a failure of the service.
 pub fn is_refusal(error: &str) -> bool {
-    ["can't point into the local network", "that address is never fetched", "resolves to this computer or the local network"]
-        .iter()
-        .any(|m| error.contains(m))
+    [
+        "can't point into the local network",
+        "that address is never fetched",
+        "that peer address is never fetched",
+        "resolves to this computer or the local network",
+    ]
+    .iter()
+    .any(|m| error.contains(m))
 }
 
 #[cfg(test)]
@@ -430,6 +435,20 @@ mod tests {
             assert_eq!(reach(url), Reach::Local, "{url}");
             assert!(check(url, None).is_ok(), "{url}");
         }
+    }
+
+    /// Every refusal for where an address reaches is told from a service's failure.
+    #[test]
+    fn refusals_are_told_from_other_failures() {
+        let refused = [
+            check_reach("http://10.0.40.1/a.png", Reach::Public).unwrap_err(),
+            check_reach("http://169.254.169.254/latest", Reach::Local).unwrap_err(),
+            Origin::connected("https://refused-peer.example/a.png", "169.254.169.254".parse().unwrap()).unwrap_err(),
+        ];
+        for e in &refused {
+            assert!(is_refusal(e), "{e}");
+        }
+        assert!(!is_refusal("HTTP 404"));
     }
 
     /// Site-local addresses (`fec0::/10`, deprecated but still routed inside some sites) are

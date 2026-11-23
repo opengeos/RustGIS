@@ -417,7 +417,10 @@ fn remember_node_origins(s: &mut Session, c: &Connection, children: &[Value], or
     // A node a listing read from the internet named stays held there, though a listing read
     // locally names it again: the narrower record is kept. Records already there are narrowed
     // first, whatever room is left, as narrowing adds none.
-    let (known, new): (Vec<_>, Vec<_>) = keys.into_iter().partition(|key| s.browse_origins.1.contains_key(key));
+    let (known, mut new): (Vec<_>, Vec<_>) = keys.into_iter().partition(|key| s.browse_origins.1.contains_key(key));
+    // A node named twice (records often link the same service) takes one place.
+    let mut unique = std::collections::HashSet::new();
+    new.retain(|key| unique.insert(key.clone()));
     for key in known {
         if !s.browse_origins.1.get(&key).is_some_and(|recorded| recorded.reach() < origin.reach()) {
             s.browse_origins.1.insert(key, origin.clone());
@@ -1402,6 +1405,25 @@ mod tests {
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("1 entry") && said[0].contains("the rest are judged"), "{said:?}");
         assert_eq!(children, [json!({"node": services[1].0})]);
+    }
+
+    /// A node a listing names twice takes one place in the record, so a page that fits isn't
+    /// refused as too many.
+    #[test]
+    fn a_node_named_twice_takes_one_place_in_the_record() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let mut session = crate::Session::new(crate::Project::default());
+        let saved = session.run("connection.new", &json!({"kind":"csw","address":"https://csw-23.corp-looks-public.example/csw"})).unwrap();
+        let connection = session.connections.connections.iter().find(|c| c.id == saved["id"].as_str().unwrap()).unwrap().clone();
+        let local = Origin::connected(&connection.address, "10.0.0.5".parse().unwrap()).unwrap();
+        let first = json!({"node": "service:wms:https://csw-23-first.example/wms"});
+        super::remember_node_origins(&mut session, &connection, &[first], &local, false).unwrap();
+        let room = 16_384 - session.browse_origins.1.len() - 1;
+        session.browse_origins.1.extend((0..room).map(|i| ((format!("full-{i}"), String::new(), String::new()), local.clone())));
+        let node = json!({"node": "service:wms:https://csw-23-wms.example/wms"});
+        let twice = super::remember_node_origins(&mut session, &connection, &[node.clone(), node], &local, false);
+        assert!(twice.is_ok(), "{twice:?}");
+        assert_eq!(session.browse_origins.1.len(), 16_384);
     }
 
     /// A directory listing more services than are shown records only those shown.
