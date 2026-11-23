@@ -91,6 +91,10 @@ pub struct Converted {
     /// Its coordinate system is one RustGIS can't read, so GDAL converted it to longitude/latitude
     /// (as every conversion did before layers kept their own system).
     pub in_lonlat: bool,
+    /// Its features whose Z or M values the conversion dropped, as it keeps x and y only.
+    pub zm_dropped: u64,
+    /// Its features couldn't be checked for Z or M values: any it had were dropped.
+    pub zm_unknown: bool,
 }
 
 /// A GDAL program (`ogr2ogr`, `ogrinfo`): from `RUSTGIS_GDAL_BIN` (a folder), else on the `PATH`.
@@ -324,12 +328,25 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
                     },
                     layer: l.name.clone(),
                     family,
+                    zm_dropped: 0,
+                    zm_unknown: false,
                 }),
                 // A family the layer doesn't have.
                 Ok(None) => {}
                 // A layer (or a family filter the driver can't apply) that fails doesn't stop the
                 // others; the file fails only if nothing converts.
                 Err(e) => errors.push(e),
+            }
+        }
+        // The features of each part that had Z or M values, which the conversion drops (`-dim
+        // XY`), as a fresh conversion counts them. A count that fails on a layer declaring them
+        // is said without a code: the layer may hold only x and y.
+        if l.has_zm || l.family.is_none() {
+            for part in out.iter_mut().skip(before) {
+                match count_zm_features(src, &l, part.family) {
+                    Ok(n) => part.zm_dropped = n,
+                    Err(_) => part.zm_unknown = l.has_zm,
+                }
             }
         }
         // Count all converted families together: splitting a mixed layer isn't a loss. Read
@@ -479,9 +496,8 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
                 ));
             }
             Err(_) => {
-                // A layer that declares them had them dropped, though how many is unknown: said,
-                // without a code, as it may have lost none.
-                zm_dropped = info.has_zm;
+                // A layer that declares them may still hold only x and y: said, without a code,
+                // and not marked as having lost them.
                 zm_note = Some(crate::loss::Note::plain(format!(
                     "GDAL: '{layer}': an unknown number of source feature(s) may have had Z or M coordinates dropped; conversion keeps only XY coordinates"
                 )));
@@ -1275,8 +1291,17 @@ mod tests {
                 format!(r#"{{"type":"Feature","properties":{{"rank":1}},"geometry":{{"type":"Point","coordinates":{coordinates}}}}}"#);
             std::fs::write(&path, input).unwrap();
             let fresh = convert_one_fresh_in(&dir.join("cache"), &path, "points", None, None).unwrap();
-            assert_eq!(fresh.notes.iter().any(|n| n.contains("Z or M coordinates on 1 source feature")), lossy);
+            assert_eq!(
+                fresh
+                    .notes
+                    .iter()
+                    .any(|n| n.loss == Some(crate::loss::LossCode::DroppedZm) && n.contains("Z or M coordinates on 1 source feature")),
+                lossy
+            );
             assert_eq!(fresh.zm_dropped, lossy);
+            // A first conversion, as Add Data makes it, counts them too.
+            let (parts, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
+            assert_eq!(parts.iter().map(|p| p.zm_dropped).sum::<u64>(), u64::from(lossy));
             let source = crate::source::open_path(&fresh.path, None).unwrap();
             let batch = source.read(&crate::source::Request { extent: None, limit: 10 }).unwrap();
             assert_eq!(batch.features[0].geometry.as_ref().unwrap().extent().center().x, if lossy { 2.0 } else { 8.0 });

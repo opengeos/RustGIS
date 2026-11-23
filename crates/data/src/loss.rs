@@ -93,12 +93,7 @@ loss_codes! {
     ApproximatedDatum => (
         "approximated.datum",
         Approximated,
-        "Export in the layer's own coordinate system, or reproject it to one with a known shift to WGS 84."
-    ),
-    AssumedCrs => (
-        "assumed.crs",
-        Assumed,
-        "Set the layer's coordinate system to the one its coordinates are in (Define Projection)."
+        "Export in the layer's own coordinate system, or give that system with a known transformation to WGS 84."
     ),
 }
 

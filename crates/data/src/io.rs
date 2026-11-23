@@ -6581,10 +6581,10 @@ mod tests {
         assert!(rep.messages.is_empty(), "{:?}", rep.messages);
         assert_eq!(
             crate::export_notes([(&utm, ext(&utm)), (&lonlat, ext(&lonlat))], "out.geojson", Crs::LonLat),
-            [crate::loss::Note::loss(
-                crate::loss::LossCode::AssumedCrs,
+            // Told by the extent alone: said without a code.
+            [
                 "out.geojson: the coordinates of utm aren't longitude/latitude, so they're out of place: define its projection and export again"
-            )]
+            ]
         );
         assert!(crate::export_notes([(&lonlat, ext(&lonlat))], "out.geojson", Crs::LonLat).is_empty());
 
@@ -6691,10 +6691,9 @@ mod tests {
         window.windowed = true;
         assert_eq!(
             crate::export_notes([(&window, Extent::new(-180.0, -90.0, 180.0, 84.0))], "tiles.gpkg", Crs::WebMercator),
-            [crate::loss::Note::loss(
-                crate::loss::LossCode::ChangedPosition,
+            [
                 "tiles.gpkg: the extent of tiles reaches beyond 85.05° north or south, and what lies beyond is written at 85.05°, where Web Mercator ends"
-            )]
+            ]
         );
         assert!(crate::export_notes([(&window, Extent::new(-180.0, -80.0, 180.0, 84.0))], "tiles.gpkg", Crs::WebMercator).is_empty());
         // A layer counted and a window told by its extent: one notice, saying both.

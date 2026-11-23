@@ -845,10 +845,12 @@ pub fn export_notes<'a>(
     let names: Vec<&str> = layers.iter().filter(|(_, e)| e.beyond_lonlat()).map(|(ds, _)| ds.name.as_str()).collect();
     match names.as_slice() {
         [] => {}
-        [one] => notes.push(Note::loss(LossCode::AssumedCrs, format!(
+        // Told by the extent alone, which also takes in longitudes past ±180° on purpose (a layer
+        // crossing the antimeridian): said, without a code, as it may have lost nothing.
+        [one] => notes.push(Note::plain(format!(
             "{target}: the coordinates of {one} aren't longitude/latitude, so they're out of place: define its projection and export again"
         ))),
-        _ => notes.push(Note::loss(LossCode::AssumedCrs, format!(
+        _ => notes.push(Note::plain(format!(
             "{target}: the coordinates of {} aren't longitude/latitude, so they're out of place: define their projection and export again",
             layer_list(&names)
         ))),
@@ -946,7 +948,9 @@ fn web_mercator_said(beyond: &[(&str, Option<usize>)], target: &str) -> Option<l
     if said.is_empty() {
         return None;
     }
-    Some(loss::Note::loss(loss::LossCode::ChangedPosition, format!("{target}: {}, where Web Mercator ends", said.join("; "))))
+    let text = format!("{target}: {}, where Web Mercator ends", said.join("; "));
+    // Vertices counted are moved; an extent alone may reach further than the features do.
+    Some(if counted.is_empty() { loss::Note::plain(text) } else { loss::Note::loss(loss::LossCode::ChangedPosition, text) })
 }
 
 /// Why exporting `ds` in `crs` would write other data than the layer's: a layer on another body

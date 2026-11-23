@@ -1037,7 +1037,13 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
     }
     if dxf_height {
         let native = rustgis_engine::data::dxf::read(file, content, &Default::default()).map_err(std::io::Error::other)?;
-        if native.len() != 1 || native[0].1.skipped != 0 || native[0].1.messages != dxf_messages {
+        // The varying heights lost are coded `dropped.zm`; nothing else is.
+        let expected: Vec<Option<LossCode>> = dxf_messages.iter().map(|m| m.contains("varying Z").then_some(LossCode::DroppedZm)).collect();
+        if native.len() != 1
+            || native[0].1.skipped != 0
+            || native[0].1.messages.texts().collect::<Vec<_>>() != dxf_messages
+            || native[0].1.messages.iter().map(|m| m.loss).collect::<Vec<_>>() != expected
+        {
             return Err(std::io::Error::other(format!("DXF height native report: {native:?}")));
         }
         check_dxf_height(&native[0].0)?;
@@ -1136,7 +1142,9 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
         }
         check_dxf_height(&s.map().layers[0].dataset)?;
         let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        if said != dxf_messages {
+        let codes: Vec<Option<LossCode>> = s.notices_since(mark).iter().map(|n| n.loss()).collect();
+        let expected: Vec<Option<LossCode>> = dxf_messages.iter().map(|m| m.contains("varying Z").then_some(LossCode::DroppedZm)).collect();
+        if said != dxf_messages || codes != expected {
             return Err(std::io::Error::other(format!("DXF height command notices: {said:?}")));
         }
     }

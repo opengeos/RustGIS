@@ -167,8 +167,7 @@ An `--allow` that names no kind or code is refused with status 2, as is `--allow
 | `changed.truncated` | Use a decimal field to keep the fractional part. |
 | `changed.body` | Export in the layer's own coordinate system, which keeps its body. |
 | `changed.position` | Export in a coordinate system that holds the positions, such as WGS 84. |
-| `approximated.datum` | Export in the layer's own coordinate system, or reproject it to one with a known shift to WGS 84. |
-| `assumed.crs` | Set the layer's coordinate system to the one its coordinates are in (Define Projection). |
+| `approximated.datum` | Export in the layer's own coordinate system, or give that system with a known transformation to WGS 84. |
 
 Not every loss has a code yet: losses still reported without one don't stop a strict run.
 

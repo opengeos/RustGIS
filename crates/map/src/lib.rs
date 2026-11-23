@@ -854,17 +854,19 @@ impl Layer {
 
     /// [`Layer::load_all`], with what of the source couldn't be read.
     pub fn load_all_counted(&self) -> Result<(Dataset, Unreadable), String> {
-        let (ds, report, zm_noted) = self.load_all_with_notices()?;
+        let (ds, report, _) = self.load_all_with_notices()?;
         // materialize also puts the typed date diagnostics in messages. Existing consumers
         // give them their own export wording, so preserve only the other messages here.
         let date_notes: Vec<_> = report.unread_dates.iter().chain(&report.rounded_dates).map(|n| format!(": {n}")).collect();
         let mut seen = std::collections::HashSet::new();
-        let messages = report
+        let messages: rustgis_data::loss::Notes = report
             .messages
             .into_iter()
             .filter(|m| !date_notes.iter().any(|date| m.ends_with(date)))
             .filter(|m| seen.insert(m.clone()))
             .collect();
+        // A Z/M note found by this read too, not only one the source said when it opened.
+        let zm_noted = messages.iter().any(|m| m.loss == Some(rustgis_data::loss::LossCode::DroppedZm));
         Ok((ds, Unreadable { rows: report.skipped, dates: report.unread_dates, rounded: report.rounded_dates, messages, zm_noted }))
     }
 

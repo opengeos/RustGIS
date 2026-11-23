@@ -185,7 +185,12 @@ impl Engine {
                 for message in report.messages.into_iter().filter(|message| !opened_notes.contains(message)) {
                     session.say(message);
                 }
-                if let Some(note) = rustgis_engine::data::zm_export_note([&ds], &format!("{name} as GeoJSON")) {
+                // What GeoJSON, in WGS 84, lacks of it, as an export to GeoJSON says it.
+                for note in rustgis_engine::data::export_notes(
+                    [(&ds, ds.lonlat_extent())],
+                    &format!("{name} as GeoJSON"),
+                    rustgis_engine::data::raster::Crs::LonLat,
+                ) {
                     session.say(note);
                 }
                 // GeoJSON is longitude/latitude, whatever system the source holds its coordinates in.
@@ -193,8 +198,12 @@ impl Engine {
             }
             if !selected {
                 let text = rustgis_engine::data::io::to_geojson(&*found.dataset.in_lonlat()?).to_string();
-                let note = rustgis_engine::data::zm_export_note([&found.dataset], &format!("{} as GeoJSON", found.name));
-                if let Some(note) = note {
+                let target = format!("{} as GeoJSON", found.name);
+                for note in rustgis_engine::data::export_notes(
+                    [(&found.dataset, found.dataset.lonlat_extent())],
+                    &target,
+                    rustgis_engine::data::raster::Crs::LonLat,
+                ) {
                     session.say(note);
                 }
                 return Ok(text);
@@ -221,7 +230,14 @@ impl Engine {
                 ds.push(g, r.values().cloned().collect());
             }
             let text = rustgis_engine::data::io::to_geojson(&ds).to_string();
-            if let Some(note) = rustgis_engine::data::zm_export_note([&ds], &format!("{} as GeoJSON", ds.name)) {
+            // The selected rows lack what the layer's do: said of the layer, whose system and body
+            // the copy in longitude/latitude no longer holds.
+            let target = format!("{} as GeoJSON", ds.name);
+            for note in rustgis_engine::data::export_notes(
+                [(&found.dataset, found.dataset.lonlat_extent())],
+                &target,
+                rustgis_engine::data::raster::Crs::LonLat,
+            ) {
                 session.say(note);
             }
             Ok::<String, String>(text)

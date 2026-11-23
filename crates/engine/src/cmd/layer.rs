@@ -3565,6 +3565,24 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     for f in failed {
         s.notify(format!("{path}: {f}"), true);
     }
+    // What the conversion dropped of each part's Z or M values, as a fresh conversion says it.
+    for c in &converted {
+        if c.zm_dropped > 0 {
+            let text = format!(
+                "{path}: GDAL: '{}' contains Z or M coordinates on {} source feature(s); conversion keeps only XY coordinates",
+                c.name, c.zm_dropped
+            );
+            s.notify_loss(rustgis_data::loss::LossCode::DroppedZm, text.into());
+        } else if c.zm_unknown {
+            s.notify(
+                format!(
+                    "{path}: GDAL: '{}': an unknown number of source feature(s) may have had Z or M coordinates dropped; conversion keeps only XY coordinates",
+                    c.name
+                ),
+                false,
+            );
+        }
+    }
     let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let parts = gdal_parts(converted, &original, crs);
     add_converted(s, p, path, &original, parts)
@@ -3585,7 +3603,7 @@ pub(crate) fn gdal_parts(mut converted: Vec<rustgis_data::source::gdal::Converte
             name: c.name,
             unprojected: c.unprojected,
             in_lonlat: c.in_lonlat,
-            zm_dropped: false,
+            zm_dropped: c.zm_dropped > 0,
             origin: ConvertedOrigin::Gdal(rustgis_map::source::GdalOrigin {
                 path: original.to_string(),
                 layer: c.layer,

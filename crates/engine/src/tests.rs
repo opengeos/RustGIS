@@ -22462,6 +22462,8 @@ fn split_sources_keep_their_points_on_top() {
             family: Some(f),
             unprojected: false,
             in_lonlat: false,
+            zm_dropped: 0,
+            zm_unknown: false,
         })
         .collect();
     let original = dir.join("file.gpx").display().to_string();

@@ -2794,11 +2794,10 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
             let count = inputs.len();
             let inputs_list = inputs.join(", ");
             let label = if count == 1 { "input" } else { "inputs" };
-            let text = format!("gp.batch: {count} {label} ({inputs_list}): {msg}");
-            if let Some(code) = code {
-                losses.add(code, &text, count);
-            } else {
-                s.notify(text, false);
+            match code {
+                // Its inputs are named in the example, which the batch's loss notice prefixes.
+                Some(code) => losses.add_stated(code, &format!("{count} {label} ({inputs_list}): {msg}"), count),
+                None => s.notify(format!("gp.batch: {count} {label} ({inputs_list}): {msg}"), false),
             }
         }
     }
@@ -3192,6 +3191,18 @@ impl BatchLosses {
         entry.reports = entry.reports.saturating_add(count);
         if entry.examples.len() < 3 {
             entry.examples.push(batch_message(text, count));
+        } else {
+            entry.omitted += 1;
+        }
+    }
+
+    /// [`BatchLosses::add`] for a message that already says how many it covers (`count`):
+    /// counted, without a repetition count added to it.
+    fn add_stated(&mut self, code: LossCode, text: &str, count: usize) {
+        let entry = self.0.entry(code.spec().id).or_insert_with(|| BatchLoss { code, reports: 0, examples: Vec::new(), omitted: 0 });
+        entry.reports = entry.reports.saturating_add(count);
+        if entry.examples.len() < 3 {
+            entry.examples.push(text.to_string());
         } else {
             entry.omitted += 1;
         }
@@ -7238,7 +7249,8 @@ mod batch_tests {
         // A Z/M loss has its code, so it is said as one loss notice for the batch.
         let notice = s.notices_since(mark).iter().find(|n| n.text.contains("Z or M")).unwrap();
         assert_eq!(notice.loss(), Some(rustgis_data::loss::LossCode::DroppedZm));
-        assert!(notice.text.starts_with("gp.batch: 4 loss report(s) (gp.batch: 4 inputs ("), "{}", notice.text);
+        assert!(notice.text.starts_with("gp.batch: 4 loss report(s) (4 inputs ("), "{}", notice.text);
+        assert!(!notice.text.contains("(×"), "{}", notice.text);
         assert!(notice.text.contains("file_1.geojson"));
         assert!(notice.text.contains("file_2.geojson"));
         assert!(notice.text.contains("file_3.geojson"));
