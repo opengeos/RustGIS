@@ -11,6 +11,8 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering::Relaxed;
 
 mod cache;
 mod index;
@@ -71,7 +73,7 @@ pub struct ShpSource {
     /// Whether every record's stored box holds its shape, as reads by area take the boxes on
     /// trust: [`BOXES_UNKNOWN`] until a whole read has looked, then [`BOXES_HOLD`] or
     /// [`BOXES_DONT`]. A file of points holds from the start: each point is its own box.
-    boxes: std::sync::atomic::AtomicU8,
+    boxes: AtomicU8,
 }
 
 /// Not yet looked at ([`ShpSource::boxes`]).
@@ -223,7 +225,7 @@ impl ShpSource {
         if matches!(shape_type, 11 | 13 | 15 | 18 | 21 | 23 | 25 | 28) {
             info.drop_zm(Some(index.count));
         }
-        let boxes = std::sync::atomic::AtomicU8::new(if matches!(shape_type, 1 | 11 | 21) { BOXES_HOLD } else { BOXES_UNKNOWN });
+        let boxes = AtomicU8::new(if matches!(shape_type, 1 | 11 | 21) { BOXES_HOLD } else { BOXES_UNKNOWN });
         Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes })
     }
 }
@@ -374,7 +376,7 @@ impl FeatureSource for ShpSource {
     /// opened). Until then, and for a file whose boxes miss their shapes, reads by area may leave
     /// shapes out.
     fn finds_all_by_area(&self) -> bool {
-        self.index.unboxed == 0 && self.boxes.load(std::sync::atomic::Ordering::Relaxed) == BOXES_HOLD
+        self.index.unboxed == 0 && self.boxes.load(Relaxed) == BOXES_HOLD
     }
     /// Visits located shapes in a spatial request; geometry-less rows belong only to whole reads.
     /// Counts scanned records and checks Cancel before filtering them.
@@ -386,11 +388,13 @@ impl FeatureSource for ShpSource {
         if extent.is_some_and(|e| e.is_empty()) {
             return Ok(Batch { complete: true, ..Batch::default() });
         }
-        let bounds = extent.map(|e| [e.min_x as f32, e.min_y as f32, e.max_x as f32, e.max_y as f32]);
+        // Rounded outward, as the index keeps the records' boxes, so a box reaching the extent by
+        // less than an f32 step is still found.
+        let bounds = extent.map(|e| [f32_down(e.min_x), f32_down(e.min_y), f32_up(e.max_x), f32_up(e.max_y)]);
         // As in `read`, an extent the file's system couldn't bound (#1925) visits every record.
         let late = req.extent.is_some() && bounds.is_none();
         // A whole read looks at whether the stored boxes hold their shapes, once.
-        let checking = req.extent.is_none() && self.boxes.load(std::sync::atomic::Ordering::Relaxed) == BOXES_UNKNOWN;
+        let checking = req.extent.is_none() && self.boxes.load(Relaxed) == BOXES_UNKNOWN;
         let mut missed = false;
         // A record a whole read couldn't read this time had its box left unchecked: the check
         // waits for a read that reads them all.
@@ -473,7 +477,7 @@ impl FeatureSource for ShpSource {
         })?;
         chunks.flush()?;
         if checking && complete && (missed || !unchecked) {
-            self.boxes.store(if missed { BOXES_DONT } else { BOXES_HOLD }, std::sync::atomic::Ordering::Relaxed);
+            self.boxes.store(if missed { BOXES_DONT } else { BOXES_HOLD }, Relaxed);
         }
         Ok(Batch {
             features: Vec::new(),
