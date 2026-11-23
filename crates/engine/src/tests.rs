@@ -37604,6 +37604,74 @@ fn map_move_reorders_maps_keeping_the_one_in_view() {
     assert_eq!(one.undo_depth(), depth);
 }
 
+/// Moving a map that holds a streamed layer next to another such map, whose layer has the same id
+/// and as many reads but other features, isn't taken for an edit of either: each map is compared
+/// with its own earlier version, not with the one that was at its place (#2802).
+#[test]
+fn moving_maps_with_streamed_layers_is_not_an_edit_of_them() {
+    let mut s = Session::new(Project::default());
+    let mut layer = None;
+    let mut files = Vec::new();
+    for (name, n) in [("North", 4), ("South", 6)] {
+        s.run("map.new", &json!({"name": name})).unwrap();
+        let path = grid_fgb(&format!("moved-{name}"), n);
+        let r = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+        files.push(path);
+        let id = r["layer"].as_u64().unwrap() as u32;
+        assert!(layer.is_none_or(|l| l == id), "the same id in both maps");
+        layer = Some(id);
+        // Its window read, as drawing does.
+        let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+        crate::render::render_png(s.map_mut(), &v).unwrap();
+    }
+    let id = layer.unwrap();
+    let state = |s: &Session, map: &str| {
+        let l = s.project.maps.iter().find(|m| m.name == map).unwrap().layer(id).unwrap();
+        (l.dataset.features.len(), l.source.as_ref().map(|src| src.reads))
+    };
+    let (north, south) = (state(&s, "North"), state(&s, "South"));
+    assert!(north.0 != south.0 && north.1 == south.1, "{north:?} {south:?}");
+    s.run("map.move", &json!({"name": "South", "to": 0})).unwrap_or_else(|e| panic!("{e}"));
+    let names: Vec<_> = s.project.maps.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names.iter().position(|n| *n == "South"), Some(0), "{names:?}");
+    assert_eq!((state(&s, "North"), state(&s, "South")), (north, south));
+    // A real edit of a streamed layer is still refused after the move.
+    s.run("map.activate", &json!({"name": "North"})).unwrap();
+    s.active_layer = Some(id);
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0];
+    assert!(s.run("edit.delete", &Value::Null).unwrap_err().contains("read in place"));
+    assert_eq!(state(&s, "North"), north);
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// A map moved past its copy keeps its GeoPackage rows' keys: the copy shares the rows' versions,
+/// and a row the original deleted is still the copy's, not a new one to give a fresh key (#2802).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn moving_a_map_past_its_copy_keeps_its_geopackage_keys() {
+    let fixture = GpkgRegressionFixture::new("moved-copy");
+    let mut s = fixture.session();
+    let original = s.project.maps[s.project.active_map].name.clone();
+    s.run("map.duplicate", &json!({"name": "Copy"})).unwrap();
+    let keys = |s: &Session, map: &str| -> Vec<u64> {
+        let m = s.project.maps.iter().find(|m| m.name == map).unwrap();
+        m.layer_by_name("R").unwrap().dataset.features.iter().map(|f| f.id).collect()
+    };
+    let copy_keys = keys(&s, "Copy");
+    assert!(copy_keys.contains(&3), "{copy_keys:?}");
+    s.run("map.activate", &json!({"name": original})).unwrap();
+    let id = s.map().layer_by_name("R").unwrap().id;
+    let r3 = s.map().layer(id).unwrap().dataset.features.iter().position(|f| f.id == 3).unwrap();
+    s.map_mut().layer_mut(id).unwrap().selection = vec![r3];
+    s.active_layer = Some(id);
+    s.run("edit.delete", &json!({})).unwrap();
+    s.run("map.move", &json!({"name": "Copy", "to": 0})).unwrap();
+    assert_eq!(s.project.maps[0].name, "Copy");
+    assert_eq!(keys(&s, "Copy"), copy_keys);
+}
+
 /// Moving a layout changes the order of layouts in one undo step, with the open layout kept open
 /// whichever moves; a move to where it is leaves no step (#2802).
 #[test]
