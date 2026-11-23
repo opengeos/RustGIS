@@ -1014,21 +1014,25 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
             return v.to_string();
         }
     }
+    // With no losses to leave out, only that the result was cut.
+    let trimmed = !losses.is_empty();
     let mut v = said_cut;
-    v.insert("lossesTrimmed".into(), json!(true));
+    if trimmed {
+        v.insert("lossesTrimmed".into(), json!(true));
+    }
     let v = Value::Object(v).to_string();
     // The tightest budgets: the markers alone, then the list's name alone; below that (15 bytes)
     // no marker fits, and nothing a client could misread is said.
-    let both = json!({"truncated": true, "lossesTrimmed": true}).to_string();
+    let both = if trimmed { json!({"truncated": true, "lossesTrimmed": true}) } else { json!({"truncated": true}) }.to_string();
     let marker = json!({"lossesTrimmed": true}).to_string();
     let name = json!("lossesTrimmed").to_string();
     if v.len() <= max {
         v
     } else if both.len() <= max {
         both
-    } else if marker.len() <= max {
+    } else if trimmed && marker.len() <= max {
         marker
-    } else if name.len() <= max {
+    } else if trimmed && name.len() <= max {
         name
     } else {
         "{}".to_string()
@@ -1054,7 +1058,9 @@ fn loss_forms(losses: &[Value]) -> Vec<(Value, bool)> {
     let counts: Vec<Value> =
         summary.as_array().map(|a| a.iter().map(|e| json!({"code": e["code"], "count": e["count"]})).collect()).unwrap_or_default();
     let codes: Vec<Value> = summary.as_array().map(|a| a.iter().map(|e| e["code"].clone()).collect()).unwrap_or_default();
-    vec![(json!(losses), false), (json!(compact), true), (summary, true), (json!(counts), true), (json!(codes), true)]
+    // An empty list is never shortened.
+    let shortened = !losses.is_empty();
+    vec![(json!(losses), false), (json!(compact), shortened), (summary, shortened), (json!(counts), shortened), (json!(codes), shortened)]
 }
 
 /// The first `max` bytes of `text`, cut at a character boundary.
@@ -1768,6 +1774,10 @@ mod tests {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
         }
+        // A cut result with no losses says it was cut, not that a list was.
+        let text = finish_with_losses(&mut s, run_ok.clone(), vec![], 32, Withheld::default(), true);
+        let out: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((&out["truncated"], out.get("lossesTrimmed"), &out["losses"]), (&json!(true), None, &json!([])), "{out}");
         // A failure with its own `losses`, cut, keeps its `success` and says it was cut.
         let own = json!({"success": false, "error": "e".repeat(5000), "losses": 3});
         let text = finish_with_losses(&mut s, own, vec![loss.clone()], 200, Withheld::default(), true);
