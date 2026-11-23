@@ -69,9 +69,9 @@ The shared pieces the everyday workflow stands on.
 ### Correct results
 A result is right, or RustGIS says what it lost or assumed
 ([AGENTS.md](AGENTS.md#never-silent)).
-- Known silent losses: the text readers' losses listed as `Silent` in `crates/engine/tests/integration/never_silent_reading.rs`, among them
-  unreadable coordinates and parts in DXF,
-  and attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
+- Known silent losses: DXF polyface faces with missing vertices and unreadable supplied Z outside 3D POLYLINE vertices; and the text
+  reader loss listed as `Silent` in `crates/engine/tests/integration/never_silent_reading.rs`:
+  attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
   workbook retains its point but no attributes, without a notice). A fix makes
   its case `Said` or `Imported` _(open)_.
 - Lossy sample files in `never_silent_reading.rs` for the readers it doesn't cover yet:
@@ -107,8 +107,6 @@ features build on.
   already are refused, [#1364](https://github.com/opengeos/RustGIS/pull/1364)); packages
   (`.rgispkg`) that hold everything or say what stayed linked; projects written to disk as they
   save, not built in memory first.
-- A snapshot test of command ids and parameters, so a removal is always deliberate (the project
-  file's JSON Schema, its fixtures and the files past releases saved are checked today).
 - A compressed encoding of today's project JSON, read one release before it is written.
   _Coordinate first_: an issue is needed.
 - A system for the data a project refers to: named connections, copies that remember their
