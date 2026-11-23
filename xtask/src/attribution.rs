@@ -65,11 +65,13 @@ fn is_asset(file: &str) -> bool {
 
 /// The names in `git ls-files -z` output, or an error naming an image or font one that isn't valid
 /// UTF-8: the output was decoded lossily, so such a file would otherwise look missing and be
-/// skipped. (A name whose bad bytes are in its extension can't be told from an asset, so it counts.)
+/// skipped. (A name whose bad bytes are in its extension can't be told from an asset, so it counts; one with no extension is no asset.)
 fn names(listed: &str) -> Result<Vec<&str>, String> {
     let names: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty()).collect();
-    let unreadable =
-        |f: &str| f.contains('\u{FFFD}') && (is_asset(f) || f.rsplit_once('.').is_none_or(|(_, ext)| ext.contains('\u{FFFD}')));
+    let unreadable = |f: &str| {
+        let file = f.rsplit('/').next().unwrap_or(f);
+        f.contains('\u{FFFD}') && (is_asset(f) || file.rsplit_once('.').is_some_and(|(_, ext)| ext.contains('\u{FFFD}')))
+    };
     match names.iter().copied().find(|f| unreadable(f)) {
         Some(bad) => Err(format!("attribution: `{bad}` is not a valid UTF-8 file name, so it can't be checked: rename it")),
         None => Ok(names),
@@ -154,7 +156,9 @@ mod tests {
         let lossy = String::from_utf8_lossy(b"a/ok.png\0a/bad\xff.png\0");
         assert!(names(&lossy).unwrap_err().contains("bad\u{FFFD}.png"));
         // A name that is no image or font is none of this check's business, however it is spelt.
-        assert_eq!(names(&String::from_utf8_lossy(b"src/bad\xff.rs\0")).unwrap().len(), 1);
+        for name in [&b"src/bad\xff.rs"[..], b"bin/bad\xff", b"a.d/bad\xff", b".github/bad\xff"] {
+            assert_eq!(names(&String::from_utf8_lossy(name)).unwrap().len(), 1, "{}", String::from_utf8_lossy(name));
+        }
         assert!(names(&String::from_utf8_lossy(b"a/b.p\xffg\0")).is_err());
     }
 
