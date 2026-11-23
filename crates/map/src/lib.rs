@@ -1140,7 +1140,8 @@ impl Layer {
     /// vertex index, which only the source geometry has.
     pub fn projected_in(&mut self, flat: &projection::Flat, key: &str) -> &[Option<Geometry>] {
         if !self.is_cached(key) {
-            if !matches!(flat, projection::Flat::Mercator) {
+            // Display copies made for another map are of no use on this one.
+            if self.display_rows(flat).is_none() {
                 self.display_levels.clear();
             }
             self.fill_projected(key, flat);
@@ -1320,9 +1321,11 @@ impl Layer {
     /// Every failure clears the active display; recent reusable levels may remain cached.
     pub fn prepare_display(&mut self, flat: &projection::Flat, tol: f64, whole_layer_eligible: bool) -> bool {
         self.display = None;
-        // The display copies are made from longitude/latitude rows ([`lod::display`]).
-        let lonlat = self.dataset.coord_crs() == Crs::LonLat;
-        let Some(level) = lod::level(tol).filter(|_| lonlat && matches!(flat, projection::Flat::Mercator)) else { return false };
+        // The display copies are made from longitude/latitude rows on Web Mercator, and from rows
+        // held in the map's own system on that map, as they are ([`lod::display`]): no other is
+        // made, as converting a whole layer each level would cost what the copy saves.
+        let Some(rows) = self.display_rows(flat) else { return false };
+        let Some(level) = lod::level(tol) else { return false };
         self.trim_thinned_levels(self.lod_budget());
         let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
         let budget = self.lod_budget().saturating_sub(used);
@@ -1339,7 +1342,7 @@ impl Layer {
             self.display_rejected.insert(0, hit);
             return false;
         }
-        let Some(display) = lod::display(&self.dataset.features, self.geometry_rev, level, budget, whole_layer_eligible) else {
+        let Some(display) = lod::display(&self.dataset.features, rows, self.geometry_rev, level, budget, whole_layer_eligible) else {
             self.display_rejected.insert(0, attempt);
             self.display_rejected.truncate(lod::LEVELS_KEPT);
             return false;
@@ -1350,6 +1353,19 @@ impl Layer {
         self.trim_display_levels(budget);
         self.display = Some(display);
         true
+    }
+
+    /// Where its rows are on a map in `flat`, when display copies are made from them there
+    /// ([`Layer::prepare_display`]): longitude/latitude rows on Web Mercator, rows held in the map's
+    /// own system on that map; `None` on any other.
+    fn display_rows(&self, flat: &projection::Flat) -> Option<lod::Rows> {
+        let crs = self.dataset.coord_crs();
+        match flat {
+            projection::Flat::Mercator if crs == Crs::LonLat => Some(lod::Rows::LonLat),
+            projection::Flat::Mercator if crs == Crs::WebMercator => Some(lod::Rows::MapUnits),
+            _ if flat.direct_system() == Some(crs) => Some(lod::Rows::MapUnits),
+            _ => None,
+        }
     }
 
     /// Shared optional LOD storage remaining after original rows and exact projection caches.
@@ -4339,6 +4355,41 @@ mod tests {
         assert!(!m.layer(id).unwrap().is_cached("mercator"));
     }
 
+    /// A layer held in the system its map is drawn in gets display copies made from its own rows,
+    /// simplified as they are, with nothing converted and no full copy of it on the map; a map in
+    /// another system makes none (it draws the projected copy, as before), and a projection made
+    /// there drops those copies.
+    #[test]
+    fn a_held_layer_gets_display_copies_on_a_map_in_its_own_system() {
+        let utm = Crs::Epsg(32632);
+        let n = lod::THIN_ABOVE + 1000;
+        let mut d = Dataset::new("zigzag", GeometryType::Polyline, vec![]);
+        // Some 100 km east from 9°E at 48°N, zigzagging a metre either side.
+        let run: Vec<Coord> = (0..n)
+            .map(|i| Coord::new(500_000.0 + 100_000.0 * i as f64 / n as f64, 5_316_000.0 + if i % 2 == 0 { 1.0 } else { -1.0 }))
+            .collect();
+        d.push(Some(Geometry::Line(vec![run.clone()])), vec![]);
+        d.held_in = utm;
+        let mut l = Layer::new(1, d);
+        let own = projection::Flat::of(&Projection::Custom("EPSG:32632".into()));
+        assert!(l.prepare_display(&own, 1_000.0, false));
+        assert!(l.projected_cache().is_empty(), "no copy of the whole layer on the map");
+        let (g, extents) = l.display_cache().unwrap();
+        let Some(Geometry::Line(parts)) = &g[0] else { panic!("a line") };
+        assert!(lod::vertices(g[0].as_ref().unwrap()) < n / 40, "{}", lod::vertices(g[0].as_ref().unwrap()));
+        // Its ends exactly as held.
+        assert_eq!((parts[0][0], *parts[0].last().unwrap()), (run[0], *run.last().unwrap()));
+        assert_eq!(extents, &[l.dataset.features[0].geometry.as_ref().unwrap().extent()]);
+        // On a map in another system, and on Web Mercator, none is made.
+        let other = projection::Flat::of(&Projection::Custom("EPSG:25832".into()));
+        assert!(!l.prepare_display(&other, 1_000.0, false));
+        assert!(!l.prepare_display(&projection::Flat::Mercator, 1_000.0, false));
+        // Drawn there, the copies made for its own system go.
+        assert!(l.prepare_display(&own, 1_000.0, false));
+        l.projected_in(&other, "etrs");
+        assert!(l.display_levels.is_empty());
+    }
+
     #[test]
     fn display_projection_is_lazy_shared_bounded_and_invalidated() {
         let flat = projection::Flat::Mercator;
@@ -4370,7 +4421,7 @@ mod tests {
         l.clear_cache();
         assert!(l.display_cache().is_none());
         assert_eq!(l.view_cache_bytes(), rustgis_data::source::memory::features_bytes(&original));
-        assert!(lod::display(&original, 0, 12, 1, false).is_none());
+        assert!(lod::display(&original, lod::Rows::LonLat, 0, 12, 1, false).is_none());
         assert!(!long_line(100).prepare_display(&flat, 12_000.0, false));
         assert_eq!(l.dataset.features, original);
     }
@@ -4512,7 +4563,7 @@ mod tests {
         let copy = lod::project_budgeted(&l.dataset.features, 20, usize::MAX).unwrap();
         let budget = lod::cache_bytes(&copy);
         assert_eq!(lod::project_budgeted(&l.dataset.features, 20, budget).unwrap(), copy);
-        assert!(lod::display(&l.dataset.features, 0, 20, budget, true).is_none());
+        assert!(lod::display(&l.dataset.features, lod::Rows::LonLat, 0, 20, budget, true).is_none());
     }
 
     /// Tilted bands and zoom reversals reuse bounded display levels shared by snapshots.
