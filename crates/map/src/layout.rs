@@ -1403,13 +1403,26 @@ fn is_chart_bars(n: &usize) -> bool {
     *n == CHART_BARS
 }
 
-/// A scale bar's decimals as a file holds them: any number saturates into `u8` (negative to 0,
-/// a fraction cut, a huge value to 255), so `Layout::clamp` brings it into range and says so,
-/// rather than the whole layout failing to load.
+/// What a file's scale bar decimals that are no count at all (negative, fractional, not a number)
+/// read as: read from a file only, never kept. `Layout::clamp` sends it back to automatic and
+/// counts it.
+const SCALE_DECIMALS_INVALID: u8 = u8::MAX;
+
+/// A scale bar's decimals as a file holds them: a whole number from 0 to 253 as it is, a whole
+/// number past that as 254 (more than any count, so `Layout::clamp` cuts it to the most), and
+/// anything else that is a number as [`SCALE_DECIMALS_INVALID`]. So `Layout::clamp` brings every
+/// invalid value into range and says so, rather than the whole layout failing to load or a bad
+/// value passing as a good one.
 fn de_scale_decimals<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
     let n: Option<f64> = serde::Deserialize::deserialize(d)?;
-    // `as` saturates and sends NaN to 0.
-    Ok(n.map(|v| v as u8))
+    Ok(n.map(|v| {
+        if v == f64::INFINITY || (v.fract() == 0.0 && v >= 0.0) {
+            // Whole and not negative (or infinite): 254 is the cap.
+            v.min(254.0) as u8
+        } else {
+            SCALE_DECIMALS_INVALID
+        }
+    }))
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -1635,6 +1648,7 @@ impl ElementKind {
             return false;
         };
         // One subdivision is none: it clamps to 0, and an imported text is checked before that.
+        // Before clamp a file's invalid decimals read as 255 (a detail): over-requires for an invalid file only.
         let subdivisions = if *subdivisions == 1 { 0 } else { *subdivisions };
         (subdivisions, *divisions_before_zero, *label_position, unit_label, *unit_label_position, *decimals, *fit)
             != (s0, z0, lp0, &u0, up0, d0, f0)
@@ -2813,7 +2827,11 @@ impl Layout {
                     // One part is the whole division: saved as none, it asks for no details.
                     *subdivisions = if *subdivisions == 1 { 0 } else { (*subdivisions).min(MAX_SCALE_SUBDIVISIONS) };
                     *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
-                    *decimals = decimals.map(|d| d.min(MAX_SCALE_DECIMALS as u8));
+                    // A file's invalid count (negative, fractional) is read as a marker: back to automatic.
+                    *decimals = match *decimals {
+                        Some(SCALE_DECIMALS_INVALID) => None,
+                        d => d.map(|d| d.min(MAX_SCALE_DECIMALS as u8)),
+                    };
                     // The label is one line: a break in a hand-edited file is a space.
                     if let Some(label) = unit_label {
                         *label = label.replace("\r\n", " ").replace(['\n', '\r'], " ");
@@ -4570,7 +4588,9 @@ mod tests {
             {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"text_size":1e9,"unit_label":"{}"}}}}}},
             {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"text_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}},
             {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}},
-            {{"id":5,"name":"e","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":300}}}}}}]}}"#,
+            {{"id":5,"name":"e","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":300}}}}}},
+            {{"id":6,"name":"f","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":-1}}}}}},
+            {{"id":7,"name":"g","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":2.5}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4597,7 +4617,10 @@ mod tests {
         assert!(l.element(4).is_some_and(|e| !e.kind.scale_bar_uses_details()));
         // A count past 255 loads too (it would not fit a byte) and ends at the most, said.
         assert_eq!(got(5), (0, 0, Some(MAX_SCALE_DECIMALS as u8), SCALE_BAR_TEXT_PT, String::new()));
-        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (3, 1));
+        // A negative or fractional count is no count: it goes back to automatic, and is said too.
+        assert_eq!(got(6), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
+        assert_eq!(got(7), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (5, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
         }
