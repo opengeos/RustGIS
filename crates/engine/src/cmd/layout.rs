@@ -3550,13 +3550,13 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32) {
     };
     let Some(loss) = text_fit_loss(s, li, id) else { return };
     // A scale bar's labels (#2581): its box too small for them, or one off the page.
-    let said = if bar {
+    let notices = if bar {
         rustgis_render::layout::scale_bar_fit_notices(&[loss])
     } else {
         rustgis_render::layout::lines_left_out_notice(&loss).into_iter().collect()
     };
-    for said in said {
-        s.warn(said);
+    for notice in notices {
+        s.warn(notice);
     }
 }
 
@@ -4996,7 +4996,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         Some(c) => {
             let a = c.as_array().ok_or("center is [lon, lat]")?;
             match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)) {
-                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Coord::new(x.clamp(-540.0, 540.0), y.clamp(-85.0, 85.0))),
+                // A pole too: the frame's map decides where it's drawn (#2684).
+                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Coord::new(x.clamp(-540.0, 540.0), y.clamp(-90.0, 90.0))),
                 _ => return Err("center is [lon, lat]".into()),
             }
         }
@@ -5521,7 +5522,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     let refit = basis.filter(|basis| {
         // A text size given back (`null`) changes the bar's labels too.
         let restyled = id == basis.bar_id && (given(&["units", "divisions"]) || p.get("textSize").is_some());
-        (id == basis.frame && given(&["scale", "w"])) || (id == basis.text_id && given(&["text", "size", "bold"])) || restyled
+        // Its frame's centre and map fill the text's tokens and set the bar's ground too.
+        (id == basis.frame && given(&["scale", "w", "center", "map"]))
+            || (id == basis.text_id && given(&["text", "size", "bold"]))
+            || restyled
     });
     // A map frame drawn at another view: its scale bars' lengths and labels change (#2581).
     let frame_view = given(&["scale", "center", "bearing", "pitch", "map"])
@@ -5531,9 +5535,23 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     } else if let Some(basis) = &refit {
         refit_scale_box(s, li, basis);
     }
-    // After the scale box is refitted: a text is measured in the box it is saved with.
-    if shown || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) || BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some()) {
+    // After the scale box is refitted: a text is measured in the box it is saved with, and a scale
+    // bar moved, whose labels can then run off the page, too.
+    let bar = s.project.layouts.get(li).and_then(|l| l.element(id)).is_some_and(|e| matches!(e.kind, ElementKind::ScaleBar { .. }));
+    if shown
+        || TEXT_FIT_KEYS.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()))
+        || BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some())
+        || (bar && given(&["x", "y"]))
+    {
         say_text_fit(s, li, id);
+    }
+    // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).
+    if new_center.is_some() || given(&["map"]) {
+        let said =
+            s.project.layouts.get(li).and_then(|l| unplaced_notice(&l.name, &unplaced_center(s, l, id).into_iter().collect::<Vec<_>>()));
+        if let Some(said) = said {
+            s.notify(said, false);
+        }
     }
     say_held(s, "Element Properties", held);
     if let Some(w) = font_told {
@@ -5573,11 +5591,12 @@ fn scale_text_mm(text: &str, text_pt: f64, bold: bool) -> f64 {
 /// What a publication places over its map, which a scale bar box measured again must stay off.
 const PLACED_OVER_MAP: [&str; 3] = ["Legend Box", "Locator", "North Arrow"];
 
-/// What a publication's scale bar box is measured from: its frame (id, centre, scale, width), its
-/// bar (id, units, divisions) and the text under the bar (id, text, size, boldness).
+/// What a publication's scale bar box is measured from: its frame (id, map, centre, scale, width),
+/// its bar (id, units, divisions, text size) and the text under the bar (id, text, size, boldness).
 #[derive(Clone)]
 struct BoxBasis {
     frame: u32,
+    map: String,
     center: Coord,
     scale: f64,
     frame_w: f64,
@@ -5629,9 +5648,10 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         return None;
     };
     let fr = l.element(*frame)?;
-    let ElementKind::MapFrame { center, scale, .. } = &fr.kind else { return None };
+    let ElementKind::MapFrame { map, center, scale, .. } = &fr.kind else { return None };
     Some(BoxBasis {
         frame: *frame,
+        map: map.clone(),
         center: *center,
         scale: *scale,
         frame_w: fr.w,
@@ -5663,7 +5683,8 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
     }
 }
 
-/// A publication's scale bar box measured again after its frame's scale or width changed (#1379):
+/// A publication's scale bar box measured again after its frame's scale, width, centre or map
+/// changed (#1379, #2581), each measured on its own map and centre:
 /// the "Scale Box", the "Scale Bar" of `frame` and the "Scale" under it, as a publication lays them
 /// out (one place, one width, none locked), take the width that bar and the text under it (its
 /// tokens filled as the page draws them, measured as drawn) now need, kept on the side of the
@@ -5680,8 +5701,9 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame) else { return };
     let Some(l) = s.project.layouts.get(li) else { return };
     let Some(fr) = l.element(frame) else { return };
-    let ElementKind::MapFrame { map, .. } = &fr.kind else { return };
-    let Some(m) = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return };
+    // Each basis measured on its own map: a frame given another map fills the text from it.
+    let map_of = |b: &BoxBasis| s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(&b.map));
+    let (Some(m), Some(was)) = (map_of(&now), map_of(before)) else { return };
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (Some(boxed), Some(bar), Some(text)) = (named("Scale Box"), named("Scale Bar"), named("Scale")) else { return };
     let (ElementKind::ScaleBar { frame: of, .. }, ElementKind::Text { text: written, letter_spacing, font, font_name, .. }) =
@@ -5708,7 +5730,7 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
         return;
     }
     // The width the box had from its basis before the change: another one was set by hand.
-    if (boxed.w - basis_width(l, m, before)).abs() > 0.01 {
+    if (boxed.w - basis_width(l, was, before)).abs() > 0.01 {
         return;
     }
     let w = basis_width(l, m, &now);
@@ -6368,11 +6390,61 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
             false,
         );
     }
+    // A frame centred where its map can't place the point (a pole on Web Mercator) is said (#2684).
+    // One notice for them all, counted.
+    let unplaced: Vec<(String, Option<f64>)> = l.elements.iter().filter_map(|e| unplaced_center(s, &l, e.id)).collect();
+    if let Some(said) = unplaced_notice(&l.name, &unplaced) {
+        s.notify(said, false);
+    }
     let name = l.name.clone();
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
     Ok(json!({"layout": i, "name": name}))
+}
+
+/// Map frame `id` in `l` when its centre lies where its map's projection can't place it (a pole
+/// on Web Mercator, whose poles are at infinity): its name and the latitude it's drawn centred
+/// at instead, as [`rustgis_map::layout::frame_camera`] draws it (85° for a Mercator pole;
+/// `None` when that can't be read back) (#2684). `None` when it's drawn where it's centred, or
+/// `id` isn't a frame of a map here.
+fn unplaced_center(s: &Session, l: &Layout, id: u32) -> Option<(String, Option<f64>)> {
+    let e = l.element(id)?;
+    let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { return None };
+    let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
+    if rustgis_map::layout::frame_center_placed(m, *center) {
+        return None;
+    }
+    let cam = rustgis_map::layout::frame_camera(m, *center, *scale, 0.0, 0.0);
+    let drawn = m.to_lonlat(cam.center).map(|c| (c.y * 100.0).round() / 100.0).filter(|y| y.is_finite());
+    Some((e.name.clone(), drawn))
+}
+
+/// One notice for the map frames of layout `layout` centred where their maps' projections can't
+/// show them, with where each is drawn instead ([`unplaced_center`]): counted, the first five
+/// named. `None` for none (#2684).
+fn unplaced_notice(layout: &str, frames: &[(String, Option<f64>)]) -> Option<String> {
+    if frames.is_empty() {
+        return None;
+    }
+    let at = |lat: &Option<f64>| match lat {
+        Some(y) => format!("latitude {}", rustgis_map::symbology::fmt_num(*y)),
+        None => "the map's view centre".to_string(),
+    };
+    let mut named = frames
+        .iter()
+        .take(5)
+        .map(|(name, lat)| format!("'{}' at {}", crate::project::short_name(name), at(lat)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if frames.len() > 5 {
+        named.push_str(&format!(" and {} more", frames.len() - 5));
+    }
+    Some(format!(
+        "{}: {} map frame(s) are centred where their map's projection can't show the centre, and are drawn centred elsewhere: {named}",
+        crate::project::short_name(layout),
+        frames.len()
+    ))
 }
 
 /// Selects the explicit or first feature layer in the stored frame's map.

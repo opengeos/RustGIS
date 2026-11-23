@@ -331,7 +331,8 @@ or the folder holding them in `RUSTGIS_GDAL_BIN`; GDAL 3.8 or later), the deskto
 the vector formats GDAL reads: DWG, MapInfo TAB, OpenStreetMap XML, File Geodatabases RustGIS
 can't read itself (compressed ones, or ones with raster fields)
 and more. RustGIS doesn't link to GDAL: each layer is converted once, by `ogr2ogr`, into a
-FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cache folder
+FlatGeobuf with a spatial index in the layer's own coordinate system (in WGS 84, with a notice,
+when RustGIS can't read that system), kept in the cache folder
 (`~/.cache/rustgis/gdal` on Linux, `~/Library/Caches/RustGIS/gdal` on macOS,
 `%LOCALAPPDATA%\RustGIS\cache\gdal` on Windows, or `RUSTGIS_GDAL_CACHE`). Adding the file again
 reuses the conversion and its layer listing until the file's path, size or modification time
@@ -523,6 +524,8 @@ back to it. In **Home › Add › Add Data › Database…**, give a PostgreSQL 
   A table whose geometries are of several types loads each type as its own layer (points on top), each up to that many.
   A **condition** (an SQL expression on its columns, such as `population > 10000`) loads only the
   rows it keeps. The layer is an ordinary layer in memory, so every editing tool works on it.
+  It keeps the table's own coordinates when RustGIS knows its SRID, and edits are written back
+  in that SRID; a row whose geometry isn't edited keeps it as the table holds it.
 
 - **Edit › Manage Edits › Save to PostGIS…** (`pg.saveEdits`), there while a layer is loaded for
   editing, shows how many of the layer's rows are new, changed and deleted, and writes them to its
@@ -569,7 +572,8 @@ On the desktop, **Home › Add › Add Data › Edit GeoPackage Table…** (`gpk
 feature table of an existing local `.gpkg` for editing. Choose its table with **List Tables**
 when the file has several. The table needs one `INTEGER PRIMARY KEY`. At most 100,000 rows
 are loaded; **Most rows** can lower that limit. Whole numbers may use comma-grouped thousands
-(for example, `1,000`); fractional values are rejected. RustGIS does not
+(for example, `1,000`); fractional values are rejected. The layer keeps the table's own
+coordinates (its `srs_id`), and edits are written back in them. RustGIS does not
 directly edit rows outside that load, including rows with unreadable geometry. File-owned
 triggers can change other rows.
 

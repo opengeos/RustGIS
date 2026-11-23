@@ -260,7 +260,7 @@ fn to_fixed(nano: i64) -> i32 {
     (nano / 100).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
-/// Decodes a primitive block within the object/member limits and counts aligned member tails.
+/// Decodes a primitive block within its object/member limits and counts source members past the cap.
 fn block(osm: &mut Osm, data: &[u8]) -> Result<()> {
     let mut strings: Vec<String> = Vec::new();
     let mut groups: Vec<&[u8]> = Vec::new();
@@ -596,7 +596,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     let mut lines = Dataset::new(format!("{stem} lines"), GeometryType::Polyline, fields.clone());
     let mut polys = Dataset::new(format!("{stem} multipolygons"), GeometryType::Polygon, fields);
     let mut missing = 0usize;
-    let (mut missing_members, mut missing_rings, mut unclosed, mut outside) = (0u64, 0u64, 0u64, 0u64);
+    let (mut missing_members, mut missing_rings, mut unclosed, mut outside, mut containment_limited) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut short_ways = 0usize;
     let mut no_closed_outer = 0usize;
     // Ways in a multipolygon are drawn as its parts, not again on their own when their tags are
@@ -691,14 +691,22 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut budget = MAX_MEMBERS;
         for inner in inners {
             let p = inner.first().copied().unwrap_or_default();
+            let mut untested_candidate = false;
             let host = (0..parts.len()).find(|&k| {
-                boxes.get(k).is_some_and(|b| p.x >= b[0] && p.y >= b[1] && p.x <= b[2] && p.y <= b[3]) && budget > 0 && {
-                    budget -= 1;
-                    parts.get(k).and_then(|poly| poly.first()).is_some_and(|o| inside(p, o))
+                if !boxes.get(k).is_some_and(|b| p.x >= b[0] && p.y >= b[1] && p.x <= b[2] && p.y <= b[3]) {
+                    return false;
                 }
+                if budget == 0 {
+                    untested_candidate = true;
+                    return false;
+                }
+                budget -= 1;
+                parts.get(k).and_then(|poly| poly.first()).is_some_and(|o| inside(p, o))
             });
             if let Some(poly) = host.and_then(|k| parts.get_mut(k)) {
                 poly.push(inner);
+            } else if untested_candidate {
+                containment_limited += 1;
             } else {
                 outside += 1;
             }
@@ -752,6 +760,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             let subject = if count == 1 { one } else { many };
             report.messages.push(format!("{count} {subject}"));
         }
+    }
+    if containment_limited > 0 {
+        let subject = if containment_limited == 1 { "inner ring was" } else { "inner rings were" };
+        report.messages.push(format!("{containment_limited} OSM {subject} omitted after the containment-test limit of {MAX_MEMBERS}"));
     }
     // The notices are the file's: said once, with the first layer.
     let mut out: Vec<(Dataset, ReadReport)> =
@@ -930,7 +942,7 @@ pub(crate) mod tests {
     }
 
     /// Native PBF builder for finite omission cases: a tagged point survives every bad way or
-    /// relation, so successful imports must report the omitted data. All four nodes are present.
+    /// relation, so successful imports must report the omitted data. All referenced nodes are present.
     fn finite_omission_file(ways: &[(u64, &[i64], bool)], members: Option<&[(i64, u64, u64)]>) -> Vec<u8> {
         let mut out = Vec::new();
         let mut header = Vec::new();
@@ -941,7 +953,15 @@ pub(crate) mod tests {
             field_bytes(1, s.as_bytes(), &mut st);
         }
         let mut group = Vec::new();
-        for (id, x, y) in [(1, 0, 0), (2, 40_000_000, 0), (3, 40_000_000, 40_000_000), (4, 0, 40_000_000)] {
+        for (id, x, y) in [
+            (1, 0, 0),
+            (2, 40_000_000, 0),
+            (3, 40_000_000, 40_000_000),
+            (4, 0, 40_000_000),
+            (5, 30_000_000, 30_000_000),
+            (6, 35_000_000, 30_000_000),
+            (7, 30_000_000, 35_000_000),
+        ] {
             let mut n = Vec::new();
             field_varint(1, zz(id), &mut n);
             field_varint(8, zz(y), &mut n);
@@ -977,6 +997,29 @@ pub(crate) mod tests {
         field_bytes(2, &group, &mut block);
         blob("OSMData", &block, false, &mut out);
         out
+    }
+
+    /// Each hole needs two box-overlapping outer tests; the extra hole exceeds the real budget.
+    #[test]
+    fn containment_limit_has_its_own_omission_notice() {
+        let ways: &[(u64, &[i64], bool)] = &[(100, &[1, 2, 4, 1], false), (101, &[1, 2, 3, 4, 1], false), (102, &[5, 6, 7, 5], false)];
+        let mut members = vec![(100, 1, 7), (101, 1, 7)];
+        members.extend(std::iter::repeat_n((102, 1, 8), MAX_MEMBERS / 2));
+        let clean = read("budget.pbf", &finite_omission_file(ways, Some(&members))).unwrap();
+        assert_eq!(clean.len(), 2);
+        assert_eq!(clean[0].1.skipped, 0);
+        assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+        let Some(Geometry::Polygon(parts)) = &clean[1].0.features[0].geometry else { panic!("relation") };
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 1);
+        assert_eq!(parts[1].len(), MAX_MEMBERS / 2 + 1);
+        assert_eq!(parts[1][1], vec![Coord::new(3., 3.), Coord::new(3.5, 3.), Coord::new(3., 3.5), Coord::new(3., 3.)]);
+        members.push((102, 1, 8));
+        let lossy = read("budget.pbf", &finite_omission_file(ways, Some(&members))).unwrap();
+        assert_eq!(lossy[1].0.features.iter().collect::<Vec<_>>(), clean[1].0.features.iter().collect::<Vec<_>>());
+        assert_eq!(lossy[0].1.skipped, 0);
+        assert_eq!(lossy[0].1.messages, ["1 OSM inner ring was omitted after the containment-test limit of 100000"]);
+        assert!(lossy[1].1.messages.is_empty());
     }
 
     #[test]

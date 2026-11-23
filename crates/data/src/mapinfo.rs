@@ -296,7 +296,7 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
         (0..n).map(|k| Some(Coord::new(num(j + 2 * k)?, num(j + 2 * k + 1)?))).collect()
     };
     let mut error = None;
-    let (mut arcs, mut texts, mut short_parts, mut short_rings) = (0usize, 0usize, 0usize, 0usize);
+    let (mut arcs, mut texts, mut short_parts, mut short_rings, mut empty_objects) = (0usize, 0usize, 0usize, 0usize, 0usize);
     while i < w.len() {
         let kw = up(i);
         if !OBJECTS.contains(&kw.as_str()) {
@@ -324,11 +324,13 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
                     parts.push(pts(j + 1, n)?);
                     j += 1 + 2 * n;
                 }
+                let before = short_parts;
                 parts.retain(|p| {
                     let keep = p.len() >= 2;
                     short_parts += usize::from(!keep);
                     keep
                 });
+                empty_objects += usize::from(parts.is_empty() && short_parts > before);
                 Some(((!parts.is_empty()).then_some(Geometry::Line(parts)), j))
             })(),
             "REGION" => (|| {
@@ -343,7 +345,10 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
                     rings.push(pts(j + 1, n)?);
                     j += 1 + 2 * n;
                 }
-                Some((region_counted(rings, &mut short_rings), j))
+                let before = short_rings;
+                let geometry = region_counted(rings, &mut short_rings);
+                empty_objects += usize::from(geometry.is_none() && short_rings > before);
+                Some((geometry, j))
             })(),
             "RECT" | "ROUNDRECT" => (|| {
                 let (x1, y1, x2, y2) = (num(i + 1)?, num(i + 2)?, num(i + 3)?, num(i + 4)?);
@@ -395,6 +400,13 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
             let subject = if count == 1 { one } else { many };
             report.messages.push(format!("{count} {subject}"));
         }
+    }
+    if empty_objects > 0 {
+        let subject = if empty_objects == 1 { "object was kept as a row" } else { "objects were kept as rows" };
+        let possessive = if empty_objects == 1 { "its" } else { "their" };
+        report
+            .messages
+            .push(format!("{empty_objects} MapInfo {subject} without geometry because all {possessive} parts or rings were too short"));
     }
     if let Some(e) = error {
         report.messages.push(e);
@@ -524,6 +536,28 @@ mod tests {
         let (_, clean) =
             read("Columns 1\nid Integer\nData\nPline 2 0 0 1 1\nRegion 1 3 0 0 4 0 4 4\nNone", Some("1\n2\n3"), "clean").unwrap();
         assert!(clean.messages.is_empty(), "{clean:?}");
+    }
+
+    /// A row stays aligned even when all of its short line parts or polygon rings disappear.
+    #[test]
+    fn all_short_parts_keep_rows_and_report_missing_geometry() {
+        for (object, part_note) in [
+            ("Pline Multiple 1 1 1 1", "1 MapInfo line part with fewer than two coordinates was omitted"),
+            ("Region 1 2 0 0 1 1", "1 MapInfo polygon ring with fewer than four coordinates after closure was omitted"),
+        ] {
+            let mif = format!("Version 300\nCoordSys Earth Projection 1, 104\nColumns 1\nid Integer\nData\n{object}\nPoint 9 9\n");
+            let (ds, report) = read(&mif, Some("7\n8\n"), "parts").unwrap();
+            assert_eq!(ds.features.len(), 2);
+            assert!(ds.features[0].geometry.is_none());
+            assert_eq!(ds.features[0].attrs, [Value::Int(7)]);
+            assert_eq!(ds.features[1].geometry, Some(Geometry::Point(Coord::new(9., 9.))));
+            assert_eq!(ds.features[1].attrs, [Value::Int(8)]);
+            assert_eq!(report.skipped, 0);
+            assert_eq!(
+                report.messages,
+                [part_note, "1 MapInfo object was kept as a row without geometry because all its parts or rings were too short",]
+            );
+        }
     }
 
     const MIF: &str = "Version 300\nCharset \"WindowsLatin1\"\nDelimiter \",\"\nCoordSys Earth Projection 1, 104\nColumns 3\n  name Char(20)\n  pop Integer\n  area Decimal(10,2)\nData\n\nPoint 10 20\n    Symbol (35,0,12)\nPline 3\n10 20\n11 21\n12 20\n    Pen (1,2,0)\nRegion 2\n  5\n0 0\n10 0\n10 10\n0 10\n0 0\n  4\n2 2\n4 2\n3 4\n2 2\n    Pen (1,2,0)\n    Brush (2,16777215,16777215)\n    Center 5 5\nPline Multiple 2\n  2\n0 0\n1 1\n  2\n2 2\n3 3\nText \"Hello world\"\n 1 1 2 2\nNone\nRect 0 0 1 1\n";

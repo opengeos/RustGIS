@@ -151,7 +151,8 @@ the pull request which of these it reaches and why the rest don't apply:
 ## Quality gates
 `cargo xtask ci` (fmt, clippy -D warnings, tests, layers) before every commit.
 `cargo xtask test-hygiene` (also in CI) requires `// test-wait: reason` on timer waits in tests and
-`#[ignore = "reason"]` on ignored tests; prefer completion or progress signals.
+`#[ignore = "reason"]` on ignored tests, and refuses an `assert_eq!` or `assert_ne!` (or `debug_assert_*`)
+whose two sides are the same tokens; prefer completion or progress signals, and a fixed expected value.
 `cargo xtask memory` (in CI on Linux) fails when a command line workflow's peak memory grows past
 its limit in `xtask/memory-limits.txt`; a change that lowers one commits the lower limit with it.
 `cargo xtask rows` (also in CI) fails when code outside `rustgis-data` uses a layer's rows directly
@@ -160,6 +161,10 @@ its limit in `xtask/memory-limits.txt`; a change that lowers one commits the low
 It counts only the libraries and programs built for the host, not tests, examples, benches or code
 built only for other targets, nor a row indexed without reading a field (`features[i]` alone); use
 the accessors there too.
+Both limit files only go down: CI's `Limits only go down` job fails a pull request that raises or
+removes a limit against its base (a new memory scenario is fine). A maintainer approves a deliberate
+raise by commenting on the pull request with the line the failure prints for it, on a line of its
+own (`<!-- ratchet-raise-approved: xtask/row-uses.txt count=790 -->`), then re-runs the job.
 While you work, `cargo xtask changed` runs the same checks on only the packages your branch changes
 and those that depend on them (and `test-hygiene` on the whole workspace, and formatting, `layers` and
 `rows` when packages are checked), or everything when a

@@ -1785,7 +1785,9 @@ opens a list of the commands it starts, under the cursor: ↑/↓ to move, Enter
 Escape to close, or a click; Ctrl+Space opens it with nothing typed yet (on an empty line, every
 command), or again after Escape closed it (on macOS, where Ctrl+Space may switch the input source,
 type the first letter instead). Beside it, the highlighted command's help: its signature (keys with `?`
-may be left out), its name, its parameters one per line, and where it sits in the interface.
+may be left out), its name, its parameters one per line, and where it sits in the interface. Page Up
+and Page Down scroll a help longer than its box. With a screen reader, each entry the highlight
+moves to is read with a short form of its help.
 Accepting a command on a line of its own adds its braces: with its required keys ready for their
 values, the cursor at the first (`map.goToXY {"lon": , "lat": }`), or empty with the cursor inside
 when every key may be left out; a command with no parameters gets none, and a line that has
@@ -2054,9 +2056,12 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
   is a new layer (`name`, by default the layer's name with "raster"), and with `path` a
   cloud-optimised GeoTIFF too.
   - **The grid** is given as for Project Raster: `"grid"`, another raster's grid taken exactly, or
-    `crs` (by default the layer's), `cellSize` (required), `origin` (`[0, 0]` by default, so the
-    result lines up with any raster projected with the same `crs` and `cellSize`) and `extent` (by
-    default the polygons' bounds).
+    `crs` (by default the projected system the layer holds its coordinates in, else the one it was
+    read in), `cellSize` (required), `origin` (`[0, 0]` by default, so the result lines up with any
+    raster projected with the same `crs` and `cellSize`) and `extent` (by default the polygons'
+    bounds). The polygons are burned from their own coordinates: as they are on a grid in their
+    layer's system, else converted straight into the grid's, by the transformation between the
+    two datums where they differ. Raster clip and a spectral zone take a polygon the same way.
   - **What a cell takes:** a cell takes a polygon's value when its centre falls inside it, holes
     cut out. A numeric `field` gives its values; a text `field` gives codes 1 to n, in sorted order
     of its values. A table named after the result with "classes" (`code`, `value`), numbered if
@@ -2083,7 +2088,9 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
     yet and no cap on its work: each polygon fills the cells it covers, so many large polygons on a
     fine grid take time in proportion.
 - **Classification Wizard** (unsupervised k-means) and **Classification Tools** (minimum distance
-  from training polygons).
+  from training polygons). Training polygons held in a coordinate system of their own are read as
+  they are: a pixel's centre is converted into their system to be tested, straight by the
+  transformation between the two datums where they differ, as for Deep Learning Tools.
 - **Mensuration**: distances along the surface, heights between two points, areas, and volumes
   above or below a base height, with a list of results.
 
@@ -2349,8 +2356,9 @@ the wrong field.
 ## Deep learning and hosted imagery
 
 **Imagery › Deep Learning Tools** trains a neural network (a multilayer perceptron) on the pixels
-under training polygons and classifies every pixel, adding a class raster with a confidence band
-and reporting the accuracy on held-back pixels. Run from its pane in the desktop app, it trains
+under training polygons (tested in the system their layer holds them in, as for Classification
+Tools) and classifies every pixel, adding a class raster with a confidence band and reporting the
+accuracy on held-back pixels. Run from its pane in the desktop app, it trains
 on every sampled pixel for all the epochs asked, however long that takes, and can be cancelled;
 elsewhere it keeps to a few seconds of work (see the limits above). Trained models stay in the project; **Publish ›
 Share As › Deep Learning** saves one as a package to apply in other projects. **Imagery › Create
