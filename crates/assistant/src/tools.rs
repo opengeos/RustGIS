@@ -101,7 +101,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_tool",
-            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step.",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step. As for run_command, a notice that reports lost data is also in the result's losses, as {code, kind, text, action}.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -859,8 +859,8 @@ fn run_script(s: &mut Session, call: &ToolCall, tokens: usize, scope: Scope, per
             // Nothing was kept, so no line ran and no layer was added.
             // The notice of the failure is the error redacted: compared as such, it isn't repeated.
             let told = rustgis_engine::data::diagnostics::redact(&e);
-            let said: Vec<&&str> = notices.iter().filter(|t| **t != e && **t != told).collect();
-            let out = json!({"success": false, "result": null, "lines": 0, "layersAdded": [], "notices": said,
+            let kept: Vec<&&str> = notices.iter().filter(|t| **t != e && **t != told).collect();
+            let out = json!({"success": false, "result": null, "lines": 0, "layersAdded": [], "notices": kept,
                 "error": clip(&e, 8000), "duration_s": secs});
             let (out, withheld) = public_projection(out);
             Err(finish_with_losses(s, out, losses, tokens, withheld, true))
@@ -945,8 +945,14 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
         }
         Value::Object(o)
     };
-    if let Some(v) = forms.iter().map(|form| with(o.clone(), form)).find(|v| v.to_string().len() <= max) {
-        return v.to_string();
+    // Sized from the parts, so the result is serialized once: its own bytes, then each form's
+    // with its key (and `lossesTrimmed`'s).
+    let base = Value::Object(o.clone()).to_string().len();
+    let size = |(list, trimmed): &(Value, bool)| {
+        base + list.to_string().len() + r#","losses":"#.len() + if *trimmed { r#","lossesTrimmed":true"#.len() } else { 0 }
+    };
+    if let Some(form) = forms.iter().find(|form| size(form) <= max) {
+        return with(o, form).to_string();
     }
     // The result cut to leave room for one entry per code.
     let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
@@ -987,7 +993,6 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     let mut v = bare;
     v.insert("lossesTrimmed".into(), json!(true));
     let v = Value::Object(v).to_string();
-    // The tightest budgets: the marker alone.
     // The tightest budgets: the marker alone, then its name alone; below that (15 bytes) no
     // marker fits, and nothing a client could misread is said.
     let marker = json!({"lossesTrimmed": true}).to_string();
