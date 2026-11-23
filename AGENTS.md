@@ -61,8 +61,8 @@ Work that splits into independent parts runs on several threads where practical:
   `available_parallelism` or a fixed number, and scratch memory within `memory::thread_scratch`;
 - a thread the OS refuses costs speed, not the run (`Builder::spawn_scoped`), and a job's thread
   it refuses ends that job with an error (`Builder::spawn`; `work_off_frame` in `ui-egui`).
-  `clippy.toml` refuses `available_parallelism` and `std::thread::spawn`, which panics then; an
-  exception says why in its `#[expect(clippy::disallowed_methods, reason = "…")]`.
+  `clippy.toml` refuses `available_parallelism`, and `std::thread::spawn` and `Scope::spawn`, which
+  panic then; an exception says why in its `#[expect(clippy::disallowed_methods, reason = "…")]`.
 
 ## Size for real data
 Real data dwarfs the sample project: a parcel layer of half a million rows and a hundred fields

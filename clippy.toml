@@ -19,4 +19,5 @@ disallowed-methods = [
     { path = "rustgis_geom::geodesic_ring_area_m2", reason = "the sphere; the Earth measures with `wgs84_ring_perimeter_area_m2`" },
     { path = "std::thread::available_parallelism", reason = "the thread count comes from `rustgis_data::threads`, which follows the user's setting" },
     { path = "std::thread::spawn", reason = "it panics when the system refuses a thread: use `std::thread::Builder::spawn` and handle the error" },
+    { path = "std::thread::Scope::spawn", reason = "it panics when the system refuses a thread: use `std::thread::Builder::spawn_scoped` and handle the error" },
 ]
