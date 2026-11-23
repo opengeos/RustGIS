@@ -27,9 +27,84 @@ from ._rustgis import Engine as _Engine
 from ._rustgis import RustGISError, __version__
 from ._rustgis import load_plugins as _load_plugins
 
-__all__ = ["Layer", "Map", "RustGISError", "Session", "__version__", "load_plugins"]
+__all__ = [
+    "ApproximatedWarning",
+    "AssumedWarning",
+    "ChangedWarning",
+    "DataLossWarning",
+    "DroppedWarning",
+    "Layer",
+    "Map",
+    "RustGISError",
+    "Session",
+    "__version__",
+    "load_plugins",
+]
 
 PathLike = Union[str, "os.PathLike[str]"]
+
+
+class DataLossWarning(UserWarning):
+    """A command lost data: it dropped, changed, approximated or assumed something.
+
+    Raised through :mod:`warnings` for each notice that carries a loss code, so
+    ``warnings.filterwarnings("error", category=rustgis.DataLossWarning)`` turns a loss into
+    an exception. The notice also stays in :meth:`Session.notices`.
+
+    Attributes:
+        code: The loss code, such as ``"dropped.ring"``: never translated, renamed or reused.
+            The command line guide lists every code with what to do about it.
+        kind: The code's kind: ``"dropped"``, ``"changed"``, ``"approximated"`` or ``"assumed"``.
+    """
+
+    def __init__(self, message: str, code: str) -> None:
+        """Keeps the notice's text as the message, and its code.
+
+        Args:
+            message: The notice's text.
+            code: The loss code.
+        """
+        super().__init__(message)
+        self.code = code
+        self.kind = code.split(".", 1)[0]
+
+
+class DroppedWarning(DataLossWarning):
+    """Something in the input isn't in the result (``dropped.*`` codes)."""
+
+
+class ChangedWarning(DataLossWarning):
+    """A value is in the result but different (``changed.*`` codes)."""
+
+
+class ApproximatedWarning(DataLossWarning):
+    """The result stands in for something it couldn't represent exactly (``approximated.*``)."""
+
+
+class AssumedWarning(DataLossWarning):
+    """The data didn't say, so RustGIS picked (``assumed.*`` codes)."""
+
+
+_LOSS_WARNINGS = {
+    "dropped": DroppedWarning,
+    "changed": ChangedWarning,
+    "approximated": ApproximatedWarning,
+    "assumed": AssumedWarning,
+}
+
+# Warnings point at the caller's line, not at this package's.
+_PACKAGE = (os.path.dirname(__file__),)
+
+
+def _warn_losses(engine: _Engine) -> None:
+    """Raises each loss the engine reported since the last call as a :class:`DataLossWarning`.
+
+    Args:
+        engine: The session's engine.
+    """
+    for kind, code, text in engine._take_losses():
+        category = _LOSS_WARNINGS.get(kind, DataLossWarning)
+        warnings.warn(category(f"{text} [{code}]", code), skip_file_prefixes=_PACKAGE)
 
 
 def __getattr__(name: str) -> Any:
@@ -847,7 +922,11 @@ class Session(_Api):
             encoded = json.dumps(merged, default=_jsonable, allow_nan=False) if merged else ""
         except ValueError as e:
             raise ValueError(f"{command}: parameters must be finite numbers, text, lists and dicts ({e})") from e
-        text = self._engine.run(command, encoded)
+        try:
+            text = self._engine.run(command, encoded)
+        finally:
+            # A failed command can still have lost data it can't take back.
+            _warn_losses(self._engine)
         return json.loads(text)
 
     def notices(self) -> List[Tuple[str, bool]]:
@@ -866,7 +945,10 @@ class Session(_Api):
             layer: The layer's id.
             selected: Only its selected features.
         """
-        return self._engine.layer_geojson(layer, selected)
+        try:
+            return self._engine.layer_geojson(layer, selected)
+        finally:
+            _warn_losses(self._engine)
 
     def _root(self) -> "Session":
         """The session that holds the project: this one."""
@@ -888,7 +970,10 @@ class Session(_Api):
         Returns:
             The JSON text; ``run("project.openText", text=...)`` opens it.
         """
-        return self._engine.project_json()
+        try:
+            return self._engine.project_json()
+        finally:
+            _warn_losses(self._engine)
 
     # Maps ----------------------------------------------------------------------------------
 
@@ -911,13 +996,16 @@ class Session(_Api):
         Returns:
             The PNG bytes.
         """
-        png = bytes(
-            self._engine.render_png(
-                None if width is None else float(width),
-                None if height is None else float(height),
-                None if dpi is None else float(dpi),
+        try:
+            png = bytes(
+                self._engine.render_png(
+                    None if width is None else float(width),
+                    None if height is None else float(height),
+                    None if dpi is None else float(dpi),
+                )
             )
-        )
+        finally:
+            _warn_losses(self._engine)
         if path is not None:
             with open(path, "wb") as f:
                 f.write(png)

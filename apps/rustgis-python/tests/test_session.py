@@ -119,6 +119,49 @@ def test_data_files(tmp_path):
     assert s.layers()[0]["features"] == 2
 
 
+def _feed(hole):
+    """A GeoRSS feed of one polygon with this hole."""
+    return (
+        '<?xml version="1.0"?><rss version="2.0" xmlns:georss="http://www.georss.org/georss" '
+        'xmlns:gml="http://www.opengis.net/gml"><channel><title>t</title><item><title>i</title><georss:where>'
+        "<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>0 0 0 4 4 4 0 0</gml:posList></gml:LinearRing>"
+        f"</gml:exterior><gml:interior><gml:LinearRing><gml:posList>{hole}</gml:posList></gml:LinearRing>"
+        "</gml:interior></gml:Polygon></georss:where></item></channel></rss>"
+    )
+
+
+def test_losses_are_warnings_with_their_code(tmp_path):
+    lossy, clean = tmp_path / "lossy.rss", tmp_path / "clean.rss"
+    lossy.write_text(_feed("1 x"))
+    clean.write_text(_feed("1 1 1 2 2 2 1 1"))
+    s = rustgis.Session()
+    with pytest.warns(rustgis.DroppedWarning, match=r"\[dropped\.ring\]") as seen:
+        s.add_data(lossy)
+    [warning] = [w for w in seen if issubclass(w.category, rustgis.DataLossWarning)]
+    assert (warning.message.code, warning.message.kind) == ("dropped.ring", "dropped")
+    assert warning.filename == __file__, "the warning points at the caller's line"
+    text = str(warning.message).removesuffix(" [dropped.ring]")
+    assert (text, False) in s.notices(), "the notice is kept too"
+    # Python's filters decide: an error filter raises it, after the command ran.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", category=rustgis.DataLossWarning)
+        with pytest.raises(rustgis.DroppedWarning):
+            s.add_data(lossy)
+        assert len(s.layers()) == 2
+        s.add_data(clean)
+    # A command's loss: a fraction written to a whole-number field.
+    s.run("layer.addDataText", fileName="records.csv", text="n\n1\n2\n")
+    s.run("edit.enable", on=True)
+    with pytest.warns(rustgis.ChangedWarning) as seen:
+        s.run("edit.calculateField", table="records", field="n", expression="n + 1.5")
+    assert [w.message.code for w in seen if issubclass(w.category, rustgis.DataLossWarning)] == ["changed.truncated"]
+    s.notices()
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        s.run("edit.calculateField", table="records", field="n", expression="n + 1")
+    assert not [w for w in seen if issubclass(w.category, rustgis.DataLossWarning)]
+
+
 @pytest.mark.parametrize("as_text", [False, True])
 def test_pmtiles_options_survive_a_project_round_trip(as_text):
     """The Python names reach the engine, including JSON-text styles and extensionless URLs."""

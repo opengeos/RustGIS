@@ -68,7 +68,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_command",
-            description: "Run a RustGIS command by id with JSON parameters (see search_commands for ids and parameters). Project edits are undoable. Source publication and other external file writes cannot be undone. Commands that read or write files, use the network or replace the project ask the user first.",
+            description: "Run a RustGIS command by id with JSON parameters (see search_commands for ids and parameters). Project edits are undoable. Source publication and other external file writes cannot be undone. Commands that read or write files, use the network or replace the project ask the user first. A notice that reports lost data is also in the result's losses, as {code, kind, text, action}; for an assumed.* code, ask the user rather than guess.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -788,7 +788,7 @@ fn with_new_layers(r: Value, s: &Session, before: &[(String, Vec<u32>)]) -> Valu
 /// call and one undo step, none when its lines only read, moved the view, exported, left a
 /// request or reported they changed nothing. A failing line stops the script and nothing it did
 /// to the project is kept (files it wrote stay). The answer is
-/// `{success, result, lines, layersAdded, notices, error, duration_s}`, where `result` is the
+/// `{success, result, lines, layersAdded, notices, losses, error, duration_s}`, where `result` is the
 /// last command's; a failure is an `Err` holding the same JSON.
 fn run_script(s: &mut Session, call: &ToolCall, tokens: usize, scope: Scope, permit: Option<Permit>) -> Result<String, String> {
     let a = &call.args;
@@ -807,13 +807,14 @@ fn run_script(s: &mut Session, call: &ToolCall, tokens: usize, scope: Scope, per
     };
     let secs = (start.elapsed().as_secs_f64() * 1000.0).round() / 1000.0;
     let notices: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    let losses = losses_since(s, mark);
     match r {
         Ok(v) => {
             let ran = v.get("ran").and_then(Value::as_array);
             let last = ran.and_then(|r| r.last()).and_then(|l| l.get("result")).cloned().unwrap_or(Value::Null);
             let added = with_new_layers(json!({}), s, &before).get("layersAdded").cloned().unwrap_or_else(|| json!([]));
             let out = json!({"success": true, "result": last, "lines": ran.map_or(0, Vec::len), "layersAdded": added,
-                "notices": notices, "error": null, "duration_s": secs});
+                "notices": notices, "losses": losses, "error": null, "duration_s": secs});
             Ok(public_envelope(s, out, tokens))
         }
         Err(e) => {
@@ -823,7 +824,7 @@ fn run_script(s: &mut Session, call: &ToolCall, tokens: usize, scope: Scope, per
             let told = rustgis_engine::data::diagnostics::redact(&e);
             let said: Vec<&&str> = notices.iter().filter(|t| **t != e && **t != told).collect();
             let out = json!({"success": false, "result": null, "lines": 0, "layersAdded": [], "notices": said,
-                "error": clip(&e, 8000), "duration_s": secs});
+                "losses": losses, "error": clip(&e, 8000), "duration_s": secs});
             Err(public_envelope(s, out, tokens))
         }
     }
@@ -831,18 +832,36 @@ fn run_script(s: &mut Session, call: &ToolCall, tokens: usize, scope: Scope, per
 
 /// A run's result with what it said beside it (a notice that only the first tables of a GeoPackage
 /// were added, a file's warnings), which the status bar shows in the app.
+/// Classified losses also go in `losses`, so an agent can match their codes.
 fn with_notices(r: Value, s: &Session, mark: u64) -> Value {
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| public_text(n.text.clone())).collect();
     if said.is_empty() {
         return r;
     }
+    let losses = losses_since(s, mark);
     match r {
         Value::Object(mut o) if !o.contains_key("notices") => {
             o.insert("notices".into(), json!(said));
+            if !losses.is_empty() && !o.contains_key("losses") {
+                o.insert("losses".into(), json!(losses));
+            }
             Value::Object(o)
         }
-        other => json!({"result": other, "notices": said}),
+        other if losses.is_empty() => json!({"result": other, "notices": said}),
+        other => json!({"result": other, "notices": said, "losses": losses}),
     }
+}
+
+/// The notices since `mark` that report a classified loss, as `{code, kind, text, action}`: the
+/// code is never translated or renamed, so it can be matched where the text can't.
+fn losses_since(s: &Session, mark: u64) -> Vec<Value> {
+    s.notices_since(mark)
+        .iter()
+        .filter_map(|n| {
+            let spec = n.loss()?.spec();
+            Some(json!({"code": spec.id, "kind": spec.kind.id(), "text": public_text(n.text.clone()), "action": spec.action}))
+        })
+        .collect()
 }
 
 /// A failed run's error with what the command said before failing (a GDAL layer that couldn't be
@@ -1362,6 +1381,44 @@ mod tests {
         let counts: Vec<usize> = notice.split_whitespace().filter_map(|word| word.parse().ok()).collect();
         assert_eq!(counts, [2, MAX_DEPTH], "the notice reports truncated subtrees, not an unbounded count of their contents");
         assert_eq!(s.notices_since(0).len(), 1, "the app also receives one aggregate loss notice");
+    }
+
+    /// A notice that reports lost data comes with its code in `losses`, beside the notice text;
+    /// a run that loses nothing has no `losses`, and a script's answer an empty list.
+    #[test]
+    fn results_give_the_codes_of_the_losses_their_notices_report() {
+        let mut s = Session::new(rustgis_engine::Project::default());
+        // An MCP agent the server lets act without asking (`--yes`).
+        let scope = Scope::agent(rustgis_engine::policy::AgentAccess::Full, true, "loss-codes", None, std::sync::Arc::new(Live::default()));
+        const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
+<Style><Name>default</Name><LegendURL><Format>image/png</Format><OnlineResource xlink:href="LEGEND"/></LegendURL></Style></Layer></Layer></Capability></WMS_Capabilities>"#;
+        // A legend picture whose address is too long to keep is left out, and said with its code.
+        let long = format!("https://maps.example.com/legends/{}.png", "a".repeat(5000));
+        let params = |legend: &str| json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS.replace("LEGEND", legend)});
+        let lossy = params(&long);
+        let clean = params("https://maps.example.com/legends/roads.png");
+        let add = |params: &Value| ToolCall {
+            id: "add".into(),
+            name: "run_command".into(),
+            args: json!({"command": "service.add", "params": params}),
+        };
+        let mut run = |call: &ToolCall| -> Value {
+            serde_json::from_str(&run_with_budget(&mut s, call, DEFAULT_OUTPUT_TOKENS, scope.clone(), None).unwrap()).unwrap()
+        };
+        let out = run(&add(&lossy));
+        let [loss] = out["losses"].as_array().map(Vec::as_slice).unwrap_or_default() else { panic!("one loss: {out}") };
+        assert_eq!((&loss["code"], &loss["kind"]), (&json!("dropped.legend"), &json!("dropped")), "{out}");
+        assert_eq!(loss["action"], "Use a service with short HTTP or HTTPS addresses for its legend pictures.");
+        assert!(out["notices"].as_array().unwrap().iter().any(|n| n == &loss["text"]), "the loss is a notice too: {out}");
+        assert!(run(&add(&clean)).get("losses").is_none());
+        let line = |params: &Value| format!("service.add {params}");
+        let script = |text: String| ToolCall { id: "script".into(), name: "run".into(), args: json!({"script": text}) };
+        let out = run(&script(line(&lossy)));
+        assert_eq!(out["losses"][0]["code"], "dropped.legend", "{out}");
+        assert_eq!(run(&script(line(&clean)))["losses"], json!([]));
     }
 
     #[test]

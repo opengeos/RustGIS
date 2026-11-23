@@ -11,6 +11,7 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use rustgis_engine::data::loss::LossCode;
 use rustgis_engine::{Project, Session};
 use serde_json::Value;
 use std::io::Write;
@@ -84,6 +85,9 @@ struct Engine {
     /// What the session's store reported (the first failure of the keychain, a preferences file
     /// that couldn't be read), waiting to be logged by the call that is running or the next one.
     diagnostics: Arc<Mutex<Vec<String>>>,
+    /// Classified losses not yet raised as warnings, and where collecting them last stopped (the
+    /// notice mark and the session's loss counts). Only locked inside the session's lock.
+    losses: Mutex<Losses>,
 }
 
 impl Engine {
@@ -104,8 +108,39 @@ impl Engine {
     }
 }
 
+/// See [`Engine::losses`].
+struct Losses {
+    pending: Vec<(String, String, String)>,
+    mark: u64,
+    given: Vec<(LossCode, u64)>,
+}
+
+impl Losses {
+    /// Sets aside the losses `session` gave since the last call, while their notices are still in
+    /// its queue (before `take_notices` drains it). One the queue no longer keeps (past its last
+    /// 200) is set aside as one entry per code that says how many.
+    fn collect(&mut self, session: &Session) {
+        let kept: Vec<(LossCode, String)> =
+            session.notices_since(self.mark).iter().filter_map(|n| n.loss().map(|code| (code, n.text.clone()))).collect();
+        for &(code, given) in session.losses_given() {
+            let was = self.given.iter().find(|(c, _)| *c == code).map_or(0, |(_, n)| *n);
+            let held = kept.iter().filter(|(c, _)| *c == code).count() as u64;
+            let lost = given.saturating_sub(was).saturating_sub(held);
+            if lost > 0 {
+                let spec = code.spec();
+                self.pending.push((spec.kind.id().into(), spec.id.into(), format!("{lost} further {} notice(s) were not kept", spec.id)));
+            }
+        }
+        self.pending.extend(kept.into_iter().map(|(code, text)| (code.spec().kind.id().into(), code.spec().id.into(), text)));
+        self.mark = session.notice_mark();
+        self.given = session.losses_given().to_vec();
+    }
+}
+
 #[pymethods]
 impl Engine {
+    /// An empty session; `use_saved_secrets` reads the desktop app's saved connections, and
+    /// asks the system keychain for a secret only when a command needs one.
     #[new]
     #[pyo3(signature = (use_saved_secrets=false))]
     fn new(py: Python<'_>, use_saved_secrets: bool) -> Self {
@@ -121,7 +156,8 @@ impl Engine {
             }
             session
         });
-        let engine = Engine { session: Mutex::new(session), diagnostics };
+        let losses = Losses { pending: Vec::new(), mark: session.notice_mark(), given: session.losses_given().to_vec() };
+        let engine = Engine { session: Mutex::new(session), diagnostics, losses: Mutex::new(losses) };
         engine.flush(py);
         engine
     }
@@ -270,12 +306,24 @@ impl Engine {
         result.map_err(RustGISError::new_err)
     }
 
+    /// The classified losses given since the last call, as `(kind, code, text)`, oldest first,
+    /// which the package raises as warnings; `take_notices` still returns them too.
+    fn _take_losses(&self, py: Python<'_>) -> Vec<(String, String, String)> {
+        let losses = &self.losses;
+        self.with_session(py, |session| {
+            let mut losses = losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            losses.collect(session);
+            std::mem::take(&mut losses.pending)
+        })
+    }
+
     /// The notices commands have given since the last call (a file's warnings, a tool's
     /// summary): `(text, is_error)` pairs, oldest first.
     fn take_notices(&self, py: Python<'_>) -> Vec<(String, bool)> {
         let notices: Vec<(String, bool)> = self.with_session(py, |session| {
             // A client made on a background thread since the last command may have chosen the trust.
             session.notice_trust();
+            self.losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).collect(session);
             session.notices.drain(..).map(|n| (n.text, n.error)).collect()
         });
         self.flush(py);
