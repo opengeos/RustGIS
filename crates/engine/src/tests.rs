@@ -9081,6 +9081,48 @@ fn a_label_class_takes_a_weight() {
     assert!(notes.len() == 1 && notes[0].contains("2 label weight(s)"), "{notes:?}");
 }
 
+/// A weight other than 5 saved in a task, a model's step or a script, or in a saved style, also
+/// requires `label-weight`: an older reader would run the step, or apply the style, without the
+/// weight, saying nothing (#2803). A weight of 5 or null needs nothing: that is what an older
+/// reader keeps.
+#[test]
+fn saved_label_weights_are_required_by_name() {
+    let s = world();
+    let with_task = |params: Value| {
+        let mut project = s.project.clone();
+        project.tasks = vec![
+            serde_json::from_value(
+                json!({"name": "Weigh", "steps": [{"title": "Weigh", "command": "labels.placement", "params": params}]}),
+            )
+            .unwrap(),
+        ];
+        serde_json::to_value(&project).unwrap().get("requires").cloned()
+    };
+    for weight in [json!(8), json!(0), json!("8"), json!(5.6)] {
+        assert_eq!(with_task(json!({"layer": "Cities", "position": "above", "weight": weight})), Some(json!(["label-weight"])), "{weight}");
+    }
+    for nothing in [
+        json!({"layer": "Cities", "weight": 5}),
+        json!({"layer": "Cities", "weight": null}),
+        json!({"layer": "Cities", "position": "above"}),
+    ] {
+        assert_eq!(with_task(nothing.clone()), None, "{nothing}");
+    }
+    // In a script, too.
+    let script = json!({"script": "labels.placement {\"layer\": \"Cities\", \"weight\": 9}"});
+    let mut project = s.project.clone();
+    project.tasks = vec![
+        serde_json::from_value(json!({"name": "Script", "steps": [{"title": "Run", "command": "script.run", "params": script}]})).unwrap(),
+    ];
+    assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(["label-weight"]));
+    // A saved style keeps the weight its layer had.
+    let mut s = world();
+    s.run("labels.placement", &json!({"layer": "Cities", "weight": 7})).unwrap();
+    s.run("style.new", &json!({"layer": "Cities", "name": "Heavy"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "weight": 5})).unwrap();
+    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["label-weight"]));
+}
+
 /// A label class takes an offset with its placement and a background with its text symbol; junk
 /// is refused, numbers kept within their ranges, and each change undoes.
 #[test]

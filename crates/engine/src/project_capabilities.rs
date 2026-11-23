@@ -60,6 +60,12 @@ impl Project {
         if !required.contains(&"picture-markers") && self.styles.iter().any(|s| s.renderer.has_picture_markers()) {
             required.push("picture-markers");
         }
+        // And its labels' weights (#2803): an older reader would apply the style without them.
+        if !required.contains(&"label-weight")
+            && self.styles.iter().any(|s| s.labels.in_order().any(|c| c.weight != rustgis_map::symbology::DEFAULT_LABEL_WEIGHT))
+        {
+            required.push("label-weight");
+        }
         let commands: Vec<&'static str> =
             COMMAND_CAPABILITIES.iter().filter_map(|&(name, uses)| self.uses_commands(uses).then_some(name)).collect();
         required.extend(commands.into_iter().filter(|name| !required.contains(name)).collect::<Vec<_>>());
@@ -160,7 +166,22 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-frame-border", command_uses_frame_border),
     ("layout-text-size", command_uses_text_size),
     ("dggs-system", command_uses_dggs_system),
+    ("label-weight", command_weighs_labels),
 ];
+
+/// A saved `labels.placement` that gives a class a weight other than 5, read as the command reads
+/// it (#2803): an older reader runs it without the key, saying nothing, so the labels would compete
+/// as before. 5 or null is what an older reader keeps.
+fn command_weighs_labels(id: &str, params: &Value) -> bool {
+    match id {
+        "labels.placement" => params
+            .get("weight")
+            .and_then(crate::cmd::labels::number)
+            .is_some_and(|w| rustgis_map::symbology::label_weight(w) != rustgis_map::symbology::DEFAULT_LABEL_WEIGHT),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_weighs_labels)),
+        _ => false,
+    }
+}
 
 /// A saved `map.graticule` that switches to the MGRS grid, its type read as the command reads it:
 /// an older reader refuses the type, so the command would fail there.

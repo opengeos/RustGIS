@@ -15,7 +15,7 @@ use crate::notice_text::NoticeText;
 use crate::{CmdResult, CommandSpec as C, Session};
 
 /// A number, or a number written as text (as `f` reads a parameter).
-fn number(v: &Value) -> Option<f64> {
+pub(crate) fn number(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).filter(|x: &f64| x.is_finite())
 }
 

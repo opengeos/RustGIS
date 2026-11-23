@@ -984,26 +984,19 @@ fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         }
         ui.end_row();
         let input_label = ui.label(tl!("Weight"));
-        let mut v = f64::from(c.it.weight);
-        let r = ui
-            .add(egui::DragValue::new(&mut v).update_while_editing(false).range(LABEL_WEIGHT).speed(0.05).max_decimals(0))
-            .labelled_by(input_label.id)
-            .on_hover_text(tl!("Where labels compete for a place, the heavier class's label wins, whatever its layer's place."));
-        crate::ribbon::live_drag(
-            app,
-            ui,
-            &r,
-            f64::from(c.it.weight),
-            v,
-            |app, x| {
-                if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
-                    k.weight = label_weight(x);
-                }
-            },
-            |app, x| {
-                run(app, "labels.placement", c.params(json!({"weight": label_weight(x)})));
-            },
-        );
+        // Scoped to its layer and class: another chosen mid-drag drops the drag, and nothing is
+        // written until it is let go (#2803).
+        ui.push_id(("label_weight", l.instance_id(), c.name), |ui| {
+            let mut v = f64::from(c.it.weight);
+            let drag = crate::widgets::Dragged::lend(ui, egui::Id::unique(("label_weight_drag", l.instance_id(), c.name)), &mut v);
+            let r = ui
+                .add(egui::DragValue::new(&mut v).update_while_editing(false).range(LABEL_WEIGHT).speed(0.05).max_decimals(0))
+                .labelled_by(input_label.id)
+                .on_hover_text(tl!("Where labels compete for a place, the heavier class's label wins, whatever its layer's place."));
+            if drag.settled(ui, &r, &mut v) && label_weight(v) != c.it.weight {
+                run(app, "labels.placement", c.params(json!({"weight": label_weight(v)})));
+            }
+        });
         ui.end_row();
         let input_label = ui.label(tl!("Callouts"));
         ui.horizontal(|ui| {
@@ -1657,6 +1650,32 @@ mod tests {
         h.run();
         assert_eq!(weight(&h), 3, "each frame's part of the drag counts");
         assert_eq!(h.state().session.undo_depth(), steps + 1, "a drag is one step");
+        // Another layer chosen mid-drag: the drag is dropped, neither layer's weight changed and
+        // nothing to undo.
+        let rivers = layer_id(h.state(), "Rivers");
+        let weights = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            let m = h.state().session.map();
+            (m.layer(cities).unwrap().labels.default.weight, m.layer(rivers).unwrap().labels.default.weight)
+        };
+        let steps = h.state().session.undo_depth();
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        for i in 1..=5 {
+            h.event(egui::Event::PointerMoved(at + egui::vec2(8.0 * i as f32, 0.0)));
+            h.step();
+        }
+        h.state_mut().session.run("layer.select", &json!({"layer": rivers})).unwrap();
+        for i in 6..=10 {
+            h.event(egui::Event::PointerMoved(at + egui::vec2(8.0 * i as f32, 0.0)));
+            h.step();
+        }
+        h.event(button(at + egui::vec2(80.0, 0.0), false));
+        h.step();
+        h.run();
+        assert_eq!(weights(&h), (3, 5), "nothing moved on either layer");
+        assert_eq!(h.state().session.undo_depth(), steps, "nothing to undo");
     }
 
     /// A line layer's labels can try other places along the line (#1187): the box is there for a
