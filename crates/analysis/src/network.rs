@@ -176,13 +176,16 @@ static NETWORK: Mutex<Option<CachedNetwork>> = Mutex::new(None);
 
 /// Reuses one bounded graph across calls and workers, without retaining the source features.
 /// Mutable feature access invalidates the weak allocation identity, including in-place edits.
+/// The graph is in longitude/latitude, built from `ds` given there ([`Dataset::in_lonlat`]) when
+/// it holds its coordinates in another system, and kept under `ds` as it holds them, so a layer
+/// in a projected system isn't converted again while its graph is kept (#2032 C2e-5).
 fn network_for(
     cache: &Mutex<Option<CachedNetwork>>,
     ds: &Dataset,
     rows: &[usize],
     cost_field: Option<usize>,
 ) -> Result<Arc<Network>, String> {
-    network_keyed(cache, ds, rows, cost_field, || Network::build(ds, rows, cost_field))
+    network_keyed(cache, ds, rows, cost_field, || Network::build(&*ds.in_lonlat()?, rows, cost_field))
 }
 
 /// [`network_for`] kept under `ds`'s rows as it holds them (its system, and the datum grids
@@ -1577,6 +1580,26 @@ mod tests {
         let graph = Graph(Arc::new(Network::build(&ds, &[0], None).unwrap()));
         let placed = graph.place(Coord::new(10.005, 0.0001), 100.0).unwrap();
         assert!(placed.is_some_and(|p| p.seg == 0), "{placed:?}");
+    }
+
+    /// A network held in a projected system is searched in longitude/latitude, its graph built
+    /// from it converted there and kept under it as it holds it: a later search over it reuses
+    /// the graph without converting it again (#2032 C2e-5).
+    #[test]
+    fn a_held_networks_graph_is_kept_under_it() {
+        let cache = Mutex::new(None);
+        let utm = rustgis_data::raster::Crs::Epsg(32632);
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(11.5, 48.7), Coord::new(11.51, 48.7), Coord::new(11.51, 48.71)]])), vec![]);
+        let lonlat = ds.clone();
+        ds.hold_in(utm).unwrap();
+        let graph = network_for(&cache, &ds, &[0], None).unwrap();
+        let converted = ds.in_lonlat().unwrap();
+        let Some(Geometry::Line(parts)) = &converted.features[0].geometry else { panic!("a line") };
+        assert_eq!(graph.nodes, parts[0], "the graph is in longitude/latitude");
+        let Some(Geometry::Line(given)) = &lonlat.features[0].geometry else { panic!("a line") };
+        assert!(graph.nodes.iter().zip(&given[0]).all(|(a, b)| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9));
+        assert!(Arc::ptr_eq(&graph, &network_for(&cache, &ds, &[0], None).unwrap()), "kept under the held layer");
     }
 
     /// Repeated pairs reuse topology without retaining endpoint edits; every graph input
