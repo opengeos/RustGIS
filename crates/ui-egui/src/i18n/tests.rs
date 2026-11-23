@@ -365,6 +365,7 @@ fn context_lookup_fallback_macros_and_formatted_values() {
         script: Script::Alphabetic,
         source: "Open\tDefault\nverb\tOpen\tÖffnen\nstate\tOpen\tOffen\ncount\t{n} open\t{n} offen\nrtl\tOpen\tباز RustGIS\n",
         catalog: OnceLock::new(),
+        letters: OnceLock::new(),
         visual: OnceLock::new(),
     };
     let lang = Lang(&INFO);

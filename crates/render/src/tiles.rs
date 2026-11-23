@@ -54,7 +54,24 @@ pub(crate) fn tile_label(l: rustgis_tiles::Label) -> Option<(PlacedLabel, f64)> 
     // Styles often label in two scripts ("Syria\nسوريا"): only the lines the font can
     // draw are kept, so a name never shows as boxes, and a label left with neither text
     // nor an icon is left out.
-    let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s, l.bold)).collect();
+    let lines: Vec<&str> = l
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|s| {
+            if s.is_empty() {
+                return false;
+            }
+            let covered = crate::text::covers(s, l.bold);
+            if !covered {
+                crate::approximations::missing_label_line();
+                crate::approximations::missing_glyphs(
+                    s.chars().filter(|c| !c.is_whitespace() && !crate::text::covers(&c.to_string(), l.bold)),
+                );
+            }
+            covered
+        })
+        .collect();
     if lines.is_empty() && l.icon.is_none() {
         return None;
     }

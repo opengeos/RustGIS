@@ -388,7 +388,7 @@ use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
 use rustgis_map::layout::TextAlign;
 use rustgis_map::{Camera, Globe, LabelPlacement, LineStroke, Map, Marker, Rgba, Symbol};
-pub use text::halo_reach;
+pub use text::{covers_quietly, halo_reach};
 /// The image type pages and maps are drawn into.
 pub use tiny_skia::Pixmap;
 use tiny_skia::{
@@ -1993,8 +1993,11 @@ pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny
             }
             // A space draws nothing; a character no font here has, a circle of its size, so the
             // point still shows.
-            None if g.ch.is_whitespace() => return None,
-            None => pb.push_circle(x, y, r),
+            None if text::invisible(g.ch) => return None,
+            None => {
+                approximations::missing_glyphs([g.ch]);
+                pb.push_circle(x, y, r);
+            }
         },
         // An image has no outline (`picture_marker` draws it): where only an outline is drawn, a
         // circle of its size.
