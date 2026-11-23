@@ -151,7 +151,7 @@ use serde_json::{Value, json};
 pub use autosave::FolderStore;
 pub use autosave::{Recovery, RecoveryStore};
 pub use chrome::{DoubleClick, TitlebarMetrics};
-pub use coordreadout::CoordReadout;
+pub use coordreadout::{CoordReadout, MapSystem};
 pub use rustgis_assistant;
 pub use rustgis_engine;
 pub use widgets::big_split_menu;
@@ -1926,15 +1926,15 @@ impl RustGisApp {
             .unwrap_or_else(|| "Meters".into());
         self.ui.measurement_imperial =
             self.services.load_pref.as_ref().and_then(|load| load("measurement_units")).as_deref() == Some("imperial");
-        // The pointer's coordinate format; a missing one reads as decimal degrees. One this
-        // version doesn't know (a newer RustGIS may have saved it) is said and read as decimal
-        // degrees too. It stays saved until the user picks a format (`ui.coordinateFormat`).
+        // The pointer's coordinate format; a missing one reads in the map's coordinates. One this
+        // version doesn't know (a newer RustGIS may have saved it) is said and read in the map's
+        // coordinates too. It stays saved until the user picks a format (`ui.coordinateFormat`).
         if let Some(code) = self.services.load_pref.as_ref().and_then(|load| load(coordreadout::PREF)) {
             match CoordReadout::from_code(&code) {
                 Some(format) => self.map.coord_format = format,
                 None => {
                     self.session
-                        .notify(tl!("The saved coordinate format isn't known to this version, so decimal degrees are shown."), false);
+                        .notify(tl!("The saved coordinate format isn't known to this version, so map coordinates are shown."), false);
                 }
             }
         }
@@ -4315,8 +4315,8 @@ impl RustGisApp {
                 let format = match p.get("format") {
                     None | Some(Value::Null) => self.map.coord_format.next(),
                     Some(Value::String(v)) => CoordReadout::from_code(v)
-                        .ok_or_else(|| tl!("The coordinate format must be decimal, dms, utm or mgrs").to_string())?,
-                    _ => return Err(tl!("The coordinate format must be decimal, dms, utm or mgrs").into()),
+                        .ok_or_else(|| tl!("The coordinate format must be map, decimal, dms, utm or mgrs").to_string())?,
+                    _ => return Err(tl!("The coordinate format must be map, decimal, dms, utm or mgrs").into()),
                 };
                 self.map.coord_format = format;
                 self.save_pref(coordreadout::PREF, format.code());
@@ -4592,6 +4592,19 @@ impl RustGisApp {
                     connectionui::open_edit(self, id)?;
                 } else {
                     connectionui::open_new(self, p.get("kind").and_then(Value::as_str).unwrap_or("service"))?;
+                }
+                // An enterprise geodatabase: SQL Server's form (server, sign-in, database), filled
+                // with what is given, or from a .sde file. A file that is refused says why in the
+                // form, which stays open to enter the connection by hand.
+                if p.get("form").and_then(Value::as_bool) == Some(true) && self.ui.connection.kind == "sqlserver" {
+                    let text = |key: &str| p.get(key).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+                    if let Err(e) = connectionui::use_form(&mut self.ui.connection, text("server"), text("database")) {
+                        self.dialogs.error = Some(e);
+                    } else if let Some(file) = text("sdeFile")
+                        && let Err(e) = connectionui::fill_from_sde(self, file)
+                    {
+                        self.dialogs.error = Some(e);
+                    }
                 }
                 if p.get("test").and_then(Value::as_bool) == Some(true) {
                     connectionui::start_test(self);
@@ -5481,8 +5494,8 @@ impl RustGisApp {
                 // In the layer's own coordinate system, as share.exportLayer writes a file.
                 use rustgis_engine::data::io;
                 let (crs, default_note) = io::default_export_in(&ds, &name, self.session.project.coordinate_system);
-                let written = io::write_bytes_in(&ds, &ext, crs).map_err(|e| e.to_string());
-                let (bytes, left_out) = match written {
+                let written = io::write_bytes_noted(&ds, &ext, crs, &name).map_err(|e| e.to_string());
+                let (bytes, left_out, unplaced) = match written {
                     Ok(w) => w,
                     Err(e) => {
                         self.session.notify(e.clone(), true);
@@ -5495,6 +5508,7 @@ impl RustGisApp {
                 let mut notes: rustgis_engine::data::loss::Notes =
                     rustgis_engine::data::export_notes([(ds.as_ref(), ds.lonlat_extent())], &name, crs).into();
                 rustgis_engine::cmd::share::coalesce_read_zm(&mut notes, &name, &ds, &lost);
+                notes.extend(unplaced);
                 // Which system it is written in, where that isn't the layer's own, as share.exportLayer says.
                 notes.extend(default_note);
                 let mut dbf_notes = rustgis_engine::data::loss::Notes::new();

@@ -2013,21 +2013,41 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// Holds `ds`, a layer made in longitude/latitude from another, as that layer is
-/// ([`Dataset::hold_as`]; `system` is its [`Dataset::coord_crs`] and [`Dataset::crs`]), and says
-/// so when it can't be: it stays in longitude/latitude then, as it was made. A cancel stops the
-/// command, which adds nothing.
+/// ([`Dataset::hold_as`]; `system` is its [`Dataset::coord_crs`] and [`Dataset::crs`]), or in the
+/// project's system ([`made_in`]), and says so when it can't be: it stays in longitude/latitude
+/// then, as it was made. A cancel stops the command, which adds nothing.
 pub(crate) fn hold_as(
     s: &mut Session,
     ds: &mut Dataset,
-    (held, crs): (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>),
+    system: (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>),
 ) -> Result<(), String> {
+    let (held, crs) = made_in(s, system);
     match ds.hold_as(held, crs) {
         Err(e) if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) => Err(e),
         Err(e) => {
-            s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {}: {e}", ds.name, held.label()), false);
+            // Its refusal starts with the layer's name, named once here.
+            let why = e.strip_prefix(&format!("{}: ", ds.name)).unwrap_or(&e);
+            let whose = if held == system.0 { String::new() } else { "the project's ".to_string() };
+            s.notify(format!("{}: kept in longitude/latitude, as it was made, not in {whose}{}: {why}", ds.name, held.label()), false);
             Ok(())
         }
         Ok(()) => Ok(()),
+    }
+}
+
+/// The system a layer made in longitude/latitude from another, held in `system` (its
+/// [`Dataset::coord_crs`] and [`Dataset::crs`]), is held in: the other's, unless that is one tools
+/// don't work in ([`rustgis_analysis::works_in`]: longitude/latitude, Web Mercator, a geographic
+/// one) and the project has a system of its own (#2032 C3a), which it then takes, as a tool's
+/// output does. A geocentric project system holds no map coordinates, so it is passed over.
+pub(crate) fn made_in(
+    s: &Session,
+    system: (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>),
+) -> (rustgis_data::raster::Crs, Option<rustgis_data::raster::Crs>) {
+    use rustgis_data::raster::Crs;
+    match s.project.coordinate_system.filter(|c| *c != Crs::LonLat && !c.is_geocentric()) {
+        Some(p) if !rustgis_analysis::works_in(system.0) => (p, Some(p)),
+        _ => system,
     }
 }
 
@@ -2160,6 +2180,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             if result.skipped > 0 {
                 notes.push(format!("{path}: {} rows couldn't be read and were left out", result.skipped));
             }
+            notes.extend(rustgis_data::io::unplaced_export_note(&path, &ds.name, result.unplaced, rustgis_data::raster::Crs::LonLat));
             notes.extend(
                 rustgis_data::source::unread_dates_note(&ds.fields, &result.unread_dates)
                     .map(|n| format!("{path}: {}: {n} (empty in the export)", ds.name)),
@@ -2241,8 +2262,9 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
         ps(p, "nameField").and_then(|n| ds.field_index(n)).or_else(|| ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name")));
     let format = conversion_format(p)?;
     // Every format here is longitude/latitude, whatever system the layer holds its coordinates
-    // in; the notes below read the layer itself, converting as they need.
-    let lonlat = ds.in_lonlat()?;
+    // in: the text and what it loses are read from the copy there. A feature with a place that
+    // can't be given there is written without its geometry, and said.
+    let (lonlat, unplaced) = ds.in_lonlat_leaving_out()?;
     let text = match format {
         "geojson" => rustgis_data::io::to_geojson_text(&lonlat).map_err(|e| e.to_string())?,
         "csv" => rustgis_data::io::to_csv(&lonlat).map_err(|e| e.to_string())?,
@@ -2252,12 +2274,17 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
     };
     let target = ps(p, "path").unwrap_or(&ds.name);
     let mut notes = rustgis_data::export_notes([(ds, ds.lonlat_extent())], target, rustgis_data::raster::Crs::LonLat);
+    notes.extend(rustgis_data::unplaced_note(target, &ds.name, unplaced));
     // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
-    notes.extend(rustgis_data::io::export_losses_notes(ds, format, name_field, target).map_err(|e| e.to_string())?);
-    // KML and GPX hold features with geometry only.
+    notes.extend(rustgis_data::io::export_losses_notes(&lonlat, format, name_field, target).map_err(|e| e.to_string())?);
+    // KML and GPX hold features with geometry only: counted in what is written, so a feature
+    // whose geometry is left out above is counted as left out too.
     if let ext @ ("kml" | "gpx") = format {
-        let without =
-            if ext == "gpx" { rustgis_data::io::gpx_left_out(ds) } else { ds.features.iter().filter(|f| f.geometry.is_none()).count() };
+        let without = if ext == "gpx" {
+            rustgis_data::io::gpx_left_out(&lonlat)
+        } else {
+            lonlat.features.iter().filter(|f| f.geometry.is_none()).count()
+        };
         notes.extend(rustgis_data::io::left_out_note(target, ext, without));
     }
     Ok((text, notes))
