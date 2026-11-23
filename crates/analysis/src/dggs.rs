@@ -189,10 +189,11 @@ fn drawable(points: impl IntoIterator<Item = Coord>) -> Option<Vec<Coord>> {
     (out.len() >= 4).then_some(out)
 }
 
-/// An open ring with corners on a pole (S2's cells that meet at a cube face's centre, from level
-/// 1 on, have them, and so do A5's cells round a pole) as a map of longitudes and latitudes draws it. Such a corner has no longitude of its own,
-/// so without this a point near the pole fell outside the outline of its cell: the pole becomes a
-/// line along it, from the longitude of the corner before to that of the one after.
+/// An open ring with corners on a pole (S2's cells that meet at a cube face's centre, from level 1
+/// on, have them, and so do A5's cells round a pole) as a map of longitudes and latitudes draws it.
+/// Such a corner has no longitude of its own, so without this a point near the pole fell outside
+/// the outline of its cell: the pole becomes a line along it, from the longitude of the corner
+/// before to that of the one after.
 fn pole_as_line(open: Vec<Coord>) -> Vec<Coord> {
     let n = open.len();
     if n < 3 || open.iter().all(|c| c.y.abs() < 90.0 - rustgis_geom::POLE_TOLERANCE) {
