@@ -2633,3 +2633,31 @@ fn topology_is_checked_in_a_held_layers_own_system() {
         assert!((p.lon - q.lon).abs() < 1e-6 && (p.lat - q.lat).abs() < 1e-6, "{p:?} vs {q:?}");
     }
 }
+
+/// A covering layer converted into a held layer's system for its topology check says when its long
+/// edges, straight there, run more than a metre from where a check in longitude/latitude takes
+/// them; one that system can't hold sends the rule to longitude/latitude, and says so; one in the
+/// same system says nothing (#2032 C2e-5).
+#[test]
+fn a_covering_layers_conversion_is_said() {
+    let said = |cover: Geometry, crs: Crs, checked: Crs| {
+        let mut s = Session::new(Project::default());
+        add_held(&mut s, "Wells", GeometryType::Point, vec![Geometry::Point(Coord::new(11.5, 48.7))], checked);
+        add_held(&mut s, "Cover", GeometryType::Polygon, vec![cover], crs);
+        s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Wells", "by": "Cover"}})).unwrap();
+        let mark = s.notice_mark();
+        s.run("topology.validate", &json!({})).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("'Cover'")).collect::<Vec<_>>()
+    };
+    let box_of = |w: f64, s: f64, e: f64, n: f64| {
+        Geometry::Polygon(vec![vec![vec![Coord::new(w, s), Coord::new(e, s), Coord::new(e, n), Coord::new(w, n), Coord::new(w, s)]]])
+    };
+    // A degree-wide box: its east–west edges follow their parallels in longitude/latitude, and are
+    // chords in UTM, some 120 m away.
+    let bent = said(box_of(11.0, 48.0, 12.0, 49.0), Crs::LonLat, UTM);
+    assert!(bent.len() == 1 && bent[0].contains("edge(s) of 'Cover', converted into"), "{bent:?}");
+    assert!(said(box_of(11.0, 48.0, 12.0, 49.0), UTM, UTM).is_empty(), "the same system: nothing to say");
+    // Reaching the South Pole, which the NSIDC north polar stereographic system can't hold.
+    let fell_back = said(box_of(0.0, -90.0, 10.0, -89.0), Crs::LonLat, Crs::Epsg(3413));
+    assert!(fell_back.len() == 1 && fell_back[0].contains("checked in longitude/latitude"), "{fell_back:?}");
+}

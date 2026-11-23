@@ -159,7 +159,9 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   A layer held in a projected system is checked in its own coordinates, as the analysis tools
   work in it: the dangle tolerance (`toleranceM`, 1 m by default) is measured flat there in its
   unit, an overlap or gap counts from a square metre of it, and a covering layer is converted
-  into it (one that system can't hold is checked in longitude/latitude, as before). An error at a
+  into it, with a notice when its long edges, taken straight there, run more than a metre from
+  where a check in longitude/latitude takes them. A rule whose covering layer that system can't
+  hold is checked in longitude/latitude instead, and says so. An error at a
   place that can't be given in longitude/latitude, where the Error Inspector would zoom, refuses
   the check, naming the layer and feature.
   On the desktop the check runs in the background, so the map stays in use: the status bar

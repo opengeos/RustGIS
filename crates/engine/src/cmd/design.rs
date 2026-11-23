@@ -2395,6 +2395,9 @@ struct TopologyChecked {
     incomplete: Vec<String>,
     skipped: Vec<String>,
     query_errors: Vec<Option<String>>,
+    /// What changed how a rule was checked: one checked in longitude/latitude, not its layer's
+    /// own system, and a covering layer's edges bent by their conversion into it (#2032 C2e-5).
+    notes: Vec<String>,
 }
 
 /// Checks each rule and its query on the worker, with Cancel between rows/rules and counted
@@ -2413,6 +2416,7 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
     let mut incomplete = Vec::new();
     let mut skipped = Vec::new();
     let mut query_errors = Vec::with_capacity(inputs.len());
+    let mut notes = Vec::new();
     for i in inputs {
         rustgis_data::progress::check().map_err(|_| cancelled())?;
         let (query, error) = match rustgis_data::rows::Query::compile(i.query.as_deref(), &i.data) {
@@ -2443,15 +2447,37 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
             }
         };
         // A layer held in a projected system is checked in its own coordinates, as the analysis
-        // tools work in it (#2032 C2e-5), its covering layer converted into it; one that system
-        // can't hold sends the rule to longitude/latitude, as it does a tool.
-        let own = Some(i.data.coord_crs()).filter(|c| rustgis_analysis::works_in(*c)).and_then(|crs| {
-            let by = match &i.by {
-                Some(b) => Some(b.in_crs(crs).ok()?),
-                None => None,
-            };
-            Some((crs, by))
-        });
+        // tools work in it (#2032 C2e-5), its covering layer converted into it (a copy of it, when
+        // it is held in another system), with a notice when its edges bend there, as a tool's. One
+        // that system can't hold sends the rule to longitude/latitude, and says so.
+        let mut own = None;
+        if let Some(crs) = Some(i.data.coord_crs()).filter(|c| rustgis_analysis::works_in(*c)) {
+            match i.by.as_ref().map(|b| b.in_crs(crs)).transpose() {
+                Ok(by) => own = Some((crs, by)),
+                Err(e) if matches!(rustgis_data::DataError::of_conversion(e.clone()), rustgis_data::DataError::Cancelled) => {
+                    return Err(cancelled());
+                }
+                Err(e) => notes.push(format!(
+                    "{} on '{}': checked in longitude/latitude, as '{}' can't be held in {}: {e}",
+                    i.rule.label(),
+                    i.layer,
+                    i.by_layer,
+                    crs.label()
+                )),
+            }
+        }
+        if let (Some((crs, Some(std::borrow::Cow::Owned(converted)))), Some(original)) = (&own, &i.by) {
+            let (n, far) = super::gp::bent_edges(original, converted, *crs).map_err(|e| named(&original.name, &i.by_layer, e))?;
+            if n > 0 {
+                notes.push(format!(
+                    "{} on '{}': {n} edge(s) of '{}', converted into {}, are taken straight there, up to {far:.0} m from where a check in longitude/latitude takes them; their vertices are where they were",
+                    i.rule.label(),
+                    i.layer,
+                    i.by_layer,
+                    crs.label()
+                ));
+            }
+        }
         let (work, data, by) = match own {
             Some((crs, by)) => (crs, std::borrow::Cow::Borrowed(&i.data), by),
             None => (
@@ -2522,7 +2548,7 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
         }
         query_errors.push(error);
     }
-    Ok(TopologyChecked { errors, incomplete, skipped, query_errors })
+    Ok(TopologyChecked { errors, incomplete, skipped, query_errors, notes })
 }
 
 /// The tolerance `topology.validate` checks dangles with, in metres.
@@ -2632,7 +2658,10 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
         super::gp::record_read(s, TOPOLOGY_AHEAD, p, recorded);
         return answer;
     }
-    let TopologyChecked { errors, incomplete, skipped, query_errors } = found?;
+    let TopologyChecked { errors, incomplete, skipped, query_errors, notes } = found?;
+    for note in notes {
+        s.warn(note);
+    }
     // Rules whose layer, or covering layer, isn't on the map are checked for nothing: said.
     let unchecked: Vec<String> = s
         .map()
