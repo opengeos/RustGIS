@@ -6796,10 +6796,11 @@ fn tessellations_and_points_by_cell_in_every_system() {
         s.run("map.projection", &json!({"type": code})).unwrap();
         let p = json!({"tool": "a5Grid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": out}});
         let r = s.run("gp.run", &p).unwrap();
-        s.map().layer_by_name(out).map_or(0, |l| l.dataset.features.len()).to_string() + &format!(" {r}")
+        let n = s.map().layer_by_name(out).unwrap_or_else(|| panic!("{code}: {r}")).dataset.features.len();
+        assert!(n > 12, "{code}: {r}");
+        n
     };
-    let (greenwich, pacific) = (world_on("equirectangular", "eqc 0"), world_on("equirectangular +lon_0=150", "eqc 150"));
-    assert_eq!(greenwich.split(' ').next(), pacific.split(' ').next(), "{greenwich} / {pacific}");
+    assert_eq!(world_on("equirectangular", "eqc 0"), world_on("equirectangular +lon_0=150", "eqc 150"));
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     s.run(
         "gp.run",
