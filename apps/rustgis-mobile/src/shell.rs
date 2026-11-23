@@ -182,7 +182,11 @@ impl<P: Phone> App<P> {
         }
         for event in events {
             match event {
-                Event::Picked { purpose, name, path } => {
+                Event::Picked { purpose, name, path, document } => {
+                    // A project the phone may write back to: Save writes there once it is open.
+                    if let Some(document) = document.filter(|_| purpose == "project") {
+                        self.app.picked_document(path.clone(), document);
+                    }
                     // A file answers its own request; one of an earlier request (still being
                     // copied when another was asked for) leaves the later one waiting.
                     self.asked.borrow_mut().picked(&purpose);
@@ -203,6 +207,7 @@ impl<P: Phone> App<P> {
                     self.app.photos.push(path);
                 }
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
+                Event::ProjectDocument(document) => self.app.project_document(document),
                 Event::ProjectSave(result) => self.app.complete_project_save(result),
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
                 // A fix that was on its way when positioning was turned off.
@@ -508,7 +513,10 @@ fn use_picker<P: Phone + 'static>(
     let saver = phone.clone();
     app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes, false)));
     let saver = phone.clone();
-    app.services.save_project = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes, true)));
+    app.services.save_project = Some(Box::new(move |name: &str, bytes: Vec<u8>, document: Option<&str>| match document {
+        Some(document) => saver.write_back(document, name, bytes),
+        None => saver.save_file(name, bytes, true),
+    }));
     app.services.inbox = Some(inbox.clone());
     let (camera, photographing) = (phone.clone(), asked.clone());
     app.services.take_photo = Some(Box::new(move || {

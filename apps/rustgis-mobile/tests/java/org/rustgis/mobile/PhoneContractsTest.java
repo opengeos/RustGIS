@@ -43,6 +43,32 @@ public final class PhoneContractsTest {
         assert providers.anyEnabled(provider -> provider.equals("gps"));
         providers.clear();
         assert !providers.anyEnabled(provider -> true);
+        overwriteCutsALongerDocument();
         System.out.println("Phone contract checks passed");
+    }
+
+    /** A project written over a longer one leaves none of the old bytes after it. */
+    private static void overwriteCutsALongerDocument() {
+        try {
+            java.io.File file = java.io.File.createTempFile("document", ".rgis");
+            try {
+                java.nio.file.Files.write(file.toPath(), "an older and longer project".getBytes("UTF-8"));
+                try (java.io.RandomAccessFile open = new java.io.RandomAccessFile(file, "rw")) {
+                    DocumentWrite.overwrite(open.getChannel(), "new".getBytes("UTF-8"));
+                }
+                String held = new String(java.nio.file.Files.readAllBytes(file.toPath()), "UTF-8");
+                assert held.equals("new") : held;
+                // Longer than before: all of it.
+                try (java.io.RandomAccessFile open = new java.io.RandomAccessFile(file, "rw")) {
+                    DocumentWrite.overwrite(open.getChannel(), "a newer and longer project, again".getBytes("UTF-8"));
+                }
+                held = new String(java.nio.file.Files.readAllBytes(file.toPath()), "UTF-8");
+                assert held.equals("a newer and longer project, again") : held;
+            } finally {
+                file.delete();
+            }
+        } catch (java.io.IOException e) {
+            throw new AssertionError(e);
+        }
     }
 }

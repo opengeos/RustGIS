@@ -18,11 +18,15 @@ import java.util.ArrayList;
  * is never called from here, so the library exports nothing but its entry point.
  *
  * An event is one string, its fields separated by tabs:
- *   picked    purpose  name  path    a chosen file, copied to the app's storage
+ *   picked    purpose  name  path  [document]
+ *                                    a chosen file, copied to the app's storage; a project file
+ *                                    RustGIS may write back to also gives its document's address
  *   ended     purpose               a request whose every file failed to be copied
  *   cancelled                        a picker closed without a choice
  *   saved     name                   an export written where the user chose
- *   project-saved        name        a project written where the user chose
+ *   project-document     document    the document a project save is about to report written,
+ *                                    which RustGIS may write back to later
+ *   project-saved        name        a project written where the user chose, or written back
  *   project-save-failed  reason      a project save that failed or was cancelled
  *   position  lon  lat  accuracy  time  elapsed   where the device is (accuracy in metres, or
  *                                        empty; time in milliseconds since 1970; elapsed in
@@ -85,6 +89,8 @@ public class MainActivity extends NativeActivity {
     private String saveName = "";
     private byte[] saveBytes;
     private boolean saveProject;
+    /** A project is being written back to its document (the main thread's alone). */
+    private boolean writing;
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -440,6 +446,11 @@ public class MainActivity extends NativeActivity {
             // Several files only where the front end takes several, as in the browser: two
             // projects would replace one another, and a dialog's options go with one file.
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, purpose.equals("data") || purpose.equals("shapefile"));
+            // A project is opened for writing too, kept across restarts: Save writes it back.
+            if (purpose.equals("project")) {
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            }
             if (!start(intent, PICK)) {
                 picking = false;
             }
@@ -449,7 +460,7 @@ public class MainActivity extends NativeActivity {
     /** Asks where to write a file. Project saves return a distinct result to the save prompt. */
     public void save(final String name, final byte[] bytes, final boolean project) {
         runOnUiThread(() -> {
-            if (saveBytes != null || picking) {
+            if (saveBytes != null || picking || writing) {
                 saveFailed(project, name, "another file is being chosen.");
                 return;
             }
@@ -469,6 +480,141 @@ public class MainActivity extends NativeActivity {
                 saveBytes = null;
             }
         });
+    }
+
+    /**
+     * Writes a project back to the document it was opened from or last saved as, with no picker.
+     * A complete copy is written to the app's storage first: if the document can't be opened for
+     * writing, it is left as it was and the copy goes; if writing it fails partway, it may be
+     * damaged, and the copy is kept and named. Either way the result is a project-saved or
+     * project-save-failed event.
+     */
+    public void writeBack(final String document, final String name, final byte[] bytes) {
+        runOnUiThread(() -> {
+            if (saveBytes != null || picking || writing) {
+                saveFailed(true, name, "another file is being chosen or saved.");
+                return;
+            }
+            writing = true;
+            synchronized (events) {
+                asked++;
+            }
+            new Thread(() -> {
+                try {
+                    writeBackNow(Uri.parse(document), name, bytes);
+                } finally {
+                    runOnUiThread(() -> writing = false);
+                    answered();
+                }
+            }).start();
+        });
+    }
+
+    private void writeBackNow(Uri uri, String name, byte[] bytes) {
+        // The complete copy, kept until the document holds the project.
+        File copy;
+        try {
+            File dir = new File(new File(getFilesDir(), "saved"), Long.toString(System.nanoTime()));
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                throw new java.io.IOException("the app's storage can't be written to");
+            }
+            copy = new File(dir, displayName(uri).isEmpty() ? name : displayName(uri));
+            try (FileOutputStream out = new FileOutputStream(copy)) {
+                out.write(bytes);
+                out.getFD().sync();
+            }
+        } catch (Throwable e) {
+            saveFailed(true, name, e.getMessage() + ". The file wasn't changed.");
+            return;
+        }
+        android.os.ParcelFileDescriptor descriptor;
+        try {
+            descriptor = getContentResolver().openFileDescriptor(uri, "rw");
+            if (descriptor == null) {
+                throw new java.io.IOException("the file can't be written to");
+            }
+        } catch (Throwable e) {
+            // Nothing was written to it: it is as it was, and the copy isn't needed.
+            removeWithFolder(copy);
+            saveFailed(true, name, "it can't be written where it was opened from (" + e.getMessage()
+                    + "). The file wasn't changed: Save again to choose where to save it.");
+            return;
+        }
+        try {
+            try (FileOutputStream out = new FileOutputStream(descriptor.getFileDescriptor())) {
+                DocumentWrite.overwrite(out.getChannel(), bytes);
+            }
+            // Closing hands the document back to its provider, which may store it only then.
+            descriptor.close();
+            descriptor = null;
+            long size = documentSize(uri);
+            if (size >= 0 && size != bytes.length) {
+                throw new java.io.IOException("the file holds " + size + " bytes after writing " + bytes.length);
+            }
+            removeWithFolder(copy);
+            add("project-saved\t" + name);
+        } catch (Throwable e) {
+            if (descriptor != null) {
+                try {
+                    descriptor.close();
+                } catch (java.io.IOException closing) {
+                    // Already said below: the write failed.
+                }
+            }
+            add("project-save-failed\t" + name + " may be damaged where it was opened from: " + e.getMessage()
+                    + ". The project as saved is kept at " + copy.getAbsolutePath()
+                    + ". Save again to choose where to save it.");
+        }
+    }
+
+    /** The document's size as its provider gives it, or -1 when it doesn't say. */
+    private long documentSize(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[] {OpenableColumns.SIZE}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
+                return cursor.getLong(0);
+            }
+        } catch (RuntimeException e) {
+            // The size is a check only: not knowing it isn't a failure.
+        }
+        return -1;
+    }
+
+    /** Removes a file and its folder, once that is empty. */
+    private static void removeWithFolder(File file) {
+        file.delete();
+        File folder = file.getParentFile();
+        if (folder != null) {
+            folder.delete();
+        }
+    }
+
+    /**
+     * The document's address when RustGIS may write a project back to it: a project file
+     * ({@code .rgis}), granted for writing ({@code grants}), whose provider writes it. The grant is
+     * kept across restarts where the provider allows it. Null otherwise.
+     */
+    private String writable(Uri uri, String name, int grants) {
+        if (!name.toLowerCase(java.util.Locale.ROOT).endsWith(".rgis") || (grants & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) {
+            return null;
+        }
+        try (Cursor cursor = getContentResolver().query(uri,
+                new String[] {android.provider.DocumentsContract.Document.COLUMN_FLAGS}, null, null, null)) {
+            if (cursor == null || !cursor.moveToFirst()
+                    || (cursor.getInt(0) & android.provider.DocumentsContract.Document.FLAG_SUPPORTS_WRITE) == 0) {
+                return null;
+            }
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if ((grants & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (RuntimeException e) {
+                // Kept for this session only: Save still writes back until the app ends.
+            }
+        }
+        return uri.toString();
     }
 
     private void saveFailed(boolean project, String name, String reason) {
@@ -618,6 +764,7 @@ public class MainActivity extends NativeActivity {
                 return;
             }
             final String purpose = this.purpose;
+            final int grants = data == null ? 0 : data.getFlags();
             // Copied off the main thread: a document can be large, or come from the network.
             new Thread(() -> {
                 // One folder for what was picked together, and for nothing else, with a folder of
@@ -659,7 +806,7 @@ public class MainActivity extends NativeActivity {
                             sources.add(source);
                             k = sources.size() - 1;
                         }
-                        if (copyIn(purpose, uri, new File(dir, Integer.toString(k)))) {
+                        if (copyIn(purpose, uri, new File(dir, Integer.toString(k)), grants)) {
                             copies++;
                         }
                     }
@@ -677,6 +824,7 @@ public class MainActivity extends NativeActivity {
                 }
             }).start();
         } else if (request == SAVE) {
+            final int grants = data == null ? 0 : data.getFlags();
             final byte[] bytes = saveBytes;
             final String name = saveName;
             final boolean project = saveProject;
@@ -696,7 +844,12 @@ public class MainActivity extends NativeActivity {
                         }
                         out.write(bytes);
                     }
-                    // Said once the file is closed: a failure to close is a failure to save.
+                    // Said once the file is closed: a failure to close is a failure to save. A project
+                    // saved where RustGIS may write it back names its document first.
+                    String document = project ? writable(uri, displayName(uri), grants) : null;
+                    if (document != null) {
+                        add("project-document\t" + document);
+                    }
                     add((project ? "project-saved\t" : "saved\t") + name);
                 } catch (Throwable e) {
                     saveFailed(project, name, e.getMessage());
@@ -735,7 +888,7 @@ public class MainActivity extends NativeActivity {
      * Copies a picked document into the app's storage, where the Rust side can open it by path.
      * Returns whether it was copied.
      */
-    private boolean copyIn(String purpose, Uri uri, File dir) {
+    private boolean copyIn(String purpose, Uri uri, File dir, int grants) {
         String name = displayName(uri);
         File file = new File(dir, name);
         // Two documents of one name picked together (from two folders) both keep their bytes.
@@ -764,8 +917,11 @@ public class MainActivity extends NativeActivity {
             if (!part.renameTo(file)) {
                 throw new java.io.IOException("the copy couldn't be given its name");
             }
-            // The copy's own name: a second document of one name is told from the first.
-            add("picked\t" + purpose + "\t" + file.getName() + "\t" + file.getAbsolutePath());
+            // The copy's own name: a second document of one name is told from the first. A project
+            // RustGIS may write back to names its document too.
+            String document = purpose.equals("project") ? writable(uri, name, grants) : null;
+            add("picked\t" + purpose + "\t" + file.getName() + "\t" + file.getAbsolutePath()
+                    + (document == null ? "" : "\t" + document));
             return true;
         } catch (Throwable e) {
             // Half a copy would only fill the storage: nothing reports its path to remove it later.

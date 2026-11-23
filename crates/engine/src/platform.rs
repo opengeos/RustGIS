@@ -60,6 +60,9 @@ pub enum Event {
         name: String,
         /// Where its copy is.
         path: PathBuf,
+        /// The picked document itself, when the system lets RustGIS write it back
+        /// ([`Platform::write_back`]): a project file opened for reading and writing.
+        document: Option<String>,
     },
     /// A picker closed without a choice.
     Cancelled,
@@ -78,6 +81,9 @@ pub enum Event {
     },
     /// The outcome of a project save, including a picker that closed without saving.
     ProjectSave(Result<String, String>),
+    /// The document a project save is about to report written ([`Event::ProjectSave`] follows),
+    /// when the system lets RustGIS write it back later ([`Platform::write_back`]).
+    ProjectDocument(String),
     /// A photo the camera took ([`Platform::take_photo`]), written where it can be opened by path.
     Photo {
         /// The photo's file name.
@@ -96,16 +102,24 @@ pub enum Event {
 
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
-    /// `ended`, `saved`, `project-saved`, `project-save-failed`, `photo`, `position`, `stopped`,
-    /// `failed`). Unrecognized lines become failures that quote the line. A position is
+    /// `ended`, `saved`, `project-saved`, `project-save-failed`, `project-document`, `photo`,
+    /// `position`, `stopped`, `failed`). A `picked` line may end with the document it can write
+    /// back to. Unrecognized lines become failures that quote the line. A position is
     /// `position`, longitude, latitude, accuracy (empty when unknown), optionally its time in
     /// milliseconds since 1970, then optionally the monotonic fix time in nanoseconds since boot.
     pub fn parse(line: &str) -> Event {
         let fields: Vec<&str> = line.split('\t').collect();
         match fields.as_slice() {
             ["picked", purpose, name, path] => {
-                Event::Picked { purpose: purpose.to_string(), name: name.to_string(), path: PathBuf::from(path) }
+                Event::Picked { purpose: purpose.to_string(), name: name.to_string(), path: PathBuf::from(path), document: None }
             }
+            ["picked", purpose, name, path, document] => Event::Picked {
+                purpose: purpose.to_string(),
+                name: name.to_string(),
+                path: PathBuf::from(path),
+                document: (!document.is_empty()).then(|| document.to_string()),
+            },
+            ["project-document", document] if !document.is_empty() => Event::ProjectDocument(document.to_string()),
             ["cancelled"] => Event::Cancelled,
             ["ended", purpose] => Event::Ended { purpose: purpose.to_string() },
             ["photo", name, path] if !path.is_empty() => Event::Photo { name: name.to_string(), path: PathBuf::from(path) },
@@ -165,6 +179,16 @@ pub trait Platform {
     /// Other requests answer with [`Event::Saved`] or [`Event::Failed`].
     fn save_file(&self, name: &str, bytes: Vec<u8>, project: bool) -> Result<(), String>;
 
+    /// Writes the project `bytes` back to `document`, one the system said RustGIS may write
+    /// ([`Event::Picked`]'s or [`Event::ProjectDocument`]'s), with no picker. `Ok` means the
+    /// request was accepted; it answers with [`Event::ProjectSave`], the failure saying whether
+    /// the document may be damaged and where the project as saved is kept then. A system that
+    /// can't write back refuses.
+    fn write_back(&self, document: &str, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        let _ = (document, name, bytes);
+        Err("this system can't write a project back where it was opened".into())
+    }
+
     /// Starts (`on`) or stops reporting the device's position: each fix arrives as an
     /// [`Event::Position`]. Starting asks the user for leave where the system wants it. A refusal,
     /// like any other end to positioning that wasn't asked for, arrives as an [`Event::Failed`]
@@ -220,8 +244,23 @@ mod tests {
     fn events_are_read_from_their_lines() {
         assert_eq!(
             Event::parse("picked\tdata\tparcels.gpkg\t/data/picked/1/parcels.gpkg"),
-            Event::Picked { purpose: "data".into(), name: "parcels.gpkg".into(), path: PathBuf::from("/data/picked/1/parcels.gpkg") }
+            Event::Picked {
+                purpose: "data".into(),
+                name: "parcels.gpkg".into(),
+                path: PathBuf::from("/data/picked/1/parcels.gpkg"),
+                document: None
+            }
         );
+        assert_eq!(
+            Event::parse("picked\tproject\tsite.rgis\t/data/picked/2/site.rgis\tcontent://docs/document/primary%3Asite.rgis"),
+            Event::Picked {
+                purpose: "project".into(),
+                name: "site.rgis".into(),
+                path: PathBuf::from("/data/picked/2/site.rgis"),
+                document: Some("content://docs/document/primary%3Asite.rgis".into())
+            }
+        );
+        assert_eq!(Event::parse("project-document\tcontent://docs/document/7"), Event::ProjectDocument("content://docs/document/7".into()));
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
         assert_eq!(Event::parse("ended\tdxf:3"), Event::Ended { purpose: "dxf:3".into() });
         assert_eq!(
@@ -259,6 +298,8 @@ mod tests {
             "ended",
             "moved\tx",
             "saved",
+            "project-document",
+            "project-document\t",
             "photo\ta.jpg",
             "photo\ta.jpg\t",
             "position\t200\t20\t5",

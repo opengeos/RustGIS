@@ -178,7 +178,11 @@ impl PickerDelegate {
                 let result = if urls.is_empty() {
                     Err(i18n::fmt("{name} wasn't saved: no place was chosen for it.", &[("name", &name)]))
                 } else {
-                    // The picker has copied the file where the user chose.
+                    // The picker has copied the file where the user chose. A project saved where
+                    // RustGIS may write it back names that place first, for Save to write to.
+                    if let Some(document) = urls.first().filter(|_| project).and_then(|url| scoped(url, || bookmark(url))) {
+                        shared.add(Event::ProjectDocument(document));
+                    }
                     Ok(name)
                 };
                 shared.save_result(project, result);
@@ -281,6 +285,9 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) -> bool {
         n += 1;
     }
     let copied = coordinated_copy(url, folder, &file);
+    // A project file is kept track of, for Save to write it back where it is.
+    let document =
+        if purpose == "project" && name.to_ascii_lowercase().ends_with(".rgis") && copied.is_ok() { bookmark(url) } else { None };
     if scoped {
         // SAFETY: the scope `startAccessingSecurityScopedResource` started above.
         unsafe { url.stopAccessingSecurityScopedResource() };
@@ -289,7 +296,7 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) -> bool {
         Ok(_) => {
             // The copy's own name: a second document of one name is told from the first.
             let shown = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
-            shared.add(Event::Picked { purpose: purpose.to_string(), name: shown, path: file });
+            shared.add(Event::Picked { purpose: purpose.to_string(), name: shown, path: file, document });
             true
         }
         Err(error) => {
@@ -352,6 +359,78 @@ fn coordinated_copy(url: &NSURL, folder: &Path, file: &Path) -> Result<(), Strin
         (None, Some(error)) => Err(error.localizedDescription().to_string()),
         (None, None) => Err(i18n::fmt("the system didn't let it be read", &[])),
     }
+}
+
+/// The document at `url` as a bookmark the app can find it by again, in base64: called inside
+/// its security scope. `None` where the system gives none.
+fn bookmark(url: &NSURL) -> Option<String> {
+    use base64::Engine as _;
+    let data = url
+        .bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
+            objc2_foundation::NSURLBookmarkCreationOptions::empty(),
+            None,
+            None,
+        )
+        .ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(data.to_vec()))
+}
+
+/// Runs `inside` within `url`'s security scope, where it has one.
+fn scoped<T>(url: &NSURL, inside: impl FnOnce() -> T) -> T {
+    // SAFETY: a URL a document picker returned or a bookmark resolved; the scope ends below.
+    let started = unsafe { url.startAccessingSecurityScopedResource() };
+    let result = inside();
+    if started {
+        // SAFETY: the scope started above.
+        unsafe { url.stopAccessingSecurityScopedResource() };
+    }
+    result
+}
+
+/// Writes `bytes` over the document `document` names ([`bookmark`]), inside its security scope
+/// and a coordinated write, atomically: written whole beside it by the system and then put in its
+/// place, so a failure leaves the document as it was.
+fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.decode(document).map_err(|e| e.to_string())?;
+    let data = objc2_foundation::NSData::with_bytes(&data);
+    let mut stale = objc2::runtime::Bool::NO;
+    // SAFETY: bookmark data this app made (`bookmark`), and a flag for the system to set.
+    let url = unsafe {
+        NSURL::URLByResolvingBookmarkData_options_relativeToURL_bookmarkDataIsStale_error(
+            &data,
+            objc2_foundation::NSURLBookmarkResolutionOptions::empty(),
+            None,
+            &mut stale,
+        )
+    }
+    .map_err(|e| e.localizedDescription().to_string())?;
+    scoped(&url, || {
+        let result: RefCell<Option<Result<(), String>>> = RefCell::new(None);
+        let contents = objc2_foundation::NSData::with_bytes(bytes);
+        let writer = block2::RcBlock::new(|to: std::ptr::NonNull<NSURL>| {
+            // SAFETY: the URL the coordinator hands its writer, alive while the writer runs.
+            let to = unsafe { to.as_ref() };
+            let written = contents
+                .writeToURL_options_error(to, objc2_foundation::NSDataWritingOptions::Atomic)
+                .map_err(|e| e.localizedDescription().to_string());
+            result.replace(Some(written));
+        });
+        let coordinator = objc2_foundation::NSFileCoordinator::initWithFilePresenter(objc2_foundation::NSFileCoordinator::alloc(), None);
+        let mut error = None;
+        coordinator.coordinateWritingItemAtURL_options_error_byAccessor(
+            &url,
+            objc2_foundation::NSFileCoordinatorWritingOptions::ForReplacing,
+            Some(&mut error),
+            &writer,
+        );
+        drop(writer);
+        match (result.into_inner(), error) {
+            (Some(written), _) => written,
+            (None, Some(error)) => Err(error.localizedDescription().to_string()),
+            (None, None) => Err(i18n::fmt("the system didn't let it be written", &[])),
+        }
+    })
 }
 
 /// A document's file name, without anything that would put it outside the folder it is copied
@@ -850,6 +929,8 @@ pub struct Ios {
     /// ([`Ios::check_presented`]).
     /// With whether it is the camera.
     presenting: RefCell<Option<(Retained<UIViewController>, std::time::Instant, bool)>>,
+    /// A project is being written back to its document ([`Platform::write_back`]).
+    writing_back: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Whether a file to save is written: `None` while it is being written.
@@ -885,6 +966,7 @@ impl Ios {
         }
         Ios {
             mtm,
+            writing_back: Arc::default(),
             shared,
             folders,
             picker: RefCell::new(None),
@@ -1050,6 +1132,34 @@ impl Platform for Ios {
         }
         // Waiting from now: another save is refused until this one's picker has answered.
         self.saving.replace(Some(Saving { name: name.to_string(), temporary, done, project }));
+        Ok(())
+    }
+
+    fn write_back(&self, document: &str, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        self.not_already_asking(i18n::fmt("{name} wasn't saved: another file is waiting for its place to be chosen.", &[("name", name)]))?;
+        if self.writing_back.swap(true, Ordering::AcqRel) {
+            return Err(i18n::fmt("{name} wasn't saved: it is being saved already.", &[("name", name)]));
+        }
+        // Written off the main thread: a project can be large, and a document in iCloud Drive is
+        // waited for. Its answer is work still to come until then.
+        count(&self.shared.working, true);
+        let (shared, busy, document, name) = (self.shared.clone(), self.writing_back.clone(), document.to_string(), name.to_string());
+        let started = std::thread::Builder::new().name("project written back".into()).spawn(move || {
+            let result = write_document(&document, &bytes).map(|()| name.clone()).map_err(|error| {
+                i18n::fmt(
+                    "{name} wasn't saved where it was opened from: {error}. The file wasn't changed: Save again to choose where to save it.",
+                    &[("name", &name), ("error", &error)],
+                )
+            });
+            shared.save_result(true, result);
+            busy.store(false, Ordering::Release);
+            count(&shared.working, false);
+        });
+        if let Err(e) = started {
+            self.writing_back.store(false, Ordering::Release);
+            count(&self.shared.working, false);
+            return Err(i18n::fmt("{name} wasn't saved: {error}", &[("name", name), ("error", &e.to_string())]));
+        }
         Ok(())
     }
 

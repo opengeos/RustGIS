@@ -38,11 +38,41 @@ pub(crate) struct SavePromptState {
     /// The project changed while the dialog showed: it asks again, and says why.
     pub changed: bool,
     pending: Option<PendingSave>,
+    /// The documents picked projects were copied from, by the copy's path, that a phone may write
+    /// back to ([`RustGisApp::picked_document`]).
+    documents: std::collections::HashMap<std::path::PathBuf, String>,
+    /// The document the project ([`rustgis_engine::Session::opened`]) was last saved as through
+    /// the picker, which it is written back to from then on.
+    saved_as: Option<(u64, String)>,
+    /// The document a picker save reported, until its result comes.
+    reported: Option<String>,
 }
 
 struct PendingSave {
     snapshot: rustgis_engine::platform::SaveSnapshot,
     after: Option<Discard>,
+    /// The project saved ([`rustgis_engine::Session::opened`]).
+    opened: u64,
+    /// The document written back to, or `None` for a picker save.
+    document: Option<String>,
+}
+
+/// The document the open project is written back to on Save: the one it was last saved as, or
+/// the one it was opened from. A field package is never written over by Save: it goes back with
+/// Send Field Package.
+fn document(app: &RustGisApp) -> Option<String> {
+    let prompt = &app.save_prompt;
+    if let Some((opened, document)) = &prompt.saved_as
+        && *opened == app.session.opened
+    {
+        return Some(document.clone());
+    }
+    if app.session.opened_package().is_some() {
+        return None;
+    }
+    // Only a project file: a package opened (`.rgispkg`) isn't written over by its project's text.
+    let project = app.session.path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("rgis")));
+    project.and_then(|path| prompt.documents.get(path)).cloned()
 }
 
 /// Whether running command `id` from the interface asks first: it replaces the project, which
@@ -51,19 +81,23 @@ pub(crate) fn asks(app: &RustGisApp, id: &str) -> bool {
     REPLACES.contains(&id) && app.session.dirty() && (app.opens_files() || app.services.save_project.is_some())
 }
 
-/// Sends the same portable project text as the download path. The picker supplies the final
-/// file name, so the request leaves the live project name alone.
-pub(crate) fn start_project_save(app: &mut RustGisApp) -> Result<(), String> {
+/// Sends the same portable project text as the download path: written back to the project's
+/// document (`in_place`, where it has one), or offered to the picker, which supplies the final file
+/// name, so the request leaves the live project name alone.
+pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result<(), String> {
     if app.save_prompt.pending.is_some() {
         return Err(tl!("A project save is already in progress.").into());
     }
+    let target = if in_place { document(app) } else { None };
     let save = app.services.save_project.as_ref().ok_or(tl!("This build cannot save through the native picker."))?;
     let name = app.session.project.name.replace(['/', '\\'], "-");
     let file = format!("{name}.rgis");
     let notes = app.session.construction_output_notes()?;
     let (text, report) = app.session.project.saved_text(None)?;
-    save(&file, text.into_bytes())?;
-    app.save_prompt.pending = Some(PendingSave { snapshot: app.session.save_snapshot(), after: None });
+    save(&file, text.into_bytes(), target.as_deref())?;
+    app.save_prompt.reported = None;
+    app.save_prompt.pending =
+        Some(PendingSave { snapshot: app.session.save_snapshot(), after: None, opened: app.session.opened, document: target });
     report.notify(&mut app.session);
     for note in notes {
         app.session.notify(note, false);
@@ -76,14 +110,32 @@ impl RustGisApp {
     /// A failed or cancelled write abandons any action that was waiting for it.
     pub fn complete_project_save(&mut self, result: Result<String, String>) {
         let pending = self.save_prompt.pending.take();
+        let reported = self.save_prompt.reported.take();
         match result {
             Ok(name) => self.session.notify(crate::i18n::fmt("Saved {name}.", &[("name", &name)]), false),
             Err(error) => {
                 self.session.notify(error, true);
+                // A document that couldn't be written back is asked for again: the next Save
+                // shows the picker.
+                if let Some(failed) = pending.and_then(|p| p.document) {
+                    let prompt = &mut self.save_prompt;
+                    prompt.documents.retain(|_, d| *d != failed);
+                    if prompt.saved_as.as_ref().is_some_and(|(_, d)| *d == failed) {
+                        prompt.saved_as = None;
+                    }
+                }
                 return;
             }
         }
         let Some(saved) = pending else { return };
+        // Saved as a document the phone may write back to: Save writes there from now on, for
+        // as long as this project is open.
+        if let Some(document) = reported
+            && saved.document.is_none()
+            && saved.opened == self.session.opened
+        {
+            self.save_prompt.saved_as = Some((saved.opened, document));
+        }
         if self.session.mark_snapshot_saved(saved.snapshot)
             && let Some(what) = saved.after
         {
@@ -94,6 +146,20 @@ impl RustGisApp {
                 proceed(self, what);
             }
         }
+    }
+}
+
+impl RustGisApp {
+    /// A picked project's copy at `path` came from `document`, which the phone may write back to:
+    /// Save writes there while that copy is the open project.
+    pub fn picked_document(&mut self, path: std::path::PathBuf, document: String) {
+        self.save_prompt.documents.insert(path, document);
+    }
+
+    /// The picker save under way wrote `document`, which the phone may write back to: its
+    /// [`RustGisApp::complete_project_save`] follows.
+    pub fn project_document(&mut self, document: String) {
+        self.save_prompt.reported = Some(document);
     }
 }
 
@@ -424,7 +490,7 @@ mod tests {
     fn native_project_save_resumes_replacement_after_success() {
         let mut h = launch();
         h.state_mut().services.open_async = Some(Box::new(|_| {}));
-        h.state_mut().services.save_project = Some(Box::new(|name, bytes| {
+        h.state_mut().services.save_project = Some(Box::new(|name, bytes, _| {
             assert_eq!(name, "World Atlas.rgis");
             assert!(String::from_utf8(bytes).unwrap().contains("\"Edited\""));
             Ok(())
@@ -449,7 +515,7 @@ mod tests {
     fn native_project_save_refused_before_the_picker_is_said() {
         let mut h = launch();
         h.state_mut().services.open_async = Some(Box::new(|_| {}));
-        h.state_mut().services.save_project = Some(Box::new(|_, _| Err("No picker".into())));
+        h.state_mut().services.save_project = Some(Box::new(|_, _, _| Err("No picker".into())));
         edit(&mut h, "Edited");
         h.state_mut().run_by_user("project.new", Value::Null).unwrap();
         frames(&mut h, 2);
@@ -460,11 +526,51 @@ mod tests {
         assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("No picker")), "the failure is said");
     }
 
+    /// On a phone, Save writes back to the document the project was opened from, and Save As asks
+    /// where; a document saved as through the picker is written back to after, for that project
+    /// only, and one that couldn't be written is asked for again.
+    #[test]
+    fn native_save_writes_back_to_the_opened_document() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut h = launch();
+        let asked: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        let seen = asked.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |_, _, document| {
+            seen.borrow_mut().push(document.map(str::to_string));
+            Ok(())
+        }));
+        let copy = std::path::PathBuf::from("/picked/1/0/site.rgis");
+        h.state_mut().picked_document(copy.clone(), "content://site".into());
+        h.state_mut().session.path = Some(copy.clone());
+        let save = |h: &mut Harness, id: &str, result: Result<String, String>| {
+            edit(h, id);
+            h.state_mut().run(id, Value::Null).unwrap();
+            h.state_mut().complete_project_save(result);
+        };
+        save(&mut h, "ui.save", Ok("site.rgis".into()));
+        save(&mut h, "ui.saveAs", Ok("copy.rgis".into()));
+        // The write back failed: the next Save asks where.
+        save(&mut h, "ui.save", Err("site.rgis may be damaged".into()));
+        save(&mut h, "ui.save", Ok("site.rgis".into()));
+        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), None, Some("content://site".to_string()), None]);
+        // Saved as a document the phone may write back to: Save writes there from now on.
+        edit(&mut h, "Saved as");
+        h.state_mut().run("ui.saveAs", Value::Null).unwrap();
+        h.state_mut().project_document("content://other".into());
+        h.state_mut().complete_project_save(Ok("other.rgis".into()));
+        save(&mut h, "ui.save", Ok("other.rgis".into()));
+        assert_eq!(asked.borrow().last(), Some(&Some("content://other".to_string())));
+        // Another project opened: neither document is its own.
+        h.state_mut().run("project.new", Value::Null).unwrap();
+        save(&mut h, "ui.save", Ok("Untitled.rgis".into()));
+        assert_eq!(asked.borrow().last(), Some(&None));
+    }
+
     /// A direct Save As writes the submitted state. Any edit after submission is still unsaved.
     #[test]
     fn native_save_marks_the_written_snapshot() {
         let mut h = launch();
-        h.state_mut().services.save_project = Some(Box::new(|_, _| Ok(())));
+        h.state_mut().services.save_project = Some(Box::new(|_, _, _| Ok(())));
         edit(&mut h, "On disk");
         h.state_mut().run("ui.saveAs", Value::Null).unwrap();
         edit(&mut h, "In memory");
