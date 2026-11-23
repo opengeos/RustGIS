@@ -965,11 +965,14 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     // The result cut to leave room for one entry per code.
     let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
     let text = bounded_json(&Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1));
+    let failed = o.contains_key("error");
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
-        Ok(Value::String(preview)) => serde_json::Map::from_iter([("error".to_string(), json!(preview))]),
-        _ => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
+        Ok(Value::String(preview)) if failed => serde_json::Map::from_iter([("error".to_string(), json!(preview))]),
+        _ if failed => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
+        // No room for any of a result that didn't fail: only that it was cut.
+        _ => serde_json::Map::from_iter([("truncated".to_string(), json!(true))]),
     };
     let success = o.get("success").cloned();
     if let Some(success) = &success {
@@ -990,12 +993,17 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
             }
         }
     }
-    // The codes before what is left of the result: then only that the list was left out.
+    // The codes before what is left of the result, saying it was cut where that fits: then only
+    // that the list was left out.
     let bare = serde_json::Map::from_iter(success.map(|v| ("success".to_string(), v)));
+    let mut said_cut = bare.clone();
+    said_cut.insert("truncated".into(), json!(true));
     for form in forms.iter().skip(2) {
-        let v = with(bare.clone(), form);
-        if v.to_string().len() <= max {
-            return v.to_string();
+        for base in [&said_cut, &bare] {
+            let v = with(base.clone(), form);
+            if v.to_string().len() <= max {
+                return v.to_string();
+            }
         }
     }
     let mut v = bare;
@@ -1732,6 +1740,10 @@ mod tests {
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
             assert_eq!((&out["lossesTrimmed"], &out["success"]), (&json!(true), &json!(true)), "{tokens}: {text}");
             assert!(out["losses"].to_string().contains("dropped.value"), "{tokens}: {text}");
+            // A success cut this far is never said as an error; it is said to be cut where that
+            // fits beside the codes.
+            assert!(out.get("error").is_none(), "{tokens}: {text}");
+            assert_eq!(out.get("truncated").is_some(), tokens == 32, "{tokens}: {text}");
         }
         for tokens in 1..=8 {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
