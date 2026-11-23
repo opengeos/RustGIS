@@ -1030,7 +1030,8 @@ impl Reproject {
             if !g.is_finite() {
                 return None;
             }
-            let inside = g.extent().intersects(&own);
+            // A box over the whole plane holds every shape, one with no place (an empty part) too.
+            let inside = own == whole_plane() || g.extent().intersects(&own);
             return Some(Fitted { geometry: g, inside });
         }
         let Placed { geometry, lonlat } = self.read(g)?;
