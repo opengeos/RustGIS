@@ -229,7 +229,7 @@ impl FeatureSource for ShpSource {
     fn read(&self, req: &Request) -> Result<Batch> {
         let encoding = self.encoding.decoder();
         let limit = clamp_limit(req.limit);
-        let extent = req.extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
+        let extent = self.reproject.request_box(req);
         // Keep indexed zero-limit counts; a refused view has no cheap candidate count.
         if limit == 0 && req.extent.is_some() && extent.is_none() {
             return Err(super::unbounded_count());
@@ -275,7 +275,7 @@ impl FeatureSource for ShpSource {
                     boxed_off += u64::from(index::usable(record_box(&buf, u64::from(place.len))));
                     return Ok(());
                 }
-                Ok(Some(g)) => match self.reproject.read(g) {
+                Ok(Some(g)) => match self.reproject.place(g, req) {
                     Some(placed) => Some(placed),
                     None => {
                         skipped += 1;
@@ -290,7 +290,7 @@ impl FeatureSource for ShpSource {
             };
             // The index's boxes are rounded outward to f32, so it can match a shape just outside. A
             // shape without geometry doesn't match an extent, bounded natively or not.
-            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.in_request(req)) {
+            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.inside) {
                 return Ok(());
             }
             let geometry = geometry.map(|p| p.geometry);
@@ -355,7 +355,7 @@ impl FeatureSource for ShpSource {
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         let encoding = self.encoding.decoder();
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
-        let req = Request { extent, limit: usize::MAX };
+        let req = Request { extent, limit: usize::MAX, own: None };
         let extent = extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
         if extent.is_some_and(|e| e.is_empty()) {
             return Ok(Batch { complete: true, ..Batch::default() });
@@ -396,7 +396,7 @@ impl FeatureSource for ShpSource {
                     boxed_off += u64::from(index::usable(record_box(&buf, u64::from(place.len))));
                     return Ok(());
                 }
-                Ok(Some(g)) => match self.reproject.read(g) {
+                Ok(Some(g)) => match self.reproject.place(g, &req) {
                     Some(placed) => Some(placed),
                     None => {
                         skipped += 1;
@@ -410,7 +410,7 @@ impl FeatureSource for ShpSource {
                 }
             };
             // As in `read`, the shape itself is checked.
-            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.in_request(&req)) {
+            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.inside) {
                 return Ok(());
             }
             let geometry = geometry.map(|p| p.geometry);

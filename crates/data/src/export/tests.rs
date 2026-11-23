@@ -481,8 +481,9 @@ fn a_streamed_export_into_an_existing_geopackage_starts_again_inside_its_transac
     assert_eq!((e.written, table), (20, Some(GpkgWritten { table: "both".into(), replaced: false, dependents: vec![] })));
     let whole = d.join("whole.gpkg");
     crate::io::write_path(&both, &whole).unwrap();
-    let read =
-        |p: &Path, t: &str| crate::source::open_path(p, Some(t)).unwrap().read(&Request { extent: None, limit: 100 }).unwrap().features;
+    let read = |p: &Path, t: &str| {
+        crate::source::open_path(p, Some(t)).unwrap().read(&Request { extent: None, limit: 100, own: None }).unwrap().features
+    };
     assert_eq!(read(&county, "both"), read(&whole, "both"));
     assert_eq!(read(&county, "parcels").len(), 1);
     let c = rusqlite::Connection::open(&county).unwrap();

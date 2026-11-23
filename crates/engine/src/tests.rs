@@ -44516,7 +44516,7 @@ fn postgis_dates_live() {
         let conn = postgis::connect(&url, false).unwrap();
         let t = postgis::find_table(&conn, &format!("public.{table}")).unwrap();
         let src = postgis::PostgisSource::open(conn, t, None, None).unwrap();
-        let b = src.read(&Request { extent: None, limit: 100 }).unwrap();
+        let b = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
         let note = rustgis_data::source::unread_dates_note(&src.info().fields, &b.unread_dates);
         assert_eq!(note.as_deref(), Some("2 values aren't dates and were read as empty, in 'd', 'ts'"));
         let f = b.features.iter().find(|f| f.id == 1).unwrap();

@@ -14,10 +14,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use crate::projection::Flat;
 use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
-use rustgis_geom::Extent;
+use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod own_tests;
 mod render_lod;
 mod window;
 pub(crate) use window::Query;
@@ -704,11 +707,15 @@ pub struct Window {
     pub kept: usize,
     /// The read kept the definition query's matches: `matched` counts them.
     pub filtered: bool,
+    /// The same box in map units, when it was read in the map's own system, which is the
+    /// source's ([`SourceLayer::wanted_in`]): a later view is tested against it there.
+    pub own: Option<Extent>,
 }
 
 /// A read in flight.
 struct Pending {
     extent: Extent,
+    own: Option<Extent>,
     result: Mutex<Option<Result<(Batch, window::Cache), String>>>,
     still: Option<rustgis_data::source::remote::Still>,
 }
@@ -825,7 +832,7 @@ pub enum Polled {
     /// A read is still running.
     Waiting,
     /// A read finished: install its features.
-    Done(Window, Batch),
+    Done(Window, Box<Batch>),
     /// A read failed.
     Failed(String),
 }
@@ -1132,7 +1139,7 @@ impl SourceLayer {
         // Opening a header alone doesn't establish that its payload is readable. Probe the
         // candidate, never the live source, before the caller commits the replacement.
         let handle = new.handle.as_deref().ok_or_else(|| named("the replacement source didn't open"))?;
-        let probe = handle.read(&Request { extent: None, limit: 1 }).map_err(|e| named(&e.to_string()))?;
+        let probe = handle.read(&Request { extent: None, limit: 1, own: None }).map_err(|e| named(&e.to_string()))?;
         if probe.features.is_empty() && probe.skipped > 0 {
             return Err(named(&format!(
                 "no readable features found while checking the replacement ({} rows could not be read)",
@@ -1796,19 +1803,61 @@ impl SourceLayer {
 
     /// The extent to read for a view (longitude/latitude), or `None` when the window serves it.
     pub fn wanted(&self, view: &Extent) -> Option<Extent> {
+        self.wanted_in(view, None).map(|w| w.extent)
+    }
+
+    /// The extent to read for a view, or `None` when the window serves it. `own` is the view in
+    /// map units with the map's projection, given when the map is in the source's own system: the
+    /// window is then read and kept in map units too, its longitude/latitude extent the place of
+    /// that box there.
+    pub fn wanted_in(&self, view: &Extent, own: Option<(&Flat, Extent)>) -> Option<Wanted> {
         let v = clamp_world(view);
         if v.is_empty() {
             return None;
         }
+        let own = own.filter(|(_, o)| !o.is_empty() && [o.min_x, o.min_y, o.max_x, o.max_y].iter().all(|n| n.is_finite()));
+        // A view past the world (zoomed out) reads the world, as in longitude/latitude: clamped to
+        // the world's box in map units, or read in longitude/latitude where the map can't place
+        // the world (a system for an area).
+        let whole = contains(&v, &Extent::WORLD_LONLAT);
+        let own = own.and_then(|(flat, o)| {
+            if !whole {
+                return Some((flat, o));
+            }
+            let world = map_around(flat, &Extent::WORLD_LONLAT)?;
+            let clamped =
+                Extent::new(o.min_x.max(world.min_x), o.min_y.max(world.min_y), o.max_x.min(world.max_x), o.max_y.min(world.max_y));
+            (!clamped.is_empty()).then_some((flat, clamped))
+        });
+        let all = self.info().map(|i| i.extent).filter(|e| !e.is_empty());
+        // In map units, where the source says its features lie, with a margin for the curve
+        // between the places its edges are taken at.
+        let all_own = own.and_then(|(flat, _)| all.and_then(|a| map_around(flat, &a))).map(|a| a.padded(0.05, 0.0));
         if let Some(w) = &self.window {
-            let all = self.info().map(|i| i.extent).filter(|e| !e.is_empty());
-            // Everything has been read: nothing more to fetch, wherever the view goes.
-            if w.complete && all.is_some_and(|a| contains(&w.extent, &a)) {
+            // Everything has been read: nothing more to fetch, wherever the view goes. A window
+            // read in map units is compared there, as its longitude/latitude extent holds more
+            // than was read.
+            let everything = match w.own {
+                Some(read) => all_own.is_some_and(|a| contains(&read, &a)),
+                None => all.is_some_and(|a| contains(&w.extent, &a)),
+            };
+            if w.complete && everything {
                 return None;
             }
             // The window covers the view, and is complete or not much larger (a view zoomed well
-            // inside a sampled window reads again, for the detail the sample left out).
-            if contains(&w.extent, &v) && (w.complete || area(&v) * 6.0 > area(&w.extent)) {
+            // inside a sampled window reads again, for the detail the sample left out): in map
+            // units when the window and the view are both there, else in longitude/latitude. A
+            // window read in map units isn't compared in longitude/latitude, where its extent
+            // holds more than was read.
+            let compared = match (own, w.own) {
+                (Some((_, o)), Some(read)) => Some((o, read)),
+                (_, None) => Some((v, w.extent)),
+                (None, Some(_)) => None,
+            };
+            if let Some((view, read)) = compared
+                && contains(&read, &view)
+                && (w.complete || area(&view) * 6.0 > area(&read))
+            {
                 return None;
             }
         }
@@ -1818,15 +1867,32 @@ impl SourceLayer {
         if self.pending.is_some() {
             return None;
         }
-        Some(clamp_world(&v.padded(0.5, 0.0)))
+        // In map units, the read's longitude/latitude extent is the place of its box there, for
+        // a source that reads by that; a box the map can't take back is read as without one.
+        if let Some((flat, o)) = own {
+            let padded = o.padded(0.5, 0.0);
+            if let Some(lonlat) = lonlat_around(flat, &padded).map(|e| clamp_world(&e)).filter(|e| !e.is_empty()) {
+                return Some(Wanted { extent: lonlat, own: Some(padded) });
+            }
+        }
+        Some(Wanted { extent: clamp_world(&v.padded(0.5, 0.0)), own: None })
     }
 
     /// Starts reading an extent: on a background thread unless `block` (or in the browser).
     pub fn start(&mut self, extent: Extent, block: bool) {
+        self.start_wanted(Wanted { extent, own: None }, block);
+    }
+
+    /// Starts reading what [`SourceLayer::wanted_in`] asked for: on a background thread unless
+    /// `block` (or in the browser). A box in map units goes to the source as one in its own
+    /// system ([`Request::own`]).
+    pub fn start_wanted(&mut self, wanted: Wanted, block: bool) {
+        let Wanted { extent, own } = wanted;
         self.ready_cache = None;
         let Some(h) = self.handle.clone() else { return };
         let most = if h.remote().is_some() { REMOTE_VIEW_LIMIT } else { VIEW_LIMIT };
-        let req = Request { extent: Some(extent), limit: if self.limit == 0 { most } else { self.limit } };
+        let own_box = own.map(|o| (h.coord_crs(), o));
+        let req = Request { extent: Some(extent), limit: if self.limit == 0 { most } else { self.limit }, own: own_box };
         let budget = self.budget();
         let projection = self.projection.clone().unwrap_or(crate::Projection::WebMercator);
         let estimate = self.estimated_row_bytes;
@@ -1834,7 +1900,7 @@ impl SourceLayer {
         let fields = self.window_fields;
         let query = self.query.clone();
         let still = rustgis_data::source::remote::current_still();
-        let pending = Arc::new(Pending { extent, result: Mutex::new(None), still: still.clone() });
+        let pending = Arc::new(Pending { extent, own, result: Mutex::new(None), still: still.clone() });
         let p = pending.clone();
         // A source by its web address: the read runs as its bytes land (on the desktop and in
         // the browser alike), fetching what it needs in rounds.
@@ -1895,7 +1961,7 @@ impl SourceLayer {
                 Err(e) => {
                     self.saved_selection.clear();
                     self.error = Some(format!("couldn't start reading the layer: {e}"));
-                    self.window = Some(Window { extent, complete: true, matched: 0, kept: 0, filtered: false });
+                    self.window = Some(Window { extent, complete: true, matched: 0, kept: 0, filtered: false, own });
                 }
             }
             return;
@@ -1917,10 +1983,11 @@ impl SourceLayer {
                     self.estimated_row_bytes = cache.mean_bytes;
                     let filtered = cache.filtered;
                     self.ready_cache = Some(cache);
-                    let w = Window { extent: p.extent, complete: b.complete, matched: b.matched, kept: b.features.len(), filtered };
+                    let w =
+                        Window { extent: p.extent, complete: b.complete, matched: b.matched, kept: b.features.len(), filtered, own: p.own };
                     self.window = Some(w);
                     self.clear_error();
-                    return Polled::Done(w, b);
+                    return Polled::Done(w, Box::new(b));
                 }
                 Some(Err(e)) => {
                     self.pending = None;
@@ -1928,7 +1995,7 @@ impl SourceLayer {
                     self.saved_selection.clear();
                     self.error = Some(e.clone());
                     // Not read again until the view moves past it.
-                    self.window = Some(Window { extent: p.extent, complete: true, matched: 0, kept: 0, filtered: false });
+                    self.window = Some(Window { extent: p.extent, complete: true, matched: 0, kept: 0, filtered: false, own: p.own });
                     return Polled::Failed(e);
                 }
                 None if block && cfg!(not(target_arch = "wasm32")) && start.elapsed() < web_time::Duration::from_secs(60) => {
@@ -1970,6 +2037,50 @@ fn contains(outer: &Extent, inner: &Extent) -> bool {
         && outer.min_y <= inner.min_y
         && outer.max_x >= inner.max_x
         && outer.max_y >= inner.max_y
+}
+
+/// What a view wants read ([`SourceLayer::wanted_in`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wanted {
+    /// Longitude/latitude.
+    pub extent: Extent,
+    /// The same box in map units, when the map is in the source's own system.
+    pub own: Option<Extent>,
+}
+
+/// Where a box in map units lies in longitude/latitude: its edges taken back, 16 places each,
+/// reaching a pole inside it (a polar system); `None` when the map can't take a place back.
+fn lonlat_around(flat: &Flat, e: &Extent) -> Option<Extent> {
+    let mut out = Extent::EMPTY;
+    const N: usize = 16;
+    for i in 0..=N {
+        let t = i as f64 / N as f64;
+        let (x, y) = (e.min_x + t * e.width(), e.min_y + t * e.height());
+        for c in [Coord::new(x, e.min_y), Coord::new(x, e.max_y), Coord::new(e.min_x, y), Coord::new(e.max_x, y)] {
+            out.expand(flat.inverse(c).filter(|p| p.is_finite())?);
+        }
+    }
+    for pole in [Coord::new(0.0, 90.0), Coord::new(0.0, -90.0)] {
+        if flat.forward(pole).is_some_and(|p| p.is_finite() && e.contains(p)) {
+            out = Extent::new(-180.0, out.min_y.min(pole.y), 180.0, out.max_y.max(pole.y));
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Where a longitude/latitude box lies in map units: its edges taken there, 16 places each;
+/// `None` when the map can't place one of them.
+fn map_around(flat: &Flat, e: &Extent) -> Option<Extent> {
+    let mut out = Extent::EMPTY;
+    const N: usize = 16;
+    for i in 0..=N {
+        let t = i as f64 / N as f64;
+        let (x, y) = (e.min_x + t * e.width(), e.min_y + t * e.height());
+        for c in [Coord::new(x, e.min_y), Coord::new(x, e.max_y), Coord::new(e.min_x, y), Coord::new(e.max_x, y)] {
+            out.expand(flat.forward(c).filter(|p| p.is_finite())?);
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 fn clamp_world(e: &Extent) -> Extent {
