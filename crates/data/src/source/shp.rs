@@ -74,9 +74,35 @@ pub struct ShpSource {
     /// trust: [`BOXES_UNKNOWN`] until a whole read has looked, then [`BOXES_HOLD`] or
     /// [`BOXES_DONT`].
     boxes: AtomicU8,
-    /// The `.shp`'s and the `.dbf`'s sizes and modification times as opened
+    /// The `.shp`'s and the `.dbf`'s versions as opened
     /// ([`FeatureSource::same_as_opened`]).
-    stamps: [Option<(u64, u128)>; 2],
+    stamps: [Option<Stamp>; 2],
+}
+
+/// What a file's metadata says of its version ([`FeatureSource::same_as_opened`]): its size and
+/// modification time and, on Unix, its identity and change time, which a write of the same size
+/// within the clock's step still moves. `None` without a modification time: then no copy of what
+/// was read is trusted.
+#[derive(PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    identity_and_change: (u64, u64, i64, i64),
+}
+
+impl Stamp {
+    fn of(path: &Path) -> Option<Stamp> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path).ok()?;
+        Some(Stamp {
+            len: m.len(),
+            modified: m.modified().ok()?,
+            #[cfg(unix)]
+            identity_and_change: (m.dev(), m.ino(), m.ctime(), m.ctime_nsec()),
+        })
+    }
 }
 
 /// Not yet looked at ([`ShpSource::boxes`]).
@@ -116,6 +142,8 @@ impl ShpSource {
         if !dbf.is_file() {
             return Err(bad(format!("{} is missing", dbf.display())));
         }
+        // Taken before anything is read, so a file written while it opens is seen as changed.
+        let stamps = [Stamp::of(path), Stamp::of(&dbf)];
         let mut notes = Vec::new();
         let table = read_table(&dbf)?;
         let cpg = crate::dbf::read_cpg(path, &mut notes);
@@ -230,7 +258,6 @@ impl ShpSource {
         }
         // Points too: each record's own type is read, whatever the header says.
         let boxes = AtomicU8::new(BOXES_UNKNOWN);
-        let stamps = [super::external::stamp(path).ok(), super::external::stamp(&dbf).ok()];
         Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes, stamps })
     }
 }
@@ -383,12 +410,12 @@ impl FeatureSource for ShpSource {
     fn finds_all_by_area(&self) -> bool {
         self.index.unboxed == 0 && self.boxes.load(Relaxed) == BOXES_HOLD
     }
-    /// Both files opened as a read opens them, so one gone gives a read's error, then their sizes
-    /// and modification times compared with those at opening.
+    /// Both files opened as a read opens them, so one gone gives a read's error, then their
+    /// versions ([`Stamp`]) compared with those at opening.
     fn same_as_opened(&self) -> Result<bool> {
         drop(crate::provenance::open(&self.shp)?);
         drop(crate::provenance::open(&self.dbf)?);
-        let now = [super::external::stamp(&self.shp).ok(), super::external::stamp(&self.dbf).ok()];
+        let now = [Stamp::of(&self.shp), Stamp::of(&self.dbf)];
         Ok(self.stamps.iter().all(Option::is_some) && now == self.stamps)
     }
     /// Visits located shapes in a spatial request; geometry-less rows belong only to whole reads.

@@ -6449,6 +6449,7 @@ fn render_frame(
             let kept = near.filter(|_| unchanged).and_then(|n| owner?.kept_view(&kept_key, &n, room));
             let wide = cull_extent(view, KEEP_MARGIN);
             let keep = (near.is_some()
+                && unchanged
                 && kept.is_none()
                 && within_mercator_lats(&wide)
                 && owner.is_some_and(|o| o.view_worth_keeping(&kept_key, res)))

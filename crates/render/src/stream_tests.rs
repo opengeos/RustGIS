@@ -1856,6 +1856,7 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
         if near {
             let e = drawn.unwrap_or_else(|| panic!("case {n}: the whole source was read"));
             let read = features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&e))).count();
+            // A fifth: the view is read a quarter of its size wider on each side, to be kept.
             assert!(read * 5 < total, "case {n}, {view:?}: {read} of {total} features read for a view of a few");
         } else {
             assert_eq!(drawn, None, "case {n}: a layer reaching in from beyond the view reads everything");
