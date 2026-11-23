@@ -1524,17 +1524,21 @@ pub(crate) fn tiled_inputs(
                 None => {
                     #[cfg(test)]
                     TILED_READS.with(|n| n.set(n.get() + 1));
-                    // One such read at a time across runs, each planned with what the others
-                    // read counted: their decodes would otherwise each plan for the same memory.
-                    let _turn = TILED_TURN.lock().unwrap_or_else(|e| e.into_inner());
+                    // The last file a batch read alone: let go before another is read, so a batch
+                    // over several files holds one, and doesn't hold it uncounted while the next
+                    // is planned.
+                    BATCH_READS.with(|b| {
+                        if let Some(reads) = b.borrow_mut().as_mut() {
+                            reads.clear();
+                        }
+                    });
+                    let _turn = tiled_turn().map_err(|e| format!("{}: {e}", l.name))?;
                     let r = std::sync::Arc::new(
                         rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None)
                             .map_err(|e| format!("{}: {e}", l.name))?,
                     );
                     BATCH_READS.with(|b| {
-                        // The last file read alone: a batch over several files holds one.
                         if let Some(reads) = b.borrow_mut().as_mut() {
-                            reads.clear();
                             reads.insert(path.to_string(), r.clone());
                         }
                     });
@@ -1560,6 +1564,22 @@ pub(crate) fn tiled_inputs(
 /// run one at a time across runs, so each plans its size with the ones before it held.
 #[cfg(not(target_arch = "wasm32"))]
 static TILED_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// [`TILED_TURN`], waited for while another run reads, looking at the run's Cancel every 50 ms
+/// (through the progress probe it installed).
+#[cfg(not(target_arch = "wasm32"))]
+fn tiled_turn() -> rustgis_data::Result<std::sync::MutexGuard<'static, ()>> {
+    loop {
+        match TILED_TURN.try_lock() {
+            Ok(turn) => return Ok(turn),
+            Err(std::sync::TryLockError::Poisoned(e)) => return Ok(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                rustgis_data::progress::check()?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
