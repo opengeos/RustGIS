@@ -192,6 +192,11 @@ pub struct Info {
     stretch_failed: Mutex<HashMap<(Vec<usize>, bool), Instant>>,
     /// The file's alpha band, shown with any look.
     alpha: Option<usize>,
+    /// A GeoTIFF on this computer: the revision of the file its header was read from, taken
+    /// before it was read. The header is kept only while the file is that revision, and what is
+    /// read with it is checked against it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) revision: OnceLock<rustgis_data::raster::FileRevision>,
 }
 
 impl Info {
@@ -414,32 +419,20 @@ pub fn landed_count() -> u64 {
     LANDED.load(Ordering::Relaxed)
 }
 
-/// The revision of each GeoTIFF on this computer whose header is read or kept ([`is_local_file`]),
-/// taken before its header is read: a header kept is used only while the file is still that
-/// revision, so a file written again while it is open is read again, not drawn from its old
-/// header and tiles.
-#[cfg(not(target_arch = "wasm32"))]
-fn local_revisions() -> &'static Mutex<HashMap<String, Option<rustgis_data::raster::FileRevision>>> {
-    static R: OnceLock<Mutex<HashMap<String, Option<rustgis_data::raster::FileRevision>>>> = OnceLock::new();
-    R.get_or_init(Mutex::default)
-}
-
-/// The revision a local file's header was read at ([`local_revisions`]); `None` when it wasn't
-/// recorded or couldn't be read.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn local_revision(url: &str) -> Option<rustgis_data::raster::FileRevision> {
-    local_revisions().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned().flatten()
-}
-
-/// Forgets what was read of a local file that is no longer the revision its header was read at.
+/// Forgets what was read of a GeoTIFF on this computer whose header was read from another
+/// revision of the file than it is now: a file written again while it is open is read again, not
+/// drawn from its old header and tiles.
 #[cfg(not(target_arch = "wasm32"))]
 fn forget_if_rewritten(url: &str) {
     if !is_local_file(url) {
         return;
     }
-    let kept = local_revisions().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned();
+    let kept = match infos().lock().unwrap_or_else(|e| e.into_inner()).get(url) {
+        Some(State::Ready(info, _)) => info.revision.get().cloned(),
+        _ => return,
+    };
     if let Some(kept) = kept
-        && kept != rustgis_data::raster::FileRevision::of(std::path::Path::new(url))
+        && Some(kept) != rustgis_data::raster::FileRevision::of(std::path::Path::new(url))
     {
         forget_file(url);
     }
@@ -566,7 +559,10 @@ fn read(url: &str, at: u64, len: u64, ceiling: crate::address::Reach, done: Done
 /// Whether `url` names a GeoTIFF on this computer, by its full path: the desktop reads a large
 /// local tiled GeoTIFF in place, as it reads a web address's (#2761).
 pub fn is_local_file(url: &str) -> bool {
-    crate::pmtiles::is_local(url) && crate::pmtiles::check_local_path(url, "a GeoTIFF read in place", &["tif", "tiff"]).is_ok()
+    // A plain path, as a layer's file is given: a `file:` address isn't read in place.
+    !url.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:"))
+        && crate::pmtiles::is_local(url)
+        && crate::pmtiles::check_local_path(url, "a GeoTIFF read in place", &["tif", "tiff"]).is_ok()
 }
 
 /// Whether a local GeoTIFF may be read in place: a full path to a `.tif` or `.tiff` file, asked
@@ -597,12 +593,17 @@ fn load(url: String, ceiling: crate::address::Reach, done: Box<dyn FnOnce(Result
             done(Err(e));
             return;
         }
-        // The revision the header is read at, taken before it is read.
+        // The revision the header is read at, taken before it is read, kept with the header.
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let done: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send> = {
             let revision = rustgis_data::raster::FileRevision::of(std::path::Path::new(&url));
-            local_revisions().lock().unwrap_or_else(|e| e.into_inner()).insert(url.clone(), revision);
-        }
+            Box::new(move |r: Result<Arc<Info>, String>| {
+                if let (Ok(info), Some(revision)) = (&r, revision) {
+                    let _ = info.revision.set(revision);
+                }
+                done(r);
+            })
+        };
         return read_header(url, HEAD, ceiling, done);
     }
     if let Err(e) = crate::address::check_reach(&url, ceiling) {
@@ -791,6 +792,8 @@ fn stats(
         stretching: Mutex::new(HashMap::new()),
         stretch_failed: Mutex::new(HashMap::new()),
         alpha,
+        #[cfg(not(target_arch = "wasm32"))]
+        revision: OnceLock::new(),
     });
     // 8-bit colour images are shown as they are; others between the coarsest overview's
     // percentiles (a palette image's own look needs none: its table colours its values, see
@@ -1291,12 +1294,17 @@ fn get_tile_at(
             let r = crate::cache::check_still(&crate::cache::current_still()).and(r);
             let r = crate::logins::check(&key.0).map_err(str::to_string).and(r);
             let mut r = r;
+            // A local file's tile decoded with a header since forgotten (the file written again
+            // while it was read) is handed on, not kept: the next draw reads it with the new one.
+            let superseded = is_local_file(&key.0)
+                && !matches!(infos().lock().unwrap_or_else(|e| e.into_inner()).get(&key.0), Some(State::Ready(i, _)) if Arc::ptr_eq(i, &info));
             let waiting = {
                 let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
                 if started_reach > crate::cache::ceiling_for(&key.0) {
                     r = Err(REACH_CHANGED.into());
                 }
                 let old = match &r {
+                    Ok(_) if superseded => t.map.remove(&key),
                     // Over the budget: the tiles used longest ago make room.
                     Ok(b) => t.keep(key, b.clone(), samples, started_reach),
                     // A failed tile is read again by the next map tile that needs it.
@@ -1976,6 +1984,8 @@ mod tests {
             stretching: Mutex::default(),
             stretch_failed: Mutex::default(),
             alpha: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            revision: OnceLock::new(),
         });
         let own = super::Look::default();
         assert_eq!(info.palette(&own).map(<[[u8; 4]]>::len), Some(256));
@@ -2068,6 +2078,8 @@ mod tests {
             stretching: Mutex::default(),
             stretch_failed: Mutex::default(),
             alpha: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            revision: OnceLock::new(),
         });
         let asked = Arc::new(AtomicUsize::new(0));
         let a = asked.clone();
@@ -2580,6 +2592,8 @@ mod tests {
                 stretching: Mutex::default(),
                 stretch_failed: Mutex::default(),
                 alpha: None,
+                #[cfg(not(target_arch = "wasm32"))]
+                revision: OnceLock::new(),
             });
             let url = format!("https://sparse-pending.example/{reader:?}.tif");
             let key = (url.clone(), 0, 0);
@@ -2712,7 +2726,7 @@ mod tests {
         load(url.clone(), crate::address::Reach::Public, Box::new(move |r| tx.send(r.err()).unwrap()));
         let refused = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_or_default();
         assert!(refused.contains("a file on this computer can't be read from here"), "{refused}");
-        for not in ["local.tif", "./local.tif", "//server/share/local.tif", "https://example.com/local.tif"] {
+        for not in ["local.tif", "./local.tif", "//server/share/local.tif", "https://example.com/local.tif", "file:///tmp/local.tif"] {
             assert!(!is_local_file(not), "{not}");
         }
         assert!(!is_local_file(&dir.join("local.png").display().to_string()));

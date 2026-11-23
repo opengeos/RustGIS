@@ -98,7 +98,7 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
     // A file on this computer: the revision its header was read at, which it must still be once
     // its tiles are in.
     #[cfg(not(target_arch = "wasm32"))]
-    let before = super::is_local_file(&url).then(|| super::local_revision(&url));
+    let before = super::is_local_file(&url).then(|| info.revision.get().cloned());
     fetch_all(
         info,
         url.clone(),
@@ -137,10 +137,13 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                 // the file's own grid is checked against.
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(before) = before {
-                    if before.is_none() || before != rustgis_data::raster::FileRevision::of(std::path::Path::new(&url)) {
+                    let Some(revision) =
+                        before.filter(|b| Some(b) == rustgis_data::raster::FileRevision::of(std::path::Path::new(&url)).as_ref())
+                    else {
                         return Err(format!("{url}: the file changed while its overview was read: read it again"));
-                    }
-                    r.capture_source_file(std::path::Path::new(&url));
+                    };
+                    // The revision checked, recorded as is (not the file's again).
+                    r.set_source_revision(revision);
                 }
                 Ok(r)
             }))
@@ -520,6 +523,7 @@ mod tests {
             stretching: Mutex::default(),
             stretch_failed: Mutex::default(),
             alpha: None,
+            revision: std::sync::OnceLock::new(),
         }
     }
 
