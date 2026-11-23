@@ -7535,7 +7535,11 @@ fn square_lines(
             continue;
         }
         let Some(layer) = map.layer_by_name(&name) else { continue };
-        if layer.dataset.coord_crs() != rustgis_data::raster::Crs::LonLat {
+        let crs = layer.dataset.coord_crs();
+        let drawing = if ctx.globe.is_none() && crs != rustgis_data::raster::Crs::LonLat { flat.held(crs).ok() } else { None };
+        // A label squared to it reads its places in longitude/latitude, which count what can't be
+        // given there ([`note_held_read`]): not on a map in its own system, which reads none.
+        if crs != rustgis_data::raster::Crs::LonLat && !drawing.as_ref().is_some_and(|d| d.is_identity()) {
             held.insert(name.clone(), layer.id);
         }
         let mut runs = Vec::new();
@@ -7543,13 +7547,13 @@ fn square_lines(
         // coordinates as the map draws it ([`rustgis_map::projection::Flat::held`]): as it is on
         // a map in its own system, by the direct operation on one in another, so a label squares
         // to the line where it is drawn; a place the map can't show breaks the line there.
-        let crs = layer.dataset.coord_crs();
         if ctx.globe.is_none() && crs != rustgis_data::raster::Crs::LonLat {
-            let Ok(held) = flat.held(crs) else { continue };
-            for f in layer.dataset.features.iter() {
-                let Some(g) = f.geometry.as_ref() else { continue };
+            // A system that can't be converted squares nothing, as the map draws none of it.
+            let Some(drawing) = &drawing else { continue };
+            for g in layer.dataset.features.rows().filter_map(|r| r.geometry()) {
                 // On a map in its own system, as it is, with no copy.
-                let drawn = if held.is_identity() { std::borrow::Cow::Borrowed(g) } else { std::borrow::Cow::Owned(held.geometry(g).0) };
+                let drawn =
+                    if drawing.is_identity() { std::borrow::Cow::Borrowed(g) } else { std::borrow::Cow::Owned(drawing.geometry(g).0) };
                 for part in outline_parts(&drawn) {
                     let points: Vec<Option<(f32, f32)>> =
                         part.iter().map(|m| m.is_finite().then(|| ctx.view.to_screen(*m)).map(|(x, y)| (x as f32, y as f32))).collect();

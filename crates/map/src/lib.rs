@@ -1439,7 +1439,7 @@ impl Layer {
                 // Projected and thinned at once from longitude/latitude rows; from any other
                 // system, the projected geometry is thinned.
                 let copy = if matches!(flat, projection::Flat::Mercator) && self.dataset.coord_crs() == Crs::LonLat {
-                    lod::project_budgeted(&self.dataset.features, level, budget)
+                    lod::project_budgeted(&self.dataset.features, lod::Rows::LonLat, level, budget)
                 } else {
                     lod::thin_budgeted(&self.projected, t, budget)
                 };
@@ -1545,8 +1545,6 @@ impl Layer {
         fits
     }
 
-    /// Whether the projected geometry cache is filled for a projection, from the layer's current
-    /// rows and its coordinate system ([`Dataset::coord_crs`]).
     /// Lets go of a projected copy made for another map than `key`'s, and its thinned levels: a
     /// frame drawn there from display copies alone ([`Layer::prepare_display`]) has no use for it,
     /// and it would stay, a copy of the layer's geometry, until that map came back.
@@ -1562,6 +1560,8 @@ impl Layer {
         }
     }
 
+    /// Whether the projected geometry cache is filled for a projection, from the layer's current
+    /// rows and its coordinate system ([`Dataset::coord_crs`]).
     pub fn is_cached(&self, key: &str) -> bool {
         self.projected_for == key
             && self.projected_rev == self.geometry_rev
@@ -1728,16 +1728,17 @@ impl Layer {
     /// ([`projection::Flat::extent`]).
     pub fn extent_on(&self, flat: &projection::Flat, of: ExtentOf) -> Extent {
         if self.in_map_units(flat) {
-            let rows: Vec<usize> = match of {
-                ExtentOf::All => (0..self.dataset.features.len()).collect(),
-                ExtentOf::Shown => self.visible_rows().iter().enumerate().filter_map(|(r, v)| v.then_some(r)).collect(),
-                ExtentOf::Selected => self.selection.iter().copied().collect(),
+            let boxed = |rows: &mut dyn Iterator<Item = usize>| {
+                rows.filter_map(|r| self.dataset.features.geometry(r)).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
             };
-            return rows
-                .into_iter()
-                .filter_map(|r| self.dataset.features.get(r))
-                .filter_map(|f| f.geometry.as_ref())
-                .fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
+            return match of {
+                ExtentOf::All => self.dataset.extent(),
+                ExtentOf::Shown => match self.query_rows(&self.dataset) {
+                    Some(shown) => boxed(&mut shown.iter().enumerate().filter_map(|(r, v)| v.then_some(r))),
+                    None => self.dataset.extent(),
+                },
+                ExtentOf::Selected => boxed(&mut self.selection.iter().copied()),
+            };
         }
         let lonlat = self.extent_of(of);
         if lonlat.is_empty() { Extent::EMPTY } else { flat.extent(&lonlat) }
@@ -4575,9 +4576,9 @@ mod tests {
     #[test]
     fn geometry_only_lod_does_not_charge_for_unused_extents() {
         let l = long_line(100);
-        let copy = lod::project_budgeted(&l.dataset.features, 20, usize::MAX).unwrap();
+        let copy = lod::project_budgeted(&l.dataset.features, lod::Rows::LonLat, 20, usize::MAX).unwrap();
         let budget = lod::cache_bytes(&copy);
-        assert_eq!(lod::project_budgeted(&l.dataset.features, 20, budget).unwrap(), copy);
+        assert_eq!(lod::project_budgeted(&l.dataset.features, lod::Rows::LonLat, 20, budget).unwrap(), copy);
         assert!(lod::display(&l.dataset.features, lod::Rows::LonLat, 0, 20, budget, true).is_none());
     }
 
@@ -4642,7 +4643,7 @@ mod tests {
         l.projected();
         assert_eq!(l.display_levels.len(), 1);
         let base = l.view_memory.base(&l.dataset.features, &l.projected, &l.projected_extents);
-        let copy = lod::project_budgeted(&l.dataset.features, lod::level(24_000.0).unwrap(), usize::MAX).unwrap();
+        let copy = lod::project_budgeted(&l.dataset.features, lod::Rows::LonLat, lod::level(24_000.0).unwrap(), usize::MAX).unwrap();
         let extra = lod::cache_bytes(&copy);
         let mut source = source::SourceLayer::default();
         source.byte_budget = base + display_bytes + extra;

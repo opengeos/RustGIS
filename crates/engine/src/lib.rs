@@ -4163,14 +4163,15 @@ impl Session {
     pub fn zoom_to_layers(&mut self, ids: &[u32], of: rustgis_map::ExtentOf) -> Option<bool> {
         let m = self.map();
         let layers: Vec<&rustgis_map::Layer> = ids.iter().filter_map(|id| m.layer(*id)).collect();
-        let lonlat = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_of(of)));
-        if lonlat.is_empty() {
-            return None;
-        }
+        // In map coordinates first, where a layer's are its own: its longitude/latitude extent,
+        // which converts every place, isn't worked out for it then.
         if !m.projection.is_globe() {
             let flat = m.flat();
             if layers.iter().any(|l| l.in_map_units(&flat)) {
                 let boxed = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_on(&flat, of)));
+                if boxed.is_empty() {
+                    return None;
+                }
                 // A single point has no size to fit: framed as one in longitude/latitude is.
                 if boxed.width() > 0.0 || boxed.height() > 0.0 {
                     let (w, h) = self.view_size;
@@ -4181,6 +4182,10 @@ impl Session {
                     return Some(true);
                 }
             }
+        }
+        let lonlat = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_of(of)));
+        if lonlat.is_empty() {
+            return None;
         }
         Some(self.zoom_to(&lonlat))
     }

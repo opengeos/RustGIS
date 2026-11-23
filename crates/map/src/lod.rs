@@ -120,13 +120,7 @@ pub(crate) fn display(
     }
     let extent_bytes = features.len().checked_mul(std::mem::size_of::<rustgis_geom::Extent>())?;
     let budget = budget.checked_sub(extent_bytes)?;
-    let geometries = match rows {
-        Rows::LonLat => project_budgeted(features, level, budget)?,
-        Rows::MapUnits => {
-            let tol = tolerance(level);
-            map_budgeted(features, budget, |f| f.geometry.as_ref(), |g| simplify(g, tol))?
-        }
-    };
+    let geometries = project_budgeted(features, rows, level, budget)?;
     let all: usize = features.iter().filter_map(|f| f.geometry.as_ref()).map(vertices).sum();
     let kept: usize = geometries.iter().flatten().map(vertices).sum();
     if !whole_layer_eligible && kept as f64 > all as f64 * (1.0 - MIN_SAVING) {
@@ -152,11 +146,21 @@ pub(crate) fn display(
     Some(Display { revision, level, whole_layer_eligible, geometries, extents, bytes })
 }
 
-/// Builds only Mercator display geometry within `budget`. Callers apply their own eligibility
-/// and saving rules; exact consumers already have extents and need no second extent table.
-pub(crate) fn project_budgeted(features: &[rustgis_data::Feature], level: i32, budget: usize) -> Option<Vec<Option<Geometry>>> {
+/// Builds only display geometry within `budget`: Mercator from rows in longitude/latitude, the
+/// rows simplified as they are when they are in the map's coordinates ([`Rows`]). Callers apply
+/// their own eligibility and saving rules; exact consumers already have extents and need no second
+/// extent table.
+pub(crate) fn project_budgeted(features: &[rustgis_data::Feature], rows: Rows, level: i32, budget: usize) -> Option<Vec<Option<Geometry>>> {
     let tol = tolerance(level);
-    map_budgeted(features, budget, |f| f.geometry.as_ref(), |g| project_thinned(g, &crate::projection::Flat::Mercator, tol))
+    map_budgeted(
+        features,
+        budget,
+        |f| f.geometry.as_ref(),
+        |g| match rows {
+            Rows::LonLat => project_thinned(g, &crate::projection::Flat::Mercator, tol),
+            Rows::MapUnits => simplify(g, tol),
+        },
+    )
 }
 
 /// Heap allocation held by a geometry's vectors (the enum itself is in its containing array).

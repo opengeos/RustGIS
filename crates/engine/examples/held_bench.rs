@@ -32,7 +32,7 @@ fn ms(t: Instant) -> f64 {
 fn main() -> Result<(), String> {
     let vertices: usize = std::env::args().nth(1).and_then(|v| v.parse().ok()).unwrap_or(1_000_000);
     println!("{vertices} vertices; times in ms");
-    println!("{:<34}{:>12}{:>12}", "", "lon/lat", "UTM 32N");
+    println!("{:<34}{:>12}{:>12}", "layer held in", "lon/lat", "UTM 32N");
     let mut rows: Vec<(&str, [f64; 2])> = Vec::new();
     let mut put = |what: &'static str, i: usize, v: f64| match rows.iter_mut().find(|r| r.0 == what) {
         Some(r) => r.1[i] = v,
@@ -79,12 +79,12 @@ fn main() -> Result<(), String> {
         s.run("map.projection", &json!({"type": "epsg:32632"}))?;
         s.run("layer.zoomTo", &json!({"layer": "lines"}))?;
         let mut camera = s.map().camera;
-        put("first frame (UTM 32N)", i, frame(&mut s, camera)?);
-        put("next frame (UTM 32N)", i, frame(&mut s, camera)?);
+        put("first frame (on a UTM 32N map)", i, frame(&mut s, camera)?);
+        put("next frame (on a UTM 32N map)", i, frame(&mut s, camera)?);
         camera.res /= 4.0;
-        put("zoom in 4x (UTM 32N)", i, frame(&mut s, camera)?);
+        put("zoom in 4x (on a UTM 32N map)", i, frame(&mut s, camera)?);
         // What the map keeps for drawing it there, beside its rows (MB, not ms).
-        put("map's drawing copies (MB, UTM 32N)", i, s.map().layers[0].view_cache_bytes() as f64 / 1e6);
+        put("drawing copies, MB (UTM 32N map)", i, s.map().layers[0].view_cache_bytes() as f64 / 1e6);
     }
     for (what, [a, b]) in rows {
         println!("{what:<34}{a:>12.1}{b:>12.1}");
