@@ -38,6 +38,9 @@ const SEPARATOR: P = P {
     help: "Put between the values CONCATENATE joins.",
 };
 
+/// Each grid system's resolutions and their sizes, for both grid tools' Resolution.
+const DGGS_RESOLUTIONS: &str = "H3 0–15 (each step about a seventh: 5 is about 250 km², 9 about 0.1 km²); S2 0–30 (a quarter: 10 is about 80 km²); A5 0–30 and Hexagon 0–24 (a quarter: 5 is about 33,000 km², 12 about 2 km²).";
+
 pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "polygonToLine",
@@ -604,14 +607,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 default: "\"A5\"",
                 help: "H3 (Uber) hexagons, S2 (Google) cells, A5 (Felix Palmer) equal-area pentagons. Hexagon lays flat hexagons on the map's projection (Web Mercator for a globe), anchored at its origin: a place gets the same cell with any layer, in that projection.",
             },
-            P {
-                name: "resolution",
-                label: "Resolution",
-                kind: K::Number,
-                required: false,
-                default: "5",
-                help: "H3 0–15 (each step about a seventh: 5 is about 250 km², 9 about 0.1 km²); S2 0–30 (a quarter: 10 is about 80 km²); A5 0–30 and Hexagon 0–24 (a quarter: 5 is about 33,000 km², 12 about 2 km²).",
-            },
+            P { name: "resolution", label: "Resolution", kind: K::Number, required: false, default: "5", help: DGGS_RESOLUTIONS },
             P {
                 name: "area",
                 label: "Area",
@@ -648,7 +644,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 default: "\"A5\"",
                 help: "The cells of Generate Tessellation's system, with the same ids, so the two layers join.",
             },
-            P { name: "resolution", label: "Resolution", kind: K::Number, required: false, default: "9", help: "" },
+            P { name: "resolution", label: "Resolution", kind: K::Number, required: false, default: "9", help: DGGS_RESOLUTIONS },
             P {
                 name: "field",
                 label: "Field to Sum and Average",

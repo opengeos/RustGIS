@@ -63,6 +63,12 @@ impl System {
         }
     }
 
+    /// Whether a `system` names A5, as a run that leaves it out or blank does: the one rule for
+    /// the tools and for the `dggs-system` capability.
+    pub fn is_a5(given: &str) -> bool {
+        matches!(System::parse(given), Ok(System::A5))
+    }
+
     fn unknown(given: &str) -> String {
         format!("System is H3, S2, A5 or Hexagon, not {}", given.chars().take(40).collect::<String>())
     }
@@ -662,16 +668,18 @@ impl<'a> Grid<'a> {
         }
     }
 
-    fn id_text(&self, id: u64) -> String {
-        match self.system {
+    /// A cell's id as text, or none for an index the system doesn't take (the cell is then
+    /// left out and counted, never written with a blank id).
+    fn id_text(&self, id: u64) -> Option<String> {
+        Some(match self.system {
             System::A5 => a5::u64_to_hex(id),
-            System::H3 => h3o::CellIndex::try_from(id).map(|c| c.to_string()).unwrap_or_default(),
+            System::H3 => h3o::CellIndex::try_from(id).ok()?.to_string(),
             System::S2 => s2::cellid::CellID(id).to_token(),
             System::Hexagon => {
                 let (q, r) = unpack(id);
                 format!("{q},{r}")
             }
-        }
+        })
     }
 
     /// A cell's area on the ground, in square kilometres.
@@ -703,7 +711,7 @@ impl<'a> Grid<'a> {
         let ring = self.ring(id)?;
         let area = self.area_km2(id, &ring);
         let polygon = split(ring)?;
-        let mut attrs = vec![Value::Text(self.id_text(id)), Value::Int(i64::from(self.res)), Value::Float(area)];
+        let mut attrs = vec![Value::Text(self.id_text(id)?), Value::Int(i64::from(self.res)), Value::Float(area)];
         if self.system == System::Hexagon {
             attrs.push(Value::Text(self.plane.name()));
         }
@@ -1089,6 +1097,9 @@ fn tessellate(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult, 
         }
     }
     control::finish();
+    if out.features.is_empty() && undrawn > 0 {
+        return Err(format!("No cell at resolution {res} could be drawn: {}", undrawable(undrawn, &g)));
+    }
     let n = out.features.len();
     let mut msg = match system {
         System::A5 => format!("A5 grid: {n} cells at resolution {res}, each {:.6} km²", a5::cell_area(res) / 1e6),
@@ -1786,6 +1797,16 @@ mod tests {
             edge.messages[0].contains("cells were left out: their corners are outside what Plate Carrée reaches"),
             "{:?}",
             edge.messages
+        );
+        // A view whose every cell is such a cell makes no layer: it's refused, and said why.
+        let e = grid(
+            &Flat(points(&[]), Some(Extent::new(174.97, 0.0, 174.99, 0.02))),
+            &serde_json::json!({"system": "Hexagon", "resolution": 5}),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("No cell at resolution 5 could be drawn: 1 cell was left out: its corners are outside what Plate Carrée reaches"),
+            "{e}"
         );
         // Points in such a cell are left out with it, and said to be.
         let at_edge = Flat(points(&[(174.999, 1.0, 1.0), (174.998, 1.2, 1.0), (172.5, 1.0, 1.0)]), None);

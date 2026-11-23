@@ -459,11 +459,11 @@ fn tabulate_uses(id: &str, params: &Value, uses: fn(&Value) -> bool) -> bool {
 
 /// Generate Tessellation and Aggregate Points to Grid were A5's tools, and keep A5's ids: an
 /// older reader would leave out a `system` other than A5's and make A5 cells, warning only that
-/// it ignored the key. Blank or `A5` needs nothing.
+/// it ignored the key. Blank or `A5` needs nothing, by the tools' own rule (`System::is_a5`).
 fn command_uses_dggs_system(id: &str, params: &Value) -> bool {
     tool_uses(&["a5Grid", "a5Aggregate"], id, params, |p| match p.get("system") {
         None | Some(Value::Null) => false,
-        Some(Value::String(s)) => !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("a5"),
+        Some(Value::String(s)) => !rustgis_analysis::dggs::System::is_a5(s),
         Some(_) => true,
     })
 }

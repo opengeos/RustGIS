@@ -1226,7 +1226,8 @@ instead.
   multipoint's, however many of its points fall there). In the same system and resolution the two
   tools give the same ids, so their layers join on the id field.
 - **Every layer** writes the cell's id, `resolution` and `area_km2`, the cell's own area on the
-  ground. A cell across the antimeridian, or round a pole, is split at ±180° into two parts of one
+  ground, measured on the authalic sphere (the one with the WGS 84 ellipsoid's total area), so it
+  differs from the ellipsoid's by under 1%. A cell across the antimeridian, or round a pole, is split at ±180° into two parts of one
   polygon, each within −180° to 180°.
 - **The hexagon grid** is laid on the active map's projection (Web Mercator when the map is a
   globe), anchored at that projection's origin rather than at a layer's corner, so a place falls in
