@@ -630,19 +630,56 @@ pub fn default_export_note(ds: &Dataset, path: &str) -> Option<String> {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let own = ds.crs.filter(|&c| c != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()))?;
     (default_export_crs(ds, &ext) == Crs::LonLat).then(|| {
-        let why = if !matches!(ext.as_str(), "parquet" | "geoparquet") {
-            "has no EPSG code and no WKT definition RustGIS can write"
-        } else if own.epsg() == 0 {
-            "has no EPSG code"
-        } else {
-            "has no PROJJSON definition RustGIS can write"
-        };
         format!(
-            "{path}: the coordinate system of {} ({}) {why}, so it is written in WGS 84 (EPSG:4326); give a \"crs\" to write another",
+            "{path}: the coordinate system of {} ({}) {}, so it is written in WGS 84 (EPSG:4326); give a \"crs\" to write another",
             ds.name,
-            own.label()
+            own.label(),
+            unwritable(&ext, own)
         )
     })
+}
+
+/// Why a system can't be written to a file with extension `ext` ([`check_projected`]).
+fn unwritable(ext: &str, crs: Crs) -> &'static str {
+    if !matches!(ext, "parquet" | "geoparquet") {
+        "has no EPSG code and no WKT definition RustGIS can write"
+    } else if crs.epsg() == 0 {
+        "has no EPSG code"
+    } else {
+        "has no PROJJSON definition RustGIS can write"
+    }
+}
+
+/// The system an export to `path` is written in when none is asked for, and what is said of it,
+/// in a project whose coordinate system is `project` (#2032 C3a): as [`default_export_crs`] and
+/// [`default_export_note`] for a dataset with a system of its own, or in a project without one. A
+/// dataset with none of its own, in longitude/latitude, is written in the project's where the
+/// format can say it, and that is said; in WGS 84, said, when the format can't hold that system.
+/// Places that system can't hold are written as any export into it writes them (at 85.05° in Web
+/// Mercator, said).
+pub fn default_export_in(ds: &Dataset, path: &str, project: Option<Crs>) -> (Crs, Option<String>) {
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let project = project.filter(|p| {
+        ds.crs.is_none()
+            && ds.coord_crs() == Crs::LonLat
+            && *p != Crs::LonLat
+            && !p.is_geocentric()
+            && PROJECTED_FORMATS.contains(&ext.as_str())
+    });
+    let Some(p) = project else { return (default_export_crs(ds, &ext), default_export_note(ds, path)) };
+    let in_wgs84 = |why: String| {
+        (
+            Crs::LonLat,
+            Some(format!(
+                "{path}: written in WGS 84 (EPSG:4326), not the project's coordinate system ({}), as {why}; give a \"crs\" to write another",
+                p.label()
+            )),
+        )
+    };
+    if check_projected(&ext, p).is_err() {
+        return in_wgs84(format!("that {}", unwritable(&ext, p)));
+    }
+    (p, Some(format!("{path}: written in {}, the project's coordinate system, as {} has none of its own", p.label(), ds.name)))
 }
 
 /// The dataset in `crs`'s coordinates, from the system it holds them in ([`Dataset::coord_crs`]),
@@ -1173,7 +1210,17 @@ pub fn replace_atomic_with<T, E: From<std::io::Error>>(
 /// [`StagedWrite::commit`] installs them. Dropping the result discards the staged file.
 pub fn stage_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<StagedWrite> {
     use std::io::Write;
-    stage_at(link_target(path)?, |w| w.write_all(bytes)).map(|(staged, ())| staged)
+    stage_at(link_target(path)?, 8 << 10, |w| w.write_all(bytes)).map(|(staged, ())| staged)
+}
+
+/// [`stage_atomic`] for a write that streams: `write` fills the file beside the destination (a
+/// symbolic link's target), which [`StagedWrite::commit`] installs; dropping the result discards it.
+pub fn stage_streamed<T, E: From<std::io::Error>>(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
+) -> std::result::Result<(StagedWrite, T), E> {
+    // A streamed write (a raster's tiles) goes through a buffer of a megabyte.
+    stage_at(link_target(path)?, 1 << 20, write)
 }
 
 /// Stages and installs a write, retaining the old file on error or cancellation.
@@ -1181,7 +1228,7 @@ fn atomic_write_at<T, E: From<std::io::Error>>(
     path: std::path::PathBuf,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
-    let (staged, value) = stage_at(path, write)?;
+    let (staged, value) = stage_at(path, 8 << 10, write)?;
     staged.commit()?;
     Ok(value)
 }
@@ -1190,6 +1237,7 @@ fn atomic_write_at<T, E: From<std::io::Error>>(
 /// and a directory sync.
 fn stage_at<T, E: From<std::io::Error>>(
     path: std::path::PathBuf,
+    buffer: usize,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
 ) -> std::result::Result<(StagedWrite, T), E> {
     use std::io::Write;
@@ -1215,7 +1263,7 @@ fn stage_at<T, E: From<std::io::Error>>(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let mut out = std::io::BufWriter::new(file);
+    let mut out = std::io::BufWriter::with_capacity(buffer, file);
     let value = write(&mut out)?;
     out.flush()?;
     out.get_ref().sync_all()?;
@@ -1457,7 +1505,7 @@ fn legacy_crs(decl: &Json) -> std::result::Result<Option<(Crs, crate::raster::Tr
 /// `http(s)://www.opengis.net/def/crs/EPSG/<version>/N`, or CRS84 as `CRS84`, `OGC:CRS84`,
 /// `urn:ogc:def:crs:OGC:<version, maybe empty>:CRS84` or
 /// `http(s)://www.opengis.net/def/crs/OGC/<version>/CRS84` (any case, whitespace around).
-fn is_epsg_or_crs84_name(name: &str) -> bool {
+pub(crate) fn is_epsg_or_crs84_name(name: &str) -> bool {
     let up = name.trim().to_ascii_uppercase();
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let version = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || b == b'.');
@@ -1771,7 +1819,9 @@ impl Collector {
         if report.skipped > 0 {
             report.messages.push(format!("{} features had unreadable geometry", report.skipped));
         }
-        let declared = declared_crs(root, &mut report.messages)?;
+        let mut said = Vec::new();
+        let declared = declared_crs(root, &mut said)?;
+        report.messages.extend(said);
         let mut unconverted = 0usize;
         // Only features kept count toward the heights dropped.
         let mut zm = 0usize;
@@ -2713,8 +2763,13 @@ pub(crate) fn read_rows(
         }
     }
     let (mut bad_wkt, mut zm_rows, mut collection_rows) = (0usize, 0usize, 0usize);
+    let (mut extra_cells, mut extra_rows) = (0usize, 0usize);
     for r in rows {
         crate::progress::step(1)?;
+        // Only header-defined columns are retained below; count actual cells, including empty ones.
+        let extra = r.len().saturating_sub(headers.len());
+        extra_cells += extra;
+        extra_rows += usize::from(extra > 0);
         let cell = |i: usize| r.get(i).map(|s| s.trim()).unwrap_or("");
         let geom = if let Some((x, y)) = xy {
             match cell(x).parse::<f64>().ok().zip(cell(y).parse::<f64>().ok()) {
@@ -2762,6 +2817,15 @@ pub(crate) fn read_rows(
             })
             .collect();
         ds.push_next(geom, attrs);
+    }
+    if extra_cells > 0 {
+        let cells = if extra_cells == 1 { "cell" } else { "cells" };
+        let was = if extra_cells == 1 { "was" } else { "were" };
+        let rows = if extra_rows == 1 { "row" } else { "rows" };
+        let columns = if headers.len() == 1 { "column" } else { "columns" };
+        report
+            .messages
+            .push(format!("{extra_cells} {cells} past the header's {} {columns} {was} omitted in {extra_rows} {rows}", headers.len()));
     }
     ds.drop_zm(&mut report, zm_rows);
     if collection_rows > 0 {
@@ -3631,7 +3695,7 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfR
         })
         .collect();
     let fields = order.into_iter().map(|(n, t)| Field::new(n, t)).collect();
-    let report = ReadReport { messages: encoding_notes, ..Default::default() };
+    let report = ReadReport { messages: encoding_notes.into(), ..Default::default() };
     Ok(DbfRead { reader: dbf, fields, decimals, report, not_utf8, deleted, encoding: encoding.name() })
 }
 
@@ -3986,9 +4050,9 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
     if e.beyond_lonlat() {
         report.messages.push(if to_lonlat.is_some() {
-            "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place".into()
+            "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place"
         } else {
-            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into()
+            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place"
         });
     }
     if report.skipped > 0 {
@@ -4001,7 +4065,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     }
     ds.crs_incomplete = unconverted > 0;
     if unconverted > 0 && converted == 0 {
-        report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates".into());
+        report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates");
     } else if unconverted > 0 {
         report.messages.push(format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"));
     }
@@ -5499,10 +5563,34 @@ pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
     Geometry::Polygon(polys)
 }
 
+#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Each extra cell is counted, including empty ones, and each affected row once, preserving named data.
+    #[test]
+    fn csv_extra_cells_are_counted() {
+        for (text, expected) in [
+            ("wkt,id,note\nPOINT(1 2),7,kept\nPOINT(3 4),8,\n", vec![]),
+            (
+                "wkt,id,note\nPOINT(1 2),7,kept,lost,\nPOINT(3 4),8,,tail\n",
+                vec!["3 cells past the header's 3 columns were omitted in 2 rows"],
+            ),
+            ("wkt,id,note\nPOINT(1 2),7,kept,\nPOINT(3 4),8,\n", vec!["1 cell past the header's 3 columns was omitted in 1 row"]),
+        ] {
+            let (ds, report) = read_csv(text, "extra").unwrap();
+            assert_eq!(ds.fields, [Field::new("id", FieldType::Integer), Field::new("note", FieldType::Text)]);
+            assert_eq!(ds.features.len(), 2);
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
+            assert_eq!(ds.features[1].geometry, Some(Geometry::Point(Coord::new(3.0, 4.0))));
+            assert_eq!(ds.features[0].attrs, [Value::Int(7), Value::Text("kept".into())]);
+            assert_eq!(ds.features[1].attrs, [Value::Int(8), Value::Null]);
+            assert_eq!(report.skipped, 0);
+            assert_eq!(report.messages, expected);
+        }
+    }
 
     /// A file refused because RustGIS holds much of the memory says so, with the limit when nothing
     /// is held and what to do; refused at the full limit, or where the limit doesn't follow the
@@ -6425,7 +6513,7 @@ mod tests {
         };
         let (wells, flat) = (shp("wells.shp", true), shp("flat.shp", false));
         let (ds, rep) = read_path(&wells).unwrap();
-        assert!(ds.zm_dropped && rep.messages.contains(&crate::zm_note(Some(1))), "{:?}", rep.messages);
+        assert!(ds.zm_dropped && rep.messages.says(&crate::zm_note(Some(1))), "{:?}", rep.messages);
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
         let (ds, rep) = read_path(&flat).unwrap();
         assert!(!ds.zm_dropped && !said(&rep));
@@ -8110,7 +8198,7 @@ mod tests {
             }
             shp
         };
-        let said = |m: &[String]| m.iter().any(|m| m.contains("isn't a number"));
+        let said = |m: &[crate::loss::Note]| m.iter().any(|m| m.contains("isn't a number"));
         let bad = write("bad.shp", &[(f64::NAN, 20.0), (11.0, 21.0), (f64::INFINITY, 22.0)]);
         let (ds, rep) = read_path(&bad).unwrap();
         assert_eq!(ds.features.len(), 3, "the features are kept");
@@ -8120,10 +8208,8 @@ mod tests {
         assert_eq!(ds.geometry_type, GeometryType::Point);
         assert_eq!(ds.unsaved_coordinates(), 0);
         assert!(
-            rep.messages.contains(
-                &"bad: 2 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
-                    .to_string()
-            ),
+            rep.messages
+                .says("bad: 2 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"),
             "{:?}",
             rep.messages
         );
@@ -8653,7 +8739,7 @@ mod tests {
         // A long list of skipped members names the first ones and counts the rest.
         let layers = read_zip("x.zip", &crate::zip::write(&mifs(MAX_ZIP_LAYERS + 25)).unwrap()).unwrap();
         let note = &layers[0].1.messages[0];
-        assert!(note.contains("m51.mif") && !note.contains("m52.mif") && note.ends_with("; and 5 more"), "{note}");
+        assert!(note.contains("m51.mif") && !note.contains("m52.mif") && note.ends_with("; and 5 more"), "{note:?}");
     }
 
     /// A Shapefile's loose files picked or dropped together are zipped into one, which reads as a

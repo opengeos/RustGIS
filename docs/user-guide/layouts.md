@@ -25,7 +25,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     under them. When the legend sits at the right of the map (its right edge in the frame's
     right tenth), starting between 45 % and 70 % of the frame's width, the right column starts
     where the legend does, unless its texts would then need a taller box. Text sizes follow the
-    sheet's short side: an A3's are 1.41 times an A4's, an A0's four times. Given its size alone
+    sheet's short side: an A3's are 1.41 times an A4's, an A0's four times. So do the legend's
+    text size, the scale bar's and the graticule's (9, 8 and 8 points on A4) and the strips the
+    graticule's labels take inside the frame. Given its size alone
     (`"a4"`, the default, or any other: `"letter"`, `"a0"`…), a sheet is turned to
     portrait or landscape, whichever the map comes out larger on: the area's extent east to west
     against north to south, on the map's projection, with the room the style leaves the map. The
@@ -408,8 +410,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   tables. Its properties pick the **Layer** (unless one is picked, the top visible raster with a
   colour scale, not drawn by classes: a legend lists a land cover's classes, and a colorbar
   added over a map with only such rasters draws an empty placeholder and says so), the
-  **Title** (the units, such as `Elevation (m)`; the layer's name to start with; one wider than the colorbar
-  wraps at spaces onto more lines, the bar under them), the
+  **Title** (the units, such as `Elevation (m)`; the layer's name to start with; a title wider than the colorbar
+  wraps at spaces onto more lines, with the bar under them), the
   **Orientation**, which side the **Labels** go on, how many **Ticks** a gradient labels (2 to
   21, the ends included) and **Reverse** (high values first). An RGB raster or a hillshade
   without a tint has no colour scale and shows a placeholder, as does a picked layer that was

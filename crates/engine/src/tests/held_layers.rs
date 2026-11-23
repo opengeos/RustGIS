@@ -736,8 +736,17 @@ fn a_held_layer_feeds_other_layers_alike() {
         let (Some(Geometry::Point(p)), Some(Geometry::Point(q))) = (p, q) else { panic!("points") };
         assert!((p.x - q.x).abs() < 1e-7 && (p.y - q.y).abs() < 1e-7, "annotation: {p:?} vs {q:?}");
     }
+    // In UTM, the label point is found in the parcels' own coordinates and kept as it is there,
+    // held in UTM, with no round trip through longitude/latitude (#2032 C2e-5).
+    let annotation = &ss[1].map().layer_by_name(&nb).unwrap().dataset;
+    assert_eq!(annotation.coord_crs(), UTM);
+    let parcels = &ss[1].map().layer_by_name("Parcels").unwrap().dataset;
+    let points: Vec<Option<Geometry>> =
+        parcels.features.iter().map(|f| f.geometry.as_ref().and_then(Geometry::label_point).map(Geometry::Point)).collect();
+    assert_eq!(annotation.features.iter().map(|f| f.geometry.clone()).collect::<Vec<_>>(), points);
     // Cells off the wells' box's edges (the held layer's is a hair larger: see the extent above).
-    let [a, b] = run_both(&mut ss, "analysis.interpolate", &json!({"layer": "Wells", "field": "n", "cellSize": 0.0015}));
+    let [a, b] =
+        run_both(&mut ss, "analysis.interpolate", &json!({"layer": "Wells", "field": "n", "cellSize": 0.0015, "crs": "EPSG:4326"}));
     let grid =
         |s: &Session, v: &Value| s.map().layer(v["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
     let (ga, gb) = (grid(&ss[0], &a), grid(&ss[1], &b));
@@ -753,9 +762,28 @@ fn a_held_layer_feeds_other_layers_alike() {
     let route = json!({"layer": "Roads", "from": [11.4951, 48.6925], "to": [11.5295, 48.7290], "snapDistance": 100});
     let [a, b] = run_both(&mut ss, "analysis.route", &route);
     assert_close(&lonlat(&ss[0], &made(&ss[0], &a)), &lonlat(&ss[1], &made(&ss[1], &b)), "route");
+    // Points simulated in the parcels: spread in each layer's own coordinates (#2032 C2e-5), so
+    // in UTM they are those spread there, held there, each in its parcel.
     let [a, b] = run_both(&mut ss, "analysis.simulate", &json!({"layer": "Parcels", "count": 5, "seed": 3}));
     assert_eq!(a["points"], b["points"]);
-    assert_close(&lonlat(&ss[0], &made(&ss[0], &a)), &lonlat(&ss[1], &made(&ss[1], &b)), "simulation");
+    let parcels = &ss[1].map().layer_by_name("Parcels").unwrap().dataset;
+    let rows: Vec<usize> = (0..parcels.features.len()).collect();
+    let spread = rustgis_analysis::network::random_points(parcels, &rows, 5, 3);
+    let simulated = &ss[1].map().layer(b["layer"].as_u64().unwrap() as u32).unwrap().dataset;
+    assert_eq!(simulated.coord_crs(), UTM);
+    let held: Vec<(i64, Coord)> = simulated
+        .features
+        .iter()
+        .map(|f| match (&f.attrs[0], &f.geometry) {
+            (Cell::Int(r), Some(Geometry::Point(c))) => (*r, *c),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(held, spread.iter().map(|&(r, c)| (r as i64, c)).collect::<Vec<_>>());
+    for (r, c) in held {
+        let Some(Geometry::Polygon(rings)) = &parcels.features[r as usize].geometry else { panic!("a parcel") };
+        assert!(rings.iter().any(|rings| rustgis_data::geometry::polygon_contains(rings, c)), "{c:?} outside parcel {r}");
+    }
 }
 
 /// An offline area's edits sync back alike, also when they come back in longitude/latitude (as a
@@ -780,7 +808,7 @@ fn a_held_layers_offline_edits_sync_alike() {
         l.dataset = l.dataset.in_lonlat().unwrap().into_owned();
     }
     let ai = ss[1].project.offline_areas.iter().position(|a| a.name == "Field").unwrap();
-    crate::cmd::workspace::sync_area(&mut ss[1], ai, &returned).unwrap();
+    crate::cmd::workspace::sync_area(&mut ss[1], ai, &returned, "").unwrap();
     assert_close(&lonlat(&ss[0], "Wells"), &lonlat(&ss[1], "Wells"), "synced");
     let held = &ss[1].map().layer_by_name("Wells").unwrap().dataset;
     assert_eq!(held.coord_crs(), UTM);
@@ -808,7 +836,7 @@ fn a_held_offline_map_keeps_the_sources_later_edits() {
     let returned = s.project.maps.iter().find(|m| m.name == "Field (offline)").unwrap().clone();
     assert_eq!(returned.layers.iter().find(|l| l.name == "Wells").unwrap().dataset.coord_crs(), UTM);
     let ai = s.project.offline_areas.iter().position(|a| a.name == "Field").unwrap();
-    crate::cmd::workspace::sync_area(&mut s, ai, &returned).unwrap();
+    crate::cmd::workspace::sync_area(&mut s, ai, &returned, "").unwrap();
     let wells = &s.map().layer_by_name("Wells").unwrap().dataset;
     let n = wells.field_index("n").unwrap();
     assert_eq!(wells.value(0, n), &Cell::Int(7), "an unedited offline copy replaced the source's edit");
@@ -2157,6 +2185,97 @@ fn datum_pair() -> Session {
     s
 }
 
+/// The Geostatistical Wizard makes a held layer's surface in the system it holds its coordinates
+/// in, from them as they are: points 1500 km east of UTM 32N's central meridian, where a round trip
+/// through longitude/latitude doesn't come back to the same bits, give a grid whose corner is
+/// their own bounds, padded.
+#[test]
+fn the_geostatistical_wizard_works_in_the_held_system() {
+    let at: Vec<Coord> =
+        (0..9).map(|i| Coord::new(2_000_003.7 + f64::from(i % 3) * 100.0, 5_400_001.3 + f64::from(i / 3) * 100.0)).collect();
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Wells", GeometryType::Point, at.iter().map(|c| Geometry::Point(*c)).collect(), UTM);
+    s.run("analysis.interpolate", &json!({"layer": "Wells", "field": "v", "cellSize": 10, "name": "Surface"})).unwrap();
+    let g = grid_of(&s, "Surface");
+    let mut e = rustgis_geom::Extent::EMPTY;
+    at.iter().for_each(|c| e.expand(*c));
+    let e = e.padded(0.05, rustgis_analysis::min_pad(UTM));
+    assert_eq!(g.crs, UTM);
+    assert_eq!((g.transform.origin_x, g.transform.origin_y), (e.min_x, e.max_y));
+}
+
+/// A new feature's elevation from a surface whose system can't give its place refuses the edit,
+/// rather than leave the feature without its `z`: the North Pole held in polar stereographic north,
+/// over a surface in Antarctic polar stereographic (EPSG:3031), whose plane has no place for it.
+#[test]
+fn elevation_from_a_surface_that_cant_hold_the_place_refuses_the_edit() {
+    use rustgis_data::raster::{ColorHint, GeoTransform, Raster};
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: -1000.0, origin_y: 1000.0, pixel_width: 100.0, pixel_height: -100.0 };
+    let r = Raster::new("south", 20, 20, vec![vec![1.0; 400]], gt, Crs::Epsg(3031), None, ColorHint::Gray, "Float32").unwrap();
+    s.map_mut().add_raster("south", rustgis_map::raster::RasterLayer::from_path(r, "south.tif"));
+    add_in(&mut s, "Pins", GeometryType::Point, Vec::new(), POLAR);
+    s.run("edit.enable", &json!({"on": true})).unwrap();
+    s.run("edit.elevation", &json!({"mode": "surface", "surface": "south"})).unwrap();
+    let e = s.run("edit.addFeature", &json!({"layer": "Pins", "geometry": {"type": "Point", "coordinates": [0.0, 90.0]}})).unwrap_err();
+    assert!(e.contains("can't be given in the system of the surface south"), "{e}");
+    assert!(s.map().layer_by_name("Pins").unwrap().dataset.features.is_empty());
+}
+
+/// Training polygons held in another system than the raster's reach it by the direct operation:
+/// two 3 m squares of two classes held in Gauss-Krüger zone 3 (DHDN) train the same supervised
+/// classification and the same deep learning model over a raster of 10 cm cells in UTM 32N
+/// (ETRS89) as the squares converted there by [`Crs::to`], where the way through WGS 84 is 0.44 m
+/// off.
+#[test]
+fn training_polygons_reach_a_raster_by_the_direct_operation() {
+    let mut s = datum_pair();
+    let (cx, cy) = (3_500_000.0, 5_400_000.0);
+    let square = |dx: f64| -> Vec<Coord> {
+        [(-1.5, -1.5), (1.5, -1.5), (1.5, 1.5), (-1.5, 1.5), (-1.5, -1.5)].iter().map(|(x, y)| Coord::new(cx + dx + x, cy + y)).collect()
+    };
+    let to = GK3.to(ETRS_UTM).unwrap();
+    let held = [square(-2.0), square(2.0)];
+    let there: Vec<Vec<Coord>> = held.iter().map(|r| r.iter().map(|c| to.point(*c).unwrap()).collect()).collect();
+    add_in(&mut s, "Training", GeometryType::Polygon, held.into_iter().map(|r| Geometry::Polygon(vec![vec![r]])).collect(), GK3);
+    add_in(&mut s, "TrainingThere", GeometryType::Polygon, there.into_iter().map(|r| Geometry::Polygon(vec![vec![r]])).collect(), ETRS_UTM);
+    let mut got = Vec::new();
+    for training in ["Training", "TrainingThere"] {
+        let p = json!({"layer": "grid", "training": training, "classField": "v", "name": format!("{training} classes")});
+        let classified = s.run("raster.classifySupervised", &p).unwrap();
+        let dl = json!({"layer": "grid", "training": training, "classField": "v", "epochs": 5, "name": format!("{training} dl")});
+        let learnt = s.run("dl.classify", &dl).unwrap();
+        got.push((classified["classes"].clone(), raster_cells(&s, &classified), learnt["classes"].clone(), raster_cells(&s, &learnt)));
+    }
+    // 30 × 30 cells a class.
+    assert_eq!(got[0].0[0]["pixels"], 900, "{:?}", got[0].0);
+    assert_eq!(got[0], got[1]);
+}
+
+/// A new feature's elevation from a surface is read where the layer holds it, placed on the
+/// surface by the direct operation: a point held in Gauss-Krüger zone 3 (DHDN) added over a
+/// surface of 10 cm cells in UTM 32N (ETRS89) takes the cell its place converted by [`Crs::to`]
+/// lands on, not the one 0.44 m off that the way through WGS 84 gives.
+#[test]
+fn elevation_is_read_from_a_surface_by_the_direct_operation() {
+    let mut s = datum_pair();
+    add_in(&mut s, "Pins", GeometryType::Point, Vec::new(), GK3);
+    s.run("edit.enable", &json!({"on": true})).unwrap();
+    s.run("edit.elevation", &json!({"mode": "surface", "surface": "grid"})).unwrap();
+    let at = Coord::new(3_500_000.0, 5_400_000.0);
+    let lonlat = GK3.to(Crs::LonLat).unwrap().point(at).unwrap();
+    s.run("edit.addFeature", &json!({"layer": "Pins", "geometry": {"type": "Point", "coordinates": [lonlat.x, lonlat.y]}})).unwrap();
+    let l = s.map().layer_by_name("Pins").unwrap();
+    let Some(Geometry::Point(p)) = l.dataset.features[0].geometry.clone() else { panic!("a point") };
+    let z = l.dataset.field_index("z").map(|i| l.dataset.value(0, i).as_f64()).unwrap_or_else(|| panic!("no z"));
+    let grid = grid_of(&s, "grid");
+    let value = |w: Coord| grid.pixel_at_world(w).and_then(|(c, r)| grid.value(0, c, r)).map(f64::from);
+    let direct = value(GK3.to(ETRS_UTM).unwrap().point(p).unwrap());
+    let via = value(ETRS_UTM.transformer().unwrap().from_lonlat(GK3.transformer().unwrap().to_lonlat(p).unwrap()).unwrap());
+    assert_ne!(direct, via, "the two ways land on one cell");
+    assert_eq!(z, direct);
+}
+
 /// Zonal Statistics and Tabulate Area place zones held in another system than the raster's by the
 /// direct operation between the two: a square held in Gauss-Krüger zone 3 on DHDN covers the cells
 /// of a raster in UTM 32N on ETRS89 that the same square converted there by [`Crs::to`] covers,
@@ -2343,6 +2462,75 @@ fn rasterize_sizes_its_grid_by_the_operation_that_burns() {
     assert!((16..=36).contains(&a["cells"].as_u64().unwrap()), "{a}");
 }
 
+/// Rasterize's default grid is the system a layer holds its coordinates in only when that is a
+/// projected one: a layer held in ETRS89 degrees (EPSG:4258), read from a file in UTM 32N, is
+/// burned onto a grid in UTM 32N.
+#[test]
+fn a_layer_held_in_degrees_is_burned_in_the_system_it_was_read_in() {
+    let geographic = Crs::Epsg(4258);
+    let ring: Vec<Coord> =
+        [(11.0, 48.0), (11.01, 48.0), (11.01, 48.01), (11.0, 48.01), (11.0, 48.0)].iter().map(|(x, y)| Coord::new(*x, *y)).collect();
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Plot", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![ring.clone()]])], geographic);
+    let id = s.map().layer_by_name("Plot").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().dataset.crs = Some(UTM);
+    let v = s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 10, "name": "Burned"})).unwrap();
+    let r = grid_of(&s, "Burned");
+    assert_eq!(r.crs, UTM);
+    // The grid holds the corners as converted into UTM, within a cell of them.
+    let to = geographic.to(UTM).unwrap();
+    let corners: Vec<Coord> = ring.iter().map(|c| to.point(*c).unwrap()).collect();
+    let mut b = rustgis_geom::Extent::EMPTY;
+    corners.iter().for_each(|c| b.expand(*c));
+    let t = r.transform;
+    let e = rustgis_geom::Extent {
+        min_x: t.origin_x,
+        max_y: t.origin_y,
+        max_x: t.origin_x + t.pixel_width * f64::from(r.width),
+        min_y: t.origin_y + t.pixel_height * f64::from(r.height),
+    };
+    assert!(e.min_x <= b.min_x && e.min_y <= b.min_y && e.max_x >= b.max_x && e.max_y >= b.max_y, "{e:?} {b:?}");
+    assert!(b.min_x - e.min_x < 10.0 && b.min_y - e.min_y < 10.0 && e.max_x - b.max_x < 10.0 && e.max_y - b.max_y < 10.0, "{e:?} {b:?}");
+    // And it burns about the polygon's area in UTM (some 830,000 m²) in 10 m cells.
+    let area = corners.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum::<f64>().abs() / 2.0;
+    let cells = v["cells"].as_f64().unwrap();
+    assert!((cells * 100.0 / area - 1.0).abs() < 0.03, "{cells} cells for {area} m²");
+}
+
+/// An extent layer with a vertex that can't be placed in longitude/latitude sizes the grid
+/// without it, and says so; clean input says nothing.
+#[test]
+fn an_extent_layers_unplaced_vertices_are_said() {
+    let (x0, y0) = (784_000.0, 5_401_300.0);
+    let square: Vec<Coord> =
+        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect();
+    let far = vec![Coord::new(x0, y0), Coord::new(1e12, 1e12), Coord::new(x0, y0 + 500.0), Coord::new(x0, y0)];
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Plot", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square.clone()]])], UTM);
+    add_in(&mut s, "Clean", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square]])], UTM);
+    add_in(&mut s, "Odd", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![far]])], UTM);
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    let mark = s.notice_mark();
+    s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Clean", "name": "A"})).unwrap();
+    assert!(said(&s, mark).iter().all(|n| !n.contains("left out of the grid's extent")), "{:?}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Odd", "name": "B"})).unwrap();
+    assert!(
+        said(&s, mark)
+            .iter()
+            .any(|n| n.starts_with("Odd: 1 vertex that can't be placed in longitude/latitude was left out of the grid's extent")),
+        "{:?}",
+        said(&s, mark)
+    );
+    // Only vertices that can't be placed: refused, saying so, not that it has no features.
+    let nowhere = vec![Coord::new(1e12, 1e12), Coord::new(2e12, 1e12), Coord::new(2e12, 2e12), Coord::new(1e12, 1e12)];
+    add_in(&mut s, "Nowhere", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![nowhere]])], UTM);
+    let e = s
+        .run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Nowhere", "name": "C"}))
+        .unwrap_err();
+    assert!(e.contains("Nowhere has no vertex that can be placed in longitude/latitude"), "{e}");
+}
+
 /// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,
 /// and says how many vertices it couldn't place there, left out of that box: a polygon held in UTM
 /// with a vertex far beyond any place UTM holds, burned onto a grid in degrees. With an extent
@@ -2418,4 +2606,158 @@ fn a_point_its_own_system_cant_give_is_said_as_such() {
     let own = format!("1 point(s) that {} can't give in longitude/latitude were left out", UTM.label());
     assert!(said.iter().any(|t| t.contains(&own)), "{said:?}");
     assert!(!said.iter().any(|t| t.contains("beyond what")), "{said:?}");
+}
+
+/// Calculate Geometry gives a held point layer's x and y in its own system's unit, as it holds
+/// them, and a held polygon's area on the ground; Service Area and OD Cost Matrix search a held
+/// network on the ground as one in longitude/latitude (within a millimetre), the service area
+/// held in the network's system, and a second search reuses the graph (#2032 C2e-5).
+#[test]
+fn a_held_layers_points_and_networks_work_in_its_own_system() {
+    let mut ss = both();
+    run_both(&mut ss, "gp.run", &json!({"tool": "calculateGeometry", "params": {"input": "Wells"}}));
+    let wells = &ss[1].map().layer_by_name("Wells").unwrap().dataset;
+    let (fx, fy) = (wells.field_index("point_x").unwrap(), wells.field_index("point_y").unwrap());
+    for (r, held) in held_coords(&ss[1], "Wells").iter().enumerate() {
+        assert_eq!((wells.value(r, fx).as_f64(), wells.value(r, fy).as_f64()), (Some(held[0].x), Some(held[0].y)), "well {r}");
+    }
+    assert!(field_numbers(&ss[0], "Wells", "point_x").iter().all(|x| (11.5..11.53).contains(x)), "degrees in longitude/latitude");
+    let p = json!({"network": "Roads", "facilities": "Wells", "breaks": "0.5, 1", "snapDistance": 2000});
+    let [a, b] = run_both(&mut ss, "gp.run", &json!({"tool": "serviceArea", "params": p}));
+    assert_eq!(a["messages"], b["messages"]);
+    assert_eq!(ss[1].map().layer_by_name("Roads_ServiceArea").unwrap().dataset.coord_crs(), UTM);
+    let [la, lb] = [&ss[0], &ss[1]].map(|s| lonlat(s, "Roads_ServiceArea"));
+    assert_eq!(la.iter().map(shape).collect::<Vec<_>>(), lb.iter().map(shape).collect::<Vec<_>>());
+    for (g, h) in la.iter().zip(&lb) {
+        let (mut p, mut q) = (Vec::new(), Vec::new());
+        g.as_ref().unwrap().for_each_coord(|c| p.push(c));
+        h.as_ref().unwrap().for_each_coord(|c| q.push(c));
+        for (p, q) in p.iter().zip(&q) {
+            assert!(rustgis_geom::wgs84_distance_m(*p, *q) < 1e-3, "{p:?} vs {q:?}");
+        }
+    }
+    let od =
+        json!({"tool": "odCostMatrix", "params": {"network": "Roads", "origins": "Wells", "destinations": "Wells", "snapDistance": 2000}});
+    run_both(&mut ss, "gp.run", &od);
+    let costs = |s: &Session| {
+        let t = &s.project.tables.last().expect("a table").dataset;
+        let f = t.field_index("cost").unwrap();
+        (0..t.features.len()).map(|r| t.value(r, f).as_f64().unwrap()).collect::<Vec<_>>()
+    };
+    assert_numbers_close(&costs(&ss[0]), &costs(&ss[1]), 1e-6, "OD costs (km)");
+}
+
+/// A label moved to a place the layer's own system can't hold (the South Pole, for the NSIDC
+/// north polar stereographic system) becomes annotation at its feature's label point, isn't moved there in the
+/// annotation's labels, and is said; with every label placed, nothing is said (#2032 C2e-5).
+#[test]
+fn a_moved_label_the_layers_system_cant_hold_is_said() {
+    let polar = Crs::Epsg(3413);
+    for (to, said) in [([11.0, -90.0], true), ([11.51, 48.71], false)] {
+        let mut s = session(polar);
+        let l = s.map().layer_by_name("Wells").unwrap();
+        let moved = l.dataset.features[1].id;
+        let label_point = l.dataset.features[1].geometry.clone();
+        s.run("labels.enable", &json!({"layer": "Wells", "on": true})).unwrap();
+        s.run("labels.move", &json!({"layer": "Wells", "feature": moved, "to": to})).unwrap();
+        let mark = s.notice_mark();
+        let made = s.run("labels.convert", &json!({"layer": "Wells"})).unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.iter().any(|n| n.contains("can't be placed in")), said, "{to:?}: {notices:?}");
+        let a = s.map().layer(made["layer"].as_u64().unwrap() as u32).unwrap();
+        assert_eq!(a.dataset.coord_crs(), polar);
+        if said {
+            assert_eq!(a.dataset.features[1].geometry, label_point, "at its label point");
+            assert!(a.labels.default.moved.is_empty(), "not moved in the annotation");
+        } else {
+            assert_eq!(a.labels.default.moved.len(), 1);
+        }
+    }
+}
+
+/// Topology is checked in a held layer's own system (#2032 C2e-5): overlapping squares, a
+/// bow-tie, dangling ends (a tolerance of a metre, flat in UTM) and a point outside the blocks are
+/// found as they are for the same layers in longitude/latitude, at the same places.
+#[test]
+fn topology_is_checked_in_a_held_layers_own_system() {
+    let o = (650_000.0, 5_400_000.0);
+    let at = |x: f64, y: f64| Coord::new(o.0 + x, o.1 + y);
+    let ring = |pts: &[(f64, f64)]| pts.iter().map(|&(x, y)| at(x, y)).collect::<Vec<_>>();
+    let blocks = vec![
+        Geometry::Polygon(vec![vec![ring(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)])]]),
+        Geometry::Polygon(vec![vec![ring(&[(50.0, 0.0), (150.0, 0.0), (150.0, 100.0), (50.0, 100.0), (50.0, 0.0)])]]),
+        Geometry::Polygon(vec![vec![ring(&[(300.0, 0.0), (400.0, 100.0), (400.0, 0.0), (300.0, 100.0), (300.0, 0.0)])]]),
+    ];
+    let paths = vec![
+        Geometry::Line(vec![ring(&[(0.0, 200.0), (100.0, 200.0)])]),
+        // Starts half a metre from the first's end: they touch.
+        Geometry::Line(vec![ring(&[(100.5, 200.0), (200.0, 250.0)])]),
+        // Starts five metres from it: dangles.
+        Geometry::Line(vec![ring(&[(100.0, 205.0), (100.0, 300.0)])]),
+    ];
+    let wells = vec![Geometry::Point(at(50.0, 50.0)), Geometry::Point(at(1000.0, 1000.0))];
+    let to_lonlat = |g: &Geometry| g.map_coords(&|c| UTM.to(Crs::LonLat).unwrap().point(c).unwrap());
+    let checked = |crs: Crs| {
+        let mut s = Session::new(Project::default());
+        for (name, kind, geoms) in
+            [("Blocks", GeometryType::Polygon, &blocks), ("Paths", GeometryType::Polyline, &paths), ("Wells", GeometryType::Point, &wells)]
+        {
+            let geoms = geoms.iter().map(|g| if crs == UTM { g.clone() } else { to_lonlat(g) }).collect();
+            add_in(&mut s, name, kind, geoms, crs);
+        }
+        for rule in [
+            json!({"rule": "mustNotOverlap", "layer": "Blocks"}),
+            json!({"rule": "mustNotSelfIntersect", "layer": "Blocks"}),
+            json!({"rule": "mustNotHaveDangles", "layer": "Paths"}),
+            json!({"rule": "mustBeCoveredBy", "layer": "Wells", "by": "Blocks"}),
+        ] {
+            s.run("topology.rules", &json!({"add": rule})).unwrap();
+        }
+        s.run("topology.validate", &json!({"toleranceM": 1.0})).unwrap();
+        assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.coord_crs(), crs);
+        s.topology_errors.clone()
+    };
+    let (a, b) = (checked(Crs::LonLat), checked(UTM));
+    let found = |e: &[crate::TopologyIssue]| e.iter().map(|e| (e.rule.clone(), e.rows.clone())).collect::<Vec<_>>();
+    assert_eq!(found(&a), found(&b));
+    // An overlap, a bow-tie, four dangling ends (the first line's start, the second's end, both
+    // of the third's) and a well outside the blocks.
+    assert_eq!(a.len(), 1 + 1 + 4 + 1, "{a:?}");
+    for (p, q) in a.iter().zip(&b) {
+        assert!((p.lon - q.lon).abs() < 1e-6 && (p.lat - q.lat).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+}
+
+/// A covering layer converted into a held layer's system for its topology check says when its long
+/// edges, straight there, run more than a metre from where a check in longitude/latitude takes
+/// them; one that system can't hold sends the rule to longitude/latitude, and says so; one in the
+/// same system says nothing (#2032 C2e-5).
+#[test]
+fn a_covering_layers_conversion_is_said() {
+    let said = |cover: Geometry, crs: Crs, checked: Crs| {
+        let mut s = Session::new(Project::default());
+        add_held(&mut s, "Wells", GeometryType::Point, vec![Geometry::Point(Coord::new(11.5, 48.7))], checked);
+        add_held(&mut s, "Cover", GeometryType::Polygon, vec![cover], crs);
+        s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Wells", "by": "Cover"}})).unwrap();
+        let mark = s.notice_mark();
+        s.run("topology.validate", &json!({})).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("'Cover'")).collect::<Vec<_>>()
+    };
+    let box_of = |w: f64, s: f64, e: f64, n: f64| {
+        Geometry::Polygon(vec![vec![vec![Coord::new(w, s), Coord::new(e, s), Coord::new(e, n), Coord::new(w, n), Coord::new(w, s)]]])
+    };
+    // A degree-wide box: its east–west edges follow their parallels in longitude/latitude, and are
+    // chords in UTM, some 120 m away.
+    let bent = said(box_of(11.0, 48.0, 12.0, 49.0), Crs::LonLat, UTM);
+    assert!(bent.len() == 1 && bent[0].contains("edge(s) of covering layers converted") && bent[0].contains("'Cover' for"), "{bent:?}");
+    assert!(said(box_of(11.0, 48.0, 12.0, 49.0), UTM, UTM).is_empty(), "the same system: nothing to say");
+    // Reaching the South Pole, which the NSIDC north polar stereographic system can't hold.
+    let fell_back = said(box_of(0.0, -90.0, 10.0, -89.0), Crs::LonLat, Crs::Epsg(3413));
+    assert!(fell_back.len() == 1 && fell_back[0].starts_with("1 topology rule(s) checked in longitude/latitude"), "{fell_back:?}");
+    assert_eq!(
+        // The layer's name as a word ("Covered By" names the rule).
+        fell_back[0].split(|c: char| !c.is_alphanumeric()).filter(|w| *w == "Cover").count(),
+        1,
+        "the covering layer named once: {fell_back:?}"
+    );
 }

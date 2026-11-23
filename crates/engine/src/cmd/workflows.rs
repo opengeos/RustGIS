@@ -143,6 +143,18 @@ pub struct Made {
     /// Made on another thread: the command's name and the map it was started on.
     ran: Option<(&'static str, u64)>,
     pub(crate) continuation: Option<crate::policy::Continuation>,
+    /// The file the work wrote, put in its place as the raster is added: a run cancelled or
+    /// abandoned before then leaves the file there as it was.
+    staged: Option<(rustgis_data::io::StagedWrite, Vec<String>)>,
+}
+
+impl Made {
+    /// With `file` to commit as it is added; `said`, what the run had to say, goes with the
+    /// error when it can't be (its `then` doesn't run).
+    pub(crate) fn committing(mut self, file: rustgis_data::io::StagedWrite, said: Vec<String>) -> Made {
+        self.staged = Some((file, said));
+        self
+    }
 }
 
 /// A workflow's work once its inputs are read: it reads nothing more of the session, so it runs on
@@ -170,13 +182,17 @@ pub(crate) fn made_then(raster: Raster, extra: Option<Value>, then: Option<Then>
 
 /// A layer made (styled, say), to be added as `name`.
 pub(crate) fn made_layer(name: String, layer: rustgis_map::RasterLayer, extra: Option<Value>, then: Option<Then>) -> Made {
-    Made { name, layer, extra, then, ran: None, continuation: None, inputs: Vec::new() }
+    Made { name, layer, extra, then, ran: None, continuation: None, inputs: Vec::new(), staged: None }
 }
 
 /// Adds a made raster as a layer: the command's answer is the layer's (its id, size and bands) and
 /// what the command says besides (`extra`), and what it does then.
 pub(crate) fn add_made(s: &mut Session, m: Made) -> CmdResult {
-    let Made { name, layer, extra, then, inputs, .. } = m;
+    let Made { name, layer, extra, then, inputs, staged, .. } = m;
+    if let Some((file, said)) = staged {
+        let path = file.destination().display().to_string();
+        file.commit().map_err(|e| if said.is_empty() { format!("{path}: {e}") } else { format!("{path}: {e} ({})", said.join("; ")) })?;
+    }
     rustgis_data::provenance::record(inputs);
     let mut v = super::raster::add_raster(s, &name, layer)?;
     if let (Some(Value::Object(more)), Some(o)) = (extra, v.as_object_mut()) {
@@ -237,6 +253,7 @@ pub(crate) const IN_BACKGROUND: &[(&str, &str, Start)] = &[
     ("stac.addBands", "Add STAC Bands", super::stac_bands::bands_work),
     ("stac.addIndex", "Add STAC Index", super::stac_bands::index_work),
     ("raster.process", "Process", super::imagery::process_work),
+    ("raster.rasterize", "Polygons to Raster", super::imagery::rasterize_work),
     ("imagery.mosaic", "Build Mosaic", super::imagery::mosaic_work),
     ("dl.classify", "Deep Learning", super::deeplearning::classify_work),
     ("embeddings.similarity", "Satellite Embedding Similarity", super::embeddings::similarity_work),
@@ -1651,15 +1668,18 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
     // Features without a place or a number are left out, and said (by kind, with a count).
     let (mut no_point, mut no_value) = (0usize, 0usize);
     let mut pts: Vec<(Coord, f64)> = Vec::with_capacity(ds.features.len());
-    // Each place in longitude/latitude, whatever system the layer holds its coordinates in; one
-    // that can't be given there has no place. A point is converted alone; any other shape is
-    // converted first, so its label point (a polygon's centroid) is the one it has in
-    // longitude/latitude, not the one in the layer's own system. A shape with a place that can't
-    // be converted gives its label point in its own system, converted, as long as that converts.
-    let to = ds.lonlat_conversion()?;
-    let place = |g: &Geometry| match g {
-        Geometry::Point(c) => to.point(*c),
-        g => match Dataset::converted_to_lonlat(&to, g) {
+    // The run's system: the layer's own projected one it holds its coordinates in, as the
+    // interpolation tools take it (`rustgis_analysis::works_in`), its places taken as they are; else
+    // longitude/latitude, each place given there (one that can't be has no place). There a point
+    // is converted alone; any other shape is converted first, so its label point (a polygon's
+    // centroid) is the one it has in longitude/latitude. A shape with a place that can't be
+    // converted gives its label point in its own system, converted, as long as that converts.
+    let work = Some(ds.coord_crs()).filter(|c| rustgis_analysis::works_in(*c)).unwrap_or(Crs::LonLat);
+    let to = if work == Crs::LonLat { Some(ds.lonlat_conversion()?) } else { None };
+    let place = |g: &Geometry| match (&to, g) {
+        (None, g) => g.label_point(),
+        (Some(to), Geometry::Point(c)) => to.point(*c),
+        (Some(to), g) => match Dataset::converted_to_lonlat(to, g) {
             Some(g) => g.label_point(),
             None => g.label_point().and_then(|c| to.point(c)),
         },
@@ -1676,14 +1696,14 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
         pts.push((c, v));
     }
     let (layer_name, field_name) = (ds.name.clone(), field.to_string());
-    // The system: the one given, else the environment's, else the projected one the layer was read
-    // in, else degrees.
+    // The system: the one given, else the environment's, else the projected one the layer holds its
+    // coordinates in, else the one it was read in, else degrees.
     let env = &s.project.gp_env;
     // An empty `crs` is none given, as `null` is: the environment's system still applies.
     let given = p.get("crs").is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
     let (crs, crs_note) = match env.projected {
         Some(g) if !given => (g.crs, None),
-        _ => rustgis_analysis::raster_crs(ds, p, "Geostatistical Wizard")?,
+        _ => rustgis_analysis::raster_crs_in(ds, work, s.project.coordinate_system, p, "Geostatistical Wizard")?,
     };
     let crs_note = rustgis_analysis::in_its_units(p, crs, crs_note, &Extent::EMPTY, &[], &["cellSize"]);
     let env_extent = env.extent;
@@ -1713,7 +1733,7 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
     let neighbors = p.get("neighbors").and_then(Value::as_u64).unwrap_or(12).max(1) as usize;
     Ok(Box::new(move || {
         // Off the window's thread: the points, and the grid they set, in the system.
-        let (pts, beyond_note) = rustgis_analysis::points_in(crs, pts)?;
+        let (pts, beyond_note) = rustgis_analysis::points_from(work, crs, pts)?;
         let e = match env_extent {
             Some(e) if crs == Crs::LonLat => e,
             Some(e) => {
@@ -1942,10 +1962,13 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         rustgis_map::rows::Rows::All => (0..l.dataset.features.len()).collect(),
         rustgis_map::rows::Rows::Subset(rows) => rows,
     };
-    // Placed in longitude/latitude, whatever system the polygons' layer holds its coordinates in,
-    // then held in that system, as the polygons are.
-    let polygons = l.dataset.in_lonlat()?;
+    // Placed in the polygons' own coordinates when their layer holds them in a projected system,
+    // spread evenly there (#2032 C2e-5), as the analysis tools work in it
+    // ([`rustgis_analysis::works_in`]); else in longitude/latitude, then held in the layer's
+    // system, as the polygons are.
     let system = (l.dataset.coord_crs(), l.dataset.crs);
+    let own = rustgis_analysis::works_in(system.0);
+    let polygons = if own { std::borrow::Cow::Borrowed(&l.dataset) } else { l.dataset.in_lonlat()? };
     let seed = f(p, "seed").map_or(42, |v| v.max(0.0) as u64);
     let pts: Vec<(usize, Coord)> = match ps(p, "field") {
         Some(fname) => {
@@ -1975,7 +1998,13 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         ds.push(Some(Geometry::Point(*c)), vec![Attr::Int(*r as i64)]);
     }
     let n = ds.features.len();
-    hold_as(s, &mut ds, system)?;
+    // A cancel stops the sampling with the points made so far: none of them is added.
+    rustgis_data::progress::check().map_err(|e| e.to_string())?;
+    if own {
+        (ds.held_in, ds.crs) = system;
+    } else {
+        hold_as(s, &mut ds, system)?;
+    }
     if let Some(notice) = query_notice {
         s.notify_text(notice, false);
     }
@@ -2121,7 +2150,8 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                 query,
             )
             .map_err(|e| e.to_string())?;
-            let mut notes = rustgis_data::export_notes([(&ds, layer.extent())], &path, rustgis_data::raster::Crs::LonLat);
+            let mut notes: rustgis_data::loss::Notes =
+                rustgis_data::export_notes([(&ds, layer.extent())], &path, rustgis_data::raster::Crs::LonLat).into();
             if format == "csv" {
                 notes.extend(result.csv.notes(&ds.fields, &path));
                 notes.extend(result.csv.coordinates_note(&ds.fields, &path));
@@ -2142,7 +2172,9 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                 rustgis_data::source::null_text_note(&ds.fields, &result.null_text)
                     .map(|n| format!("{path}: {}: {n} (empty in the export)", ds.name)),
             );
-            notes.extend(result.read_notes.iter().map(|n| format!("{path}: {}: {n} when read for the export", ds.name)));
+            notes.extend(
+                result.read_notes.iter().map(|n| n.clone().map_text(|t| format!("{path}: {}: {t} when read for the export", ds.name))),
+            );
             notes.extend(
                 rustgis_data::source::not_utf8_note(&ds.fields, &result.not_utf8, result.not_utf8_in)
                     .map(|n| format!("{path}: {}: {n}", ds.name)),
@@ -2157,7 +2189,8 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             };
             let report = rustgis_data::export::filter_dataset(&mut ds, query).map_err(|e| e.to_string())?;
             rustgis_data::progress::begin(ds.features.len());
-            let (text, mut notes) = converted(&ds, &params)?;
+            let (text, notes) = converted(&ds, &params)?;
+            let mut notes: rustgis_data::loss::Notes = notes.into();
             super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
             rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             if unreadable.rows > 0 {

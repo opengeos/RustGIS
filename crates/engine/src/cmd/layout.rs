@@ -428,8 +428,9 @@ const FIGURE_PT: f64 = 7.0;
 /// The graticule steps a publication layout picks from, in degrees.
 const GRID_STEPS: &[f64] = &[0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0];
 
-/// The strips a frame's graticule labels take inside its edges, in mm: beside the left and right
-/// edges (a latitude such as `10°S` across), and along the top and bottom ones.
+/// The strips a frame's graticule labels take inside its edges on an A4 sheet, in mm: beside the
+/// left and right edges (a latitude such as `10°S` across), and along the top and bottom ones. A
+/// sheet scales them with its labels, by its short side (#2581).
 const LABEL_ROOM_SIDE: f64 = 9.0;
 const LABEL_ROOM_END: f64 = 6.0;
 
@@ -809,6 +810,17 @@ pub(crate) fn veil_panel(
 /// A publication layout's colorbar's height, in mm, with a title of one line: its title, the bar and
 /// its labels.
 const COLORBAR_MM: f64 = 15.0;
+
+/// The height a publication gives its colorbar in a legend's box `ih` mm high inside, in mm,
+/// when its title needs `need` (#2493). Over the map it leaves the rows the room they were sized
+/// to (`rows`, with the gap above the colorbar), so a title past the box's cap is cut short
+/// rather than taking them; but never below a colorbar's own height while the box has it, so
+/// the bar isn't lost to rows that fill the box: those are cut and said instead (#2638). In a
+/// side column it takes what it needs of the box.
+pub(crate) fn colorbar_fit(need: f64, ih: f64, rows: f64, over_map: bool) -> f64 {
+    let ih = ih.max(0.0);
+    if over_map { need.min((ih - rows).max(COLORBAR_MM.min(ih))) } else { need.min(ih) }
+}
 
 /// A publication layout's colorbar's height, in mm, `width` mm wide: [`COLORBAR_MM`] and a line's
 /// pitch more for each line its title wraps to past the first (#2493).
@@ -1203,7 +1215,7 @@ fn landscape_suits(aspect: f64, short: f64, long: f64, style: Style) -> bool {
         let texts = if style == Style::Panel { 50.0 } else { 100.0 } * k;
         let (iw, ih) = (w - 30.0 * k, h - texts);
         let fw = if matches!(style, Style::Panel | Style::Editorial | Style::Modular) { 0.68 * iw } else { iw };
-        let (fw, fh) = (fw - 2.0 * LABEL_ROOM_SIDE, ih - 2.0 * LABEL_ROOM_END);
+        let (fw, fh) = (fw - 2.0 * LABEL_ROOM_SIDE * k, ih - 2.0 * LABEL_ROOM_END * k);
         fw.min(fh / aspect.max(1e-6))
     };
     map_w(long, short) > 1.03 * map_w(short, long)
@@ -1358,6 +1370,11 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // A sheet's sizes follow its short side (A4's 210 mm is 1); a figure keeps its texts at their
     // printed size, whatever its width.
     let k = if sheet { page_w.min(page_h) / 210.0 } else { 1.0 };
+    // So do its legend's rows, its scale bar's and graticule's labels and the strips those take
+    // inside the frame (#2581): A4's sizes times k, within the 4 to 100 points a text size takes
+    // on every sheet size (k from 0.70 on A5 to 4.0 on A0).
+    let (legend_pt, bar_pt, grid_pt) = (rustgis_map::layout::LEGEND_TEXT_PT * k, SCALE_BAR_TEXT_PT * k, GRID_LABEL_PT * k);
+    let (room_side, room_end) = (LABEL_ROOM_SIDE * k, LABEL_ROOM_END * k);
     // The sources and the reference that have something in them, each its heading in `head_pt` and
     // lines in `body_pt`, `tw` wide. Each one's elements keep their names (`Sources`, `Reference`)
     // whatever its heading reads, the heading filled and wrapped like the rest.
@@ -1860,7 +1877,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             target = (sheet && matches!(style, Style::Panel | Style::Editorial))
                 .then(|| aspect(s, &extent))
                 .flatten()
-                .map(|a| (((lw - 2.0 * LABEL_ROOM_SIDE).max(1.0) * a + 2.0 * LABEL_ROOM_END) * 1.15).max(40.0 * k))
+                .map(|a| (((lw - 2.0 * room_side).max(1.0) * a + 2.0 * room_end) * 1.15).max(40.0 * k))
                 // Only a frame clearly too tall is cut.
                 .filter(|n| *n < 0.97 * lh);
         }
@@ -1883,8 +1900,8 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // The extent fits within the graticule's label strips (drawn inside the frame along its
     // labelled edges), on both sides so it stays centred, and its labels cover none of it.
     let edges = GridEdges { top: sheet, bottom: true, left: true, right: sheet };
-    let strip_w = if edges.left || edges.right { 2.0 * LABEL_ROOM_SIDE } else { 0.0 };
-    let strip_h = if edges.top || edges.bottom { 2.0 * LABEL_ROOM_END } else { 0.0 };
+    let strip_w = if edges.left || edges.right { 2.0 * room_side } else { 0.0 };
+    let strip_h = if edges.top || edges.bottom { 2.0 * room_end } else { 0.0 };
     if fw - strip_w < fw / 2.0 || fh - strip_h < fh / 2.0 {
         warnings.push("the frame is too small to keep its graticule's labels off the map's edges: they may cover them".into());
     }
@@ -1908,7 +1925,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         fit_scale(s.map(), &extent, inner_w, inner_h).ok_or("the extent can't be drawn on the map's projection")?
     };
     let scale = round_scale(scale);
-    let grid = Grid { step, edges, ..Grid::default() };
+    let grid = Grid { step, edges, label_size: grid_pt, ..Grid::default() };
     // A name given past the limit is refused, as layout.new refuses it, not cut (#2639).
     let given = super::within("name", "a layout's name", ps(p, "name").unwrap_or("Publication").trim(), super::MAX_NAME)?;
     let (name, name_cut) = unique_name(s, "New Publication Layout", "the name given", &given);
@@ -1951,9 +1968,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         e + if !labelled {
             0.0
         } else if side {
-            LABEL_ROOM_SIDE
+            room_side
         } else {
-            LABEL_ROOM_END
+            room_end
         }
     };
     let (left, right, top, bottom) = (room(edges.left, true), room(edges.right, true), room(edges.top, false), room(edges.bottom, false));
@@ -2128,7 +2145,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         if context_in_legend { Vec::new() } else { legend_context(s.map(), center, scale, (fw, fh)) }
     };
     let mut context = context_at(s, center, scale);
-    let mut sizes = crate::render::layout::legend_sizes_mm(s.map_mut(), render_scale, false, false, (&context, &Default::default()));
+    let mut sizes = crate::render::layout::legend_sizes_with_no_data_mm(
+        s.map_mut(),
+        render_scale,
+        false,
+        false,
+        (false, legend_pt),
+        (&context, &Default::default()),
+    );
     let (mut cw, mut ch) = match sizes {
         Some(sizes) => sizes[0],
         None => {
@@ -2154,10 +2178,13 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // would draw, which sets its length and divisions. The box is the narrowest that draws that same
     // bar: the renderer gives a bar at most 85 % of its box, so the box is at least the bar's length
     // over 0.85.
-    let bar_kind = ElementKind::scale_bar(frame);
+    let mut scale_bar = ElementKind::scale_bar(frame);
+    if let ElementKind::ScaleBar { text_size, .. } = &mut scale_bar {
+        *text_size = bar_pt;
+    }
     let scale_box = |ground_per_pt: f64, scale: f64| {
         let text = ("{scale}", small_pt, false);
-        let w = scale_box_width(ground_per_pt, scale, fw, &bar_kind, comma, text);
+        let w = scale_box_width(ground_per_pt, scale, fw, &scale_bar, comma, text);
         (w, sh + nh)
     };
     let ground_per_pt = |s: &Session, center: Coord, scale: f64| {
@@ -2213,8 +2240,17 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     };
     let base_w = if sheet { 50.0 * k } else { 40.0 };
     let bar_w = base_w.max(bar.as_deref().map_or(0.0, crate::render::layout::colorbar_title_width_mm).min(title_room));
-    let bar_h = bar.as_deref().map_or(COLORBAR_MM, |title| colorbar_mm(title, bar_w.min(title_room)));
-    let bar_part = if bar.is_some() { bar_h + if ch > 0.0 { 2.0 } else { 0.0 } } else { 0.0 };
+    let bar_measured = bar.as_deref().map_or(COLORBAR_MM, |title| colorbar_mm(title, bar_w.min(title_room)));
+    let bar_gap = if ch > 0.0 { 2.0 } else { 0.0 };
+    // Over the map the box is never placed taller than 60% of the frame, so the title's lines
+    // count only up to that, less the rows of the legend beside them (a colorbar's own height, as
+    // before, at the least): the map isn't moved, veiled or scaled for room the box can't have, and
+    // each candidate's rows keep their height (the fit test and the placement below). The lines past
+    // it are said as cut off.
+    let over_map = column.is_none();
+    let cap = |rows_h: f64| (fh * 0.6 - 2.0 * pad - rows_h - bar_gap).max(COLORBAR_MM);
+    let bar_reserve = |rows_h: f64| if over_map { bar_measured.min(cap(rows_h)) } else { bar_measured };
+    let bar_part = if bar.is_some() { bar_reserve(ch) + bar_gap } else { 0.0 };
     let (content_w, content_h) = (if bar.is_some() { cw.max(bar_w) } else { cw }, ch + bar_part);
     let legend_in_column = column.is_some();
     if content_h > 0.0 && !legend_in_column {
@@ -2248,7 +2284,11 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // the frame's area in the background (which the export reads anyway); web tiles aren't fetched.
     let coverage = crate::render::layout::frame_coverage(s.map_mut(), center, scale, fw, fh, 384);
     // The legend's whole box, around its rows and the colorbar under them.
-    let whole = |(w, h): (f64, f64)| ((if bar.is_some() { w.max(bar_w) } else { w }) + 2.0 * pad, h + bar_part + 2.0 * pad);
+    // A candidate's colorbar reservation follows its own rows, which its column count sets.
+    let whole = |(w, h): (f64, f64)| {
+        let part = if bar.is_some() { bar_reserve(h) + bar_gap } else { 0.0 };
+        ((if bar.is_some() { w.max(bar_w) } else { w }) + 2.0 * pad, h + part + 2.0 * pad)
+    };
     // The largest rectangle a coverage leaves free inside the graticule's margins, in mm.
     let free_room = |(gw, gh, cells): &(u32, u32, Vec<bool>)| {
         let (gw, gh) = (*gw as usize, *gh as usize);
@@ -2377,11 +2417,12 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         } else {
                             // A legend that can't be measured there (a source that can't be read
                             // through) leaves that scale untried too, which is said.
-                            let measured = crate::render::layout::legend_sizes_mm(
+                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
                                 s.map_mut(),
                                 render_scale,
                                 false,
                                 false,
+                                (false, legend_pt),
                                 (&here_context, &Default::default()),
                             );
                             if measured.is_none() {
@@ -2469,11 +2510,12 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = crate::render::layout::legend_sizes_mm(
+                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
                                 s.map_mut(),
                                 at_there,
                                 false,
                                 false,
+                                (false, legend_pt),
                                 (&own_context, &Default::default()),
                             );
                             // A legend that can't be measured there leaves that move untried, which is
@@ -2857,13 +2899,18 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         // the colorbar asked for (the rows in more columns): fewer lines leave the rows more room.
         let (ix, iy, iw, ih) = (r.0 + pad, r.1 + pad, lw - 2.0 * pad, lh - 2.0 * pad);
         let bar_need = bar.as_deref().map_or(0.0, |title| colorbar_mm(title, iw));
-        let bar_fit = bar_need.min(ih);
-        let rows_h = (ih - bar_fit - if bar.is_some() { bar_part - bar_h } else { 0.0 }).max(0.0);
+        let bar_fit = colorbar_fit(bar_need, ih, ch + bar_gap, over_map);
+        let rows_h = (ih - bar_fit - if bar.is_some() { bar_gap } else { 0.0 }).max(0.0);
         warnings.extend(legend_fit_warnings(legend_cols, (cw, ch), (iw, rows_h)).into_iter().map(String::from));
+        let short = bar_need > bar_fit + LEGEND_FIT_MM;
         // In a column the colorbar takes the column's width, as its rows do.
-        if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || bar_need > ih + LEGEND_FIT_MM)
-        {
-            warnings.push(format!("the legend's box is smaller than the colorbar of '{layer}': it is drawn narrower or shorter"));
+        if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || short) {
+            // With no height left in the box the bar is not drawn at all, so the notice says so.
+            if bar_fit > 0.0 {
+                warnings.push(format!("the legend's box is smaller than the colorbar of '{layer}': it is drawn narrower or shorter"));
+            } else {
+                warnings.push(format!("the legend's box has no room for the colorbar of '{layer}': it is left out"));
+            }
         }
         if ch > 0.0 && rows_h >= 1.0 {
             l.add(
@@ -2879,7 +2926,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                     columns: legend_cols,
                     labels: Default::default(),
                     color: None,
-                    text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                    text_size: legend_pt,
                 },
             );
         }
@@ -2903,7 +2950,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     if let Some((sx, sy, w, h)) = spot_of(Surround::Scale) {
         placed.push(("scale bar", (sx, sy, w, h)));
         l.add("Scale Box", (sx, sy, w, sh + nh), surround_box(paper));
-        l.add("Scale Bar", (sx, sy, w, sh), ElementKind::scale_bar(frame));
+        l.add("Scale Bar", (sx, sy, w, sh), scale_bar);
         l.add("Scale", (sx, sy + sh, w, nh), pub_text("{scale}".into(), small_pt, ink, false, TextAlign::Center));
     }
     // What placing couldn't avoid: a surround over the map's drawing while a clearly freer corner
@@ -5119,7 +5166,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         Some(c) => {
             let a = c.as_array().ok_or("center is [lon, lat]")?;
             match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)) {
-                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Coord::new(x.clamp(-540.0, 540.0), y.clamp(-85.0, 85.0))),
+                // A pole too: the frame's map decides where it's drawn (#2684).
+                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Coord::new(x.clamp(-540.0, 540.0), y.clamp(-90.0, 90.0))),
                 _ => return Err("center is [lon, lat]".into()),
             }
         }
@@ -5672,6 +5720,14 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         || (bar && given(&["x", "y"]))
     {
         say_text_fit(s, li, id);
+    }
+    // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).
+    if new_center.is_some() || given(&["map"]) {
+        let said =
+            s.project.layouts.get(li).and_then(|l| unplaced_notice(&l.name, &unplaced_center(s, l, id).into_iter().collect::<Vec<_>>()));
+        if let Some(said) = said {
+            s.notify(said, false);
+        }
     }
     say_held(s, "Element Properties", held);
     if let Some(w) = font_told {
@@ -6501,11 +6557,61 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
             false,
         );
     }
+    // A frame centred where its map can't place the point (a pole on Web Mercator) is said (#2684).
+    // One notice for them all, counted.
+    let unplaced: Vec<(String, Option<f64>)> = l.elements.iter().filter_map(|e| unplaced_center(s, &l, e.id)).collect();
+    if let Some(said) = unplaced_notice(&l.name, &unplaced) {
+        s.notify(said, false);
+    }
     let name = l.name.clone();
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
     Ok(json!({"layout": i, "name": name}))
+}
+
+/// Map frame `id` in `l` when its centre lies where its map's projection can't place it (a pole
+/// on Web Mercator, whose poles are at infinity): its name and the latitude it's drawn centred
+/// at instead, as [`rustgis_map::layout::frame_camera`] draws it (85° for a Mercator pole;
+/// `None` when that can't be read back) (#2684). `None` when it's drawn where it's centred, or
+/// `id` isn't a frame of a map here.
+fn unplaced_center(s: &Session, l: &Layout, id: u32) -> Option<(String, Option<f64>)> {
+    let e = l.element(id)?;
+    let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { return None };
+    let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
+    if rustgis_map::layout::frame_center_placed(m, *center) {
+        return None;
+    }
+    let cam = rustgis_map::layout::frame_camera(m, *center, *scale, 0.0, 0.0);
+    let drawn = m.to_lonlat(cam.center).map(|c| (c.y * 100.0).round() / 100.0).filter(|y| y.is_finite());
+    Some((e.name.clone(), drawn))
+}
+
+/// One notice for the map frames of layout `layout` centred where their maps' projections can't
+/// show them, with where each is drawn instead ([`unplaced_center`]): counted, the first five
+/// named. `None` for none (#2684).
+fn unplaced_notice(layout: &str, frames: &[(String, Option<f64>)]) -> Option<String> {
+    if frames.is_empty() {
+        return None;
+    }
+    let at = |lat: &Option<f64>| match lat {
+        Some(y) => format!("latitude {}", rustgis_map::symbology::fmt_num(*y)),
+        None => "the map's view centre".to_string(),
+    };
+    let mut named = frames
+        .iter()
+        .take(5)
+        .map(|(name, lat)| format!("'{}' at {}", crate::project::short_name(name), at(lat)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if frames.len() > 5 {
+        named.push_str(&format!(" and {} more", frames.len() - 5));
+    }
+    Some(format!(
+        "{}: {} map frame(s) are centred where their map's projection can't show the centre, and are drawn centred elsewhere: {named}",
+        crate::project::short_name(layout),
+        frames.len()
+    ))
 }
 
 /// Selects the explicit or first feature layer in the stored frame's map.

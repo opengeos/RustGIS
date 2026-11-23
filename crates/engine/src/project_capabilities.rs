@@ -46,6 +46,9 @@ impl Project {
         {
             required.push("field-package");
         }
+        if self.offline_areas.iter().any(|area| !area.conflicts.is_empty()) {
+            required.push(super::FIELD_CONFLICTS);
+        }
         // A table saved in a coordinate system of its own, as a layer's is (map_capabilities).
         if !required.contains(&super::NATIVE_COORDINATES) && self.tables.iter().any(|t| held_natively(&t.dataset)) {
             required.push(super::NATIVE_COORDINATES);
@@ -159,6 +162,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
     ("layout-text-size", command_uses_text_size),
+    ("dggs-system", command_uses_dggs_system),
     ("layout-scale-bar-details", command_uses_scale_bar_details),
 ];
 
@@ -504,16 +508,34 @@ fn command_uses_tabulate_empty_zones(id: &str, params: &Value) -> bool {
 
 /// Tests Tabulate Intersection parameters in executable commands, including nested envelopes.
 fn tabulate_uses(id: &str, params: &Value, uses: fn(&Value) -> bool) -> bool {
-    if crate::cmd::gp::tool_id(id) == Some("tabulateIntersection") {
+    tool_uses(&["tabulateIntersection"], id, params, uses)
+}
+
+/// Generate Tessellation and Aggregate Points to Grid were A5's tools, and keep A5's ids: an
+/// older reader would leave out a `system` other than A5's and make A5 cells, warning only that
+/// it ignored the key. Blank or `A5` needs nothing, by the tools' own rule (`System::is_a5`).
+fn command_uses_dggs_system(id: &str, params: &Value) -> bool {
+    tool_uses(&["a5Grid", "a5Aggregate"], id, params, |p| match p.get("system") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !rustgis_analysis::dggs::System::is_a5(s),
+        Some(_) => true,
+    })
+}
+
+/// Whether a saved command runs one of `tools` with parameters `uses` matches: as a tool step,
+/// through `gp.run` or `gp.batch`, or in a script.
+fn tool_uses(tools: &[&str], id: &str, params: &Value, uses: fn(&Value) -> bool) -> bool {
+    let named = |t: Option<&str>| t.is_some_and(|t| tools.contains(&t));
+    if named(crate::cmd::gp::tool_id(id)) {
         return uses(params);
     }
-    let tabulate = params.get("tool").and_then(Value::as_str).and_then(crate::cmd::gp::tool_id) == Some("tabulateIntersection");
+    let tool = named(params.get("tool").and_then(Value::as_str).and_then(crate::cmd::gp::tool_id));
     match id {
-        "gp.run" if tabulate => crate::parameters::params_envelope(params.get("params")).is_ok_and(|p| uses(&p)),
+        "gp.run" if tool => crate::parameters::params_envelope(params.get("params")).is_ok_and(|p| uses(&p)),
         // Batch ignores non-object shared params; older tools refuse unknown binding parameters.
-        "gp.batch" if tabulate => params.get("params").filter(|p| p.is_object()).is_some_and(uses),
+        "gp.batch" if tool => params.get("params").filter(|p| p.is_object()).is_some_and(uses),
         "script.run" => {
-            params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, |id, params| tabulate_uses(id, params, uses)))
+            params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, |id, params| tool_uses(tools, id, params, uses)))
         }
         _ => false,
     }
@@ -797,6 +819,37 @@ mod tests {
         let rustgis_map::Marker::Picture(picture) = symbol.marker else { panic!("an image marker") };
         assert!(picture.base64().starts_with("iVBORw0KGgo") && !picture.is_dropped());
         assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["picture-markers"]));
+    }
+
+    /// A grid system other than A5 on A5's tools requires `dggs-system` wherever a run is saved;
+    /// A5, blank or none needs nothing, as such a run means the same to an older reader.
+    #[test]
+    fn a_grid_system_other_than_a5_is_required() {
+        for (params, needed) in [
+            (json!({"resolution": 5}), false),
+            (json!({"system": "A5"}), false),
+            (json!({"system": " a5 "}), false),
+            (json!({"system": ""}), false),
+            (json!({"system": null}), false),
+            (json!({"system": "H3"}), true),
+            (json!({"system": "Hexagon"}), true),
+            (json!({"system": 5}), true),
+        ] {
+            for tool in ["a5Grid", "a5Aggregate"] {
+                assert_eq!(command_uses_dggs_system(tool, &params), needed, "{tool} {params}");
+                let run = json!({"tool": tool, "params": params});
+                assert_eq!(command_uses_dggs_system("gp.run", &run), needed, "gp.run {params}");
+                assert_eq!(command_uses_dggs_system("gp.batch", &run), needed, "gp.batch {params}");
+                let script = json!({"script": format!("gp.run {run}")});
+                assert_eq!(command_uses_dggs_system("script.run", &script), needed, "script {params}");
+                let steps = vec![ModelStep { tool: tool.into(), params: params.clone() }];
+                assert_eq!(model_capabilities(&steps, None).contains(&"dggs-system"), needed, "model {params}");
+            }
+            assert!(!command_uses_dggs_system("buffer", &params));
+        }
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/dggs_system.rgis")).unwrap();
+        assert_eq!(fixture.models[0].steps[0].params["system"], "H3");
+        assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["dggs-system"]));
     }
 
     /// All replayable project containers require non-default options only when requested.
@@ -1474,6 +1527,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
+            conflicts: Default::default(),
             data: with_area.map().clone(),
         });
         assert_eq!(serde_json::to_value(&with_area).unwrap()["requires"], json!(["field-origin"]));
@@ -1483,6 +1537,37 @@ mod tests {
         let mut invalid = saved;
         invalid["offline_areas"][0]["generation"] = json!("nope");
         assert!(Project::from_json(&invalid.to_string()).unwrap_err().contains("identity"));
+    }
+
+    /// The versions an offline area's conflicts kept are saved again as they were read, one of each
+    /// kind, and require their own capability, which goes once none is left.
+    #[test]
+    fn offline_area_conflicts_are_preserved_and_required() {
+        use crate::project::ConflictKind;
+        let project = Project::from_json(include_str!("../../../schema/fixtures/field_conflicts.rgis")).unwrap();
+        let kept = &project.offline_areas[0].conflicts;
+        let kinds: Vec<ConflictKind> = kept.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [ConflictKind::Replaced, ConflictKind::Deleted, ConflictKind::Kept, ConflictKind::Dropped]);
+        assert_eq!(kept[0].values[1], ("pop_max".to_string(), rustgis_data::Value::Int(1200)));
+        assert_eq!(kept[0].geometry, Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(12.5, 41.9))));
+        // A shape that lost with none: the feature had no shape.
+        assert!(kept[1].shape && kept[1].geometry.is_none());
+        assert!(!kept[3].shape && kept[3].package == "a1b2c3d4e5f60718293a4b5c6d7e8f90");
+        let saved = serde_json::to_value(&project).unwrap();
+        assert!(saved["requires"].as_array().unwrap().contains(&json!("field-conflicts")), "{}", saved["requires"]);
+        assert_eq!(Project::from_json(&saved.to_string()).unwrap().offline_areas[0].conflicts, *kept);
+        // An Undo step's copy of the project shares each one, and so does a list changed after it.
+        let mut copy = project.clone();
+        copy.offline_areas[0].conflicts.remove(0);
+        assert!(std::sync::Arc::ptr_eq(&copy.offline_areas[0].conflicts[0], &project.offline_areas[0].conflicts[1]));
+        let mut none = project.clone();
+        none.offline_areas[0].conflicts = Default::default();
+        let saved = serde_json::to_value(&none).unwrap();
+        assert!(!saved["requires"].as_array().unwrap().contains(&json!("field-conflicts")), "{}", saved["requires"]);
+        // A kind this version doesn't know is refused, not read as another.
+        let mut strange = serde_json::to_value(&project).unwrap();
+        strange["offline_areas"][0]["conflicts"][0]["kind"] = json!("merged");
+        assert!(Project::from_json(&strange.to_string()).is_err());
     }
 
     /// A package's identity, and an area's list of packages brought back, are kept on saving and
@@ -1525,6 +1610,7 @@ mod tests {
             generation: String::new(),
             returned: vec!["a1b2c3d4e5f60718293a4b5c6d7e8f90".into()],
             ids: Default::default(),
+            conflicts: Default::default(),
             data: with_area.map().clone(),
         });
         let saved = serde_json::to_value(&with_area).unwrap();
@@ -1568,6 +1654,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
+            conflicts: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].tiles.clear();
@@ -1596,6 +1683,7 @@ mod tests {
             generation: String::new(),
             returned: Vec::new(),
             ids: Default::default(),
+            conflicts: Default::default(),
             data: p.map().clone(),
         });
         p.maps[0].view.terrain = None;
