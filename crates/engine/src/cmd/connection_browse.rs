@@ -725,17 +725,17 @@ fn service(
                 .or_insert(at);
         }
     }
-    // Only the nodes shown are recorded: those past the list's end never are.
-    let services: Vec<(String, address::Reach)> = children
+    // The list is cut to what is shown first, so only the nodes shown are recorded, and none past
+    // its end comes up unrecorded when those the full record refuses are left out.
+    let mut found = Found::new(children);
+    found.truncated |= left_out;
+    let services: Vec<(String, address::Reach)> = found
+        .children
         .iter()
-        .take(MAX_CHILDREN)
         .filter_map(|child| child["node"].as_str())
         .filter_map(|node| reach_of.get(node).map(|r| (node.to_string(), *r)))
         .collect();
-    let mut children = children;
-    remember_services(s, c, url, &services, &mut children)?;
-    let mut found = Found::new(children);
-    found.truncated |= left_out;
+    remember_services(s, c, url, &services, &mut found.children)?;
     Ok(found)
 }
 
@@ -1429,6 +1429,20 @@ mod tests {
         let shown = out["children"].as_array().unwrap().iter().filter(|c| c.get("node").is_some()).count();
         assert!(shown > 0 && shown <= super::MAX_CHILDREN + 1, "{shown}");
         assert_eq!(session.browse_origins.1.len() - before, shown);
+        // With the record full, a listing read from the internet has every node it shows left
+        // out, and none past the shown end takes their place unrecorded.
+        let node = "service:arcgis:https://dir-22.corp-looks-public.example/arcgis/rest/services".to_string();
+        super::remember_node_origins(&mut session, &connection, &[json!({"node": node})], &local, false).unwrap();
+        let requested = super::browse(&mut session, &json!({"id": connection.id, "node": node, "probe": true})).unwrap()["fetch"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        session.browse_origins.1.extend((0..16_384).map(|i| ((format!("full-{i}"), String::new(), String::new()), local.clone())));
+        let read = Origin::connected(&requested, "93.184.216.34".parse().unwrap()).unwrap();
+        let out =
+            session.browse_from_origin(&json!({"id": connection.id, "node": node, "answer": listing}), &requested, opened, read).unwrap();
+        let nodes: Vec<&Value> = out["children"].as_array().unwrap().iter().filter(|c| c.get("node").is_some()).collect();
+        assert!(nodes.is_empty(), "{nodes:?}");
     }
 
     #[test]

@@ -353,8 +353,9 @@ pub fn start(app: &mut RustGisApp, p: &serde_json::Value) {
     let st = &mut app.ui.opendata;
     let fresh = st.service != svc.map(|s| s.id);
     if fresh {
-        // Another service: its own choices.
-        *st = State { service: svc.map(|s| s.id), ..State::default() };
+        // Another service: its own choices. Pictures refused so far are still said.
+        let refused = std::mem::take(&mut st.thumbs_refused);
+        *st = State { service: svc.map(|s| s.id), thumbs_refused: refused, ..State::default() };
         if let Some(s) = svc {
             st.portal = s.portal;
             // A search by place is where the map is.
@@ -993,6 +994,19 @@ mod tests {
         assert!(said[0].starts_with("2 pictures of the results are left out, such as http://10.0.30."), "{said:?}");
         assert!(matches!(app.ui.opendata.thumbs.get("d"), Some(Thumb::Ready(_))));
         assert!(matches!(app.ui.opendata.thumbs.get("c"), Some(Thumb::Failed)));
+        // One refused while another is still being fetched, and the pane moves to another
+        // service: still said.
+        let st = &mut app.ui.opendata;
+        st.service = Some("dynamical");
+        st.thumbs.insert("e".into(), landed(Err(refused("http://10.0.30.5/e.png"))));
+        st.thumbs.insert("f".into(), Thumb::Loading(Default::default()));
+        let mark = app.session.notice_mark();
+        poll_thumbs(&mut app, &egui::Context::default());
+        assert_eq!(app.session.notices_since(mark).len(), 0, "one is still being fetched");
+        start(&mut app, &json!({}));
+        poll_thumbs(&mut app, &egui::Context::default());
+        let said: Vec<&str> = app.session.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+        assert!(said.len() == 1 && said[0].starts_with("A picture of the results is left out: http://10.0.30.5/"), "{said:?}");
     }
 
     /// Web Data's Add reads a GeoLens dataset's every page, not only the server's first 1,000.
