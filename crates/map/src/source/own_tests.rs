@@ -229,10 +229,12 @@ fn a_stated_extent_too_small_hides_nothing_in_view() {
     let mut map = crate::Map::new("utm");
     map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
     let (source, asked) = lines();
-    map.add_streamed("lines", SourceLayer::from_path("lines.fgb", None, source));
+    let id = map.add_streamed("lines", SourceLayer::from_path("lines.fgb", None, source));
     let east = Extent::new(utm.min_x + 100_000.0, utm.min_y, utm.max_x + 100_000.0, utm.max_y);
     sync(&mut map, &lonlat, &east);
     assert_eq!(asked.lock().unwrap().last().unwrap().own, Some((utm31(), east.padded(0.5, 0.0))));
+    // 100 km east of Paris only the line reaching 1e9 m east passes, past the stated extent: read.
+    assert_eq!(names(map.layer(id).unwrap()), ["far east"]);
 }
 
 /// Lines in UTM 31N as a FlatGeobuf: one at Paris and one from 1,200 km east to 1e9 m east, whose

@@ -694,9 +694,9 @@ impl Layer {
         // previous view's features.
         match src.poll(block) {
             source::Polled::Done(window, batch) => {
-                src.saw_unread_dates(&window.extent, &batch.unread_dates, &batch.rounded_dates);
-                src.saw_null_text(&window.extent, &batch.null_text);
-                src.saw_not_utf8(&window.extent, &batch.not_utf8);
+                src.saw_unread_dates(&window, &batch.unread_dates, &batch.rounded_dates);
+                src.saw_null_text(&window, &batch.null_text);
+                src.saw_not_utf8(&window, &batch.not_utf8);
                 src.saw_read_notes(&batch.notes);
                 self.install(batch.features)
             }
@@ -711,9 +711,9 @@ impl Layer {
             src.start_wanted(wanted, block);
             match src.poll(block) {
                 source::Polled::Done(window, batch) => {
-                    src.saw_unread_dates(&window.extent, &batch.unread_dates, &batch.rounded_dates);
-                    src.saw_null_text(&window.extent, &batch.null_text);
-                    src.saw_not_utf8(&window.extent, &batch.not_utf8);
+                    src.saw_unread_dates(&window, &batch.unread_dates, &batch.rounded_dates);
+                    src.saw_null_text(&window, &batch.null_text);
+                    src.saw_not_utf8(&window, &batch.not_utf8);
                     src.saw_read_notes(&batch.notes);
                     self.install(batch.features)
                 }

@@ -780,11 +780,33 @@ pub(crate) fn another_frame() {
 /// How many windows a [`Tally`] keeps apart.
 const WINDOWS_COUNTED: usize = 64;
 
+/// Which read a batch's counts are of ([`SourceLayer::saw_unread_dates`]): its window's
+/// longitude/latitude extent and, for one read in map units, its box there. Two windows in map
+/// units can share a longitude/latitude extent (both read by the view's where the map can't take
+/// their boxes back), so the box tells them apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowKey {
+    extent: Extent,
+    own: Option<Extent>,
+}
+
+impl From<&Extent> for WindowKey {
+    fn from(extent: &Extent) -> Self {
+        WindowKey { extent: *extent, own: None }
+    }
+}
+
+impl From<&Window> for WindowKey {
+    fn from(w: &Window) -> Self {
+        WindowKey { extent: w.extent, own: w.own }
+    }
+}
+
 /// What view reads found, counted for each field by its position, kept for each window read: a
 /// window read again replaces its counts instead of adding to them.
 #[derive(Clone, Default)]
 struct Tally {
-    windows: Vec<(Extent, Vec<usize>)>,
+    windows: Vec<(WindowKey, Vec<usize>)>,
     /// Counts of windows past [`WINDOWS_COUNTED`], added up as they come.
     // ponytail: past 64 windows between two notice passes a window read again adds up as before;
     // keep rows' identity in `Batch` to count exactly.
@@ -792,8 +814,9 @@ struct Tally {
 }
 
 impl Tally {
-    fn saw(&mut self, window: &Extent, counts: &[usize]) {
-        let at = self.windows.iter().position(|(w, _)| w == window);
+    fn saw(&mut self, window: impl Into<WindowKey>, counts: &[usize]) {
+        let window = window.into();
+        let at = self.windows.iter().position(|(w, _)| *w == window);
         if counts.iter().all(|n| *n == 0) {
             if let Some(at) = at {
                 self.windows.remove(at);
@@ -801,7 +824,7 @@ impl Tally {
         } else if let Some((_, kept)) = at.and_then(|at| self.windows.get_mut(at)) {
             *kept = counts.to_vec();
         } else if self.windows.len() < WINDOWS_COUNTED {
-            self.windows.push((*window, counts.to_vec()));
+            self.windows.push((window, counts.to_vec()));
         } else {
             rustgis_data::source::add_unread_dates(&mut self.rest, counts);
         }
@@ -846,10 +869,11 @@ impl SourceLayer {
     /// [`SourceLayer::take_unread_dates`] says it. Once said, later reads aren't counted: they
     /// read the same features again, and the notice says Load All Features counts them all.
     /// Each kind is counted until its own notice is said, so saying one doesn't silence the other.
-    /// `window` is the extent the batch was read for: reading it again replaces its counts, so the
-    /// same rows aren't counted twice. Two different windows that overlap still count the rows
+    /// `window` is what the batch was read for ([`WindowKey`]: its extent, and its box in map
+    /// units): reading it again replaces its counts, so the same rows aren't counted twice. Two different windows that overlap still count the rows
     /// they share twice; the notice says "so far" and Load All Features counts them all.
-    pub fn saw_unread_dates(&mut self, window: &Extent, unread: &[usize], rounded: &[usize]) {
+    pub fn saw_unread_dates(&mut self, window: impl Into<WindowKey>, unread: &[usize], rounded: &[usize]) {
+        let window = window.into();
         if !self.unread_dates_said {
             self.unread_dates.saw(window, unread);
         }
@@ -877,7 +901,7 @@ impl SourceLayer {
 
     /// Keeps what view reads found of text values `<Null>` read as null, until
     /// [`SourceLayer::take_null_text`] says it, as [`SourceLayer::saw_unread_dates`] does for dates.
-    pub fn saw_null_text(&mut self, window: &Extent, counts: &[usize]) {
+    pub fn saw_null_text(&mut self, window: impl Into<WindowKey>, counts: &[usize]) {
         if !self.null_text_said {
             self.null_text.saw(window, counts);
         }
@@ -894,7 +918,7 @@ impl SourceLayer {
 
     /// Keeps what view reads found of text values that aren't UTF-8, until
     /// [`SourceLayer::take_not_utf8`] says it, as [`SourceLayer::saw_unread_dates`] does for dates.
-    pub fn saw_not_utf8(&mut self, window: &Extent, counts: &[usize]) {
+    pub fn saw_not_utf8(&mut self, window: impl Into<WindowKey>, counts: &[usize]) {
         if !self.not_utf8_said {
             let encoding = self.handle.as_ref().map_or("UTF-8", |h| h.text_encoding());
             // Counts of another encoding are of another opening's text: they aren't added to these.
@@ -1807,11 +1831,6 @@ impl SourceLayer {
         self.saved_selection.clear();
     }
 
-    /// The extent to read for a view (longitude/latitude), or `None` when the window serves it.
-    pub fn wanted(&self, view: &Extent) -> Option<Extent> {
-        self.wanted_in(view, None).map(|w| w.extent)
-    }
-
     /// The extent to read for a view, or `None` when the window serves it. `own` is the view in
     /// map units with the map's projection, given when the map is in the source's own system: the
     /// window is then read and kept in map units too, its longitude/latitude extent the place of
@@ -2333,6 +2352,18 @@ mod tests {
         assert_eq!(tally.total(), Some(vec![1]));
         tally.saw(&b, &[0]);
         assert_eq!(tally.total(), None);
+        // Two windows in map units read by the same longitude/latitude extent (where the map can't
+        // take their boxes back) are told apart by their boxes: the second's clean read leaves the
+        // first's counts.
+        let mut apart = Tally::default();
+        let first =
+            super::Window { extent: a, complete: true, matched: 1, kept: 1, filtered: false, own: Some(Extent::new(0.0, 0.0, 1.0, 1.0)) };
+        let second = super::Window { own: Some(Extent::new(5.0, 5.0, 6.0, 6.0)), ..first };
+        apart.saw(&first, &[1]);
+        apart.saw(&second, &[0]);
+        assert_eq!(apart.total(), Some(vec![1]));
+        apart.saw(&first, &[0]);
+        assert_eq!(apart.total(), None);
         let nan = Extent::new(f64::NAN, 0.0, 1.0, 1.0);
         for _ in 0..2 * WINDOWS_COUNTED {
             tally.saw(&nan, &[1]);
