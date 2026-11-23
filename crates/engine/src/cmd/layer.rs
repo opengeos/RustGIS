@@ -2822,10 +2822,11 @@ fn add_picked(
             })
             .map(|(_, r)| {
                 let mut said = r.report.clone();
-                // The layer's own Z/M note leads its messages; it is said by that layer. A note
-                // that reports another loss is never taken for it.
-                if r.dataset.zm_dropped && said.messages.first().is_some_and(|n| n.loss.is_none()) {
-                    said.messages.drain(..1);
+                // The layer's own Z/M note, by its code: that layer says it.
+                if r.dataset.zm_dropped
+                    && let Some(at) = said.messages.iter().position(|n| n.loss == Some(rustgis_data::loss::LossCode::DroppedZm))
+                {
+                    said.messages.drain(at..=at);
                 }
                 (r.dataset.source.clone(), said)
             })
