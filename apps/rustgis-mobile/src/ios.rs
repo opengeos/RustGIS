@@ -16,6 +16,8 @@ use crate::shell;
 use eframe::egui;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+// `alloc` on classes any thread may make (the file coordinator).
+use objc2::AnyThread as _;
 use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_core_location::{
     CLAuthorizationStatus, CLError, CLLocation, CLLocationManager, CLLocationManagerDelegate, kCLLocationAccuracyBest,
@@ -338,7 +340,6 @@ fn copy_via_part(from: &Path, folder: &Path, file: &Path) -> std::io::Result<()>
 /// whole: Remove Unused Copies keeps a pick holding one, so a copy being written is never taken
 /// for unused, and no document of the pick is written over.
 fn coordinated_copy(url: &NSURL, folder: &Path, file: &Path) -> Result<(), String> {
-    use objc2::AnyThread as _;
     std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     let result: RefCell<Option<Result<(), String>>> = RefCell::new(None);
     let reader = block2::RcBlock::new(|read: std::ptr::NonNull<NSURL>| {

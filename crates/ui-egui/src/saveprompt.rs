@@ -94,7 +94,11 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     let name = app.session.project.name.replace(['/', '\\'], "-");
     let file = format!("{name}.rgis");
     let notes = app.session.construction_output_notes()?;
-    let (text, report) = app.session.project.saved_text(None)?;
+    // Written back, its paths are written relative to the folder of the copy it was opened from:
+    // a file linked beside the original (`./terrain.tif`) stays so, where the original is. A
+    // picker save keeps them whole, as the download does.
+    let copy_dir = target.as_ref().and(app.session.path.as_deref()).and_then(std::path::Path::parent).map(std::path::Path::to_path_buf);
+    let (text, report) = app.session.project.saved_text(copy_dir.as_deref())?;
     save(&file, text.into_bytes(), target.as_deref())?;
     app.save_prompt.reported = None;
     app.save_prompt.pending =
@@ -148,6 +152,12 @@ impl RustGisApp {
     /// Save writes there while that copy is the open project.
     pub fn picked_document(&mut self, path: std::path::PathBuf, document: String) {
         self.save_prompt.documents.insert(path, document);
+    }
+
+    /// Whether the save under way is of the project open now: a failure's advice to Save again
+    /// is for it alone.
+    pub fn saving_the_open_project(&self) -> bool {
+        self.save_prompt.pending.as_ref().is_some_and(|p| p.project == self.session.file_identity())
     }
 
     /// The picker save under way wrote `document`, which the phone may write back to: its
@@ -578,6 +588,41 @@ mod tests {
         h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("kept.rgis".into()));
         assert_eq!(last(&asked).as_deref(), Some("content://kept"));
+    }
+
+    /// Written back, a project names a file beside its copy as beside itself (`./…`), so the
+    /// original still finds a file linked beside it; a picker save keeps the path whole.
+    #[test]
+    fn native_write_back_keeps_links_beside_the_project_relative() {
+        use std::{cell::RefCell, rc::Rc};
+        let dir = folder("write-back-links");
+        let roads = dir.join("roads.geojson");
+        std::fs::write(
+            &roads,
+            r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+        )
+        .unwrap();
+        let mut h = launch();
+        let written: Rc<RefCell<Vec<(Option<String>, String)>>> = Rc::default();
+        let seen = written.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |_, bytes, document| {
+            seen.borrow_mut().push((document.map(str::to_string), String::from_utf8(bytes).unwrap()));
+            Ok(())
+        }));
+        h.state_mut().run("layer.addData", json!({"path": roads})).unwrap();
+        let copy = dir.join("site.rgis");
+        h.state_mut().picked_document(copy.clone(), "content://site".into());
+        h.state_mut().session.path = Some(copy);
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().complete_project_save(Ok("site.rgis".into()));
+        h.state_mut().run("ui.saveAs", Value::Null).unwrap();
+        h.state_mut().complete_project_save(Ok("copy.rgis".into()));
+        let written = written.borrow();
+        assert_eq!(written[0].0.as_deref(), Some("content://site"));
+        assert!(written[0].1.contains("\"./roads.geojson\""), "written back with the link beside it");
+        assert_eq!(written[1].0, None);
+        assert!(written[1].1.contains(&serde_json::to_string(&roads.display().to_string()).unwrap()), "a picker save keeps it whole");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A direct Save As writes the submitted state. Any edit after submission is still unsaved.

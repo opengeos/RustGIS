@@ -210,13 +210,24 @@ impl<P: Phone> App<P> {
                 Event::ProjectDocument(document) => self.app.project_document(document),
                 Event::ProjectSave(result) => self.app.complete_project_save(result),
                 Event::WriteBackFailed { name, reason, kept } => {
-                    let text = match kept {
-                        None => i18n::fmt(
+                    let reason = write_back_reason(&reason);
+                    // Save again only helps while the project saved is the one open.
+                    let open = self.app.saving_the_open_project();
+                    let text = match (kept, open) {
+                        (None, true) => i18n::fmt(
                             "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed: Save again to choose where to save it.",
                             &[("name", &name), ("reason", &reason)],
                         ),
-                        Some(kept) => i18n::fmt(
+                        (None, false) => i18n::fmt(
+                            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed.",
+                            &[("name", &name), ("reason", &reason)],
+                        ),
+                        (Some(kept), true) => i18n::fmt(
                             "{name} may be damaged where it was opened from: {reason}. The project is still open: Save again to choose where to save it. A copy of it as saved is kept at {kept}.",
+                            &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
+                        ),
+                        (Some(kept), false) => i18n::fmt(
+                            "{name} may be damaged where it was opened from: {reason}. A copy of it as saved is kept at {kept}.",
                             &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
                         ),
                     };
@@ -472,6 +483,18 @@ fn waits(purpose: &str) -> bool {
 fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
     if let Some(purpose) = purpose.filter(|p| waits(p)) {
         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
+    }
+}
+
+/// Why a project couldn't be written back, in the user's language: the activity's codes for its
+/// own reasons (`DocumentWrite.java`), or the system's text as it gave it.
+fn write_back_reason(reason: &str) -> String {
+    match reason {
+        "code:storage" => tl!("the app's storage can't be written to").to_string(),
+        "code:unwritable" => tl!("the file can't be written to").to_string(),
+        "code:stalled" => tl!("the file took no more bytes").to_string(),
+        "code:short" => tl!("the file doesn't hold all of the project after writing it").to_string(),
+        other => other.to_string(),
     }
 }
 

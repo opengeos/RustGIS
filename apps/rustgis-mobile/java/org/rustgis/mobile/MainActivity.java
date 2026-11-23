@@ -533,7 +533,7 @@ public class MainActivity extends NativeActivity {
         try {
             File dir = new File(new File(getFilesDir(), "saved"), Long.toString(System.nanoTime()));
             if (!dir.isDirectory() && !dir.mkdirs()) {
-                throw new java.io.IOException("the app's storage can't be written to");
+                throw new java.io.IOException(DocumentWrite.STORAGE);
             }
             copy = new File(dir, displayName(uri));
         } catch (Throwable e) {
@@ -551,7 +551,7 @@ public class MainActivity extends NativeActivity {
         try {
             descriptor = getContentResolver().openFileDescriptor(uri, "rw");
             if (descriptor == null) {
-                throw new java.io.IOException("the file can't be written to");
+                throw new java.io.IOException(DocumentWrite.UNWRITABLE);
             }
         } catch (Throwable e) {
             // Nothing was written to it: it is as it was, and the copy isn't needed.
@@ -584,7 +584,8 @@ public class MainActivity extends NativeActivity {
 
     /**
      * A write-back-failed event: the document was left as it was ({@code kept} null), or may be
-     * damaged, with the complete project kept at {@code kept}. The Rust side words it.
+     * damaged, with the complete project kept at {@code kept}. The Rust side words it: the
+     * reason is one of DocumentWrite's codes, or the system's own text.
      */
     private static String writeBackFailed(String name, Throwable e, File kept) {
         String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();

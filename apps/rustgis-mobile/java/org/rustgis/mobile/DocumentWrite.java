@@ -10,6 +10,15 @@ import java.nio.channels.FileChannel;
  * the result forced to storage; the caller keeps a complete copy of its own until this returns.
  */
 final class DocumentWrite {
+    /**
+     * Why a write-back failed, as codes the Rust side words in the user's language (shell.rs,
+     * WriteBackFailed); any other reason is the system's own text.
+     */
+    static final String STORAGE = "code:storage";
+    static final String UNWRITABLE = "code:unwritable";
+    static final String STALLED = "code:stalled";
+    static final String SHORT = "code:short";
+
     private DocumentWrite() {}
 
     /**
@@ -22,7 +31,7 @@ final class DocumentWrite {
         while (buffer.hasRemaining()) {
             int n = channel.write(buffer, at);
             if (n <= 0) {
-                throw new IOException("the document took no more bytes after " + at + " of " + bytes.length);
+                throw new IOException(STALLED);
             }
             at += n;
         }
@@ -30,7 +39,7 @@ final class DocumentWrite {
         channel.force(true);
         long size = channel.size();
         if (size != bytes.length) {
-            throw new IOException("the document holds " + size + " bytes after writing " + bytes.length);
+            throw new IOException(SHORT);
         }
     }
 }
