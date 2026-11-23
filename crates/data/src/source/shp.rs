@@ -502,8 +502,9 @@ impl FeatureSource for ShpSource {
                     return Ok(());
                 }
             };
-            // As in `read`, the shape itself is checked.
-            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.inside) {
+            // As in `read`, the shape itself is checked; a read by area, its box in the file's
+            // own system included, gives no rows without a shape.
+            if geometry.as_ref().map_or(req.extent.is_some() || req.own.is_some(), |g| !g.inside) {
                 return Ok(());
             }
             let geometry = geometry.map(|p| p.geometry);

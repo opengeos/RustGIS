@@ -6457,8 +6457,15 @@ fn render_frame(
             // And a box over most of the layer reads it all, in file order: asking the index which
             // records nearly all of them are costs more than reading the few left over.
             let crs = source.coord_crs();
-            let own =
-                crs != rustgis_data::raster::Crs::LonLat && source.reads_own_box() && flat.held(crs).is_ok_and(|held| held.is_identity());
+            let view_only = globe.is_none()
+                && !gpu
+                && source.finds_all_by_area()
+                && matches!(labels_to, Labels::Own | Labels::Turned(_))
+                && draws_in_view_only(&chunk, !display.paused, shore.is_some());
+            let own = view_only
+                && crs != rustgis_data::raster::Crs::LonLat
+                && source.reads_own_box()
+                && flat.held(crs).is_ok_and(|held| held.is_identity());
             let lonlat = !own && crs == rustgis_data::raster::Crs::LonLat && matches!(flat, rustgis_map::projection::Flat::Mercator);
             // The box a read of the map extent `e` asks for, in its path's units.
             let box_of = |e: &Extent| {
@@ -6480,14 +6487,7 @@ fn render_frame(
                 limit: usize::MAX,
                 own: own.then_some((crs, b)),
             };
-            let near = (globe.is_none()
-                && !gpu
-                && source.finds_all_by_area()
-                && matches!(labels_to, Labels::Own | Labels::Turned(_))
-                && draws_in_view_only(&chunk, !display.paused, shore.is_some()))
-            .then(|| box_of(&ctx.cull))
-            .flatten()
-            .filter(partial);
+            let near = view_only.then(|| box_of(&ctx.cull)).flatten().filter(partial);
             // The source's long loops that only look at Cancel see the frame's stop too.
             let _stop = cancel::current().map(rustgis_data::progress::also_stop_when);
             // A view read this way is kept with the geometry drawn from it, for the frames of the

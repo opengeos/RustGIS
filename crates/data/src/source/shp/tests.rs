@@ -917,3 +917,42 @@ fn a_shapefile_says_whether_it_is_as_it_was_opened() {
         assert!(s.same_as_opened().is_err(), "gone");
     });
 }
+
+/// A complete read by a box in the file's own system (#2788) gives the shapes meeting it and no
+/// row without a shape, as a read by area in longitude/latitude does, also when it gives no
+/// longitude/latitude extent beside the box.
+#[test]
+fn a_complete_read_by_its_own_box_leaves_out_rows_without_a_shape() {
+    let utm = crate::raster::Crs::from_epsg(32631).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pts.shp");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for (i, p) in
+        [Some((450_000.0, 5_410_000.0)), None, Some((460_000.0, 5_420_000.0)), Some((900_000.0, 5_000_000.0))].into_iter().enumerate()
+    {
+        ds.push(p.map(|(x, y)| Geometry::Point(Coord::new(x, y))), vec![Value::Int(i as i64)]);
+    }
+    ds.held_in = utm;
+    crate::io::write_path_in(&ds, &path, utm).unwrap();
+    cache::with_index_dir(tmp.path().join("cache"), || {
+        let s = ShpSource::open_path(&path, "pts").unwrap();
+        let own = Extent::new(440_000.0, 5_400_000.0, 470_000.0, 5_430_000.0);
+        let mut got = Vec::new();
+        s.visit_request_chunks(&Request { extent: None, limit: usize::MAX, own: Some((utm, own)) }, 4096, &mut |chunk| {
+            got.extend(chunk.iter().map(|f| f.id));
+            Ok(())
+        })
+        .unwrap();
+        // What a whole read gives, the features with a shape in the box.
+        let mut expected = Vec::new();
+        let mut rows = 0;
+        s.visit_chunks(None, 4096, &mut |chunk| {
+            rows += chunk.len();
+            expected.extend(chunk.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(&own))).map(|f| f.id));
+            Ok(())
+        })
+        .unwrap();
+        assert!(rows > expected.len() && expected.len() == 2, "{rows} rows, {expected:?} in the box");
+        assert_eq!(got, expected, "the points in the box, not a row without a shape or the far point");
+    });
+}
