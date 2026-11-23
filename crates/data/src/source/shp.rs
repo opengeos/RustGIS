@@ -350,6 +350,11 @@ impl FeatureSource for ShpSource {
     fn streams_chunks(&self) -> bool {
         true
     }
+    /// Every record but those without a usable box, which reads by area leave out (said when
+    /// the file is opened).
+    fn finds_all_by_area(&self) -> bool {
+        self.index.unboxed == 0
+    }
     /// Visits located shapes in a spatial request; geometry-less rows belong only to whole reads.
     /// Counts scanned records and checks Cancel before filtering them.
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {

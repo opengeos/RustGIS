@@ -2546,6 +2546,14 @@ fn visit_within(
     Ok(result)
 }
 
+/// Whether `e`, a Web Mercator extent, stays short of the northing Web Mercator clamps latitudes
+/// past ±85.05° to: there every place further north or south is drawn too, so a box of
+/// longitude/latitude around it leaves out features drawn in it.
+fn within_mercator_lats(e: &Extent) -> bool {
+    let edge = rustgis_geom::lonlat_to_merc(Coord::new(0.0, 90.0)).y;
+    !e.is_empty() && e.max_y < edge && e.min_y > -edge
+}
+
 /// Whether `b` covers at least [`READ_ALL_OVER`] of the area of `layer`, a layer's extent (never
 /// for one without area: unknown, or a single point).
 fn covers_most(b: &Extent, layer: &Extent) -> bool {
@@ -6386,22 +6394,28 @@ fn render_frame(
             // longitude/latitude. Otherwise every feature: labels, shadows and other effects reach
             // in from beyond the view. Web Mercator maps longitude and latitude each on its own,
             // so a feature held in longitude/latitude whose box misses that box is drawn wholly
-            // outside the cull extent, straight edges and all. In another projection, or from
-            // another system, an edge drawn straight between two places can cross the view while
-            // the feature's box misses it, so those read everything. So do GPU frames, whose
-            // meshes are made a batch at a time: which features share a batch decides which fall
-            // back to the CPU. And a box over most of the layer reads it all, in file order:
-            // asking the index which records nearly all of them are costs more than reading the
-            // few left over.
+            // outside the cull extent, straight edges and all, short of the latitudes it clamps
+            // (a view reaching them reads everything). In another projection, or from another
+            // system, an edge drawn straight between two places can cross the view while the
+            // feature's box misses it, so those read everything. So does a source whose reads by
+            // area leave some features out (a Shapefile's records without a usable box), and a GPU
+            // frame, whose meshes are made a batch at a time: which features share a batch decides
+            // which fall back to the CPU. And a box over most of the layer reads it all, in file
+            // order: asking the index which records nearly all of them are costs more than
+            // reading the few left over.
             let near = (globe.is_none()
                 && !gpu
                 && matches!(flat, rustgis_map::projection::Flat::Mercator)
+                && within_mercator_lats(&ctx.cull)
                 && source.coord_crs() == rustgis_data::raster::Crs::LonLat
+                && source.finds_all_by_area()
                 && matches!(labels_to, Labels::Own | Labels::Turned(_))
                 && draws_in_view_only(&chunk, !display.paused, shore.is_some()))
             .then(|| lonlat_box(&flat, &ctx.cull))
             .flatten()
             .filter(|e| !covers_most(e, &source.info().extent));
+            // The source's long loops that only look at Cancel see the frame's stop too.
+            let _stop = cancel::current().map(rustgis_data::progress::also_stop_when);
             let result = visit_within(source.as_ref(), near, &mut |features| {
                 // A frame no longer wanted reads no further (see `cancel`).
                 if cancel::requested() {

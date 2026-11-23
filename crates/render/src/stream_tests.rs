@@ -1744,6 +1744,8 @@ fn a_stopped_frame_reads_no_further_chunk_and_leaves_its_source_unfailed() {
 struct Near {
     chunks: Chunks,
     asked: std::sync::Arc<std::sync::Mutex<Vec<Option<Extent>>>>,
+    /// Whether a read by area finds every feature a whole read does.
+    all_by_area: bool,
 }
 
 impl FeatureSource for Near {
@@ -1755,6 +1757,9 @@ impl FeatureSource for Near {
     }
     fn streams_chunks(&self) -> bool {
         true
+    }
+    fn finds_all_by_area(&self) -> bool {
+        self.all_by_area
     }
     /// Keeps `extent`, then gives the features whose boxes meet it (all of them for `None`), in
     /// file order.
@@ -1835,7 +1840,7 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
         let mut layer = streamed(&m.layers[0], usize::MAX);
         let info = layer.source.as_ref().unwrap().info().unwrap().clone();
         let chunks = Chunks { info, ds, size: usize::MAX };
-        layer.source = Some(SourceLayer::from_path("near.shp", None, Box::new(Near { chunks, asked: asked.clone() })));
+        layer.source = Some(SourceLayer::from_path("near.shp", None, Box::new(Near { chunks, asked: asked.clone(), all_by_area: true })));
         layer.selection = m.layers[0].selection.clone();
         actual.layers[0] = layer;
         let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut actual, &view, true, Backend::Cpu) else {
@@ -1862,9 +1867,33 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
     let mut layer = streamed(&m.layers[0], usize::MAX);
     let info = layer.source.as_ref().unwrap().info().unwrap().clone();
     let chunks = Chunks { info, ds: squares, size: usize::MAX };
-    layer.source = Some(SourceLayer::from_path("whole.shp", None, Box::new(Near { chunks, asked: asked.clone() })));
+    layer.source = Some(SourceLayer::from_path("whole.shp", None, Box::new(Near { chunks, asked: asked.clone(), all_by_area: true })));
     m.layers[0] = layer;
     let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut m, &view, true, Backend::Cpu) else { panic!("a complete frame") };
     assert!(got.pixmap.data() == expected.pixmap.data(), "the pixels changed");
     assert_eq!(asked.lock().unwrap().last().copied().flatten(), None, "a view over most of the layer reads it all");
+    // A source whose reads by area leave features out, and a view reaching the latitudes Web
+    // Mercator clamps (a point at 88°N drawn on its edge), read everything too.
+    let mut far = Dataset::new("far", GeometryType::Point, vec![]);
+    for x in 0..200 {
+        far.push(Some(Geometry::Point(Coord::new(f64::from(x) * 0.5 - 50.0, 0.0))), vec![]);
+    }
+    far.push(Some(Geometry::Point(Coord::new(60.0, 88.0))), vec![]);
+    let edge = rustgis_geom::lonlat_to_merc(Coord::new(60.0, 88.0));
+    for (all_by_area, center) in [(false, rustgis_geom::lonlat_to_merc(Coord::new(0.0, 0.0))), (true, edge)] {
+        let mut m = Map::new("far");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.add_dataset(far.clone());
+        let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(center, 1_000.0), sky: false };
+        let expected = render(&mut m.clone(), &view).unwrap();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let mut layer = streamed(&m.layers[0], usize::MAX);
+        let info = layer.source.as_ref().unwrap().info().unwrap().clone();
+        let chunks = Chunks { info, ds: far.clone(), size: usize::MAX };
+        layer.source = Some(SourceLayer::from_path("far.shp", None, Box::new(Near { chunks, asked: asked.clone(), all_by_area })));
+        m.layers[0] = layer;
+        let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut m, &view, true, Backend::Cpu) else { panic!("a complete frame") };
+        assert!(got.pixmap.data() == expected.pixmap.data(), "all by area {all_by_area}: the pixels changed");
+        assert_eq!(asked.lock().unwrap().last().copied().flatten(), None, "all by area {all_by_area}: reads everything");
+    }
 }
