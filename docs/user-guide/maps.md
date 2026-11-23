@@ -14,9 +14,18 @@ Europe, Africa, Americas and East Asia), and **Locate**: **By Coordinates…** p
 (X) and latitude (Y), each in decimal degrees or degrees, minutes and seconds (`-74.006` or
 `74°0'22"W`; `40.7128` or `40°42'46"N`; an N or S in the longitude is refused, not swapped), or on
 the Earth's map to a UTM or MGRS grid reference in place of both (`18north 583959 4507351`,
-`18TWL8395907350`). `map.goToXY` takes the same: `lon` and `lat` as numbers or text, or a
-`position` read as the search box reads it, latitude first; two bare numbers there are said back
-as the latitude and longitude they were read as. A reference that names no place says why; an
+`18TWL8395907350`). On a flat map of the Earth, **Coordinates in** also offers the map's own
+system and each layer's projected system: X and Y are then an easting and a northing there,
+starting at the map's center. The position box (and the search box) also reads an easting and a
+northing followed by their system, as the right-click menu copies them in map coordinates
+(`2600000 mE  1200000 mN  EPSG:2056`, `2600000 1200000 EPSG:2056`; the system as a code, `Web
+Mercator`, a projection preset, or `map` for the map's own). A unit written (`m`, `ft`, `ftUS`)
+must be the system's: feet in a system of metres are refused, not read as metres. `map.goToXY` takes the same: `lon` and `lat` as numbers or
+text, or `x` and `y` with `crs` (`"map"`, a layer's name for the system it was read in, or a
+code such as `EPSG:2056`; a layer named like a code means the layer), or a `position` read as the search box reads it, latitude first; two
+bare numbers there are said back as the latitude and longitude they were read as. A place a
+system's formulas don't reach (one that doesn't project back to the same easting and northing)
+is refused. A reference that names no place says why; an
 MGRS reference coarser than a meter (`18TWL`) goes to the center of its square and says so.
 **By Place or Address…** finds a place or address with a geocoder.
 **New Bookmark…**

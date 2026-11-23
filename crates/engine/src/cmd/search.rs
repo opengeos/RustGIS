@@ -170,6 +170,12 @@ fn search_map(map: &rustgis_map::Map, query: &str, limit: usize) -> Results {
     if let Some(c) = parse_lat_lon(&q) {
         out.hits.push(Hit::Coordinate { lon: c.x, lat: c.y });
         plainly_coordinate = q.chars().any(|c| matches!(c, '.' | '°' | 'º' | '\'' | '′' | '"' | '″') || c.is_alphabetic());
+    } else if let Some(Ok(c)) = super::navigate::read_system_position(map, &q) {
+        // An easting and a northing in a named system, as the map's right-click menu copies them
+        // (`2600000 mE  1200000 mN  EPSG:2056`). Plainly one when the system is a code; a name
+        // (`12 34 robinson`) may be a feature's too, so the tables are searched as well.
+        out.hits.push(Hit::Coordinate { lon: c.x, lat: c.y });
+        plainly_coordinate = q.contains(':');
     } else if map.body().is_earth() {
         match read_grid_reference(&q) {
             Ok(c) if letter_led(&q) && !plainly_polar_place(&q) => polar_place = Some(c),

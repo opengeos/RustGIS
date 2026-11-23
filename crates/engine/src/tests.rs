@@ -49,6 +49,8 @@ mod write_notices;
 
 #[path = "tests/held_layers.rs"]
 mod held_layers;
+#[path = "tests/map_system_places.rs"]
+mod map_system_places;
 #[path = "tests/project_crs.rs"]
 mod project_crs;
 
