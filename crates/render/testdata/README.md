@@ -80,7 +80,8 @@ fb.save("test-fallback.otf")
 
 - `test-latin-catalog.otf`: the same original square outline, mapped to the 96 extended Latin
   letters used by the Azerbaijani and Vietnamese catalogs. It tests successful UI activation
-  after a complete font arrives, not typography. Generated from `test-fallback.otf`:
+  after a complete font arrives, not typography. Two additional kana (`あか`) exercise a
+  downloaded face filling a partial installed CJK font. Generated from `test-fallback.otf`:
 
 ```python
 from fontTools.ttLib import TTFont
@@ -89,5 +90,6 @@ chars = "ÀÁÂÇÍÔÖÚÜÝàáâãçèéêìíòóôõöùúüýăĐđğĩİ�
 for table in font["cmap"].tables:
     if table.isUnicode():
         table.cmap = {ord(c): "g0259" for c in chars}
+        table.cmap.update({ord(c): "g3042" for c in "あか"})
 font.save("test-latin-catalog.otf")
 ```

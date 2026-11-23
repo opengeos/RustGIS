@@ -276,7 +276,14 @@ impl Lang {
         self.0.letters.get_or_init(|| {
             let mut letters: Vec<char> = self.0.catalog().values().flat_map(|entries| entries.values()).flat_map(|text| text.chars())
                 .chain(self.name().chars())
-                .filter(|c| c.is_alphabetic() || matches!(*c, '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}'))
+                .filter(|c| c.is_alphabetic() || matches!(*c,
+                    '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}'
+                    // Supported scripts have combining marks outside the common mark blocks.
+                    | '\u{064b}'..='\u{065f}' | '\u{0670}'
+                    | '\u{0981}'..='\u{0983}' | '\u{09bc}' | '\u{09be}'..='\u{09c4}' | '\u{09c7}'..='\u{09c8}'
+                    | '\u{09cb}'..='\u{09cd}' | '\u{09d7}' | '\u{09e2}'..='\u{09e3}' | '\u{09fe}'
+                    | '\u{0eb1}' | '\u{0eb4}'..='\u{0ebc}' | '\u{0ec8}'..='\u{0ece}'
+                ))
                 .collect();
             letters.sort_unstable();
             letters.dedup();

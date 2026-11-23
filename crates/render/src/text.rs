@@ -168,16 +168,20 @@ pub(crate) fn invisible(c: char) -> bool {
 /// A CJK face for `region`, parsed once: an installed one, else the one the web app downloaded
 /// (`None` until it has). An installed face is looked for once; a downloaded one once it's there.
 fn cjk(region: CjkRegion) -> Option<&'static FontRef<'static>> {
+    installed_cjk(region).or_else(|| downloaded_cjk(region))
+}
+
+/// Parses an installed regional face once, independently of downloaded coverage.
+fn installed_cjk(region: CjkRegion) -> Option<&'static FontRef<'static>> {
     static FACES: [OnceLock<Option<FontRef<'static>>>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
     // A test can run in a process of its own with no installed face, as in the browser, so the
     // downloaded faces are tested alike whatever fonts the machine has.
     let none_installed = cfg!(test) && std::env::var_os("RUSTGIS_TEST_NO_INSTALLED_CJK").is_some();
-    let installed = if none_installed {
+    if none_installed {
         None
     } else {
         FACES.get(cjk_slot(region))?.get_or_init(|| crate::fonts::cjk_font(region).and_then(parse_cjk)).as_ref()
-    };
-    installed.or_else(|| downloaded_cjk(region))
+    }
 }
 
 /// The CJK face the web app downloaded for `region`, parsed once it's there.
@@ -289,7 +293,16 @@ fn glyph(c: char, f: &'static FontRef<'static>, sans: Option<&'static FontRef<'s
     }
     let not_kana_or_hangul = !matches!(CjkScript::of(c), Some(CjkScript::Kana | CjkScript::Hangul));
     let preferred = not_kana_or_hangul.then(crate::fonts::preferred_downloaded_cjk).flatten().and_then(downloaded_cjk);
-    preferred.into_iter().chain(cjk_order(c).into_iter().filter_map(cjk)).find_map(|f| {
+    cjk_glyph(c, preferred, |region| [installed_cjk(region), downloaded_cjk(region)])
+}
+
+/// Chooses a regional CJK glyph, retaining the preferred downloaded face for Han text.
+fn cjk_glyph(
+    c: char,
+    preferred: Option<&'static FontRef<'static>>,
+    candidates: impl Fn(CjkRegion) -> [Option<&'static FontRef<'static>>; 2],
+) -> Option<(&'static FontRef<'static>, GlyphId)> {
+    preferred.into_iter().chain(cjk_order(c).into_iter().flat_map(|region| candidates(region).into_iter().flatten())).find_map(|f| {
         let id = f.glyph_id(c);
         (id.0 != 0).then_some((f, id))
     })
@@ -1435,6 +1448,23 @@ mod coverage_tests {
             super::text_at(c, &ch.to_string(), 40.0, 20.0, 24.0, rustgis_map::Rgba::rgb(0, 0, 0), false, super::Align::Center, false)
         });
         assert!(pm.pixels().iter().any(|p| p.alpha() > 0), "the fallback glyph was not drawn");
+    }
+
+    /// An installed Japanese probe glyph must not hide a downloaded face's other kana.
+    #[test]
+    fn downloaded_cjk_fills_a_partial_installed_face() {
+        use crate::fonts::CjkRegion;
+        use ab_glyph::FontRef;
+        use std::sync::OnceLock;
+        static PARTIAL: OnceLock<FontRef<'static>> = OnceLock::new();
+        static COMPLETE: OnceLock<FontRef<'static>> = OnceLock::new();
+        let partial = PARTIAL.get_or_init(|| FontRef::try_from_slice(include_bytes!("../testdata/test-fallback.otf")).unwrap());
+        let complete = COMPLETE.get_or_init(|| FontRef::try_from_slice(include_bytes!("../testdata/test-latin-catalog.otf")).unwrap());
+        let select = |c| {
+            super::cjk_glyph(c, None, |region| if region == CjkRegion::Japanese { [Some(partial), Some(complete)] } else { [None, None] })
+        };
+        assert!(std::ptr::eq(select('あ').unwrap().0, partial), "the installed glyph keeps priority");
+        assert!(std::ptr::eq(select('か').expect("the downloaded face supplies the missing kana").0, complete));
     }
 
     /// Traditional Chinese is the last face tried for every script, so on the desktop a character

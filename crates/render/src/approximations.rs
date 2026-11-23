@@ -177,6 +177,24 @@ pub(crate) fn layer(name: Option<&str>) {
     });
 }
 
+/// Attributes nested drawing to its own layer, restoring the caller's layer on exit.
+/// Both transitions flush pending counts before their owning name changes.
+pub(crate) struct NamedLayer(Option<String>);
+
+impl NamedLayer {
+    pub(crate) fn new(name: &str) -> Self {
+        let previous = LAYER.with(|l| l.borrow().clone());
+        layer(Some(name));
+        Self(previous)
+    }
+}
+
+impl Drop for NamedLayer {
+    fn drop(&mut self) {
+        layer(self.0.as_deref());
+    }
+}
+
 /// Notes `n` lines drawn solid outside any layer (a legend's swatch, say). Its key ends where no
 /// layer's (`{layer}\0dashes`) can, whatever the layer is named, an empty name included.
 fn note_stray_dashes(n: u32) {

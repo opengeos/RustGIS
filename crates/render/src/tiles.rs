@@ -511,6 +511,7 @@ fn collect(d: rustgis_tiles::Drawn, t: &TileLayer, out: &mut TileOutput) {
         out.errors.push(format!("{name}: {e}"));
     }
     // The layer's opacity fades its text and icons as it fades the rest of what it draws (#1358).
+    let _layer = crate::approximations::NamedLayer::new(name);
     out.labels.extend(d.labels.into_iter().filter_map(tile_label).map(|(l, p)| (fade(l, t.opacity), p)));
 }
 
@@ -744,6 +745,46 @@ fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64,
             }
         }
         above = below;
+    }
+}
+
+#[cfg(test)]
+mod missing_label_tests {
+    /// Collection is shared by CPU, GPU and warped tiles, so scope the actual omission there.
+    #[test]
+    fn tile_label_omissions_name_the_tile_layer_and_restore_the_parent() {
+        let _ = crate::approximations::take();
+        crate::approximations::layer(Some("Parent"));
+        let layer = rustgis_map::TileLayer::new("Place tiles", rustgis_map::TileKind::Vector, "https://tiles.test/{z}/{x}/{y}.pbf");
+        let label = rustgis_tiles::Label {
+            text: "\u{10ffff}".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 12.0,
+            color: [0, 0, 0, 255],
+            halo: None,
+            bold: false,
+            italic: false,
+            letter_spacing: 0.0,
+            max_width: 0.0,
+            justify: 0.0,
+            priority: 0.0,
+            anchor: [0.0, 0.0],
+            offset: [0.0, 0.0],
+            angle: None,
+            icon: None,
+            collide: Default::default(),
+        };
+        let drawn = rustgis_tiles::Drawn { labels: vec![label], ..Default::default() };
+        let mut output = super::TileOutput::default();
+        super::collect(drawn, &layer, &mut output);
+        assert!(output.labels.is_empty());
+        crate::approximations::missing_glyphs(['\u{10fffe}']);
+        crate::approximations::layer(None);
+        let notices = crate::approximations::take();
+        assert!(notices.iter().any(|n| n.starts_with("Place tiles:") && n.contains("U+10FFFF")), "{notices:?}");
+        assert!(notices.iter().any(|n| n.starts_with("Parent:") && n.contains("U+10FFFE")), "{notices:?}");
+        assert_eq!(notices.len(), 2, "{notices:?}");
     }
 }
 
