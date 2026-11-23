@@ -193,7 +193,7 @@ fn a_wcs_coverage_is_asked_for_in_its_own_system() {
     let c = s.run("service.coverage", &p).unwrap();
     let get = c["url"].as_str().unwrap();
     assert!(
-        get.contains("&SUBSET=E(2600000,2600100)&SUBSET=N(1200000,1200100)&SCALESIZE=E(2048),N(2048)") && !get.contains("CRS="),
+        get.contains("&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/2056&SUBSET=E(2600000,2600100)&SUBSET=N(1200000,1200100)&SCALESIZE=E(2048),N(2048)"),
         "{get}"
     );
     let added = s.run("service.add", &p).unwrap();
@@ -260,7 +260,7 @@ fn a_coverage_answer_without_its_system_is_read_in_the_one_asked_for() {
     let p = json!({"url": url, "layer": "dem", "text": caps, "describe": describe, "bbox": "full"});
     let mut s = Session::new(Project::default());
     let c = s.run("service.coverage", &p).unwrap();
-    assert_eq!(c["crs"], "EPSG:2056", "{c}");
+    assert_eq!(c["coverageCrs"], "EPSG:2056", "{c}");
     let crs_of = |s: &Session, id: &serde_json::Value| {
         s.map().layer(id.as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().crs
     };
@@ -273,17 +273,27 @@ fn a_coverage_answer_without_its_system_is_read_in_the_one_asked_for() {
     let added =
         s.run("layer.addDownload", &json!({"id": 7, "url": get, "name": "Terrain", "coverage": true, "coverageCrs": "EPSG:2056"})).unwrap();
     assert_eq!(crs_of(&s, &added["layer"]), lv95);
-    // Without the system asked for (or with one that isn't an EPSG code of a projected system),
-    // its metres can't be placed: refused, as before.
+    // The address says the system too: without coverageCrs, as a script adds it.
+    s.downloaded.push((13, tiff.clone()));
+    let added = s.run("layer.addDownload", &json!({"id": 13, "url": get, "name": "Terrain", "coverage": true})).unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+    // An address that doesn't say it, without the system (or with one that isn't an EPSG code of
+    // a projected system): its metres can't be placed, refused as before.
+    let unsaid =
+        get.replace("&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/2056&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/2056", "");
+    assert_ne!(unsaid, get);
     for (id, crs) in [(8, None), (9, Some("EPSG:4326")), (10, Some("2056")), (11, Some("EPSG:x")), (12, Some("+proj=somerc"))] {
         s.downloaded.push((id, tiff.clone()));
-        let mut q = json!({"id": id, "url": get, "name": "Terrain", "coverage": true});
+        let mut q = json!({"id": id, "url": unsaid, "name": "Terrain", "coverage": true});
         if let Some(c) = crs {
             q["coverageCrs"] = json!(c);
         }
         assert!(s.run("layer.addDownload", &q).is_err(), "{crs:?}");
     }
-    // Added by address, as the command line adds service.coverage's address.
-    let added = s.run("layer.addUrl", &json!({"url": get, "name": "By address", "coverage": true, "coverageCrs": "EPSG:2056"})).unwrap();
+    // Added by address, as the command line adds service.coverage's address: the address says
+    // the system, or coverageCrs does.
+    let added = s.run("layer.addUrl", &json!({"url": get, "name": "By address", "coverage": true})).unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+    let added = s.run("layer.addUrl", &json!({"url": unsaid, "name": "Given", "coverage": true, "coverageCrs": "EPSG:2056"})).unwrap();
     assert_eq!(crs_of(&s, &added["layer"]), lv95);
 }

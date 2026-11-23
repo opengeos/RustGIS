@@ -741,19 +741,23 @@ fn add_bytes<const LIMIT: usize>(s: &mut Session, p: &Value) -> CmdResult {
     add_named_bytes(s, p, name, bytes, b(p, "zoom"))
 }
 
+/// The system a WCS coverage was asked for in, for an answer that doesn't say its own:
+/// `"coverageCrs"` (`service.coverage`'s, `EPSG:<code>`), else the one its GetCoverage address
+/// `url` names ([`coverage_request_system`](rustgis_data::ogc::coverage_request_system)).
+pub(crate) fn coverage_system(p: &Value, url: &str) -> Option<rustgis_data::raster::Crs> {
+    // Only `EPSG:<code>`: `Crs::parse` takes WKT and PROJ text too, and keeps a system for them.
+    let given = ps(p, "coverageCrs")
+        .and_then(|c| c.strip_prefix("EPSG:")?.parse::<u32>().ok())
+        .and_then(rustgis_data::raster::Crs::from_epsg)
+        .filter(|c| !c.is_geographic());
+    given.or_else(|| rustgis_data::ogc::coverage_request_system(url))
+}
+
 /// Adds a file's contents (an upload, a download) as its name's extension says. A PDF's page is
 /// drawn here, on the caller's thread, unless it was drawn already ([`add_named_bytes_read`]): the
 /// desktop app's downloads land with theirs drawn off the frame ([`download_page`]) and its file
 /// drops are read by path on the read queue, so a caller here is the command line, Python or a
 /// script, with no window to hold.
-/// The system a WCS coverage was asked for in (`"coverageCrs"`, internal: the GetCoverage
-/// request's, from `service.coverage`), for an answer that doesn't say its own.
-pub(crate) fn coverage_system(p: &Value) -> Option<rustgis_data::raster::Crs> {
-    // Only `EPSG:<code>`: `Crs::parse` takes WKT and PROJ text too, and keeps a system for them.
-    let code: u32 = ps(p, "coverageCrs")?.strip_prefix("EPSG:")?.parse().ok()?;
-    rustgis_data::raster::Crs::from_epsg(code).filter(|c| !c.is_geographic())
-}
-
 pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: Vec<u8>, zoom: Option<bool>) -> CmdResult {
     add_named_bytes_read(s, p, name, bytes, zoom, None, None)
 }

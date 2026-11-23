@@ -6582,7 +6582,7 @@ impl RustGisApp {
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
                         let mut p = json!({"url": get, "name": title, "coverage": true});
                         // The system it was asked in, for an answer that doesn't say it.
-                        if let Some(crs) = c.get("crs").and_then(Value::as_str) {
+                        if let Some(crs) = c.get("coverageCrs").and_then(Value::as_str) {
                             p["coverageCrs"] = json!(crs);
                         }
                         // Its service's document came from the internet: so does the coverage.

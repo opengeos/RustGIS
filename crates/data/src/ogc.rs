@@ -2215,7 +2215,9 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
 
 /// A WCS 2.0 coverage's grid axis labels (its `RectifiedGrid`'s), in the order of the axes of
 /// its system as the envelope gives them: each grid axis goes with the system axis its offset
-/// vector runs along. `None` when the grid doesn't say, or its labels or offsets don't fit.
+/// vector runs along, else (offsets that don't say) in the grid's own order, as grids are most
+/// often laid out. Scaling must name grid axes, so the grid's labels are used whenever it has
+/// two. `None` when it doesn't.
 fn grid_labels(root: &Node) -> Option<[String; 2]> {
     let grid = root.descendants().find(|n| n.is_element() && local(n) == "RectifiedGrid")?;
     let text = child_text(&grid, "axisLabels").or_else(|| grid.attribute("axisLabels").map(str::to_string))?;
@@ -2231,12 +2233,25 @@ fn grid_labels(root: &Node) -> Option<[String; 2]> {
         let (x, y) = (c.first()?.abs(), c.get(1)?.abs());
         (x != y).then_some(usize::from(y > x))
     };
-    let offsets: Vec<usize> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect::<Option<_>>()?;
-    match offsets[..] {
-        [0, 1] => Some([l0.to_string(), l1.to_string()]),
-        [1, 0] => Some([l1.to_string(), l0.to_string()]),
-        _ => None,
+    let offsets: Option<Vec<usize>> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect();
+    match offsets.as_deref() {
+        Some([1, 0]) => Some([l1.to_string(), l0.to_string()]),
+        _ => Some([l0.to_string(), l1.to_string()]),
     }
+}
+
+/// The projected system a WCS GetCoverage address asks its coverage in, when the address says
+/// one (WCS 2.0's `OUTPUTCRS`, WCS 1.0's `RESPONSE_CRS`, else its `CRS`): a GeoTIFF answer that
+/// doesn't say its system is read in it. `None` for longitude/latitude, a system RustGIS doesn't
+/// read, and any other address.
+pub fn coverage_request_system(url: &str) -> Option<crate::raster::Crs> {
+    let is = |key: &str, value: &str| query_value(url, key).is_some_and(|v| v.eq_ignore_ascii_case(value));
+    if !(is("service", "wcs") && is("request", "getcoverage")) {
+        return None;
+    }
+    let decoded = |v: &str| v.replace("%3A", ":").replace("%3a", ":").replace("%2F", "/").replace("%2f", "/");
+    let named = ["outputcrs", "response_crs", "crs"].iter().find_map(|k| query_value(url, k)).map(decoded)?;
+    projected_system(&named).map(|(_, crs)| crs)
 }
 
 /// Whether a coverage's axis labels name the north-south axis first (`N E`), the east-west one
@@ -2340,13 +2355,15 @@ pub fn get_coverage(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> (Strin
         let [x0, y0, x1, y1] = b;
         let (pw, ph) = coverage_size(b);
         let q = match (&own.axes, c.version.starts_with('2')) {
-            // Without a CRS asked for, WCS 2.0 subsets and answers in the coverage's own; scaling
-            // names the grid's axes.
+            // In the coverage's own system, named (as EPSG:4326 was: the CRS extension the
+            // servers answering that request have), so the address says which system its answer
+            // is in ([`coverage_request_system`]); scaling names the grid's axes.
             (Some((e, n)), true) => Some(format!(
-                "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSET={e}({x0},{x1})&SUBSET={n}({y0},{y1})&SCALESIZE={ge}({pw}),{gn}({ph})",
+                "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSETTINGCRS={crs}&OUTPUTCRS={crs}&SUBSET={e}({x0},{x1})&SUBSET={n}({y0},{y1})&SCALESIZE={ge}({pw}),{gn}({ph})",
                 c.version,
                 encode(&c.id),
                 encode(&info.format),
+                crs = format!("http://www.opengis.net/def/crs/EPSG/0/{}", own.crs.epsg()),
                 ge = own.grid_axes.as_ref().map_or(e, |g| &g.0),
                 gn = own.grid_axes.as_ref().map_or(n, |g| &g.1),
             )),
@@ -8737,7 +8754,7 @@ mod tests {
         let whole = get_coverage_url(&c2, &east_first, east_first.bbox.unwrap());
         assert_eq!(
             whole,
-            "https://x.org/wcs?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dem&FORMAT=image%2Ftiff&SUBSET=E(2590000,2610000)&SUBSET=N(1190000,1210000)&SCALESIZE=E(2048),N(2048)"
+            "https://x.org/wcs?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dem&FORMAT=image%2Ftiff&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/2056&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/2056&SUBSET=E(2590000,2610000)&SUBSET=N(1190000,1210000)&SCALESIZE=E(2048),N(2048)"
         );
         assert_eq!(get_coverage_url(&c2, &north_first, north_first.bbox.unwrap()), whole);
         // Part of it: the area's box in LV95, within the envelope.
@@ -8749,7 +8766,25 @@ mod tests {
         };
         let ((x0, x1), (y0, y1)) = (subset(&part, "E"), subset(&part, "N"));
         assert!(x0 > 2_590_000.0 && x1 < 2_610_000.0 && (y0, y1).1 == 1_210_000.0 && y0 > 1_190_000.0, "{part}");
-        assert!(!part.contains("OUTPUTCRS"), "{part}");
+        assert!(part.contains("&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/2056&"), "{part}");
+        // The address says the system it asks in, for an answer that doesn't say its own.
+        assert_eq!(coverage_request_system(&part), Some(lv95));
+        assert_eq!(
+            coverage_request_system(&part.replace(
+                "OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/2056",
+                "OUTPUTCRS=http%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2FEPSG%2F0%2F2056"
+            )),
+            Some(lv95)
+        );
+        assert_eq!(coverage_request_system(&part.replace("EPSG/0/2056", "EPSG/0/4326")), None);
+        assert_eq!(
+            coverage_request_system(
+                "https://x.org/wcs?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=dem&CRS=EPSG:2056&BBOX=1,2,3,4"
+            ),
+            Some(lv95)
+        );
+        assert_eq!(coverage_request_system("https://x.org/wcs?SERVICE=WCS&REQUEST=GetCoverage&CRS=EPSG:2056&RESPONSE_CRS=EPSG:4326"), None);
+        assert_eq!(coverage_request_system("https://x.org/wms?SERVICE=WMS&REQUEST=GetMap&CRS=EPSG:2056"), None);
         // EPSG's axis order decides, not the labels' names: LV03 names its east axis Y, and
         // Gauss-Krüger zone 3 its north axis X.
         let lv03 =
@@ -8792,7 +8827,11 @@ mod tests {
         assert_eq!(ji.native.unwrap().grid_axes, Some(("j".into(), "i".into())));
         let unmatched =
             parse_describe(&c2, gridded("i j", "<offsetVector>10 10</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
-        assert!(get_coverage_url(&c2, &unmatched, unmatched.bbox.unwrap()).contains("SCALESIZE=E(2048),N(2048)"));
+        // Offsets that don't say: still the grid's labels (scaling must name grid axes), in its
+        // own order.
+        assert!(get_coverage_url(&c2, &unmatched, unmatched.bbox.unwrap()).contains("SCALESIZE=i(2048),j(2048)"));
+        let no_offsets = parse_describe(&c2, gridded("i j", "").as_bytes()).unwrap();
+        assert_eq!(no_offsets.native.unwrap().grid_axes, Some(("i".into(), "j".into())));
         // North first (Gauss-Krüger zone 3, `N E`): the grid's axes follow the file's order, then
         // turn with the system's.
         let gk = desc("http://www.opengis.net/def/crs/EPSG/0/31467", "N E", "5420000 3480000", "5440000 3500000").replace(
