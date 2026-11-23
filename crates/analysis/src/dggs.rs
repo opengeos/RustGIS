@@ -34,10 +34,10 @@ pub const MAX_RESOLUTION: i32 = 30;
 /// How far over [`MAX_CELLS`] an area's [`estimate`] may go before it's refused without being
 /// covered: the estimate is rough, and the exact count still applies after.
 const ESTIMATE_MARGIN: f64 = 2.0;
-/// The most cells a run's coverings test, and rows an edge crosses past its own band, before keeping those in the area
-/// (S2's descent, the hexagon grid's rows), over all its polygons ([`Work`]): past it the run is
-/// refused, as one over the cap. S2's coarser cells on the way down are paced, not counted: there
-/// are a third as many of them as of the cells tested.
+/// The most cells a run's coverings test, and rows an edge crosses past the two its band always
+/// touches, before keeping those in the area (S2's descent, the hexagon grid's rows), over all its
+/// polygons ([`Work`]): past it the run is refused, as one over the cap. S2's coarser cells on the
+/// way down are paced, not counted: there are a third as many of them as of the cells tested.
 const MAX_WORK: u64 = 4 * MAX_CELLS;
 
 /// A grid system.
@@ -853,6 +853,8 @@ impl<'a> Grid<'a> {
         }
         let rect = s2::rect::Rect::from_degrees(e.min_y.max(-90.0), e.min_x, e.max_y.min(90.0), e.max_x);
         let prepared = PreparedGeometry::from(polygon);
+        // Each test locates the cell against the whole outline, so it's paced by its vertices.
+        let per_test = side.iter().map(Vec::len).fold(64usize, usize::saturating_add);
         let mut stack: Vec<s2::cell::Cell> = (0..6).map(|f| s2::cell::Cell::from(s2::cellid::CellID::from_face(f))).collect();
         while let Some(cell) = stack.pop() {
             if !rect.intersects_cell(&cell) {
@@ -863,7 +865,7 @@ impl<'a> Grid<'a> {
                 stack.extend(cell.children().into_iter().flatten());
                 continue;
             }
-            work.spend(1, 64, self.res)?;
+            work.spend(1, per_test, self.res)?;
             let keep = if center {
                 let c = s2::latlng::LatLng::from(cell.center());
                 prepared.relate(&geo::Point::new(c.lng.deg(), c.lat.deg())).is_intersects()
@@ -992,8 +994,9 @@ fn overlaps(m: &geo::relate::IntersectionMatrix) -> bool {
 }
 
 /// What a run's coverings look at, over all its polygons: the cells tested (S2's and the hexagon
-/// grid's) and the rows an edge crosses past its own band, capped at [`MAX_WORK`] so many polygons that each stay under
-/// the cap don't add up to hours; and its pace, so Cancel stops it soon.
+/// grid's) and the rows an edge crosses past the two its band always touches, capped at
+/// [`MAX_WORK`] so many polygons that each stay under the cap don't add up to hours; and its pace,
+/// so Cancel stops it soon.
 #[derive(Default)]
 struct Work {
     looked: u64,
@@ -1760,7 +1763,7 @@ mod tests {
         let p = serde_json::json!({"system": "Hexagon", "resolution": 2, "area": "Input Layer", "input": "pts"});
         assert!(!layer(grid(&One(d, None), &p).unwrap()).features.is_empty());
         // Each cell's test grows with the outline, so Cancel is looked at by its vertices too.
-        let looks = |n: usize| {
+        let looks = |system: &str, res: i32, n: usize| {
             let ring: Vec<Coord> = (0..=n)
                 .map(|i| {
                     let a = i as f64 / n as f64 * 2.0 * PI;
@@ -1769,12 +1772,14 @@ mod tests {
                 .collect();
             let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
             d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
-            let p = serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"});
+            let p = serde_json::json!({"system": system, "resolution": res, "area": "Input Layer", "input": "pts"});
             let cancel = control::Control::cancelled_at_look(u64::MAX);
             crate::run_under("Grid", &cancel, || grid(&One(d, None), &p)).unwrap();
             cancel.looked()
         };
-        assert!(looks(100_000) >= looks(1_000) + 2);
+        for (system, res) in [("Hexagon", 5), ("S2", 7)] {
+            assert!(looks(system, res, 100_000) >= looks(system, res, 1_000) + 2, "{system}");
+        }
     }
 
     /// A zigzag outline whose edges each cross many rows is still held to the work limit, with
