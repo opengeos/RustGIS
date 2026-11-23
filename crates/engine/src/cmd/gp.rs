@@ -1460,7 +1460,10 @@ fn inputs_of<'a>(
 /// computer ([`rustgis_map::raster::RasterLayer::tiled`]), each read again from the file for the
 /// run, by lowercase name: such a layer holds only the small overview the map draws from zoomed
 /// out, and a tool reads the finest level of the file it can hold, the full image when it fits
-/// (#2761). Read on the run's thread, stopping on its Cancel; one read from an overview is said.
+/// (#2761). Read on the run's thread; one read from an overview is said. The GeoTIFF reader looks
+/// at Cancel between its chunks through the progress probe, which a run from [`tool_start`]
+/// installs before reading its inputs; a run made where the caller waits stops there only when
+/// the caller installed one, else after the read.
 /// Read only for [`Tiled::File`]: for [`Tiled::Overview`] each such layer's held overview is said,
 /// and for [`Tiled::ByPath`] nothing is read or said.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1505,12 +1508,16 @@ pub(crate) fn tiled_inputs(
             let r = match BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned())) {
                 Some(r) => r,
                 None => {
+                    #[cfg(test)]
+                    TILED_READS.with(|n| n.set(n.get() + 1));
                     let r = std::sync::Arc::new(
                         rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None)
                             .map_err(|e| format!("{}: {e}", l.name))?,
                     );
                     BATCH_READS.with(|b| {
+                        // The last file read alone: a batch over several files holds one.
                         if let Some(reads) = b.borrow_mut().as_mut() {
+                            reads.clear();
                             reads.insert(path.to_string(), r.clone());
                         }
                     });
@@ -1531,11 +1538,25 @@ pub(crate) fn tiled_inputs(
 
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
-    /// The raster files read in place that a batch's items read ([`tiled_inputs`]), by path, kept
-    /// while the batch runs on this thread ([`BatchReads`]): its items read each file once, not
-    /// once an item. `None` outside a batch, where nothing is kept past the run.
+    /// The raster file read in place that a batch's items last read ([`tiled_inputs`]), by path,
+    /// kept while the batch runs on this thread ([`BatchReads`]): items reading the same file read
+    /// it once, not once an item, and a batch over several files holds one at a time. `None`
+    /// outside a batch, where nothing is kept past the run.
     static BATCH_READS: std::cell::RefCell<Option<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many raster files read in place [`tiled_inputs`] has read from their file on this
+    /// thread, under test.
+    pub(crate) static TILED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a batch's reads are kept on this thread now ([`BATCH_READS`]), under test.
+#[cfg(test)]
+pub(crate) fn batch_reads_kept() -> bool {
+    BATCH_READS.with(|b| b.borrow().is_some())
 }
 
 /// Keeps [`BATCH_READS`] while it lives: the outermost batch on this thread starts it and lets

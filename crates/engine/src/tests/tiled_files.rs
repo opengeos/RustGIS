@@ -242,8 +242,18 @@ fn a_batch_over_a_tiled_file_reads_the_file_for_each_item() {
         std::fs::write(&zone, box_around).unwrap();
         s.run("layer.addData", &json!({"path": zone.display().to_string(), "name": name})).unwrap();
     }
+    let reads = || crate::cmd::gp::TILED_READS.with(std::cell::Cell::get);
+    let before = reads();
     let p = json!({"tool": "zonalStats", "inputs": ["one", "two"], "param": "polygons", "params": {"raster": "checks"}, "outputPattern": "{input}_stats"});
     let r = s.run("gp.batch", &p).unwrap();
+    assert_eq!(reads() - before, 1, "the file read once for both items");
+    assert!(!crate::cmd::gp::batch_reads_kept(), "nothing kept once the batch ends");
+    // Outside a batch, each run reads the file again: nothing is kept between runs.
+    let before = reads();
+    for out in ["again_1", "again_2"] {
+        s.run("gp.run", &json!({"tool": "zonalStats", "params": {"raster": "checks", "polygons": "one", "output": out}})).unwrap();
+    }
+    assert_eq!(reads() - before, 2);
     for name in ["one_stats", "two_stats"] {
         let out = &s.map().layer_by_name(name).unwrap_or_else(|| panic!("no {name}: {r}")).dataset;
         let count = out.fields.iter().position(|f| f.name.ends_with("_count")).unwrap();
