@@ -62,7 +62,7 @@ fn root() -> PathBuf {
 }
 
 /// The `.rs` files of every crate's and app's `src`, leaving out test files and directories by name
-/// (`tests.rs`, `*_tests.rs`, `*_test.rs`, `tests/`); a test-only module in a file with another name
+/// (`tests.rs`, `*_tests.rs`, `tests/`); a test-only module in a file with another name
 /// (`#[cfg(test)] mod legacy;`) is scanned. A directory or entry that can't be read fails the test: a
 /// file left out unseen would pass it.
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -76,7 +76,7 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
             if name != "tests" && name != "benches" {
                 sources(&path, out);
             }
-        } else if name.ends_with(".rs") && name != "tests.rs" && !name.ends_with("_tests.rs") && !name.ends_with("_test.rs") {
+        } else if name.ends_with(".rs") && name != "tests.rs" && !name.ends_with("_tests.rs") {
             out.push(path);
         }
     }
