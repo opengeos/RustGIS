@@ -138,7 +138,7 @@ mod tests {
             count: Some(0),
             crs: "EPSG:4326".into(),
             indexed: true,
-            notes: Vec::new(),
+            notes: Default::default(),
             zm_dropped: false,
         };
         let source: Arc<dyn FeatureSource> = Arc::new(Empty(info.clone()));
