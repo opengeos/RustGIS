@@ -41,9 +41,12 @@ pub(crate) struct SavePromptState {
     /// The documents picked projects were copied from, by the copy's path, that a phone may write
     /// back to ([`RustGisApp::picked_document`]).
     documents: std::collections::HashMap<std::path::PathBuf, String>,
-    /// The document the project ([`rustgis_engine::Session::opened`]) was last saved as through
-    /// the picker, which it is written back to from then on.
-    saved_as: Option<(u64, String)>,
+    /// Where Save puts each project ([`rustgis_engine::Session::file_identity`], which Undo puts
+    /// back with it) once a save has decided it: the document a picker save wrote, which Save
+    /// writes back to from then on, or `None` for the picker (a picker save the phone can't write
+    /// back to, or a write-back that failed). A project with none here is written back to the
+    /// document it was opened from.
+    targets: std::collections::HashMap<u64, Option<String>>,
     /// The document a picker save reported, until its result comes.
     reported: Option<String>,
 }
@@ -51,27 +54,25 @@ pub(crate) struct SavePromptState {
 struct PendingSave {
     snapshot: rustgis_engine::platform::SaveSnapshot,
     after: Option<Discard>,
-    /// The project saved ([`rustgis_engine::Session::opened`]).
-    opened: u64,
+    /// The project saved ([`rustgis_engine::Session::file_identity`]).
+    project: u64,
     /// The document written back to, or `None` for a picker save.
     document: Option<String>,
 }
 
-/// The document the open project is written back to on Save: the one it was last saved as, or
+/// The document the open project is written back to on Save: where its last save decided, or else
 /// the one it was opened from. A field package is never written over by Save: it goes back with
 /// Send Field Package.
 fn document(app: &RustGisApp) -> Option<String> {
     let prompt = &app.save_prompt;
-    if let Some((opened, document)) = &prompt.saved_as
-        && *opened == app.session.opened
-    {
-        return Some(document.clone());
+    if let Some(target) = prompt.targets.get(&app.session.file_identity()) {
+        return target.clone();
     }
     if app.session.opened_package().is_some() {
         return None;
     }
     // Only a project file: a package opened (`.rgispkg`) isn't written over by its project's text.
-    let project = app.session.path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("rgis")));
+    let project = app.session.path.as_ref().filter(|p| rustgis_engine::project::is_project_file(&p.to_string_lossy()));
     project.and_then(|path| prompt.documents.get(path)).cloned()
 }
 
@@ -97,7 +98,7 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     save(&file, text.into_bytes(), target.as_deref())?;
     app.save_prompt.reported = None;
     app.save_prompt.pending =
-        Some(PendingSave { snapshot: app.session.save_snapshot(), after: None, opened: app.session.opened, document: target });
+        Some(PendingSave { snapshot: app.session.save_snapshot(), after: None, project: app.session.file_identity(), document: target });
     report.notify(&mut app.session);
     for note in notes {
         app.session.notify(note, false);
@@ -116,25 +117,18 @@ impl RustGisApp {
             Err(error) => {
                 self.session.notify(error, true);
                 // A document that couldn't be written back is asked for again: the next Save
-                // shows the picker.
-                if let Some(failed) = pending.and_then(|p| p.document) {
-                    let prompt = &mut self.save_prompt;
-                    prompt.documents.retain(|_, d| *d != failed);
-                    if prompt.saved_as.as_ref().is_some_and(|(_, d)| *d == failed) {
-                        prompt.saved_as = None;
-                    }
+                // shows the picker. A picker closed with no choice changes nothing.
+                if let Some(failed) = pending.filter(|p| p.document.is_some()) {
+                    self.save_prompt.targets.insert(failed.project, None);
                 }
                 return;
             }
         }
         let Some(saved) = pending else { return };
-        // Saved as a document the phone may write back to: Save writes there from now on, for
-        // as long as this project is open.
-        if let Some(document) = reported
-            && saved.document.is_none()
-            && saved.opened == self.session.opened
-        {
-            self.save_prompt.saved_as = Some((saved.opened, document));
+        // Saved through the picker: Save writes back to the document it wrote from now on, or
+        // asks again where the phone can't write it back; never to the one before.
+        if saved.document.is_none() {
+            self.save_prompt.targets.insert(saved.project, reported);
         }
         if self.session.mark_snapshot_saved(saved.snapshot)
             && let Some(what) = saved.after
@@ -527,8 +521,9 @@ mod tests {
     }
 
     /// On a phone, Save writes back to the document the project was opened from, and Save As asks
-    /// where; a document saved as through the picker is written back to after, for that project
-    /// only, and one that couldn't be written is asked for again.
+    /// where. A picker save decides where Save goes next: the document it wrote where the phone may
+    /// write it back, else the picker, never the document before. A write-back that failed asks
+    /// again. Each project keeps its own, through Undo across a replacement.
     #[test]
     fn native_save_writes_back_to_the_opened_document() {
         use std::{cell::RefCell, rc::Rc};
@@ -542,28 +537,47 @@ mod tests {
         let copy = std::path::PathBuf::from("/picked/1/0/site.rgis");
         h.state_mut().picked_document(copy.clone(), "content://site".into());
         h.state_mut().session.path = Some(copy.clone());
-        let save = |h: &mut Harness, id: &str, result: Result<String, String>| {
+        // Saves with an edit before each, answered with `result`; a picker save may report the
+        // document it wrote first.
+        let save = |h: &mut Harness, id: &str, reported: Option<&str>, result: Result<String, String>| {
             edit(h, id);
             h.state_mut().run(id, Value::Null).unwrap();
+            if let Some(document) = reported {
+                h.state_mut().project_document(document.into());
+            }
             h.state_mut().complete_project_save(result);
         };
-        save(&mut h, "ui.save", Ok("site.rgis".into()));
-        save(&mut h, "ui.saveAs", Ok("copy.rgis".into()));
+        let last = |asked: &Rc<RefCell<Vec<Option<String>>>>| asked.borrow().last().cloned().flatten();
+        save(&mut h, "ui.save", None, Ok("site.rgis".into()));
+        assert_eq!(last(&asked).as_deref(), Some("content://site"));
         // The write back failed: the next Save asks where.
-        save(&mut h, "ui.save", Err("site.rgis may be damaged".into()));
-        save(&mut h, "ui.save", Ok("site.rgis".into()));
-        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), None, Some("content://site".to_string()), None]);
-        // Saved as a document the phone may write back to: Save writes there from now on.
-        edit(&mut h, "Saved as");
+        save(&mut h, "ui.save", None, Err("site.rgis may be damaged".into()));
+        save(&mut h, "ui.save", None, Err("no place was chosen".into()));
+        assert_eq!(last(&asked), None);
+        // Saved as a document the phone may write back to: Save writes there.
+        save(&mut h, "ui.saveAs", Some("content://other"), Ok("other.rgis".into()));
+        save(&mut h, "ui.save", None, Ok("other.rgis".into()));
+        assert_eq!(last(&asked).as_deref(), Some("content://other"));
+        // Saved as one it can't: Save asks, and never goes back to the one before.
+        save(&mut h, "ui.saveAs", None, Ok("elsewhere.rgis".into()));
+        save(&mut h, "ui.save", None, Ok("elsewhere.rgis".into()));
+        assert_eq!(last(&asked), None);
+        save(&mut h, "ui.saveAs", Some("content://kept"), Ok("kept.rgis".into()));
+        // Another project (opened by a script's step, which Undo goes back across), saved as its
+        // own document; Undo brings back the first, and its own.
+        h.state_mut().run("script.run", json!({"script": "project.new {}"})).unwrap();
+        assert_eq!(h.state().session.path, None);
         h.state_mut().run("ui.saveAs", Value::Null).unwrap();
-        h.state_mut().project_document("content://other".into());
-        h.state_mut().complete_project_save(Ok("other.rgis".into()));
-        save(&mut h, "ui.save", Ok("other.rgis".into()));
-        assert_eq!(asked.borrow().last(), Some(&Some("content://other".to_string())));
-        // Another project opened: neither document is its own.
-        h.state_mut().run("project.new", Value::Null).unwrap();
-        save(&mut h, "ui.save", Ok("Untitled.rgis".into()));
-        assert_eq!(asked.borrow().last(), Some(&None));
+        h.state_mut().project_document("content://fresh".into());
+        h.state_mut().complete_project_save(Ok("fresh.rgis".into()));
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().complete_project_save(Ok("fresh.rgis".into()));
+        assert_eq!(last(&asked).as_deref(), Some("content://fresh"));
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        assert_eq!(h.state().session.path.as_deref(), Some(copy.as_path()));
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().complete_project_save(Ok("kept.rgis".into()));
+        assert_eq!(last(&asked).as_deref(), Some("content://kept"));
     }
 
     /// A direct Save As writes the submitted state. Any edit after submission is still unsaved.

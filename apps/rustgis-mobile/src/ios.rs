@@ -180,7 +180,9 @@ impl PickerDelegate {
                 } else {
                     // The picker has copied the file where the user chose. A project saved where
                     // RustGIS may write it back names that place first, for Save to write to.
-                    if let Some(document) = urls.first().filter(|_| project).and_then(|url| scoped(url, || bookmark(url))) {
+                    if let Some(document) =
+                        urls.first().filter(|_| project).and_then(|url| scoped(url, || writable_bookmark(url)).flatten())
+                    {
                         shared.add(Event::ProjectDocument(document));
                     }
                     Ok(name)
@@ -286,8 +288,12 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) -> bool {
     }
     let copied = coordinated_copy(url, folder, &file);
     // A project file is kept track of, for Save to write it back where it is.
-    let document =
-        if purpose == "project" && name.to_ascii_lowercase().ends_with(".rgis") && copied.is_ok() { bookmark(url) } else { None };
+    // Only inside its scope: one the system gave none is out of reach to write later.
+    let document = if purpose == "project" && rustgis_engine::project::is_project_file(&name) && copied.is_ok() && scoped {
+        writable_bookmark(url)
+    } else {
+        None
+    };
     if scoped {
         // SAFETY: the scope `startAccessingSecurityScopedResource` started above.
         unsafe { url.stopAccessingSecurityScopedResource() };
@@ -375,16 +381,27 @@ fn bookmark(url: &NSURL) -> Option<String> {
     Some(base64::engine::general_purpose::STANDARD.encode(data.to_vec()))
 }
 
-/// Runs `inside` within `url`'s security scope, where it has one.
-fn scoped<T>(url: &NSURL, inside: impl FnOnce() -> T) -> T {
-    // SAFETY: a URL a document picker returned or a bookmark resolved; the scope ends below.
-    let started = unsafe { url.startAccessingSecurityScopedResource() };
-    let result = inside();
-    if started {
-        // SAFETY: the scope started above.
-        unsafe { url.stopAccessingSecurityScopedResource() };
+/// The document at `url` as a bookmark ([`bookmark`]), when the app may write it: a file it can
+/// write where it is. Called inside its security scope.
+fn writable_bookmark(url: &NSURL) -> Option<String> {
+    let path = url.path()?;
+    if !objc2_foundation::NSFileManager::defaultManager().isWritableFileAtPath(&path) {
+        return None;
     }
-    result
+    bookmark(url)
+}
+
+/// Runs `inside` within `url`'s security scope; `None` when the system gives none (the document is
+/// out of the app's reach).
+fn scoped<T>(url: &NSURL, inside: impl FnOnce() -> T) -> Option<T> {
+    // SAFETY: a URL a document picker returned or a bookmark resolved; the scope ends below.
+    if !unsafe { url.startAccessingSecurityScopedResource() } {
+        return None;
+    }
+    let result = inside();
+    // SAFETY: the scope started above.
+    unsafe { url.stopAccessingSecurityScopedResource() };
+    Some(result)
 }
 
 /// Writes `bytes` over the document `document` names ([`bookmark`]), inside its security scope
@@ -405,7 +422,13 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
         )
     }
     .map_err(|e| e.localizedDescription().to_string())?;
-    scoped(&url, || {
+    // A stale bookmark still finds the document (moved or renamed since): it is written there.
+    let _ = stale;
+    let written = scoped(&url, || {
+        // Checked again: leave to write it may have gone since it was opened.
+        if !url.path().is_some_and(|path| objc2_foundation::NSFileManager::defaultManager().isWritableFileAtPath(&path)) {
+            return Err(i18n::fmt("the file can't be written to", &[]));
+        }
         let result: RefCell<Option<Result<(), String>>> = RefCell::new(None);
         let contents = objc2_foundation::NSData::with_bytes(bytes);
         let writer = block2::RcBlock::new(|to: std::ptr::NonNull<NSURL>| {
@@ -430,7 +453,8 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
             (None, Some(error)) => Err(error.localizedDescription().to_string()),
             (None, None) => Err(i18n::fmt("the system didn't let it be written", &[])),
         }
-    })
+    });
+    written.unwrap_or_else(|| Err(i18n::fmt("the system no longer lets RustGIS reach it", &[])))
 }
 
 /// A document's file name, without anything that would put it outside the folder it is copied
@@ -1002,8 +1026,10 @@ impl Ios {
         };
         let url = NSURL::fileURLWithPath(&NSString::from_str(&temporary.to_string_lossy()));
         let urls = NSArray::from_retained_slice(&[url]);
+        // A project is moved, not copied: the place it lands in is then the app's to write again,
+        // for Save to write it back there. Other files go as copies.
         let picker =
-            UIDocumentPickerViewController::initForExportingURLs_asCopy(UIDocumentPickerViewController::alloc(self.mtm), &urls, true);
+            UIDocumentPickerViewController::initForExportingURLs_asCopy(UIDocumentPickerViewController::alloc(self.mtm), &urls, !project);
         let delegate = PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name, temporary, project });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));

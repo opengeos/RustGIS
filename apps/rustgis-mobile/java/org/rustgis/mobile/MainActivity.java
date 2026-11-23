@@ -27,6 +27,9 @@ import java.util.ArrayList;
  *   project-document     document    the document a project save is about to report written,
  *                                    which RustGIS may write back to later
  *   project-saved        name        a project written where the user chose, or written back
+ *   write-back-failed    name  reason  [kept]
+ *                                    a project not written back: the document is as it was, or,
+ *                                    with kept, may be damaged and the project is kept there
  *   project-save-failed  reason      a project save that failed or was cancelled
  *   position  lon  lat  accuracy  time  elapsed   where the device is (accuracy in metres, or
  *                                        empty; time in milliseconds since 1970; elapsed in
@@ -89,8 +92,8 @@ public class MainActivity extends NativeActivity {
     private String saveName = "";
     private byte[] saveBytes;
     private boolean saveProject;
-    /** A project is being written back to its document (the main thread's alone). */
-    private boolean writing;
+    /** A project is being written back to its document (set on the main thread, cleared by its worker). */
+    private volatile boolean writing;
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -486,31 +489,45 @@ public class MainActivity extends NativeActivity {
      * Writes a project back to the document it was opened from or last saved as, with no picker.
      * A complete copy is written to the app's storage first: if the document can't be opened for
      * writing, it is left as it was and the copy goes; if writing it fails partway, it may be
-     * damaged, and the copy is kept and named. Either way the result is a project-saved or
-     * project-save-failed event.
+     * damaged, and the copy is kept and named. The result is a project-saved or write-back-failed
+     * event (project-save-failed when another save is under way).
      */
     public void writeBack(final String document, final String name, final byte[] bytes) {
+        // Counted before anything is posted: the Rust side keeps looking until the answer comes,
+        // as no picker will wake it.
+        synchronized (events) {
+            asked++;
+        }
         runOnUiThread(() -> {
             if (saveBytes != null || picking || writing) {
                 saveFailed(true, name, "another file is being chosen or saved.");
+                answered();
                 return;
             }
             writing = true;
-            synchronized (events) {
-                asked++;
-            }
-            new Thread(() -> {
-                try {
-                    writeBackNow(Uri.parse(document), name, bytes);
-                } finally {
-                    runOnUiThread(() -> writing = false);
+            try {
+                new Thread(() -> {
+                    String result;
+                    try {
+                        result = writeBackNow(Uri.parse(document), name, bytes);
+                    } catch (Throwable e) {
+                        result = writeBackFailed(name, e, null);
+                    }
+                    // Free for the next save before it is told this one is done.
+                    writing = false;
+                    add(result);
                     answered();
-                }
-            }).start();
+                }).start();
+            } catch (Throwable e) {
+                writing = false;
+                add(writeBackFailed(name, e, null));
+                answered();
+            }
         });
     }
 
-    private void writeBackNow(Uri uri, String name, byte[] bytes) {
+    /** Writes the project back; returns the event that says how it went. */
+    private String writeBackNow(Uri uri, String name, byte[] bytes) {
         // The complete copy, kept until the document holds the project.
         File copy;
         try {
@@ -518,14 +535,13 @@ public class MainActivity extends NativeActivity {
             if (!dir.isDirectory() && !dir.mkdirs()) {
                 throw new java.io.IOException("the app's storage can't be written to");
             }
-            copy = new File(dir, displayName(uri).isEmpty() ? name : displayName(uri));
+            copy = new File(dir, displayName(uri));
             try (FileOutputStream out = new FileOutputStream(copy)) {
                 out.write(bytes);
                 out.getFD().sync();
             }
         } catch (Throwable e) {
-            saveFailed(true, name, e.getMessage() + ". The file wasn't changed.");
-            return;
+            return writeBackFailed(name, e, null);
         }
         android.os.ParcelFileDescriptor descriptor;
         try {
@@ -536,14 +552,12 @@ public class MainActivity extends NativeActivity {
         } catch (Throwable e) {
             // Nothing was written to it: it is as it was, and the copy isn't needed.
             removeWithFolder(copy);
-            saveFailed(true, name, "it can't be written where it was opened from (" + e.getMessage()
-                    + "). The file wasn't changed: Save again to choose where to save it.");
-            return;
+            return writeBackFailed(name, e, null);
         }
         try {
-            try (FileOutputStream out = new FileOutputStream(descriptor.getFileDescriptor())) {
-                DocumentWrite.overwrite(out.getChannel(), bytes);
-            }
+            // Not closed by the stream: a failure closes the descriptor with its error, below.
+            FileOutputStream out = new FileOutputStream(descriptor.getFileDescriptor());
+            DocumentWrite.overwrite(out.getChannel(), bytes);
             // Closing hands the document back to its provider, which may store it only then.
             descriptor.close();
             descriptor = null;
@@ -552,19 +566,34 @@ public class MainActivity extends NativeActivity {
                 throw new java.io.IOException("the file holds " + size + " bytes after writing " + bytes.length);
             }
             removeWithFolder(copy);
-            add("project-saved\t" + name);
+            return "project-saved\t" + name;
         } catch (Throwable e) {
             if (descriptor != null) {
+                // Its provider is told the write failed, so one that stores on close keeps the
+                // document it had.
                 try {
-                    descriptor.close();
+                    descriptor.closeWithError(String.valueOf(e.getMessage()));
                 } catch (java.io.IOException closing) {
-                    // Already said below: the write failed.
+                    // Said below: the write failed.
                 }
             }
-            add("project-save-failed\t" + name + " may be damaged where it was opened from: " + e.getMessage()
-                    + ". The project as saved is kept at " + copy.getAbsolutePath()
-                    + ". Save again to choose where to save it.");
+            return writeBackFailed(name, e, copy);
         }
+    }
+
+    /**
+     * A write-back-failed event: the document was left as it was ({@code kept} null), or may be
+     * damaged, with the complete project kept at {@code kept}. The Rust side words it.
+     */
+    private static String writeBackFailed(String name, Throwable e, File kept) {
+        String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return "write-back-failed\t" + oneField(name) + "\t" + oneField(reason)
+                + (kept == null ? "" : "\t" + kept.getAbsolutePath());
+    }
+
+    /** Text that fits in one field of an event: no tab or line break. */
+    private static String oneField(String text) {
+        return text.replaceAll("[\\t\\r\\n]", " ");
     }
 
     /** The document's size as its provider gives it, or -1 when it doesn't say. */
@@ -594,7 +623,9 @@ public class MainActivity extends NativeActivity {
      * kept across restarts where the provider allows it. Null otherwise.
      */
     private String writable(Uri uri, String name, int grants) {
-        if (!name.toLowerCase(java.util.Locale.ROOT).endsWith(".rgis") || (grants & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) {
+        // A project file, as the Rust side's is_project_file has it (.rgis, or the older .rgisx).
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        if (!(lower.endsWith(".rgis") || lower.endsWith(".rgisx")) || (grants & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) {
             return null;
         }
         try (Cursor cursor = getContentResolver().query(uri,

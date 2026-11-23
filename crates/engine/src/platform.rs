@@ -13,6 +13,12 @@ pub struct SaveSnapshot {
 }
 
 impl crate::Session {
+    /// The project's identity as a file: changed when another project replaces it, and put back
+    /// with it by Undo. A phone keeps where to save a project by it.
+    pub fn file_identity(&self) -> u64 {
+        self.file_identity
+    }
+
     /// Captures which project and undo state the native saver was given.
     pub fn save_snapshot(&self) -> SaveSnapshot {
         SaveSnapshot { project: self.file_identity, state: self.state(), unsaved_marks: self.unsaved_marks }
@@ -84,6 +90,17 @@ pub enum Event {
     /// The document a project save is about to report written ([`Event::ProjectSave`] follows),
     /// when the system lets RustGIS write it back later ([`Platform::write_back`]).
     ProjectDocument(String),
+    /// A project couldn't be written back to its document ([`Platform::write_back`]): it answers
+    /// the save as a failed [`Event::ProjectSave`] does.
+    WriteBackFailed {
+        /// The project's file name.
+        name: String,
+        /// Why, as the system said.
+        reason: String,
+        /// Where the complete project was kept, when the write failed partway and the document
+        /// may be damaged; `None` when the document was left as it was.
+        kept: Option<PathBuf>,
+    },
     /// A photo the camera took ([`Platform::take_photo`]), written where it can be opened by path.
     Photo {
         /// The photo's file name.
@@ -102,7 +119,8 @@ pub enum Event {
 
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
-    /// `ended`, `saved`, `project-saved`, `project-save-failed`, `project-document`, `photo`,
+    /// `ended`, `saved`, `project-saved`, `project-save-failed`, `project-document`,
+    /// `write-back-failed`, `photo`,
     /// `position`, `stopped`, `failed`). A `picked` line may end with the document it can write
     /// back to. Unrecognized lines become failures that quote the line. A position is
     /// `position`, longitude, latitude, accuracy (empty when unknown), optionally its time in
@@ -120,6 +138,12 @@ impl Event {
                 document: (!document.is_empty()).then(|| document.to_string()),
             },
             ["project-document", document] if !document.is_empty() => Event::ProjectDocument(document.to_string()),
+            ["write-back-failed", name, reason] => {
+                Event::WriteBackFailed { name: name.to_string(), reason: reason.to_string(), kept: None }
+            }
+            ["write-back-failed", name, reason, kept] if !kept.is_empty() => {
+                Event::WriteBackFailed { name: name.to_string(), reason: reason.to_string(), kept: Some(PathBuf::from(kept)) }
+            }
             ["cancelled"] => Event::Cancelled,
             ["ended", purpose] => Event::Ended { purpose: purpose.to_string() },
             ["photo", name, path] if !path.is_empty() => Event::Photo { name: name.to_string(), path: PathBuf::from(path) },
@@ -181,9 +205,9 @@ pub trait Platform {
 
     /// Writes the project `bytes` back to `document`, one the system said RustGIS may write
     /// ([`Event::Picked`]'s or [`Event::ProjectDocument`]'s), with no picker. `Ok` means the
-    /// request was accepted; it answers with [`Event::ProjectSave`], the failure saying whether
-    /// the document may be damaged and where the project as saved is kept then. A system that
-    /// can't write back refuses.
+    /// request was accepted; it answers with [`Event::ProjectSave`], or [`Event::WriteBackFailed`]
+    /// saying whether the document may be damaged and where the project as saved is kept then. A
+    /// system that can't write back refuses.
     fn write_back(&self, document: &str, name: &str, bytes: Vec<u8>) -> Result<(), String> {
         let _ = (document, name, bytes);
         Err("this system can't write a project back where it was opened".into())
@@ -261,6 +285,18 @@ mod tests {
             }
         );
         assert_eq!(Event::parse("project-document\tcontent://docs/document/7"), Event::ProjectDocument("content://docs/document/7".into()));
+        assert_eq!(
+            Event::parse("write-back-failed\tsite.rgis\tread-only"),
+            Event::WriteBackFailed { name: "site.rgis".into(), reason: "read-only".into(), kept: None }
+        );
+        assert_eq!(
+            Event::parse("write-back-failed\tsite.rgis\tno room\t/data/saved/1/site.rgis"),
+            Event::WriteBackFailed {
+                name: "site.rgis".into(),
+                reason: "no room".into(),
+                kept: Some(PathBuf::from("/data/saved/1/site.rgis"))
+            }
+        );
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
         assert_eq!(Event::parse("ended\tdxf:3"), Event::Ended { purpose: "dxf:3".into() });
         assert_eq!(
@@ -300,6 +336,8 @@ mod tests {
             "saved",
             "project-document",
             "project-document\t",
+            "write-back-failed\tsite.rgis",
+            "write-back-failed\tsite.rgis\tno room\t",
             "photo\ta.jpg",
             "photo\ta.jpg\t",
             "position\t200\t20\t5",

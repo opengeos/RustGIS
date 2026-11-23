@@ -209,6 +209,19 @@ impl<P: Phone> App<P> {
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                 Event::ProjectDocument(document) => self.app.project_document(document),
                 Event::ProjectSave(result) => self.app.complete_project_save(result),
+                Event::WriteBackFailed { name, reason, kept } => {
+                    let text = match kept {
+                        None => i18n::fmt(
+                            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed: Save again to choose where to save it.",
+                            &[("name", &name), ("reason", &reason)],
+                        ),
+                        Some(kept) => i18n::fmt(
+                            "{name} may be damaged where it was opened from: {reason}. The project as saved is kept at {kept}: Save again to choose where to save it.",
+                            &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
+                        ),
+                    };
+                    self.app.complete_project_save(Err(text));
+                }
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
                 // A fix that was on its way when positioning was turned off.
                 Event::Position(_) => {}

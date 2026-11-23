@@ -1456,10 +1456,12 @@ fn edit_sheet(
 /// The More sheet: what is done now and then, each a row as tall as a finger.
 fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     heading(ui, t, tl!("More"));
-    let rows: [(&str, &str, &str); 6] = [
+    let rows: [(&str, &str, &str); 7] = [
         ("zoom_full", tl!("Full Extent"), "map.zoomFull"),
         ("open", tl!("Open Project"), "ui.open"),
         ("save", tl!("Save Project"), "ui.save"),
+        // Save writes back where the project came from: this asks where.
+        ("save", tl!("Save Project As…"), "ui.saveAs"),
         ("new", tl!("New Project"), "project.new"),
         ("undo", tl!("Undo"), "edit.undo"),
         ("redo", tl!("Redo"), "edit.redo"),
