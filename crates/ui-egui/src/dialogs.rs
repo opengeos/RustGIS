@@ -50,6 +50,10 @@ pub struct Dialogs {
     /// Go To XY: the system its X and Y are in: empty for degrees, `map` for the map's own, or a
     /// layer's name for the system it was read in.
     pub xy_system: String,
+    /// Go To XY: the system `xy_system` named when its X and Y were filled ([`xy_key`]): the
+    /// map's projection, or a layer's, changing under the same entry makes them numbers in another
+    /// system.
+    pub xy_named: String,
     pub d: String,
     pub e: String,
     /// Add From Database: load the PostgreSQL table whole, to be edited and saved back.
@@ -232,9 +236,9 @@ impl Dialogs {
             "goToXY" => {
                 // The map's center, the longitude within ±180 even when the view has been panned
                 // past the antimeridian.
-                let c = s.map().center_lonlat();
-                self.a = format!("{:.4}", crate::mapmenu::wrap_lon(c.x));
-                self.b = format!("{:.4}", c.y);
+                // In degrees, as every dialog opens afresh, the boxes' system noted.
+                [self.a, self.b] = center_in(s.map(), "").unwrap_or_default();
+                self.xy_named = xy_key(s.map(), "");
             }
             "bookmark" => self.text = rustgis_engine::cmd::navigate::new_bookmark_name(s.map()),
             "camera" => {
@@ -449,6 +453,14 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         app.dialogs.b.clear();
                     }
                     app.dialogs.xy_system.clear();
+                    app.dialogs.xy_named = xy_key(app.session.map(), "");
+                }
+                // The same entry naming another system now (the map's projection changed, or a
+                // layer's system was defined): the boxes take the center in it, or are emptied.
+                let named = xy_key(app.session.map(), &app.dialogs.xy_system);
+                if named != app.dialogs.xy_named {
+                    [app.dialogs.a, app.dialogs.b] = center_in(app.session.map(), &app.dialogs.xy_system).unwrap_or_default();
+                    app.dialogs.xy_named = named;
                 }
                 let degrees = app.dialogs.xy_system.is_empty();
                 egui::Grid::new("xy").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
@@ -472,6 +484,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                             // The boxes show the map's center in the system picked; empty when it
                             // has none there, so numbers in the old system aren't read in the new.
                             [app.dialogs.a, app.dialogs.b] = center_in(app.session.map(), &id).unwrap_or_default();
+                            app.dialogs.xy_named = xy_key(app.session.map(), &id);
                             app.dialogs.xy_system = id;
                         }
                         ui.end_row();
@@ -1131,6 +1144,17 @@ fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
         }
     }
     v
+}
+
+/// The system a Go To XY entry (`id`, as [`xy_systems`] lists it) names now: degrees, the map's
+/// projection, or the system a layer was read in, by its definition (not the list's wording,
+/// which a change of language rewrites).
+fn xy_key(map: &rustgis_engine::map::Map, id: &str) -> String {
+    match id {
+        "" => String::new(),
+        "map" => format!("map {}", map.projection.code()),
+        layer => map.layer_by_name(layer).and_then(|l| l.dataset.crs).map(|c| format!("layer {}", c.definition_text())).unwrap_or_default(),
+    }
 }
 
 /// `text` cut to 60 characters, with an ellipsis when cut (a PROJ definition in a list).
@@ -3776,6 +3800,47 @@ mod tests {
         h.get_by_role_and_label(Role::Button, "Apply").click();
         h.run_steps(4);
         assert_eq!(h.state().session.map().projection.code(), "EPSG:2056");
+    }
+
+    /// Go To XY with the map's own system picked: when the map's projection changes while the
+    /// dialog is open, X and Y take the center in the new system, never the old numbers read in
+    /// it; numbers typed stay as they are frame after frame.
+    #[test]
+    fn go_to_xy_follows_the_maps_system_changing_under_it() {
+        let mut app = RustGisApp::with_sample();
+        app.run("map.projection", json!({"type": "EPSG:2056"})).unwrap();
+        app.run("map.goToXY", json!({"lon": 7.44, "lat": 46.95})).unwrap();
+        app.dialogs.open("goToXY", &app.session).unwrap();
+        app.dialogs.xy_system = "map".into();
+        let frame = |app: RustGisApp| {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(1400.0, 1000.0))
+                .with_max_steps(8)
+                .with_context_setup(|ctx| crate::theme::install_fonts(ctx, &[], None))
+                .build_ui_state(
+                    |ui, app: &mut RustGisApp| {
+                        let ctx = ui.ctx().clone();
+                        app.logic(&ctx);
+                        app.ui(ui);
+                    },
+                    app,
+                );
+            h.run_steps(2);
+            h.into_state()
+        };
+        let mut app = frame(app);
+        let lv95 = center_in(app.session.map(), "map").unwrap();
+        assert_eq!([app.dialogs.a.clone(), app.dialogs.b.clone()], lv95, "the center in LV95");
+        assert!(app.dialogs.a.parse::<f64>().unwrap() > 2_000_000.0, "{}", app.dialogs.a);
+        app.run("map.projection", json!({"type": "mercator"})).unwrap();
+        let mut app = frame(app);
+        let mercator = center_in(app.session.map(), "map").unwrap();
+        assert_eq!([app.dialogs.a.clone(), app.dialogs.b.clone()], mercator, "the center in Web Mercator, not LV95's numbers");
+        assert_eq!(app.dialogs.xy_system, "map");
+        // Numbers typed stay.
+        app.dialogs.a = "830000".into();
+        let app = frame(app);
+        assert_eq!(app.dialogs.a, "830000");
     }
 
     /// In the app, Escape in a coordinate system box closes its list, not the dialog, and the
