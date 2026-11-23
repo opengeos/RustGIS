@@ -46,11 +46,14 @@ const EXEMPT: &[(&str, &str)] = &[
 const DISPATCH: &str = "crates/ui-egui/src/lib.rs";
 
 /// The byte range of `run_ui` in the dispatch file's `text`: from its signature to the first line
-/// that is only an indented closing brace (rustfmt puts a method's at four spaces).
+/// that is only an indented closing brace (rustfmt puts a method's at four spaces), with `\n` or
+/// `\r\n` line ends.
 fn run_ui_range(text: &str) -> std::ops::Range<usize> {
     let Some(start) = text.find("fn run_ui(") else { panic!("{DISPATCH} has no `fn run_ui(`") };
-    let Some(end) = text[start..].find("\n    }\n") else { panic!("the end of `run_ui` in {DISPATCH} not found") };
-    start..start + end
+    let ends_line = |at: usize| matches!(text.as_bytes().get(at), Some(b'\n' | b'\r'));
+    let end = text[start..].match_indices("\n    }").map(|(n, m)| start + n + m.len()).find(|&at| ends_line(at));
+    let Some(end) = end else { panic!("the end of `run_ui` in {DISPATCH} not found") };
+    start..end
 }
 
 /// The repository's root.
@@ -68,7 +71,8 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         let entry = entry.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if path.is_dir() {
+        let kind = entry.file_type().unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if kind.is_dir() {
             if name != "tests" && name != "benches" {
                 sources(&path, out);
             }
@@ -205,7 +209,7 @@ fn lex(text: &str) -> Vec<Lexed<'_>> {
                 i += 1;
             }
         } else {
-            if matches!(c, b'#' | b'[' | b']' | b'(' | b')' | b'{' | b'}' | b';' | b'|' | b'=' | b'>') {
+            if matches!(c, b'#' | b'[' | b']' | b'(' | b')' | b'{' | b'}' | b';' | b',' | b'|' | b'=' | b'>') {
                 out.push((i, Tok::Punct(char::from(c))));
             }
             i += 1;
@@ -354,20 +358,43 @@ fn guard_ends_in_arrow(tokens: &[Lexed<'_>], from: usize) -> bool {
     false
 }
 
-/// The id-shaped string literals in the non-test code of `text`: (offset, literal, whether it is a
-/// match arm). Id-shaped is dotted words, the first a lower-case word, none empty; one ending in a
-/// dot is a prefix (`"ui.pane."`), not an id.
-fn literals(text: &str) -> Vec<(usize, &str, bool)> {
+/// An id-shaped string literal: its byte offset, its text, whether it is a match arm, and how many
+/// braces were open where it stands.
+type Literal<'a> = (usize, &'a str, bool, usize);
+
+/// The id-shaped string literals in the non-test code of `text`. Id-shaped is dotted words, the
+/// first a lower-case word, none empty; one ending in a dot is a prefix (`"ui.pane."`), not an id.
+fn literals(text: &str) -> Vec<Literal<'_>> {
     let tokens = non_test(lex(text));
-    let mut out = Vec::new();
+    let (mut out, mut depth) = (Vec::new(), 0usize);
     for (n, (at, tok)) in tokens.iter().enumerate() {
-        let Tok::Str(s) = *tok else { continue };
+        let s = match *tok {
+            Tok::Punct('{') => {
+                depth += 1;
+                continue;
+            }
+            Tok::Punct('}') => {
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            Tok::Str(s) => s,
+            _ => continue,
+        };
         let words_ok = s.split('.').all(|w| !w.is_empty() && w.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'));
         if words_ok && s.contains('.') && s.bytes().next().is_some_and(|c| c.is_ascii_lowercase()) {
-            out.push((*at, s, is_arm(&tokens, n + 1)));
+            out.push((*at, s, is_arm(&tokens, n + 1), depth));
         }
     }
     out
+}
+
+/// The `ui.*` ids that are arms of the dispatch `match` within `range` of the file the `literals`
+/// are from: of the arms there, those at the least depth, since an inner `match` has more braces
+/// open (`let cmd = match id { "ui.copy" => "edit.copy", … }` inside an arm handles nothing).
+fn dispatch_arms<'a>(literals: &[Literal<'a>], range: std::ops::Range<usize>) -> HashSet<&'a str> {
+    let arms: Vec<_> = literals.iter().filter(|(at, id, arm, _)| *arm && id.starts_with("ui.") && range.contains(at)).collect();
+    let top = arms.iter().map(|(_, _, _, depth)| *depth).min();
+    arms.iter().filter(|(_, _, _, depth)| Some(*depth) == top).map(|(_, id, _, _)| *id).collect()
 }
 
 /// The scan reads Rust as the compiler does: a literal in a comment or after a test module, in a
@@ -412,9 +439,15 @@ fn arm(id: &str) {
     let _ = matches!(id, "ui.four" | "ui.five");
     let _ = matches!(id, "ui.six" if id.len() > 1);
 }
+fn run(id: &str) {
+    match id {
+        "ui.outer" => { let c = match id { "ui.inner" => "edit.x", "ui.active" => "ui.result", _ => "" }; }
+        _ => {}
+    }
+}
 "####;
     let found = literals(text);
-    let ids: Vec<&str> = found.iter().map(|(_, id, _)| *id).collect();
+    let ids: Vec<&str> = found.iter().map(|(_, id, _, _)| *id).collect();
     assert_eq!(
         ids,
         [
@@ -431,13 +464,25 @@ fn arm(id: &str) {
             "ui.three",
             "ui.four",
             "ui.five",
-            "ui.six"
+            "ui.six",
+            "ui.outer",
+            "ui.inner",
+            "edit.x",
+            "ui.active",
+            "ui.result"
         ],
         "{found:?}"
     );
-    let arms: Vec<&str> = found.iter().filter(|(_, _, arm)| *arm).map(|(_, id, _)| *id).collect();
-    assert_eq!(arms, ["ui.one", "ui.two", "ui.three"]);
+    let arms: Vec<&str> = found.iter().filter(|(_, _, arm, _)| *arm).map(|(_, id, _, _)| *id).collect();
+    assert_eq!(arms, ["ui.one", "ui.two", "ui.three", "ui.outer", "ui.inner", "ui.active"]);
+    // The dispatch is the outer match: not the inner one, and not a string that follows `=>`.
+    let mut dispatch: Vec<&str> = dispatch_arms(&found, 0..text.len()).into_iter().collect();
+    dispatch.sort_unstable();
+    assert_eq!(dispatch, ["ui.one", "ui.outer", "ui.three", "ui.two"]);
     assert_eq!(line_of(text, found[3].0), 12, "the line of a literal after a test module");
+    // `run_ui` ends at its closing brace whether the file has LF or CRLF line ends.
+    let crlf = "impl A {\r\n    fn run_ui(&mut self) {\r\n        x\r\n    }\r\n}\r\n";
+    assert_eq!(&crlf[run_ui_range(crlf)], "fn run_ui(&mut self) {\r\n        x\r\n    }");
 }
 
 #[test]
@@ -457,8 +502,11 @@ fn command_ids_in_hand_kept_lists_are_registered() {
         for package in packages {
             let src = package.unwrap_or_else(|e| panic!("{group}: {e}")).path().join("src");
             // A package without a `src` directory has no source; one that can't be read is an error.
-            if src.is_dir() {
-                sources(&src, &mut files);
+            match std::fs::metadata(&src) {
+                Ok(meta) if meta.is_dir() => sources(&src, &mut files),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => panic!("{}: {e}", src.display()),
             }
         }
     }
@@ -472,25 +520,18 @@ fn command_ids_in_hand_kept_lists_are_registered() {
             (f.strip_prefix(&root).unwrap_or(f).display().to_string().replace('\\', "/"), text)
         })
         .collect();
-    let found: Vec<(&str, &str, Vec<(usize, &str, bool)>)> =
+    let found: Vec<(&str, &str, Vec<Literal<'_>>)> =
         texts.iter().map(|(name, text)| (name.as_str(), text.as_str(), literals(text))).collect();
 
-    // The `ui.*` commands the app handles: those with a match arm in `run_ui` (an arm elsewhere, even
-    // in the same file, such as one that picks an icon, handles nothing).
-    let ui_arms: HashSet<&str> = found
-        .iter()
-        .filter(|(file, _, _)| *file == DISPATCH)
-        .flat_map(|(_, text, l)| {
-            let run_ui = run_ui_range(text);
-            l.iter().filter(move |(at, id, arm)| *arm && id.starts_with("ui.") && run_ui.contains(at))
-        })
-        .map(|(_, id, _)| *id)
-        .collect();
+    // The `ui.*` commands the app handles: those with a match arm in the dispatch in `run_ui` (an arm
+    // elsewhere, such as one that picks an icon or an inner `match`, handles nothing).
+    let ui_arms: HashSet<&str> =
+        found.iter().filter(|(file, _, _)| *file == DISPATCH).flat_map(|(_, text, l)| dispatch_arms(l, run_ui_range(text))).collect();
     assert!(ui_arms.len() > 100, "the scan found {} ui commands with an arm", ui_arms.len());
 
     let (mut seen, mut exempt_seen, mut dangling) = (0, HashSet::new(), Vec::new());
     for (file, text, literals) in &found {
-        for (at, word, _) in literals {
+        for (at, word, _, _) in literals {
             let namespace = word.split('.').next().unwrap_or("");
             let last = word.rsplit('.').next().unwrap_or("");
             if !namespaces.contains(namespace) || NOT_IDS.contains(&last) {
