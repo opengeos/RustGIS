@@ -4154,6 +4154,43 @@ impl Session {
         true
     }
 
+    /// Fits the camera to the layers `ids` ([`rustgis_map::ExtentOf`] says which of their
+    /// features): on a flat map in a coordinate system that holds one of them in its own
+    /// coordinates ([`rustgis_map::Layer::in_map_units`]), around their places in map coordinates,
+    /// those layers' exactly as held, with nothing converted; else as [`Session::zoom_to`] does,
+    /// around their longitude/latitude extent. `None` when they have nothing to zoom to; else
+    /// whether it did.
+    pub fn zoom_to_layers(&mut self, ids: &[u32], of: rustgis_map::ExtentOf) -> Option<bool> {
+        let m = self.map();
+        let layers: Vec<&rustgis_map::Layer> = ids.iter().filter_map(|id| m.layer(*id)).collect();
+        let lonlat = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_of(of)));
+        if lonlat.is_empty() {
+            return None;
+        }
+        if !m.projection.is_globe() {
+            let flat = m.flat();
+            if layers.iter().any(|l| l.in_map_units(&flat)) {
+                let boxed = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_on(&flat, of)));
+                // A single point has no size to fit: framed as one in longitude/latitude is.
+                if boxed.width() > 0.0 || boxed.height() > 0.0 {
+                    let (w, h) = self.view_size;
+                    if !self.map_mut().fit_map_extent(&boxed, w, h) {
+                        return Some(false);
+                    }
+                    self.record_extent();
+                    return Some(true);
+                }
+            }
+        }
+        Some(self.zoom_to(&lonlat))
+    }
+
+    /// The layers on the active map it shows, by id, top first: what Full Extent zooms to.
+    pub fn shown_layer_ids(&self) -> Vec<u32> {
+        let m = self.map();
+        m.layers.iter().filter(|l| m.shows(l)).map(|l| l.id).collect()
+    }
+
     pub fn title(&self) -> String {
         self.project.name.clone()
     }

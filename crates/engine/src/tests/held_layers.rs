@@ -158,6 +158,44 @@ fn a_held_layer_has_the_same_extent_and_zoom() {
     assert!((a.x - b.x).abs() < 5.0 && (a.y - b.y).abs() < 5.0, "{a:?} vs {b:?}");
 }
 
+/// On a map in a layer's own system, Zoom To Layer, Zoom To Selection and Full Extent frame its
+/// features as they are held, in map coordinates, with nothing converted: the view is centred on
+/// the middle of their own box exactly (through longitude/latitude it is the centre of the drawn
+/// box of their longitude/latitude box, metres away on UTM's turned grid).
+#[test]
+fn zooming_on_a_map_in_the_layers_system_frames_its_own_box() {
+    let mut s = session(UTM);
+    s.view_size = (800.0, 600.0);
+    s.run("map.projection", &json!({"type": "EPSG:32632"})).unwrap();
+    let own = |s: &Session, rows: &[usize]| {
+        let ds = &s.map().layer_by_name("Parcels").unwrap().dataset;
+        rows.iter().filter_map(|r| ds.features[*r].geometry.as_ref()).fold(rustgis_geom::Extent::EMPTY, |e, g| e.union(&g.extent()))
+    };
+    let centred = |s: &Session, e: &rustgis_geom::Extent, what: &str| {
+        let c = s.map().camera.center;
+        assert!((c.x - e.center().x).abs() < 1e-6 && (c.y - e.center().y).abs() < 1e-6, "{what}: {c:?} vs {:?}", e.center());
+    };
+    s.run("layer.zoomTo", &json!({"layer": "Parcels"})).unwrap();
+    centred(&s, &own(&s, &(0..9).collect::<Vec<_>>()), "layer");
+    // The road runs at a slant: the drawn box of its longitude/latitude box is turned against
+    // UTM's grid and larger than its own, so the way through longitude/latitude centres elsewhere.
+    s.run("layer.zoomTo", &json!({"layer": "Roads"})).unwrap();
+    let road = s.map().layer_by_name("Roads").unwrap();
+    let road_own = road.dataset.extent();
+    centred(&s, &road_own, "road");
+    let via = s.map().flat().extent(&road.extent()).center();
+    assert!((via.x - road_own.center().x).hypot(via.y - road_own.center().y) > 1.0, "{via:?} vs {:?}", road_own.center());
+    s.run("select.rows", &json!({"layer": "Parcels", "rows": [0, 4]})).unwrap();
+    s.run("select.zoomTo", &json!({})).unwrap();
+    centred(&s, &own(&s, &[0, 4]), "selection");
+    // Full Extent: Wells, Roads and Parcels together, all held in UTM.
+    s.run("map.zoomFull", &json!({})).unwrap();
+    let full = ["Wells", "Roads", "Parcels"]
+        .iter()
+        .fold(rustgis_geom::Extent::EMPTY, |e, name| e.union(&s.map().layer_by_name(name).unwrap().dataset.extent()));
+    centred(&s, &full, "full extent");
+}
+
 /// Selecting by a box, a point, a radius and a polygon picks the same features.
 #[test]
 fn a_held_layer_is_selected_alike() {

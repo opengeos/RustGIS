@@ -1684,9 +1684,57 @@ impl Layer {
         self.dataset.lonlat_extent_of(rows.into_iter().filter_map(|r| self.dataset.features.get(r)).filter_map(|f| f.geometry.as_ref()))
     }
 
+    /// Whether a map in `flat` holds its features' coordinates as its own map coordinates: a
+    /// layer of features held in the system the map is drawn in ([`projection::Flat::direct_system`]),
+    /// its rows all at hand (not read in place, nor a raster).
+    pub fn in_map_units(&self, flat: &projection::Flat) -> bool {
+        self.raster.is_none() && self.source.is_none() && flat.direct_system().is_some_and(|map| map == self.dataset.coord_crs())
+    }
+
+    /// Its [`ExtentOf`] extent in the map coordinates of `flat`: on a map in the layer's own
+    /// system ([`Layer::in_map_units`]), the box around those features exactly as they are held,
+    /// with nothing converted; else its longitude/latitude extent drawn on the map
+    /// ([`projection::Flat::extent`]).
+    pub fn extent_on(&self, flat: &projection::Flat, of: ExtentOf) -> Extent {
+        if self.in_map_units(flat) {
+            let rows: Vec<usize> = match of {
+                ExtentOf::All => (0..self.dataset.features.len()).collect(),
+                ExtentOf::Shown => self.visible_rows().iter().enumerate().filter_map(|(r, v)| v.then_some(r)).collect(),
+                ExtentOf::Selected => self.selection.iter().copied().collect(),
+            };
+            return rows
+                .into_iter()
+                .filter_map(|r| self.dataset.features.get(r))
+                .filter_map(|f| f.geometry.as_ref())
+                .fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
+        }
+        let lonlat = self.extent_of(of);
+        if lonlat.is_empty() { Extent::EMPTY } else { flat.extent(&lonlat) }
+    }
+
+    /// Its [`ExtentOf`] extent in longitude/latitude.
+    pub fn extent_of(&self, of: ExtentOf) -> Extent {
+        match of {
+            ExtentOf::All => self.extent(),
+            ExtentOf::Shown => self.shown_extent(),
+            ExtentOf::Selected => self.selection_extent(),
+        }
+    }
+
     pub fn opacity(&self) -> f32 {
         (1.0 - self.transparency / 100.0).clamp(0.0, 1.0)
     }
+}
+
+/// Which of a layer's features an extent is around ([`Layer::extent_of`], [`Layer::extent_on`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtentOf {
+    /// All of them ([`Layer::extent`]).
+    All,
+    /// Those its definition query lets through ([`Layer::shown_extent`]).
+    Shown,
+    /// Its selected ones ([`Layer::selection_extent`]).
+    Selected,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -3267,6 +3315,17 @@ impl Map {
             return false;
         }
         self.camera.fit_extent(&m, w, h);
+        true
+    }
+
+    /// Points the flat map at an extent in its own map coordinates with a margin, as
+    /// [`Map::fit_lonlat`] does one in longitude/latitude. Whether it did: not for an empty extent
+    /// or view.
+    pub fn fit_map_extent(&mut self, m: &Extent, w: f64, h: f64) -> bool {
+        if m.is_empty() || w <= 1.0 || h <= 1.0 {
+            return false;
+        }
+        self.camera.fit_extent(&m.padded(0.06, 0.0), w, h);
         true
     }
 
