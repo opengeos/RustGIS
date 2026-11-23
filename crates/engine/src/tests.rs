@@ -6790,6 +6790,16 @@ fn tessellations_and_points_by_cell_in_every_system() {
         .unwrap();
     assert!(s.map().layer_by_name("moll world").is_some_and(|l| l.dataset.features.len() > 12), "{r}");
     assert!(!r.to_string().contains("85.05"), "{r}");
+    // On a map centred on the Pacific the world is cut at the map's edge, 30°W: the same grid as
+    // on one centred on Greenwich.
+    let mut world_on = |code: &str, out: &str| {
+        s.run("map.projection", &json!({"type": code})).unwrap();
+        let p = json!({"tool": "a5Grid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": out}});
+        let r = s.run("gp.run", &p).unwrap();
+        s.map().layer_by_name(out).map_or(0, |l| l.dataset.features.len()).to_string() + &format!(" {r}")
+    };
+    let (greenwich, pacific) = (world_on("equirectangular", "eqc 0"), world_on("equirectangular +lon_0=150", "eqc 150"));
+    assert_eq!(greenwich.split(' ').next(), pacific.split(' ').next(), "{greenwich} / {pacific}");
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     s.run(
         "gp.run",

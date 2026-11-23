@@ -262,10 +262,23 @@ pub fn parts(cell: u64) -> Option<Vec<Vec<Vec<Coord>>>> {
     split(ring(cell)?)
 }
 
+/// [`on_the_globe_sides`] at the meridian `edge` (and a turn either side of it) in place of ±180°:
+/// the sides of a shape on a map that wraps there, each within `edge - 360 ..= edge`. A corner on
+/// the edge is moved 1e-6° (about 11 cm) into its side: a projection takes the edge's longitude
+/// to one side of the map or the other, not to the side it closes.
+fn sides_at(shape: Vec<Vec<Coord>>, edge: f64) -> Vec<Vec<Vec<Coord>>> {
+    let shift = edge - 180.0;
+    let inside = |x: f64| x.clamp(-180.0 + 1e-6, 180.0 - 1e-6);
+    let moved = |rings: Vec<Vec<Coord>>, by: f64, keep: &dyn Fn(f64) -> f64| -> Vec<Vec<Coord>> {
+        rings.into_iter().map(|r| r.into_iter().map(|c| Coord::new(keep(c.x) + by, c.y)).collect()).collect()
+    };
+    let sides = on_the_globe_sides(moved(shape, -shift, &|x| x));
+    sides.into_iter().map(|side| moved(side, shift, &inside)).collect()
+}
+
 /// A shape (its outer ring, then its holes) as shapes within −180° to 180°: itself, or, for one
 /// whose ring runs on past ±180°, its two sides of the meridian, the far one moved back a turn.
-/// Every ring comes back closed. H3's tiler, S2's descent and the hexagon grid's plane take
-/// longitudes on the globe only.
+/// Every ring comes back closed. H3's tiler and S2's descent take longitudes on the globe only.
 fn on_the_globe_sides(shape: Vec<Vec<Coord>>) -> Vec<Vec<Vec<Coord>>> {
     let rings: Vec<Vec<Coord>> = shape
         .into_iter()
@@ -342,6 +355,11 @@ fn too_many(n: impl std::fmt::Display, res: i32) -> String {
 
 /// A ring's area (absolute) and length on the authalic sphere, its edges taken as great circles,
 /// in square metres and metres.
+///
+/// The sphere, not the WGS 84 ellipsoid, for a comparison it can't change: H3, S2 and A5 give
+/// their cells' areas on the authalic sphere (from `h3o`, `s2` and `a5`), so the hexagon grid's
+/// `area_km2`, and the estimate before any covering, are measured on it too, and a cell in one
+/// system compares with a cell in another. On the Earth it's under 1% from the ellipsoid's area.
 fn on_the_sphere(ring: &[Coord]) -> (f64, f64) {
     let r = radius();
     let (mut twice, mut arc) = (0.0, 0.0);
@@ -502,6 +520,13 @@ impl<'a> Plane<'a> {
 
     fn name(&self) -> String {
         self.map.clone().unwrap_or_else(|| "Web Mercator".into())
+    }
+
+    /// The meridian where the plane wraps from one side to the other: a shape is cut there, not at
+    /// ±180°, before its corners are put on the plane. 180 for Web Mercator, and for a plane
+    /// limited to an area of use, which never reaches its edge.
+    fn edge(&self) -> f64 {
+        self.map.as_ref().and_then(|_| self.inp.map_edge()).filter(|e| e.is_finite()).unwrap_or(180.0)
     }
 
     fn forward(&self, c: Coord) -> Option<Coord> {
@@ -689,6 +714,7 @@ impl<'a> Grid<'a> {
             System::A5 => a5::cell_area(self.res) / 1e6,
             System::H3 => h3o::CellIndex::try_from(id).map_or(f64::NAN, |c| c.area_km2()),
             System::S2 => s2::cell::Cell::from(s2::cellid::CellID(id)).exact_area() * radius() * radius() / 1e6,
+            // On the sphere, as the other three systems' areas are (see `on_the_sphere`).
             System::Hexagon => on_the_sphere(ring).0 / 1e6,
         }
     }
@@ -781,7 +807,9 @@ impl<'a> Grid<'a> {
         }
         let mut cells: HashSet<u64> = HashSet::new();
         let mut work = Work::default();
-        for side in shapes.into_iter().flat_map(on_the_globe_sides) {
+        // H3 and S2 take longitudes on the globe; the hexagon grid, a run the plane draws unbroken.
+        let sides = |s| if self.system == System::Hexagon { sides_at(s, self.plane.edge()) } else { on_the_globe_sides(s) };
+        for side in shapes.into_iter().flat_map(sides) {
             // Weighted as A5's polygons are: H3's tiler is one step per polygon.
             work.spend(0, side.iter().map(Vec::len).sum::<usize>().saturating_mul(64), res)?;
             match self.system {
@@ -1515,6 +1543,58 @@ mod tests {
         fn unproject(&self, m: Coord) -> Option<Coord> {
             (m.x.abs() <= 175.0 * M).then(|| Coord::new(m.x / M, m.y / M))
         }
+    }
+
+    /// A plate carrée centred on `.0` east, which wraps opposite it, as the map's projections do:
+    /// a longitude is taken within half a turn of the centre, and the edge's own to the west side.
+    struct Centred(f64, Dataset);
+    impl Inputs for Centred {
+        fn dataset(&self, n: &str) -> Option<&Dataset> {
+            (n == self.1.name).then_some(&self.1)
+        }
+        fn selection(&self, _: &str) -> &[usize] {
+            &[]
+        }
+        fn projection_name(&self) -> Option<String> {
+            Some(format!("Plate Carrée on {}°", self.0))
+        }
+        fn project(&self, c: Coord) -> Option<Coord> {
+            let x = (c.x - self.0 + 180.0).rem_euclid(360.0) - 180.0;
+            c.is_finite().then(|| Coord::new(x * M, c.y * M))
+        }
+        fn unproject(&self, m: Coord) -> Option<Coord> {
+            (m.x.abs() <= 180.0 * M).then(|| Coord::new(((m.x / M + self.0 + 540.0).rem_euclid(360.0)) - 180.0, m.y / M))
+        }
+        fn map_edge(&self) -> Option<f64> {
+            Some(self.0 + 180.0)
+        }
+    }
+
+    /// On a map centred off Greenwich the hexagon grid cuts an area at the map's edge, not at
+    /// ±180°: an area across the edge is covered at both sides of the map, and the world is the
+    /// same grid as on a map centred on 0°.
+    #[test]
+    fn the_hexagon_grid_cuts_at_the_maps_edge() {
+        let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        let across =
+            vec![Coord::new(-30.5, 0.0), Coord::new(-29.5, 0.0), Coord::new(-29.5, 1.0), Coord::new(-30.5, 1.0), Coord::new(-30.5, 0.0)];
+        d.push(Some(Geometry::Polygon(vec![vec![across]])), vec![]);
+        let p = serde_json::json!({"system": "Hexagon", "resolution": 9, "area": "Input Layer", "input": "pts"});
+        let cells = layer(grid(&Centred(150.0, d), &p).unwrap());
+        assert!(!cells.features.is_empty());
+        // Every corner is near the area, not across the middle of the map.
+        for f in &cells.features {
+            let Some(Geometry::Polygon(poly)) = &f.geometry else { panic!("a polygon") };
+            for c in poly.iter().flatten().flatten() {
+                let from = ((c.x + 30.0 + 540.0).rem_euclid(360.0) - 180.0).abs();
+                assert!(from < 1.5 && c.y > -1.0 && c.y < 2.0, "{c:?}");
+            }
+        }
+        let world = |lon0: f64| {
+            let p = serde_json::json!({"system": "Hexagon", "resolution": 2, "area": "World"});
+            layer(grid(&Centred(lon0, points(&[])), &p).unwrap()).features.len()
+        };
+        assert_eq!(world(150.0), world(0.0));
     }
 
     const SYSTEMS: [(&str, i32); 4] = [("H3", 7), ("S2", 12), ("A5", 11), ("Hexagon", 13)];
