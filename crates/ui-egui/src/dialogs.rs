@@ -1130,7 +1130,13 @@ fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
             // A layer named `map` would be taken for the map's own system, and one whose name another
             // layer has first would be taken for that one.
             let found_by_name = map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id);
-            let Some(crs) = l.dataset.crs.filter(|c| !c.is_geographic() && !l.name.eq_ignore_ascii_case("map") && found_by_name) else {
+            // Only a system counted east, then north: X and Y are an easting and a northing.
+            let Some(crs) = rustgis_engine::cmd::navigate::layer_coordinates_system(l).filter(|c| {
+                !c.is_geographic()
+                    && c.axis_directions() == [(1.0, 0.0), (0.0, 1.0)]
+                    && !l.name.eq_ignore_ascii_case("map")
+                    && found_by_name
+            }) else {
                 continue;
             };
             if seen.contains(&crs) || seen.len() >= 20 {
@@ -1153,7 +1159,11 @@ fn xy_key(map: &rustgis_engine::map::Map, id: &str) -> String {
     match id {
         "" => String::new(),
         "map" => format!("map {}", map.projection.code()),
-        layer => map.layer_by_name(layer).and_then(|l| l.dataset.crs).map(|c| format!("layer {}", c.definition_text())).unwrap_or_default(),
+        layer => map
+            .layer_by_name(layer)
+            .and_then(rustgis_engine::cmd::navigate::layer_coordinates_system)
+            .map(|c| format!("layer {}", c.definition_text()))
+            .unwrap_or_default(),
     }
 }
 
@@ -1170,7 +1180,7 @@ fn center_in(map: &rustgis_engine::map::Map, system: &str) -> Option<[String; 2]
     let at = match system {
         "" => return Some([format!("{:.4}", c.x), format!("{:.4}", c.y)]),
         "map" => map.flat().forward(c)?,
-        layer => map.layer_by_name(layer)?.dataset.crs?.transformer().ok()?.from_lonlat(c)?,
+        layer => rustgis_engine::cmd::navigate::layer_coordinates_system(map.layer_by_name(layer)?)?.transformer().ok()?.from_lonlat(c)?,
     };
     at.is_finite().then(|| [format!("{:.2}", at.x), format!("{:.2}", at.y)])
 }

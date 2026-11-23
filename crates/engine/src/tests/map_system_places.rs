@@ -265,3 +265,48 @@ fn names_and_units_mean_what_they_say() {
     let e = s.run("map.goToXY", &json!({"position": "2600000 ftE 1200000 ftN EPSG:2056"})).unwrap_err();
     assert!(e.contains("counts in m, not ft"), "{e}");
 }
+
+/// A raster layer's system is its pixels' (a raster names none on its features): named in `crs`,
+/// an LV95 raster takes an easting and a northing in LV95.
+#[test]
+fn a_raster_layers_system_is_its_pixels() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    let gt = GeoTransform { origin_x: 2_599_000.0, origin_y: 1_201_000.0, pixel_width: 100.0, pixel_height: -100.0 };
+    let r = Raster::new("relief", 20, 20, vec![vec![1.0; 400]], gt, Crs::Epsg(2056), None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "relief", rustgis_map::RasterLayer::from_bytes(r, "relief.tif".to_string(), bytes)).unwrap();
+    away(&mut s);
+    s.run("map.goToXY", &json!({"x": 2_600_000, "y": 1_200_000, "crs": "relief"})).unwrap();
+    assert!(near_bern(&s));
+}
+
+/// X and Y are an easting and a northing: a system counted west, then south (as South Africa's
+/// Lo systems are) would take them mirrored, so it is refused with the reason.
+#[test]
+fn a_system_counted_other_than_east_then_north_is_refused() {
+    let mut s = world();
+    let lo29 = "+proj=tmerc +lat_0=0 +lon_0=29 +k=1 +x_0=0 +y_0=0 +axis=wsu +ellps=WGS84 +units=m +no_defs";
+    let e = s.run("map.goToXY", &json!({"x": 10_000, "y": 3_000_000, "crs": lo29})).unwrap_err();
+    assert!(e.contains("counts a westing, then a southing"), "{e}");
+    // By its EPSG code too (a code a map projection also takes), and as a typed position.
+    let e = s.run("map.goToXY", &json!({"x": 10_000, "y": 3_000_000, "crs": "EPSG:22275"})).unwrap_err();
+    assert!(e.contains("counts a westing, then a southing"), "{e}");
+    let e = s.run("map.goToXY", &json!({"position": "10000 3000000 EPSG:22275"})).unwrap_err();
+    assert!(e.contains("counts a westing, then a southing"), "{e}");
+    // A system whose EPSG definition names the northing first (LAEA Europe) still takes an
+    // easting, then a northing, as RustGIS holds and writes its coordinates.
+    s.run("map.goToXY", &json!({"position": "4200000 2600000 EPSG:3035"})).unwrap();
+}
+
+/// A place in Robinson, whose inverse iterates (to about 1.5e-5°, some 1.6 m), is taken: its
+/// round trip comes back within a millionth of the coordinate's size.
+#[test]
+fn a_place_in_robinson_is_taken() {
+    let mut s = world();
+    let robinson = rustgis_data::raster::Crs::parse("ESRI:54030").unwrap();
+    let at = robinson.transformer().unwrap().from_lonlat(rustgis_geom::Coord::new(20.0, 30.0)).unwrap();
+    let v = s.run("map.convertPosition", &json!({"x": at.x, "y": at.y, "crs": "ESRI:54030"})).unwrap();
+    let (lon, lat) = (v["lon"].as_f64().unwrap(), v["lat"].as_f64().unwrap());
+    assert!((lon - 20.0).abs() < 1e-4 && (lat - 30.0).abs() < 1e-4, "{v}");
+}
