@@ -1184,7 +1184,9 @@ impl Dataset {
     /// written back as an edit is ([`Dataset::edit_from_lonlat`]), its stored places kept as
     /// stored. Every stored place is read, but only those the results read as are held, so what is
     /// held is as large as the results, not the layer. Refused, naming the first feature, when one
-    /// of its places can't be held in its system.
+    /// of its places can't be held in its system. A feature of the results without geometry whose
+    /// stored one has a place that can't be given in longitude/latitude, so it was read without it
+    /// ([`Dataset::in_lonlat_leaving_out`]), is left as stored, a field the results add empty.
     pub fn results_from_lonlat(&self, mut results: Dataset) -> std::result::Result<Dataset, String> {
         // Exact through WGS 84 both ways, as the results were read (`in_lonlat`), whatever map
         // the layer is shown on.
@@ -1201,13 +1203,42 @@ impl Dataset {
                 Self::hold_places_by(&read, g, None, &mut held);
             }
         }
+        // The stored features of the results without geometry whose stored geometry has a place
+        // that can't be given in longitude/latitude, by id: only those are converted again.
+        let bare: std::collections::HashSet<u64> = results.features.rows().filter(|r| r.geometry().is_none()).map(|r| r.id()).collect();
+        let mut unplaced = std::collections::HashMap::new();
+        if !bare.is_empty() {
+            for (i, f) in self.features.iter().enumerate() {
+                stop_when_asked(i)?;
+                if bare.contains(&f.id)
+                    && let Some(g) = &f.geometry
+                    && convert_keeping_missing(&read, g, &HeldPlaces::default()).is_none()
+                {
+                    unplaced.insert(f.id, f);
+                }
+            }
+        }
         // Before the rows are copied out of what shares them.
         stop_when_asked(0)?;
         for (i, f) in results.features.iter_mut().enumerate() {
             stop_when_asked(i)?;
-            if let Some(g) = f.geometry.take() {
-                f.geometry =
-                    Some(Self::edit_from_lonlat_by(&write, g, &held).map_err(|e| format!("{}: feature {}: {e}", self.name, f.id))?);
+            match f.geometry.take() {
+                Some(g) => {
+                    f.geometry =
+                        Some(Self::edit_from_lonlat_by(&write, g, &held).map_err(|e| format!("{}: feature {}: {e}", self.name, f.id))?);
+                }
+                // Read without its geometry: left as it was, what the results add to it empty, as
+                // nothing was worked out from a geometry it wasn't given.
+                None => {
+                    if let Some(stored) = unplaced.get(&f.id) {
+                        f.geometry.clone_from(&stored.geometry);
+                        for (k, field) in results.fields.iter().enumerate() {
+                            if let Some(a) = f.attrs.get_mut(k) {
+                                *a = self.field_index(&field.name).and_then(|j| stored.attrs.get(j)).cloned().unwrap_or(Value::Null);
+                            }
+                        }
+                    }
+                }
             }
         }
         results.held_in = self.held_in;

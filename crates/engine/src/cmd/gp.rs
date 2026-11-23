@@ -1645,7 +1645,8 @@ fn attributes_only(spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) ->
 /// its first input's own for a tool that works in it, every other input converted into it; else
 /// longitude/latitude. An input with a place that system can't hold has the run work in
 /// longitude/latitude instead, and a message says so (the conversions made for the first attempt
-/// are dropped then, and the inputs read again in longitude/latitude). Returns the system.
+/// are dropped then, and the inputs read again in longitude/latitude, a feature with a place
+/// that has none there either read without its geometry, [`inputs_in`]). Returns the system.
 fn work_inputs(
     map: &rustgis_map::Map,
     tables: &[crate::project::Table],
@@ -1670,14 +1671,17 @@ fn work_inputs(
             }
         }
     }
-    let (converted, _) = inputs_in(map, tables, spec, params, full, Crs::LonLat)?;
+    let (converted, said) = inputs_in(map, tables, spec, params, full, Crs::LonLat)?;
     full.extend(converted);
+    messages.extend(said);
     Ok(Crs::LonLat)
 }
 
 /// Copies of the layers a tool reads converted into `work`, by lowercase name: those read whole
 /// (streamed layers, files) and each other layer or standalone table with geometry it names whose
-/// coordinates are in another system. Nothing is copied for a layer already in `work`.
+/// coordinates are in another system. Nothing is copied for a layer already in `work`. In
+/// longitude/latitude, a feature with a place that can't be given there is read without its
+/// geometry, and one notice says how many of each layer were.
 fn inputs_in(
     map: &rustgis_map::Map,
     tables: &[crate::project::Table],
@@ -1699,6 +1703,27 @@ fn inputs_in(
         }
         Ok(())
     };
+    // The inputs with features read without their geometry, a place of theirs having none in
+    // longitude/latitude: name, how many. In `work`, another system, such a place sends the run
+    // to longitude/latitude instead ([`work_inputs`]), where the feature is read without it,
+    // rather than the run refused.
+    let mut unplaced: Vec<(String, usize)> = Vec::new();
+    let mut convert = |ds: &'_ Dataset| -> Result<Option<Dataset>, String> {
+        if work != Crs::LonLat {
+            return Ok(match ds.in_crs(work)? {
+                std::borrow::Cow::Owned(c) => Some(c),
+                std::borrow::Cow::Borrowed(_) => None,
+            });
+        }
+        let (c, n) = ds.in_lonlat_leaving_out()?;
+        if n > 0 {
+            unplaced.push((ds.name.clone(), n));
+        }
+        Ok(match c {
+            std::borrow::Cow::Owned(c) => Some(c),
+            std::borrow::Cow::Borrowed(_) => None,
+        })
+    };
     // Read only for its attributes in a run in its first input's system: as it is. (The first
     // input, if it is named there too, is in that system already.)
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
@@ -1706,7 +1731,7 @@ fn inputs_in(
         if unread.contains(&key.to_ascii_lowercase()) {
             continue;
         }
-        if let std::borrow::Cow::Owned(c) = ds.in_crs(work)? {
+        if let Some(c) = convert(ds)? {
             say(ds, &c)?;
             converted.insert(key.clone(), c);
         }
@@ -1737,7 +1762,7 @@ fn inputs_in(
             .filter(|i| !matches!(i, ProjectInput::Layer(l) if l.is_raster()))
             .map(|i| i.dataset())
             .filter(|d| d.geometry_type != rustgis_data::GeometryType::None)
-            && let std::borrow::Cow::Owned(c) = ds.in_crs(work)?
+            && let Some(c) = convert(ds)?
         {
             say(ds, &c)?;
             converted.insert(key, c);
@@ -1766,13 +1791,21 @@ fn inputs_in(
         if t.dataset.geometry_type == rustgis_data::GeometryType::None {
             continue;
         }
-        if let std::borrow::Cow::Owned(c) = t.dataset.in_crs(work)? {
+        if let Some(c) = convert(&t.dataset)? {
             say(&t.dataset, &c)?;
             converted.insert(table_key(t.id), c);
         }
     }
     // One notice for them all, naming each layer.
     let mut said = Vec::new();
+    if !unplaced.is_empty() {
+        let name = spec.map_or("The tool", |t| t.name);
+        let n: usize = unplaced.iter().map(|(_, n)| n).sum();
+        let layers = unplaced.iter().map(|(layer, n)| format!("'{layer}' ({n})")).collect::<Vec<_>>().join(", ");
+        said.push(format!(
+            "{name}: {n} feature(s) of {layers} have a place that can't be given in longitude/latitude, so the tool reads them without their geometry"
+        ));
+    }
     if !bent.is_empty() {
         let name = spec.map_or("The tool", |t| t.name);
         let n: usize = bent.iter().map(|(_, n, _)| n).sum();
