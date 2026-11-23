@@ -1962,6 +1962,9 @@ pub struct CoverageSystem {
     pub envelope: [f64; 4],
     /// WCS 2.0's axis labels, the east-west one first.
     pub axes: Option<(String, String)>,
+    /// WCS 2.0's grid axis labels for the same axes (`i j`), which scaling names: matched to the
+    /// system's axes by their offset vectors; the system's labels when the grid doesn't say.
+    pub grid_axes: Option<(String, String)>,
 }
 
 fn wcs(url: &str, root: &Node) -> Service {
@@ -2149,8 +2152,13 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             // axes decides, and the names only when that isn't known.
             let north_first =
                 north_first_labels(&a, &b, false).or_else(|| epsg_north_first(crs)).or_else(|| north_first_labels(&a, &b, true))?;
-            let (envelope, axes) = if north_first { ([lo1, lo0, hi1, hi0], (b, a)) } else { ([lo0, lo1, hi0, hi1], (a, b)) };
-            Some(CoverageSystem { crs, name: srs.clone(), envelope: ordered(envelope)?, axes: Some(axes) })
+            let grid = grid_labels(&root);
+            let (envelope, axes, grid_axes) = if north_first {
+                ([lo1, lo0, hi1, hi0], (b, a), grid.map(|[g0, g1]| (g1, g0)))
+            } else {
+                ([lo0, lo1, hi0, hi1], (a, b), grid.map(|[g0, g1]| (g0, g1)))
+            };
+            Some(CoverageSystem { crs, name: srs.clone(), envelope: ordered(envelope)?, axes: Some(axes), grid_axes })
         });
         let bbox = bbox.or_else(|| own.as_ref().and_then(|o| lonlat_of(o.envelope, o.crs)));
         let native = root.descendants().find(|n| n.is_element() && local(n) == "nativeFormat").map(|n| text_of(&n));
@@ -2199,10 +2207,36 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             .flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>())
             .collect();
         let envelope = ordered([*pos.first()?, *pos.get(1)?, *pos.get(2)?, *pos.get(3)?])?;
-        Some(CoverageSystem { crs, name, envelope, axes: None })
+        Some(CoverageSystem { crs, name, envelope, axes: None, grid_axes: None })
     })();
     let bbox = bbox.or_else(|| own.as_ref().and_then(|o| lonlat_of(o.envelope, o.crs)));
     Ok(CoverageInfo { format: tiff_format(formats.iter().map(String::as_str)), axes: None, bbox, native: own })
+}
+
+/// A WCS 2.0 coverage's grid axis labels (its `RectifiedGrid`'s), in the order of the axes of
+/// its system as the envelope gives them: each grid axis goes with the system axis its offset
+/// vector runs along. `None` when the grid doesn't say, or its labels or offsets don't fit.
+fn grid_labels(root: &Node) -> Option<[String; 2]> {
+    let grid = root.descendants().find(|n| n.is_element() && local(n) == "RectifiedGrid")?;
+    let text = child_text(&grid, "axisLabels").or_else(|| grid.attribute("axisLabels").map(str::to_string))?;
+    let labels: Vec<&str> = text.split_whitespace().collect();
+    let ok = |s: &str| !s.is_empty() && s.len() <= 32 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+    let [l0, l1] = labels[..] else { return None };
+    if !ok(l0) || !ok(l1) {
+        return None;
+    }
+    // The system axis each offset vector runs along: its larger component.
+    let along = |v: &Node| -> Option<usize> {
+        let c: Vec<f64> = text_of(v).split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let (x, y) = (c.first()?.abs(), c.get(1)?.abs());
+        (x != y).then_some(usize::from(y > x))
+    };
+    let offsets: Vec<usize> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect::<Option<_>>()?;
+    match offsets[..] {
+        [0, 1] => Some([l0.to_string(), l1.to_string()]),
+        [1, 0] => Some([l1.to_string(), l0.to_string()]),
+        _ => None,
+    }
 }
 
 /// Whether a coverage's axis labels name the north-south axis first (`N E`), the east-west one
@@ -2291,6 +2325,12 @@ pub fn coverage_size(area: [f64; 4]) -> (u32, u32) {
 /// Otherwise, or when the area has no place there, in EPSG:4326 (the server reprojects; WCS 2.0
 /// through its CRS extension). Scaled to fit [`COVERAGE_MAX_PIXELS`].
 pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> String {
+    get_coverage(c, info, area).0
+}
+
+/// [`get_coverage_url`], with the system it asks the coverage in when that is its own (not
+/// EPSG:4326): an answer that doesn't say its system is read in it.
+pub fn get_coverage(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> (String, Option<crate::raster::Crs>) {
     // An area holding the whole coverage asks for its envelope, not for that converted there and
     // back.
     let whole = info.bbox.is_some_and(|b| area[0] <= b[0] && area[1] <= b[1] && area[2] >= b[2] && area[3] >= b[3]);
@@ -2300,12 +2340,15 @@ pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> St
         let [x0, y0, x1, y1] = b;
         let (pw, ph) = coverage_size(b);
         let q = match (&own.axes, c.version.starts_with('2')) {
-            // Without a CRS asked for, WCS 2.0 subsets and answers in the coverage's own.
+            // Without a CRS asked for, WCS 2.0 subsets and answers in the coverage's own; scaling
+            // names the grid's axes.
             (Some((e, n)), true) => Some(format!(
-                "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSET={e}({x0},{x1})&SUBSET={n}({y0},{y1})&SCALESIZE={e}({pw}),{n}({ph})",
+                "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSET={e}({x0},{x1})&SUBSET={n}({y0},{y1})&SCALESIZE={ge}({pw}),{gn}({ph})",
                 c.version,
                 encode(&c.id),
-                encode(&info.format)
+                encode(&info.format),
+                ge = own.grid_axes.as_ref().map_or(e, |g| &g.0),
+                gn = own.grid_axes.as_ref().map_or(n, |g| &g.1),
             )),
             (_, false) => Some(format!(
                 "SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE={}&CRS={}&BBOX={x0},{y0},{x1},{y1}&WIDTH={pw}&HEIGHT={ph}&FORMAT={}",
@@ -2316,7 +2359,7 @@ pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> St
             (None, true) => None,
         };
         if let Some(q) = q {
-            return with_query(&c.endpoint, &q);
+            return (with_query(&c.endpoint, &q), Some(own.crs));
         }
     }
     let [w, s, e, n] = area;
@@ -2337,7 +2380,7 @@ pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> St
             encode(&info.format)
         )
     };
-    with_query(&c.endpoint, &q)
+    (with_query(&c.endpoint, &q), None)
 }
 
 /// The part of `area` a coverage covers (all of `area` when its bounds aren't known); `None` when
@@ -8729,6 +8772,36 @@ mod tests {
         .unwrap();
         let [w, s, e, _] = polar.bbox.unwrap();
         assert_eq!((w, s, e), (-180.0, -90.0, 180.0), "{:?}", polar.bbox);
+        // Scaling names the grid's axes, matched by their offset vectors; the request says the
+        // system it asks in, which the EPSG:4326 one doesn't.
+        let gridded = |labels: &str, offsets: &str| {
+            desc(srs, "E N", "2590000 1190000", "2610000 1210000").replace(
+                "<nativeFormat>",
+                &format!(
+                    r#"<domainSet><RectifiedGrid><axisLabels>{labels}</axisLabels>{offsets}</RectifiedGrid></domainSet><nativeFormat>"#
+                ),
+            )
+        };
+        let ij =
+            parse_describe(&c2, gridded("i j", "<offsetVector>10 0</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
+        let (get, asked) = get_coverage(&c2, &ij, ij.bbox.unwrap());
+        assert!(get.contains("&SUBSET=E(2590000,2610000)&SUBSET=N(1190000,1210000)&SCALESIZE=i(2048),j(2048)"), "{get}");
+        assert_eq!(asked, Some(lv95));
+        let ji =
+            parse_describe(&c2, gridded("i j", "<offsetVector>0 -10</offsetVector><offsetVector>10 0</offsetVector>").as_bytes()).unwrap();
+        assert_eq!(ji.native.unwrap().grid_axes, Some(("j".into(), "i".into())));
+        let unmatched =
+            parse_describe(&c2, gridded("i j", "<offsetVector>10 10</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
+        assert!(get_coverage_url(&c2, &unmatched, unmatched.bbox.unwrap()).contains("SCALESIZE=E(2048),N(2048)"));
+        // North first (Gauss-Krüger zone 3, `N E`): the grid's axes follow the file's order, then
+        // turn with the system's.
+        let gk = desc("http://www.opengis.net/def/crs/EPSG/0/31467", "N E", "5420000 3480000", "5440000 3500000").replace(
+            "<nativeFormat>",
+            "<domainSet><RectifiedGrid><axisLabels>i j</axisLabels><offsetVector>0 10</offsetVector><offsetVector>-10 0</offsetVector></RectifiedGrid></domainSet><nativeFormat>",
+        );
+        let gk = parse_describe(&c2, gk.as_bytes()).unwrap();
+        let get = get_coverage_url(&c2, &gk, gk.bbox.unwrap());
+        assert!(get.contains("&SUBSET=E(3480000,3500000)&SUBSET=N(5420000,5440000)&SCALESIZE=i(2048),j(2048)"), "{get}");
         // No axis names it knows: EPSG's order (LV95 is east first).
         let unnamed = parse_describe(&c2, desc(srs, "i j", "2590000 1190000", "2610000 1210000").as_bytes()).unwrap();
         assert_eq!(unnamed.native.unwrap().axes, Some(("i".into(), "j".into())));
@@ -8741,10 +8814,8 @@ mod tests {
             let d = desc(srs, labels, lo, hi).replace(r#" axisLabels="""#, "");
             let info = parse_describe(&c2, d.as_bytes()).unwrap();
             assert!(info.native.is_none(), "{srs} {labels}");
-            assert!(
-                get_coverage_url(&c2, &info, [7.4, 46.9, 7.5, 47.0]).contains("OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326"),
-                "{srs}"
-            );
+            let (get, asked) = get_coverage(&c2, &info, [7.4, 46.9, 7.5, 47.0]);
+            assert!(get.contains("OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326") && asked.is_none(), "{srs}");
         }
         // WCS 1.0: its native CRS, the box east first in it.
         let c1 = Coverage { version: "1.0.0".into(), ..c2.clone() };

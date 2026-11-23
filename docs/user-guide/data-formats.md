@@ -398,8 +398,9 @@ the system's axes does, as `X` and `Y` mean either), or WCS 1.0's native CRS wit
 the spatial domain in it. Its longitude/latitude bounds then come from that envelope, so
 `"bbox": "full"` works for it too. Otherwise (a geographic system, or one RustGIS doesn't read)
 the server reprojects it to EPSG:4326 (WCS 2.0 through its CRS extension); one that can't answers
-with an error, which is shown. A GeoTIFF answer that doesn't name its system is read as
-longitude/latitude, with a notice.
+with an error, which is shown. A GeoTIFF answer that doesn't name its system is read in the
+system it was asked for in, when its coordinates aren't degrees, with a notice; otherwise as
+longitude/latitude when they are, with a notice, and refused when they aren't.
 
 A feature type whose own system (its default one) is a projected system RustGIS reads is asked
 for in it, as `EPSG:<code>`, and the layer is held in it, without a conversion by the server or

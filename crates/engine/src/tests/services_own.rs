@@ -208,3 +208,82 @@ fn a_wcs_coverage_is_asked_for_in_its_own_system() {
     let c = s.run("service.coverage", &json!({"url": url, "layer": "dem", "text": caps, "describe": geographic, "bbox": "full"})).unwrap();
     assert!(c["url"].as_str().unwrap().contains("OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326&SUBSET=Long(7.43,7.45)"), "{c}");
 }
+
+/// A 2 × 2 byte GeoTIFF placed at `corner`, `step` a pixel, that doesn't say its coordinate system
+/// (no GeoKey directory), written by hand: little-endian, one strip.
+fn untagged_tiff(corner: (f64, f64), step: f64) -> Vec<u8> {
+    let entries: [(u16, u16, u32, u32); 11] = [
+        (256, 3, 1, 2),
+        (257, 3, 1, 2),
+        (258, 3, 1, 8),
+        (259, 3, 1, 1),
+        (262, 3, 1, 1),
+        (273, 4, 1, 218),
+        (277, 3, 1, 1),
+        (278, 3, 1, 2),
+        (279, 4, 1, 4),
+        (33550, 12, 3, 146),
+        (33922, 12, 6, 170),
+    ];
+    let mut out = b"II*\0".to_vec();
+    out.extend_from_slice(&8u32.to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(out.len(), 146);
+    for v in [step, step, 0.0, 0.0, 0.0, 0.0, corner.0, corner.1, 0.0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(out.len(), 218);
+    out.extend_from_slice(&[1, 2, 3, 4]);
+    out
+}
+
+/// A coverage asked for in LV95 whose answer doesn't say its system is read in LV95, and says so,
+/// whether `service.add` downloads it or the app does (`service.coverage` gives the system, and
+/// `layer.addDownload` takes it as `coverageCrs`).
+#[test]
+fn a_coverage_answer_without_its_system_is_read_in_the_one_asked_for() {
+    let lv95 = Crs::from_epsg(2056).unwrap();
+    let tiff = untagged_tiff((2_600_000.0, 1_200_020.0), 10.0);
+    let (base, _) = super::serve_file(tiff.clone(), false);
+    let caps = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+        <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>dem</wcs:CoverageId><ows:Title>Terrain</ows:Title></wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+    let describe = r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/2056" axisLabels="E N">
+        <lowerCorner>2600000 1200000</lowerCorner><upperCorner>2600020 1200020</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#;
+    let url = format!("{base}/wcs");
+    let p = json!({"url": url, "layer": "dem", "text": caps, "describe": describe, "bbox": "full"});
+    let mut s = Session::new(Project::default());
+    let c = s.run("service.coverage", &p).unwrap();
+    assert_eq!(c["crs"], "EPSG:2056", "{c}");
+    let crs_of = |s: &Session, id: &serde_json::Value| {
+        s.map().layer(id.as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().crs
+    };
+    let added = s.run("service.add", &p).unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+    assert!(notices(&s).iter().any(|n| n.contains("the system it was asked for in")), "{:?}", notices(&s));
+    // As the app adds it.
+    let get = c["url"].as_str().unwrap();
+    s.downloaded.push((7, tiff.clone()));
+    let added =
+        s.run("layer.addDownload", &json!({"id": 7, "url": get, "name": "Terrain", "coverage": true, "coverageCrs": "EPSG:2056"})).unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+    // Without the system asked for (or with one that isn't an EPSG code of a projected system),
+    // its metres can't be placed: refused, as before.
+    for (id, crs) in [(8, None), (9, Some("EPSG:4326")), (10, Some("2056")), (11, Some("EPSG:x")), (12, Some("+proj=somerc"))] {
+        s.downloaded.push((id, tiff.clone()));
+        let mut q = json!({"id": id, "url": get, "name": "Terrain", "coverage": true});
+        if let Some(c) = crs {
+            q["coverageCrs"] = json!(c);
+        }
+        assert!(s.run("layer.addDownload", &q).is_err(), "{crs:?}");
+    }
+    // Added by address, as the command line adds service.coverage's address.
+    let added = s.run("layer.addUrl", &json!({"url": get, "name": "By address", "coverage": true, "coverageCrs": "EPSG:2056"})).unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+}
