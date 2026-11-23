@@ -731,7 +731,7 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             // A file written is the layer's source; without one the pixels are kept in the project.
             // Written beside it, the file is put in its place as the layer is added: a run cancelled
             // before then leaves the file there as it was.
-            let (mut written, mut staged) = (Vec::new(), None);
+            let (mut written, mut staged) = (rustgis_data::loss::Notes::new(), None);
             let mut rl = match &path {
                 Some(path) => {
                     let (wrote, file) = super::raster::write_cog_staged(
@@ -774,11 +774,11 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let class_count = classes.len();
             let notes = std::mem::take(&mut notes);
             // Said with the error should its file not go in place.
-            let said: Vec<String> = notes.iter().map(|(n, _)| n.clone()).chain(written.iter().cloned()).collect();
+            let said: Vec<String> = notes.iter().map(|(n, _)| n.clone()).chain(written.texts().map(str::to_string)).collect();
             let then: super::workflows::Then = Box::new(move |s: &mut Session, v: &mut Value| {
                 say(s, notes);
                 for note in written {
-                    s.notify_written(note);
+                    s.say_written(note);
                 }
                 // The name the layer got (another may hold the one asked for: "… raster (2)").
                 let id = v.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok());
