@@ -3342,6 +3342,9 @@ pub(crate) fn execute(
             }
             #[cfg(not(target_arch = "wasm32"))]
             let read = recording.then(|| Snapshot::owned(s));
+            // Reading the inputs stops on Cancel too, as a run the app starts on a thread does.
+            #[cfg(not(target_arch = "wasm32"))]
+            let _probe = rustgis_analysis::control::install_progress(Some(control.clone()));
             // A built-in tool run here (the command line, a script on its own thread) reads a
             // raster file read in place, as one the app starts on a thread does.
             let tiled = tiled_for(pin);
