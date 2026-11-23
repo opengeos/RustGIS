@@ -405,6 +405,10 @@ pub const MAX_SIDE: u32 = 8192;
 /// How far past each side of the view (a fraction of its size) features are still drawn.
 pub const CULL_MARGIN: f64 = 0.05;
 
+/// How much a streamed layer's read of the view's longitude/latitude box is grown on each side
+/// (a fraction of its size), for the edges' curve between the points it is measured from.
+const VIEW_READ_PAD: f64 = 0.05;
+
 /// The wider margin the GPU backend tessellates vector layers out to: while the map moves,
 /// its meshes are moved rather than rebuilt, so they hold the ground a pan of half the view
 /// or zooming out to twice the extent reveals (as MapLibre keeps the tiles around the view).
@@ -2101,8 +2105,12 @@ pub fn view_lonlat(map: &Map, view: &View) -> Extent {
     if map.projection.is_globe() {
         return Extent::WORLD_LONLAT;
     }
-    let flat = map.flat();
-    let e = view.camera.extent(view.width, view.height);
+    lonlat_box(&map.flat(), &view.camera.extent(view.width, view.height)).unwrap_or(Extent::WORLD_LONLAT)
+}
+
+/// The longitude/latitude box around the flat map's extent `e`, from points along its edges and
+/// any pole inside it; `None` when the projection can't place one of them.
+fn lonlat_box(flat: &rustgis_map::projection::Flat, e: &Extent) -> Option<Extent> {
     let mut out = Extent::EMPTY;
     const N: usize = 8;
     for i in 0..=N {
@@ -2111,7 +2119,7 @@ pub fn view_lonlat(map: &Map, view: &View) -> Extent {
         for c in [Coord::new(x, e.min_y), Coord::new(x, e.max_y), Coord::new(e.min_x, y), Coord::new(e.max_x, y)] {
             match flat.inverse(c) {
                 Some(p) if p.is_finite() => out.expand(p),
-                _ => return Extent::WORLD_LONLAT,
+                _ => return None,
             }
         }
     }
@@ -2124,7 +2132,7 @@ pub fn view_lonlat(map: &Map, view: &View) -> Extent {
             out = Extent::new(-180.0, out.min_y.min(pole.y), 180.0, out.max_y.max(pole.y));
         }
     }
-    if out.is_empty() { Extent::WORLD_LONLAT } else { out }
+    (!out.is_empty()).then_some(out)
 }
 
 /// A source-specific render revision, independent of ordinary tile arrivals.
@@ -2521,11 +2529,48 @@ fn visit_complete(
     source: &dyn rustgis_data::source::FeatureSource,
     visit: &mut dyn FnMut(Vec<rustgis_data::Feature>) -> rustgis_data::Result<()>,
 ) -> rustgis_data::Result<rustgis_data::source::Batch> {
-    let result = source.visit_chunks(None, COMPLETE_CHUNK_BYTES, visit)?;
+    visit_within(source, None, visit)
+}
+
+/// As [`visit_complete`], for the features whose boxes meet `extent` (longitude/latitude), or
+/// every feature for `None`.
+fn visit_within(
+    source: &dyn rustgis_data::source::FeatureSource,
+    extent: Option<Extent>,
+    visit: &mut dyn FnMut(Vec<rustgis_data::Feature>) -> rustgis_data::Result<()>,
+) -> rustgis_data::Result<rustgis_data::source::Batch> {
+    let result = source.visit_chunks(extent, COMPLETE_CHUNK_BYTES, visit)?;
     if !result.complete {
         return Err(rustgis_data::DataError::Format("source traversal was incomplete".into()));
     }
     Ok(result)
+}
+
+/// Whether a streamed layer, drawn upright on a flat map, draws nothing from a feature whose box
+/// misses the frame's cull extent, so that it can read only the features near the view (#1065).
+/// The draw loop draws a polygon, a line without stacked strokes, and a point without marks or an
+/// image only when its box meets the cull extent (`marked_in`), and a polygon or line's selection
+/// outline doesn't reach past the cull margin. Labels, diagrams, aggregation bins, extrusions,
+/// graphics and a shore band take features from beyond the view, so a layer with any of them
+/// reads them all. The layer's geometry type stands for each feature's: the sources drawn this
+/// way ([`FeatureSource::streams_chunks`](rustgis_data::source::FeatureSource::streams_chunks),
+/// Shapefiles) hold one kind of shape.
+fn draws_in_view_only(layer: &rustgis_map::Layer, labels_drawn: bool, shore: bool) -> bool {
+    let plain = !(labels_drawn && layer.labels.enabled)
+        && !shore
+        && layer.aggregation.is_none()
+        && layer.extrusion.is_none()
+        && layer.diagram.is_none()
+        && !layer.graphics;
+    plain
+        && match layer.geometry_type() {
+            GeometryType::Polygon => true,
+            GeometryType::Polyline => !layer.has_strokes(),
+            GeometryType::Point => {
+                !layer.has_strokes() && !layer.has_picture_markers() && layer.symbol_by.is_empty() && layer.selection.is_empty()
+            }
+            GeometryType::None => false,
+        }
 }
 
 /// A label waiting to be placed: the label, its priority and its key, and where else it may go
@@ -6314,9 +6359,24 @@ fn render_frame(
             chunk.dataset.held_in = source.coord_crs();
             chunk.clear_cache();
             chunk.dataset.features = Vec::new().into();
-            // All coordinates are read here: filtering only to the viewport can change labels,
-            // shadows and screen-space effects whose geometry lies beyond its boundary.
-            let result = visit_complete(source.as_ref(), &mut |features| {
+            // Only the features near the view are read when nothing the layer draws comes from
+            // beyond them (#1065): the cull extent's box in longitude/latitude, padded for the
+            // edges' curve between samples, and the GPU's wider one when its meshes are moved
+            // during a pan. Otherwise every feature: labels, shadows and other effects reach in
+            // from beyond the view. So is every feature when the box doesn't come back around
+            // the cull extent on the map (a projection that wraps longitude near its edge).
+            let reach = if gpu { &mesh_cull } else { &ctx.cull };
+            let near = (globe.is_none()
+                && matches!(labels_to, Labels::Own | Labels::Turned(_))
+                && draws_in_view_only(&chunk, !display.paused, shore.is_some()))
+            .then(|| lonlat_box(&flat, reach))
+            .flatten()
+            .map(|e| e.padded(VIEW_READ_PAD, 0.0))
+            .filter(|e| {
+                let back = flat.extent(e);
+                back.min_x <= reach.min_x && back.min_y <= reach.min_y && back.max_x >= reach.max_x && back.max_y >= reach.max_y
+            });
+            let result = visit_within(source.as_ref(), near, &mut |features| {
                 // A frame no longer wanted reads no further (see `cancel`).
                 if cancel::requested() {
                     return Err(rustgis_data::DataError::Cancelled);
