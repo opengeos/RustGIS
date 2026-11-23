@@ -414,16 +414,20 @@ fn remember_node_origins(s: &mut Session, c: &Connection, children: &[Value], or
             }
         }
     }
-    let added = keys.iter().filter(|key| !s.browse_origins.1.contains_key(*key)).count();
-    if s.browse_origins.1.len().saturating_add(added) > 16_384 {
-        return Err("too many catalog nodes are open in this session; reopen the project to browse more".into());
-    }
     // A node a listing read from the internet named stays held there, though a listing read
-    // locally names it again: the narrower record is kept.
-    for key in keys {
+    // locally names it again: the narrower record is kept. Records already there are narrowed
+    // first, whatever room is left, as narrowing adds none.
+    let (known, new): (Vec<_>, Vec<_>) = keys.into_iter().partition(|key| s.browse_origins.1.contains_key(key));
+    for key in known {
         if !s.browse_origins.1.get(&key).is_some_and(|recorded| recorded.reach() < origin.reach()) {
             s.browse_origins.1.insert(key, origin.clone());
         }
+    }
+    if s.browse_origins.1.len().saturating_add(new.len()) > 16_384 {
+        return Err("too many catalog nodes are open in this session; reopen the project to browse more".into());
+    }
+    for key in new {
+        s.browse_origins.1.insert(key, origin.clone());
     }
     Ok(())
 }
@@ -741,7 +745,11 @@ fn service(
 fn remember_or_say(s: &mut Session, c: &Connection, children: &[Value], origin: &address::Origin, root: bool) -> bool {
     let Err(e) = remember_node_origins(s, c, children, origin, root) else { return true };
     if origin.reach() == address::Reach::Public {
-        s.notify(format!("{e}: {} entries this listing names are left out", children.len()), false);
+        let left = match children.len() {
+            1 => "1 entry".to_string(),
+            n => format!("{n} entries"),
+        };
+        s.notify(format!("{e}: {left} this listing names are left out"), false);
         false
     } else {
         s.notify(format!("{e}; what this listing names is judged by its connection's address"), false);
@@ -1246,7 +1254,7 @@ mod tests {
         assert_eq!(found.children.len(), 1, "the record is still listed");
         assert_eq!(found.children[0]["children"].as_array().map(Vec::len), Some(0), "its service is left out");
         let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(told.iter().any(|t| t.contains("1 entries this listing names are left out")), "{told:?}");
+        assert!(told.iter().any(|t| t.contains("1 entry this listing names are left out")), "{told:?}");
     }
 
     /// The folders a service lists keep where its listing was read: a directory a catalogue read
@@ -1318,6 +1326,16 @@ mod tests {
         super::remember_node_origins(&mut session, &connection, std::slice::from_ref(&node), &local, false).unwrap();
         let held = super::node_origin(&session, &connection, node["node"].as_str().unwrap()).map(|o| o.reach());
         assert_eq!(held, Some(Reach::Public));
+        // With the record full, a listing read from the internet still narrows the node records it
+        // names that are already there (it adds no entries); only its new ones can't be recorded.
+        let other = json!({"node": "service:wms:https://csw-21-other.example/wms"});
+        super::remember_node_origins(&mut session, &connection, std::slice::from_ref(&other), &local, false).unwrap();
+        let filler = (0..16_384).map(|i| ((format!("full-{i}"), String::new(), String::new()), local.clone()));
+        session.browse_origins.1.extend(filler);
+        let new = json!({"node": "service:wms:https://csw-21-new.example/wms"});
+        assert!(super::remember_node_origins(&mut session, &connection, &[other.clone(), new], &public, false).is_err());
+        let narrowed = super::node_origin(&session, &connection, other["node"].as_str().unwrap()).map(|o| o.reach());
+        assert_eq!(narrowed, Some(Reach::Public));
     }
 
     #[test]

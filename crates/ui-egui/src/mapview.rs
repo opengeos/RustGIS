@@ -125,8 +125,17 @@ impl Popup {
     /// A popup for what identify found at `at`, asking the WMS layers it lists.
     pub fn new(info: Value, at: Coord, map: usize, opened: u64) -> Popup {
         let mut asks: Vec<Ask> = Vec::new();
-        // The capabilities each fetch is for: layers of one service share it.
+        // The capabilities each fetch is for: layers of one service share it, asked within the
+        // narrowest reach of those layers (any listed by a document read from the internet holds
+        // the fetch there).
         let mut fetched: Vec<(String, usize)> = Vec::new();
+        let held: std::collections::HashSet<&str> = info["featureInfo"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|a| a["public"] == true)
+            .filter_map(|a| a["capabilities"].as_str())
+            .collect();
         for a in info["featureInfo"].as_array().into_iter().flatten() {
             let Some(layer) = a["tileLayer"].as_str().map(str::to_string) else { continue };
             let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
@@ -143,7 +152,7 @@ impl Popup {
             if capabilities {
                 fetched.push((url.to_string(), asks.len()));
             }
-            let slot = ask_within(a, url);
+            let slot = if capabilities && held.contains(url) { ask_within(&json!({"public": true}), url) } else { ask_within(a, url) };
             let request = Some(url.to_string());
             asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
@@ -5652,6 +5661,30 @@ mod tests {
         follow_asks(&mut app, &egui::Context::default());
         let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("http://192.168.7.5/info") && t.contains("local network")), "{told:?}");
+    }
+
+    /// Layers sharing capabilities have them asked once, within the narrowest of their reaches: one
+    /// listed by a document read from the internet holds the fetch there, though the first layer
+    /// asking is the user's own.
+    #[test]
+    fn shared_capabilities_are_asked_within_the_narrowest_reach() {
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        let _turn = crate::fetching::turn();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            log.lock().unwrap().push(ceiling);
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: b"<WMS_Capabilities version=\"1.3.0\"/>".to_vec(), origin }));
+        });
+        let caps = "https://shared-caps.example/wms?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0";
+        let info = json!({"featureInfo": [
+            {"tileLayer": "Mine", "capabilities": caps},
+            {"tileLayer": "Listed", "capabilities": caps, "public": true},
+        ]});
+        let pp = Popup::new(info, Coord::new(8.6, 46.65), 0, 0);
+        assert_eq!(pp.asks.len(), 1, "asked once for both");
+        assert_eq!(asked.lock().unwrap().clone(), [Reach::Public]);
     }
 
     /// Capabilities answer only the service they were asked of: a layer replaced meanwhile by
