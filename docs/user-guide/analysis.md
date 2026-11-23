@@ -2002,7 +2002,9 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
   numbers is in degrees, or in `crs` when given (`{"extent": [2599000, 1199000, 2601000, 1201000],
   "crs": "EPSG:2056"}`), and the raster is placed in that system; an entry that isn't a number is
   refused, not passed over. An extent goes without control points, `transform` and `pointsCrs`:
-  any of them beside it is refused, as none would be used. The `extent` it answers is in
+  any of them beside it is refused, as none would be used. So are `name`, `path`, `cellSize` and
+  `resampling` without `transform`, as only a warp makes a new raster; without one the layer itself
+  is placed. The `extent` it answers is in
   longitude/latitude, whatever system the raster is placed in.
   With `transform` (`raster.georeference`) the points are fitted by any
   of the Control Point Fit transforms and the raster is warped onto a new north-up grid covering the

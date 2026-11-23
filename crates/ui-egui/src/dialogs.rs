@@ -1129,12 +1129,13 @@ fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
         for l in &map.layers {
             // A layer named `map` would be taken for the map's own system, and one whose name another
             // layer has first would be taken for that one.
-            let found_by_name = map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id);
+            // By the name as `map.goToXY` reads it, trimmed (a layer named " map " is the map's).
+            let found_by_name = map.layer_by_name(l.name.trim()).is_some_and(|f| f.id == l.id);
             // Only a system counted east, then north: X and Y are an easting and a northing.
             let Some(crs) = rustgis_engine::cmd::navigate::layer_coordinates_system(l).filter(|c| {
                 !c.is_geographic()
                     && c.axis_directions() == [(1.0, 0.0), (0.0, 1.0)]
-                    && !l.name.eq_ignore_ascii_case("map")
+                    && !l.name.trim().eq_ignore_ascii_case("map")
                     && found_by_name
             }) else {
                 continue;

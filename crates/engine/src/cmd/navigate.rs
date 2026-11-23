@@ -528,13 +528,22 @@ pub(crate) fn system_of(map: &Map, name: &str) -> Result<System, String> {
         if !map.body().is_earth() && !crs.is_geographic() && !crs.is_planetary() {
             return Err(format!("layer '{name}' is in {}, a system of the Earth, and names no place on this map", crs.label()));
         }
+        // Nor does another body's projection on the Earth's map: its inverse gives that body's
+        // degrees, not the Earth's. (Its degrees are read as they are, as data reads them.)
+        if map.body().is_earth() && !crs.is_geographic() && crs.is_planetary() {
+            return Err(format!("layer '{name}' is in {}, a system of another body, and names no place on the Earth's map", crs.label()));
+        }
         return System::of_crs(crs).map_err(|e| format!("layer '{name}': {e}"));
     }
     if let Some(named) = named_system(name) {
         let (system, planetary) = named?;
-        // An Earth system names no place on another body's map; that body's own does.
+        // An Earth system names no place on another body's map; that body's own does. Another
+        // body's projection names none on the Earth's.
         if !map.body().is_earth() && !planetary {
             return Err(format!("{name} is a system of the Earth and names no place on this map"));
+        }
+        if map.body().is_earth() && planetary && !system.is_geographic() {
+            return Err(format!("{name} is a system of another body and names no place on the Earth's map"));
         }
         return Ok(system);
     }
@@ -607,9 +616,13 @@ pub(crate) fn read_system_position(map: &Map, text: &str) -> Option<Result<Coord
             Err(e) => return Some(Err(e)),
         }
     };
-    // An Earth system names no place on another body's map; that body's own does.
+    // An Earth system names no place on another body's map; that body's own does. Another
+    // body's projection names none on the Earth's.
     if !map.body().is_earth() && !planetary {
         return Some(Err(format!("{system} is a system of the Earth and names no place on this map")));
+    }
+    if map.body().is_earth() && planetary && !found.is_geographic() {
+        return Some(Err(format!("{system} is a system of another body and names no place on the Earth's map")));
     }
     // Degrees are written latitude first, as a position without a system reads them, while this
     // form takes an easting first: the order would be a guess, so a system in degrees is refused.
@@ -626,14 +639,17 @@ pub(crate) fn read_system_position(map: &Map, text: &str) -> Option<Result<Coord
     let at = Coord::new(numbers[0], numbers[1]);
     // Two numbers that read as a latitude and a longitude before `map` are degrees typed with the
     // map's name, not metres a few steps from the map's origin: said, not taken for metres.
+    // Two numbers that read as a latitude and a longitude before a projected system (`map`, or
+    // a code) are degrees typed with its name, not a place a few steps from its origin: said, not
+    // taken for its units. Only numbers without a unit: `50 mE 30 mN map` says it is metres.
     let degrees = at.x.abs() <= 180.0 && at.y.abs() <= 180.0 && (at.x.abs() <= 90.0 || at.y.abs() <= 90.0);
-    // Only numbers without a unit: `50 mE 30 mN map` says it is metres.
-    if system.eq_ignore_ascii_case("map") && degrees && units.is_empty() {
+    if degrees && units.is_empty() {
+        // With a unit it counts in, how to say these are its units after all.
+        let hint =
+            found.unit().map(|u| format!(", or write its unit after each number ({} {u}E  {} {u}N)", at.x, at.y)).unwrap_or_default();
         return Some(Err(format!(
-            "{} {} map reads as degrees, not the map's {}: give degrees without a system, latitude then longitude",
-            at.x,
-            at.y,
-            found.unit().unwrap_or("units")
+            "{} {} {system} reads as degrees, not {system}'s units: give degrees without a system, latitude then longitude{hint}",
+            at.x, at.y
         )));
     }
     Some(found.to_lonlat(at).ok_or_else(|| format!("{} {} names no place in {system}", at.x, at.y)))
