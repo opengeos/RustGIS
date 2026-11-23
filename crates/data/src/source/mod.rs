@@ -419,6 +419,14 @@ pub trait FeatureSource: Send + Sync {
     fn visit_chunks(&self, _extent: Option<Extent>, _bytes: usize, _visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         Err(DataError::Unsupported("a source that can't be read a chunk at a time".into()))
     }
+    /// [`FeatureSource::visit_chunks`] for a whole request, its box in the source's own system
+    /// ([`Request::own`]) too: a source that reads one this way tests each feature's own box
+    /// against it, converting nothing. One that doesn't visits every feature when given such a
+    /// box, never fewer than it holds (its extent, in longitude/latitude, may hold less), and
+    /// reads the extent otherwise.
+    fn visit_request_chunks(&self, req: &Request, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        self.visit_chunks(if req.own.is_some() { None } else { req.extent }, bytes, visit)
+    }
     fn info(&self) -> &SourceInfo;
     /// The coordinate system of the features it gives: a file read in place gives them as the file
     /// holds them, in its own system (Shapefile, GeoPackage, FlatGeobuf, GeoParquet, GeoJSON); a
