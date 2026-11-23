@@ -28784,6 +28784,11 @@ fn raster_project_takes_a_given_grid_without_the_sources_footprint() {
     assert!(e.contains("can't be placed in"), "{e}");
     let v = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": [-180, -90, 180, -60], "cellSize": 500_000})).unwrap();
     assert!(v["width"].as_u64().is_some_and(|w| w > 0), "{v}");
+    // The whole world reaches every cell of the grid, as projected: each takes its value.
+    let id = v["layer"].as_u64().unwrap() as u32;
+    let out = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
+    assert_eq!(out.crs, rustgis_data::raster::Crs::from_epsg(3031).unwrap());
+    assert!(out.bands[0].data.iter().all(|c| *c == 1.0), "{:?}", &out.bands[0].data[..8]);
 }
 
 /// Class labels describe source values; interpolating or averaging those values drops the labels
@@ -51086,6 +51091,18 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert!(e.contains("cellSize is required"), "{e}");
     let e = s.run("raster.rasterize", &json!({"layer": "soils", "nodata": 1, "cellSize": 1})).unwrap_err();
     assert!(e.contains("no-data value"), "{e}");
+    // A GeoTIFF that can't be put in its place (a folder holds its name): refused, with what the
+    // run had to say, and nothing added.
+    let dir = std::env::temp_dir().join(format!("rustgis-rasterize-commit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let taken = dir.join("soils.tif");
+    std::fs::create_dir_all(taken.join("inside")).unwrap();
+    let e =
+        s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "path": taken.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("soils.tif") && e.contains("features skipped: 1 with no value"), "{e}");
+    assert_eq!((s.map().layers.len(), s.project.tables.len()), (layers, tables), "nothing added by a refused run");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the staged file is removed");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A whole number past what a pixel holds is refused with advice that applies: a numeric field can

@@ -145,13 +145,14 @@ pub struct Made {
     pub(crate) continuation: Option<crate::policy::Continuation>,
     /// The file the work wrote, put in its place as the raster is added: a run cancelled or
     /// abandoned before then leaves the file there as it was.
-    staged: Option<rustgis_data::io::StagedWrite>,
+    staged: Option<(rustgis_data::io::StagedWrite, Vec<String>)>,
 }
 
 impl Made {
-    /// With `file` to commit as it is added.
-    pub(crate) fn committing(mut self, file: rustgis_data::io::StagedWrite) -> Made {
-        self.staged = Some(file);
+    /// With `file` to commit as it is added; `said`, what the run had to say, goes with the
+    /// error when it can't be (its `then` doesn't run).
+    pub(crate) fn committing(mut self, file: rustgis_data::io::StagedWrite, said: Vec<String>) -> Made {
+        self.staged = Some((file, said));
         self
     }
 }
@@ -188,9 +189,9 @@ pub(crate) fn made_layer(name: String, layer: rustgis_map::RasterLayer, extra: O
 /// what the command says besides (`extra`), and what it does then.
 pub(crate) fn add_made(s: &mut Session, m: Made) -> CmdResult {
     let Made { name, layer, extra, then, inputs, staged, .. } = m;
-    if let Some(file) = staged {
+    if let Some((file, said)) = staged {
         let path = file.destination().display().to_string();
-        file.commit().map_err(|e| format!("{path}: {e}"))?;
+        file.commit().map_err(|e| if said.is_empty() { format!("{path}: {e}") } else { format!("{path}: {e} ({})", said.join("; ")) })?;
     }
     rustgis_data::provenance::record(inputs);
     let mut v = super::raster::add_raster(s, &name, layer)?;

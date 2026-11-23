@@ -767,6 +767,8 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let listed: Vec<Value> = classes.iter().take(256).enumerate().map(|(i, c)| json!({"code": i + 1, "value": c})).collect();
             let class_count = classes.len();
             let notes = std::mem::take(&mut notes);
+            // Said with the error should its file not go in place.
+            let said: Vec<String> = notes.iter().map(|(n, _)| n.clone()).chain(written.iter().cloned()).collect();
             let then: super::workflows::Then = Box::new(move |s: &mut Session, v: &mut Value| {
                 say(s, notes);
                 for note in written {
@@ -787,7 +789,7 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             let name = info.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
             let made = super::workflows::made_layer(name, rl, Some(info), Some(then));
             Ok(match staged {
-                Some(file) => made.committing(file),
+                Some(file) => made.committing(file, said),
                 None => made,
             })
         })();
@@ -940,23 +942,36 @@ impl Bounds {
                     Some(rows) => Box::new(rows.into_iter()),
                     None => Box::new(0..dataset.features.len()),
                 };
-                // Cancel is looked at every few thousand features; a cancelled pass stops there.
+                // Each vertex converted as `lonlat_extent_of` does it, Cancel looked at every few
+                // thousand features and vertices.
+                let to = dataset.lonlat_conversion()?;
+                let (mut e, mut seen) = (Extent::EMPTY, 0usize);
                 let mut cancelled = None;
-                let shapes = rows
-                    .enumerate()
-                    .map_while(|(k, row)| {
-                        if k % 4096 == 0
-                            && let Err(e) = rustgis_data::progress::check()
+                for row in rows {
+                    if seen.is_multiple_of(4096) {
+                        rustgis_data::progress::check().map_err(|e| e.to_string())?;
+                    }
+                    seen += 1;
+                    let Some(g) = dataset.features.geometry(row) else { continue };
+                    if to.is_identity() {
+                        e = e.union(&g.extent());
+                        continue;
+                    }
+                    g.for_each_coord(|c| {
+                        seen += 1;
+                        if cancelled.is_some()
+                            || (seen.is_multiple_of(4096)
+                                && rustgis_data::progress::check().map_err(|e| cancelled = Some(e.to_string())).is_err())
                         {
-                            cancelled = Some(e.to_string());
-                            return None;
+                            return;
                         }
-                        Some(row)
-                    })
-                    .filter_map(|r| dataset.features.geometry(r));
-                let e = dataset.lonlat_extent_of(shapes);
-                if let Some(e) = cancelled {
-                    return Err(e);
+                        if let Some(l) = to.point(c) {
+                            e.expand(l);
+                        }
+                    });
+                    if let Some(c) = cancelled {
+                        return Err(c);
+                    }
                 }
                 if e.is_empty() {
                     return Err(format!("{name} has no features to take an extent from"));
