@@ -3187,13 +3187,7 @@ struct BatchLoss {
 impl BatchLosses {
     /// Counts every report, even when its text is beyond the sample.
     fn add(&mut self, code: LossCode, text: &str, count: usize) {
-        let entry = self.0.entry(code.spec().id).or_insert_with(|| BatchLoss { code, reports: 0, examples: Vec::new(), omitted: 0 });
-        entry.reports = entry.reports.saturating_add(count);
-        if entry.examples.len() < 3 {
-            entry.examples.push(batch_message(text, count));
-        } else {
-            entry.omitted += 1;
-        }
+        self.add_stated(code, &batch_message(text, count), count);
     }
 
     /// [`BatchLosses::add`] for a message that already says how many it covers (`count`):
