@@ -250,9 +250,36 @@ pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 /// an error rather than the app (AGENTS.md › Use the threads). In the browser, which has no
 /// threads, that is every time.
 pub(crate) fn work_off_frame<T, E: From<String>>(name: &str, slot: &Slot<Result<T, E>>, work: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(work) {
+    work_off_frame_with(|work| std::thread::Builder::new().name(name.into()).spawn(work).map(drop), slot, work);
+}
+
+/// [`work_off_frame`], its thread started by `spawn`, which a test can make refuse.
+fn work_off_frame_with<T, E: From<String>>(
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    slot: &Slot<Result<T, E>>,
+    work: impl FnOnce() + Send + 'static,
+) {
+    if let Err(e) = spawn(Box::new(work)) {
         let why = i18n::fmt("The system refused a thread to do this on ({error}); try again", &[("error", &e.to_string())]);
         *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Err(E::from(why)));
+    }
+}
+
+#[cfg(test)]
+mod work_off_frame_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A thread the system refuses ends the job with the refusal in its slot, its work unrun.
+    #[test]
+    fn a_refused_thread_ends_the_job_with_an_error() {
+        let slot: super::Slot<Result<(), String>> = super::Slot::default();
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = ran.clone();
+        super::work_off_frame_with(|_| Err(std::io::Error::other("no threads left")), &slot, move || r.store(true, Ordering::Relaxed));
+        let landed = slot.lock().unwrap().take();
+        assert!(landed.is_some_and(|r| r.is_err_and(|e| e.contains("no threads left"))));
+        assert!(!ran.load(Ordering::Relaxed));
     }
 }
 

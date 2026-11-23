@@ -2492,20 +2492,48 @@ mod native {
         refused: impl FnOnce(String) -> T,
         work: impl FnOnce(Box<dyn FnOnce(T) + Send>) + Send + 'static,
     ) {
+        let spawn = |work| std::thread::Builder::new().name("rustgis-request".into()).spawn(work).map(drop);
+        answer_on_own_thread_with(spawn, done, refused, work);
+    }
+
+    /// [`answer_on_own_thread`], its thread started by `spawn`, which a test can make refuse.
+    fn answer_on_own_thread_with<T: 'static>(
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+        done: Box<dyn FnOnce(T) + Send>,
+        refused: impl FnOnce(String) -> T,
+        work: impl FnOnce(Box<dyn FnOnce(T) + Send>) + Send + 'static,
+    ) {
         let held = std::sync::Arc::new(Mutex::new(Some(done)));
         let given = held.clone();
-        let spawned = std::thread::Builder::new().name("rustgis-request".into()).spawn(move || {
+        let spawned = spawn(Box::new(move || {
             let done = given.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(done) = done {
                 work(done);
             }
-        });
+        }));
         if let Err(e) = spawned {
             let done = held.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(done) = done {
                 done(refused(format!("the system refused a thread for the request ({e})")));
             }
         }
+    }
+
+    /// A thread the system refuses for a request answers its `done` with the refusal, the request
+    /// unsent.
+    #[cfg(test)]
+    #[test]
+    fn a_refused_thread_answers_the_request_with_the_refusal() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let heard: std::sync::Arc<Mutex<Option<Result<(), String>>>> = std::sync::Arc::default();
+        let (h, sent) = (heard.clone(), std::sync::Arc::new(AtomicBool::new(false)));
+        let s = sent.clone();
+        let done: Box<dyn FnOnce(Result<(), String>) + Send> = Box::new(move |r| *h.lock().unwrap() = Some(r));
+        let refuse = |_| Err(std::io::Error::other("no threads left"));
+        answer_on_own_thread_with(refuse, done, Err, move |_| s.store(true, Ordering::Relaxed));
+        let heard = heard.lock().unwrap().take();
+        assert!(heard.is_some_and(|r| r.is_err_and(|e| e.contains("no threads left"))));
+        assert!(!sent.load(Ordering::Relaxed));
     }
 
     /// Fetches under way at once, over all servers: two servers at their cap.

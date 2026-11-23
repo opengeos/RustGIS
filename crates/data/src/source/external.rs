@@ -336,7 +336,6 @@ pub(crate) fn prune(dir: &Path, ours: fn(&str) -> bool, keep: std::time::Duratio
     }
 }
 
-#[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +495,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
     fn timeout_returns_while_a_grandchild_holds_the_pipes() {
         use std::time::{Duration, Instant};
         for budgeted in [false, true] {

@@ -379,7 +379,8 @@ pub(crate) fn spawn(spec: &Spec, wake: Option<crate::session::Wake>) -> Result<S
     match threads {
         Ok((errs, rx, stdin)) => Ok(Started { child, errs, rx, stdin }),
         Err(e) => {
-            finish(&mut child, Duration::ZERO);
+            // Its process group too: a wrapper that has exited may have left workers holding a pipe.
+            let _ = end(&mut child, Duration::ZERO);
             Err(format!("couldn't talk to it: the system refused a thread ({e})"))
         }
     }
