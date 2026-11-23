@@ -6429,11 +6429,24 @@ fn render_frame(
             // the frame drew with, within what the source's share of the map's view memory leaves
             // beside its interaction rows.
             let res = view.camera.res;
+            // Only while the source is as it was opened: a file changed since reads again, and
+            // one gone fails as a read of it would.
+            let unchanged = match near.map(|_| source.same_as_opened()) {
+                Some(Err(e)) => {
+                    if let Some(s) = &mut layer.source {
+                        s.error = Some(e.to_string());
+                    }
+                    *failed_source = Some(layer.instance_id());
+                    return None;
+                }
+                Some(Ok(same)) => same,
+                None => false,
+            };
             let owner = layer.source.as_ref();
             let grids = rustgis_data::raster::crs::grid_generation();
             let kept_key = format!("{key} {grids}");
             let room = owner.map_or(0, |o| o.budget().saturating_sub(layer.view_cache_bytes()).min(rustgis_map::source::KEPT_VIEW_BYTES));
-            let kept = near.and_then(|n| owner?.kept_view(&kept_key, &n, room));
+            let kept = near.filter(|_| unchanged).and_then(|n| owner?.kept_view(&kept_key, &n, room));
             let wide = cull_extent(view, KEEP_MARGIN);
             let keep = (near.is_some()
                 && kept.is_none()
@@ -6447,9 +6460,9 @@ fn render_frame(
                 chunk.selection = chunk
                     .dataset
                     .features
-                    .iter()
+                    .rows()
                     .enumerate()
-                    .filter_map(|(r, f)| selected_order.contains_key(&f.id).then_some(r))
+                    .filter_map(|(r, row)| selected_order.contains_key(&row.id()).then_some(r))
                     .collect();
                 draw_chunk(chunk)?;
                 if let Some((chunks, bytes)) = &mut keeping {

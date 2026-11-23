@@ -74,6 +74,9 @@ pub struct ShpSource {
     /// trust: [`BOXES_UNKNOWN`] until a whole read has looked, then [`BOXES_HOLD`] or
     /// [`BOXES_DONT`].
     boxes: AtomicU8,
+    /// The `.shp`'s and the `.dbf`'s sizes and modification times as opened
+    /// ([`FeatureSource::same_as_opened`]).
+    stamps: [Option<(u64, u128)>; 2],
 }
 
 /// Not yet looked at ([`ShpSource::boxes`]).
@@ -227,7 +230,8 @@ impl ShpSource {
         }
         // Points too: each record's own type is read, whatever the header says.
         let boxes = AtomicU8::new(BOXES_UNKNOWN);
-        Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes })
+        let stamps = [super::external::stamp(path).ok(), super::external::stamp(&dbf).ok()];
+        Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes, stamps })
     }
 }
 
@@ -378,6 +382,14 @@ impl FeatureSource for ShpSource {
     /// shapes out.
     fn finds_all_by_area(&self) -> bool {
         self.index.unboxed == 0 && self.boxes.load(Relaxed) == BOXES_HOLD
+    }
+    /// Both files opened as a read opens them, so one gone gives a read's error, then their sizes
+    /// and modification times compared with those at opening.
+    fn same_as_opened(&self) -> Result<bool> {
+        drop(crate::provenance::open(&self.shp)?);
+        drop(crate::provenance::open(&self.dbf)?);
+        let now = [super::external::stamp(&self.shp).ok(), super::external::stamp(&self.dbf).ok()];
+        Ok(self.stamps.iter().all(Option::is_some) && now == self.stamps)
     }
     /// Visits located shapes in a spatial request; geometry-less rows belong only to whole reads.
     /// Counts scanned records and checks Cancel before filtering them.

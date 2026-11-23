@@ -1761,6 +1761,9 @@ impl FeatureSource for Near {
     fn finds_all_by_area(&self) -> bool {
         self.all_by_area
     }
+    fn same_as_opened(&self) -> rustgis_data::Result<bool> {
+        Ok(true)
+    }
     /// Keeps `extent`, then gives the features whose boxes meet it (all of them for `None`), in
     /// file order.
     fn visit_chunks(
