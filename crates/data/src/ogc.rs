@@ -4335,10 +4335,11 @@ impl Pages {
                 }
                 // One it names that RustGIS can't use (a code, a WKT): read as asked too (as a
                 // GeoJSON answer's is), and its message says so.
-                for m in &mut report.messages {
-                    if let Some(said) = m.strip_suffix("; coordinates are read as longitude/latitude") {
-                        *m = format!("{said}; coordinates are read in {asked}, the system asked for");
+                for mut note in std::mem::replace(&mut report.messages, crate::loss::Notes::new()) {
+                    if let Some(said) = note.text.strip_suffix("; coordinates are read as longitude/latitude") {
+                        note.text = format!("{said}; coordinates are read in {asked}, the system asked for");
                     }
+                    report.messages.push(note);
                 }
             }
             report.messages.extend(losses.messages());
