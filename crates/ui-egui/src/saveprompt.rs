@@ -153,8 +153,12 @@ impl RustGisApp {
         let Some(saved) = pending else { return };
         // Saved through the picker: Save writes back to the document it wrote from now on, or
         // asks again where the phone can't write it back; never to the one before.
+        // A write-back that reports its document again (iOS made its bookmark again, the file having
+        // moved) writes there by the new one from now on.
         if saved.document.is_none() {
             self.save_prompt.targets.insert(saved.project, reported);
+        } else if let Some(fresh) = reported {
+            self.save_prompt.targets.insert(saved.project, Some(fresh));
         }
         if self.session.mark_snapshot_saved(saved.snapshot)
             && let Some(what) = saved.after
@@ -182,7 +186,8 @@ impl RustGisApp {
         self.save_prompt.pending.as_ref().is_some_and(|p| p.project == self.session.file_identity())
     }
 
-    /// The picker save under way wrote `document`, which the phone may write back to: its
+    /// The save under way wrote `document`, which the phone may write back to (a picker save's, or
+    /// a write-back's document found again under a new address): its
     /// [`RustGisApp::complete_project_save`] follows.
     pub fn project_document(&mut self, document: String) {
         self.save_prompt.reported = Some(document);
@@ -631,6 +636,28 @@ mod tests {
         h.state_mut().project_save_refused("site.rgis wasn't saved: another file is being chosen or saved.".into());
         h.state_mut().run("ui.save", Value::Null).unwrap();
         assert_eq!(*asked.borrow(), [Some("content://site".to_string()), Some("content://site".to_string())]);
+    }
+
+    /// A write-back that finds its document under a new address (iOS makes its bookmark again)
+    /// writes there by the new one from then on.
+    #[test]
+    fn a_write_back_that_finds_its_document_again_keeps_the_new_address() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut h = launch();
+        let asked: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        let seen = asked.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |_, _, document| {
+            seen.borrow_mut().push(document.map(str::to_string));
+            Ok(())
+        }));
+        let copy = std::path::PathBuf::from("/picked/4/0/site.rgis");
+        h.state_mut().picked_document(copy.clone(), "bookmark-old".into());
+        h.state_mut().session.path = Some(copy);
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().project_document("bookmark-new".into());
+        h.state_mut().complete_project_save(Ok("site.rgis".into()));
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        assert_eq!(*asked.borrow(), [Some("bookmark-old".to_string()), Some("bookmark-new".to_string())]);
     }
 
     /// A write-back the phone refuses before it starts makes the next Save ask where.

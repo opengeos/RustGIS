@@ -549,7 +549,9 @@ public class MainActivity extends NativeActivity {
         }
         android.os.ParcelFileDescriptor descriptor;
         try {
-            descriptor = getContentResolver().openFileDescriptor(uri, "rw");
+            // "rwt": the mode Android documents as cut to nothing on opening, as some providers
+            // can't cut a file they have handed out; DocumentWrite cuts and checks it again.
+            descriptor = getContentResolver().openFileDescriptor(uri, "rwt");
             if (descriptor == null) {
                 throw new java.io.IOException(DocumentWrite.UNWRITABLE);
             }

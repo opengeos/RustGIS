@@ -408,7 +408,7 @@ fn scoped<T>(url: &NSURL, inside: impl FnOnce() -> T) -> Option<T> {
 /// Writes `bytes` over the document `document` names ([`bookmark`]), inside its security scope
 /// and a coordinated write, atomically: written whole beside it by the system and then put in its
 /// place, so a failure leaves the document as it was.
-fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
+fn write_document(document: &str, bytes: &[u8]) -> Result<Option<String>, String> {
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD.decode(document).map_err(|e| e.to_string())?;
     let data = objc2_foundation::NSData::with_bytes(&data);
@@ -424,7 +424,8 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
         )
     }
     .map_err(|e| e.localizedDescription().to_string())?;
-    // A stale bookmark still finds the document (moved or renamed since): it is written there.
+    // A stale bookmark still finds the document (moved or renamed since): it is written there, and
+    // a fresh one is made for the next Save.
     let written = scoped(&url, || {
         // Checked again: leave to write it may have gone since it was opened.
         if !url.path().is_some_and(|path| objc2_foundation::NSFileManager::defaultManager().isWritableFileAtPath(&path)) {
@@ -449,11 +450,12 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
             &writer,
         );
         drop(writer);
-        match (result.into_inner(), error) {
+        let written = match (result.into_inner(), error) {
             (Some(written), _) => written,
             (None, Some(error)) => Err(error.localizedDescription().to_string()),
             (None, None) => Err(i18n::fmt("the system didn't let it be written", &[])),
-        }
+        };
+        written.map(|()| if stale.as_bool() { bookmark(&url) } else { None })
     });
     written.unwrap_or_else(|| Err(i18n::fmt("the system no longer lets RustGIS reach it", &[])))
 }
@@ -1176,7 +1178,13 @@ impl Platform for Ios {
             // Free for the next save before this one is reported done; counted as work until then.
             busy.store(false, Ordering::Release);
             match written {
-                Ok(()) => shared.save_result(true, Ok(saved)),
+                Ok(fresh) => {
+                    // A bookmark made again (the document moved): Save writes there by it from now on.
+                    if let Some(fresh) = fresh {
+                        shared.add(Event::ProjectDocument(fresh));
+                    }
+                    shared.save_result(true, Ok(saved));
+                }
                 // Worded by the shell, as Android's: the file is as it was (the write is atomic).
                 Err(reason) => shared.add(Event::WriteBackFailed { name: saved, reason, kept: None }),
             }
