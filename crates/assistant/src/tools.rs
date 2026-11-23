@@ -941,9 +941,21 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     if losses.is_empty() && !always {
         return bounded_json(&Value::Object(o), tokens);
     }
+    // Read before a wrap below moves them. A result's `error` that is null (`run`'s on success)
+    // isn't a failure.
+    let failed = o.get("error").is_some_and(|e| !e.is_null());
+    let success = o.get("success").cloned();
     // A result with its own `losses` goes under `result`, as a result that isn't an object does
-    // beside `notices`, so the codes still have their key.
-    let o = if o.contains_key("losses") { serde_json::Map::from_iter([("result".to_string(), Value::Object(o))]) } else { o };
+    // beside `notices`, so the codes still have their key; its `success` stays beside them.
+    let o = if o.contains_key("losses") {
+        let mut wrapped = serde_json::Map::from_iter([("result".to_string(), Value::Object(o))]);
+        if let Some(success) = &success {
+            wrapped.insert("success".into(), success.clone());
+        }
+        wrapped
+    } else {
+        o
+    };
     let max = output_bytes(tokens);
     let forms = loss_forms(&losses);
     let with = |mut o: serde_json::Map<String, Value>, (list, trimmed): &(Value, bool)| {
@@ -965,8 +977,6 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     // The result cut to leave room for one entry per code.
     let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
     let text = bounded_json(&Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1));
-    // A result's `error` that is null (`run`'s on success) isn't a failure.
-    let failed = o.get("error").is_some_and(|e| !e.is_null());
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
@@ -977,7 +987,6 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
         // No room for any of a result that didn't fail: only that it was cut.
         _ => serde_json::Map::from_iter([("truncated".to_string(), json!(true))]),
     };
-    let success = o.get("success").cloned();
     if let Some(success) = &success {
         cut.insert("success".into(), success.clone());
     }
@@ -1759,6 +1768,11 @@ mod tests {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
         }
+        // A failure with its own `losses`, cut, keeps its `success` and says it was cut.
+        let own = json!({"success": false, "error": "e".repeat(5000), "losses": 3});
+        let text = finish_with_losses(&mut s, own, vec![loss.clone()], 200, Withheld::default(), true);
+        let out: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((&out["success"], &out["truncated"]), (&json!(false), &json!(true)), "{out}");
         // A failure whose error gives way says so, at every budget.
         for tokens in 12..=24 {
             let failed = json!({"success": false, "error": "e".repeat(5000)});
