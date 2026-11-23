@@ -22464,6 +22464,7 @@ fn split_sources_keep_their_points_on_top() {
             in_lonlat: false,
             zm_dropped: 0,
             zm_unknown: false,
+            zm_declared: false,
         })
         .collect();
     let original = dir.join("file.gpx").display().to_string();

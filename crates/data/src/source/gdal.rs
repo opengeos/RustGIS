@@ -95,6 +95,8 @@ pub struct Converted {
     pub zm_dropped: u64,
     /// Its features couldn't be checked for Z or M values: any it had were dropped.
     pub zm_unknown: bool,
+    /// Its layer declares Z or M values: one whose count failed most likely lost them.
+    pub zm_declared: bool,
 }
 
 /// A GDAL program (`ogr2ogr`, `ogrinfo`): from `RUSTGIS_GDAL_BIN` (a folder), else on the `PATH`.
@@ -330,6 +332,7 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
                     family,
                     zm_dropped: 0,
                     zm_unknown: false,
+                    zm_declared: l.has_zm,
                 }),
                 // A family the layer doesn't have.
                 Ok(None) => {}
