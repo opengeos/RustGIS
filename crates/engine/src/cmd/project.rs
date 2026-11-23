@@ -249,6 +249,8 @@ pub(crate) fn say_conversion_fallbacks(s: &mut Session) {
         }
         let mut seen = std::collections::BTreeSet::new();
         for note in source.take_conversion_notes() {
+            // Aggregated by the kind its text names (said once per kind, as plain text below).
+            let note = note.text;
             // Source layer names and feature counts vary within a loss kind. Count affected
             // layers once each and total leading feature/row counts across those layers.
             let kind = [
