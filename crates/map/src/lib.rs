@@ -1547,6 +1547,21 @@ impl Layer {
 
     /// Whether the projected geometry cache is filled for a projection, from the layer's current
     /// rows and its coordinate system ([`Dataset::coord_crs`]).
+    /// Lets go of a projected copy made for another map than `key`'s, and its thinned levels: a
+    /// frame drawn there from display copies alone ([`Layer::prepare_display`]) has no use for it,
+    /// and it would stay, a copy of the layer's geometry, until that map came back.
+    pub fn release_projected_other_than(&mut self, key: &str) {
+        if !self.projected.is_empty() && self.projected_for != key {
+            self.projected = Default::default();
+            self.projected_extents = Default::default();
+            self.projected_vertices = 0;
+            self.thinned = Default::default();
+            self.projected_rev = u64::MAX;
+            self.projected_for.clear();
+            self.projected_crs = None;
+        }
+    }
+
     pub fn is_cached(&self, key: &str) -> bool {
         self.projected_for == key
             && self.projected_rev == self.geometry_rev

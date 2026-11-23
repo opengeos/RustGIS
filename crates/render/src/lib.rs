@@ -5307,6 +5307,10 @@ fn render_frame(
                 // In longitude/latitude, which the globe draws (none for a layer held there).
                 layer.lonlat_in();
             }
+            if display_only {
+                // A copy for the map it was drawn on before is of no use here.
+                layer.release_projected_other_than(&key);
+            }
             if globe.is_none() && !display_only {
                 if complete_source {
                     layer.projected_in(&flat, &key);
