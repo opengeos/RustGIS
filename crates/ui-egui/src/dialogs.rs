@@ -482,7 +482,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                                     let n = left_out.to_string();
                                     ui.label(
                                         egui::RichText::new(crate::i18n::fmt(
-                                            "{n} more layers' systems not listed; map.goToXY takes any by its layer's name",
+                                            "{n} more systems of layers not listed; map.goToXY takes any by its layer's name",
                                             &[("n", &n)],
                                         ))
                                         .color(t.text_dim),
