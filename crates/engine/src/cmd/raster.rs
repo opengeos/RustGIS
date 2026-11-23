@@ -689,8 +689,10 @@ pub(crate) type RasterRead = Result<(Raster, bool), String>;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tiled_in_place(path: &str) -> bool {
     use crate::render::rustgis_tiles::cog;
-    // A `#` would be taken for a look's start by the in-place reader.
-    if !cog::is_local_file(path) || path.contains('#') {
+    use crate::render::rustgis_tiles::{address::Reach, cache};
+    // A `#` would be taken for a look's start by the in-place reader. A document that may reach
+    // only public addresses reads no file in place, and nothing of it is looked at here.
+    if !cog::is_local_file(path) || path.contains('#') || cache::ceiling_for(path) != Reach::Local {
         return false;
     }
     let p = Path::new(path);

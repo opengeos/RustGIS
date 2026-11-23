@@ -395,7 +395,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             return Err(format!("no GeoLibre tool '{tool}'"));
         }
         let params = params.clone();
-        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params, false)?, &params))?;
+        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params, Tiled::ByPath)?, &params))?;
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun {
@@ -534,14 +534,19 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     let spec = pin.spec();
     let plugin = pin.plugin().ok_or_else(|| format!("no plugin tool '{tool}'"))?;
     let (_, tid) = rustgis_plugins::split_id(spec.id).ok_or("invalid plugin tool id")?;
-    let (job, full_ids) = preparing(&continuation, || {
-        let inputs = map_inputs(s, Some(spec), resolved, false)?;
+    let (job, full_ids, said) = preparing(&continuation, || {
+        let inputs = map_inputs(s, Some(spec), resolved, Tiled::Overview)?;
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rustgis_plugins::tools::prepare_pinned(plugin.plugin(), tid, &inputs, resolved)
         }))
         .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
-        Ok((job, full_ids(&inputs.loaded)))
+        Ok((job, full_ids(&inputs.loaded), inputs.messages.clone()))
     })?;
+    // What reading its inputs approximated (a raster's overview read for a file read in place),
+    // said now: the run's result is the plugin's own.
+    for m in said {
+        s.notify(format!("{}: {m}", spec.name), false);
+    }
     let read = read_layers(s, spec, resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
@@ -710,7 +715,7 @@ impl ToolRun {
         // A bug in reading the inputs, like one in a tool, must not take the app down.
         let mut done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::render::rustgis_tiles::cache::with_still(still, || {
-                let inputs = match inputs_of(snap, Some(spec), &params, true) {
+                let inputs = match inputs_of(snap, Some(spec), &params, Tiled::File) {
                     Ok(inputs) => inputs,
                     // A Cancel while the inputs are read names the tool, as one while it runs does.
                     Err(_) if control.is_cancelled() => {
@@ -1366,27 +1371,39 @@ impl MapInputs<'_> {
     }
 }
 
-/// [`inputs_of`] from the session as it is; `read_tiled` as there.
+/// How a tool's inputs read a raster layer read in place from a file on this computer
+/// ([`rustgis_map::raster::RasterLayer::tiled`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Tiled {
+    /// From the file, at the finest level the run can hold ([`tiled_inputs`]): a built-in tool's
+    /// run, on its own thread or where the caller waits.
+    File,
+    /// The overview the layer holds, said: a plugin's run, whose inputs are read on the app's
+    /// thread.
+    Overview,
+    /// By its path: a suite tool stages the file itself.
+    ByPath,
+}
+
+/// [`inputs_of`] from the session as it is; `tiled` as there.
 fn map_inputs<'a>(
     s: &'a Session,
     spec: Option<&rustgis_analysis::ToolSpec>,
     params: &Value,
-    read_tiled: bool,
+    tiled: Tiled,
 ) -> Result<MapInputs<'a>, String> {
-    inputs_of(Snapshot::of(s), spec, params, read_tiled)
+    inputs_of(Snapshot::of(s), spec, params, tiled)
 }
 
 /// A tool's inputs from what it read of the session: the streamed layers and files it names read
 /// whole, and the rows of each layer it runs on. It reads, so a background run does this on its
-/// thread. With `read_tiled`, the raster layers it reads that are read in place from a file on
-/// this computer are read from the file ([`tiled_inputs`]): only where the read may take long (a
-/// built-in tool's run), never for a plugin's run or a suite tool's preparation on the app's
-/// thread, which read the overview the layer holds, or the file by its path.
+/// thread. `tiled` says how the raster layers it reads that are read in place from a file on this
+/// computer are read ([`Tiled`]).
 fn inputs_of<'a>(
     snap: Snapshot<'a>,
     spec: Option<&rustgis_analysis::ToolSpec>,
     params: &Value,
-    read_tiled: bool,
+    tiled: Tiled,
 ) -> Result<MapInputs<'a>, String> {
     let (full, said) = streamed_inputs(&snap.map, spec, params)?;
     let (mut messages, mut losses) = (Vec::new(), Vec::new());
@@ -1419,10 +1436,10 @@ fn inputs_of<'a>(
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
     #[cfg(not(target_arch = "wasm32"))]
-    let rasters = if read_tiled { tiled_inputs(&snap.map, spec, params, &mut messages)? } else { std::collections::HashMap::new() };
+    let rasters = tiled_inputs(&snap.map, spec, params, tiled, &mut messages)?;
     #[cfg(target_arch = "wasm32")]
     let rasters = {
-        let _ = read_tiled;
+        let _ = tiled;
         std::collections::HashMap::new()
     };
     Ok(MapInputs {
@@ -1444,16 +1461,22 @@ fn inputs_of<'a>(
 /// run, by lowercase name: such a layer holds only the small overview the map draws from zoomed
 /// out, and a tool reads the finest level of the file it can hold, the full image when it fits
 /// (#2761). Read on the run's thread, stopping on its Cancel; one read from an overview is said.
+/// Read only for [`Tiled::File`]: for [`Tiled::Overview`] each such layer's held overview is said,
+/// and for [`Tiled::ByPath`] nothing is read or said.
 #[cfg(not(target_arch = "wasm32"))]
-fn tiled_inputs(
+pub(crate) fn tiled_inputs(
     map: &rustgis_map::Map,
     spec: Option<&rustgis_analysis::ToolSpec>,
     params: &Value,
+    tiled: Tiled,
     messages: &mut Vec<String>,
 ) -> Result<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>, String> {
     use rustgis_analysis::ParamKind;
     let mut read = std::collections::HashMap::new();
-    let Some(spec) = spec else { return Ok(read) };
+    // Raster to PMTiles draws its input as the map does, in place at each zoom's level, and
+    // reads no pixels through the run's inputs.
+    let Some(spec) = spec.filter(|t| tiled != Tiled::ByPath && t.id != "rasterToPmtiles") else { return Ok(read) };
+    let mut seen = std::collections::HashSet::new();
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
         let names: Vec<&str> = match parameter.kind {
@@ -1465,7 +1488,18 @@ fn tiled_inputs(
             let Some(l) = map.layer_by_name(name) else { continue };
             let key = l.name.to_ascii_lowercase();
             let Some(path) = l.raster.as_ref().filter(|rl| rl.tiled).and_then(|rl| rl.path.as_deref()) else { continue };
-            if read.contains_key(&key) {
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if tiled == Tiled::Overview {
+                if let Some(held) = l.raster.as_ref().and_then(|rl| rl.data.as_ref())
+                    && let Some((fw, fh)) = held.overview
+                {
+                    messages.push(format!(
+                        "{}: read at the {} × {} overview of the {fw} × {fh} raster the layer holds, as plugin tools don't read a raster read in place from its file",
+                        l.name, held.width, held.height
+                    ));
+                }
                 continue;
             }
             let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None).map_err(|e| format!("{}: {e}", l.name))?;
@@ -3171,7 +3205,8 @@ pub(crate) fn execute(
             let read = recording.then(|| Snapshot::owned(s));
             // A built-in tool run here (the command line, a script on its own thread) reads a
             // raster file read in place, as one the app starts on a thread does.
-            let inputs = match map_inputs(s, Some(spec), params, pin.plugin().is_none()) {
+            let tiled = if pin.plugin().is_none() { Tiled::File } else { Tiled::Overview };
+            let inputs = match map_inputs(s, Some(spec), params, tiled) {
                 Ok(inputs) => inputs,
                 // A batch item that can't read its input is kept in the history as a failed run.
                 Err(e) if opts.record.is_some() => return apply_with(s, run_of(t0), kept(), Err(e), now_ms().saturating_sub(t0), opts),

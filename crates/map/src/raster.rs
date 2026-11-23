@@ -194,6 +194,23 @@ fn probed_tiled(path: &str) -> bool {
     probe.is_some_and(|p| p(path))
 }
 
+/// The overview of the file at `path` read in place by the installed reader, waited for
+/// (natively; at most two minutes); `None` when it can't be read so, or in the browser.
+fn read_in_place_now(path: &str) -> Option<Raster> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let reader = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        reader(path, Box::new(move |r| tx.send(r).unwrap_or_default()));
+        rx.recv_timeout(rustgis_data::raster::IN_PLACE_WAIT).ok()?.ok()
+    }
+}
+
 /// The renderer bands' statistics without the masked pixels, and what they were worked out for:
 /// the mask, the renderer's bands and the pixels (held weakly, so their address isn't reused).
 #[derive(Clone, Default)]
@@ -254,7 +271,19 @@ impl RasterLayer {
             return Err("give a raster file or Zarr store on this computer: web addresses aren't repaired here".into());
         }
         let sub = subdataset.or(self.subdataset.as_deref());
-        let r = self.read_placed(path, sub, false).map_err(|e| format!("{path}: {e}"))?;
+        // A large tiled GeoTIFF is read in place, as when it was added (#2761): its overview,
+        // waited for (a repair or reload reads ahead of the window, natively); read whole when
+        // that can't be read after all.
+        let in_place = if sub.is_none() && self.crs.is_none() && self.placement.is_none() && probed_tiled(path) {
+            read_in_place_now(path)
+        } else {
+            None
+        };
+        let tiled = in_place.is_some();
+        let r = match in_place {
+            Some(r) => r,
+            None => self.read_placed(path, sub, false).map_err(|e| format!("{path}: {e}"))?,
+        };
         self.validate_replacement(&r, path)?;
         let mut style = self.style.clone();
         style.repair(&r);
@@ -264,7 +293,7 @@ impl RasterLayer {
         Ok(RasterLayer {
             path: Some(path.into()),
             in_place: false,
-            tiled: false,
+            tiled,
             file_name: None,
             embedded: None,
             subdataset: sub.filter(|_| !elevation).map(String::from),
@@ -494,7 +523,9 @@ impl RasterLayer {
     /// one being read, and one that waits for something other than time (its bucket's connection:
     /// see [`RasterLayer::fail`]).
     pub fn read_failure(&self) -> Option<(&str, Instant, u32)> {
-        if !self.reads_in_place() || self.data.is_some() || self.opening.is_some() {
+        // A web address's read is made again; a local file's read in place that failed is the
+        // file's, which Reload Data reads again, deciding afresh how.
+        if !self.in_place || self.data.is_some() || self.opening.is_some() {
             return None;
         }
         Some((self.error.as_deref()?, self.failed_at?, self.failures))
@@ -574,7 +605,9 @@ impl RasterLayer {
             #[cfg(target_arch = "wasm32")]
             let _ = wait;
             match read {
-                Err(_) if self.tiled => {
+                // The in-place reader failing on its own, not a read asked to stop (a Cancel, a
+                // project replaced), which the whole read below wouldn't stop for.
+                Err(_) if self.tiled && rustgis_data::source::remote::check_still(&self.read_still).is_ok() => {
                     self.tiled = false;
                     self.opening = None;
                     self.error = None;

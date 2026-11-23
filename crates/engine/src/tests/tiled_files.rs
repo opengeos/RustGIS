@@ -99,7 +99,7 @@ fn a_large_local_tiled_geotiff_draws_its_full_image_zoomed_in() {
     let notes = said(&s, mark);
     assert!(
         notes.iter().any(|n| n.starts_with("checks: read in place: the map draws its 1024 × 1024 pixels")
-            && n.contains("geoprocessing tools read the file")
+            && n.contains("built-in geoprocessing tools read the file")
             && n.contains("read a 512 × 512 overview")),
         "{notes:?}"
     );
@@ -132,6 +132,11 @@ fn a_project_keeps_a_tiled_file_as_a_file_and_reads_it_in_place_again() {
     opened.run("project.open", &json!({"path": project.display().to_string()})).unwrap();
     let rl = raster(&opened, "checks");
     assert!(rl.tiled, "read in place again");
+    assert_eq!(rl.data.as_ref().map(|r| (r.width, r.overview)), Some((512, Some((1024, 1024)))));
+    // Reload Data reads it in place again too, not whole.
+    opened.run("layer.reloadData", &json!({"layer": "checks"})).unwrap();
+    let rl = raster(&opened, "checks");
+    assert!(rl.tiled, "reloaded in place");
     assert_eq!(rl.data.as_ref().map(|r| (r.width, r.overview)), Some((512, Some((1024, 1024)))));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -178,5 +183,43 @@ fn a_file_that_fits_or_has_a_sidecar_is_held_whole() {
     let mut s = Session::new(Project::default());
     s.run("layer.addData", &json!({"path": path})).unwrap();
     assert!(!raster(&s, "checks").tiled, "a sidecar keeps it whole");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// How each kind of run reads a raster layer read in place from its file: a built-in tool's run
+/// reads the file, a plugin's reads the overview the layer holds and says so, and a suite tool
+/// (which stages the file by its path) neither reads nor says anything. A layer held whole is
+/// read as it is, with nothing said.
+#[test]
+fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
+    use crate::cmd::gp::{Tiled, tiled_inputs};
+    let d = dir("kinds");
+    let path = checkerboard(&d);
+    let spec = rustgis_analysis::TOOLS.iter().find(|t| t.id == "zonalStats").unwrap();
+    let params = json!({"raster": "checks", "polygons": "zone"});
+    let read = |s: &Session, tiled: Tiled| {
+        let mut messages = Vec::new();
+        let read = tiled_inputs(s.map(), Some(spec), &params, tiled, &mut messages).unwrap();
+        (read.get("checks").map(|r| (r.width, r.overview)), messages)
+    };
+    let mut s = Session::new(Project::default());
+    {
+        let _held = HeldWhole::at(1_000_000);
+        s.run("layer.addData", &json!({"path": path})).unwrap();
+    }
+    assert_eq!(read(&s, Tiled::File), (Some((1024, None)), Vec::new()), "the full image, as it fits");
+    let (none, said) = read(&s, Tiled::Overview);
+    assert_eq!(none, None, "the layer's own overview is read");
+    assert_eq!(
+        said,
+        [
+            "checks: read at the 512 × 512 overview of the 1024 × 1024 raster the layer holds, as plugin tools don't read a raster read in place from its file"
+        ]
+    );
+    assert_eq!(read(&s, Tiled::ByPath), (None, Vec::new()));
+    // Held whole: nothing read again, nothing said.
+    let mut whole = Session::new(Project::default());
+    whole.run("layer.addData", &json!({"path": path})).unwrap();
+    assert_eq!(read(&whole, Tiled::Overview), (None, Vec::new()));
     let _ = std::fs::remove_dir_all(&d);
 }
