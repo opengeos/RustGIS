@@ -6967,7 +6967,18 @@ fn layer_masks(
                         let crs = source.coord_crs();
                         let to_lonlat = crs.to(rustgis_data::raster::Crs::LonLat).ok();
                         let held = flat.held(crs).ok();
-                        let result = visit_complete(source.as_ref(), &mut |features| {
+                        // On a map drawn in the file's own system, every shape it draws, those
+                        // longitude/latitude can't place too, as the layer's own read takes them.
+                        let whole = (ctx.globe.is_none()
+                            && crs != rustgis_data::raster::Crs::LonLat
+                            && source.reads_own_box()
+                            && held.as_ref().is_some_and(|h| h.is_identity()))
+                        .then(|| rustgis_data::source::Request {
+                            extent: None,
+                            limit: usize::MAX,
+                            own: Some((crs, rustgis_data::source::whole_plane())),
+                        });
+                        let result = visit_within(source.as_ref(), whole, &mut |features| {
                             for feature in features {
                                 if let Some(g) = feature.geometry {
                                     let g = match (ctx.globe.is_some(), crs == rustgis_data::raster::Crs::LonLat) {
