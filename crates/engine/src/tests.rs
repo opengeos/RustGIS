@@ -28775,6 +28775,7 @@ fn raster_export_paths_report_band_class_and_credit_changes() {
 #[test]
 fn raster_project_takes_a_given_grid_without_the_sources_footprint() {
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
     let mut s = Session::new(Project::default());
     let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 10.0, pixel_height: -10.0 };
     let r = Raster::new("World", 36, 18, vec![vec![1.0; 36 * 18]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
@@ -28784,6 +28785,21 @@ fn raster_project_takes_a_given_grid_without_the_sources_footprint() {
     assert!(e.contains("can't be placed in"), "{e}");
     let v = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": [-180, -90, 180, -60], "cellSize": 500_000})).unwrap();
     assert!(v["width"].as_u64().is_some_and(|w| w > 0), "{v}");
+    // An extent layer read in place (only the part in view) is refused, as for Polygons to Raster.
+    let mut part = Dataset::new("part", GeometryType::Polygon, vec![]);
+    part.push(
+        Some(Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, -80.0),
+            Coord::new(10.0, -80.0),
+            Coord::new(10.0, -70.0),
+            Coord::new(0.0, -80.0),
+        ]]])),
+        vec![],
+    );
+    part.windowed = true;
+    crate::cmd::layer::add_dataset(&mut s, part);
+    let e = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": "part", "cellSize": 500_000})).unwrap_err();
+    assert!(e.contains("part: load all its features first"), "{e}");
     // The whole world reaches every cell of the grid, as projected: each takes its value.
     let id = v["layer"].as_u64().unwrap() as u32;
     let out = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
