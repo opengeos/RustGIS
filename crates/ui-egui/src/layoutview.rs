@@ -158,8 +158,9 @@ pub struct LayoutView {
     /// Text being typed into the element properties, by (layout, element, field): kept here so
     /// keystrokes survive the frame, and saved when the field loses focus or stops being shown.
     typing: std::collections::HashMap<(usize, u32, &'static str), String>,
-    /// The layouts' names, in their order, when `typing` last followed them ([`follow_project`]).
-    typing_order: Vec<String>,
+    /// The layouts (their [`Layout::instance_id`]), in their order, when `typing` last followed
+    /// them ([`follow_project`]).
+    typing_order: Vec<u64>,
     /// The layout shown, shared between frames until the project changes (layouts can hold
     /// megabytes of pictures, too much to copy every frame), keyed by layout and revision.
     shown: Option<(usize, u64, std::rc::Rc<Layout>)>,
@@ -232,11 +233,10 @@ pub(crate) fn follow_project(app: &mut RustGisApp) {
         app.layout.viewed = None;
     }
     // Text being typed is kept by its layout's place: when the layouts change places (a move, a
-    // removal, a copy, an undo, from the app, an agent or a script), it follows its layout by
-    // name (#2802). With its layout's name gone it goes too: a layout removed, or
-    // renamed (names alone can't tell a rename from a removal and a new layout in its stead).
-    if !app.layout.typing_order.iter().map(String::as_str).eq(layouts.iter().map(|l| l.name.as_str())) {
-        let was = std::mem::replace(&mut app.layout.typing_order, layouts.iter().map(|l| l.name.clone()).collect());
+    // removal, a copy, an undo, from the app, an agent or a script), it follows its layout, renamed
+    // or not (#2802). With its layout gone it goes too, even for a new layout given its name.
+    if !app.layout.typing_order.iter().copied().eq(layouts.iter().map(Layout::instance_id)) {
+        let was = std::mem::replace(&mut app.layout.typing_order, layouts.iter().map(Layout::instance_id).collect());
         let now = &app.layout.typing_order;
         let typing = std::mem::take(&mut app.layout.typing);
         app.layout.typing = typing
@@ -4447,16 +4447,39 @@ mod tests {
         super::save_drafts(&mut app);
         assert_eq!((title_of(&app, "C").1, title_of(&app, "D").1), (before_c.clone(), before_c.clone()));
         assert!(app.layout.typing.is_empty());
-        // Removed and another made at its place within one frame, which names alone can't tell
-        // from a rename: the draft is dropped, never written into the new layout.
-        app.run("layout.new", json!({"name": "E"})).unwrap();
+        // Removed and another made at its place within one frame, under another name or its own:
+        // the draft is dropped, never written into the new layout.
+        for name in ["F", "E"] {
+            app.run("layout.new", json!({"name": "E"})).unwrap();
+            super::follow_project(&mut app);
+            app.layout.typing.insert((place(&app, "E"), title, "text"), "Typed for E".into());
+            app.session.run("layout.remove", &json!({"name": "E"})).unwrap();
+            app.session.run("layout.new", &json!({"name": name})).unwrap();
+            super::save_drafts(&mut app);
+            assert_eq!(title_of(&app, name).1, before_c, "{name}");
+            assert!(app.layout.typing.is_empty(), "{name}");
+            app.session.run("layout.remove", &json!({"name": name})).unwrap();
+        }
+        // Renamed, by an agent between frames: the draft stays with it.
         super::follow_project(&mut app);
-        app.layout.typing.insert((place(&app, "E"), title, "text"), "Typed for E".into());
-        app.session.run("layout.remove", &json!({"name": "E"})).unwrap();
-        app.session.run("layout.new", &json!({"name": "F"})).unwrap();
+        app.layout.typing.insert((place(&app, "C"), title, "text"), "Typed for C".into());
+        app.session.run("layout.rename", &json!({"name": "C", "newName": "X"})).unwrap();
         super::save_drafts(&mut app);
-        assert_eq!(title_of(&app, "F").1, before_c);
-        assert!(app.layout.typing.is_empty());
+        assert_eq!(title_of(&app, "X").1, "Typed for C");
+        // Renamed, and its old name given to another, in one go: the draft stays with its own
+        // layout, not the one now called what it was.
+        super::follow_project(&mut app);
+        app.layout.typing.insert((place(&app, "D"), title, "text"), "Typed for D".into());
+        app.session.run("layout.rename", &json!({"name": "D", "newName": "Q"})).unwrap();
+        app.session.run("layout.rename", &json!({"name": "X", "newName": "D"})).unwrap();
+        super::save_drafts(&mut app);
+        assert_eq!((title_of(&app, "Q").1, title_of(&app, "D").1), ("Typed for D".to_string(), "Typed for C".to_string()));
+        // Copied: the draft is the original's, not the copy's.
+        super::follow_project(&mut app);
+        app.layout.typing.insert((place(&app, "Q"), title, "text"), "Typed again".into());
+        app.session.run("layout.duplicate", &json!({"name": "Q", "newName": "Q2"})).unwrap();
+        super::save_drafts(&mut app);
+        assert_eq!((title_of(&app, "Q").1, title_of(&app, "Q2").1), ("Typed again".to_string(), "Typed for D".to_string()));
     }
 
     /// Text being typed when another project opens is for the old one: it never reaches the

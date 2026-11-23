@@ -97,6 +97,7 @@ pub fn commands() -> Vec<C> {
                 s.project.layouts.iter().any(|x| x.name.eq_ignore_ascii_case(n))
             });
             l.name = name.clone();
+            l.renew_instance_id();
             if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
                 return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
             }
