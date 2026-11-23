@@ -2754,4 +2754,9 @@ fn a_covering_layers_conversion_is_said() {
     // Reaching the South Pole, which the NSIDC north polar stereographic system can't hold.
     let fell_back = said(box_of(0.0, -90.0, 10.0, -89.0), Crs::LonLat, Crs::Epsg(3413));
     assert!(fell_back.len() == 1 && fell_back[0].starts_with("1 topology rule(s) checked in longitude/latitude"), "{fell_back:?}");
+    assert_eq!(
+        fell_back[0].matches("Cover'").count() + fell_back[0].matches("Cover:").count(),
+        1,
+        "the covering layer named once: {fell_back:?}"
+    );
 }
