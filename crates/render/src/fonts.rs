@@ -972,8 +972,9 @@ pub fn take_missing_text() -> Vec<(ScriptFont, Vec<char>)> {
     ScriptFont::ALL.into_iter().filter_map(|script| missing.remove(&script).map(|chars| (script, chars.into_iter().collect()))).collect()
 }
 
-/// Takes missing script kinds once, for callers that do not need the representative characters.
-pub fn take_missing_scripts() -> Vec<ScriptFont> {
+/// Takes missing script kinds once for coverage tests that do not need representative characters.
+#[cfg(test)]
+pub(crate) fn take_missing_scripts() -> Vec<ScriptFont> {
     take_missing_text().into_iter().map(|(script, _)| script).collect()
 }
 

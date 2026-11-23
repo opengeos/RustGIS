@@ -2010,7 +2010,7 @@ fn marker_path_report(x: f32, y: f32, r: f32, marker: Marker) -> (Option<tiny_sk
             }
             // A space draws nothing; a character no font here has, a circle of its size, so the
             // point still shows.
-            None if text::invisible(g.ch) => return (None, None),
+            None if g.ch.is_whitespace() => return (None, None),
             None => {
                 approximations::missing_glyphs([g.ch]);
                 missing = Some(g.ch);
@@ -3955,6 +3955,8 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
     let (_, fog) = tilt_sky(map);
     let ppp = (f64::from(pm.width()) / view.width.max(1e-9)) as f32;
     let (pw, ph) = (pm.width() as f32, pm.height() as f32);
+    let mut active_layer = None;
+    let mut active_name: Option<std::sync::Arc<str>> = None;
     for m in upright_markers_with(map, view, 0.0, env) {
         let Some((x, y, k, t)) = m.place(&view.camera, view.width, view.height) else { continue };
         let s = m.look(k, fog, t);
@@ -3970,7 +3972,12 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
         {
             continue;
         }
-        let _layer = approximations::NamedLayer::new(&m.layer);
+        // The list is grouped by layer; one scope per run avoids allocating for every point.
+        if active_name.as_deref() != Some(m.layer.as_ref()) {
+            drop(active_layer.take());
+            active_layer = Some(approximations::NamedLayer::new(&m.layer));
+            active_name = Some(m.layer.clone());
+        }
         let _ = draw_marker(pm, x, y, &s, 1.0, halo, ppp);
     }
 }
@@ -10972,12 +10979,23 @@ mod tests {
         }
         assert_eq!(notices.len(), 2);
         approximations::layer(Some("Clean"));
-        for ch in ['A', ' ', '\u{200b}'] {
+        for ch in ['A', ' '] {
             let clean = Symbol { marker: Marker::Char(rustgis_map::Glyph::new(ch, "")), ..symbol };
             crate::canvas::with_canvas(&mut image, |canvas| ctx.stamp(canvas, Coord::new(0.0, 0.0), &clean));
         }
         approximations::layer(None);
-        assert!(approximations::take().is_empty(), "present and invisible glyphs aren't omissions");
+        assert!(approximations::take().is_empty(), "present glyphs and spaces aren't omissions");
+        approximations::layer(Some("Format markers"));
+        for ch in ['\u{200b}', '\u{fe0f}'] {
+            let format = Symbol { marker: Marker::Char(rustgis_map::Glyph::new(ch, "")), ..symbol };
+            let mut point = Pixmap::new(120, 80).unwrap();
+            crate::canvas::with_canvas(&mut point, |canvas| ctx.stamp(canvas, Coord::new(0.0, 0.0), &format));
+            assert!(point.pixels().iter().any(|pixel| pixel.alpha() > 0), "U+{:04X}: the point must stay visible", u32::from(ch));
+        }
+        approximations::layer(None);
+        let notices = approximations::take();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].starts_with("Format markers") && notices[0].contains("U+200B") && notices[0].contains("U+FE0F"), "{notices:?}");
     }
 
     #[test]

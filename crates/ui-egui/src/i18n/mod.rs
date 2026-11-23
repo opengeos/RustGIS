@@ -269,8 +269,8 @@ impl Lang {
     pub fn all() -> impl Iterator<Item = Lang> {
         LANGUAGES.iter().map(Lang)
     }
-    /// Catalog letters, combining accents, and its script's punctuation and numerals, sorted
-    /// and deduplicated. Formatting controls and spaces do not require glyphs.
+    /// Catalog letters and combining accents, plus punctuation and numerals in its Arabic,
+    /// Bengali, Lao or CJK script, sorted and deduplicated. Spaces and format controls need no glyphs.
     /// Checked against the active UI fonts before switching languages; script names alone do
     /// not describe coverage (Vietnamese and Azerbaijani also need extra Latin letters).
     pub(crate) fn letters(self) -> &'static [char] {
