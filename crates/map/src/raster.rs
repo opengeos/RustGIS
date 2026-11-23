@@ -204,10 +204,22 @@ fn read_in_place_now(path: &str) -> Option<Raster> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        use rustgis_data::source::remote;
         let reader = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+        let still = remote::current_still();
         let (tx, rx) = std::sync::mpsc::channel();
         reader(path, Box::new(move |r| tx.send(r).unwrap_or_default()));
-        rx.recv_timeout(rustgis_data::raster::IN_PLACE_WAIT).ok()?.ok()
+        // Waited for as `wait_for_read` waits: given up as soon as the read is asked to stop (a
+        // Cancel, a project replaced).
+        let deadline = Instant::now() + rustgis_data::raster::IN_PLACE_WAIT;
+        loop {
+            remote::check_still(&still).ok()?;
+            match rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                Ok(r) => return r.ok(),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(_) => return None,
+            }
+        }
     }
 }
 

@@ -1486,6 +1486,7 @@ pub(crate) fn tiled_inputs(
     // reads no pixels through the run's inputs.
     let Some(spec) = spec.filter(|t| t.id != "rasterToPmtiles") else { return Ok(read) };
     let mut seen = std::collections::HashSet::new();
+    let mut overviews = Vec::new();
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
         let names: Vec<&str> = match parameter.kind {
@@ -1551,13 +1552,14 @@ pub(crate) fn tiled_inputs(
             };
             held.push(count);
             if let Some((fw, fh)) = r.overview {
-                messages.push(format!(
-                    "{}: read at its {} × {} overview of the {fw} × {fh} raster, the finest it can hold",
-                    l.name, r.width, r.height
-                ));
+                overviews.push(format!("{} at its {} × {} overview of the {fw} × {fh} raster", l.name, r.width, r.height));
             }
             read.insert(key, r);
         }
+    }
+    // Said once for the run, every raster named.
+    if !overviews.is_empty() {
+        messages.push(format!("read at the finest level each can hold: {}", overviews.join("; ")));
     }
     Ok(read)
 }
