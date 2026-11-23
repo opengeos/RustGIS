@@ -344,13 +344,16 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         // without a code: the layer may hold only x and y.
         if l.has_zm || l.family.is_none() {
             for part in out.iter_mut().skip(before) {
-                let count = kept_zm_count(&part.path).unwrap_or_else(|| {
-                    let count = count_zm_features(src, &l, part.family).ok();
-                    // A count, or that it couldn't be taken (which this GDAL won't do next time
-                    // either). Not kept, it is counted again next time.
-                    let kept = count.map_or_else(|| UNCOUNTED.to_string(), |n| format!("{n}\n"));
-                    let _ = std::fs::write(part.path.with_extension("zm"), kept);
-                    count
+                let count = kept_zm_count(&part.path).unwrap_or_else(|| match count_zm_features(src, &l, part.family) {
+                    // A count, or that this GDAL can't take it, which it won't next time either.
+                    // Not kept, it is counted again next time.
+                    Ok(count) => {
+                        let kept = count.map_or_else(|| UNCOUNTED.to_string(), |n| format!("{n}\n"));
+                        let _ = std::fs::write(part.path.with_extension("zm"), kept);
+                        count
+                    }
+                    // A program missing, a timeout: tried again next time.
+                    Err(_) => None,
                 });
                 match count {
                     Some(n) => part.zm_dropped = n,
@@ -493,9 +496,9 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
     // A layer declaring Z or M may still hold features with only XY: those that carry them are
     // counted, as for a layer of several types.
     if (info.has_zm || info.family.is_none()) && !converted.empty {
-        match count_zm_features(src, info, family) {
-            Ok(0) => {}
-            Ok(count) => {
+        match count_zm_features(src, info, family).ok().flatten() {
+            Some(0) => {}
+            Some(count) => {
                 zm_dropped = true;
                 zm_note = Some(crate::loss::Note::loss(
                     crate::loss::LossCode::DroppedZm,
@@ -504,7 +507,7 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
                     ),
                 ));
             }
-            Err(_) => {
+            None => {
                 // A layer that declares them may still hold only x and y: said, without a code,
                 // and not marked as having lost them.
                 zm_note = Some(crate::loss::Note::plain(format!(
@@ -838,8 +841,10 @@ const UNCOUNTED: &str = "unknown\n";
 /// Generic layers don't declare the dimensions of their features. Count the selected family's
 /// actual Z/M geometries that conversion flattens; SQLite's spatial functions aren't present in every
 /// GDAL build, so the caller reports possible loss if this diagnostic query fails. One `ogrinfo`
-/// scan of the source, as long as the conversion's, with no Cancel check inside it.
-fn count_zm_features(src: &Path, layer: &LayerInfo, family: Option<Family>) -> Result<u64> {
+/// scan of the source, as long as the conversion's, with no Cancel check inside it. `Ok(None)` when
+/// GDAL refuses the query or its answer can't be read, as it will every time; an error when the
+/// program couldn't run it (missing, timed out), which may not happen again.
+fn count_zm_features(src: &Path, layer: &LayerInfo, family: Option<Family>) -> Result<Option<u64>> {
     let src = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let geometry = format!("\"{}\"", layer.geometry_column.replace('"', "\"\""));
     let name = format!("\"{}\"", layer.name.replace('"', "\"\""));
@@ -853,11 +858,11 @@ fn count_zm_features(src: &Path, layer: &LayerInfo, family: Option<Family>) -> R
     c.args(["-json", "-ro", "-features", "-nomd", "-dialect", "SQLite", "-sql", &sql]).arg(&src);
     let out = output(c, CONVERT_TIMEOUT, &format!("GDAL dimension count for {}, layer '{}'", src.display(), layer.name))?;
     if !out.status.success() {
-        return Err(DataError::Format(format!("GDAL: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        return Ok(None);
     }
-    let json: serde_json::Value =
-        serde_json::from_slice(&out.stdout).map_err(|e| DataError::Format(format!("GDAL: unreadable dimension count ({e})")))?;
-    json.get("layers")
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else { return Ok(None) };
+    Ok(json
+        .get("layers")
         .and_then(|layers| layers.as_array())
         .and_then(|layers| layers.first())
         .and_then(|layer| layer.get("features"))
@@ -865,8 +870,7 @@ fn count_zm_features(src: &Path, layer: &LayerInfo, family: Option<Family>) -> R
         .and_then(|features| features.first())
         .and_then(|feature| feature.get("properties"))
         .and_then(|properties| properties.get("zm_count"))
-        .and_then(|count| count.as_u64())
-        .ok_or_else(|| DataError::Format("GDAL: could not count features with Z or M coordinates".into()))
+        .and_then(|count| count.as_u64()))
 }
 
 /// The longest a conversion may run, and the longest a layer listing may.
@@ -1537,7 +1541,7 @@ mod tests {
         for (point, expected) in [("POINT M (2 48 100)", 1), ("POINT ZM (2 48 100 200)", 1), ("POINT (2 48)", 0)] {
             std::fs::write(&path, format!("WKT,name\n\"{point}\",point\n\"LINESTRING Z (2 48 100,3 48 100)\",line\n")).unwrap();
             let info = list(&path).unwrap().remove(0);
-            assert_eq!(count_zm_features(&path, &info, Some(Family::Points)).unwrap(), expected);
+            assert_eq!(count_zm_features(&path, &info, Some(Family::Points)).unwrap(), Some(expected));
         }
     }
 }
