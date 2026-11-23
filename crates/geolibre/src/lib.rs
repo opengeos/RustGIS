@@ -861,10 +861,38 @@ fn looks_projected(ds: &Dataset) -> bool {
     ds.extent().beyond_lonlat()
 }
 
+/// `bytes` start as a JSON object (after white space), not with a TIFF's signature.
+fn json_not_tiff(bytes: &[u8]) -> bool {
+    let tiff = [b"II*\0".as_slice(), b"MM\0*", b"II+\0", b"MM\0+"];
+    if tiff.iter().any(|t| bytes.starts_with(t)) {
+        return false;
+    }
+    bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
+}
+
 /// Reads one output file back as a layer, table or message. `dir` is the native working folder,
 /// for formats read with their sidecar files (shapefiles).
-fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<&Path>, messages: &mut Vec<String>) -> Option<OutputLayer> {
-    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+fn load(
+    file_name: &str,
+    bytes: &[u8],
+    layer_name: &str,
+    job: &Job,
+    dir: Option<&Path>,
+    messages: &mut Vec<String>,
+    losses: &mut Vec<rustgis_data::loss::LossMessage>,
+) -> Option<OutputLayer> {
+    let mut ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // A tool whose manifest calls its vector output a raster writes GeoJSON into the `.tif` it is
+    // given (Longest Flowpath, #2762): read by what it holds, as a `.json`, so a JSON report written
+    // so is shown as one too.
+    let renamed;
+    let file_name = if matches!(ext.as_str(), "tif" | "tiff") && json_not_tiff(bytes) {
+        ext = "json".into();
+        renamed = Path::new(file_name).with_extension("json").display().to_string();
+        renamed.as_str()
+    } else {
+        file_name
+    };
     match ext.as_str() {
         "tif" | "tiff" | "asc" => match rustgis_data::raster::read_bytes(file_name, bytes) {
             Ok(grey) => {
@@ -882,8 +910,17 @@ fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<
                 _ => rustgis_data::io::read_bytes(file_name, bytes),
             };
             match read {
-                Ok((mut ds, _)) => {
+                Ok((mut ds, report)) => {
                     ds.name = layer_name.to_string();
+                    // What the reader left out or assumed (features without a geometry it reads, Z
+                    // values, a `crs` it doesn't know) is said, as when the file is added.
+                    for note in report.messages {
+                        let note = note.prefixed(layer_name);
+                        match note.loss {
+                            Some(code) => losses.push(rustgis_data::loss::LossMessage { code, text: note.text }),
+                            None => messages.push(note.text),
+                        }
+                    }
                     // An output that says its system (a .prj, a GeoJSON `crs`) is held in it as
                     // read; one in the working system that doesn't is relabelled to it.
                     if job.crs != Crs::LonLat && ds.coord_crs() == Crs::LonLat && looks_projected(&ds) {
@@ -994,6 +1031,7 @@ pub fn finish(job: &Job, files: &[(String, Vec<u8>)], lines: &[String], dir: Opt
     messages.extend(lines.into_iter().take(40).map(str::to_string));
 
     let mut layers = Vec::new();
+    let mut losses = Vec::new();
     for (file, name) in &job.outputs {
         // A tool may pick its own extension (a shapefile for a vector output).
         let stem = Path::new(file).file_stem();
@@ -1004,7 +1042,7 @@ pub fn finish(job: &Job, files: &[(String, Vec<u8>)], lines: &[String], dir: Opt
             })
         });
         if let Some((f, bytes)) = found
-            && let Some(l) = load(f, bytes, name, job, dir, &mut messages)
+            && let Some(l) = load(f, bytes, name, job, dir, &mut messages, &mut losses)
         {
             layers.push(l);
         }
@@ -1027,7 +1065,7 @@ pub fn finish(job: &Job, files: &[(String, Vec<u8>)], lines: &[String], dir: Opt
     if layers.is_empty() && messages.is_empty() {
         messages.push(format!("{} finished without output", job.name));
     }
-    ToolResult { losses: Vec::new(), output: Output::Layers(layers), messages }
+    ToolResult { losses, output: Output::Layers(layers), messages }
 }
 
 /// Runs a tool to completion: natively through the `geolibre` program; in the browser the

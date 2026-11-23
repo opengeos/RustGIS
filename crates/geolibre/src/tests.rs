@@ -799,3 +799,44 @@ fn a_default_sent_back_as_text_is_left_to_the_runner() {
         ]
     );
 }
+
+/// Longest Flowpath's manifest calls its output a raster, so it is asked for a `.tif`, and the
+/// tool writes GeoJSON lines into it: they come back as a vector layer, not as a GeoTIFF that
+/// fails to read (#2762). A real GeoTIFF named `.tif` is still read as one.
+#[test]
+fn a_vector_written_into_a_tif_comes_back_as_a_vector() {
+    let job = Job {
+        tool: "longest_flowpath".into(),
+        name: "Longest Flowpath".into(),
+        files: Vec::new(),
+        args: Vec::new(),
+        outputs: vec![("output.tif".into(), "Flowpaths".into())],
+        crs: Crs::from_epsg(32632).unwrap(),
+        notes: Vec::new(),
+    };
+    // As GeoLibre writes it, in longitude/latitude (here after a line break).
+    let lines = "\n{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"properties\":{\"BASIN\":1,\"LENGTH\":512.5},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[9.002,46.953],[9.002,46.952],[9.003,46.951]]}}]}";
+    let r = finish(&job, &[("output.tif".into(), lines.as_bytes().to_vec())], &[], None);
+    let Output::Layers(layers) = r.output else { panic!("layers") };
+    let Some(OutputLayer::Vector(ds)) = layers.first() else { panic!("a vector: {layers:?} {:?}", r.messages) };
+    assert_eq!((ds.name.as_str(), ds.features.len()), ("Flowpaths", 1));
+    assert!(matches!(ds.features[0].geometry, Some(Geometry::Line(_))), "{:?}", ds.features[0].geometry);
+    assert_eq!(ds.coord_crs(), Crs::LonLat, "not taken for the working system's numbers");
+    assert!(r.messages.is_empty() && r.losses.is_empty(), "a clean output, no notices: {:?} {:?}", r.messages, r.losses);
+    // What the reader leaves out is said, with the layer it is about.
+    let broken =
+        lines.replacen("]}", ",{\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"type\":\"LineString\",\"coordinates\":\"x\"}}]}", 1);
+    let r = finish(&job, &[("output.tif".into(), broken.into_bytes())], &[], None);
+    let said =
+        r.messages.iter().chain(r.losses.iter().map(|l| &l.text)).any(|m| m.starts_with("Flowpaths: 1 features had unreadable geometry"));
+    assert!(said, "{:?} {:?}", r.messages, r.losses);
+    // A JSON report written into the `.tif` is shown as one.
+    let report = finish(&job, &[("output.tif".into(), br#"{"basins": 3, "longest": 512.5}"#.to_vec())], &[], None);
+    assert!(report.messages.iter().any(|m| m.contains("longest")), "{:?}", report.messages);
+    // A GeoTIFF stays a raster, and a file that is neither still says why it can't be read.
+    let tiff = finish(&job, &[("output.tif".into(), u32_tiff([1, 2, 3, 4], None, false))], &[], None);
+    assert!(matches!(tiff.output, Output::Layers(ref l) if matches!(l.first(), Some(OutputLayer::Raster { .. }))));
+    let junk = finish(&job, &[("output.tif".into(), b"not a picture".to_vec())], &[], None);
+    assert!(matches!(junk.output, Output::Layers(ref l) if l.is_empty()));
+    assert!(junk.messages.iter().any(|m| m.starts_with("Flowpaths:")), "{:?}", junk.messages);
+}
