@@ -290,7 +290,7 @@ fn main() -> ExitCode {
             Some(other) => Err(format!("unknown argument {other}: usage: cargo xtask schema [--check]")),
         },
         "web-pwa" => web_pwa(std::env::args().nth(2)),
-        _ => Err("usage: cargo xtask ci | changed [--list] [base] | layers | memory [--cli <path>] [--update] | rows [--update] [--list] | commands | test-hygiene | notices [--check] | schema [--check] | web-pwa <dir>".into()),
+        _ => Err("usage: cargo xtask ci | changed [--list] [base] | layers | attribution | memory [--cli <path>] [--update] | rows [--update] [--list] | commands | test-hygiene | notices [--check] | schema [--check] | web-pwa <dir>".into()),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
