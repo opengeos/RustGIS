@@ -1064,13 +1064,20 @@ mod native {
         let grant = super::parse_grant(&body, super::now_secs())?;
         let scopes = discover(&p.portal, &grant.access_token);
         if cancel.load(Ordering::SeqCst) {
-            revoke_all(vec![Revocation {
+            let revocation = Revocation {
                 endpoint: super::endpoint(&p.portal, "revokeToken"),
                 body: match &grant.refresh_token {
                     Some(r) => super::revoke_body(&p.client_id, r, true),
                     None => super::revoke_body(&p.client_id, &grant.access_token, false),
                 },
-            }]);
+            };
+            // No thread to send it on: sent here, on the sign-in's own thread, so the grant
+            // RustGIS doesn't keep is never left live.
+            if let Err(unsent) = revoke_all(vec![revocation]) {
+                for r in unsent {
+                    let _ = post_form(&r.endpoint, &r.body);
+                }
+            }
             return Err("the sign-in was cancelled".into());
         }
         super::sign_in(&p.portal, &p.client_id, grant, scopes);
@@ -1118,17 +1125,38 @@ mod native {
         super::authorization(url)
     }
 
-    /// Sends revocations off the caller's thread, on a best-effort basis.
-    pub fn revoke_all(revocations: Vec<Revocation>) {
+    /// Sends revocations off the caller's thread, on a best-effort basis. When the system refuses
+    /// a thread, they come back unsent, for the caller to send or to say.
+    pub fn revoke_all(revocations: Vec<Revocation>) -> Result<(), Vec<Revocation>> {
+        revoke_all_with(|send| std::thread::Builder::new().name("rustgis-portal-revoke".into()).spawn(send).map(drop), revocations)
+    }
+
+    /// [`revoke_all`], its thread started by `spawn`, which a test can make refuse.
+    fn revoke_all_with(
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+        revocations: Vec<Revocation>,
+    ) -> Result<(), Vec<Revocation>> {
         if revocations.is_empty() {
-            return;
+            return Ok(());
         }
-        // A thread the system refuses leaves them unsent, as a failed request does.
-        let _ = std::thread::Builder::new().name("rustgis-portal-revoke".into()).spawn(move || {
+        let unsent = revocations.clone();
+        spawn(Box::new(move || {
             for r in revocations {
                 let _ = post_form(&r.endpoint, &r.body);
             }
-        });
+        }))
+        .map_err(|_| unsent)
+    }
+
+    /// Revocations a thread is refused for come back unsent, every one of them.
+    #[cfg(test)]
+    #[test]
+    fn revocations_refused_a_thread_come_back_unsent() {
+        let r = || Revocation { endpoint: "https://portal.example/sharing/rest/oauth2/revokeToken".into(), body: "token=t".into() };
+        let refuse = |_| Err(std::io::Error::other("no threads left"));
+        assert!(revoke_all_with(refuse, vec![r(), r()]).is_err_and(|unsent| unsent == vec![r(), r()]));
+        assert!(revoke_all_with(|_| Ok(()), vec![r()]).is_ok());
+        assert!(revoke_all_with(refuse, Vec::new()).is_ok());
     }
 
     /// The request line's target of an HTTP request.

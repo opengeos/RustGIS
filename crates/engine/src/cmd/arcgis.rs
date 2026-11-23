@@ -97,7 +97,7 @@ fn token(_s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"server": root, "sessions": status()["sessions"]}))
 }
 
-fn sign_out(_s: &mut Session, p: &Value) -> CmdResult {
+fn sign_out(s: &mut Session, p: &Value) -> CmdResult {
     // Only an absent (or blank) portal means every session: junk is refused, not taken for it.
     if p.get("portal").is_some_and(|v| !v.is_null() && !v.is_string()) {
         return Err("portal is a signed-in portal's address (arcgis.status lists them)".into());
@@ -118,8 +118,16 @@ fn sign_out(_s: &mut Session, p: &Value) -> CmdResult {
         crate::render::rustgis_tiles::cache::sign_out();
     }
     #[cfg(not(target_arch = "wasm32"))]
-    arcgis_auth::revoke_all(revocations);
+    if let Err(unsent) = arcgis_auth::revoke_all(revocations) {
+        s.notify(
+            format!(
+                "{} sign-in token(s) weren't revoked at the portal: the system refused a thread to send them on. The portal accepts them until they expire.",
+                unsent.len()
+            ),
+            true,
+        );
+    }
     #[cfg(target_arch = "wasm32")]
-    drop(revocations);
+    let _ = (s, revocations);
     Ok(json!({"signedOut": gone, "sessions": status()["sessions"]}))
 }
