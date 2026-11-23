@@ -72,7 +72,7 @@ pub struct ShpSource {
     reproject: Reproject,
     /// Whether every record's stored box holds its shape, as reads by area take the boxes on
     /// trust: [`BOXES_UNKNOWN`] until a whole read has looked, then [`BOXES_HOLD`] or
-    /// [`BOXES_DONT`]. A file of points holds from the start: each point is its own box.
+    /// [`BOXES_DONT`].
     boxes: AtomicU8,
 }
 
@@ -225,7 +225,8 @@ impl ShpSource {
         if matches!(shape_type, 11 | 13 | 15 | 18 | 21 | 23 | 25 | 28) {
             info.drop_zm(Some(index.count));
         }
-        let boxes = AtomicU8::new(if matches!(shape_type, 1 | 11 | 21) { BOXES_HOLD } else { BOXES_UNKNOWN });
+        // Points too: each record's own type is read, whatever the header says.
+        let boxes = AtomicU8::new(BOXES_UNKNOWN);
         Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject, boxes })
     }
 }

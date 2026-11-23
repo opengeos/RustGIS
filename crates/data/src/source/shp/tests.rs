@@ -834,10 +834,9 @@ fn a_streamed_shapefile_counts_its_deleted_records() {
 }
 
 /// Reads by area take each record's stored box on trust, so they find every shape only once a
-/// whole read has seen each box hold its shape (#1065): a clean file of polygons after that read,
-/// a file of points from the start (each point is its own box), and never a file whose stored box
-/// misses its shape (a stale one, left over from an edit), by however little, which reads by area
-/// leave out.
+/// whole read has seen each box hold its shape (#1065): a clean file of polygons or of points after
+/// that read, and never a file whose stored box misses its shape (a stale one, left over from an
+/// edit), by however little, which reads by area leave out.
 #[test]
 fn reads_by_area_find_every_shape_once_a_whole_read_has_seen_the_boxes_hold() {
     let tmp = tempfile::tempdir().unwrap();
@@ -882,6 +881,10 @@ fn reads_by_area_find_every_shape_once_a_whole_read_has_seen_the_boxes_hold() {
         let s = ShpSource::open_path(&short, "short").unwrap();
         whole(&s);
         assert!(!s.finds_all_by_area(), "a stored box misses its square by a millionth of a degree");
-        assert!(ShpSource::open_path(&pts, "pts").unwrap().finds_all_by_area(), "each point is its own box");
+        // Points are looked at too: a record's own type is read, whatever the header says.
+        let s = ShpSource::open_path(&pts, "pts").unwrap();
+        assert!(!s.finds_all_by_area(), "not before a whole read has looked");
+        whole(&s);
+        assert!(s.finds_all_by_area(), "each point is its own box");
     });
 }
