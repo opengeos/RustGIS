@@ -954,6 +954,7 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
+        Ok(Value::String(preview)) => serde_json::Map::from_iter([("error".to_string(), json!(preview))]),
         _ => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
     };
     let success = o.get("success").cloned();
@@ -987,12 +988,16 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     v.insert("lossesTrimmed".into(), json!(true));
     let v = Value::Object(v).to_string();
     // The tightest budgets: the marker alone.
-    // The tightest budgets: the marker alone, else nothing a client could misread.
+    // The tightest budgets: the marker alone, then its name alone; below that (15 bytes) no
+    // marker fits, and nothing a client could misread is said.
     let marker = json!({"lossesTrimmed": true}).to_string();
+    let name = json!("lossesTrimmed").to_string();
     if v.len() <= max {
         v
     } else if marker.len() <= max {
         marker
+    } else if name.len() <= max {
+        name
     } else {
         "{}".to_string()
     }
@@ -1724,6 +1729,7 @@ mod tests {
         assert!(text.len() <= output_bytes(200), "{}", text.len());
         let out: Value = serde_json::from_str(&text).unwrap();
         assert_eq!((&out["success"], &out["losses"][0]["code"]), (&json!(false), &json!("dropped.value")), "{out}");
+        assert!(out["error"].as_str().unwrap().starts_with("error: eee"), "the error as text, not encoded twice: {out}");
         let mut finish = |r: Value, always: bool| -> Value {
             serde_json::from_str(&finish_with_losses(&mut s, r, vec![], 200, Withheld::default(), always)).unwrap()
         };
