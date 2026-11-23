@@ -1171,12 +1171,12 @@ impl Platform for Ios {
         // Written off the main thread: a project can be large, and a document in iCloud Drive is
         // waited for. Its answer is work still to come until then.
         count(&self.shared.working, true);
-        let (shared, busy, document, name) = (self.shared.clone(), self.writing_back.clone(), document.to_string(), name.to_string());
+        let (shared, busy, document, saved) = (self.shared.clone(), self.writing_back.clone(), document.to_string(), name.to_string());
         let started = std::thread::Builder::new().name("project written back".into()).spawn(move || {
-            let result = write_document(&document, &bytes).map(|()| name.clone()).map_err(|error| {
+            let result = write_document(&document, &bytes).map(|()| saved.clone()).map_err(|error| {
                 i18n::fmt(
                     "{name} wasn't saved where it was opened from: {error}. The file wasn't changed: Save again to choose where to save it.",
-                    &[("name", &name), ("error", &error)],
+                    &[("name", &saved), ("error", &error)],
                 )
             });
             // Free for the next save before this one is reported done; counted as work until then.
