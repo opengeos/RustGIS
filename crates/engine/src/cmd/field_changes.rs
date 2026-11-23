@@ -268,14 +268,8 @@ impl GivenRows {
     /// package says it went out from home ([`GIVEN`]) under the identity `project` carries, and this
     /// device doesn't keep them already.
     pub(crate) fn in_package(dir: &Path, project: &Project) -> Option<GivenRows> {
-        #[derive(Deserialize)]
-        struct Marker {
-            package: String,
-        }
         let package = project.field_origin.as_ref().map(|o| o.package.as_str()).filter(|p| !p.is_empty())?;
-        let marker = std::fs::read(dir.join(GIVEN)).ok().filter(|b| b.len() <= 4096)?;
-        let marker: Marker = serde_json::from_slice(&marker).ok()?;
-        let given = (marker.package == package).then(|| GivenRows::of(project, package))?;
+        let given = marks(dir, package).then(|| GivenRows::of(project, package))?;
         (!given.kept()).then_some(given)
     }
 
@@ -319,6 +313,21 @@ fn is_spent(package: &str) -> bool {
 /// What a keep says when its package has gone back already.
 const ALREADY_SENT: &str =
     "The field package had already gone back, so the rows it gave weren't kept on this device: make a new field package for more edits";
+
+/// Whether `dir`, a package unpacked, went out from home as package `package`: its [`GIVEN`] names
+/// it.
+pub(crate) fn marks(dir: &Path, package: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Marker {
+        package: String,
+    }
+    !package.is_empty()
+        && std::fs::read(dir.join(GIVEN))
+            .ok()
+            .filter(|b| b.len() <= 4096)
+            .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
+            .is_some_and(|m| m.package == package)
+}
 
 /// What a package going out from home holds under [`GIVEN`].
 pub(crate) fn given_entry(package: &str) -> Result<Vec<u8>, String> {
