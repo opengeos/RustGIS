@@ -1072,10 +1072,12 @@ mod native {
                 },
             };
             // No thread to send it on: sent here, on the sign-in's own thread, so the grant
-            // RustGIS doesn't keep is never left live.
+            // RustGIS doesn't keep isn't left live without a word.
             if let Err(unsent) = revoke_all(vec![revocation]) {
-                for r in unsent {
-                    let _ = post_form(&r.endpoint, &r.body);
+                // Every one is sent, whichever fail.
+                let failed = unsent.iter().filter(|r| post_form(&r.endpoint, &r.body).is_err()).count();
+                if failed > 0 {
+                    return Err("the sign-in was cancelled, but the portal didn't confirm revoking its token: it may stay valid there until it expires".into());
                 }
             }
             return Err("the sign-in was cancelled".into());
