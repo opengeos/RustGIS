@@ -536,11 +536,15 @@ public class MainActivity extends NativeActivity {
                 throw new java.io.IOException("the app's storage can't be written to");
             }
             copy = new File(dir, displayName(uri));
-            try (FileOutputStream out = new FileOutputStream(copy)) {
-                out.write(bytes);
-                out.getFD().sync();
-            }
         } catch (Throwable e) {
+            return writeBackFailed(name, e, null);
+        }
+        try (FileOutputStream out = new FileOutputStream(copy)) {
+            out.write(bytes);
+            out.getFD().sync();
+        } catch (Throwable e) {
+            // Half a copy would only take room: nothing has touched the document yet.
+            removeWithFolder(copy);
             return writeBackFailed(name, e, null);
         }
         android.os.ParcelFileDescriptor descriptor;
@@ -558,13 +562,10 @@ public class MainActivity extends NativeActivity {
             // Not closed by the stream: a failure closes the descriptor with its error, below.
             FileOutputStream out = new FileOutputStream(descriptor.getFileDescriptor());
             DocumentWrite.overwrite(out.getChannel(), bytes);
-            // Closing hands the document back to its provider, which may store it only then.
+            // Closing hands the document back to its provider, which may store it only then (its
+            // size as the provider lists it can lag behind: the length was checked on the file).
             descriptor.close();
             descriptor = null;
-            long size = documentSize(uri);
-            if (size >= 0 && size != bytes.length) {
-                throw new java.io.IOException("the file holds " + size + " bytes after writing " + bytes.length);
-            }
             removeWithFolder(copy);
             return "project-saved\t" + name;
         } catch (Throwable e) {
@@ -594,18 +595,6 @@ public class MainActivity extends NativeActivity {
     /** Text that fits in one field of an event: no tab or line break. */
     private static String oneField(String text) {
         return text.replaceAll("[\\t\\r\\n]", " ");
-    }
-
-    /** The document's size as its provider gives it, or -1 when it doesn't say. */
-    private long documentSize(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(uri, new String[] {OpenableColumns.SIZE}, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
-                return cursor.getLong(0);
-            }
-        } catch (RuntimeException e) {
-            // The size is a check only: not knowing it isn't a failure.
-        }
-        return -1;
     }
 
     /** Removes a file and its folder, once that is empty. */

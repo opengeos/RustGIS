@@ -216,7 +216,7 @@ impl<P: Phone> App<P> {
                             &[("name", &name), ("reason", &reason)],
                         ),
                         Some(kept) => i18n::fmt(
-                            "{name} may be damaged where it was opened from: {reason}. The project as saved is kept at {kept}: Save again to choose where to save it.",
+                            "{name} may be damaged where it was opened from: {reason}. The project is still open: Save again to choose where to save it. A copy of it as saved is kept at {kept}.",
                             &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
                         ),
                     };

@@ -416,7 +416,8 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
     let url = unsafe {
         NSURL::URLByResolvingBookmarkData_options_relativeToURL_bookmarkDataIsStale_error(
             &data,
-            objc2_foundation::NSURLBookmarkResolutionOptions::empty(),
+            // Access is started (and ended) explicitly by `scoped`, never left on by resolving.
+            objc2_foundation::NSURLBookmarkResolutionOptions::WithoutImplicitStartAccessing,
             None,
             &mut stale,
         )
@@ -1177,8 +1178,9 @@ impl Platform for Ios {
                     &[("name", &name), ("error", &error)],
                 )
             });
-            shared.save_result(true, result);
+            // Free for the next save before this one is reported done; counted as work until then.
             busy.store(false, Ordering::Release);
+            shared.save_result(true, result);
             count(&shared.working, false);
         });
         if let Err(e) = started {
