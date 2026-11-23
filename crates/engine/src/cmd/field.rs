@@ -882,17 +882,29 @@ fn photos_field(layer: &rustgis_map::Layer) -> Option<usize> {
 }
 
 /// Rewrites each photos field of `map` with `rewrite` (one path in, the path to name instead out).
-fn rewrite_photos(map: &mut rustgis_map::Map, mut rewrite: impl FnMut(&str) -> String) {
+fn rewrite_photos(map: &mut rustgis_map::Map, rewrite: impl FnMut(&str) -> String) {
+    let _ = rewrite_photos_until(map, rewrite, || Ok(()));
+}
+
+/// [`rewrite_photos`], asking `go_on` before each row and stopping with its error: Cancel, for
+/// a pass whose reading of a row can look at the disk.
+fn rewrite_photos_until(
+    map: &mut rustgis_map::Map,
+    mut rewrite: impl FnMut(&str) -> String,
+    mut go_on: impl FnMut() -> Result<(), String>,
+) -> Result<(), String> {
     for l in map.layers.iter_mut().filter(|l| !l.is_raster()) {
         let Some(fi) = photos_field(l) else { continue };
         let features = &mut l.dataset.features;
         for row in 0..features.len() {
+            go_on()?;
             let rustgis_data::Value::Text(held) = features.value(row, fi) else { continue };
             if let Some(out) = rewrite_paths(held, &mut rewrite) {
                 let _ = features.set_value(row, fi, rustgis_data::Value::Text(out));
             }
         }
     }
+    Ok(())
 }
 
 /// A photos field's text `held` with each path rewritten by `rewrite`, or `None` when none
@@ -986,7 +998,9 @@ fn photo_paths(held: &str) -> Vec<std::ops::Range<usize>> {
 fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize) -> Result<Photos, String> {
     let mut found = Photos::default();
     // Every path named, once, in order; and the names already given under `photos/`, kept.
-    let (mut named, mut seen, mut taken) = (Vec::new(), std::collections::HashSet::new(), std::collections::HashSet::new());
+    // The names are borrowed from the map's rows, not copied.
+    let (mut named, mut seen, mut taken): (Vec<&str>, std::collections::HashSet<&str>, std::collections::HashSet<String>) =
+        (Vec::new(), std::collections::HashSet::new(), std::collections::HashSet::new());
     for l in map.layers.iter().filter(|l| !l.is_raster()) {
         let Some(fi) = photos_field(l) else { continue };
         for value in l.dataset.features.column(fi) {
@@ -998,8 +1012,8 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
                 if let Some(name) = path.strip_prefix(&format!("{PHOTOS}/")) {
                     taken.insert(name.to_ascii_lowercase());
                 }
-                if seen.insert(path.to_string()) {
-                    named.push(path.to_string());
+                if seen.insert(path) {
+                    named.push(path);
                 }
             }
         }
@@ -1009,7 +1023,7 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
         rustgis_data::progress::check().map_err(|e| e.to_string())?;
         let file = Path::new(&path);
         if !file.is_absolute() {
-            found.missing.push(path);
+            found.missing.push(path.to_string());
             continue;
         }
         // The index holds one path a line, its fields split by tabs; a photos field splits its
@@ -1021,12 +1035,12 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
         let size = match std::fs::metadata(file) {
             Ok(m) if m.is_file() => m.len(),
             Ok(_) => {
-                found.missing.push(path);
+                found.missing.push(path.to_string());
                 continue;
             }
             // The browser has no files to look at by path: not here either.
             Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported) => {
-                found.missing.push(path);
+                found.missing.push(path.to_string());
                 continue;
             }
             Err(e) => {
@@ -1035,7 +1049,7 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
             }
         };
         if !file.extension().is_some_and(|e| PICTURES.iter().any(|p| e.eq_ignore_ascii_case(p))) {
-            found.not_pictures.push(path);
+            found.not_pictures.push(path.to_string());
             continue;
         }
         // A short name of plain letters and digits, numbered: two names a system takes for one
@@ -1052,7 +1066,7 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
         // Past the budget, past what the phone reads of the index, or past the entries a package
         // holds: it stays home.
         if size > *budget || (index.len() + line.len()) as u64 > MAX_INDEX || found.entries.len() >= most_entries {
-            found.too_large.push(path);
+            found.too_large.push(path.to_string());
             continue;
         }
         match crate::project::read_file(file, *budget) {
@@ -1091,91 +1105,89 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
     let mut said = std::collections::HashSet::new();
     // The index unpacked with each folder of photos a package brought: entry → path at home.
     let mut unpacked = Unpacked::new();
-    let mut cancelled = None;
-    rewrite_photos(map, |path| {
-        if let Some(entry) = placed.get(path) {
-            return entry.clone();
-        }
-        if said.contains(path) || cancelled.is_some() {
-            return path.to_string();
-        }
-        if let Err(e) = rustgis_data::progress::check() {
-            cancelled = Some(e.to_string());
-            return path.to_string();
-        }
-        // Brought from home in this package: named where it is at home, and not carried back.
-        let at_home = home_path(&mut unpacked, package, path);
-        if at_home != path {
-            placed.insert(path.to_string(), at_home.clone());
-            return at_home;
-        }
-        let file = Path::new(path);
-        // A picture only: a photos field is free text, and could name any file on the device.
-        let picture = file.extension().is_some_and(|e| PICTURES.iter().any(|p| e.eq_ignore_ascii_case(p)));
-        if !file.is_absolute() {
-            said.insert(path.to_string());
-            found.missing.push(path.to_string());
-            return path.to_string();
-        }
-        // Not on this device (in a returning package, a photo named at home): left as named. One
-        // there that can't be looked at is said, as one that can't be read is.
-        let size = match std::fs::metadata(file) {
-            Ok(m) if m.is_file() => m.len(),
-            // A folder, or nothing there: no photo file on this device.
-            Ok(_) => {
+    // Cancel is looked at before each row: reading a row's paths can look at the disk.
+    let go_on = || rustgis_data::progress::check().map_err(|e| e.to_string());
+    rewrite_photos_until(
+        map,
+        |path| {
+            if let Some(entry) = placed.get(path) {
+                return entry.clone();
+            }
+            if said.contains(path) {
+                return path.to_string();
+            }
+            // Brought from home in this package: named where it is at home, and not carried back.
+            let at_home = home_path(&mut unpacked, package, path);
+            if at_home != path {
+                placed.insert(path.to_string(), at_home.clone());
+                return at_home;
+            }
+            let file = Path::new(path);
+            // A picture only: a photos field is free text, and could name any file on the device.
+            let picture = file.extension().is_some_and(|e| PICTURES.iter().any(|p| e.eq_ignore_ascii_case(p)));
+            if !file.is_absolute() {
                 said.insert(path.to_string());
                 found.missing.push(path.to_string());
                 return path.to_string();
             }
-            // The browser has no files to look at by path: not here either.
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported) => {
-                said.insert(path.to_string());
-                found.missing.push(path.to_string());
-                return path.to_string();
-            }
-            Err(e) => {
-                said.insert(path.to_string());
-                found.unread.push(format!("{path} ({e})"));
-                return path.to_string();
-            }
-        };
-        if !picture {
-            said.insert(path.to_string());
-            found.not_pictures.push(path.to_string());
-            return path.to_string();
-        }
-        if size > *budget {
-            said.insert(path.to_string());
-            found.too_large.push(path.to_string());
-            return path.to_string();
-        }
-        match crate::project::read_file(file, *budget) {
-            Ok(bytes) => {
-                *budget = budget.saturating_sub(bytes.len() as u64);
-                let stem = file.file_name().map(|n| plain_name(&n.to_string_lossy())).unwrap_or_else(|| "photo.jpg".into());
-                let mut name = stem.clone();
-                for n in 2.. {
-                    if taken.insert(name.to_ascii_lowercase()) {
-                        break;
-                    }
-                    name = format!("{n}-{stem}");
+            // Not on this device (in a returning package, a photo named at home): left as named. One
+            // there that can't be looked at is said, as one that can't be read is.
+            let size = match std::fs::metadata(file) {
+                Ok(m) if m.is_file() => m.len(),
+                // A folder, or nothing there: no photo file on this device.
+                Ok(_) => {
+                    said.insert(path.to_string());
+                    found.missing.push(path.to_string());
+                    return path.to_string();
                 }
-                let entry = format!("{PHOTOS}/{name}");
-                index.push_str(&format!("{entry}\t{path}\n"));
-                found.entries.push((entry.clone(), bytes));
-                placed.insert(path.to_string(), entry.clone());
-                entry
-            }
-            Err(e) => {
+                // The browser has no files to look at by path: not here either.
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported) => {
+                    said.insert(path.to_string());
+                    found.missing.push(path.to_string());
+                    return path.to_string();
+                }
+                Err(e) => {
+                    said.insert(path.to_string());
+                    found.unread.push(format!("{path} ({e})"));
+                    return path.to_string();
+                }
+            };
+            if !picture {
                 said.insert(path.to_string());
-                found.unread.push(format!("{path} ({e})"));
-                path.to_string()
+                found.not_pictures.push(path.to_string());
+                return path.to_string();
             }
-        }
-    });
-    if let Some(e) = cancelled {
-        return Err(e);
-    }
+            if size > *budget {
+                said.insert(path.to_string());
+                found.too_large.push(path.to_string());
+                return path.to_string();
+            }
+            match crate::project::read_file(file, *budget) {
+                Ok(bytes) => {
+                    *budget = budget.saturating_sub(bytes.len() as u64);
+                    let stem = file.file_name().map(|n| plain_name(&n.to_string_lossy())).unwrap_or_else(|| "photo.jpg".into());
+                    let mut name = stem.clone();
+                    for n in 2.. {
+                        if taken.insert(name.to_ascii_lowercase()) {
+                            break;
+                        }
+                        name = format!("{n}-{stem}");
+                    }
+                    let entry = format!("{PHOTOS}/{name}");
+                    index.push_str(&format!("{entry}\t{path}\n"));
+                    found.entries.push((entry.clone(), bytes));
+                    placed.insert(path.to_string(), entry.clone());
+                    entry
+                }
+                Err(e) => {
+                    said.insert(path.to_string());
+                    found.unread.push(format!("{path} ({e})"));
+                    path.to_string()
+                }
+            }
+        },
+        go_on,
+    )?;
     if !index.is_empty() {
         found.entries.push((INDEX.to_string(), index.into_bytes()));
     }
@@ -1810,13 +1822,16 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     if photos.is_dir() {
         // A package from home names its photos where they are at home; its index says which entry
         // each is.
-        let at_home: std::collections::HashMap<String, String> =
-            unpacked_index(&photos, project.field_origin.as_ref().map_or("", |o| o.package.as_str()))
-                .into_iter()
-                .map(|(entry, named)| (named, entry))
-                .collect();
+        let index = unpacked_index(&photos, project.field_origin.as_ref().map_or("", |o| o.package.as_str()));
+        // An entry the index lists belongs to the home path it names, and to nothing else: a
+        // feature naming the entry itself (a reference copy's, say) isn't pointed at that photo.
+        let listed: std::collections::HashSet<String> = index.keys().cloned().collect();
+        let at_home: std::collections::HashMap<String, String> = index.into_iter().map(|(entry, named)| (named, entry)).collect();
         for map in &mut project.maps {
             rewrite_photos(map, |path| {
+                if listed.contains(path) {
+                    return path.to_string();
+                }
                 // One named where it is at home keeps that name unless its unpacked file can be named.
                 let (named, entry) = (path, at_home.get(path).map_or(path, String::as_str));
                 if let Some(name) = entry.strip_prefix("photos/").filter(|name| plain_file(name)) {
