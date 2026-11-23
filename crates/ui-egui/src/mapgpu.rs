@@ -1240,22 +1240,33 @@ impl SceneBuffers {
     /// vertices; else it is drawn again.
     pub(crate) fn fits(&self, cam: &Camera) -> bool {
         let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
-        let precise = gpu_scene::f32_holds(self.reach, cam.res / f64::from(self.ppp.max(0.1)));
-        precise
+        self.follows(cam)
             && match &self.tilt {
-                None => cam.bearing == 0.0 && pitch == 0.0,
+                None => true,
                 Some(t) => {
                     let turn = rustgis_engine::map::camera::normalize_bearing(cam.bearing - t.camera.bearing).abs();
                     let zoom = cam.res / t.camera.res.max(1e-12);
-                    (t.camera.bearing != 0.0) == (cam.bearing != 0.0)
-                    && (t.camera.pitch != 0.0) == (pitch != 0.0)
-                    && turn < 0.5
+                    turn < 0.5
                     && (pitch - t.camera.pitch).abs() < 0.5
                     && (0.7..1.4).contains(&zoom)
                     // Panned less than a quarter of the view: the ground it drew still covers it.
                     && (cam.center.x - t.camera.center.x).hypot(cam.center.y - t.camera.center.y)
                         < 0.25 * self.size[0].min(self.size[1]) * t.camera.res
                 }
+            }
+    }
+
+    /// Whether the scene can be drawn for `cam` at all, though past [`GpuFrame::fits`] it shows
+    /// less than a new one would (ground it left out, detail for another zoom): a turned or
+    /// tilted scene for a view still turned or tilted, a north-up flat one for a north-up flat
+    /// view, with its vertices still precise in f32. It stands in while the scene for `cam` is
+    /// made off the UI thread.
+    pub(crate) fn follows(&self, cam: &Camera) -> bool {
+        let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
+        gpu_scene::f32_holds(self.reach, cam.res / f64::from(self.ppp.max(0.1)))
+            && match &self.tilt {
+                None => cam.bearing == 0.0 && pitch == 0.0,
+                Some(t) => (t.camera.bearing != 0.0) == (cam.bearing != 0.0) && (t.camera.pitch != 0.0) == (pitch != 0.0),
             }
     }
 }
