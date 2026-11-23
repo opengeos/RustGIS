@@ -182,9 +182,9 @@ impl Engine {
                     1 => session.warn(format!("{name}: 1 row couldn't be read and was left out")),
                     n => session.warn(format!("{name}: {n} rows couldn't be read and were left out")),
                 }
-                let mut read_zm = false;
+                // Said at its opening or by this read, as `zm_noted` counts it for the file writer.
+                let read_zm = report.messages.iter().any(|m| m.loss == Some(rustgis_engine::data::loss::LossCode::DroppedZm));
                 for message in report.messages.into_iter().filter(|message| !opened_notes.contains(message)) {
-                    read_zm |= message.loss == Some(rustgis_engine::data::loss::LossCode::DroppedZm);
                     session.say(message);
                 }
                 // What GeoJSON, in WGS 84, lacks of it, as an export to GeoJSON says it; a Z/M loss

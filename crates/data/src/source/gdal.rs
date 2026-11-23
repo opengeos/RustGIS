@@ -348,7 +348,8 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
                 // A count read is touched with its conversion, so pruning keeps it as long.
                 let count = kept_zm_count(&part.path).inspect(|_| touch(&part.path.with_extension("zm"))).or_else(|| {
                     let count = count_zm_features(src, &l, part.family).ok().flatten()?;
-                    // Not kept, it is counted again next time.
+                    // Kept beside the conversion, so a cache hit reads it instead of scanning the
+                    // source again; a write that fails only means it is counted again next time.
                     let _ = std::fs::write(part.path.with_extension("zm"), format!("{count}\n"));
                     Some(count)
                 });
