@@ -600,7 +600,7 @@ impl ArcgisSource {
         let matched = if complete { features.len() as u64 } else { matched };
         let mut notes = self.notes(losses, view.is_some());
         notes.extend(shortfall(short));
-        Ok(Batch { features, matched, complete, skipped, notes: notes.into(), ..Batch::default() })
+        Ok(Batch { features, matched, complete, skipped, notes, ..Batch::default() })
     }
 
     /// A count's answer, or `None` when it isn't fetched yet (noted as missing).
@@ -824,7 +824,7 @@ impl FeatureSource for ArcgisSource {
             let mut notes = self.notes(losses, view.is_some());
             let short = total.saturating_sub(received);
             notes.extend(shortfall(short));
-            Ok(Batch { matched: visited, complete: short == 0, skipped, notes: notes.into(), ..Batch::default() })
+            Ok(Batch { matched: visited, complete: short == 0, skipped, notes, ..Batch::default() })
         }
     }
 }

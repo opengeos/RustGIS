@@ -7235,8 +7235,10 @@ mod batch_tests {
         }
 
         // Notices aggregated into a single notice per warning kind without truncating later files
+        // A Z/M loss has its code, so it is said as one loss notice for the batch.
         let notice = s.notices_since(mark).iter().find(|n| n.text.contains("Z or M")).unwrap();
-        assert!(notice.text.starts_with("gp.batch: 4 inputs ("));
+        assert_eq!(notice.loss(), Some(rustgis_data::loss::LossCode::DroppedZm));
+        assert!(notice.text.starts_with("gp.batch: 4 loss report(s) (gp.batch: 4 inputs ("), "{}", notice.text);
         assert!(notice.text.contains("file_1.geojson"));
         assert!(notice.text.contains("file_2.geojson"));
         assert!(notice.text.contains("file_3.geojson"));
