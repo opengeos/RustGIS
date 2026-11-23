@@ -241,9 +241,9 @@ older reader ignores the keys; giving the defaults, `"decimals": "auto"` or `"un
 needs nothing. Decimals fixed at any number, 0 included, are a detail. A chart takes `decimals`
 too: a saved `layout.update` can't tell whose they are, so a number there requires both this and
 `layout-chart-look`, while a `layout.addElement` says which kind it adds. A saved
-`layout.import` whose `text` has such a bar requires it as well. Layout files are not covered,
-as for backgrounds (#2277). A scale bar's text size isn't one of its details: it requires
-`layout-text-size`, as above.
+`layout.import` whose `text` has such a bar requires it as well, and a layout file
+(`.rgislayout`) with such a bar lists it in its header, so an older reader refuses the file too.
+A scale bar's text size isn't one of its details: it requires `layout-text-size`, as above.
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,

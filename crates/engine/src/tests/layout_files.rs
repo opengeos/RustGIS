@@ -146,3 +146,22 @@ fn a_layout_file_requires_nothing_for_other_layouts_or_saved_commands() {
     assert_eq!(plain["format"], json!(crate::project::FORMAT));
     assert!(plain.get("requires").is_none(), "{plain}");
 }
+
+/// A layout file with a scale bar that has details requires `layout-scale-bar-details`, so an
+/// older RustGIS refuses it instead of drawing a plain bar; a plain bar's file requires nothing.
+#[test]
+fn a_layout_file_with_scale_bar_details_says_so_in_its_header() {
+    let (mut s, _) = with_layout();
+    s.run("layout.addElement", &json!({"kind": "scaleBar"})).unwrap();
+    let (_, plain) = saved_file(&mut s, 0, "plain-bar");
+    assert_eq!(plain["format"], json!(crate::project::FORMAT));
+    assert!(plain.get("requires").is_none(), "{plain}");
+    s.run("layout.new", &json!({"page": "a4", "template": "map"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "scaleBar", "subdivisions": 4})).unwrap();
+    assert!(s.project.layouts[1].elements.iter().any(|e| e.kind.scale_bar_uses_details()));
+    let (text, detailed) = saved_file(&mut s, 1, "detailed-bar");
+    assert_eq!(detailed["requires"], json!(["layout-scale-bar-details"]));
+    // This RustGIS reads it back.
+    s.run("layout.import", &json!({"text": text})).unwrap();
+    assert!(s.project.layouts[2].elements.iter().any(|e| e.kind.scale_bar_uses_details()));
+}
