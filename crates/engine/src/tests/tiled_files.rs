@@ -199,7 +199,7 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
     let params = json!({"raster": "checks", "polygons": "zone"});
     let read = |s: &Session, tiled: Tiled| {
         let mut messages = Vec::new();
-        let read = tiled_inputs(s.map(), Some(spec), &params, tiled, &mut messages).unwrap();
+        let read = tiled_inputs(s.map(), Some(spec), &params, tiled, &mut messages, &mut Vec::new()).unwrap();
         (read.get("checks").map(|r| (r.width, r.overview)), messages)
     };
     let mut s = Session::new(Project::default());
@@ -217,6 +217,12 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
         ]
     );
     assert_eq!(read(&s, Tiled::ByPath), (None, Vec::new()));
+    // A suite tool would stage the held overview of a file no longer there: refused.
+    let moved = d.join("moved.tif");
+    std::fs::rename(&path, &moved).unwrap();
+    let e = tiled_inputs(s.map(), Some(spec), &params, Tiled::ByPath, &mut Vec::new(), &mut Vec::new()).unwrap_err();
+    assert!(e.starts_with("checks: its file") && e.contains("is no longer there"), "{e}");
+    std::fs::rename(&moved, &path).unwrap();
     // Held whole: nothing read again, nothing said.
     let mut whole = Session::new(Project::default());
     whole.run("layer.addData", &json!({"path": path})).unwrap();

@@ -1317,6 +1317,8 @@ struct MapInputs<'a> {
     /// Raster layers read in place from a file on this computer, read again from it for the run
     /// ([`tiled_inputs`]), by lowercase name.
     rasters: std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>,
+    /// [`MapInputs::rasters`] counted as held while the run holds them (kept only to be dropped).
+    _held: Vec<rustgis_data::memory::Holding>,
     /// The flat map's projection (its name, the projection and its unit in metres), built the
     /// first time a tool asks for it (Tissot's indicatrix does), once for the run; `None` on the
     /// globe.
@@ -1436,11 +1438,13 @@ fn inputs_of<'a>(
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
     #[cfg(not(target_arch = "wasm32"))]
-    let rasters = tiled_inputs(&snap.map, spec, params, tiled, &mut messages)?;
+    let mut held = Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let rasters = tiled_inputs(&snap.map, spec, params, tiled, &mut messages, &mut held)?;
     #[cfg(target_arch = "wasm32")]
-    let rasters = {
+    let (rasters, held) = {
         let _ = tiled;
-        std::collections::HashMap::new()
+        (std::collections::HashMap::new(), Vec::new())
     };
     Ok(MapInputs {
         snap,
@@ -1451,6 +1455,7 @@ fn inputs_of<'a>(
         messages,
         losses,
         rasters,
+        _held: held,
         flat: std::cell::OnceCell::new(),
         view: std::cell::OnceCell::new(),
     })
@@ -1473,12 +1478,13 @@ pub(crate) fn tiled_inputs(
     params: &Value,
     tiled: Tiled,
     messages: &mut Vec<String>,
+    held: &mut Vec<rustgis_data::memory::Holding>,
 ) -> Result<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>, String> {
     use rustgis_analysis::ParamKind;
     let mut read = std::collections::HashMap::new();
     // Raster to PMTiles draws its input as the map does, in place at each zoom's level, and
     // reads no pixels through the run's inputs.
-    let Some(spec) = spec.filter(|t| tiled != Tiled::ByPath && t.id != "rasterToPmtiles") else { return Ok(read) };
+    let Some(spec) = spec.filter(|t| t.id != "rasterToPmtiles") else { return Ok(read) };
     let mut seen = std::collections::HashSet::new();
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
@@ -1492,6 +1498,14 @@ pub(crate) fn tiled_inputs(
             let key = l.name.to_ascii_lowercase();
             let Some(path) = l.raster.as_ref().filter(|rl| rl.tiled).and_then(|rl| rl.path.as_deref()) else { continue };
             if !seen.insert(key.clone()) {
+                continue;
+            }
+            // A suite tool stages the file by its path: one no longer there would have it stage
+            // the overview the layer holds instead, so it is refused.
+            if tiled == Tiled::ByPath {
+                if !std::path::Path::new(path).is_file() {
+                    return Err(format!("{}: its file {path} is no longer there: Reload Data or Repair Data Source first", l.name));
+                }
                 continue;
             }
             if tiled == Tiled::Overview {
@@ -1510,6 +1524,9 @@ pub(crate) fn tiled_inputs(
                 None => {
                     #[cfg(test)]
                     TILED_READS.with(|n| n.set(n.get() + 1));
+                    // One such read at a time across runs, each planned with what the others
+                    // read counted: their decodes would otherwise each plan for the same memory.
+                    let _turn = TILED_TURN.lock().unwrap_or_else(|e| e.into_inner());
                     let r = std::sync::Arc::new(
                         rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None)
                             .map_err(|e| format!("{}: {e}", l.name))?,
@@ -1524,6 +1541,9 @@ pub(crate) fn tiled_inputs(
                     r
                 }
             };
+            // Counted as held for as long as the run holds it.
+            let bytes: usize = r.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
+            held.push(rustgis_data::memory::Holding::of(bytes as u64));
             if let Some((fw, fh)) = r.overview {
                 messages.push(format!(
                     "{}: read at its {} × {} overview of the {fw} × {fh} raster, the finest it can hold",
@@ -1535,6 +1555,11 @@ pub(crate) fn tiled_inputs(
     }
     Ok(read)
 }
+
+/// Taken by each read of a raster file read in place for a run ([`tiled_inputs`]): such reads
+/// run one at a time across runs, so each plans its size with the ones before it held.
+#[cfg(not(target_arch = "wasm32"))]
+static TILED_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
