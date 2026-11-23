@@ -51091,6 +51091,14 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert!(e.contains("cellSize is required"), "{e}");
     let e = s.run("raster.rasterize", &json!({"layer": "soils", "nodata": 1, "cellSize": 1})).unwrap_err();
     assert!(e.contains("no-data value"), "{e}");
+    // An extent layer read in place holds only the part in view: refused before the run.
+    let mut part = Dataset::new("part", GeometryType::Polygon, vec![Field::new("unit", FieldType::Text)]);
+    part.push(Some(Geometry::Polygon(vec![vec![ring(0.0, 0.0, 1.0, 1.0)]])), vec![V::Text("x".into())]);
+    part.windowed = true;
+    crate::cmd::layer::add_dataset(&mut s, part);
+    let e = s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "extent": "part"})).unwrap_err();
+    assert!(e.contains("part: load all its features first"), "{e}");
+    let layers = layers + 1;
     // An extent layer with no features: refused (as the run sizes its grid), nothing added.
     crate::cmd::layer::add_dataset(&mut s, Dataset::new("nothing", GeometryType::Polygon, vec![Field::new("unit", FieldType::Text)]));
     let e = s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "extent": "nothing"})).unwrap_err();

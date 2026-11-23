@@ -1081,6 +1081,10 @@ fn grid_spec_noting(s: &Session, p: &Value, crs: Crs, notes: &mut Notes) -> Resu
                 Some(Value::String(_)) if project_extent_name(p).is_some() => {
                     let l = project_extent_name(p).ok_or("extent layer is required")?;
                     let layer = s.map().layer_by_name(l).filter(|l| l.raster.is_none()).ok_or_else(|| format!("no vector layer '{l}'"))?;
+                    // Read in place, it holds only the part in view: its bounds wouldn't be the layer's.
+                    if layer.dataset.windowed {
+                        return Err(format!("{l}: load all its features first (Layers › Load All Features)"));
+                    }
                     let rows = (!layer.selection.is_empty()).then(|| layer.selection.clone());
                     // Its rows shared, not copied ([`Bounds::in_crs`] reads them).
                     Some(Bounds::Layer { name: l.to_string(), dataset: layer.dataset.clone(), rows })
