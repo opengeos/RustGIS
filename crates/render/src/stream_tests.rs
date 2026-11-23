@@ -1847,4 +1847,19 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
             assert_eq!(drawn, None, "case {n}: a layer reaching in from beyond the view reads everything");
         }
     }
+    // A view over most of the grid reads all of it, in file order.
+    let mut m = Map::new("whole");
+    m.basemap = rustgis_map::Basemap::Blank;
+    m.add_dataset(squares.clone());
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera { res: 15_000.0, ..camera }, sky: false };
+    let expected = render(&mut m.clone(), &view).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let mut layer = streamed(&m.layers[0], usize::MAX);
+    let info = layer.source.as_ref().unwrap().info().unwrap().clone();
+    let chunks = Chunks { info, ds: squares, size: usize::MAX };
+    layer.source = Some(SourceLayer::from_path("whole.shp", None, Box::new(Near { chunks, asked: asked.clone() })));
+    m.layers[0] = layer;
+    let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut m, &view, true, Backend::Cpu) else { panic!("a complete frame") };
+    assert!(got.pixmap.data() == expected.pixmap.data(), "the pixels changed");
+    assert_eq!(asked.lock().unwrap().last().copied().flatten(), None, "a view over most of the layer reads it all");
 }

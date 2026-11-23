@@ -405,6 +405,10 @@ pub const MAX_SIDE: u32 = 8192;
 /// How far past each side of the view (a fraction of its size) features are still drawn.
 pub const CULL_MARGIN: f64 = 0.05;
 
+/// The share of a streamed layer's extent a view's box covers past which the whole layer is read
+/// in file order rather than through its index ([`covers_most`]).
+const READ_ALL_OVER: f64 = 0.5;
+
 /// How much a streamed layer's read of the view's longitude/latitude box is grown on each side
 /// (a fraction of its size), for the edges' curve between the points it is measured from.
 const VIEW_READ_PAD: f64 = 0.05;
@@ -2544,6 +2548,15 @@ fn visit_within(
         return Err(rustgis_data::DataError::Format("source traversal was incomplete".into()));
     }
     Ok(result)
+}
+
+/// Whether `b` covers at least [`READ_ALL_OVER`] of the area of `layer`, a layer's extent (never
+/// for one without area: unknown, or a single point).
+fn covers_most(b: &Extent, layer: &Extent) -> bool {
+    let area = |e: &Extent| if e.is_empty() { 0.0 } else { e.width() * e.height() };
+    let whole = area(layer);
+    let shared = Extent::new(b.min_x.max(layer.min_x), b.min_y.max(layer.min_y), b.max_x.min(layer.max_x), b.max_y.min(layer.max_y));
+    whole > 0.0 && area(&shared) >= whole * READ_ALL_OVER
 }
 
 /// Whether a streamed layer, drawn upright on a flat map, draws nothing from a feature whose box
@@ -6364,7 +6377,8 @@ fn render_frame(
             // edges' curve between samples, and the GPU's wider one when its meshes are moved
             // during a pan. Otherwise every feature: labels, shadows and other effects reach in
             // from beyond the view. So is every feature when the box doesn't come back around
-            // the cull extent on the map (a projection that wraps longitude near its edge).
+            // the cull extent on the map (a projection that wraps longitude near its edge), or
+            // covers most of the layer.
             let reach = if gpu { &mesh_cull } else { &ctx.cull };
             let near = (globe.is_none()
                 && matches!(labels_to, Labels::Own | Labels::Turned(_))
@@ -6375,7 +6389,10 @@ fn render_frame(
             .filter(|e| {
                 let back = flat.extent(e);
                 back.min_x <= reach.min_x && back.min_y <= reach.min_y && back.max_x >= reach.max_x && back.max_y >= reach.max_y
-            });
+            })
+            // A box over most of the layer reads it all, in file order: asking the index which
+            // records nearly all of them are costs more than reading the few left over.
+            .filter(|e| !covers_most(e, &source.info().extent));
             let result = visit_within(source.as_ref(), near, &mut |features| {
                 // A frame no longer wanted reads no further (see `cancel`).
                 if cancel::requested() {
