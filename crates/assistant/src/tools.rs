@@ -920,42 +920,76 @@ fn losses_since(s: &Session, said: &Said) -> Vec<Value> {
 }
 
 /// [`finish_result`] for `r` with `losses` (or `[]` when `always`), within the output budget.
-/// When the whole list doesn't fit beside what `r` holds, each entry keeps only its code and
-/// kind; when that doesn't fit either, one entry per code with its count ([`loss_summary`]) is
-/// kept, and the rest of the result is cut to leave it room. `lossesTrimmed` says when either
-/// happened, so the codes are never left out without a word.
+/// The list shrinks until it fits beside `r` ([`loss_forms`]): each entry's code and kind, one
+/// entry per code, and at last the codes alone. When none fits beside `r` whole, `r` is cut to
+/// leave room for one entry per code, keeping its `success`, and the list shrinks again if it
+/// must. `lossesTrimmed` says when the list was shortened or, with the tightest budgets, left out.
 fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usize, withheld: Withheld, always: bool) -> String {
     let Value::Object(o) = r else { return finish_result(s, r, tokens, withheld) };
     if o.contains_key("losses") || (losses.is_empty() && !always) {
         return finish_result(s, Value::Object(o), tokens, withheld);
     }
-    let with = |list: Value, trimmed: bool| {
-        let mut o = o.clone();
-        o.insert("losses".into(), list);
-        if trimmed {
+    let max = output_bytes(tokens);
+    let forms = loss_forms(&losses);
+    let with = |mut o: serde_json::Map<String, Value>, (list, trimmed): &(Value, bool)| {
+        o.insert("losses".into(), list.clone());
+        if *trimmed {
             o.insert("lossesTrimmed".into(), json!(true));
         }
         Value::Object(o)
     };
-    let max = output_bytes(tokens);
+    if let Some(v) = forms.iter().map(|form| with(o.clone(), form)).find(|v| v.to_string().len() <= max) {
+        return finish_result(s, v, tokens, withheld);
+    }
+    // The result cut to leave room for one entry per code.
+    let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
+    let text = finish_result(s, Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1), withheld);
+    let mut cut = match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(cut)) => cut,
+        // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
+        _ => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
+    };
+    if let Some(success) = o.get("success") {
+        cut.insert("success".into(), success.clone());
+    }
+    for form in forms.iter().skip(2) {
+        let v = with(cut.clone(), form);
+        let over = v.to_string().len().saturating_sub(max);
+        if over == 0 {
+            return v.to_string();
+        }
+        // Only a failure's error can still give way: cut it by what's over.
+        if let Some(error) = v.get("error").and_then(Value::as_str) {
+            let mut v = v.clone();
+            v["error"] = json!(clip_bytes(error, error.len().saturating_sub(over + 8)));
+            if v.to_string().len() <= max {
+                return v.to_string();
+            }
+        }
+    }
+    cut.insert("lossesTrimmed".into(), json!(true));
+    Value::Object(cut).to_string()
+}
+
+/// `losses` in the forms [`finish_with_losses`] tries, longest first, each with whether it is
+/// shortened: whole; each entry's code and kind; one entry per code ([`loss_summary`]); one entry
+/// per code with its count only; the codes alone.
+fn loss_forms(losses: &[Value]) -> Vec<(Value, bool)> {
     let compact: Vec<Value> = losses.iter().map(|l| json!({"code": l["code"], "kind": l["kind"]})).collect();
-    for (list, trimmed) in [(json!(losses), false), (json!(compact), true)] {
-        let v = with(list, trimmed);
-        if v.to_string().len() <= max {
-            return finish_result(s, v, tokens, withheld);
-        }
+    let summary = loss_summary(losses).unwrap_or_else(|| json!([]));
+    let counts: Vec<Value> =
+        summary.as_array().map(|a| a.iter().map(|e| json!({"code": e["code"], "count": e["count"]})).collect()).unwrap_or_default();
+    let codes: Vec<Value> = summary.as_array().map(|a| a.iter().map(|e| e["code"].clone()).collect()).unwrap_or_default();
+    vec![(json!(losses), false), (json!(compact), true), (summary, true), (json!(counts), true), (json!(codes), true)]
+}
+
+/// The first `max` bytes of `text`, cut at a character boundary.
+fn clip_bytes(text: &str, max: usize) -> String {
+    let mut end = max.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
-    let summary = loss_summary(&losses).unwrap_or_else(|| json!([]));
-    let reserve = summary.to_string().len() + 40;
-    let text = finish_result(s, Value::Object(o), max.saturating_sub(reserve).div_ceil(4).max(1), withheld);
-    match serde_json::from_str::<Value>(&text) {
-        Ok(Value::Object(mut cut)) => {
-            cut.insert("losses".into(), summary);
-            cut.insert("lossesTrimmed".into(), json!(true));
-            Value::Object(cut).to_string()
-        }
-        _ => format!("{text}\nlosses: {summary}"),
-    }
+    text[..end].to_string()
 }
 
 /// A failed run's error with what the command said before failing (a GDAL layer that couldn't be
@@ -973,12 +1007,30 @@ fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> Str
         // the agent additionally applies its serialized output budget.
         return public_error(&if notices.is_empty() { e } else { clip(&format!("{e}\n{}", notices.join("\n")), 8000) });
     };
-    let line = format!("\nlosses: {losses}");
-    // Within the 8,000-character cap, and the agent's `{"error": …}` within its output budget.
-    let room = 8000.min(output_bytes(tokens).saturating_sub(64)).saturating_sub(line.chars().count());
     let text = public_error(&if notices.is_empty() { e } else { format!("{e}\n{}", notices.join("\n")) });
-    // Less what `clip` adds when it cuts.
-    format!("{}{line}", clip(&text, room.saturating_sub(40)))
+    // Within the 8,000-character cap, and the agent's `{"error": …}` within its output budget,
+    // the error giving way first and then the list ([`loss_forms`]).
+    let fits = |t: &str| t.chars().count() <= 8000 && json!({"error": t}).to_string().len() <= output_bytes(tokens);
+    let raw: Vec<Value> = losses.as_array().cloned().unwrap_or_default();
+    for (list, _) in loss_forms(&raw).into_iter().skip(2) {
+        let line = format!("\nlosses: {list}");
+        if !fits(&line) {
+            continue;
+        }
+        if fits(&format!("{text}{line}")) {
+            return format!("{text}{line}");
+        }
+        // The longest start of the error that leaves the line room.
+        let chars: Vec<char> = text.chars().collect();
+        let cut = |keep: usize| format!("{}…{line}", chars.iter().take(keep).collect::<String>());
+        let (mut low, mut high) = (0, chars.len());
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            if fits(&cut(mid)) { low = mid } else { high = mid - 1 }
+        }
+        return cut(low);
+    }
+    clip(&text, 8000)
 }
 
 /// The losses as one entry per code, `{code, kind, count, action}`: short enough to keep whole
@@ -1576,6 +1628,14 @@ mod tests {
         let last = error.lines().last().unwrap_or_default();
         assert!(last.starts_with("losses: [") && last.contains(r#""code":"dropped.legend""#), "{last}");
         assert!(error.chars().count() <= 8000, "{}", error.chars().count());
+        // Within a small output budget too, counted in the bytes of the agent's `{"error": …}`,
+        // with text of several bytes a character.
+        let wide = format!("{}\nmap.drawingMode {}", line(&lossy), json!({"mode": "界".repeat(3000)}));
+        let command =
+            ToolCall { id: "wide".into(), name: "run_command".into(), args: json!({"command": "script.run", "params": {"script": wide}}) };
+        let error = run_with_budget(&mut s, &command, 200, scope.clone(), None).unwrap_err();
+        assert!(json!({"error": error}).to_string().len() <= output_bytes(200), "{error}");
+        assert!(error.lines().last().unwrap_or_default().contains("dropped.legend"), "{error}");
     }
 
     /// Losses that don't fit the output budget beside the result keep only their codes, so the
@@ -1594,13 +1654,27 @@ mod tests {
         let small = json!({"code": "dropped.value", "kind": "dropped", "text": "t", "action": "a"});
         let out = finish(json!({"notices": ["n"]}), vec![small.clone()], false);
         assert_eq!((&out["losses"], out.get("lossesTrimmed")), (&json!([small]), None));
-        // A result over the budget by itself is cut, and keeps one entry per code with its count.
-        let big = json!({"notices": ["n"], "result": "y".repeat(5000)});
-        let text = finish_with_losses(&mut s, big, vec![loss.clone(), loss], 200, Withheld::default(), false);
+        // A result over the budget by itself is cut, keeping its `success` and one entry per code
+        // with its count; a tighter budget keeps the codes alone, and the tightest says only that
+        // they were left out, always as JSON within the budget.
+        let big = json!({"success": true, "notices": ["n"], "result": "y".repeat(5000)});
+        let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone(), loss.clone()], 200, Withheld::default(), false);
         assert!(text.len() <= output_bytes(200), "{}", text.len());
         let out: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(out["losses"], json!([{"code": "dropped.value", "kind": "dropped", "count": 2, "action": "Correct the value."}]));
-        assert_eq!((&out["lossesTrimmed"], &out["truncated"]), (&json!(true), &json!(true)));
+        assert_eq!((&out["lossesTrimmed"], &out["truncated"], &out["success"]), (&json!(true), &json!(true), &json!(true)));
+        for tokens in [32, 8] {
+            let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
+            let out: Value = serde_json::from_str(&text).unwrap();
+            assert!(text.len() <= output_bytes(tokens) || out.get("losses").is_none(), "{tokens}: {text}");
+            assert_eq!((&out["lossesTrimmed"], &out["success"]), (&json!(true), &json!(true)), "{tokens}: {text}");
+        }
+        // A failure's error alone gives way to its losses, as JSON.
+        let failed = json!({"success": false, "error": "e".repeat(5000)});
+        let text = finish_with_losses(&mut s, failed, vec![loss.clone()], 200, Withheld::default(), true);
+        assert!(text.len() <= output_bytes(200), "{}", text.len());
+        let out: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((&out["success"], &out["losses"][0]["code"]), (&json!(false), &json!("dropped.value")), "{out}");
         let mut finish = |r: Value, always: bool| -> Value {
             serde_json::from_str(&finish_with_losses(&mut s, r, vec![], 200, Withheld::default(), always)).unwrap()
         };
