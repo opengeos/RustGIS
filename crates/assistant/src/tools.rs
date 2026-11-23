@@ -1002,7 +1002,17 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
 /// shortened: whole; each entry's code and kind; one entry per code ([`loss_summary`]); one entry
 /// per code with its count only; the codes alone.
 fn loss_forms(losses: &[Value]) -> Vec<(Value, bool)> {
-    let compact: Vec<Value> = losses.iter().map(|l| json!({"code": l["code"], "kind": l["kind"]})).collect();
+    // An entry for losses whose notices weren't kept keeps its count.
+    let compact: Vec<Value> = losses
+        .iter()
+        .map(|l| {
+            let mut e = json!({"code": l["code"], "kind": l["kind"]});
+            if let Some(n) = l.get("count") {
+                e["count"] = n.clone();
+            }
+            e
+        })
+        .collect();
     let summary = loss_summary(losses).unwrap_or_else(|| json!([]));
     let counts: Vec<Value> =
         summary.as_array().map(|a| a.iter().map(|e| json!({"code": e["code"], "count": e["count"]})).collect()).unwrap_or_default();
@@ -1681,6 +1691,10 @@ mod tests {
         let out = finish(json!({"notices": ["n"]}), vec![loss.clone(), loss.clone()], false);
         assert_eq!(out["losses"], json!([{"code": "dropped.value", "kind": "dropped"}, {"code": "dropped.value", "kind": "dropped"}]));
         assert_eq!((&out["lossesTrimmed"], &out["notices"]), (&json!(true), &json!(["n"])));
+        // An entry for losses whose notices weren't kept keeps its count when shortened.
+        let unkept = json!({"code": "dropped.value", "kind": "dropped", "count": 250, "text": "x".repeat(900), "action": "a"});
+        let out = finish(json!({"notices": ["n"]}), vec![unkept], false);
+        assert_eq!(out["losses"], json!([{"code": "dropped.value", "kind": "dropped", "count": 250}]), "{out}");
         let small = json!({"code": "dropped.value", "kind": "dropped", "text": "t", "action": "a"});
         let out = finish(json!({"notices": ["n"]}), vec![small.clone()], false);
         assert_eq!((&out["losses"], out.get("lossesTrimmed")), (&json!([small]), None));
