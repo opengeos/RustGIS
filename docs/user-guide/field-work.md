@@ -211,7 +211,7 @@ from again, and nothing is copied. Of the other photos a returned package carrie
 field), a return with its list of changes brings back only those of features the phone added, or whose
 photos it changed: a photo of a feature whose photos it left alone is left out, and the summary says
 how many. A return that goes back as a whole map brings back every photo it carries, except those
-named only by layers copied for reference, whose edits stay in the field.
+named only by layers copied for reference or added in the field, whose edits stay in the field.
 
 Bring Back refuses a package while the area's offline map is open with edits not synced yet, as
 renewing the area would replace them: **Sync** the area first. Syncing moves the area on, so a
