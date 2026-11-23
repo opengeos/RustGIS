@@ -269,13 +269,16 @@ impl Lang {
     pub fn all() -> impl Iterator<Item = Lang> {
         LANGUAGES.iter().map(Lang)
     }
-    /// The letters and combining accents the shipped catalog needs, sorted and deduplicated.
+    /// Catalog letters, combining accents, and its script's punctuation and numerals, sorted
+    /// and deduplicated. Formatting controls and spaces do not require glyphs.
     /// Checked against the active UI fonts before switching languages; script names alone do
     /// not describe coverage (Vietnamese and Azerbaijani also need extra Latin letters).
     pub(crate) fn letters(self) -> &'static [char] {
         self.0.letters.get_or_init(|| {
+            use rustgis_engine::render::fonts::ScriptFont;
             let mut letters: Vec<char> = self.0.catalog().values().flat_map(|entries| entries.values()).flat_map(|text| text.chars())
                 .chain(self.name().chars())
+                .filter(|c| !c.is_whitespace() && !c.is_control() && *c != '\u{feff}')
                 .filter(|c| c.is_alphabetic() || matches!(*c,
                     '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}'
                     // Supported scripts have combining marks outside the common mark blocks.
@@ -283,6 +286,11 @@ impl Lang {
                     | '\u{0981}'..='\u{0983}' | '\u{09bc}' | '\u{09be}'..='\u{09c4}' | '\u{09c7}'..='\u{09c8}'
                     | '\u{09cb}'..='\u{09cd}' | '\u{09d7}' | '\u{09e2}'..='\u{09e3}' | '\u{09fe}'
                     | '\u{0eb1}' | '\u{0eb4}'..='\u{0ebc}' | '\u{0ec8}'..='\u{0ece}'
+                ) || matches!((self.script(), ScriptFont::of(*c)),
+                    (Script::Arabic, Some(ScriptFont::Arabic))
+                    | (Script::Bengali, Some(ScriptFont::Bengali))
+                    | (Script::Lao, Some(ScriptFont::Lao))
+                    | (Script::Cjk(_), Some(ScriptFont::Cjk(_)))
                 ))
                 .collect();
             letters.sort_unstable();

@@ -3794,6 +3794,8 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
 /// A point marker standing upright in a tilted view, facing the viewer.
 #[derive(Clone, Debug)]
 pub struct UprightMarker {
+    /// The owning layer, shared by its markers for loss notices during the tilted pass.
+    layer: std::sync::Arc<str>,
     /// Where it stands (the camera's coordinates).
     pub at: Coord,
     /// The ground's height under it (map units), on terrain; 0 without.
@@ -3900,6 +3902,7 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
         layer.projected_in(&flat, &key);
         let layer: &rustgis_map::Layer = layer;
         let styler = layer.styler_with(env.at_scale(Some(scale)));
+        let name: std::sync::Arc<str> = layer.name.as_str().into();
         let mut here: Vec<(f64, UprightMarker)> = Vec::new();
         // Boxes in longitude/latitude for the view distance, from the dataset's own coordinates:
         // none is drawn when they can't be converted, as `within_view_distance` draws none.
@@ -3938,7 +3941,7 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
                 let Some(k) = cam.depth_scale(*c, h) else { continue };
                 // On terrain, standing on the ground (its height in map units there).
                 let height = ground.as_ref().and_then(|g| g.height(*c).map(|m| (m / g.per_unit(*c)).clamp(-1e9, 1e9))).unwrap_or(0.0);
-                here.push((k, UprightMarker { at: *c, height, symbol, opacity, selected }));
+                here.push((k, UprightMarker { layer: name.clone(), at: *c, height, symbol, opacity, selected }));
             }
         }
         here.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3967,6 +3970,7 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
         {
             continue;
         }
+        let _layer = approximations::NamedLayer::new(&m.layer);
         let _ = draw_marker(pm, x, y, &s, 1.0, halo, ppp);
     }
 }
@@ -8384,7 +8388,15 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     let (before, before_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(false)));
     // So is what it approximated: its own, said with it.
     let approximated_before = approximations::keep();
-    let r = render_exported(map, view);
+    let r = render_exported(map, view).map(|mut r| {
+        // Label drawing can report omissions too; keep them inside this export's notice scope.
+        let mut pm = Canvas::from_pixmap(r.pixmap);
+        for l in r.unplaced.iter().chain(&r.labels) {
+            text::draw(&mut pm, l, view.pixels_per_point as f32);
+        }
+        r.pixmap = pm.into_pixmap();
+        r
+    });
     let (shadows, to_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(before_come)));
     SHADOW_NOTICES.with(|n| *n.borrow_mut() = before);
     let approximated = approximations::take();
@@ -8416,11 +8428,7 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
             format!("{n} tile layers couldn't be drawn, so their parts are empty; the first: {first}")
         });
     }
-    let mut pm = Canvas::from_pixmap(r.pixmap);
-    for l in r.unplaced.iter().chain(&r.labels) {
-        text::draw(&mut pm, l, view.pixels_per_point as f32);
-    }
-    revisions.finish(map, None, Some(Placed { pixmap: pm.into_pixmap(), credits: r.attribution, gaps }), "could not draw the map")
+    revisions.finish(map, None, Some(Placed { pixmap: r.pixmap, credits: r.attribution, gaps }), "could not draw the map")
 }
 
 /// The map drawn whole for an export, or why it can't be written: a raster read in place whose
@@ -10851,6 +10859,76 @@ mod tests {
         let parts = clip_line(&[(-5.0, 2.0), (5.0, 2.0), (5.0, 20.0), (8.0, 20.0), (8.0, 5.0), (15.0, 5.0)], &b);
         assert_eq!(parts, vec![(5.0, vec![(0.0, 2.0), (5.0, 2.0), (5.0, 10.0)]), (41.0, vec![(8.0, 10.0), (8.0, 5.0), (10.0, 5.0)])]);
         assert!(clip_line(&[(-5.0, -5.0), (-1.0, 20.0)], &b).is_empty());
+    }
+
+    /// Tilted markers keep their point layer even when the caller is drawing another layer.
+    #[test]
+    fn tilted_character_markers_report_their_own_layer() {
+        approximations::layer(None);
+        let _ = approximations::take();
+        let mut map = Map::new("Map");
+        map.basemap = rustgis_map::Basemap::Blank;
+        for name in ["First points", "Second points"] {
+            let mut data = Dataset::new(name, GeometryType::Point, vec![]);
+            data.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+            let id = map.add_dataset(data);
+            let symbol = Symbol {
+                fill: Rgba::rgb(200, 60, 30),
+                stroke: Rgba::rgb(20, 20, 20),
+                stroke_width: 1.0,
+                size: 12.0,
+                marker: Marker::Char(rustgis_map::Glyph::new('\u{10ffff}', "")),
+            };
+            map.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol);
+        }
+        let view = View {
+            width: 120.0,
+            height: 80.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 50.0 },
+            sky: false,
+        };
+        assert_eq!(upright_markers(&mut map, &view, 0.0).len(), 2);
+        approximations::layer(Some("Outer"));
+        let mut image = Pixmap::new(120, 80).unwrap();
+        crate::canvas::with_canvas(&mut image, |canvas| markers_tilted(&mut map, &view, canvas, &Env::default()));
+        approximations::missing_glyphs(['\u{10fffe}']);
+        approximations::layer(None);
+        let notices = approximations::take();
+        for name in ["First points", "Second points"] {
+            assert!(notices.iter().any(|n| n.starts_with(name) && n.contains("U+10FFFF")), "{notices:?}");
+        }
+        assert!(notices.iter().any(|n| n.starts_with("Outer") && n.contains("U+10FFFE")), "{notices:?}");
+        assert_eq!(notices.len(), 3);
+    }
+
+    /// Ground-image exports own label omissions and leave the caller's notice state intact.
+    #[test]
+    fn placed_exports_include_label_omissions_in_their_gaps() {
+        approximations::layer(None);
+        let _ = approximations::take();
+        approximations::missing_glyphs(['\u{10fffe}']);
+        let mut map = Map::new("Map");
+        map.basemap = rustgis_map::Basemap::Blank;
+        let mut data = Dataset::new("Labels", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        data.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("A\u{10fffd}".into())]);
+        let id = map.add_dataset(data);
+        let layer = map.layer_mut(id).unwrap();
+        layer.labels.enabled = true;
+        layer.labels.default.field = "name".into();
+        let view = View {
+            width: 200.0,
+            height: 160.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        assert!(render(&mut map, &view).unwrap().labels.iter().any(|label| label.text.contains('\u{10fffd}')));
+        let result = render_placed(&mut map, &view).unwrap();
+        assert!(result.gaps.iter().any(|n| n.contains("U+10FFFD")), "{:?}", result.gaps);
+        let outer = approximations::take();
+        assert!(outer.iter().any(|n| n.contains("U+10FFFE")), "{outer:?}");
+        assert!(!outer.iter().any(|n| n.contains("U+10FFFD")), "{outer:?}");
     }
 
     /// Reusing a missing-character sprite must keep the notice attached to every using layer.

@@ -844,7 +844,7 @@ impl ScriptFont {
                 | '\u{08a0}'..='\u{08ff}'
                 | '\u{fb50}'..='\u{fdff}'
                 | '\u{fe70}'..='\u{feff}' => Some(Self::Arabic),
-                '\u{0980}'..='\u{09ff}' => Some(Self::Bengali),
+                '\u{0964}'..='\u{0965}' | '\u{0980}'..='\u{09ff}' => Some(Self::Bengali),
                 '\u{0e80}'..='\u{0eff}' => Some(Self::Lao),
                 '\u{00a0}'..='\u{02ff}' | '\u{0300}'..='\u{036f}' | '\u{1e00}'..='\u{1eff}' => Some(Self::Latin),
                 _ => None,
@@ -941,6 +941,9 @@ static MISSING_SCRIPTS: std::sync::Mutex<Option<MissingScripts>> = std::sync::Mu
 /// Notes missing supported-script text from the UI, map labels, tile labels or character markers.
 /// Work is bounded by the script registry and 64 distinct characters per script.
 pub fn note_missing_script(c: char) {
+    if crate::text::invisible(c) {
+        return;
+    }
     note_missing_cjk(c);
     if let Some(script) = ScriptFont::of(c) {
         let mut guard = MISSING_SCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -977,6 +980,15 @@ pub fn take_missing_scripts() -> Vec<ScriptFont> {
 #[cfg(test)]
 mod tests {
     use super::{bold_thickening, synthetic_bold};
+
+    /// Invisible cluster members must never become font requests or missing-text notices.
+    #[test]
+    fn invisible_characters_do_not_request_script_fonts() {
+        for c in ['\u{00ad}', '\u{feff}'] {
+            super::note_missing_script(c);
+            assert!(!super::peek_missing_text().iter().any(|(_, chars)| chars.contains(&c)));
+        }
+    }
 
     /// The face a CJK character calls for, by its script: ideographs with CJK punctuation,
     /// full-width forms and bopomofo, kana (half-width too), Hangul; other scripts are no CJK.

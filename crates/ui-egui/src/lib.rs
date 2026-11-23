@@ -1953,14 +1953,6 @@ impl RustGisApp {
                 return false;
             }
         }
-        if let Some(region) = Self::script_region(lang.script()) {
-            let waiting = format!("download-{region:?}");
-            let failed = format!("script-{region:?}");
-            let downloaded = self.extra_fonts.iter().any(|(name, _, script)| name.starts_with("web-") && *script == Some(region));
-            if self.fonts_requested.contains(&waiting) && !downloaded && !self.fonts_failed.contains(&failed) {
-                return false;
-            }
-        }
         let families = [egui::FontFamily::Proportional, egui::FontFamily::Name("semibold".into()), egui::FontFamily::Monospace];
         // Text laid out by the host can defer our font install until the next pass. An undefined
         // family is pending, not proof that the catalog is unsupported.
@@ -6989,15 +6981,15 @@ impl RustGisApp {
                 } else {
                     i18n::Lang::all().find(|l| region.is_some_and(|r| Self::script_region(l.script()) == Some(r))).unwrap_or(chosen)
                 };
-                let for_data = self.fonts_for_data.contains(&known) && region != self.current_region();
+                let for_data = self.fonts_for_data.contains(&known);
                 let msg = if for_data {
                     i18n::fmt(
-                        "Couldn't download the font for the {script} text, so those characters cannot be displayed or exported; pick a language in Settings › Language to retry.",
+                        "Couldn't download or validate the font for the {script} text, so those characters cannot be displayed or exported; pick a language in Settings › Language to retry.",
                         &[("script", fallback_script_name(known))],
                     )
                 } else {
                     i18n::fmt(
-                        "Couldn't download the font for {language}; pick the language again to retry.",
+                        "Couldn't download or validate the font for {language}; pick the language again to retry.",
                         &[("language", language.english())],
                     )
                 };
@@ -7573,7 +7565,7 @@ mod language_coverage_tests {
         inbox.lock().unwrap().push((latin.into(), Vec::new()));
         frame(&mut app, &ctx);
         let notices = app.session.notices_since(failure);
-        assert!(notices.iter().any(|n| n.text.contains("Couldn't download the font for the Latin text")), "{notices:?}");
+        assert!(notices.iter().any(|n| n.text.contains("Couldn't download or validate the font for the Latin text")), "{notices:?}");
         assert!(!notices.iter().any(|n| n.text.contains("Azerbaijani")), "a data string is not an Azerbaijani UI request");
         app.run("ui.language", json!({"code": "en"})).unwrap();
         assert_eq!(asked.lock().unwrap().iter().filter(|url| *url == latin).count(), 2, "retry includes non-CJK data fonts");
@@ -7727,6 +7719,39 @@ mod language_coverage_tests {
         assert!(asked.lock().unwrap().is_empty(), "the active native faces cover the reported characters");
         assert!(fonts::peek_missing_text().is_empty());
         assert!(fonts::peek_missing_cjk().is_empty());
+    }
+
+    /// Missing data in the same script must not block a catalog the active fonts already cover.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn data_downloads_do_not_block_a_covered_interface_in_the_same_script() {
+        if crate::isolate_account_test("language_coverage_tests::data_downloads_do_not_block_a_covered_interface_in_the_same_script") {
+            return;
+        }
+        use rustgis_engine::render::fonts::{ScriptFont, script_font_url};
+        let (mut app, ctx) = without_script_font("az");
+        app.fonts_frames = 2;
+        app.fonts_failed.clear();
+        app.extra_fonts.push((
+            "script-Latin".into(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../../render/testdata/test-latin-catalog.otf"))),
+            Some(ScriptFont::Latin),
+        ));
+        theme::install_fonts(&ctx, &app.extra_fonts, Some(ScriptFont::Latin));
+        app.fonts_for_data.push(ScriptFont::Latin);
+        app.fonts_requested.push("download-Latin".into());
+        app.services.fetch_font = Some(Box::new(|_| {}));
+        let inbox = Inbox::default();
+        app.services.font_inbox = Some(inbox.clone());
+        frame(&mut app, &ctx);
+        assert_eq!(app.lang().code(), "az", "data-only downloads must not delay a readable interface");
+        let mark = app.session.notice_mark();
+        inbox.lock().unwrap().push((script_font_url(ScriptFont::Latin).unwrap().into(), Vec::new()));
+        frame(&mut app, &ctx);
+        let notices = app.session.notices_since(mark);
+        assert!(notices.iter().any(|n| n.error && n.text.contains(fallback_script_name(ScriptFont::Latin))), "{notices:?}");
+        assert!(!notices.iter().any(|n| n.text.contains("Azerbaijani")), "{notices:?}");
+        assert_eq!(app.lang().code(), "az");
     }
 
     /// A complete font delivered through the real inbox must release the activation guard.

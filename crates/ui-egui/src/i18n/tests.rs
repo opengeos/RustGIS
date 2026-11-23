@@ -387,10 +387,10 @@ fn context_lookup_fallback_macros_and_formatted_values() {
     result.unwrap();
 }
 
-/// Script marks are required glyphs even when Unicode does not classify them as alphabetic.
+/// Script marks, punctuation and numerals are required even when they are not alphabetic.
 #[test]
-fn catalog_coverage_keeps_bengali_lao_and_persian_marks() {
-    for (code, marks) in [("bn", "়্"), ("lo", "່້໊໋໌ໍ"), ("fa", "ًِٔ")] {
+fn catalog_coverage_keeps_script_marks_punctuation_and_numerals() {
+    for (code, marks) in [("bn", "়্।০"), ("lo", "່້໊໋໌ໍ"), ("fa", "ًِٔ،؛؟۰")] {
         let lang = Lang::from_code(code).unwrap();
         for mark in marks.chars() {
             assert!(lang.0.source.contains(mark), "{code}: fixture mark is not in this catalog");
