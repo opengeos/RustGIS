@@ -71,8 +71,9 @@ def capture_prefs(desktop, env):
                 timeout=60,
             ).splitlines()[0]
             # The window can be mapped before the app reads input (slow software GL on a runner), so
-            # a key sent too early is lost. The app saves the preference in the same step that
-            # toggles it, so resending while the preference is absent never toggles it back.
+            # a key sent too early can be lost or held back. Press again every few seconds until
+            # the saved preference reads "true": the app saves it on every toggle, so a held-back
+            # press that toggles it back to "false" is seen and answered with another press.
             press = ["xdotool", "windowfocus", "--sync", window, "key", "ctrl+F1"]
             subprocess.run(press, check=True, timeout=10)
             deadline = time.monotonic() + 60
@@ -87,7 +88,7 @@ def capture_prefs(desktop, env):
                         saved = None
                     if saved and saved.get("ribbon_minimized") == "true":
                         return data
-                if saved is not None and "ribbon_minimized" not in saved and time.monotonic() >= resend:
+                if saved is not None and time.monotonic() >= resend:
                     subprocess.run(press, check=True, timeout=10)
                     resend = time.monotonic() + 5
                 time.sleep(0.1)
