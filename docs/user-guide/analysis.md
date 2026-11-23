@@ -527,9 +527,10 @@ Points can optionally be weighted by a numeric population field (invalid or non-
 are excluded and reported in the tool messages; for multipoint features, each constituent point part
 receives the feature's weight, a part with a coordinate missing or infinite is left out and
 counted, and a feature with no finite part is skipped). Calculations are performed in the linear units
-of a projected coordinate system (defaults to the projected system the layer is held in, or else was read in; if the input layer lacks a
-coordinate system or is in degrees, the project's projected system, which the tool says it used; when the project has none, or to project into a specific system, supply a projected system via `crs`,
-e.g. `EPSG:32618`). Geocentric systems such as `EPSG:4978` (X, Y and Z from the Earth's centre)
+of a projected coordinate system. By default this is the projected system the layer is held in,
+or else was read in. If the layer has no coordinate system or is in degrees, it uses the project's
+projected system and says so. When the project has none either, or to work in a specific system,
+supply a projected system via `crs`, e.g. `EPSG:32618`. Geocentric systems such as `EPSG:4978` (X, Y and Z from the Earth's centre)
 are refused, whether supplied via `crs` or inherited from the layer: their three axes do not
 define the two-dimensional projected plane Kernel Density needs.
 Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical

@@ -579,3 +579,34 @@ fn an_export_of_a_layer_with_no_system_takes_the_projects() {
     assert!(!out.contains("project's"), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Cancel while a tool's output is converted into the project's system stops the run, which
+/// adds nothing: stopped at each of its looks in turn, the last of which is the conversion's.
+#[test]
+fn a_cancel_while_an_output_is_converted_adds_nothing() {
+    use rustgis_analysis::control::Control;
+    let in_system = |crs: &str| {
+        let mut s = Session::new(Project::default());
+        s.map_mut().add_dataset(bern_points("Wells"));
+        s.run("project.coordinateSystem", &json!({"crs": crs})).unwrap();
+        s
+    };
+    let session = || in_system("EPSG:2056");
+    let p = json!({"input": "Wells", "output": "Out"});
+    let looked = |mut s: Session| {
+        let counted = Control::cancelled_at_look(u64::MAX);
+        crate::cmd::gp::run_tool_with(&mut s, "featureToPoint", &p, &counted).unwrap();
+        (counted.looked(), s.map().layer_by_name("Out").unwrap().dataset.coord_crs())
+    };
+    let (looks, held) = looked(session());
+    assert_eq!(held, LV95);
+    // The conversion looks at Cancel too, on the run's own control.
+    let (plain, _) = looked(in_system(""));
+    assert!(looks > plain, "{looks} looks with the project's system, {plain} without");
+    for n in 1..=looks {
+        let mut t = session();
+        let out = crate::cmd::gp::run_tool_with(&mut t, "featureToPoint", &p, &Control::cancelled_at_look(n));
+        assert!(out.as_ref().is_err_and(|e| e.contains("cancelled")), "cancelled at look {n} of {looks}: {out:?}");
+        assert!(t.map().layer_by_name("Out").is_none(), "look {n} of {looks}");
+    }
+}

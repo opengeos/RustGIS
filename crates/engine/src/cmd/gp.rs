@@ -3173,7 +3173,13 @@ pub(crate) fn execute(
                 result.messages.extend(inputs.messages.iter().cloned());
                 result.losses.extend(inputs.losses.iter().cloned());
             }
-            if let Err(e) = res.as_mut().map_or(Ok(()), |r| inputs.hold_results(r)) {
+            // The conversion stays under this run's Cancel, as in `ToolRun::run`: the tool's own
+            // probe ended with it.
+            let held = {
+                let _probe = rustgis_analysis::control::install_progress(Some(control.clone()));
+                res.as_mut().map_or(Ok(()), |r| inputs.hold_results(r))
+            };
+            if let Err(e) = held {
                 res = Err(e);
             }
             let ids = full_ids(&inputs.loaded);
