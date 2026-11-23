@@ -18,7 +18,7 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
 
-from . import PathLike, RustGISError, Session, _Api, _native
+from . import PathLike, RustGISError, Session, _Api, _native, _warn_losses
 
 #: The web app the widgets show; ``RUSTGIS_WEB_URL`` points them at another build (a local
 #: ``trunk serve``, a self-hosted copy).
@@ -246,17 +246,20 @@ class _Embedded(_Api):
                 return
             # Peer input is an import: keep its containment notices and invalidate old trust.
             self._hold(self._session.notices())
+            engine = self._session._engine
             try:
-                engine = self._session._engine
-                _native(engine, engine._open_peer_text, text)
+                engine._open_peer_text(text)
             except RustGISError as e:
                 self._hold([(f"the app's project couldn't be read: {e}", True)])
+                _warn_losses(engine, e)
                 return
             finally:
                 self._hold(self._session.notices())
             # The app's own text, not the session's re-serialised copy: the app then sees its
-            # project and doesn't open it again.
+            # project and doesn't open it again. Recorded before its losses are raised, which a
+            # warning filter can turn into an error.
             self._project = text
+            _warn_losses(engine)
         elif kind == "result" and content.get("ok") is False:
             self._hold([(str(content.get("error", "the command failed")), True)])
 

@@ -68,7 +68,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_command",
-            description: "Run a RustGIS command by id with JSON parameters (see search_commands for ids and parameters). Project edits are undoable. Source publication and other external file writes cannot be undone. Commands that read or write files, use the network or replace the project ask the user first. A notice that reports lost data is also in the result's losses, as {code, kind, text, action}; for an assumed.* code, ask the user rather than guess.",
+            description: "Run a RustGIS command by id with JSON parameters (see search_commands for ids and parameters). Project edits are undoable. Source publication and other external file writes cannot be undone. Commands that read or write files, use the network or replace the project ask the user first. A notice that reports lost data with a loss code is also in the result's losses, as {code, kind, text, action}; for an assumed.* code, ask the user rather than guess.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -101,7 +101,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_tool",
-            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step. As for run_command, a notice that reports lost data is also in the result's losses, as {code, kind, text, action}.",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step. As for run_command, a notice that reports lost data with a loss code is also in the result's losses, as {code, kind, text, action}.",
             schema: json!({
                 "type": "object",
                 "properties": {
