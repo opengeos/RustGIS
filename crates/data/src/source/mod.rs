@@ -428,11 +428,13 @@ pub trait FeatureSource: Send + Sync {
     /// [`FeatureSource::visit_chunks`] for a whole request, its box in the source's own system
     /// ([`Request::own`]) too (one over the whole plane, [`whole_plane`], reads every feature as a
     /// map in that system draws them): a source that reads one this way tests each feature's own box
-    /// against it, converting nothing. One that doesn't visits every feature when given such a
-    /// box, never fewer than it holds (its extent, in longitude/latitude, may hold less), and
-    /// reads the extent otherwise.
+    /// against it, converting nothing. One that doesn't visits every feature when given a box in
+    /// its own system, never fewer than it holds (its extent, in longitude/latitude, may hold
+    /// less), and reads the extent otherwise (no box, or one in another system).
     fn visit_request_chunks(&self, req: &Request, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
-        self.visit_chunks(if req.own.is_some() { None } else { req.extent }, bytes, visit)
+        // A box in another system is read as if absent, as `Request::own` has it.
+        let in_own = req.own.is_some_and(|(crs, _)| crs == self.coord_crs());
+        self.visit_chunks(if in_own { None } else { req.extent }, bytes, visit)
     }
     fn info(&self) -> &SourceInfo;
     /// The coordinate system of the features it gives: a file read in place gives them as the file
