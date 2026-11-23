@@ -6,7 +6,8 @@
 //!
 //! A literal counts as an id when it is dotted words (`layer.add`) in a namespace some registered
 //! command has, or `ui`. It must then be a command the engine registers (`cmd::all()`), or, for
-//! `ui.*`, one the app handles: a match arm `"ui.pane.catalog" => …` in [`DISPATCH`]. The other dotted literals in
+//! `ui.*`, one the app handles: a match arm `"ui.pane.catalog" => …` in `run_ui`, which is in
+//! [`DISPATCH`]. The other dotted literals in
 //! those namespaces (file names, host names) are told apart by their last word ([`NOT_IDS`]) and
 //! [`EXEMPT`]. A literal in a namespace no registered command has is not looked at, so removing
 //! the last command of a namespace leaves its literals unchecked. This lives in the UI crate
@@ -37,20 +38,30 @@ const EXEMPT: &[(&str, &str)] = &[
     ("ui.stac.sentinel2", "a Web Data preset: `ui.stac.*` is resolved by `stacui::Preset::from_id`"),
     ("ui.stac.usgsLidar", "a Web Data preset: `ui.stac.*` is resolved by `stacui::Preset::from_id`"),
     ("ui.stac.vantor", "a Web Data preset: `ui.stac.*` is resolved by `stacui::Preset::from_id`"),
-    ("data.cityofberkeley.info", "an open-data portal's host name (it ends in a word that `time.info` also ends in)"),
+    ("data.cityofberkeley.info", "an open-data portal's host name; `info` is not in `NOT_IDS`, because `time.info` is a command"),
     ("stac.cut_note", "a key for a widget's remembered state in the STAC pane (stacui.rs), not a command"),
 ];
 
 /// The file whose match arms handle the `ui.*` commands.
 const DISPATCH: &str = "crates/ui-egui/src/lib.rs";
 
+/// The byte range of `run_ui` in the dispatch file's `text`: from its signature to the first line
+/// that is only an indented closing brace (rustfmt puts a method's at four spaces).
+fn run_ui_range(text: &str) -> std::ops::Range<usize> {
+    let Some(start) = text.find("fn run_ui(") else { panic!("{DISPATCH} has no `fn run_ui(`") };
+    let Some(end) = text[start..].find("\n    }\n") else { panic!("the end of `run_ui` in {DISPATCH} not found") };
+    start..start + end
+}
+
 /// The repository's root.
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The `.rs` files of every crate's and app's `src`, leaving out test files and directories. A
-/// directory or entry that can't be read fails the test: a file left out unseen would pass it.
+/// The `.rs` files of every crate's and app's `src`, leaving out test files and directories by name
+/// (`tests.rs`, `*_tests.rs`, `*_test.rs`, `tests/`); a test-only module in a file with another name
+/// (`#[cfg(test)] mod legacy;`) is scanned. A directory or entry that can't be read fails the test: a
+/// file left out unseen would pass it.
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     for entry in entries {
@@ -464,13 +475,15 @@ fn command_ids_in_hand_kept_lists_are_registered() {
     let found: Vec<(&str, &str, Vec<(usize, &str, bool)>)> =
         texts.iter().map(|(name, text)| (name.as_str(), text.as_str(), literals(text))).collect();
 
-    // The `ui.*` commands the app handles: those with a match arm in its dispatch (`run_ui` is in
-    // `crates/ui-egui/src/lib.rs`; an arm elsewhere, such as one that picks an icon, handles nothing).
+    // The `ui.*` commands the app handles: those with a match arm in `run_ui` (an arm elsewhere, even
+    // in the same file, such as one that picks an icon, handles nothing).
     let ui_arms: HashSet<&str> = found
         .iter()
         .filter(|(file, _, _)| *file == DISPATCH)
-        .flat_map(|(_, _, l)| l)
-        .filter(|(_, id, arm)| *arm && id.starts_with("ui."))
+        .flat_map(|(_, text, l)| {
+            let run_ui = run_ui_range(text);
+            l.iter().filter(move |(at, id, arm)| *arm && id.starts_with("ui.") && run_ui.contains(at))
+        })
         .map(|(_, id, _)| *id)
         .collect();
     assert!(ui_arms.len() > 100, "the scan found {} ui commands with an arm", ui_arms.len());
