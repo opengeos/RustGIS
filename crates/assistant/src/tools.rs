@@ -933,9 +933,12 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     // What cleaning withheld is said first, so the sizes below are the final ones.
     let r = with_withheld(s, r, withheld);
     let Value::Object(o) = r else { return bounded_json(&r, tokens) };
-    if o.contains_key("losses") || (losses.is_empty() && !always) {
+    if losses.is_empty() && !always {
         return bounded_json(&Value::Object(o), tokens);
     }
+    // A result with its own `losses` goes under `result`, as a result that isn't an object does
+    // beside `notices`, so the codes still have their key.
+    let o = if o.contains_key("losses") { serde_json::Map::from_iter([("result".to_string(), Value::Object(o))]) } else { o };
     let max = output_bytes(tokens);
     let forms = loss_forms(&losses);
     let with = |mut o: serde_json::Map<String, Value>, (list, trimmed): &(Value, bool)| {
@@ -1693,6 +1696,7 @@ mod tests {
     /// the result is cut to leave it room.
     #[test]
     fn losses_beyond_the_output_budget_keep_their_codes() {
+        let small_loss = || json!({"code": "dropped.value", "kind": "dropped", "text": "t", "action": "a"});
         let mut s = Session::new(rustgis_engine::Project::default());
         let mut finish = |r: Value, losses: Vec<Value>, always: bool| -> Value {
             serde_json::from_str(&finish_with_losses(&mut s, r, losses, 200, Withheld::default(), always)).unwrap()
@@ -1740,6 +1744,11 @@ mod tests {
         };
         assert_eq!(finish(json!({"notices": ["n"]}), true)["losses"], json!([]));
         assert!(finish(json!({"notices": ["n"]}), false).get("losses").is_none());
+        // A result with its own `losses` keeps it under `result`, beside the codes.
+        let own = json!({"losses": 3});
+        let out: Value =
+            serde_json::from_str(&finish_with_losses(&mut s, own.clone(), vec![small_loss()], 200, Withheld::default(), false)).unwrap();
+        assert_eq!((&out["result"], &out["losses"][0]["code"]), (&own, &json!("dropped.value")), "{out}");
     }
 
     #[test]
