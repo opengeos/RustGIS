@@ -354,6 +354,11 @@ fn read_documents_with(
             fetch(&address, ceiling)
                 .map(|fetched| {
                     observed = Some(fetched.origin.reach());
+                    // The app knows a listed layer's document only by its address, so one read
+                    // from the internet is recorded there, as one the app reads is.
+                    if observed == Some(Reach::Public) {
+                        cache::restrict_to_public(&address);
+                    }
                     fetched.bytes
                 })
                 .map_err(|e| crate::sources::message_with_address(original, &e))
@@ -2122,13 +2127,16 @@ mod tests {
     #[test]
     fn linked_documents_are_fetched_within_the_reach_of_the_document_linking_them() {
         use crate::render::rustgis_tiles::address::Origin;
-        let landing = json!({"links":[{"rel":"data","type":"application/json","href":"https://looks-public.example/collections"}]});
-        let items = "https://looks-public.example/collections/parcels/items";
-        let collections = json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
         for observed in [Reach::Public, Reach::Local] {
+            // Each case its own names: a document read from the internet is recorded as such.
+            let tag = if observed == Reach::Public { "public" } else { "local" };
+            let linked = format!("https://looks-public-{tag}.example/collections");
+            let landing = json!({"links":[{"rel":"data","type":"application/json","href":linked}]});
+            let items = format!("{linked}/parcels/items");
+            let collections = json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
             let mut asked = Vec::new();
             let mut s = Session::new(crate::Project::default());
-            let p = json!({"url": "https://service.example/ogc", "type": "ogcapi"});
+            let p = json!({"url": format!("https://service-{tag}.example/ogc"), "type": "ogcapi"});
             let found = read_documents_with(&mut s, &p, false, None, &mut |url, ceiling| {
                 asked.push((url.to_string(), ceiling));
                 let body = if asked.len() == 1 { &landing } else { &collections };
@@ -2139,9 +2147,33 @@ mod tests {
             .unwrap();
             assert_eq!(asked.len(), 2, "{asked:?}");
             assert_eq!(asked[0].1, Reach::Local, "the service's own address is the user's choice");
-            assert_eq!(asked[1], ("https://looks-public.example/collections".to_string(), observed), "observed {observed:?}");
+            assert_eq!(asked[1], (linked.clone(), observed), "observed {observed:?}");
             assert_eq!(found.service.layers.len(), 1);
             assert_eq!(found.sources.iter().map(|source| source.public).collect::<Vec<_>>(), [observed == Reach::Public]);
+        }
+    }
+
+    /// A document read natively from the internet is recorded as such, so the app, which knows a
+    /// listed layer's document only by its address (`source_url`), fetches what the layer links to
+    /// from the internet too ([`cache::ceiling_for`], as Add From Service's `from_public` reads it).
+    #[test]
+    fn documents_read_natively_from_the_internet_are_recorded() {
+        use crate::render::rustgis_tiles::address::Origin;
+        for observed in [Reach::Public, Reach::Local] {
+            let root = format!("https://native-read-{observed:?}.example/collections").to_ascii_lowercase();
+            let items = format!("{root}/parcels/items");
+            let collections = json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
+            let mut s = Session::new(crate::Project::default());
+            let p = json!({"url": root, "type": "ogcapi"});
+            let found = read_documents_with(&mut s, &p, false, None, &mut |url, ceiling| {
+                let origin = Origin::with_observed_reach(url, observed.min(ceiling))?;
+                Ok(cache::Fetched { bytes: serde_json::to_vec(&collections).unwrap_or_default(), origin })
+            })
+            .unwrap();
+            assert_eq!(found.sources.len(), 1);
+            let source = &found.sources[0];
+            assert!(source.address.starts_with(&root), "{}", source.address);
+            assert_eq!(cache::ceiling_for(&source.address), observed, "the listed layer's document, observed {observed:?}");
         }
     }
 
@@ -2153,19 +2185,24 @@ mod tests {
     #[test]
     fn a_repeated_dataset_document_keeps_the_reach_it_was_read_at() {
         use crate::render::rustgis_tiles::address::Origin;
-        let vector = "https://vector-list.example/tiles?f=json";
-        let map = "https://map-list.example/tiles?f=json";
-        let metadata = "https://map-list.example/metadata?f=json";
-        let landing = json!({"links":[{"rel":"tilesets-vector","href":vector},{"rel":"tilesets-map","href":map}]});
-        let vector_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"vector","links":[
-            {"rel":"self","type":"application/json","href":map}]}]});
-        let map_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"map","links":[
-            {"rel":"self","type":"application/json","href":metadata}]}]});
-        let map_metadata = json!({"tileMatrixSetId":"WebMercatorQuad","links":[
-            {"rel":"item","type":"image/png","href":"https://map-list.example/map/{tileMatrix}/{tileRow}/{tileCol}.png"}]});
         // Where the vector list and the map list were observed; the map list's metadata is asked
         // within the map list's reach either way.
         for (vector_reach, map_reach) in [(Reach::Local, Reach::Public), (Reach::Public, Reach::Local)] {
+            // Each case its own names: a document read from the internet is recorded as such.
+            let tag = if map_reach == Reach::Public { "a" } else { "b" };
+            let (vector, map, metadata) = (
+                format!("https://vector-list-{tag}.example/tiles?f=json"),
+                format!("https://map-list-{tag}.example/tiles?f=json"),
+                format!("https://map-list-{tag}.example/metadata?f=json"),
+            );
+            let (vector, map, metadata) = (vector.as_str(), map.as_str(), metadata.as_str());
+            let landing = json!({"links":[{"rel":"tilesets-vector","href":vector},{"rel":"tilesets-map","href":map}]});
+            let vector_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"vector","links":[
+                {"rel":"self","type":"application/json","href":map}]}]});
+            let map_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"map","links":[
+                {"rel":"self","type":"application/json","href":metadata}]}]});
+            let map_metadata = json!({"tileMatrixSetId":"WebMercatorQuad","links":[
+                {"rel":"item","type":"image/png","href":format!("https://map-list-{tag}.example/map/{{tileMatrix}}/{{tileRow}}/{{tileCol}}.png")}]});
             let mut asked = Vec::new();
             let mut s = Session::new(crate::Project::default());
             let p = json!({"url": "https://service.example/dataset", "type": "ogcapi"});

@@ -625,11 +625,12 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// The address a paged read fetches next. Its login comes only from the page that led to it
-/// (the referrer), so a page reached through another origin stays anonymous even when it points
-/// back at the first page's origin.
-fn next_request(app: &mut RustGisApp, params: &Value, pages: &Pages) -> Result<String, String> {
-    rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer()))?;
+/// The address a paged read fetches next, judged within `reach`, where the page before it was
+/// read (not by how that page's address is spelled). Its login comes only from the page that led
+/// to it (the referrer), so a page reached through another origin stays anonymous even when it
+/// points back at the first page's origin.
+fn next_request(app: &mut RustGisApp, params: &Value, pages: &Pages, reach: Reach) -> Result<String, String> {
+    rustgis_engine::render::rustgis_tiles::address::check_reach(pages.next_url(), reach)?;
     if params.get("anonymous").and_then(Value::as_bool) == Some(true) {
         return Ok(rustgis_engine::data::login_address::inner(pages.next_url()).to_string());
     }
@@ -665,8 +666,8 @@ pub(crate) fn go_on(app: &mut RustGisApp, mut landed: Landed, left: usize, reach
                 app.session.notify(e, true);
             }
             Step::Fetch(pages) => {
-                let next = next_request(app, &landed.params, &pages);
                 let reach = reach.min(cache::ceiling_for(&landed.url));
+                let next = next_request(app, &landed.params, &pages, reach);
                 let slot = match next {
                     // A layer's description: small, and soon given up on.
                     Ok(url) if pages.describing() => {
@@ -784,6 +785,46 @@ mod tests {
             assert_eq!(asked[1].1, observed, "the next page, the first observed {observed:?}");
             let layer = app.session.map().layers.iter().find(|l| l.name == "Parcels");
             assert_eq!(layer.map(|l| l.dataset.features.len()), Some(2), "{:?}", app.dialogs.error);
+        }
+    }
+
+    /// The next page is judged by where the page before it was read, not by how that page's
+    /// address is spelled: a first page whose public-looking name connected on the local network
+    /// may lead to a local address; one read from the internet may not.
+    #[test]
+    fn the_next_page_is_judged_by_where_the_page_before_it_was_read() {
+        use rustgis_engine::render::rustgis_tiles::address::{Origin, Reach};
+        let first = "https://gis-corp.example/collections/a/items";
+        let next = "https://10.0.0.5/collections/a/items?page=2";
+        for observed in [Reach::Local, Reach::Public] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let links =
+                    if clean.starts_with(first) { json!([{"rel":"next","type":"application/geo+json","href":next}]) } else { json!([]) };
+                let body = json!({"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}],"links":links});
+                let reach = if clean.starts_with(first) { observed } else { Reach::Local };
+                let origin = Origin::with_observed_reach(&clean, reach.min(ceiling)).unwrap();
+                done(Ok(cache::Fetched { bytes: body.to_string().into_bytes(), origin }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            app.run("ui.addUrl", json!({"url": first, "name": "Corp", "service": true})).unwrap();
+            for _ in 0..4 {
+                poll_pages(&mut app, &egui::Context::default());
+            }
+            let asked = asked.lock().unwrap();
+            let layer = app.session.map().layers.iter().find(|l| l.name == "Corp").map(|l| l.dataset.features.len());
+            if observed == Reach::Local {
+                assert_eq!(asked.len(), 2, "{asked:?}");
+                assert_eq!(asked[1], (next.to_string(), Reach::Local), "{asked:?}");
+                assert_eq!(layer, Some(2), "{:?}", app.dialogs.error);
+            } else {
+                assert_eq!(asked.len(), 1, "a page read from the internet can't lead to a local address: {asked:?}");
+                assert_eq!(layer, Some(1), "the first page is kept");
+            }
         }
     }
 
@@ -983,7 +1024,7 @@ mod tests {
         };
         assert_eq!(pages.next_url(), "https://maps.example.org/items?page=3");
         assert_eq!(
-            next_request(&mut app, &json!({"connection":connection}), &pages).as_deref(),
+            next_request(&mut app, &json!({"connection":connection}), &pages, Reach::Public).as_deref(),
             Ok("https://maps.example.org/items?page=3")
         );
     }
