@@ -1192,7 +1192,7 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
     control::begin(rows.len());
     for (i, r) in rows.into_iter().enumerate() {
         control::reached(i);
-        if pace.stop(16) {
+        if pace.stop(1) {
             return Err(control::Cancelled.into());
         }
         let Some(f) = ds.features.get(r) else { continue };
@@ -1204,6 +1204,10 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
         let v = field.and_then(|i| ds.value(r, i).as_f64()).filter(|v| v.is_finite());
         let mut credited: HashSet<u64> = HashSet::new();
         for c in pts {
+            // A multipoint's points can be many: Cancel is looked at between them too.
+            if pace.stop(16) {
+                return Err(control::Cancelled.into());
+            }
             if !c.is_finite() || c.y.abs() > 90.0 || c.x.abs() > 360.0 {
                 outside += 1;
                 continue;
@@ -1507,6 +1511,16 @@ mod tests {
         multi.push(Some(Geometry::MultiPoint(vec![Coord::new(-55.72, -12.55), Coord::new(-55.7201, -12.5501)])), vec![Value::Float(5.0)]);
         let d = layer(aggregate(&One(multi, None), &serde_json::json!({"input": "pts", "resolution": 12, "field": "v"})).unwrap());
         assert_eq!((d.value(0, 3).as_f64(), d.value(0, 5).as_f64(), d.value(0, 6).as_f64()), (Some(3.0), Some(6.0), Some(3.0)));
+        // Cancel is looked at between a multipoint's points, not only between features.
+        let looks = |n: usize| {
+            let mut d = points(&[]);
+            d.push(Some(Geometry::MultiPoint(vec![Coord::new(-55.72, -12.55); n])), vec![Value::Float(1.0)]);
+            let control = control::Control::cancelled_at_look(u64::MAX);
+            let json = serde_json::json!({"system": "H3", "input": "pts", "resolution": 5});
+            crate::run_under("Aggregate", &control, || aggregate(&One(d, None), &json)).unwrap();
+            control.looked()
+        };
+        assert!(looks(2 * control::PACE_WORK / 16) >= looks(1) + 2);
         for bad in [
             serde_json::json!({"input": "nope"}),
             serde_json::json!({"input": "pts", "field": "nope"}),
