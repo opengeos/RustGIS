@@ -425,7 +425,6 @@ fn write_document(document: &str, bytes: &[u8]) -> Result<(), String> {
     }
     .map_err(|e| e.localizedDescription().to_string())?;
     // A stale bookmark still finds the document (moved or renamed since): it is written there.
-    let _ = stale;
     let written = scoped(&url, || {
         // Checked again: leave to write it may have gone since it was opened.
         if !url.path().is_some_and(|path| objc2_foundation::NSFileManager::defaultManager().isWritableFileAtPath(&path)) {
@@ -1173,15 +1172,14 @@ impl Platform for Ios {
         count(&self.shared.working, true);
         let (shared, busy, document, saved) = (self.shared.clone(), self.writing_back.clone(), document.to_string(), name.to_string());
         let started = std::thread::Builder::new().name("project written back".into()).spawn(move || {
-            let result = write_document(&document, &bytes).map(|()| saved.clone()).map_err(|error| {
-                i18n::fmt(
-                    "{name} wasn't saved where it was opened from: {error}. The file wasn't changed: Save again to choose where to save it.",
-                    &[("name", &saved), ("error", &error)],
-                )
-            });
+            let written = write_document(&document, &bytes);
             // Free for the next save before this one is reported done; counted as work until then.
             busy.store(false, Ordering::Release);
-            shared.save_result(true, result);
+            match written {
+                Ok(()) => shared.save_result(true, Ok(saved)),
+                // Worded by the shell, as Android's: the file is as it was (the write is atomic).
+                Err(reason) => shared.add(Event::WriteBackFailed { name: saved, reason, kept: None }),
+            }
             count(&shared.working, false);
         });
         if let Err(e) = started {

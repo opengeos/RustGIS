@@ -210,29 +210,10 @@ impl<P: Phone> App<P> {
                 Event::ProjectDocument(document) => self.app.project_document(document),
                 Event::ProjectSave(result) => self.app.complete_project_save(result),
                 Event::WriteBackFailed { name, reason, kept } => {
-                    let reason = write_back_reason(&reason);
                     // Save again only helps while the project saved is the one open.
                     let open = self.app.saving_the_open_project();
                     let damaged = kept.is_some();
-                    let text = match (kept, open) {
-                        (None, true) => i18n::fmt(
-                            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed: Save again to choose where to save it.",
-                            &[("name", &name), ("reason", &reason)],
-                        ),
-                        (None, false) => i18n::fmt(
-                            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed.",
-                            &[("name", &name), ("reason", &reason)],
-                        ),
-                        (Some(kept), true) => i18n::fmt(
-                            "{name} may be damaged where it was opened from: {reason}. The project is still open: Save again to choose where to save it. A copy of it as saved is kept at {kept}.",
-                            &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
-                        ),
-                        (Some(kept), false) => i18n::fmt(
-                            "{name} may be damaged where it was opened from: {reason}. A copy of it as saved is kept at {kept}.",
-                            &[("name", &name), ("reason", &reason), ("kept", &kept.display().to_string())],
-                        ),
-                    };
-                    self.app.complete_project_save(Err(text));
+                    self.app.complete_project_save(Err(write_back_failure(&name, &reason, kept.as_deref(), open)));
                     // The file may hold part of the project: what is open no longer matches any
                     // saved file, so it counts as unsaved (and asks before it is closed).
                     if damaged && open {
@@ -492,10 +473,36 @@ fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
     }
 }
 
-/// Why a project couldn't be written back, in the user's language: the activity's codes for its
-/// own reasons (`DocumentWrite.java`), or the system's text as it gave it.
+/// What the user is told when project `name` couldn't be written back: why ([`write_back_reason`]),
+/// whether the file was left as it was or may be damaged (the project as saved `kept` there), and,
+/// while the project is still `open`, that Save again asks where.
+fn write_back_failure(name: &str, reason: &str, kept: Option<&Path>, open: bool) -> String {
+    let reason = write_back_reason(reason);
+    match (kept, open) {
+        (None, true) => i18n::fmt(
+            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed: Save again to choose where to save it.",
+            &[("name", name), ("reason", &reason)],
+        ),
+        (None, false) => i18n::fmt(
+            "{name} wasn't saved where it was opened from: {reason}. The file wasn't changed.",
+            &[("name", name), ("reason", &reason)],
+        ),
+        (Some(kept), true) => i18n::fmt(
+            "{name} may be damaged where it was opened from: {reason}. The project is still open: Save again to choose where to save it. A copy of it as saved is kept at {kept}.",
+            &[("name", name), ("reason", &reason), ("kept", &kept.display().to_string())],
+        ),
+        (Some(kept), false) => i18n::fmt(
+            "{name} may be damaged where it was opened from: {reason}. A copy of it as saved is kept at {kept}.",
+            &[("name", name), ("reason", &reason), ("kept", &kept.display().to_string())],
+        ),
+    }
+}
+
+/// Why a project couldn't be written back, in the user's language: the app's codes for its own
+/// reasons (`DocumentWrite.java`), or the system's text as it gave it.
 fn write_back_reason(reason: &str) -> String {
     match reason {
+        "code:busy" => tl!("another file is being chosen or saved").to_string(),
         "code:storage" => tl!("the app's storage can't be written to").to_string(),
         "code:unwritable" => tl!("the file can't be written to").to_string(),
         "code:stalled" => tl!("the file took no more bytes").to_string(),
@@ -887,6 +894,31 @@ mod tests {
         (app.services.open_async.as_ref().unwrap())("marker:9");
         assert_eq!(inbox.lock().unwrap().last().unwrap().0, format!("{}9:", rustgis_ui_egui::MARKER_PICK));
     }
+    /// A failed write-back says whether the file was changed, and offers Save again only while the
+    /// project saved is still open; the app's own reasons are worded, the system's passed on.
+    #[test]
+    fn a_failed_write_back_is_worded_by_what_happened() {
+        let kept = Path::new("/data/saved/1/site.rgis");
+        let said = |kept: Option<&Path>, open| write_back_failure("site.rgis", "code:unwritable", kept, open);
+        assert_eq!(
+            said(None, true),
+            "site.rgis wasn't saved where it was opened from: the file can't be written to. The file wasn't changed: Save again to choose where to save it."
+        );
+        assert!(said(None, false).ends_with("The file wasn't changed.") && !said(None, false).contains("Save again"));
+        assert!(said(Some(kept), true).contains("may be damaged") && said(Some(kept), true).contains("Save again"));
+        assert!(said(Some(kept), true).ends_with("kept at /data/saved/1/site.rgis."));
+        assert!(said(Some(kept), false).contains("may be damaged") && !said(Some(kept), false).contains("Save again"));
+        for (code, worded) in [
+            ("code:busy", "another file is being chosen or saved"),
+            ("code:storage", "the app's storage can't be written to"),
+            ("code:stalled", "the file took no more bytes"),
+            ("code:short", "the file doesn't hold all of the project after writing it"),
+            ("Permission denied", "Permission denied"),
+        ] {
+            assert_eq!(write_back_reason(code), worded);
+        }
+    }
+
     #[test]
     fn a_worker_refused_before_reading_retires_its_dxf_answer() {
         let inbox = Inbox::default();

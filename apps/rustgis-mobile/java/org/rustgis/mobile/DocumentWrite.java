@@ -14,6 +14,7 @@ final class DocumentWrite {
      * Why a write-back failed, as codes the Rust side words in the user's language (shell.rs,
      * WriteBackFailed); any other reason is the system's own text.
      */
+    static final String BUSY = "code:busy";
     static final String STORAGE = "code:storage";
     static final String UNWRITABLE = "code:unwritable";
     static final String STALLED = "code:stalled";

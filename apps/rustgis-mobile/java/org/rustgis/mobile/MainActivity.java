@@ -500,7 +500,7 @@ public class MainActivity extends NativeActivity {
         }
         runOnUiThread(() -> {
             if (saveBytes != null || picking || writing) {
-                saveFailed(true, name, "another file is being chosen or saved.");
+                add(writeBackFailed(name, new java.io.IOException(DocumentWrite.BUSY), null));
                 answered();
                 return;
             }
