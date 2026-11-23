@@ -144,8 +144,9 @@ field package carries the archives its map draws from. Tile layers from the web 
 A field package (`.rgisfield`) carries a map to the phone and its edits back.
 
 1. **On the computer**, with the map in view, **Data › Offline › Package for the Field** makes
-   the package: a project of that map, the features in view, and the MBTiles and PMTiles
-   archives its tile layers use. The package records the area it was made from in your project,
+   the package: a project of that map, the features in view, the MBTiles and PMTiles archives its
+   tile layers use, and the photos its features name (pictures named by their full path, while
+   they fit the package; the notice counts any left out). The package records the area it was made from in your project,
    so save the project after packaging. A layer read in place from a supported local file is
    copied within the area while it fits the package budget. The copy is for reference, and
    Bring Back skips edits to it. The sender gets a notice about anything left behind, including
@@ -206,7 +207,8 @@ command line or Python, `offline.conflicts` lists them with the project's `state
 them by index with that state, refusing a list read before the project changed.
 
 Only the photos of features the phone added, or whose photos it changed, come back: a photo of a
-feature whose photos it left alone is left out, and the summary says how many.
+feature whose photos it left alone is left out, and the summary says how many. A photo the package
+took from the computer comes back to the file it was taken from, not as a copy.
 
 Bring Back refuses a package while the area's offline map is open with edits not synced yet, as
 renewing the area would replace them: **Sync** the area first. Syncing moves the area on, so a

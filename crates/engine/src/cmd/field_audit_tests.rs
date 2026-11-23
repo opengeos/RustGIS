@@ -602,15 +602,16 @@ fn a_feature_with_a_photo_deleted_in_the_field_is_deleted_at_home() {
     home.run("offline.sync", &json!({"name": "Day"})).unwrap();
     let (_, out) = package(&mut home, &Value::Null).unwrap();
     home.run("map.activate", &json!({"name": home.project.offline_areas[0].map.clone()})).unwrap();
-    assert!(rustgis_data::zip::read(&out).unwrap().iter().all(|(n, _)| !n.starts_with("photos/")));
+    // The photo goes with its feature, and the phone names it where it was unpacked: the
+    // deletion's old value still matches home's, which names it where it is at home.
+    assert!(rustgis_data::zip::read(&out).unwrap().iter().any(|(n, b)| n == "photos/at-home.jpg" && b == b"home photo"));
     let mut a = phone(&temp, &out, "a");
-    assert!(!temp.0.join("a").join("photos").exists(), "no photos folder, so project_in rewrote nothing");
     let cities = layer(&a, "Cities");
     let r = a.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
-    assert_eq!(
-        a.map().layer(cities).unwrap().dataset.value(r, a.map().layer(cities).unwrap().dataset.field_index("photos").unwrap()).to_string(),
-        photo.display().to_string()
-    );
+    let unpacked =
+        a.map().layer(cities).unwrap().dataset.value(r, a.map().layer(cities).unwrap().dataset.field_index("photos").unwrap()).to_string();
+    assert_ne!(unpacked, photo.display().to_string());
+    assert_eq!(std::fs::read(&unpacked).unwrap(), b"home photo");
     a.run("select.rows", &json!({"layer": cities, "rows": [r]})).unwrap();
     a.run("edit.delete", &Value::Null).unwrap();
     let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
