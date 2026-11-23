@@ -987,7 +987,15 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     v.insert("lossesTrimmed".into(), json!(true));
     let v = Value::Object(v).to_string();
     // The tightest budgets: the marker alone.
-    if v.len() <= max { v } else { json!({"lossesTrimmed": true}).to_string() }
+    // The tightest budgets: the marker alone, else nothing a client could misread.
+    let marker = json!({"lossesTrimmed": true}).to_string();
+    if v.len() <= max {
+        v
+    } else if marker.len() <= max {
+        marker
+    } else {
+        "{}".to_string()
+    }
 }
 
 /// `losses` in the forms [`finish_with_losses`] tries, longest first, each with whether it is
@@ -1692,8 +1700,10 @@ mod tests {
             assert_eq!((&out["lossesTrimmed"], &out["success"]), (&json!(true), &json!(true)), "{tokens}: {text}");
             assert!(out["losses"].to_string().contains("dropped.value"), "{tokens}: {text}");
         }
-        let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], 8, Withheld::default(), false);
-        assert!(text.len() <= output_bytes(8), "{text}");
+        for tokens in 1..=8 {
+            let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
+            assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
+        }
         // A failure's error alone gives way to its losses, as JSON.
         let failed = json!({"success": false, "error": "e".repeat(5000)});
         let text = finish_with_losses(&mut s, failed, vec![loss.clone()], 200, Withheld::default(), true);

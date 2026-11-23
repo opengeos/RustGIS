@@ -68,6 +68,15 @@ class DataLossWarning(UserWarning):
         self.code = code
         self.kind = code.split(".", 1)[0]
 
+    def __reduce__(self) -> Tuple[Any, ...]:
+        """Pickles with the code and what was added to it (notes), so a warning turned into an
+        error crosses a process boundary, as in a process pool.
+
+        Returns:
+            The class, its arguments and its state.
+        """
+        return (type(self), (self.args[0], self.code), self.__dict__)
+
 
 class DroppedWarning(DataLossWarning):
     """Something in the input isn't in the result (``dropped.*`` codes)."""

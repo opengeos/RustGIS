@@ -139,6 +139,10 @@ def test_losses_are_warnings_with_their_code(tmp_path):
         s.add_data(lossy)
     [warning] = [w for w in seen if issubclass(w.category, rustgis.DataLossWarning)]
     assert (warning.message.code, warning.message.kind) == ("dropped.ring", "dropped")
+    import pickle
+
+    copy = pickle.loads(pickle.dumps(warning.message))
+    assert (type(copy), str(copy), copy.code) == (rustgis.DroppedWarning, str(warning.message), "dropped.ring")
     assert warning.filename == __file__, "the warning points at the caller's line"
     text = str(warning.message).removesuffix(" [dropped.ring]")
     assert (text, False) in s.notices(), "the notice is kept too"
