@@ -506,8 +506,10 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
                 ));
             }
             None => {
-                // A layer that declares them may still hold only x and y: said, without a code,
-                // and not marked as having lost them.
+                // A layer that declares them may still hold only x and y: said without a code, as
+                // the count isn't known. Still marked as having lost them when it declares them, so
+                // its exports don't pass over what was most likely dropped.
+                zm_dropped = info.has_zm;
                 zm_note = Some(crate::loss::Note::plain(format!(
                     "GDAL: '{layer}': an unknown number of source feature(s) may have had Z or M coordinates dropped; conversion keeps only XY coordinates"
                 )));
