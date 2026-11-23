@@ -392,6 +392,9 @@ impl FeatureSource for ShpSource {
         // A whole read looks at whether the stored boxes hold their shapes, once.
         let checking = req.extent.is_none() && self.boxes.load(std::sync::atomic::Ordering::Relaxed) == BOXES_UNKNOWN;
         let mut missed = false;
+        // A record a whole read couldn't read this time had its box left unchecked: the check
+        // waits for a read that reads them all.
+        let mut unchecked = false;
         let mut shp = Cursor::open(&self.shp)?;
         let mut dbf = Cursor::open(&self.dbf)?;
         let mut buf = Vec::new();
@@ -413,6 +416,7 @@ impl FeatureSource for ShpSource {
             buf.resize(place.len as usize, 0);
             if shp.read_at(u64::from(place.offset), &mut buf).is_err() {
                 skipped += 1;
+                unchecked = true;
                 return Ok(());
             }
             let geometry = match parse_shape(&buf) {
@@ -468,7 +472,7 @@ impl FeatureSource for ShpSource {
             chunks.push(Feature { id: u64::from(i) + 1, geometry, attrs })
         })?;
         chunks.flush()?;
-        if checking && complete {
+        if checking && complete && (missed || !unchecked) {
             self.boxes.store(if missed { BOXES_DONT } else { BOXES_HOLD }, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(Batch {
