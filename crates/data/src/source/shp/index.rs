@@ -11,6 +11,10 @@ use std::sync::Mutex;
 /// more than one record in this many matches.
 const PASS_ABOVE: u64 = 8;
 
+/// How many index rows a read by area goes through between looks at Cancel (few in tests, so
+/// that a small file reaches one).
+const LOOK_EVERY: usize = if cfg!(test) { 64 } else { 1 << 16 };
+
 struct DiskIndex {
     db: Mutex<Connection>,
     pub count: u64,
@@ -165,15 +169,25 @@ impl DiskIndex {
     /// matches, and was run twice, once to count.
     fn visit_matches(&self, db: &Connection, extent: [f32; 4], mut visit: impl FnMut(u32, Place) -> Result<()>) -> Result<(u64, bool)> {
         let [x0, y0, x1, y1] = extent;
-        let count = usize::try_from(self.count).map_err(|_| bad("spatial index: too many records"))?;
-        let mut hits = vec![0u64; count.div_ceil(64)];
+        let words = usize::try_from(self.count.div_ceil(64)).map_err(|_| bad("spatial index: too many records"))?;
+        let mut hits: Vec<u64> = Vec::new();
+        hits.try_reserve_exact(words).map_err(|e| bad(format!("spatial index: {e}")))?;
+        hits.resize(words, 0);
         let mut matched = 0u64;
         {
             let mut stmt = db.prepare("SELECT id FROM bounds WHERE x0<=?1 AND x1>=?2 AND y0<=?3 AND y1>=?4").map_err(sql)?;
             let mut rows = stmt.query(params![x1, x0, y1, y0]).map_err(sql)?;
+            let mut seen = 0usize;
             while let Some(r) = rows.next().map_err(sql)? {
-                let id: i64 = r.get(0).map_err(sql)?;
-                let Some(word) = usize::try_from(id).ok().and_then(|i| hits.get_mut(i / 64)) else { continue };
+                seen += 1;
+                if seen.is_multiple_of(LOOK_EVERY) {
+                    crate::progress::check()?;
+                }
+                // An id past the directory is no record of this file.
+                let Some(id) = r.get::<_, i64>(0).ok().and_then(|id| u64::try_from(id).ok()).filter(|id| *id < self.count) else {
+                    continue;
+                };
+                let Some(word) = usize::try_from(id / 64).ok().and_then(|w| hits.get_mut(w)) else { continue };
                 let bit = 1u64 << (id % 64);
                 if *word & bit == 0 {
                     *word |= bit;
@@ -181,11 +195,18 @@ impl DiskIndex {
                 }
             }
         }
+        // What the progress counts from here: the records read, not every record of the file.
+        crate::progress::begin(usize::try_from(matched).unwrap_or(usize::MAX));
         let hit = |id: u64| usize::try_from(id / 64).ok().and_then(|w| hits.get(w)).is_some_and(|w| w & (1u64 << (id % 64)) != 0);
         if matched.saturating_mul(PASS_ABOVE) >= self.count {
             let mut stmt = db.prepare("SELECT id, offset, len FROM records ORDER BY id").map_err(sql)?;
             let mut rows = stmt.query([]).map_err(sql)?;
+            let mut seen = 0usize;
             while let Some(r) = rows.next().map_err(sql)? {
+                seen += 1;
+                if seen.is_multiple_of(LOOK_EVERY) {
+                    crate::progress::check()?;
+                }
                 let id: u32 = r.get(0).map_err(sql)?;
                 if hit(u64::from(id)) {
                     visit(id, Place { offset: r.get(1).map_err(sql)?, len: r.get(2).map_err(sql)? })?;
@@ -194,6 +215,9 @@ impl DiskIndex {
         } else {
             let mut stmt = db.prepare("SELECT offset, len FROM records WHERE id=?1").map_err(sql)?;
             for (w, word) in hits.iter().enumerate() {
+                if w.is_multiple_of(LOOK_EVERY / 64) {
+                    crate::progress::check()?;
+                }
                 let mut bits = *word;
                 while bits != 0 {
                     let id = (w * 64) as u64 + u64::from(bits.trailing_zeros());
@@ -624,6 +648,18 @@ mod tests {
                 assert_eq!(matched, got.len() as u64);
                 assert!(got.windows(2).all(|w| w[0].0 < w[1].0), "in file order");
                 assert_eq!(matched * PASS_ABOVE >= 400, many, "{area:?}: {matched} matched");
+                // Its progress counts the records read, and Cancel stops it before any is.
+                let probe = std::sync::Arc::new(crate::progress::tests::Counted::default());
+                let _probe = crate::progress::install(Some(probe.clone()));
+                index.visit_complete(Some(area), |_, _| Ok(())).unwrap();
+                assert_eq!(probe.total.load(std::sync::atomic::Ordering::Relaxed), matched);
+                probe.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                let mut read = 0;
+                let stopped = index.visit_complete(Some(area), |_, _| {
+                    read += 1;
+                    Ok(())
+                });
+                assert!(matches!(stopped, Err(crate::DataError::Cancelled)) && read == 0, "{area:?}: {read} read");
             }
         });
     }

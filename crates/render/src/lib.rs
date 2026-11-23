@@ -409,10 +409,6 @@ pub const CULL_MARGIN: f64 = 0.05;
 /// in file order rather than through its index ([`covers_most`]).
 const READ_ALL_OVER: f64 = 0.5;
 
-/// How much a streamed layer's read of the view's longitude/latitude box is grown on each side
-/// (a fraction of its size), for the edges' curve between the points it is measured from.
-const VIEW_READ_PAD: f64 = 0.05;
-
 /// The wider margin the GPU backend tessellates vector layers out to: while the map moves,
 /// its meshes are moved rather than rebuilt, so they hold the ground a pan of half the view
 /// or zooming out to twice the extent reveals (as MapLibre keeps the tiles around the view).
@@ -2562,11 +2558,11 @@ fn covers_most(b: &Extent, layer: &Extent) -> bool {
 /// Whether a streamed layer, drawn upright on a flat map, draws nothing from a feature whose box
 /// misses the frame's cull extent, so that it can read only the features near the view (#1065).
 /// The draw loop draws a polygon, a line without stacked strokes, and a point without marks or an
-/// image only when its box meets the cull extent (`marked_in`), and a polygon or line's selection
-/// outline doesn't reach past the cull margin. Labels, diagrams, aggregation bins, extrusions,
-/// graphics and a shore band take features from beyond the view, so a layer with any of them
-/// reads them all. The layer's geometry type stands for each feature's: the sources drawn this
-/// way ([`FeatureSource::streams_chunks`](rustgis_data::source::FeatureSource::streams_chunks),
+/// image only when its box meets the cull extent (`marked_in`). Labels, diagrams, aggregation
+/// bins, extrusions, graphics, a shore band and a selection's outline, as wide as the layer's
+/// lines, reach in from beyond the view, so a layer with any of them reads every feature. The
+/// layer's geometry type stands for each feature's: the sources drawn this way
+/// ([`FeatureSource::streams_chunks`](rustgis_data::source::FeatureSource::streams_chunks),
 /// Shapefiles) hold one kind of shape.
 fn draws_in_view_only(layer: &rustgis_map::Layer, labels_drawn: bool, shore: bool) -> bool {
     let plain = !(labels_drawn && layer.labels.enabled)
@@ -2574,16 +2570,29 @@ fn draws_in_view_only(layer: &rustgis_map::Layer, labels_drawn: bool, shore: boo
         && layer.aggregation.is_none()
         && layer.extrusion.is_none()
         && layer.diagram.is_none()
-        && !layer.graphics;
+        && !layer.graphics
+        && layer.selection.is_empty()
+        && !numbers_rows(layer);
     plain
         && match layer.geometry_type() {
             GeometryType::Polygon => true,
             GeometryType::Polyline => !layer.has_strokes(),
-            GeometryType::Point => {
-                !layer.has_strokes() && !layer.has_picture_markers() && layer.symbol_by.is_empty() && layer.selection.is_empty()
-            }
+            GeometryType::Point => !layer.has_strokes() && !layer.has_picture_markers() && layer.symbol_by.is_empty(),
             GeometryType::None => false,
         }
+}
+
+/// Whether an expression the layer is drawn by may read `@row_number`, a row's place among the
+/// rows read with it, which a read of only the view would number otherwise: any mention, quoted
+/// or not, in its definition query, display filters, classes by expression, sizes by field or
+/// symbols by expression.
+fn numbers_rows(layer: &rustgis_map::Layer) -> bool {
+    let says = |t: &str| t.to_ascii_lowercase().contains("@row_number");
+    layer.definition_query.as_deref().is_some_and(says)
+        || layer.display_filters.iter().any(|f| says(&f.where_))
+        || layer.renderer.expression().is_some_and(says)
+        || layer.size_by.as_ref().is_some_and(|b| says(&b.field))
+        || serde_json::to_string(&layer.symbol_by).is_ok_and(|t| says(&t))
 }
 
 /// A label waiting to be placed: the label, its priority and its key, and where else it may go
@@ -6373,25 +6382,25 @@ fn render_frame(
             chunk.clear_cache();
             chunk.dataset.features = Vec::new().into();
             // Only the features near the view are read when nothing the layer draws comes from
-            // beyond them (#1065): the cull extent's box in longitude/latitude, padded for the
-            // edges' curve between samples, and the GPU's wider one when its meshes are moved
-            // during a pan. Otherwise every feature: labels, shadows and other effects reach in
-            // from beyond the view. So is every feature when the box doesn't come back around
-            // the cull extent on the map (a projection that wraps longitude near its edge), or
-            // covers most of the layer.
-            let reach = if gpu { &mesh_cull } else { &ctx.cull };
+            // beyond them (#1065): those whose boxes meet the cull extent's box in
+            // longitude/latitude. Otherwise every feature: labels, shadows and other effects reach
+            // in from beyond the view. Web Mercator maps longitude and latitude each on its own,
+            // so a feature held in longitude/latitude whose box misses that box is drawn wholly
+            // outside the cull extent, straight edges and all. In another projection, or from
+            // another system, an edge drawn straight between two places can cross the view while
+            // the feature's box misses it, so those read everything. So do GPU frames, whose
+            // meshes are made a batch at a time: which features share a batch decides which fall
+            // back to the CPU. And a box over most of the layer reads it all, in file order:
+            // asking the index which records nearly all of them are costs more than reading the
+            // few left over.
             let near = (globe.is_none()
+                && !gpu
+                && matches!(flat, rustgis_map::projection::Flat::Mercator)
+                && source.coord_crs() == rustgis_data::raster::Crs::LonLat
                 && matches!(labels_to, Labels::Own | Labels::Turned(_))
                 && draws_in_view_only(&chunk, !display.paused, shore.is_some()))
-            .then(|| lonlat_box(&flat, reach))
+            .then(|| lonlat_box(&flat, &ctx.cull))
             .flatten()
-            .map(|e| e.padded(VIEW_READ_PAD, 0.0))
-            .filter(|e| {
-                let back = flat.extent(e);
-                back.min_x <= reach.min_x && back.min_y <= reach.min_y && back.max_x >= reach.max_x && back.max_y >= reach.max_y
-            })
-            // A box over most of the layer reads it all, in file order: asking the index which
-            // records nearly all of them are costs more than reading the few left over.
             .filter(|e| !covers_most(e, &source.info().extent));
             let result = visit_within(source.as_ref(), near, &mut |features| {
                 // A frame no longer wanted reads no further (see `cancel`).

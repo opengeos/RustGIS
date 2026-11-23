@@ -1781,9 +1781,10 @@ impl FeatureSource for Near {
     }
 }
 
-/// A streamed layer that draws nothing from beyond the view reads only the features near it,
-/// and draws what the layer held in memory draws (#1065); one whose labels or stacked strokes
-/// reach in from beyond the view reads them all.
+/// A streamed layer that draws nothing from beyond the view reads only the features near it on
+/// Web Mercator, and draws what the layer held in memory draws (#1065); one whose labels, stacked
+/// strokes, selection or row numbers reach in from beyond the view, or on another projection,
+/// reads them all.
 #[test]
 fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
     use std::sync::{Arc, Mutex};
@@ -1803,12 +1804,14 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
     // north up and turned.
     let camera = Camera::new(rustgis_geom::lonlat_to_merc(Coord::new(0.3, 0.3)), 2_000.0);
     let total = squares.features.len();
-    let cases: [(Dataset, fn(&mut Layer), bool); 5] = [
+    let cases: [(Dataset, fn(&mut Layer), bool); 7] = [
         (squares.clone(), |_| {}, true),
         (points.clone(), |_| {}, true),
         (squares.clone(), |l| l.labels.enabled = true, false),
         (points.clone(), |l| l.line_strokes = vec![LineStroke { offset: 3.0, width: Some(2.0), ..Default::default() }], false),
         (points, |l| l.selection = vec![0], false),
+        (squares.clone(), |l| l.selection = vec![0], false),
+        (squares.clone(), |l| l.definition_query = Some("@row_number > 0".into()), false),
     ];
     let views = [rustgis_map::Projection::default(), rustgis_map::Projection::Custom("robinson".into())].into_iter().flat_map(|p| {
         [0.0, 25.0].map(|bearing| {
@@ -1819,6 +1822,8 @@ fn a_streamed_layer_reads_only_the_view_when_nothing_it_draws_reaches_in() {
         views.flat_map(|v| cases.clone().into_iter().enumerate().map(move |c| (v.clone(), c)))
     {
         let mut m = Map::new("near");
+        // Only Web Mercator keeps a box of longitude/latitude whole.
+        let near = near && projection == rustgis_map::Projection::default();
         m.projection = projection;
         m.basemap = rustgis_map::Basemap::Blank;
         m.add_dataset(ds.clone());
