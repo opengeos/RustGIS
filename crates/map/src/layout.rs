@@ -1158,7 +1158,7 @@ pub enum ElementKind {
         unit_label_position: UnitLabelPosition,
         /// Decimal places in the numbers, 0 to [`MAX_SCALE_DECIMALS`], their thousands set apart;
         /// none (auto), the decimals each label needs, as bars always printed.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, deserialize_with = "de_scale_decimals", skip_serializing_if = "Option::is_none")]
         decimals: Option<u8>,
         /// What gives way when the bar's length does not fit its box.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -1401,6 +1401,15 @@ fn chart_bars() -> usize {
 
 fn is_chart_bars(n: &usize) -> bool {
     *n == CHART_BARS
+}
+
+/// A scale bar's decimals as a file holds them: any number saturates into `u8` (negative to 0,
+/// a fraction cut, a huge value to 255), so `Layout::clamp` brings it into range and says so,
+/// rather than the whole layout failing to load.
+fn de_scale_decimals<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
+    let n: Option<f64> = serde::Deserialize::deserialize(d)?;
+    // `as` saturates and sends NaN to 0.
+    Ok(n.map(|v| v as u8))
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -4560,7 +4569,8 @@ mod tests {
             {{"id":1,"name":"a","x":0,"y":0,"w":10,"h":10,"kind":{{"MapFrame":{{"map":"m","center":{{"x":0,"y":0}},"scale":1000}}}}}},
             {{"id":2,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":99,"divisions_before_zero":9,"decimals":9,"text_size":1e9,"unit_label":"{}"}}}}}},
             {{"id":3,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"text_size":-4,"unit_label":"a\r\nb\rc\nd"}}}}}},
-            {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}}]}}"#,
+            {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}},
+            {{"id":5,"name":"e","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":300}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4585,7 +4595,9 @@ mod tests {
         // One subdivision is the division whole: it loads as none, quietly, and asks for no details.
         assert_eq!(got(4), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
         assert!(l.element(4).is_some_and(|e| !e.kind.scale_bar_uses_details()));
-        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (2, 1));
+        // A count past 255 loads too (it would not fit a byte) and ends at the most, said.
+        assert_eq!(got(5), (0, 0, Some(MAX_SCALE_DECIMALS as u8), SCALE_BAR_TEXT_PT, String::new()));
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (3, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
         }
