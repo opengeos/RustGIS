@@ -17,6 +17,8 @@ mod services_own;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/sources_own.rs"]
 mod sources_own;
+#[path = "tests/unplaced_out.rs"]
+mod unplaced_out;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/said_not_silent.rs"]
@@ -3300,6 +3302,73 @@ fn unique_values_by_expression_keep_their_classes_and_say_scales() {
     assert!(s.notices_since(mark).iter().any(|n| n.text.contains("without a map scale")), "{:?}", s.notices_since(mark));
     let rustgis_map::Renderer::Unique { classes: kept, .. } = &s.map().layer(many).unwrap().renderer else { panic!() };
     assert_eq!(kept.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["overview"]);
+}
+
+/// A calculation rule and Calculate Field refuse quoted text past the expression language's length
+/// limit, as the language refuses any other expression that long (#2783): no rule is kept and no
+/// value changes.
+#[test]
+fn a_calculation_past_the_length_limit_is_refused_by_rules_and_calculate_field() {
+    let mut s = numbered_points(&[1]);
+    let long = format!("'{}'", "a".repeat(rustgis_data::query::MAX_LEN - 1));
+    let rule = json!({"layer": "Herds", "name": "Long", "kind": "calculation", "field": "name", "expression": long});
+    let refused = s.run("data.attributeRule", &rule).err();
+    assert_eq!(refused.as_deref(), Some("the expression is too long"), "the rule");
+    assert!(s.map().layer_by_name("Herds").unwrap().design.rules.is_empty(), "no rule kept");
+    let refused = s.run("edit.calculateField", &json!({"layer": "Herds", "field": "name", "expression": long})).err();
+    assert_eq!(refused.as_deref(), Some("the expression is too long"), "Calculate Field");
+    let ds = &s.map().layer_by_name("Herds").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("name").unwrap()).to_string(), "h1");
+    // One already in a project (an earlier version, a hand-edited file) is a rule that doesn't
+    // read, skipped as such: an edit goes through and the rule writes nothing.
+    let id = s.map().layer_by_name("Herds").unwrap().id;
+    let kept = rustgis_map::design::AttributeRule {
+        name: "Long".into(),
+        kind: rustgis_map::design::RuleKind::Calculation,
+        field: "name".into(),
+        expression: long,
+    };
+    s.map_mut().layer_mut(id).unwrap().design.rules.push(kept);
+    // A rule that reads beside it: it computes, and isn't named as skipped.
+    let clean = json!({"layer": "Herds", "name": "Code", "kind": "calculation", "field": "code", "expression": "n * 10"});
+    s.run("data.attributeRule", &clean).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.setValue", &json!({"layer": "Herds", "row": 0, "field": "n", "value": 2})).unwrap();
+    let ds = &s.map().layer_by_name("Herds").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("name").unwrap()).to_string(), "h1", "the rule wrote nothing");
+    assert_eq!(ds.value(0, ds.field_index("code").unwrap()).to_string(), "20", "the clean rule computed");
+    // Said, not silent: the layer, how many, and which.
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| t.contains("no longer read")).collect();
+    assert_eq!(said, ["Herds: 1 calculation rule(s) skipped because they no longer read, so their fields weren't computed: Long"]);
+    // Without one that doesn't read, nothing is said.
+    s.map_mut().layer_mut(id).unwrap().design.rules.retain(|r| r.name != "Long");
+    let mark = s.notice_mark();
+    s.run("edit.setValue", &json!({"layer": "Herds", "row": 0, "field": "n", "value": 3})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("no longer read")), "{:?}", s.notices_since(mark));
+    // Deleting a field drops the rules that no longer read, and says so: here the long rule,
+    // put back, on a field other than the one deleted.
+    let rules_before = s.map().layer_by_name("Herds").unwrap().design.rules.len();
+    let kept = rustgis_map::design::AttributeRule {
+        name: "Long".into(),
+        kind: rustgis_map::design::RuleKind::Calculation,
+        field: "name".into(),
+        expression: format!("'{}'", "a".repeat(rustgis_data::query::MAX_LEN - 1)),
+    };
+    s.map_mut().layer_mut(id).unwrap().design.rules.push(kept);
+    let mark = s.notice_mark();
+    let r = s.run("edit.deleteField", &json!({"layer": "Herds", "field": "code"})).unwrap();
+    assert_eq!(r["rulesRemoved"], 2, "the long rule and Code, whose field went");
+    assert_eq!(s.map().layer_by_name("Herds").unwrap().design.rules.len(), rules_before - 1);
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| t.contains("rule(s)")).collect();
+    assert_eq!(said, ["Herds: deleting field code removed 2 attribute rule(s) that used it or no longer read: Code, Long"]);
+    // A field no rule depends on: the rule that reads another stays, and nothing is said.
+    let twice = json!({"layer": "Herds", "name": "Twice", "kind": "calculation", "field": "n", "expression": "n * 2"});
+    s.run("data.attributeRule", &twice).unwrap();
+    let mark = s.notice_mark();
+    let r = s.run("edit.deleteField", &json!({"layer": "Herds", "field": "name"})).unwrap();
+    assert_eq!(r["rulesRemoved"], 0);
+    assert_eq!(s.map().layer_by_name("Herds").unwrap().design.rules.len(), 1, "Twice kept");
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("rule(s)")), "{:?}", s.notices_since(mark));
 }
 
 /// A layer of points read from GeoJSON, one for each value given, in that order: the integer
@@ -8986,6 +9055,33 @@ fn labels_take_other_positions_along_lines() {
         s.run("labels.placement", &json!({"layer": "Rivers", "class": "Big", "otherPositions": on})).unwrap();
         assert!(s.map().label_lock.is_none() && s.map().label_lock_line_anchors.is_empty(), "{on}: locked again");
     }
+}
+
+/// A line's label trying other places off its line has a place on each side, and a lock names the
+/// side by the place's number (#1187): the other side, or a distance where there was none, locks
+/// the labels again; another distance on the same side keeps the lock, as does any change while
+/// the class tries no other places, or on points.
+#[test]
+fn a_lock_on_a_line_holds_while_its_labels_keep_their_side() {
+    let mut s = world();
+    let id = s.map().layer_by_name("Rivers").unwrap().id;
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "parallel", "otherPositions": true, "lineOffset": 4})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    // Locked, the label on the other side of its line; then `p` run.
+    let held_after = |s: &mut Session, p: Value| {
+        let key = (id, 0, 0, 0);
+        s.map_mut().label_lock = Some(vec![(key, rustgis_map::LockedPlace { place: 1, callout: None })]);
+        s.map_mut().label_lock_line_anchors.insert(key, Default::default());
+        s.run("labels.placement", &p).unwrap();
+        s.map().label_lock.is_some()
+    };
+    assert!(held_after(&mut s, json!({"layer": "Rivers", "lineOffset": 6})), "the same side, farther");
+    assert!(!held_after(&mut s, json!({"layer": "Rivers", "lineOffset": -4})), "the other side");
+    assert!(!held_after(&mut s, json!({"layer": "Rivers", "lineOffset": 0})), "on the line");
+    assert!(!held_after(&mut s, json!({"layer": "Rivers", "lineOffset": 4})), "off it again");
+    assert!(held_after(&mut s, json!({"layer": "Cities", "lineOffset": 4})), "points have no side");
+    s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": false})).unwrap();
+    assert!(held_after(&mut s, json!({"layer": "Rivers", "lineOffset": -4})), "no other places: no other side");
 }
 
 /// A label class takes an offset with its placement and a background with its text symbol; junk
@@ -33258,6 +33354,56 @@ fn lidar_point_clouds() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A layer read in place is counted by its source (#2678): `info.project` and `host.layers` give
+/// the source's total in `features`, as `layer.addData` did, and what is in memory in `loaded`.
+/// A source that can't say gives null, never 0.
+#[test]
+fn info_project_counts_a_layer_read_in_place_by_its_source() {
+    isolate_plugins();
+    let dir = std::env::temp_dir().join(format!("rustgis-count-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pts: Vec<(f64, f64, f64, u8)> = (0..200).map(|i| (10.0 + f64::from(i) / 200.0, 50.5, 300.0, 2)).collect();
+    let path = dir.join("scan.las");
+    std::fs::write(&path, las_bytes(&pts)).unwrap();
+    let mut s = Session::new(Project::default());
+    let added = s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!((added["streamed"].as_bool(), added["features"].as_u64()), (Some(true), Some(200)), "{added}");
+    let info = s.run("info.project", &json!({"nameFilter": "scan"})).unwrap();
+    let scan = &info["layers"][0];
+    assert_eq!(
+        (scan["features"].as_u64(), scan["loaded"].as_u64(), scan["streamed"].as_bool()),
+        (Some(200), Some(0), Some(true)),
+        "{scan}"
+    );
+    plugin("eng-count", &[]);
+    let layers = forward(&mut s, "eng-count", "host.layers", json!({})).unwrap();
+    let scan = layers.as_array().unwrap().iter().find(|l| l["name"] == "scan").unwrap();
+    assert_eq!(
+        (scan["features"].as_u64(), scan["loaded"].as_u64(), scan["streamed"].as_bool()),
+        (Some(200), Some(0), Some(true)),
+        "{scan}"
+    );
+    // A layer held in memory: both numbers agree.
+    let mut w = world();
+    let info = w.run("info.project", &json!({"nameFilter": "Cities"})).unwrap();
+    let cities = &info["layers"][0];
+    assert!(cities["features"].as_u64().is_some_and(|n| n > 0), "{cities}");
+    assert_eq!(
+        (&cities["features"], &cities["loaded"], &cities["streamed"]),
+        (&cities["loaded"], &cities["loaded"], &json!(false)),
+        "{cities}"
+    );
+    // The file is gone when the project opens: the source can't say, so null, not 0.
+    let text = serde_json::to_string(&s.project).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let info = t.run("info.project", &json!({"nameFilter": "scan"})).unwrap();
+    let scan = &info["layers"][0];
+    assert!(scan["features"].is_null() && scan["streamed"] == true && scan["loaded"] == 0, "{scan}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A preview of an oversized cloud must never become a successful whole-data result.
 #[test]
 fn lidar_sample_refuses_exports_and_statistics() {
@@ -44866,7 +45012,7 @@ fn postgis_dates_live() {
         let conn = postgis::connect(&url, false).unwrap();
         let t = postgis::find_table(&conn, &format!("public.{table}")).unwrap();
         let src = postgis::PostgisSource::open(conn, t, None, None).unwrap();
-        let b = src.read(&Request { extent: None, limit: 100 }).unwrap();
+        let b = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
         let note = rustgis_data::source::unread_dates_note(&src.info().fields, &b.unread_dates);
         assert_eq!(note.as_deref(), Some("2 values aren't dates and were read as empty, in 'd', 'ts'"));
         let f = b.features.iter().find(|f| f.id == 1).unwrap();
