@@ -96,16 +96,32 @@ _LOSS_WARNINGS = {
 _PACKAGE = (os.path.dirname(__file__),)
 
 
-def _warn_losses(engine: _Engine) -> None:
+def _warn_losses(engine: _Engine, failure: Optional[BaseException] = None) -> None:
     """Raises each loss this thread's calls reported since the last call as a
     :class:`DataLossWarning`.
 
+    Every loss is warned of, even after a filter turns one into an error: that first one is
+    raised once all are, and the later ones promoted too are added to it as notes. After a
+    failed call (``failure``), each promoted warning is added to that exception as a note
+    instead, and nothing is raised here.
+
     Args:
         engine: The session's engine.
+        failure: The exception the call raised, if it failed.
     """
+    raised: Optional[Warning] = None
     for kind, code, text in engine._take_losses():
         category = _LOSS_WARNINGS.get(kind, DataLossWarning)
-        warnings.warn(category(f"{text} [{code}]", code), skip_file_prefixes=_PACKAGE)
+        try:
+            warnings.warn(category(f"{text} [{code}]", code), skip_file_prefixes=_PACKAGE)
+        except Warning as promoted:
+            noted = failure if failure is not None else raised
+            if noted is None:
+                raised = promoted
+            else:
+                noted.add_note(f"{type(promoted).__name__}: {promoted}")
+    if raised is not None:
+        raise raised
 
 
 def _native(engine: _Engine, operation: Any, *args: Any) -> Any:
@@ -126,10 +142,7 @@ def _native(engine: _Engine, operation: Any, *args: Any) -> Any:
     try:
         result = operation(*args)
     except BaseException as failure:
-        try:
-            _warn_losses(engine)
-        except Warning as promoted:
-            failure.add_note(f"{type(promoted).__name__}: {promoted}")
+        _warn_losses(engine, failure)
         raise
     _warn_losses(engine)
     return result

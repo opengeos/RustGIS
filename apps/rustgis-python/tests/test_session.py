@@ -203,6 +203,29 @@ def test_a_failed_command_keeps_its_error_and_still_says_its_loss():
             s.run("script.run", script=script)
 
 
+def test_every_loss_of_a_call_is_said_when_one_is_an_error(tmp_path):
+    lossy = tmp_path / "lossy.rss"
+    lossy.write_text(_feed("1 x"))
+    add = json.dumps({"url": "https://maps.example.com/wms", "layer": "roads", "text": _WMS})
+    script = f"layer.addData {json.dumps({'path': str(lossy)})}\nservice.add {add}"
+    s = rustgis.Session()
+    # The first promoted warning is raised once the others are said, each in a note.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", category=rustgis.DataLossWarning)
+        with pytest.raises(rustgis.DataLossWarning) as raised:
+            s.run("script.run", script=script)
+    codes = {raised.value.code} | {code for code in ("dropped.ring", "dropped.legend") if any(code in n for n in raised.value.__notes__)}
+    assert codes == {"dropped.ring", "dropped.legend"}
+    # A failed call keeps its own error, with each promoted warning as a note.
+    failing = f"{script}\nlayer.addDataText {json.dumps({'fileName': 'broken.geojson', 'text': '{'})}"
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", category=rustgis.DataLossWarning)
+        with pytest.raises(rustgis.RustGISError) as failed:
+            s.run("script.run", script=failing)
+    notes = " ".join(failed.value.__notes__)
+    assert "[dropped.legend]" in notes
+
+
 @pytest.mark.parametrize("as_text", [False, True])
 def test_pmtiles_options_survive_a_project_round_trip(as_text):
     """The Python names reach the engine, including JSON-text styles and extensionless URLs."""
