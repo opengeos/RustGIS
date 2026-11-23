@@ -203,7 +203,7 @@ labels.convert layer? name?
 labels.distanceRange layer? class? closest? farthest? clear?
 labels.enable layer? on?
 labels.field layer? class? field
-labels.fonts search? fonts indexing?
+labels.fonts search?
 labels.lock on?
 labels.move layer? class? feature to
 labels.pause on?
@@ -234,7 +234,7 @@ layer.copyPath layer?
 layer.defineProjection layer? crs
 layer.definitionQuery layer? where
 layer.diagram layer? kind fields size? startAngle? labels? background? outline?
-layer.diagramInfo layer? kind fields size startAngle? labels background? outline
+layer.diagramInfo layer?
 layer.displayFilters layer? filters
 layer.expand layer? on?
 layer.extrusion layer? type field? height? factor?
@@ -440,7 +440,7 @@ project.exportLog path format?
 project.fromTemplate path? text? data? name?
 project.importGeolibre path? url? text? data? dir?
 project.importQgis path? text? data? dir?
-project.log since? until? command? failed? limit? entries count total on
+project.log since? until? command? failed? limit?
 project.logCommands on?
 project.new name?
 project.newTemplate path name?
@@ -564,7 +564,7 @@ stac.addBands item combination? red? green? blue? bbox? cellSize? name? ran?
 stac.addCube url? collection asset bbox? start end maxCloud? range? name? attribution? connection?
 stac.addFootprints footprints name?
 stac.addIndex item index bbox? cellSize? name? ran?
-stac.area path? layer? buffer? unit? intersects positions ignored
+stac.area path? layer? buffer? unit?
 stac.collections url? connection?
 stac.search url? collections? bbox? intersects? layer? buffer? unit? datetime? limit? maxCloud? sortby? phase? properties? footprints? connection?
 style.add path? text? data?
@@ -576,7 +576,7 @@ style.remove name
 style.save path
 table.close
 table.open layer?
-table.remove table at
+table.remove table
 table.statistics layer? field index selected?
 task.addStep task? title instructions? command params?
 task.editStep task? step title? instructions?

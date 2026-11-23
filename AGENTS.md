@@ -153,6 +153,11 @@ the pull request which of these it reaches and why the rest don't apply:
 `cargo xtask test-hygiene` (also in CI) requires `// test-wait: reason` on timer waits in tests and
 `#[ignore = "reason"]` on ignored tests, and refuses an `assert_eq!` or `assert_ne!` (or `debug_assert_*`)
 whose two sides are the same tokens; prefer completion or progress signals, and a fixed expected value.
+`clippy.toml` refuses the four sphere measures in `rustgis-geom` (`haversine_m`, `geodesic_length_m`,
+`geodesic_ring_perimeter_m`, `geodesic_ring_area_m2`): the Earth measures on the WGS 84 ellipsoid
+(`wgs84_distance_m`, `wgs84_length_m`, `wgs84_step_m`, `wgs84_ring_perimeter_area_m2`), and a call kept on
+the sphere, for another body or a comparison it can't change, says why in its
+`#[expect(clippy::disallowed_methods, reason = "…")]`.
 The engine test `command_surface_matches_the_snapshot` fails on any difference between the registered
 commands and `crates/engine/command-surface.txt` (each command id with its parameter keys and optional
 marks, not the help text): a pull request that adds, removes or renames a command or a parameter runs

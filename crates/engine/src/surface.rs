@@ -6,7 +6,7 @@
 //! The registry is checked against the file by `command_surface_matches_the_snapshot` (an engine
 //! test, so it runs in `cargo xtask ci`); `cargo xtask commands` rewrites the file.
 
-use crate::{CommandSpec, param_entries};
+use crate::{CommandSpec, Quotes, param_entries};
 
 /// Where the snapshot is kept, from the repository's root.
 pub const PATH: &str = "crates/engine/command-surface.txt";
@@ -23,11 +23,11 @@ pub fn text(commands: &[CommandSpec]) -> String {
     out
 }
 
-/// One command's line of the snapshot: every key the description names, as `param_keys` reads
-/// them, so `"lon" | "x": degrees` records both.
+/// One command's line of the snapshot: every key the parameter object names, as `param_keys`
+/// reads them, so `"lon" | "x": degrees` records both.
 fn line(c: &CommandSpec) -> String {
     let mut line = c.id.to_string();
-    param_entries(c.params, |key, optional| {
+    param_entries(inputs(c.params), |key, optional| {
         line.push(' ');
         line.push_str(key);
         if optional {
@@ -35,6 +35,32 @@ fn line(c: &CommandSpec) -> String {
         }
     });
     line
+}
+
+/// The parameter object at the start of a description, up to its closing brace: the result that
+/// some descriptions give after it (`{"layer"?: name} → {"kind": …}`) is not parameters. A
+/// description that isn't an object is returned as it is.
+fn inputs(desc: &str) -> &str {
+    if !desc.trim_start().starts_with('{') {
+        return desc;
+    }
+    let (mut depth, mut quotes) = (0usize, Quotes::default());
+    for (at, c) in desc.char_indices() {
+        if !quotes.read(c) {
+            continue;
+        }
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return desc.get(..=at).unwrap_or(desc);
+                }
+            }
+            _ => {}
+        }
+    }
+    desc
 }
 
 /// The differences between two snapshots, one message per command that was removed, added or
@@ -64,7 +90,11 @@ mod tests {
     /// commands by id and key. An added command fails too, so the file never goes stale.
     #[test]
     fn command_surface_matches_the_snapshot() {
-        let (saved, current) = (include_str!("../command-surface.txt"), text(&crate::cmd::all()));
+        let commands = crate::cmd::all();
+        let mut seen = std::collections::HashSet::new();
+        let twice: Vec<_> = commands.iter().filter(|c| !seen.insert(c.id)).map(|c| c.id).collect();
+        assert!(twice.is_empty(), "registered twice: {twice:?}");
+        let (saved, current) = (include_str!("../command-surface.txt"), text(&commands));
         let diff = differences(saved, &current);
         // Equal ids and keys but another text: a repeated id, or lines out of order.
         assert!(
@@ -75,12 +105,14 @@ mod tests {
         );
     }
 
-    /// A key written as an alternative (`"lon" | "x": degrees`) is in the snapshot like any other.
+    /// A key written as an alternative (`"lon" | "x": degrees`) is in the snapshot like any other,
+    /// and the result a description gives after its parameters is not.
     #[test]
-    fn alternative_keys_are_recorded() {
-        let spec =
-            crate::CommandSpec::new("a.go", "Go", "", |_, _| Ok(Default::default())).params(r#"{"lon" | "x": degrees, "n"?: number}"#);
-        assert_eq!(line(&spec), "a.go lon x n?");
+    fn the_snapshot_lists_the_parameters_only() {
+        let line_of = |params: &'static str| line(&crate::CommandSpec::new("a.go", "Go", "", |_, _| Ok(Default::default())).params(params));
+        assert_eq!(line_of(r#"{"lon" | "x": degrees, "n"?: number}"#), "a.go lon x n?");
+        assert_eq!(line_of(r#"{"a"?: "x {y}" (a note)} → {"b": y, "c": {"d"}}"#), "a.go a?");
+        assert_eq!(line_of("a GeoJSON text"), "a.go");
     }
 
     /// The differences name what moved: a command gone, a key gone, a key made required and a command new.
