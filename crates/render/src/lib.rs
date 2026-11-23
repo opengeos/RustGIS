@@ -5320,6 +5320,10 @@ fn render_frame(
                 // In longitude/latitude, which the globe draws (none for a layer held there).
                 layer.lonlat_in();
             }
+            if display_only {
+                // A copy for the map it was drawn on before is of no use here.
+                layer.release_projected_other_than(&key);
+            }
             if globe.is_none() && !display_only {
                 if complete_source {
                     layer.projected_in(&flat, &key);
@@ -6017,14 +6021,15 @@ fn render_frame(
                             };
                             let overrun = size;
                             // Off the line by its class's distance (#1187): above it as the text
-                            // reads, or below; its anchors stay on the line.
+                            // reads, or below; its anchors stay on the line. Trying other places,
+                            // each on both sides (`line_labels::both_sides`).
                             let off = line_labels::off_line(class.line_offset * 1.33 * label_factor, text::block_height(&text, size));
                             let positions = |width| match locked_at {
                                 Some(at) => {
                                     let won = lock.as_ref().and_then(|keys| keys.get(&key)).map_or(0, |won| won.place);
                                     vec![at; (usize::from(won) + 1).min(8)]
                                 }
-                                None => line_labels::positions(line.length(), width, overrun),
+                                None => line_labels::both_sides(line_labels::positions(line.length(), width, overrun), off),
                             };
                             let anchors = |positions: &[f32]| {
                                 // Back-project only while locking is requested, never on ordinary frames or replay.
@@ -6130,7 +6135,7 @@ fn render_frame(
                                 let first = locked_at.or_else(|| fitted.as_ref().and_then(|f| f.first().copied()));
                                 if try_others {
                                     let width = line_labels::curved_len(&advances, gap);
-                                    let positions = fitted.clone().unwrap_or_else(|| positions(width));
+                                    let positions = fitted.clone().map_or_else(|| positions(width), |f| line_labels::both_sides(f, off));
                                     // A saved slot the curve cannot take has no truthful preview either (as for a
                                     // straight line): never draw one at the anchor or the middle.
                                     if lock.as_ref().and_then(|k| k.get(&key)).is_some_and(|won| usize::from(won.place) >= positions.len())
@@ -6138,18 +6143,19 @@ fn render_frame(
                                         continue;
                                     }
                                     line_places = Some(LinePlaces { anchors: anchors(&positions), ..Default::default() });
+                                    let locked = lock.as_ref().and_then(|k| k.get(&key)).map(|won| usize::from(won.place));
                                     let Some((cx, cy)) = line.anchor(first.unwrap_or(line.length() / 2.0)) else { continue };
                                     let angle = line.parallel(width, overrun, first).map(|(_, _, a)| a);
                                     // Off the line as its curves will be (by the line's direction
                                     // where the text can't fit, as a tilted view's preview is).
                                     let (cx, cy) =
                                         angle.or_else(|| line.direction(first.unwrap_or(line.length() / 2.0))).map_or((cx, cy), |a| {
-                                            let (x, y, _) = line_labels::parallel_off((cx, cy, a), off);
+                                            let (x, y, _) =
+                                                line_labels::parallel_off((cx, cy, a), line_labels::side_off(off, locked.unwrap_or(0)));
                                             (x, y)
                                         });
                                     // The preview is also View Unplaced's middle when every curve fails.
                                     places.push((0, cx, cy, angle, Vec::new()));
-                                    let locked = lock.as_ref().and_then(|k| k.get(&key)).map(|won| usize::from(won.place));
                                     curves = Some(label_places::Curves::new(
                                         std::sync::Arc::new(label_places::CurveSpec {
                                             line: line.clone(),
@@ -6216,9 +6222,10 @@ fn render_frame(
                                 // range: if the middle cannot fit, none can. Keep it as place 0
                                 // so a lock's alternative indices do not change.
                                 for (i, at) in along {
-                                    if let Some((x, y, angle)) =
-                                        line.parallel(width, overrun, Some(at)).map(|p| line_labels::parallel_off(p, off))
-                                    {
+                                    if let Some((x, y, angle)) = line.parallel(width, overrun, Some(at)).map(|p| {
+                                        // Another place's side; a repeat's index is no place's.
+                                        line_labels::parallel_off(p, if try_others { line_labels::side_off(off, i) } else { off })
+                                    }) {
                                         if try_others && i > 0 {
                                             line_alternatives.push(LabelPlace { x, y, angle: Some(angle), glyphs: Vec::new() });
                                         } else {
@@ -7618,13 +7625,41 @@ fn square_lines(
             continue;
         }
         let Some(layer) = map.layer_by_name(&name) else { continue };
-        if layer.dataset.coord_crs() != rustgis_data::raster::Crs::LonLat {
+        let crs = layer.dataset.coord_crs();
+        let drawing = if ctx.globe.is_none() && crs != rustgis_data::raster::Crs::LonLat { flat.held(crs).ok() } else { None };
+        // A label squared to it reads its places in longitude/latitude, which count what can't be
+        // given there ([`note_held_read`]): not on a map in its own system, which reads none.
+        if crs != rustgis_data::raster::Crs::LonLat && !drawing.as_ref().is_some_and(|d| d.is_identity()) {
             held.insert(name.clone(), layer.id);
         }
         let mut runs = Vec::new();
-        // Read in longitude/latitude, whatever system the layer holds its coordinates in; a
-        // feature that can't be given there squares nothing (nor any, in a system that can't be
-        // converted), as the map draws none of it.
+        // On the flat map, a layer held in another system than longitude/latitude is read in map
+        // coordinates as the map draws it ([`rustgis_map::projection::Flat::held`]): as it is on
+        // a map in its own system, by the direct operation on one in another, so a label squares
+        // to the line where it is drawn; a place the map can't show breaks the line there.
+        if ctx.globe.is_none() && crs != rustgis_data::raster::Crs::LonLat {
+            // A system that can't be converted squares nothing, as the map draws none of it.
+            let Some(drawing) = &drawing else { continue };
+            for g in layer.dataset.features.rows().filter_map(|r| r.geometry()) {
+                // On a map in its own system, as it is, with no copy. A place that can't be given
+                // in longitude/latitude (`HeldDrawing::geometry`'s flag) is what the held read
+                // counts ([`note_held_read`]); one the map doesn't show breaks the line here, as
+                // the map's own drawing leaves it out, uncounted there too.
+                let drawn =
+                    if drawing.is_identity() { std::borrow::Cow::Borrowed(g) } else { std::borrow::Cow::Owned(drawing.geometry(g).0) };
+                for part in outline_parts(&drawn) {
+                    let points: Vec<Option<(f32, f32)>> =
+                        part.iter().map(|m| m.is_finite().then(|| ctx.view.to_screen(*m)).map(|(x, y)| (x as f32, y as f32))).collect();
+                    runs.extend(
+                        points.split(Option::is_none).map(|r| r.iter().flatten().copied().collect()).filter_map(square_labels::Run::new),
+                    );
+                }
+            }
+            out.insert(name, runs);
+            continue;
+        }
+        // Else read in longitude/latitude; a feature that can't be given there squares nothing
+        // (nor any, in a system that can't be converted), as the map draws none of it.
         let Ok(to) = layer.dataset.shown_conversion() else { continue };
         for g in layer.dataset.features.iter().filter_map(|f| rustgis_data::Dataset::converted_to_lonlat(&to, f.geometry.as_ref()?)) {
             let (parts, rings): (Vec<&Vec<Coord>>, bool) = match &*g {
@@ -7648,6 +7683,22 @@ fn square_lines(
         out.insert(name, runs);
     }
     out
+}
+
+/// A line's parts and a polygon's rings, each ring closed as its outline is drawn; none for points.
+fn outline_parts(g: &Geometry) -> Vec<std::borrow::Cow<'_, [Coord]>> {
+    match g {
+        Geometry::Line(parts) => parts.iter().map(|p| std::borrow::Cow::Borrowed(p.as_slice())).collect(),
+        Geometry::Polygon(polys) => polys
+            .iter()
+            .flatten()
+            .map(|r| match (r.first(), r.last()) {
+                (Some(a), Some(b)) if a != b => std::borrow::Cow::Owned(r.iter().chain([a]).copied().collect()),
+                _ => std::borrow::Cow::Borrowed(r.as_slice()),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// A line's runs on the globe in screen points: bent along great circles and cut at the horizon,
@@ -9735,6 +9786,40 @@ mod tests {
         let far = labels.iter().find(|l| l.text == "Far").expect("far labelled");
         let (_, fy) = at(Coord::new(0.05, 0.05));
         assert!(far.angle.is_none() && far.y < fy as f32, "as auto: {:?} {} {fy}", far.angle, far.y);
+    }
+
+    /// On a map in a line layer's own system, a label squares to the line as the map holds it,
+    /// read in map coordinates with nothing converted: a slanting coast held in UTM 32N, on a map
+    /// in UTM 32N, turns the label square to it there.
+    #[test]
+    fn a_label_squares_to_a_line_held_in_the_maps_system() {
+        let utm = rustgis_data::raster::Crs::Epsg(32632);
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.set_projection(rustgis_map::Projection::Custom("EPSG:32632".into()));
+        // A coast slanting at 45° in UTM, a kilometre long.
+        let mut d = Dataset::new("coast", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(500_000.0, 5_300_000.0), Coord::new(501_000.0, 5_301_000.0)]])), vec![]);
+        d.held_in = utm;
+        m.add_dataset(d);
+        // A beach 50 m north-west of the coast's middle, held in UTM too.
+        let mut d = Dataset::new("beaches", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Point(Coord::new(500_464.6, 5_300_535.4))), vec![Value::Text("Beach".into())]);
+        d.held_in = utm;
+        let pts = m.add_dataset(d);
+        let l = m.layer_mut(pts).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.placement = LabelPlacement::Perpendicular;
+        l.labels.default.square_to =
+            Some(rustgis_map::SquareTo { layer: "coast".into(), within: 20.0, side: rustgis_map::SquareSide::Away });
+        let camera = Camera { center: Coord::new(500_500.0, 5_300_500.0), res: 5.0, bearing: 0.0, pitch: 0.0 };
+        m.camera = camera;
+        let view = View { width: 300.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let labels = render(&mut m, &view).unwrap().labels;
+        let beach = labels.iter().find(|l| l.text == "Beach").expect("labelled");
+        let a = beach.angle.expect("turned").to_degrees();
+        // The coast runs up to the right on the screen (y down: along -45°); square to it, 45°.
+        assert!((a.rem_euclid(180.0) - 45.0).abs() < 0.5, "{a}");
     }
 
     /// A drawing that panics (a command's panic is caught) leaves nothing noted: reads outside a
