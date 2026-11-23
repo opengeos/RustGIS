@@ -13,7 +13,7 @@
 //!   of an A5 cell at r on that plane, so the two compare at one resolution.
 //!
 //! Ids are text, so they survive CSV and JSON and join with data from other tools of the system.
-//! A5's tools (`a5Grid`, `a5Aggregate`) are this module's with the system fixed.
+//! A5's tools (`a5Grid`, `a5Aggregate`) are this module's: they take a system, A5 unless one is named.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
