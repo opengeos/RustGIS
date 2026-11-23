@@ -854,7 +854,7 @@ impl Layer {
 
     /// [`Layer::load_all`], with what of the source couldn't be read.
     pub fn load_all_counted(&self) -> Result<(Dataset, Unreadable), String> {
-        let (ds, report, _) = self.load_all_with_notices()?;
+        let (ds, report) = self.load_all_with_notices()?;
         // materialize also puts the typed date diagnostics in messages. Existing consumers
         // give them their own export wording, so preserve only the other messages here.
         let date_notes: Vec<_> = report.unread_dates.iter().chain(&report.rounded_dates).map(|n| format!(": {n}")).collect();
@@ -873,13 +873,12 @@ impl Layer {
     /// A whole read with its complete reader report, including messages beyond rows and dates.
     /// Callers decide which opening notices were already shown and which the new read discovered.
     pub fn load_all_reported(&self) -> Result<(Dataset, rustgis_data::ReadReport), String> {
-        self.load_all_with_notices().map(|(ds, report, _)| (ds, report))
+        self.load_all_with_notices()
     }
 
-    fn load_all_with_notices(&self) -> Result<(Dataset, rustgis_data::ReadReport, bool), String> {
-        let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), rustgis_data::ReadReport::default(), false)) };
+    fn load_all_with_notices(&self) -> Result<(Dataset, rustgis_data::ReadReport), String> {
+        let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), rustgis_data::ReadReport::default())) };
         let (mut ds, mut report) = copy.read_all()?;
-        let mut zm_noted = false;
         if let Some(info) = copy.info() {
             ds.zm_dropped |= info.zm_dropped;
             for note in &info.notes {
@@ -887,7 +886,6 @@ impl Layer {
                 if !report.messages.contains(&message) {
                     report.messages.push(message);
                 }
-                zm_noted |= info.zm_dropped && note.loss == Some(rustgis_data::loss::LossCode::DroppedZm);
             }
         }
         ds.name = self.dataset.name.clone();
@@ -907,7 +905,7 @@ impl Layer {
             }
         }
         ds.source = self.dataset.source.clone();
-        Ok((ds, report, zm_noted))
+        Ok((ds, report))
     }
 
     /// A streamed layer's source, to export whole a chunk at a time, with a dataset of no

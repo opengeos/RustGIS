@@ -344,13 +344,17 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         // without a code: the layer may hold only x and y.
         if l.has_zm || l.family.is_none() {
             for part in out.iter_mut().skip(before) {
-                match kept_zm_count(&part.path).map_or_else(|| count_zm_features(src, &l, part.family), Ok) {
-                    Ok(n) => {
-                        part.zm_dropped = n;
-                        // Not kept, it is counted again next time.
-                        let _ = std::fs::write(part.path.with_extension("zm"), format!("{n}\n"));
-                    }
-                    Err(_) => part.zm_unknown = true,
+                let count = kept_zm_count(&part.path).unwrap_or_else(|| {
+                    let count = count_zm_features(src, &l, part.family).ok();
+                    // A count, or that it couldn't be taken (which this GDAL won't do next time
+                    // either). Not kept, it is counted again next time.
+                    let kept = count.map_or_else(|| UNCOUNTED.to_string(), |n| format!("{n}\n"));
+                    let _ = std::fs::write(part.path.with_extension("zm"), kept);
+                    count
+                });
+                match count {
+                    Some(n) => part.zm_dropped = n,
+                    None => part.zm_unknown = true,
                 }
             }
         }
@@ -816,10 +820,20 @@ fn count_geometry_filter(src: &Path, layer: &str, filter: &str) -> Result<u64> {
 }
 
 /// The count of Z/M features kept beside the conversion at `path` ([`convert_in`]), when there is
-/// one: written whole, with its line's end, or not taken.
-fn kept_zm_count(path: &Path) -> Option<u64> {
-    std::fs::read_to_string(path.with_extension("zm")).ok()?.strip_suffix('\n')?.parse().ok()
+/// one: the count, or `None` when it couldn't be taken. Written whole, with its line's end, or
+/// not taken; read no further than a count's length, so a damaged file costs nothing.
+fn kept_zm_count(path: &Path) -> Option<Option<u64>> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path.with_extension("zm")).ok()?.take(32).read_to_string(&mut text).ok()?;
+    if text == UNCOUNTED {
+        return Some(None);
+    }
+    text.strip_suffix('\n')?.parse().ok().map(Some)
 }
+
+/// What a kept Z/M count says when the count couldn't be taken ([`kept_zm_count`]).
+const UNCOUNTED: &str = "unknown\n";
 
 /// Generic layers don't declare the dimensions of their features. Count the selected family's
 /// actual Z/M geometries that conversion flattens; SQLite's spatial functions aren't present in every
@@ -1325,6 +1339,12 @@ mod tests {
                 }
                 let (hit, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
                 assert_eq!(hit.iter().map(|p| p.zm_dropped).collect::<Vec<_>>(), vec![7; parts.len()]);
+                // A count that couldn't be taken is kept as such, and said again without a scan.
+                for part in &parts {
+                    std::fs::write(part.path.with_extension("zm"), UNCOUNTED).unwrap();
+                }
+                let (hit, _) = convert_in(&dir.join(format!("added-{lossy}")), &path, None, None).unwrap();
+                assert!(hit.iter().all(|p| p.zm_dropped == 0 && p.zm_unknown), "{hit:?}");
             }
             let source = crate::source::open_path(&fresh.path, None).unwrap();
             let batch = source.read(&crate::source::Request { extent: None, limit: 10 }).unwrap();
