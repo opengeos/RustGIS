@@ -1182,8 +1182,10 @@ impl Dataset {
     /// `results`, a dataset in longitude/latitude made from this one (a tool's update of it), in
     /// its own coordinates: as it is while they are longitude/latitude; otherwise each geometry
     /// written back as an edit is ([`Dataset::edit_from_lonlat`]), its stored places kept as
-    /// stored. Every stored place is read, but only those the results read as are held, so what is
-    /// held is as large as the results, not the layer. Refused, naming the first feature, when one
+    /// stored. Every stored place of `self` is read (for a streamed layer, its window: a place
+    /// outside it is converted back, exact to the conversion's round trip, not kept as stored),
+    /// but only those the results read as are held, so what is held is as large as the results,
+    /// not the layer. Refused, naming the first feature, when one
     /// of its places can't be held in its system. A feature of the results without geometry whose
     /// stored one has a place that can't be given in longitude/latitude, so it was read without it
     /// ([`Dataset::in_lonlat_leaving_out`]), is left as stored, a field the results add empty.

@@ -164,6 +164,16 @@ fn annotation_leaves_out_a_feature_it_cant_place_and_says_so() {
             assert!(said[0].contains("1 feature(s) of lines") && said[0].contains("labels aren't converted"), "{}", said[0]);
         }
     }
+    // A far feature with no label text (its field null) would make no label anyway: not counted.
+    let mut s = session(true);
+    let l = s.map_mut().layers.iter_mut().find(|l| l.name == "lines").unwrap();
+    let fi = l.dataset.field_index("name").unwrap();
+    l.dataset.features.set_value(1, fi, Value::Null);
+    l.labels.enabled = true;
+    l.labels.default.field = "name".into();
+    let (out, said) = run(&mut s, "labels.convert", json!({"layer": "lines"}));
+    assert_eq!(out["annotations"], json!(1));
+    assert!(said.is_empty(), "{said:?}");
 }
 
 #[test]
