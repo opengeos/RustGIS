@@ -211,7 +211,10 @@ is given; Zonal Statistics and Tabulate Area place their zones on a raster in th
 are. A surface given another projected system, or a raster in one, gets the points or zones
 converted straight into it, by the transformation between the two datums where they differ; a raster
 in longitude/latitude or Web Mercator gets them through WGS 84. Their rasters aren't converted, and
-they don't count bent edges. Area, length and perimeter fields stay on the ellipsoid.
+they don't count bent edges. Area, length and perimeter fields stay on the ellipsoid. Calculate
+Geometry Attributes gives a point's `point_x` and `point_y` in that system's x and y, in its unit,
+as the layer holds them. Service Area and OD Cost Matrix still search the network on the ellipsoid,
+and the service area's lines are held in the network's system.
 
 In the desktop app a tool runs in the background, so the map and the rest of the window stay in
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
@@ -422,8 +425,8 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Calculate Geometry Attributes | `calculateGeometry` | Data Management › Features |
 | Simplify | `simplify` | Cartography › Generalization |
 | Tissot's Indicatrix | `tissot` | Cartography › Projections |
-| A5 Grid | `a5Grid` | Analysis › DGGS |
-| Aggregate Points to A5 | `a5Aggregate` | Analysis › DGGS |
+| Generate Tessellation | `a5Grid` | Analysis › DGGS |
+| Aggregate Points to Grid | `a5Aggregate` | Analysis › DGGS |
 | Select Layer By Location | `selectByLocation` | Data Management › Layers and Table Views |
 | Select Layer By Attribute | `selectByAttributes` | Data Management › Layers and Table Views |
 | Summarize Within | `countPoints` | Analysis › Summarize |
@@ -595,7 +598,10 @@ normalized in continuous longitude space, so non-polar regions larger than half 
 keep their full area and small antimeridian crossings stay small. Rings winding around a pole
 use the smaller polar region in either direction; reversing a ring does not select its global
 complement. Edges follow the shortest geodesics between vertices. The output fields remain
-`area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged.
+`area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged. A point layer gets
+`point_x` and `point_y`: longitude and latitude, or x and y in the projected system the layer is
+held in (see above). A feature with a place that can't be given in longitude/latitude, or lies
+beyond the poles (a latitude past ±90°), isn't measured, and a notice counts them.
 A ring through both poles can wind beyond one whole surface and bound no single
 region. Calculate Geometry Attributes refuses such input, with the numbers of affected rings
 and features, before changing any fields. The attribute table's Calculate Geometry does the
@@ -1201,23 +1207,44 @@ gp.run={"tool":"tabulateIntersection","params":{"zones":"parcels","classes":"flo
     They are measured against the WGS 84 ellipsoid. For a world projection the map draws on a sphere (Mollweide, Robinson…), they can be off by a few tenths of a percent.
 - **Making a distortion map:** color the circles by `area_scale` or `max_angle`.
 
-**A5 Grid** and **Aggregate Points to A5** use [A5](https://a5geo.org), a discrete global grid of
-pentagonal cells that all have the same area at a given resolution. A count per cell is therefore
-already a density, and stays comparable between regions, unlike a grid of cells that change size
-with latitude or the map's projection.
+**Generate Tessellation** and **Aggregate Points to Grid** build a discrete global grid, or count
+points by its cells, in one of four grid systems chosen with **System**, so the same place can be
+compared in several grids. System is **A5** unless another is chosen; the tools were A5 Grid and
+Aggregate Points to A5 before they took a system, and keep their ids (`a5Grid`, `a5Aggregate`),
+so a model or script saved before gets A5, as it did. A project, model or web tool that saves a
+run in another system can't be opened in a release before this one, which would make A5 cells
+instead.
 
-- **A5 Grid** makes the cells at a resolution (0–30; each step divides a cell into four: 5 is
-  about 33,000 km², 9 about 130 km², 12 about 2 km²) over the map's extent, an input layer's
-  polygons (or the extent of its points and lines), or the whole world. **Cells: Overlapping**
-  covers the area without gaps; **Center** keeps the cells whose centre is inside. A run makes at
-  most 200,000 cells.
-- **Aggregate Points to A5** counts a point layer's points (its selection, when there is one) by the
-  cell holding them, and keeps only the cells that hold any. It adds `count` and
-  `density_per_km2`, and a numeric field's `_sum` and `_mean`, where a feature's value counts
-  once in each cell (a multipoint's, however many of its points fall there).
-- Both write `a5` (the cell's 64-bit id in hex, as other A5 tools read it: DuckDB, PostgreSQL,
-  Python's `pya5`, R), `resolution` and `area_km2`. A cell across the antimeridian, or round a pole, is
-  split at ±180° into two parts of one polygon, each within −180° to 180°.
+| System | Cells | Resolutions | Id field |
+|---|---|---|---|
+| **A5** (Felix Palmer, [a5geo.org](https://a5geo.org)) | pentagons that all have the same area at a resolution, so a count per cell is already a density | 0–30, each step a quarter: 5 is about 33,000 km², 9 about 130 km², 12 about 2 km² | `a5`, the cell's 64-bit id in hex, as other A5 tools read it (DuckDB, PostgreSQL, Python's `pya5`, R) |
+| **H3** (Uber) | hexagons (and twelve pentagons a resolution), whose areas vary by about two to one | 0–15, each about a seventh of the one before: 5 is about 250 km², 9 about 0.1 km² | `h3`, H3's own hex text (`8966…fff`), as DuckDB, PostgreSQL and Python's `h3` read it |
+| **S2** (Google) | quadrilaterals from the faces of a cube | 0–30, each a quarter: 10 is about 80 km², 14 about 0.3 km² | `s2`, the cell's S2 token |
+| **Hexagon** | flat hexagons on the map's projection | 0–24, each a quarter; a cell at a resolution has an A5 cell's area there on the map's plane | `hex`, its axial coordinates `q,r` |
+
+- **Generate Tessellation** makes the cells at a resolution over the map's extent, an input
+  layer's polygons (or the extent of its points and lines), or the whole world. **Cells:
+  Overlapping** covers the area without gaps; **Center** keeps the cells whose centre is inside.
+- **Aggregate Points to Grid** counts a point layer's points (its selection, when there is one) by
+  the cell holding them, and keeps only the cells that hold any. It adds `count` and
+  `density_per_km2` (by that cell's area, since H3, S2 and hexagon cells differ in size), and a
+  numeric field's `_sum` and `_mean`, where a feature's value counts once in each cell (a
+  multipoint's, however many of its points fall there). In the same system and resolution the two
+  tools give the same ids, so their layers join on the id field.
+- **Every layer** writes the cell's id, `resolution` and `area_km2`, the cell's own area on the
+  ground, measured on the authalic sphere (the one with the WGS 84 ellipsoid's total area), so it
+  differs from the ellipsoid's by under 1%. A cell across the antimeridian, or round a pole, is split at ±180° into two parts of one
+  polygon, each within −180° to 180°.
+- **The hexagon grid** is laid on the active map's projection (Web Mercator when the map is a
+  globe), anchored at that projection's origin rather than at a layer's corner, so a place falls in
+  the same cell whatever layer or extent it's gridded with. Its ids only mean something in that
+  projection, which the `plane` field names. In a projection local to the area (a national or UTM
+  system), every cell has about the same area on the ground; in Web Mercator, cells shrink on the
+  ground away from the equator, and stop at 85.05° north and south: an area past it is cut there,
+  and a point past it left out, each said in the run's message. A cell whose corners the
+  projection can't take back to longitudes and latitudes is left out, and counted too.
+- **Limits:** a run makes at most 200,000 cells, and one whose area would need far more is refused
+  before it's covered, with the count in the message.
 
 ### Network tools
 
@@ -1226,7 +1253,8 @@ network, as the Network Analysis workflow's route does: lines join where their v
 line's length is measured on the WGS 84 ellipsoid, and a **Cost Field** multiplies it (a line with
 no number there costs its length, and one costing 0 or less is closed; each is counted in a
 notice). Every line can be travelled both ways. The network's selection is honoured, and the graph
-is reused while the lines don't change, shared with routes.
+is reused while the lines don't change, shared with routes: a network held in a projected system
+is converted to longitude/latitude only to build it, not on every run.
 
 Points are moved onto the nearest line, at most **Snap Distance** metres (1,000 by default). A
 feature farther away, with no point, or with several (a multipoint) is left out and counted in a
@@ -1579,7 +1607,7 @@ click them on the map:
 | Geostatistical Wizard | An IDW surface from feature values, using 12 nearest neighbours by default |
 | Network Analysis | The shortest (or cheapest, by a cost field) route over a line layer |
 | Neighborhood Explorer | What lies within a distance of a point, with sums of numeric fields |
-| Simulation | Random points in polygons (a fixed number, or from a field × rate) |
+| Simulation | Random points in polygons (a fixed number, or from a field × rate), spread in the layer's own coordinates when it is held in a projected system, else in longitude/latitude |
 | Data Engineering | Counts, nulls, distinct values, min, max and mean of every field |
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
@@ -2093,9 +2121,11 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
     million cells, or more on a computer with more memory; 32 million in the web app): a grid past
     that is refused before anything is burned. A layer read in place (only the part in view loaded)
     is refused until all its features are loaded. Taken from a raster read from its overview, the
-    grid is the overview's, and a notice says so. The command runs where it is called, with no Cancel
-    yet and no cap on its work: each polygon fills the cells it covers, so many large polygons on a
-    fine grid take time in proportion.
+    grid is the overview's, and a notice says so. Run from Command Search in the desktop app, it
+    runs on a thread of its own, its progress and Cancel in the Workflows pane, as the Analysis
+    workflows that make a raster do, and a GeoTIFF it writes replaces the file only once it is done
+    (Cancel leaves the file as it was). There is no cap on its work: each polygon fills the cells
+    it covers, so many large polygons on a fine grid take time in proportion.
 - **Classification Wizard** (unsupervised k-means) and **Classification Tools** (minimum distance
   from training polygons). Training polygons held in a coordinate system of their own are read as
   they are: a pixel's centre is converted into their system to be tested, straight by the

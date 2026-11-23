@@ -86,6 +86,7 @@ pub(super) fn long_commands(boundaries: bool) {
         ("raster.index", json!({"layer": dem, "index": "ndvi", "nir": 1, "red": 1})),
         ("raster.process", json!({"layer": dem, "operation": "resample", "factor": 4})),
         ("imagery.mosaic", json!({"name": "Valley"})),
+        ("raster.rasterize", json!({"layer": "Squares", "field": "name", "cellSize": 0.0005, "path": out("burned.tif")})),
         (
             "dl.classify",
             json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": if boundaries { 2 } else { 30 }, "model": "landcover"}),
@@ -353,6 +354,10 @@ pub(super) fn long_commands(boundaries: bool) {
         ("tabulateIntersection", json!({"zones": "Countries", "classes": "Squares", "includeEmptyZones": true})),
         ("serviceArea", json!({"network": "Rivers", "facilities": "Cities", "breaks": "50", "snapDistance": 100000})),
         ("odCostMatrix", json!({"network": "Rivers", "origins": "Cities", "destinations": "Cities", "count": 1, "snapDistance": 100000})),
+        ("a5Grid", json!({"system": "S2", "resolution": 4, "area": "Input Layer", "input": "Countries"})),
+        ("a5Grid", json!({"system": "Hexagon", "resolution": 3, "area": "Input Layer", "input": "Countries"})),
+        ("a5Aggregate", json!({"system": "H3", "input": "Cities", "resolution": 3})),
+        ("a5Grid", json!({"system": "H3", "resolution": 3, "area": "Input Layer", "input": "Countries"})),
     ];
     for (tool, params) in &tools {
         exercise(&s, tool, params, Kind::Tool, &dir.0, boundaries);

@@ -1,3 +1,4 @@
+#![expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
@@ -10,6 +11,9 @@ mod held_databases;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/services_own.rs"]
+mod services_own;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/sources_own.rs"]
 mod sources_own;
@@ -6735,6 +6739,80 @@ fn a5_grids_and_points_by_cell() {
     let total: f64 = (0..by.features.len()).map(|r| by.value(r, i).as_f64().unwrap()).sum();
     assert_eq!(total as usize, cities);
     assert!(s.run("gp.run", &json!({"tool": "a5Grid", "params": {"resolution": 13, "area": "World"}})).is_err());
+    // A script saved with the names the tools had before they took a system still runs them.
+    s.run("gp.run", &json!({"tool": "A5 Grid", "params": {"resolution": 1, "area": "World", "output": "old name"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("old name").unwrap().dataset.fields[0].name, "a5");
+    s.run("gp.run", &json!({"tool": "Aggregate Points to A5", "params": {"input": "Cities", "resolution": 2, "output": "old by cell"}}))
+        .unwrap();
+    assert!(s.map().layer_by_name("old by cell").is_some());
+}
+
+/// Generate Tessellation and Aggregate Points to Grid through `gp.run` in every system, every
+/// city in one cell; the hexagon grid is laid on the map's projection, and on Web Mercator for a
+/// globe, and its layer says which.
+#[test]
+fn tessellations_and_points_by_cell_in_every_system() {
+    let mut s = world();
+    let cities = s.map().layer_by_name("Cities").unwrap().dataset.features.len();
+    let counted = |s: &Session, name: &str| {
+        let by = &s.map().layer_by_name(name).unwrap().dataset;
+        let i = by.field_index("count").unwrap();
+        (0..by.features.len()).map(|r| by.value(r, i).as_f64().unwrap()).sum::<f64>() as usize
+    };
+    for (system, res, key) in [("H3", 1, "h3"), ("S2", 3, "s2"), ("A5", 2, "a5"), ("Hexagon", 2, "hex")] {
+        let out = format!("{system} cells");
+        let r = s
+            .run("gp.run", &json!({"tool": "a5Grid", "params": {"system": system, "resolution": res, "area": "World", "output": out}}))
+            .unwrap();
+        let cells = s.map().layer_by_name(&out).unwrap_or_else(|| panic!("{r}"));
+        assert_eq!(cells.dataset.fields[0].name, key);
+        assert!(cells.dataset.features.len() > 12, "{system}");
+        let by = format!("{system} by cell");
+        s.run("gp.run", &json!({"tool": "a5Aggregate", "params": {"system": system, "input": "Cities", "resolution": res, "output": by}}))
+            .unwrap();
+        assert_eq!(counted(&s, &by), cities, "{system}");
+    }
+    let plane = |s: &Session, name: &str| s.map().layer_by_name(name).unwrap().dataset.value(0, 3).to_string();
+    assert_eq!(plane(&s, "Hexagon cells"), "Web Mercator");
+    // On an equal-area map the hexagons are laid on its plane: no city is near a pole, so every
+    // one is counted, in a cell the projection can draw.
+    s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
+    let r = s
+        .run(
+            "gp.run",
+            &json!({"tool": "a5Aggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "moll"}}),
+        )
+        .unwrap();
+    assert!(plane(&s, "moll").contains("ollweide"), "{}", plane(&s, "moll"));
+    assert_eq!(counted(&s, "moll"), cities, "{r}");
+    // The world on it reaches both poles, where its plane loses the longitude.
+    let r = s
+        .run(
+            "gp.run",
+            &json!({"tool": "a5Grid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": "moll world"}}),
+        )
+        .unwrap();
+    assert!(s.map().layer_by_name("moll world").is_some_and(|l| l.dataset.features.len() > 12), "{r}");
+    assert!(!r.to_string().contains("85.05"), "{r}");
+    // On a map centred on the Pacific the world is cut at the map's edge, 30°W: the same grid as
+    // on one centred on Greenwich.
+    let mut world_on = |code: &str, out: &str| {
+        s.run("map.projection", &json!({"type": code})).unwrap();
+        let p = json!({"tool": "a5Grid", "params": {"system": "Hexagon", "resolution": 2, "area": "World", "output": out}});
+        let r = s.run("gp.run", &p).unwrap();
+        let n = s.map().layer_by_name(out).unwrap_or_else(|| panic!("{code}: {r}")).dataset.features.len();
+        assert!(n > 12, "{code}: {r}");
+        n
+    };
+    assert_eq!(world_on("equirectangular", "eqc 0"), world_on("equirectangular +lon_0=150", "eqc 150"));
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    s.run(
+        "gp.run",
+        &json!({"tool": "a5Aggregate", "params": {"system": "Hexagon", "input": "Cities", "resolution": 6, "output": "globe"}}),
+    )
+    .unwrap();
+    assert_eq!(plane(&s, "globe"), "Web Mercator");
+    assert!(s.run("gp.run", &json!({"tool": "a5Grid", "params": {"system": "H3", "resolution": 7, "area": "World"}})).is_err());
 }
 
 #[test]
@@ -18925,7 +19003,7 @@ fn plugin_settings_are_erased_by_uninstalling_the_plugin() {
 fn plugin_host_gives_layer_crs_and_features_in_it() {
     let mut s = world();
     plugin("eng-crs", &["edit"]);
-    // A layer read in UTM 37N: stored in longitude/latitude, with its own system kept.
+    // A layer read in UTM 37N, held there.
     let text = r#"{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"EPSG:32637"}},
         "features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[500000.0,3320000.0]}}]}"#;
     let (ds, _) = rustgis_data::io::read_geojson(text, "Mine").unwrap();
@@ -18944,11 +19022,13 @@ fn plugin_host_gives_layer_crs_and_features_in_it() {
         deg["features"][0]["geometry"]["coordinates"][1].as_f64().unwrap(),
     );
     assert!((lon - 39.0).abs() < 1e-6 && (lat - 30.0).abs() < 0.1, "{deg}");
-    // "layer": the source's metres, named so host.addLayer reads them back.
+    // "layer": the source's metres, exactly as the layer holds them (no round trip through
+    // longitude/latitude), named so host.addLayer reads them back.
+    assert_eq!(s.map().layer_by_name("Mine").unwrap().dataset.coord_crs().epsg(), 32637);
     for asked in ["layer", "EPSG:32637", " Layer "] {
         let m = forward(&mut s, "eng-crs", "host.features", json!({"layer": "Mine", "crs": asked})).unwrap();
         let c = &m["features"][0]["geometry"]["coordinates"];
-        assert!((c[0].as_f64().unwrap() - 500000.0).abs() < 0.01 && (c[1].as_f64().unwrap() - 3320000.0).abs() < 0.01, "{asked}: {m}");
+        assert_eq!((c[0].as_f64().unwrap(), c[1].as_f64().unwrap()), (500000.0, 3320000.0), "{asked}: {m}");
         assert_eq!(m["crs"]["properties"]["name"], "EPSG:32637");
         assert_eq!(m["features"][0]["row"], 0);
     }
@@ -28769,6 +28849,45 @@ fn raster_export_paths_report_band_class_and_credit_changes() {
         assert_eq!(s.notices_since(mark).iter().any(|n| n.text.contains("copyright differs")), changed, "{:?}", s.notices_since(mark));
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Given both an extent and a cellSize, Project Raster takes the grid as given: a source whose
+/// footprint can't be placed whole in the output's system (the whole world in the south polar
+/// stereographic one, which can't hold the North Pole) is projected onto it, where without them it
+/// is refused for want of a footprint.
+#[test]
+fn raster_project_takes_a_given_grid_without_the_sources_footprint() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 10.0, pixel_height: -10.0 };
+    let r = Raster::new("World", 36, 18, vec![vec![1.0; 36 * 18]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "World", rustgis_map::RasterLayer::from_bytes(r, "World.tif".to_string(), bytes)).unwrap();
+    let e = s.run("raster.project", &json!({"layer": "World", "crs": 3031})).unwrap_err();
+    assert!(e.contains("can't be placed in"), "{e}");
+    let v = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": [-180, -90, 180, -60], "cellSize": 500_000})).unwrap();
+    assert!(v["width"].as_u64().is_some_and(|w| w > 0), "{v}");
+    // An extent layer read in place (only the part in view) is refused, as for Polygons to Raster.
+    let mut part = Dataset::new("part", GeometryType::Polygon, vec![]);
+    part.push(
+        Some(Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, -80.0),
+            Coord::new(10.0, -80.0),
+            Coord::new(10.0, -70.0),
+            Coord::new(0.0, -80.0),
+        ]]])),
+        vec![],
+    );
+    part.windowed = true;
+    crate::cmd::layer::add_dataset(&mut s, part);
+    let e = s.run("raster.project", &json!({"layer": "World", "crs": 3031, "extent": "part", "cellSize": 500_000})).unwrap_err();
+    assert!(e.contains("part: load all its features first"), "{e}");
+    // The whole world reaches every cell of the grid, as projected: each takes its value.
+    let id = v["layer"].as_u64().unwrap() as u32;
+    let out = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
+    assert_eq!(out.crs, rustgis_data::raster::Crs::from_epsg(3031).unwrap());
+    assert!(out.bands[0].data.iter().all(|c| *c == 1.0), "{:?}", &out.bands[0].data[..8]);
 }
 
 /// Class labels describe source values; interpolating or averaging those values drops the labels
@@ -51071,6 +51190,32 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert!(e.contains("cellSize is required"), "{e}");
     let e = s.run("raster.rasterize", &json!({"layer": "soils", "nodata": 1, "cellSize": 1})).unwrap_err();
     assert!(e.contains("no-data value"), "{e}");
+    // An extent layer read in place holds only the part in view: refused before the run.
+    let mut part = Dataset::new("part", GeometryType::Polygon, vec![Field::new("unit", FieldType::Text)]);
+    part.push(Some(Geometry::Polygon(vec![vec![ring(0.0, 0.0, 1.0, 1.0)]])), vec![V::Text("x".into())]);
+    part.windowed = true;
+    crate::cmd::layer::add_dataset(&mut s, part);
+    let e = s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "extent": "part"})).unwrap_err();
+    assert!(e.contains("part: load all its features first"), "{e}");
+    let layers = layers + 1;
+    // An extent layer with no features: refused (as the run sizes its grid), nothing added.
+    crate::cmd::layer::add_dataset(&mut s, Dataset::new("nothing", GeometryType::Polygon, vec![Field::new("unit", FieldType::Text)]));
+    let e = s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "extent": "nothing"})).unwrap_err();
+    assert!(e.contains("nothing has no features to take an extent from"), "{e}");
+    let layers = layers + 1;
+    assert_eq!((s.map().layers.len(), s.project.tables.len()), (layers, tables), "nothing added by a refused run");
+    // A GeoTIFF that can't be put in its place (a folder holds its name): refused, with what the
+    // run had to say, and nothing added.
+    let dir = std::env::temp_dir().join(format!("rustgis-rasterize-commit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let taken = dir.join("soils.tif");
+    std::fs::create_dir_all(taken.join("inside")).unwrap();
+    let e =
+        s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "path": taken.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("soils.tif") && e.contains("features skipped: 1 with no value"), "{e}");
+    assert_eq!((s.map().layers.len(), s.project.tables.len()), (layers, tables), "nothing added by a refused run");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the staged file is removed");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A whole number past what a pixel holds is refused with advice that applies: a numeric field can
@@ -51242,6 +51387,8 @@ fn raster_tools_run_on_another_thread() {
         ("raster.process", json!({"layer": dem, "operation": "clip", "extent": [10.005, 45.005, 10.02, 45.02]})),
         ("raster.process", json!({"layer": dem, "operation": "resample", "factor": 4})),
         ("imagery.mosaic", json!({"name": "Valley"})),
+        ("raster.rasterize", json!({"layer": "Training", "value": 3, "cellSize": 0.0005})),
+        ("raster.rasterize", json!({"layer": "Training", "field": "name", "cellSize": 0.0005})),
     ] {
         assert!(runs_in_background(command).is_some(), "{command}");
         let here = s.run(command, &p).unwrap();
@@ -51253,10 +51400,30 @@ fn raster_tools_run_on_another_thread() {
         with["ran"] = json!(id);
         let there = s.run(command, &with).unwrap();
         assert_eq!(pixels(&s, &here), pixels(&s, &there), "{command} {p}");
+        // The layer, and the names that follow its own (the first run's layer holds the one asked
+        // for): a class table named after it is there.
+        let named = ["layer", "name", "classTable"];
         let besides = |v: &Value| {
-            v.as_object().map(|o| o.iter().filter(|(k, _)| *k != "layer").map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
+            v.as_object()
+                .map(|o| o.iter().filter(|(k, _)| !named.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>())
         };
         assert_eq!(besides(&here), besides(&there), "{command} {p}");
+        // Each run gives the layer's id, and says the names as text, or neither: only their
+        // values differ.
+        assert!(here["layer"].is_u64() && there["layer"].is_u64(), "{command}: {here} {there}");
+        for key in ["name", "classTable"] {
+            let said = |v: &Value| v.get(key).map(|n| n.as_str().map(|_| ()).ok_or(()));
+            assert_eq!(said(&here), said(&there), "{command} {key}: {here} {there}");
+            assert_ne!(said(&here), Some(Err(())), "{command} {key} is not text: {here}");
+        }
+        // A name said is the one the layer got.
+        if let Some(name) = there["name"].as_str() {
+            let id = there["layer"].as_u64().unwrap() as u32;
+            assert_eq!(Some(name), s.map().layer(id).map(|l| l.name.as_str()), "{command}: {there}");
+        }
+        if let Some(table) = there["classTable"].as_str() {
+            assert!(s.project.tables.iter().any(|t| t.name == table), "{command}: {table}");
+        }
         // The answer is the added layer's, whatever else the command says.
         assert!(there["width"].is_u64() && there["bands"].is_u64(), "{command}: {there}");
         let run = raster_start(&mut s, command, &p).unwrap();
