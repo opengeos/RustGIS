@@ -247,6 +247,7 @@ class _Embedded(_Api):
             # Peer input is an import: keep its containment notices and invalidate old trust.
             self._hold(self._session.notices())
             try:
+                engine = self._session._engine
                 _native(engine, engine._open_peer_text, text)
             except RustGISError as e:
                 self._hold([(f"the app's project couldn't be read: {e}", True)])
