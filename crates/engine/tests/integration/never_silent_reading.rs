@@ -220,7 +220,13 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
 
     let mut out = vec![
         // GeoJSON.
-        case("GeoJSON: a height", "a.geojson", geojson(&[point]), geojson(&[r#"{"type":"Point","coordinates":[1,2,3]}"#]), Said("Z or M")),
+        case(
+            "GeoJSON: a height",
+            "a.geojson",
+            geojson(&[point]),
+            geojson(&[r#"{"type":"Point","coordinates":[1,2,3]}"#]),
+            Expect::Classified(LossCode::DroppedZm),
+        ),
         case(
             "GeoJSON: an unreadable geometry",
             "a.geojson",
@@ -229,7 +235,13 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             Said("unreadable geometry"),
         ),
         // TopoJSON.
-        case("TopoJSON: a height", "a.topojson", topo_line("[[0,0],[1,1]]"), topo_line("[[0,0,5],[1,1,6]]"), Said("Z or M")),
+        case(
+            "TopoJSON: a height",
+            "a.topojson",
+            topo_line("[[0,0],[1,1]]"),
+            topo_line("[[0,0,5],[1,1,6]]"),
+            Expect::Classified(LossCode::DroppedZm),
+        ),
         case(
             "TopoJSON: an arc index the file doesn't hold",
             "a.topojson",
@@ -259,7 +271,13 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "wkt,id\n\"POINT(1 2)\",1\n\"POINT(3\",2\n",
             Said("isn't readable WKT"),
         ),
-        case("CSV: a height in WKT", "a.csv", "wkt,id\n\"POINT(1 2)\",1\n", "wkt,id\n\"POINT Z(1 2 3)\",1\n", Said("Z or M")),
+        case(
+            "CSV: a height in WKT",
+            "a.csv",
+            "wkt,id\n\"POINT(1 2)\",1\n",
+            "wkt,id\n\"POINT Z(1 2 3)\",1\n",
+            Expect::Classified(LossCode::DroppedZm),
+        ),
         case(
             "CSV: an unreadable coordinate",
             "a.csv",
@@ -294,7 +312,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.kml",
             kml(&["<Point><coordinates>1,2</coordinates></Point>"]),
             kml(&["<Point><coordinates>1,2,30</coordinates></Point>"]),
-            Said("Z or M"),
+            Expect::Classified(LossCode::DroppedZm),
         ),
         case(
             "KML: a placemark without geometry",
@@ -432,7 +450,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             gml(
                 r#"<gml:LineString srsName="urn:ogc:def:crs:EPSG::4326"><gml:posList srsDimension="3">48 10 5 49 11 6</gml:posList></gml:LineString>"#,
             ),
-            Said("Z or M"),
+            Expect::Classified(LossCode::DroppedZm),
         ),
         // GeoRSS.
         case(
@@ -629,9 +647,9 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
         .collect::<Vec<_>>();
     out.extend(kmz);
     out.extend([
-        case("CityJSON: varying line heights", "a.city.json", cityjson(0), cityjson(5), Said("Z or M")),
-        case("CityGML: varying line heights", "a.gml", citygml(0), citygml(5), Said("Z or M")),
-        case("GeoPackage: a height", "a.gpkg", gpkg(fixture_dir, false), gpkg(fixture_dir, true), Said("Z or M")),
+        case("CityJSON: varying line heights", "a.city.json", cityjson(0), cityjson(5), Expect::Classified(LossCode::DroppedZm)),
+        case("CityGML: varying line heights", "a.gml", citygml(0), citygml(5), Expect::Classified(LossCode::DroppedZm)),
+        case("GeoPackage: a height", "a.gpkg", gpkg(fixture_dir, false), gpkg(fixture_dir, true), Expect::Classified(LossCode::DroppedZm)),
         case(
             "FlatGeobuf: a height",
             "a.fgb",
@@ -990,7 +1008,10 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
     if feature_pbf {
         let (native, report) = rustgis_engine::data::esripbf::read(content, "a").map_err(std::io::Error::other)?;
         check_feature_pbf(&native, pbf_lossy)?;
-        if report.skipped != 0 || report.messages != pbf_messages {
+        // Coded `dropped.zm`, as the notice the command gives.
+        let coded: Vec<rustgis_engine::data::loss::Note> =
+            pbf_messages.iter().map(|text| rustgis_engine::data::loss::Note::loss(LossCode::DroppedZm, text.clone())).collect();
+        if report.skipped != 0 || report.messages != coded {
             return Err(std::io::Error::other(format!("feature-service PBF has the wrong native report: {report:?}")));
         }
     }
@@ -1093,7 +1114,9 @@ fn read(dir: &std::path::Path, file: &str, content: &[u8], beside: &[(&str, Vec<
         check_feature_pbf(&s.map().layers[0].dataset, pbf_lossy)?;
         let notices = s.notices_since(mark);
         // Require the exact loss count and subject, and no additional notice.
-        if notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>() != pbf_messages {
+        if notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>() != pbf_messages
+            || notices.iter().any(|n| n.loss() != Some(LossCode::DroppedZm))
+        {
             return Err(std::io::Error::other(format!("feature-service PBF has the wrong command notices: {notices:?}")));
         }
     }
