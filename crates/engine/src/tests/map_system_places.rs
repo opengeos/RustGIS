@@ -45,6 +45,9 @@ fn go_to_xy_takes_an_easting_and_northing_in_a_named_system() {
     s.run("map.goToXY", &json!({"x": BERN.x, "y": BERN.y, "crs": "Cities"})).unwrap();
     assert!(near_bern(&s));
     // Convert Position gives the same place.
+    // Both names of an axis: refused, not one passed over.
+    let e = s.run("map.goToXY", &json!({"x": 2_600_000, "lon": 7.4, "y": 1_200_000, "crs": "EPSG:2056"})).unwrap_err();
+    assert!(e.contains("not both"), "{e}");
     let v = s.run("map.convertPosition", &json!({"x": 2_600_000, "y": 1_200_000, "crs": "EPSG:2056"})).unwrap();
     assert!((v["lon"].as_f64().unwrap() - BERN.x).abs() < 2e-3 && (v["lat"].as_f64().unwrap() - BERN.y).abs() < 2e-3, "{v}");
 }
@@ -183,6 +186,16 @@ fn fit_to_view_places_the_raster_in_the_maps_system() {
         )
         .unwrap_err();
     assert!(e.contains("not both"), "{e}");
+    // Control points beside an extent, with no transform: refused, the layer as it was.
+    let before = s.map().layer_by_name("scan").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().transform;
+    let e = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0], "points": [[0, 0, 7.0, 47.0], [10, 10, 8.0, 46.0]]}),
+        )
+        .unwrap_err();
+    assert!(e.contains("an extent or control points, not both"), "{e}");
+    assert_eq!(s.map().layer_by_name("scan").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().transform, before);
     // An entry that isn't a number is refused, not passed over, and nothing is placed.
     let before = s.map().layers.len();
     for extent in [json!([0, 0, null, 10, 10]), json!([7, 46, 8, 47, "x"]), json!([7, 46, 8, "47"])] {

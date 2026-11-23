@@ -761,6 +761,10 @@ fn typed_place(map: &Map, p: &Value, moving: bool) -> Result<(Coord, Option<crat
             .filter(|v| v.is_finite())
             .ok_or_else(|| format!("{key} must be a number in {crs}"))
         };
+        // Both names of one axis: one would be passed over.
+        if ["lon", "x"].iter().all(|k| given(k)) || ["lat", "y"].iter().all(|k| given(k)) {
+            return Err("give x and y, or lon and lat, not both".into());
+        }
         let at = Coord::new(axis(["lon", "x"])?, axis(["lat", "y"])?);
         let c = system_of(map, crs)?.to_lonlat(at).ok_or_else(|| format!("{} {} names no place in {crs}", at.x, at.y))?;
         (c.x, c.y, None)

@@ -285,6 +285,10 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
         }
         Some(_) => return Err("extent is [minX, minY, maxX, maxY] (degrees, or in crs) or \"view\"".into()),
     };
+    // An extent places the raster on its own: control points beside it would be passed over.
+    if extent.is_some() && p.get("points").is_some_and(|v| !v.is_null()) {
+        return Err("give either an extent or control points, not both".into());
+    }
     let gt = if let Some([x0, y0, x1, y1]) = extent {
         if !(x0 < x1 && y0 < y1) {
             return Err("extent is [minX, minY, maxX, maxY]: each min below its max".into());
