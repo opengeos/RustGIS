@@ -3099,16 +3099,18 @@ impl Map {
                         src.saved_selection = selected;
                     }
                 }
-                // A view kept for its frames fits in what its share leaves beside the rows it
-                // holds, hidden or not: a share shrunk by another streamed layer lets it go.
-                let room = bytes.saturating_sub(layer.view_cache_bytes());
-                if let Some(src) = &layer.source {
-                    src.trim_kept_view(room);
-                }
             }
         }
         for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale) && !held.contains(&l.id)) {
             pending |= l.sync_source_with(view, block, env);
+        }
+        // A view kept for its frames fits in what its share leaves beside the rows it holds now,
+        // hidden or not: a share shrunk by another streamed layer, or a larger view installed,
+        // lets it go.
+        for l in &self.layers {
+            if let Some(src) = &l.source {
+                src.trim_kept_view(bytes.saturating_sub(l.view_cache_bytes()));
+            }
         }
         pending
     }
