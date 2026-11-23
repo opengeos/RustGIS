@@ -1142,15 +1142,29 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
     }
     d.contingent.retain(|c| !c.fields.iter().any(|f| f.eq_ignore_ascii_case(&removed)));
     let ds = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
-    let before = d.rules.len();
+    // The rules that no longer read without the field are removed, by name, and said below.
+    let mut dropped: Vec<String> = Vec::new();
     d.rules.retain(|r| {
-        !r.field.eq_ignore_ascii_case(&removed)
+        let reads = !r.field.eq_ignore_ascii_case(&removed)
             && match r.kind {
                 rustgis_map::design::RuleKind::Calculation => Calculation::parse(&r.expression, &ds).is_ok(),
                 rustgis_map::design::RuleKind::Constraint => rustgis_data::query::parse_fields(&r.expression, &ds).is_ok(),
-            }
+            };
+        if !reads {
+            dropped.push(r.name.clone());
+        }
+        reads
     });
-    let removed_rules = before - d.rules.len();
+    let removed_rules = dropped.len();
+    let rules_note = (!dropped.is_empty()).then(|| {
+        dropped.sort();
+        format!(
+            "{}: deleting field {removed} removed {} attribute rule(s) that used it or no longer read: {}",
+            l.dataset.name,
+            removed_rules,
+            dropped.join(", ")
+        )
+    });
     // Nor its diagram: the field's slice or bar goes, the range of sums a scaled size grows over is
     // measured again without it, and a diagram left with no field goes too. Said once.
     let mut diagram_note = None;
@@ -1262,6 +1276,9 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
                 format!("Block: its water's depths came from the deleted field {removed}, so its walls show no water")
             }
         };
+        s.notify(note, false);
+    }
+    if let Some(note) = rules_note {
         s.notify(note, false);
     }
     Ok(json!({"rulesRemoved": removed_rules}))
