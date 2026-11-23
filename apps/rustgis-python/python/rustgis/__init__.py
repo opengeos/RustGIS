@@ -93,7 +93,7 @@ _LOSS_WARNINGS = {
 }
 
 # Warnings point at the caller's line, not at this package's.
-_PACKAGE = (os.path.dirname(__file__),)
+_PACKAGE = (os.path.join(os.path.dirname(__file__), ""),)
 
 
 def _warn_losses(engine: _Engine, failure: Optional[BaseException] = None) -> None:

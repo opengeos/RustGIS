@@ -1011,13 +1011,12 @@ fn clip_bytes(text: &str, max: usize) -> String {
     text[..end].to_string()
 }
 
-/// A failed run's error with what the command said before failing (a GDAL layer that couldn't be
-/// converted).
 /// A failed command's error, cleaned of login values, with what the command said before failing
 /// (a GDAL layer that couldn't be converted). It can still report losses its rollback can't take
 /// back (a counted omission): their codes follow on a `losses:` line of JSON, added after cleaning
 /// so a login can't rewrite them, and kept whole however long the rest is: the error and notices
-/// are cut to leave it room within 8,000 characters and the output budget.
+/// are cut to leave it room within 8,000 characters and the output budget. When no form of the
+/// list fits, a `lossesTrimmed: true` line says the codes were left out.
 fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> String {
     let told = rustgis_engine::data::diagnostics::redact(&e);
     let notices: Vec<&str> = s.notices_since(said.mark).iter().map(|n| n.text.as_str()).filter(|t| *t != e && *t != told).collect();
@@ -1031,8 +1030,8 @@ fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> Str
     // the error giving way first and then the list ([`loss_forms`]).
     let fits = |t: &str| t.chars().count() <= 8000 && json!({"error": t}).to_string().len() <= output_bytes(tokens);
     let raw: Vec<Value> = losses.as_array().cloned().unwrap_or_default();
-    for (list, _) in loss_forms(&raw).into_iter().skip(2) {
-        let line = format!("\nlosses: {list}");
+    let lines = loss_forms(&raw).into_iter().skip(2).map(|(list, _)| format!("\nlosses: {list}"));
+    for line in lines.chain(["\nlossesTrimmed: true".to_string()]) {
         if !fits(&line) {
             continue;
         }
@@ -1656,6 +1655,9 @@ mod tests {
         let error = run_with_budget(&mut s, &command, 200, scope.clone(), None).unwrap_err();
         assert!(json!({"error": error}).to_string().len() <= output_bytes(200), "{error}");
         assert!(error.lines().last().unwrap_or_default().contains("dropped.legend"), "{error}");
+        // With no room for even the codes, a line says they were left out.
+        let error = run_with_budget(&mut s, &command, 9, scope.clone(), None).unwrap_err();
+        assert!(error.ends_with("lossesTrimmed: true"), "{error}");
     }
 
     /// Losses that don't fit the output budget beside the result keep only their codes, so the
