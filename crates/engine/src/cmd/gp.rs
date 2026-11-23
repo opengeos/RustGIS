@@ -1318,7 +1318,7 @@ struct MapInputs<'a> {
     /// ([`tiled_inputs`]), by lowercase name.
     rasters: std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>,
     /// [`MapInputs::rasters`] counted as held while the run holds them (kept only to be dropped).
-    _held: Vec<rustgis_data::memory::Holding>,
+    _held: Vec<std::sync::Arc<rustgis_data::memory::Holding>>,
     /// The flat map's projection (its name, the projection and its unit in metres), built the
     /// first time a tool asks for it (Tissot's indicatrix does), once for the run; `None` on the
     /// globe.
@@ -1478,7 +1478,7 @@ pub(crate) fn tiled_inputs(
     params: &Value,
     tiled: Tiled,
     messages: &mut Vec<String>,
-    held: &mut Vec<rustgis_data::memory::Holding>,
+    held: &mut Vec<std::sync::Arc<rustgis_data::memory::Holding>>,
 ) -> Result<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>, String> {
     use rustgis_analysis::ParamKind;
     let mut read = std::collections::HashMap::new();
@@ -1519,8 +1519,8 @@ pub(crate) fn tiled_inputs(
                 }
                 continue;
             }
-            let r = match BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned())) {
-                Some(r) => r,
+            let (r, count) = match BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned())) {
+                Some(kept) => kept,
                 None => {
                     #[cfg(test)]
                     TILED_READS.with(|n| n.set(n.get() + 1));
@@ -1537,17 +1537,19 @@ pub(crate) fn tiled_inputs(
                         rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None)
                             .map_err(|e| format!("{}: {e}", l.name))?,
                     );
+                    // Counted as held from before the next run's turn, for as long as anything
+                    // (this run, the batch) holds it.
+                    let bytes: usize = r.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
+                    let count = std::sync::Arc::new(rustgis_data::memory::Holding::of(bytes as u64));
                     BATCH_READS.with(|b| {
                         if let Some(reads) = b.borrow_mut().as_mut() {
-                            reads.insert(path.to_string(), r.clone());
+                            reads.insert(path.to_string(), (r.clone(), count.clone()));
                         }
                     });
-                    r
+                    (r, count)
                 }
             };
-            // Counted as held for as long as the run holds it.
-            let bytes: usize = r.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
-            held.push(rustgis_data::memory::Holding::of(bytes as u64));
+            held.push(count);
             if let Some((fw, fh)) = r.overview {
                 messages.push(format!(
                     "{}: read at its {} × {} overview of the {fw} × {fh} raster, the finest it can hold",
@@ -1559,6 +1561,11 @@ pub(crate) fn tiled_inputs(
     }
     Ok(read)
 }
+
+/// A raster file read in place for a run, and its count in [`rustgis_data::memory::held`], which
+/// lasts as long as anything holds it.
+#[cfg(not(target_arch = "wasm32"))]
+type CountedRead = (std::sync::Arc<rustgis_data::raster::Raster>, std::sync::Arc<rustgis_data::memory::Holding>);
 
 /// Taken by each read of a raster file read in place for a run ([`tiled_inputs`]): such reads
 /// run one at a time across runs, so each plans its size with the ones before it held.
@@ -1587,7 +1594,7 @@ thread_local! {
     /// kept while the batch runs on this thread ([`BatchReads`]): items reading the same file read
     /// it once, not once an item, and a batch over several files holds one at a time. `None`
     /// outside a batch, where nothing is kept past the run.
-    static BATCH_READS: std::cell::RefCell<Option<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>>> =
+    static BATCH_READS: std::cell::RefCell<Option<std::collections::HashMap<String, CountedRead>>> =
         const { std::cell::RefCell::new(None) };
 }
 
