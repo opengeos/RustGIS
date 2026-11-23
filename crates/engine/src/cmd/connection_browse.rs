@@ -715,27 +715,75 @@ fn service(
         let source = l.get("source_url").and_then(Value::as_str).unwrap_or("");
         if crate::render::rustgis_tiles::cache::ceiling_for(source) == address::Reach::Public { address::Reach::Public } else { reach }
     };
-    let services: Vec<(String, address::Reach)> = r
-        .get("layers")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|l| l.get("offer").and_then(|o| o.get("type")).and_then(Value::as_str) == Some("service"))
-        .map(|l| (format!("service:arcgis:{}", text(&l["offer"], "url")), read_at(l)))
-        .collect();
-    let mut children = children;
-    for at in [address::Reach::Public, address::Reach::Local] {
-        let nodes: Vec<Value> = services.iter().filter(|(_, r)| *r == at).map(|(node, _)| json!({"node": node})).collect();
-        if !nodes.is_empty() {
-            let origin = address::Origin::with_observed_reach(url, at)?;
-            if !remember_or_say(s, c, &nodes, &origin, false) {
-                children.retain(|child| !nodes.iter().any(|n| n["node"] == child["node"]));
-            }
+    let mut reach_of = std::collections::HashMap::new();
+    for l in r.get("layers").and_then(Value::as_array).into_iter().flatten().take(MAX_CHILDREN + 1) {
+        if l.get("offer").and_then(|o| o.get("type")).and_then(Value::as_str) == Some("service") {
+            let at = read_at(l);
+            reach_of
+                .entry(format!("service:arcgis:{}", text(&l["offer"], "url")))
+                .and_modify(|r: &mut address::Reach| *r = (*r).min(at))
+                .or_insert(at);
         }
     }
+    // Only the nodes shown are recorded: those past the list's end never are.
+    let services: Vec<(String, address::Reach)> = children
+        .iter()
+        .take(MAX_CHILDREN)
+        .filter_map(|child| child["node"].as_str())
+        .filter_map(|node| reach_of.get(node).map(|r| (node.to_string(), *r)))
+        .collect();
+    let mut children = children;
+    remember_services(s, c, url, &services, &mut children)?;
     let mut found = Found::new(children);
     found.truncated |= left_out;
     Ok(found)
+}
+
+/// Records the services a listing names, each at the reach its document was read at. With the
+/// session's record full, says so once: those named by a document read from the internet are left
+/// out of `children`, the rest judged by their connection's address.
+fn remember_services(
+    s: &mut Session,
+    c: &Connection,
+    url: &str,
+    services: &[(String, address::Reach)],
+    children: &mut Vec<Value>,
+) -> Result<(), String> {
+    let (mut unrecorded, mut left, mut judged) = (None, 0, false);
+    for at in [address::Reach::Public, address::Reach::Local] {
+        let nodes: Vec<Value> = services.iter().filter(|(_, r)| *r == at).map(|(node, _)| json!({"node": node})).collect();
+        if nodes.is_empty() {
+            continue;
+        }
+        let origin = address::Origin::with_observed_reach(url, at)?;
+        if let Err(e) = remember_node_origins(s, c, &nodes, &origin, false) {
+            if at == address::Reach::Public {
+                children.retain(|child| !nodes.iter().any(|n| n["node"] == child["node"]));
+                left += nodes.len();
+            } else {
+                judged = true;
+            }
+            unrecorded.get_or_insert(e);
+        }
+    }
+    if let Some(e) = unrecorded {
+        s.notify(unrecorded_notice(&e, left, judged), false);
+    }
+    Ok(())
+}
+
+/// What a listing whose nodes the full record couldn't take says: how many entries are left out
+/// (`left`), and whether the rest are judged by their connection's address (`judged`).
+fn unrecorded_notice(e: &str, left: usize, judged: bool) -> String {
+    let entries = match left {
+        1 => "1 entry".to_string(),
+        n => format!("{n} entries"),
+    };
+    match (left > 0, judged) {
+        (true, true) => format!("{e}: {entries} this listing names are left out; the rest are judged by its connection's address"),
+        (true, false) => format!("{e}: {entries} this listing names are left out"),
+        _ => format!("{e}; what this listing names is judged by its connection's address"),
+    }
 }
 
 /// [`remember_node_origins`], saying when the session's record is full instead of failing the
@@ -744,17 +792,9 @@ fn service(
 /// the record, so the caller leaves them out (`false`).
 fn remember_or_say(s: &mut Session, c: &Connection, children: &[Value], origin: &address::Origin, root: bool) -> bool {
     let Err(e) = remember_node_origins(s, c, children, origin, root) else { return true };
-    if origin.reach() == address::Reach::Public {
-        let left = match children.len() {
-            1 => "1 entry".to_string(),
-            n => format!("{n} entries"),
-        };
-        s.notify(format!("{e}: {left} this listing names are left out"), false);
-        false
-    } else {
-        s.notify(format!("{e}; what this listing names is judged by its connection's address"), false);
-        true
-    }
+    let public = origin.reach() == address::Reach::Public;
+    s.notify(unrecorded_notice(&e, if public { children.len() } else { 0 }, !public), false);
+    !public
 }
 
 /// A catalogue's records, each with the services and files it links to, read at `origin`: what
@@ -1348,6 +1388,47 @@ mod tests {
         assert!(super::remember_node_origins(&mut session, &connection, &[other.clone(), new], &public, false).is_err());
         let narrowed = super::node_origin(&session, &connection, other["node"].as_str().unwrap()).map(|o| o.reach());
         assert_eq!(narrowed, Some(Reach::Public));
+        // A listing naming services read at both reaches says the full record once: those read
+        // from the internet left out, the rest kept.
+        let services = [
+            ("service:arcgis:https://csw-21-web.example/arcgis/rest/services".to_string(), Reach::Public),
+            ("service:arcgis:http://10.0.21.5/arcgis/rest/services".to_string(), Reach::Local),
+        ];
+        let mut children: Vec<Value> = services.iter().map(|(n, _)| json!({"node": n})).collect();
+        let mark = session.notice_mark();
+        super::remember_services(&mut session, &connection, "https://csw-21.corp-looks-public.example/csw", &services, &mut children)
+            .unwrap();
+        let said: Vec<&str> = session.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("1 entry") && said[0].contains("the rest are judged"), "{said:?}");
+        assert_eq!(children, [json!({"node": services[1].0})]);
+    }
+
+    /// A directory listing more services than are shown records only those shown.
+    #[test]
+    fn only_the_services_a_listing_shows_are_recorded() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let mut session = crate::Session::new(crate::Project::default());
+        let address = "https://csw-22.corp-looks-public.example/csw";
+        let saved = session.run("connection.new", &json!({"kind":"csw","address":address})).unwrap();
+        let connection = session.connections.connections.iter().find(|c| c.id == saved["id"].as_str().unwrap()).unwrap().clone();
+        let node = "service:arcgis:http://10.0.22.5/arcgis/rest/services".to_string();
+        let local = Origin::connected(&connection.address, "10.0.0.5".parse().unwrap()).unwrap();
+        super::remember_node_origins(&mut session, &connection, &[json!({"node": node})], &local, false).unwrap();
+        let folders: Vec<String> = (0..super::MAX_CHILDREN + 100).map(|i| format!("F{i}")).collect();
+        let listing = json!({"currentVersion": 11.1, "folders": folders, "services": []}).to_string();
+        let requested = super::browse(&mut session, &json!({"id": connection.id, "node": node, "probe": true})).unwrap()["fetch"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let read = Origin::connected(&requested, "10.0.22.5".parse().unwrap()).unwrap();
+        let before = session.browse_origins.1.len();
+        let opened = session.opened;
+        let out =
+            session.browse_from_origin(&json!({"id": connection.id, "node": node, "answer": listing}), &requested, opened, read).unwrap();
+        let shown = out["children"].as_array().unwrap().iter().filter(|c| c.get("node").is_some()).count();
+        assert!(shown > 0 && shown <= super::MAX_CHILDREN + 1, "{shown}");
+        assert_eq!(session.browse_origins.1.len() - before, shown);
     }
 
     #[test]

@@ -125,6 +125,9 @@ pub struct State {
     /// The results whose details are shown.
     open: std::collections::HashSet<usize>,
     thumbs: std::collections::HashMap<String, Thumb>,
+    /// Pictures refused for where their address reaches, said once those being fetched have
+    /// landed: how many, and the first refusal.
+    thumbs_refused: (usize, Option<String>),
     /// The Zarr stores being checked (by their result's place), which some datasets lack.
     probes: Vec<(usize, Read)>,
     /// The result whose Zarr store is open in the pane, to pick its variable and steps.
@@ -153,6 +156,7 @@ impl Default for State {
             next: None,
             open: Default::default(),
             thumbs: Default::default(),
+            thumbs_refused: (0, None),
             probes: Vec::new(),
             zarr_open: None,
             error: None,
@@ -302,8 +306,9 @@ fn poll_probes(app: &mut RustGisApp, ctx: &egui::Context) {
 
 /// Lands the pictures fetched, as textures.
 fn poll_thumbs(app: &mut RustGisApp, ctx: &egui::Context) {
+    let st = &mut app.ui.opendata;
     let mut waiting = false;
-    for (url, thumb) in app.ui.opendata.thumbs.iter_mut() {
+    for (url, thumb) in st.thumbs.iter_mut() {
         let Thumb::Loading(slot) = thumb else { continue };
         let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
             waiting = true;
@@ -314,11 +319,28 @@ fn poll_thumbs(app: &mut RustGisApp, ctx: &egui::Context) {
                 let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
                 Thumb::Ready(ctx.load_texture(format!("webdata_thumb_{url}"), img, egui::TextureOptions::LINEAR))
             }
-            Err(_) => Thumb::Failed,
+            // A picture the answer naming it can't reach is said; one the service hasn't is not.
+            Err(e) => {
+                if rustgis_engine::render::rustgis_tiles::address::is_refusal(&e) {
+                    st.thumbs_refused.0 += 1;
+                    st.thumbs_refused.1.get_or_insert(e);
+                }
+                Thumb::Failed
+            }
         };
     }
     if waiting {
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        return;
+    }
+    let (n, first) = std::mem::take(&mut st.thumbs_refused);
+    if let Some(first) = first {
+        let notice = if n == 1 {
+            crate::i18n::fmt("A picture of the results is left out: {first}", &[("first", &first)])
+        } else {
+            crate::i18n::fmt("{n} pictures of the results are left out, such as {first}", &[("n", &n.to_string()), ("first", &first)])
+        };
+        app.session.notify(notice, false);
     }
 }
 
@@ -945,6 +967,32 @@ mod tests {
             assert_eq!(asked.first().map(|(_, c)| *c), Some(Reach::Local), "the search RustGIS names: {asked:?}");
             assert!(asked.iter().any(|(u, c)| u.starts_with(&file) && *c == observed), "the file, its answer read {observed:?}: {asked:?}");
         }
+    }
+
+    /// A result's picture refused for where its address reaches is said, once for those fetched
+    /// together; one the service just hasn't isn't, and one fetched is shown.
+    #[test]
+    fn pictures_refused_for_their_reach_are_said_once() {
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let landed = |r: Result<(Vec<u8>, Reach), String>| {
+            let slot: crate::Slot<Result<(Vec<u8>, Reach), String>> = Default::default();
+            *slot.lock().unwrap() = Some(r);
+            Thumb::Loading(slot)
+        };
+        let refused = |u: &str| rustgis_engine::render::rustgis_tiles::address::check_reach(u, Reach::Public).unwrap_err();
+        let png = rustgis_engine::render::Pixmap::new(1, 1).unwrap().encode_png().unwrap();
+        let st = &mut app.ui.opendata;
+        st.thumbs.insert("a".into(), landed(Err(refused("http://10.0.30.1/a.png"))));
+        st.thumbs.insert("b".into(), landed(Err(refused("http://10.0.30.2/b.png"))));
+        st.thumbs.insert("c".into(), landed(Err("HTTP 404".into())));
+        st.thumbs.insert("d".into(), landed(Ok((png, Reach::Public))));
+        let mark = app.session.notice_mark();
+        poll_thumbs(&mut app, &egui::Context::default());
+        let said: Vec<&str> = app.session.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].starts_with("2 pictures of the results are left out, such as http://10.0.30."), "{said:?}");
+        assert!(matches!(app.ui.opendata.thumbs.get("d"), Some(Thumb::Ready(_))));
+        assert!(matches!(app.ui.opendata.thumbs.get("c"), Some(Thumb::Failed)));
     }
 
     /// Web Data's Add reads a GeoLens dataset's every page, not only the server's first 1,000.

@@ -301,6 +301,14 @@ pub fn check_reach(url: &str, ceiling: Reach) -> Result<(), String> {
     }
 }
 
+/// Whether a fetch's error is a refusal for where its address reaches ([`check_reach`], or where
+/// the address resolved when it was fetched), not a failure of the service.
+pub fn is_refusal(error: &str) -> bool {
+    ["can't point into the local network", "that address is never fetched", "resolves to this computer or the local network"]
+        .iter()
+        .any(|m| error.contains(m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

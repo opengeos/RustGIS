@@ -236,9 +236,12 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
             return Err(named(format!("the capabilities are larger than {} MB", MAX_TEXT >> 20)));
         }
         // Capabilities supplied by anything but the app say nothing trustworthy about where they
-        // were read: the requests they name are asked only on the internet.
+        // were read: the requests they name are asked only on the internet. Nor do they replace
+        // a request the layer already knows, or its reach.
         let untrusted = !s.policy_user();
-        learn(s, index, caps.as_bytes(), untrusted).map_err(named)?;
+        if !(untrusted && s.map().tiles.get(index).is_some_and(|t| t.feature_info.is_some())) {
+            learn(s, index, caps.as_bytes(), untrusted).map_err(named)?;
+        }
     }
     if let Some(text) = ps(p, "text") {
         if text.len() > MAX_TEXT {
@@ -413,5 +416,28 @@ mod tests {
                 assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");
             }
         }
+        // A layer whose request the app learned keeps it, and its reach, when the Assistant
+        // supplies capabilities for it afterwards.
+        let host = "identify-supplied-3.example";
+        let caps = format!(
+            r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://{host}/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://192.168.3.5/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title></Layer></Layer></Capability></WMS_Capabilities>"#
+        );
+        let mut s = Session::new(crate::Project::default());
+        let template = format!(
+            "https://{host}/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT=image/png"
+        );
+        s.run("map.addTiles", &json!({"url": template, "name": "Mine"})).unwrap();
+        s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+        let p = json!({"layer": "Mine", "lon": 8.5, "lat": 47.4, "capabilities": caps, "request": true});
+        feature_info(&mut s, &p).unwrap();
+        let scope = Scope::assistant(4_201_308, std::sync::Arc::new(Live));
+        let _ = s.with_scope(scope, |s| feature_info(s, &p)).unwrap();
+        assert!(!s.map().tiles[0].feature_info_public);
+        let asked = feature_info(&mut s, &json!({"layer": "Mine", "lon": 8.5, "lat": 47.4, "request": true})).unwrap();
+        assert!(asked["url"].as_str().is_some_and(|u| u.starts_with("http://192.168.3.5/info?")), "{asked}");
     }
 }
