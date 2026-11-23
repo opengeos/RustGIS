@@ -86,6 +86,44 @@ fn places_in_a_system_are_refused_with_a_reason() {
     // The globe has no flat system of its own.
     s.run("map.projection", &json!({"type": "globe"})).unwrap();
     assert!(err(&mut s, json!({"x": 1, "y": 2, "crs": "map"})).contains("globe"));
+    // A unit the system doesn't count in names no place, and the search says why.
+    let v = s.run("map.search", &json!({"query": "2600000 ftE 1200000 ftN EPSG:2056"})).unwrap();
+    assert_eq!(v["hits"], json!([]), "{v}");
+    assert!(v["positionError"].as_str().is_some_and(|e| e.contains("counts in m, not ft")), "{v}");
+    let e = s.run("map.search", &json!({"query": "2600000 ftE 1200000 ftN EPSG:2056", "go": true})).unwrap_err();
+    assert!(e.contains("as a position") && e.contains("not ft"), "{e}");
+    assert!(s.run("map.search", &json!({"query": "2600000 mE 1200000 mN EPSG:2056"})).unwrap().get("positionError").is_none());
+}
+
+/// On another body's map, a code names an Earth system: refused, not read as that body's
+/// degrees, by `crs` as by a typed position.
+#[test]
+fn an_earth_system_names_no_place_on_another_body() {
+    let mut s = world();
+    let err = |s: &mut Session, p: Value| s.run("map.goToXY", &p).expect_err(&p.to_string());
+    s.run("map.body", &json!({"name": "mars", "basemap": false})).unwrap();
+    for p in [json!({"x": 2_600_000, "y": 1_200_000, "crs": "EPSG:2056"}), json!({"position": "2600000 1200000 EPSG:2056"})] {
+        assert!(err(&mut s, p.clone()).contains("system of the Earth"), "{p}");
+        let e = s.run("map.convertPosition", &p).expect_err(&p.to_string());
+        assert!(e.contains("system of the Earth"), "{p}: {e}");
+    }
+}
+
+/// A position in Web Mercator by a name only data's systems take is in metres, as Web Mercator
+/// is: a unit of metres written with it is its own.
+#[test]
+fn web_mercator_by_any_name_counts_in_metres() {
+    let mut s = world();
+    let merc = rustgis_geom::lonlat_to_merc(BERN);
+    // Names a map projection doesn't take, so they come by data's systems.
+    for name in ["EPSG:102100", "EPSG:102113"] {
+        assert_eq!(rustgis_data::raster::Crs::parse(name).ok(), Some(rustgis_data::raster::Crs::WebMercator), "{name}");
+        assert!(rustgis_map::Projection::from_code(name).is_err(), "{name}");
+        away(&mut s);
+        let text = format!("{:.2} mE  {:.2} mN  {name}", merc.x, merc.y);
+        s.run("map.goToXY", &json!({"position": text})).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert!(near_bern(&s), "{name}");
+    }
 }
 
 /// Fit To Map View on a projected map places the raster in the map's own system over the view's
@@ -133,6 +171,13 @@ fn fit_to_view_places_the_raster_in_the_maps_system() {
     let v = s.run("raster.georeference", &json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0]})).unwrap();
     assert_eq!(out_raster(&s, &v).crs, rustgis_data::raster::Crs::LonLat);
     assert!(s.run("raster.georeference", &json!({"layer": "scan", "extent": "view", "crs": "EPSG:2056"})).is_err());
+    // An entry that isn't a number is refused, not passed over, and nothing is placed.
+    let before = s.map().layers.len();
+    for extent in [json!([0, 0, null, 10, 10]), json!([7, 46, 8, 47, "x"]), json!([7, 46, 8, "47"])] {
+        let e = s.run("raster.georeference", &json!({"layer": "scan", "extent": extent})).unwrap_err();
+        assert!(e.contains("[minX, minY, maxX, maxY]"), "{extent}: {e}");
+    }
+    assert_eq!(s.map().layers.len(), before);
 }
 
 /// A layer named as a system means the layer; `map` after a position is the map's own system; a

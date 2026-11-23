@@ -409,6 +409,15 @@ pub(crate) enum System {
 }
 
 impl System {
+    /// The system data names `crs`: Web Mercator as the map draws it, whose unit is the metre
+    /// (its conversion gives no parameters to read one from), else by its conversion.
+    fn of_crs(crs: rustgis_data::raster::Crs) -> Result<System, String> {
+        if crs == rustgis_data::raster::Crs::WebMercator {
+            return Ok(System::Flat(rustgis_map::projection::Flat::Mercator));
+        }
+        crs.transformer().map(System::Data)
+    }
+
     /// The unit it counts in as the readout writes it: `m`, `ft` (international) or `ftUS`; `None`
     /// for another (degrees, a rarer foot).
     pub(crate) fn unit(&self) -> Option<&'static str> {
@@ -452,10 +461,10 @@ impl System {
 }
 
 /// The system `name` gives: `map`, the map's own (the flat projection it draws in, not the globe
-/// or another body's map); a code or other text a map's projection or data's system takes
-/// a layer of the map by that name, the system it was read in (longitude and latitude for one that
-/// names none); else a code or other text a map's projection or data's system takes (`EPSG:2056`,
-/// `Web Mercator`, `robinson +lon_0=150`, a PROJ string).
+/// or another body's map); a layer of the map by that name, the system it was read in (longitude
+/// and latitude for one that names none); else a code or other text a map's projection or data's
+/// system takes (`EPSG:2056`, `Web Mercator`, `robinson +lon_0=150`, a PROJ string), which names
+/// an Earth system, so none on another body's map (as [`read_system_position`] refuses it).
 pub(crate) fn system_of(map: &Map, name: &str) -> Result<System, String> {
     let name = name.trim();
     if name.eq_ignore_ascii_case("map") {
@@ -468,9 +477,12 @@ pub(crate) fn system_of(map: &Map, name: &str) -> Result<System, String> {
     if let Some(l) = map.layer_by_name(name) {
         // A layer that names no system holds longitude and latitude.
         let crs = l.dataset.crs.unwrap_or(rustgis_data::raster::Crs::LonLat);
-        return crs.transformer().map(System::Data).map_err(|e| format!("layer '{name}': {e}"));
+        return System::of_crs(crs).map_err(|e| format!("layer '{name}': {e}"));
     }
     if let Some(system) = named_system(name) {
+        if !map.body().is_earth() {
+            return Err(format!("{name} is a system of the Earth and names no place on this map"));
+        }
         return Ok(system);
     }
     Err(format!("'{name}' is neither \"map\", a coordinate system (EPSG:2056), nor a layer's name"))
@@ -487,7 +499,7 @@ fn named_system(name: &str) -> Option<System> {
     match Projection::from_code(name) {
         Ok(Projection::Globe) => None,
         Ok(p) => Some(System::Flat(rustgis_map::projection::Flat::of(&p))),
-        Err(_) => rustgis_data::raster::Crs::parse(name).ok().and_then(|c| c.transformer().ok()).map(System::Data),
+        Err(_) => rustgis_data::raster::Crs::parse(name).ok().and_then(|c| System::of_crs(c).ok()),
     }
 }
 

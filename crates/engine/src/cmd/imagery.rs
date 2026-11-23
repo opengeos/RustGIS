@@ -265,9 +265,12 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
             Some([e.min_x, e.min_y, e.max_x, e.max_y])
         }
         Some(Value::Array(e)) => {
-            let n: Vec<f64> = e.iter().filter_map(Value::as_f64).filter(|v| v.is_finite()).collect();
+            // Exactly four numbers: an entry that isn't one is refused, not passed over.
+            let n: Vec<f64> = e.iter().map_while(|v| v.as_f64().filter(|v| v.is_finite())).collect();
             let given = crs_param(s, p, "crs")?;
-            let [x0, y0, x1, y1] = n.as_slice() else { return Err("extent is [minX, minY, maxX, maxY] (degrees, or in crs)".into()) };
+            let ([x0, y0, x1, y1], 4) = (n.as_slice(), e.len()) else {
+                return Err("extent is [minX, minY, maxX, maxY] (degrees, or in crs)".into());
+            };
             crs = given.unwrap_or(Crs::LonLat);
             Some([*x0, *y0, *x1, *y1])
         }

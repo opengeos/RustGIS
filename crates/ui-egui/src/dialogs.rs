@@ -441,7 +441,13 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 let earth = app.session.map().body().is_earth();
                 let by_grid = earth && !app.dialogs.text.trim().is_empty();
                 let systems = xy_systems(app.session.map());
+                // A system gone (its layer removed or renamed) leaves degrees, and the boxes empty:
+                // their numbers were in that system, not degrees.
                 if !systems.iter().any(|(id, _)| *id == app.dialogs.xy_system) {
+                    if !app.dialogs.xy_system.is_empty() {
+                        app.dialogs.a.clear();
+                        app.dialogs.b.clear();
+                    }
                     app.dialogs.xy_system.clear();
                 }
                 let degrees = app.dialogs.xy_system.is_empty();
@@ -463,10 +469,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                             .response
                             .labelled_by(input_label.id);
                         if let Some(id) = picked.filter(|id| *id != app.dialogs.xy_system) {
-                            // The boxes show the map's center in the system picked.
-                            if let Some(c) = center_in(app.session.map(), &id) {
-                                [app.dialogs.a, app.dialogs.b] = c;
-                            }
+                            // The boxes show the map's center in the system picked; empty when it
+                            // has none there, so numbers in the old system aren't read in the new.
+                            [app.dialogs.a, app.dialogs.b] = center_in(app.session.map(), &id).unwrap_or_default();
                             app.dialogs.xy_system = id;
                         }
                         ui.end_row();

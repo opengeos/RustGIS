@@ -4850,6 +4850,17 @@ fn by_coordinates_takes_an_easting_and_northing_in_the_maps_system() {
     assert_eq!(h.state().dialogs.open, None, "{:?}", h.state().dialogs.error);
     let c = h.state().session.map().center_lonlat();
     assert!((c.x - 7.4386).abs() < 2e-3 && (c.y - 46.9511).abs() < 2e-3, "Bern: {c:?}");
+    // The system picked gone (the map turned to the globe, with no flat system of its own): back
+    // to degrees with the boxes empty, so its easting and northing aren't sent as degrees.
+    h.state_mut().run("ui.dialog", json!({"name": "goToXY"})).unwrap();
+    h.step();
+    h.state_mut().dialogs.xy_system = "map".into();
+    h.state_mut().dialogs.a = "2600000".into();
+    h.state_mut().dialogs.b = "1200000".into();
+    h.state_mut().run("map.projection", json!({"type": "globe"})).unwrap();
+    h.step();
+    let d = &h.state().dialogs;
+    assert_eq!((d.xy_system.as_str(), d.a.as_str(), d.b.as_str()), ("", "", ""));
 }
 
 /// Panned past the antimeridian, By Coordinates still opens on a longitude within ±180, so Go on
