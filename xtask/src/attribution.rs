@@ -32,10 +32,10 @@ fn wildcard(pattern: &str, text: &str) -> bool {
 /// path of a file may hold spaces) or is a single word with a `.` (a file at the root), each with
 /// a trailing `/` taken off and whether it had a `/` at all.
 fn named(attribution: &str) -> Vec<(&str, bool)> {
+    // Backticks pair up within a line, so a stray one can't shift the pairing of every later row.
     attribution
-        .split('`')
-        .skip(1)
-        .step_by(2)
+        .lines()
+        .flat_map(|line| line.split('`').skip(1).step_by(2))
         .filter(|t| !t.contains(['\n', '\t']) && !t.starts_with('/'))
         .filter(|t| t.contains('/') || (t.contains('.') && !t.contains(' ')))
         .map(|t| (t.trim_end_matches('/'), t.contains('/')))
@@ -58,13 +58,23 @@ fn uncovered<'a>(files: &[&'a str], attribution: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// The names in `git ls-files -z` output, or an error naming one that isn't valid UTF-8: the
+/// output was decoded lossily, so such a file would otherwise look missing and be skipped.
+fn names(listed: &str) -> Result<Vec<&str>, String> {
+    let names: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty()).collect();
+    match names.iter().find(|f| f.contains('\u{FFFD}')) {
+        Some(bad) => Err(format!("attribution: `{bad}` is not a valid UTF-8 file name, so it can't be checked: rename it")),
+        None => Ok(names),
+    }
+}
+
 /// Runs `cargo xtask attribution`: fails listing each image or font file that is tracked (or new
 /// and not ignored) without a row.
 pub fn run(root: &Path) -> Result<(), String> {
     let attribution = std::fs::read_to_string(root.join("ATTRIBUTION.md")).map_err(|e| format!("ATTRIBUTION.md: {e}"))?;
     let listed = super::changed::git(root, &["ls-files", "--cached", "--others", "--exclude-standard", "-z"])?;
     // A file removed from the working tree but not yet from the index doesn't need a row.
-    let files: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty() && root.join(f).is_file()).collect();
+    let files: Vec<&str> = names(&listed)?.into_iter().filter(|f| root.join(f).is_file()).collect();
     let missing = uncovered(&files, &attribution);
     if missing.is_empty() {
         println!("attribution: ok");
@@ -128,6 +138,19 @@ mod tests {
             "iconsx/a.png",
         ];
         assert_eq!(uncovered(&files, TABLE), vec!["crates/map/testdata/generated-more/x.png", "iconsx/a.png"]);
+    }
+
+    #[test]
+    fn a_file_name_that_is_not_utf8_is_an_error_not_a_skip() {
+        assert_eq!(names("a/b.png\0c.otf\0").unwrap(), vec!["a/b.png", "c.otf"]);
+        let lossy = String::from_utf8_lossy(b"a/ok.png\0a/bad\xff.png\0");
+        assert!(names(&lossy).unwrap_err().contains("bad\u{FFFD}.png"));
+    }
+
+    #[test]
+    fn a_stray_backtick_does_not_shift_later_rows() {
+        let table = "| Odd ` row | x |\n| Icon (`assets/logo.png`) | us |\n";
+        assert_eq!(uncovered(&["assets/logo.png", "assets/other.png"], table), vec!["assets/other.png"]);
     }
 
     #[test]
