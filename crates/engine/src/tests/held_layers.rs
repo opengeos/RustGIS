@@ -2826,3 +2826,29 @@ fn a_covering_layers_conversion_is_said() {
         "the covering layer named once: {fell_back:?}"
     );
 }
+
+/// A tool updating a streamed layer in place writes back against the whole source, not the window
+/// the map holds: every feature keeps its stored numbers bit for bit, those outside the window too.
+#[test]
+fn an_update_of_a_streamed_layer_keeps_the_stored_places_outside_the_window() {
+    let dir = Dir::new("streamed-update");
+    let shp = dir.path().join("parcels.shp");
+    let mut file = layers().remove(2);
+    file.hold_in(UTM).unwrap();
+    rustgis_data::io::write_path_in(&file, &shp, UTM).unwrap();
+    let numbers = |ds: &Dataset| ds.features.iter().map(|f| f.geometry.clone()).collect::<Vec<_>>();
+    let in_file = numbers(&rustgis_data::io::read_path(&shp).unwrap().0);
+    assert!(in_file.len() > 1);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": shp.display().to_string(), "name": "Streamed", "stream": true})).unwrap();
+    s.wait_in_place_reads();
+    let id = s.map().layer_by_name("Streamed").unwrap().id;
+    // The window holds the first feature only, as when the view shows a part of the layer.
+    let l = s.map_mut().layer_mut(id).unwrap();
+    assert!(l.is_streamed());
+    l.dataset.features.truncate_rows(1);
+    s.run("gp.run", &json!({"tool": "calculateGeometry", "params": {"input": "Streamed"}})).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert_eq!(l.dataset.coord_crs(), UTM);
+    assert_eq!(numbers(&l.dataset), in_file, "the stored numbers, window or not");
+}

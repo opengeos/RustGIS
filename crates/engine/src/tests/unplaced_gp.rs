@@ -209,3 +209,41 @@ fn profiles_and_a_search_area_leave_out_what_they_cant_place() {
         }
     }
 }
+
+/// A search area read from a file in its own system leaves out a feature it can't place and says
+/// so; a file whose places all convert says nothing of it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_search_area_file_leaves_out_what_it_cant_place() {
+    let dir = std::env::temp_dir().join(format!("rustgis-unplaced-area-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let square = Geometry::Polygon(vec![vec![vec![
+        Coord::new(10.0, 45.0),
+        Coord::new(10.03, 45.0),
+        Coord::new(10.03, 45.03),
+        Coord::new(10.0, 45.03),
+        Coord::new(10.0, 45.0),
+    ]]]);
+    let far_square = Geometry::Polygon(vec![vec![vec![
+        Coord::new(1_000_000.0, 5_000_000.0),
+        Coord::new(1_000_100.0, 5_000_000.0),
+        FAR,
+        Coord::new(1_000_000.0, 5_000_000.0),
+    ]]]);
+    for far in [false, true] {
+        // Robinson's numbers written as they are, then labelled Robinson by the .prj, as a file
+        // made elsewhere would be: a writer converting to longitude/latitude refuses the far one.
+        let mut ds = held("area", GeometryType::Polygon, vec![square.clone()], far.then(|| far_square.clone()));
+        ds.held_in = Crs::LonLat;
+        ds.crs = None;
+        let path = dir.join(format!("area-{far}.shp"));
+        rustgis_data::io::write_path(&ds, &path).unwrap();
+        std::fs::write(path.with_extension("prj"), rustgis_data::raster::wkt::to_wkt(robinson()).unwrap()).unwrap();
+        let loaded = crate::cmd::stac_area::load_file(path.to_str().unwrap()).unwrap();
+        // Said by the reader while files are read into longitude/latitude (C2f-4b-2 keeps such a
+        // feature, and then the search area says it); a clean file says nothing of it.
+        let said = loaded.notices.iter().any(|n| n.contains("longitude/latitude"));
+        assert_eq!(said, far, "{:?}", loaded.notices);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

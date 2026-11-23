@@ -3633,15 +3633,22 @@ fn apply_with(
         }
         Output::Update { layer, dataset } => {
             let l = s.map_mut().layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer)).ok_or("the input layer disappeared")?;
+            // A streamed layer holds only its window (in longitude/latitude unless the map is in
+            // the source's own system), while the tool read and updated the whole source: the
+            // result is held in the source's own system, its stored places (and the features read
+            // without geometry, kept as stored) taken from the whole source, read again.
+            let whole = if l.is_streamed() { Some(l.load_all_counted().map_err(|e| format!("{}: {e}", l.name))?.0) } else { None };
+            let base = whole.as_ref().unwrap_or(&l.dataset);
             // Made in the system the tool worked in ([`MapInputs::hold_results`]): taken as made
             // when that is the layer's own, else written back in its own coordinates from
             // longitude/latitude.
-            l.dataset = if dataset.coord_crs() == l.dataset.coord_crs() {
+            let updated = if dataset.coord_crs() == base.coord_crs() {
                 dataset
             } else {
                 let lonlat = if dataset.coord_crs() == Crs::LonLat { dataset } else { dataset.in_lonlat()?.into_owned() };
-                l.dataset.results_from_lonlat(lonlat)?
+                base.results_from_lonlat(lonlat)?
             };
+            l.dataset = updated;
             // Under the layer's name now: a background run's layer may have been renamed meanwhile.
             l.dataset.name.clone_from(&l.name);
             // A streamed layer updated by a tool holds the whole result in memory from now on.

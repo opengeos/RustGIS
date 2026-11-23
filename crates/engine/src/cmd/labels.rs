@@ -995,6 +995,19 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
             },
         }
     };
+    // A class's label text for a row, and whether it was cut: `None` when it gives none (no
+    // expression or field, an expression with no value, a null field), so no label is made.
+    let text_of = |i: usize, row: usize| -> Option<(String, bool)> {
+        match by_text(i).and_then(|e| e.text_cut(&l.dataset, row)) {
+            Some(Some((t, was_cut))) => Some((t, was_cut)),
+            Some(None) => None,
+            None => {
+                let fi = fields.get(i).copied().flatten()?;
+                let v = l.dataset.value(row, fi);
+                (!v.is_null()).then(|| (v.to_string(), false))
+            }
+        }
+    };
     for (row, ft) in l.dataset.features.rows().enumerate() {
         if rows.get(row) != Some(&true) {
             continue;
@@ -1008,27 +1021,14 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         } else if let Some(g) = rustgis_data::Dataset::converted_to_lonlat(&to, g) {
             g
         } else {
-            // Counted only when it has a label to convert.
-            unplaced_features += usize::from(matcher.classes_of(&l.dataset, row).any(|(_, c)| c.visible));
+            // Counted only when it has a label to convert: a visible class giving it text.
+            unplaced_features += usize::from(matcher.classes_of(&l.dataset, row).any(|(i, c)| c.visible && text_of(i, row).is_some()));
             continue;
         };
         let Some(at) = g.label_point() else { continue };
         for (i, class) in matcher.classes_of(&l.dataset, row).filter(|(_, c)| c.visible) {
-            let text = match by_text(i).and_then(|e| e.text_cut(&l.dataset, row)) {
-                Some(Some((t, was_cut))) => {
-                    cut += usize::from(was_cut);
-                    t
-                }
-                Some(None) => continue,
-                None => {
-                    let Some(fi) = fields.get(i).copied().flatten() else { continue };
-                    let v = l.dataset.value(row, fi);
-                    if v.is_null() {
-                        continue;
-                    }
-                    v.to_string()
-                }
-            };
+            let Some((text, was_cut)) = text_of(i, row) else { continue };
+            cut += usize::from(was_cut);
             let mut attrs = vec![Attr::Text(text)];
             if classes {
                 attrs.push(Attr::Text(class.name.clone()));

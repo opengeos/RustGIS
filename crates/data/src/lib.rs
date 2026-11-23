@@ -1204,13 +1204,16 @@ impl Dataset {
             }
         }
         // The stored features of the results without geometry whose stored geometry has a place
-        // that can't be given in longitude/latitude, by id: only those are converted again.
-        let bare: std::collections::HashSet<u64> = results.features.rows().filter(|r| r.geometry().is_none()).map(|r| r.id()).collect();
+        // that can't be given in longitude/latitude, by id: only those are converted again. The
+        // ids of the results without geometry, sorted (8 bytes each, at most the results' count;
+        // nothing when every result has geometry), and of the unplaced among them.
+        let mut bare: Vec<u64> = results.features.rows().filter(|r| r.geometry().is_none()).map(|r| r.id()).collect();
+        bare.sort_unstable();
         let mut unplaced = std::collections::HashMap::new();
         if !bare.is_empty() {
             for (i, f) in self.features.iter().enumerate() {
                 stop_when_asked(i)?;
-                if bare.contains(&f.id)
+                if bare.binary_search(&f.id).is_ok()
                     && let Some(g) = &f.geometry
                     && convert_keeping_missing(&read, g, &HeldPlaces::default()).is_none()
                 {
