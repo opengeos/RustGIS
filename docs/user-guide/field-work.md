@@ -209,12 +209,16 @@ command line or Python, `offline.conflicts` lists them with the project's `state
 them by index with that state, refusing a list read before the project changed.
 
 A photo the package took from the computer isn't sent back: the feature names the file it was taken
-from again, and nothing is copied. (A return opened on another device and sent again from there does
-carry it; Bring Back then keeps the computer's file where it still holds the same photo.) Of the other photos a returned package carries (those taken in the
-field), a return with its list of changes brings back only those of features the phone added, or whose
-photos it changed: a photo of a feature whose photos it left alone is left out, and the summary says
-how many. A return that goes back as a whole map brings back every photo it carries, except those
-named only by layers copied for reference or added in the field, whose edits stay in the field.
+from again, and nothing is copied. A return opened on another device and sent again from there does
+carry it; Bring Back then keeps the computer's file where it still holds the same photo.
+
+Of the photos taken in the field, a return with its list of changes brings back only those of features
+the phone added, or whose photos it changed. A photo of a feature whose photos it left alone is left
+out, and the summary says how many.
+
+A return that goes back as a whole map brings back every photo it carries, except a photo that only
+layers copied for reference or added in the field name: those layers' edits stay in the field, and so
+do their photos.
 
 Bring Back refuses a package while the area's offline map is open with edits not synced yet, as
 renewing the area would replace them: **Sync** the area first. Syncing moves the area on, so a

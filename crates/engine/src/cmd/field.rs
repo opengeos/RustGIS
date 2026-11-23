@@ -513,7 +513,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
     );
     entries.push(("README.txt".into(), readme.into_bytes()));
     // With room for the marker a package going out ends with.
-    let mut companions = companion_bytes(&entries) + if coming_back { 0 } else { 4096 };
+    let mut companions = companion_bytes(&entries) + if coming_back { 0 } else { MARKER_ROOM };
     let too_large = || "the field package would be too large: leave a tile archive, photos or some data out".to_string();
     if !copied.is_empty() {
         let map = project.maps.first().ok_or("the field package holds no map")?;
@@ -532,7 +532,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
     // where they are here), and that is said.
     if text.is_none() && carried > 0 {
         entries.retain(|(n, _)| !n.starts_with(&format!("{PHOTOS}/")));
-        companions = companion_bytes(&entries) + 4096;
+        companions = companion_bytes(&entries) + MARKER_ROOM;
         // Before the note the fallback below takes back, if it runs.
         let at = losses.len() - usize::from(!copied.is_empty());
         losses.insert(at, format!("{carried} photo(s) stayed home: the map needed the field package's room for them"));
@@ -1169,6 +1169,13 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
                 found.not_pictures.push(path.to_string());
                 return path.to_string();
             }
+            // The index holds one path a line, its fields split by tabs: one holding either would be
+            // read back as another path.
+            if path.contains(['\t', '\n', '\r']) {
+                said.insert(path.to_string());
+                found.unread.push(format!("{path} (its name holds a tab or a line break)"));
+                return path.to_string();
+            }
             if size > *budget {
                 said.insert(path.to_string());
                 found.too_large.push(path.to_string());
@@ -1260,6 +1267,10 @@ fn unpacked_index(folder: &Path, package: &str) -> std::collections::HashMap<Str
 
 /// The most a package's photo index is read: a line for each of many thousand photos.
 const MAX_INDEX: u64 = 16 << 20;
+
+/// The room kept in a package going out for the marker it ends with
+/// ([`super::field_changes::GIVEN`]), which is read back within the same bound.
+const MARKER_ROOM: u64 = 4096;
 
 /// What [`take_photos`] found: the package's photo entries (with [`INDEX`]), and the photos named
 /// that stay out of it: not on this device (or not named by a full path), not pictures, past the
@@ -2790,6 +2801,34 @@ mod tests {
         assert!(rustgis_data::zip::read(&out).unwrap().iter().all(|(n, _)| !n.starts_with("photos/")));
         let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.starts_with("1 photo reference(s) of layer(s) copied for reference stayed home")), "{said:?}");
+    }
+
+    /// Coming back, a photo whose path holds a line break isn't carried (the index couldn't hold
+    /// it), and that is said; one beside it goes.
+    #[cfg(unix)]
+    #[test]
+    fn a_photo_named_with_a_line_break_stays_on_the_phone_and_is_said() {
+        let temp = Temp::new("newline-photo");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let (_, out) = package(&mut home, &json!({"name": "Break", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap().0;
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let cities = layer(&field, "Cities");
+        let (odd, plain) = (temp.path().join("odd\nname.jpg"), temp.path().join("plain.jpg"));
+        std::fs::write(&odd, b"odd").unwrap();
+        std::fs::write(&plain, b"plain").unwrap();
+        field.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        let named = format!("{};{}", odd.display(), plain.display());
+        field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": named})).unwrap();
+        let mark = field.notice_mark();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        let entries: Vec<String> = rustgis_data::zip::read(&back).unwrap().into_iter().map(|(n, _)| n).collect();
+        assert!(entries.iter().any(|n| n == "photos/plain.jpg") && !entries.iter().any(|n| n.contains("odd")), "{entries:?}");
+        let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 photo(s) couldn't be put") && t.contains("tab or a line break")), "{said:?}");
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:
