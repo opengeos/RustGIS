@@ -1502,17 +1502,68 @@ pub(crate) fn tiled_inputs(
                 }
                 continue;
             }
-            let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None).map_err(|e| format!("{}: {e}", l.name))?;
+            let r = match BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned())) {
+                Some(r) => r,
+                None => {
+                    let r = std::sync::Arc::new(
+                        rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None)
+                            .map_err(|e| format!("{}: {e}", l.name))?,
+                    );
+                    BATCH_READS.with(|b| {
+                        if let Some(reads) = b.borrow_mut().as_mut() {
+                            reads.insert(path.to_string(), r.clone());
+                        }
+                    });
+                    r
+                }
+            };
             if let Some((fw, fh)) = r.overview {
                 messages.push(format!(
                     "{}: read at its {} × {} overview of the {fw} × {fh} raster, the finest it can hold",
                     l.name, r.width, r.height
                 ));
             }
-            read.insert(key, std::sync::Arc::new(r));
+            read.insert(key, r);
         }
     }
     Ok(read)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// The raster files read in place that a batch's items read ([`tiled_inputs`]), by path, kept
+    /// while the batch runs on this thread ([`BatchReads`]): its items read each file once, not
+    /// once an item. `None` outside a batch, where nothing is kept past the run.
+    static BATCH_READS: std::cell::RefCell<Option<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Keeps [`BATCH_READS`] while it lives: the outermost batch on this thread starts it and lets
+/// it go, so a file it read is held only as long as the batch runs.
+#[cfg(not(target_arch = "wasm32"))]
+struct BatchReads(bool);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BatchReads {
+    fn start() -> BatchReads {
+        BatchReads(BATCH_READS.with(|b| {
+            let mut b = b.borrow_mut();
+            let outer = b.is_none();
+            if outer {
+                *b = Some(std::collections::HashMap::new());
+            }
+            outer
+        }))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for BatchReads {
+    fn drop(&mut self) {
+        if self.0 {
+            BATCH_READS.with(|b| *b.borrow_mut() = None);
+        }
+    }
 }
 
 /// Narrows the rows a tool reads of each layer to the features its definition query keeps, as the
@@ -2141,6 +2192,9 @@ fn batch(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Runs a geoprocessing tool in batch across multiple layers or files with cancellation and progress reporting.
 pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustgis_analysis::control::Control>) -> CmdResult {
+    // A raster file read in place is read once for the batch, not once an item.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _reads = BatchReads::start();
     let tool_name = ps(p, "tool").ok_or("tool is required")?;
     let tool_id = tool_id(tool_name).ok_or_else(|| format!("no tool '{tool_name}'"))?;
     let spec = rustgis_analysis::tool(tool_id).ok_or_else(|| format!("no tool '{tool_name}'"))?;

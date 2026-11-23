@@ -223,3 +223,31 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
     assert_eq!(read(&whole, Tiled::Overview), (None, Vec::new()));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A batch reads a raster file read in place once for its items (kept only while it runs), and
+/// each item reads the file, not the overview the layer holds: Zonal Statistics batched over two
+/// zone layers counts every pixel of the file in each.
+#[test]
+fn a_batch_over_a_tiled_file_reads_the_file_for_each_item() {
+    let d = dir("batch");
+    let path = checkerboard(&d);
+    let _held = HeldWhole::at(1_000_000);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert!(raster(&s, "checks").tiled);
+    let box_around = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"id": 1},
+        "geometry": {"type": "Polygon", "coordinates": [[[9.9, 44.9], [11.1, 44.9], [11.1, 46.1], [9.9, 46.1], [9.9, 44.9]]]}}]}"#;
+    for name in ["one", "two"] {
+        let zone = d.join(format!("{name}.geojson"));
+        std::fs::write(&zone, box_around).unwrap();
+        s.run("layer.addData", &json!({"path": zone.display().to_string(), "name": name})).unwrap();
+    }
+    let p = json!({"tool": "zonalStats", "inputs": ["one", "two"], "param": "polygons", "params": {"raster": "checks"}, "outputPattern": "{input}_stats"});
+    let r = s.run("gp.batch", &p).unwrap();
+    for name in ["one_stats", "two_stats"] {
+        let out = &s.map().layer_by_name(name).unwrap_or_else(|| panic!("no {name}: {r}")).dataset;
+        let count = out.fields.iter().position(|f| f.name.ends_with("_count")).unwrap();
+        assert_eq!(out.value(0, count), &rustgis_data::Value::Int(1024 * 1024), "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
