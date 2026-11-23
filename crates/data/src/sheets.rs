@@ -769,14 +769,14 @@ mod tests {
         let (ds, report) = book(["45000", "60", "45002"]);
         assert_eq!(ds.fields[0].ty, FieldType::Date);
         assert!(ds.value(1, 0).is_null());
-        assert_eq!(report.unread_dates.as_deref(), Some("1 value isn't a date and was read as empty, in 'a'"));
+        assert_eq!(report.unread_dates.as_ref().map(crate::loss::Note::as_str), Some("1 value isn't a date and was read as empty, in 'a'"));
         // A mixed column (text among the dates) says the same, and keeps the rest as text.
         let (ds, report) = book(["45000", "60", "x"]);
         assert_eq!(ds.fields[0].ty, FieldType::Text);
         // (A row left with nothing in it is skipped, as any empty row is.)
         let seen: Vec<String> = (0..ds.features.len()).map(|r| ds.value(r, 0).to_string()).collect();
         assert_eq!(seen, ["2023-03-15", "x"], "{seen:?}");
-        assert_eq!(report.unread_dates.as_deref(), Some("1 value isn't a date and was read as empty, in 'a'"));
+        assert_eq!(report.unread_dates.as_ref().map(crate::loss::Note::as_str), Some("1 value isn't a date and was read as empty, in 'a'"));
         // Without it, nothing is said.
         let (_, report) = book(["45000", "61", "x"]);
         assert_eq!(report.unread_dates, None);
