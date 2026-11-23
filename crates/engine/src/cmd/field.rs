@@ -282,7 +282,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
         unread.extend(photos.too_large.iter().map(|path| format!("{path} (too large for the field package)")));
     }
     if !unread.is_empty() {
-        archive_error(s, format!("{} photo(s) couldn't be put in the field package: {}", unread.len(), unread.join(", ")));
+        archive_error(s, format!("{} photo(s) couldn't be put in the field package: {}", unread.len(), some_of(&unread)));
     }
     if !photos.not_pictures.is_empty() {
         let named = &photos.not_pictures;
@@ -290,7 +290,17 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
             "{} file(s) a photos field names weren't put in the field package: only pictures go ({}): {}",
             named.len(),
             PICTURES.join(", "),
-            named.join(", ")
+            some_of(named)
+        ));
+    }
+    // Coming back, photos home has are named where they are there; any other photo not on this
+    // device goes back as its name alone.
+    if coming_back && !photos.missing.is_empty() {
+        let named = &photos.missing;
+        losses.push(format!(
+            "{} photo(s) a photos field names aren't on this device, so the field package names them without them: {}",
+            named.len(),
+            some_of(named)
         ));
     }
     if !coming_back {
@@ -1832,7 +1842,9 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                 if listed.contains(path) {
                     return path.to_string();
                 }
-                // One named where it is at home keeps that name unless its unpacked file can be named.
+                // One named where it is at home is pointed at its unpacked file: by its full path,
+                // or, where the unpack folder's name can't be held as text, by its entry, relative
+                // to the package, as one a return carries.
                 let (named, entry) = (path, at_home.get(path).map_or(path, String::as_str));
                 if let Some(name) = entry.strip_prefix("photos/").filter(|name| plain_file(name)) {
                     let file = photos.join(name);
@@ -1841,6 +1853,7 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                             return path.to_string();
                         }
                         relative += 1;
+                        return entry.to_string();
                     }
                 }
                 named.to_string()
@@ -2707,7 +2720,11 @@ mod tests {
         set(&mut field, 0, format!("{};{}", there.display(), taken.display()));
         field.run("select.rows", &json!({"layer": cities, "rows": [1]})).unwrap();
         field.run("edit.delete", &Value::Null).unwrap();
+        let mark = field.notice_mark();
         let (_, back) = package(&mut field, &Value::Null).unwrap();
+        // The two photos that never went out aren't here either, and that is said.
+        let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("2 photo(s) a photos field names aren't on this device")), "{said:?}");
         // Only the field's photo goes back: home has its own.
         let carried: Vec<String> = rustgis_data::zip::read(&back)
             .unwrap()
