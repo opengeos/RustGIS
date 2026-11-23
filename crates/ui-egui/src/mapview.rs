@@ -1247,6 +1247,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if turned_off
             && app.map.key != Some(key)
             && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
+            && gf.camera() != cam
         {
             gf.set_camera(&rs.queue, &cam);
         }
@@ -1297,6 +1298,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // as it lands, while the map still moves: the camera has moved on since, so it is shifted and
     // scaled like the frame it replaces. Once the map rests or changes it is stopped and dropped:
     // the exact frame follows.
+    // A worker's frame that came back on the CPU because the GPU declined its turned or tilted
+    // view: the frame shown now is that one, and the next decides again whether to try the GPU.
+    let mut declined_now = false;
     if (flat_settle || turned_off) && interacting && !app.map.motion_dropped {
         if let Some((k, done)) = app.map.motion_frame.take() {
             app.session.map_mut().adopt_caches(&done.map);
@@ -1312,6 +1316,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     rustgis_engine::render::RenderOutput::Cpu(r) => {
                         if gpu_ok && (done.view.camera.bearing != 0.0 || done.view.camera.pitch != 0.0) {
                             app.map.gpu_turn_declined = Some(declined_at(k.rev, &done.view.camera));
+                            declined_now = true;
+                            ui.ctx().request_repaint();
                         }
                         app.map.gpu_frame = None;
                         show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, false);
@@ -1460,6 +1466,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if stale
         && !fast_engaged
         && !motion_off
+        && !declined_now
         && !settling
         && !hold
         && !draped

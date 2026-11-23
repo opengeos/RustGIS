@@ -454,7 +454,8 @@ fn a_tilted_maps_new_scene_is_made_off_the_ui_thread() {
     }
     assert!(left, "the wheel zoomed the tilted map in");
     let cam = h.state().session.map().camera;
-    assert_eq!(h.state().map.full_frame_camera(), before, "the frame that outgrew the scene shows it, following the camera");
+    assert_eq!(h.state().map.full_frame_camera(), before, "the frame that outgrew the scene shows it");
+    assert_eq!(h.state().map.scene_camera(), Some(cam), "the scene on screen follows the camera");
     assert!(h.state().map.moves_on_gpu());
     assert!(h.state().map.drawing(), "the scene for the new camera is being made");
     wait_for_frame(&mut h);
@@ -475,7 +476,7 @@ fn a_tilted_scene_follows_a_camera_that_jumps_away_and_back() {
     assert!(h.state().map.moves_on_gpu(), "the tilted sample re-projects on the GPU");
     let a = h.state().session.map().camera;
     assert_eq!(h.state().map.scene_camera(), Some(a));
-    let b = { rustgis_ui_egui::rustgis_engine::map::Camera { res: a.res * 0.4, ..a } };
+    let b = rustgis_ui_egui::rustgis_engine::map::Camera { res: a.res * 0.4, ..a };
     h.state_mut().session.map_mut().camera = b;
     h.step();
     assert_eq!(h.state().map.full_frame_camera(), a, "the scene for the jump is made off the UI thread");
