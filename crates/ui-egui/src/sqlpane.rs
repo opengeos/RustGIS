@@ -133,6 +133,16 @@ fn database_text(a: &str) -> String {
     }
 }
 
+/// A database's table names for completion, or none with a warning saying why they couldn't be
+/// read (an unreadable database, a refused thread). They are read once per database, so it is
+/// said once.
+fn names_or_say(session: &mut rustgis_engine::Session, read: Result<Vec<(String, String)>, String>) -> Vec<(String, String)> {
+    read.unwrap_or_else(|e| {
+        session.warn(crate::i18n::fmt("The database's table names for completion couldn't be read: {reason}", &[("reason", &e)]));
+        Vec::new()
+    })
+}
+
 /// Lands queries, Add to Map runs and name lists that finished.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let st = &mut app.ui.sql;
@@ -158,11 +168,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         && let Some(r) = take(slot)
     {
         st.names_job = None;
-        // Read once per database, so a failure (an unreadable database, a refused thread) is said once.
-        st.names = r.unwrap_or_else(|e| {
-            app.session.warn(crate::i18n::fmt("The database's table names for completion couldn't be read: {reason}", &[("reason", &e)]));
-            Vec::new()
-        });
+        st.names = names_or_say(&mut app.session, r);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((sql, db, slot)) = &app.ui.sql.adding
@@ -494,6 +500,20 @@ fn history(app: &mut RustGisApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Names that couldn't be read are said once, and none are kept; names read say nothing.
+    #[test]
+    fn names_that_cant_be_read_are_said_and_names_read_are_not() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        let mark = s.notice_mark();
+        assert!(names_or_say(&mut s, Err("no threads left".into())).is_empty());
+        let said = s.notices_since(mark);
+        assert!(said.len() == 1 && said.iter().all(|n| n.text.contains("couldn't be read: no threads left")), "{said:?}");
+        let mark = s.notice_mark();
+        let names = names_or_say(&mut s, Ok(vec![("main".to_string(), "parcels".to_string())]));
+        assert_eq!(names, vec![("main".to_string(), "parcels".to_string())]);
+        assert!(s.notices_since(mark).is_empty());
+    }
 
     #[test]
     fn secrets_stay_out_of_the_history() {
