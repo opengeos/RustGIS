@@ -6462,10 +6462,14 @@ fn render_frame(
                 && source.finds_all_by_area()
                 && matches!(labels_to, Labels::Own | Labels::Turned(_))
                 && draws_in_view_only(&chunk, !display.paused, shore.is_some());
-            let own = view_only
+            // On a map drawn in the file's own system.
+            let own_units = globe.is_none()
                 && crs != rustgis_data::raster::Crs::LonLat
                 && source.reads_own_box()
                 && flat.held(crs).is_ok_and(|held| held.is_identity());
+            let own = view_only && own_units;
+            let whole =
+                || rustgis_data::source::Request { extent: None, limit: usize::MAX, own: Some((crs, rustgis_data::source::whole_plane())) };
             let lonlat = !own && crs == rustgis_data::raster::Crs::LonLat && matches!(flat, rustgis_map::projection::Flat::Mercator);
             // The box a read of the map extent `e` asks for, in its path's units.
             let box_of = |e: &Extent| {
@@ -6551,7 +6555,9 @@ fn render_frame(
                     chunk.draw_rows_of(rows);
                     draw_rows(&mut chunk)
                 }),
-                None => visit_within(source.as_ref(), keep.or(near).map(ask), &mut |features| {
+                // A read of every feature on a map in the file's own system takes those
+                // longitude/latitude can't place too, as a read of the view there does.
+                None => visit_within(source.as_ref(), keep.or(near).map(ask).or_else(|| own_units.then(whole)), &mut |features| {
                     // A frame no longer wanted reads no further (see `cancel`).
                     if cancel::requested() {
                         return Err(rustgis_data::DataError::Cancelled);

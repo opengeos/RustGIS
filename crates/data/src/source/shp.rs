@@ -433,7 +433,8 @@ impl FeatureSource for ShpSource {
         let encoding = self.encoding.decoder();
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         let req = Request { limit: usize::MAX, ..*req };
-        let extent = self.reproject.request_box(&req);
+        // A box over the whole plane narrows nothing: every record, those without a box too.
+        let extent = self.reproject.request_box(&req).filter(|e| *e != super::whole_plane());
         if extent.is_some_and(|e| e.is_empty()) {
             return Ok(Batch { complete: true, ..Batch::default() });
         }
@@ -443,7 +444,10 @@ impl FeatureSource for ShpSource {
         // As in `read`, an extent the file's system couldn't bound (#1925) visits every record.
         let late = req.extent.is_some() && bounds.is_none();
         // A whole read looks at whether the stored boxes hold their shapes, once.
-        let checking = req.extent.is_none() && req.own.is_none() && self.boxes.load(Relaxed) == BOXES_UNKNOWN;
+        // The request's box in the file's own system, when it is one (a box in another system
+        // is read as if absent).
+        let own = self.reproject.own_box(&req);
+        let checking = req.extent.is_none() && own.is_none_or(|e| e == super::whole_plane()) && self.boxes.load(Relaxed) == BOXES_UNKNOWN;
         let mut missed = false;
         // A record a whole read couldn't read this time had its box left unchecked: the check
         // waits for a read that reads them all.
@@ -504,7 +508,7 @@ impl FeatureSource for ShpSource {
             };
             // As in `read`, the shape itself is checked; a read by area, its box in the file's
             // own system included, gives no rows without a shape.
-            if geometry.as_ref().map_or(req.extent.is_some() || req.own.is_some(), |g| !g.inside) {
+            if geometry.as_ref().map_or(req.extent.is_some() || own.is_some_and(|e| e != super::whole_plane()), |g| !g.inside) {
                 return Ok(());
             }
             let geometry = geometry.map(|p| p.geometry);
