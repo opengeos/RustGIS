@@ -965,11 +965,11 @@ fn square_to(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     });
 }
 
-/// Where labels crowd: every one shown, over the others, rather than some left out; and
-/// callouts, which move a crowded label to a free spot nearby with a line back to its feature,
-/// no longer than so far.
+/// Where labels crowd: every one shown, over the others, rather than some left out; the class's
+/// weight, the heavier winning where labels compete; and callouts, which move a crowded label to a
+/// free spot nearby with a line back to its feature, no longer than so far.
 fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
-    use rustgis_engine::map::symbology::{CALLOUT_REACH, callout_reach};
+    use rustgis_engine::map::symbology::{CALLOUT_REACH, LABEL_WEIGHT, callout_reach, label_weight};
     let id = l.id;
     grid(ui, "crowding", |ui| {
         let input_label = ui.label(tl!("Show all labels"));
@@ -982,6 +982,28 @@ fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         {
             run(app, "labels.placement", c.params(json!({"showAll": all})));
         }
+        ui.end_row();
+        let input_label = ui.label(tl!("Weight"));
+        let mut v = f64::from(c.it.weight);
+        let r = ui
+            .add(egui::DragValue::new(&mut v).update_while_editing(false).range(LABEL_WEIGHT).speed(0.05).max_decimals(0))
+            .labelled_by(input_label.id)
+            .on_hover_text(tl!("Where labels compete for a place, the heavier class's label wins, whatever its layer's place."));
+        crate::ribbon::live_drag(
+            app,
+            ui,
+            &r,
+            f64::from(c.it.weight),
+            v,
+            |app, x| {
+                if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
+                    k.weight = label_weight(x);
+                }
+            },
+            |app, x| {
+                run(app, "labels.placement", c.params(json!({"weight": label_weight(x)})));
+            },
+        );
         ui.end_row();
         let input_label = ui.label(tl!("Callouts"));
         ui.horizontal(|ui| {
@@ -1588,6 +1610,53 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(offset(&h), -2.0, "the side waits for a distance");
+    }
+
+    /// A label class's weight (#2803) is shown and set in Position, beside Show all labels.
+    #[test]
+    fn a_label_weight_is_set_in_the_pane() {
+        use egui::accesskit::Role;
+        let mut h = harness(with_cities());
+        h.run();
+        let cities = layer_id(h.state(), "Cities");
+        h.state_mut().session.run("layer.select", &json!({"layer": cities})).unwrap();
+        h.state_mut().session.run("labels.placement", &json!({"layer": cities, "weight": 7})).unwrap();
+        h.run();
+        open_tab(&mut h, "Position");
+        let weight =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer_by_name("Cities").unwrap().labels.default.weight;
+        let shown = h.get_by_role_and_label(Role::SpinButton, "Weight").accesskit_node().numeric_value();
+        assert_eq!(shown, Some(7.0), "the class's weight");
+        h.get_by_role_and_label(Role::SpinButton, "Weight").focus();
+        h.run();
+        h.get_by_role_and_label(Role::SpinButton, "Weight").type_text("9");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(weight(&h), 9);
+        // Dragged slowly left over several frames, then let go: two less, in one step.
+        h.state_mut().session.run("labels.placement", &json!({"layer": cities, "weight": 5})).unwrap();
+        h.run();
+        let steps = h.state().session.undo_depth();
+        let at = h.get_by_role_and_label(Role::SpinButton, "Weight").rect().center();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        for i in 1..=10 {
+            h.event(egui::Event::PointerMoved(at - egui::vec2(4.0 * i as f32, 0.0)));
+            h.step();
+        }
+        h.event(button(at - egui::vec2(40.0, 0.0), false));
+        h.step();
+        h.run();
+        assert_eq!(weight(&h), 3, "each frame's part of the drag counts");
+        assert_eq!(h.state().session.undo_depth(), steps + 1, "a drag is one step");
     }
 
     /// A line layer's labels can try other places along the line (#1187): the box is there for a

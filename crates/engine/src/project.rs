@@ -109,6 +109,7 @@ pub const CAPABILITIES: &[&str] = &[
     NATIVE_COORDINATES,
     "layout-text-size",
     "label-guide",
+    "label-weight",
     PROJECT_CRS,
     "dggs-system",
 ];
