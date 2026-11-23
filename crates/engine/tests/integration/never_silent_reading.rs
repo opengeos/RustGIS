@@ -25,8 +25,8 @@ enum Expect {
     Said(&'static str),
     /// Imports the layer and says the loss in a notice; refusing this valid fixture is a failure.
     Imported(&'static str),
-    /// Imports successfully and identifies the loss with a code.
-    Classified(LossCode),
+    /// Imports successfully and identifies the loss with a code, in a notice holding these words.
+    Classified(LossCode, &'static str),
     /// Loses it without a notice today, still adding a layer: what is lost.
     Silent(&'static str),
 }
@@ -225,7 +225,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.geojson",
             geojson(&[point]),
             geojson(&[r#"{"type":"Point","coordinates":[1,2,3]}"#]),
-            Expect::Classified(LossCode::DroppedZm),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
         ),
         case(
             "GeoJSON: an unreadable geometry",
@@ -240,7 +240,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.topojson",
             topo_line("[[0,0],[1,1]]"),
             topo_line("[[0,0,5],[1,1,6]]"),
-            Expect::Classified(LossCode::DroppedZm),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
         ),
         case(
             "TopoJSON: an arc index the file doesn't hold",
@@ -276,7 +276,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.csv",
             "wkt,id\n\"POINT(1 2)\",1\n",
             "wkt,id\n\"POINT Z(1 2 3)\",1\n",
-            Expect::Classified(LossCode::DroppedZm),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
         ),
         case(
             "CSV: an unreadable coordinate",
@@ -312,7 +312,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.kml",
             kml(&["<Point><coordinates>1,2</coordinates></Point>"]),
             kml(&["<Point><coordinates>1,2,30</coordinates></Point>"]),
-            Expect::Classified(LossCode::DroppedZm),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
         ),
         case(
             "KML: a placemark without geometry",
@@ -450,7 +450,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             gml(
                 r#"<gml:LineString srsName="urn:ogc:def:crs:EPSG::4326"><gml:posList srsDimension="3">48 10 5 49 11 6</gml:posList></gml:LineString>"#,
             ),
-            Expect::Classified(LossCode::DroppedZm),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
         ),
         // GeoRSS.
         case(
@@ -465,7 +465,7 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
             "a.rss",
             georss(&[&georss_polygon("1 1 1 2 2 2 1 1")]),
             georss(&[&georss_polygon("1 x")]),
-            Expect::Classified(LossCode::DroppedRing),
+            Expect::Classified(LossCode::DroppedRing, "hole"),
         ),
         case(
             "GeoRSS: a point with more than one pair",
@@ -647,9 +647,15 @@ fn cases(fixture_dir: &std::path::Path) -> Vec<Case> {
         .collect::<Vec<_>>();
     out.extend(kmz);
     out.extend([
-        case("CityJSON: varying line heights", "a.city.json", cityjson(0), cityjson(5), Expect::Classified(LossCode::DroppedZm)),
-        case("CityGML: varying line heights", "a.gml", citygml(0), citygml(5), Expect::Classified(LossCode::DroppedZm)),
-        case("GeoPackage: a height", "a.gpkg", gpkg(fixture_dir, false), gpkg(fixture_dir, true), Expect::Classified(LossCode::DroppedZm)),
+        case("CityJSON: varying line heights", "a.city.json", cityjson(0), cityjson(5), Expect::Classified(LossCode::DroppedZm, "Z or M")),
+        case("CityGML: varying line heights", "a.gml", citygml(0), citygml(5), Expect::Classified(LossCode::DroppedZm, "Z or M")),
+        case(
+            "GeoPackage: a height",
+            "a.gpkg",
+            gpkg(fixture_dir, false),
+            gpkg(fixture_dir, true),
+            Expect::Classified(LossCode::DroppedZm, "Z or M"),
+        ),
         case(
             "FlatGeobuf: a height",
             "a.fgb",
@@ -1188,8 +1194,9 @@ fn a_reading_that_loses_something_says_so() {
             Ok(Err(e)) => (vec![(e, None)], false),
             Ok(Ok((said, added))) => (said.into_iter().filter(|n| !clean.contains(n)).collect(), added),
         };
-        if let Expect::Classified(code) = c.expect {
+        if let Expect::Classified(code, words) = c.expect {
             if !added
+                || new.iter().filter(|(text, loss)| *loss == Some(code) && text.contains(words)).count() != 1
                 || new.iter().filter(|(_, loss)| *loss == Some(code)).count() != 1
                 || clean.iter().any(|(_, loss)| *loss == Some(code))
             {
