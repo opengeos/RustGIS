@@ -965,7 +965,8 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     // The result cut to leave room for one entry per code.
     let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
     let text = bounded_json(&Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1));
-    let failed = o.contains_key("error");
+    // A result's `error` that is null (`run`'s on success) isn't a failure.
+    let failed = o.get("error").is_some_and(|e| !e.is_null());
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
@@ -1075,10 +1076,13 @@ fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> Str
     let fits = |t: &str| t.chars().count() <= 8000 && json!({"error": t}).to_string().len() <= output_bytes(tokens);
     let raw: Vec<Value> = losses.as_array().cloned().unwrap_or_default();
     let lines = loss_forms(&raw).into_iter().skip(2).map(|(list, _)| format!("\nlosses: {list}"));
+    // The first line that fits alone, for a budget with no room for any of the error.
+    let mut alone = None;
     for line in lines.chain(["\nlossesTrimmed: true".to_string()]) {
         if !fits(&line) {
             continue;
         }
+        alone.get_or_insert_with(|| line.trim_start().to_string());
         if fits(&format!("{text}{line}")) {
             return format!("{text}{line}");
         }
@@ -1090,10 +1094,13 @@ fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> Str
             let mid = low + (high - low).div_ceil(2);
             if fits(&cut(mid)) { low = mid } else { high = mid - 1 }
         }
-        // With no room for even a character of the error, the line alone.
-        return if fits(&cut(low)) { cut(low) } else { line.trim_start().to_string() };
+        // With room for the mark that the error was cut, as much of it as fits; without, a
+        // shorter line may leave it room.
+        if fits(&cut(low)) {
+            return cut(low);
+        }
     }
-    clip(&text, 8000)
+    alone.unwrap_or_else(|| clip(&text, 8000))
 }
 
 /// The losses as one entry per code, `{code, kind, count, action}`: short enough to keep whole
@@ -1734,7 +1741,9 @@ mod tests {
         let out: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(out["losses"], json!([{"code": "dropped.value", "kind": "dropped", "count": 2, "action": "Correct the value."}]));
         assert_eq!((&out["lossesTrimmed"], &out["truncated"], &out["success"]), (&json!(true), &json!(true), &json!(true)));
-        for tokens in [32, 16] {
+        // `run`'s success, whose `error` is null, is cut the same way.
+        let run_ok = json!({"success": true, "error": null, "notices": ["n"], "result": "y".repeat(5000)});
+        for (tokens, big) in [(32, &big), (16, &big), (32, &run_ok), (16, &run_ok)] {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
             let out: Value = serde_json::from_str(&text).unwrap();
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");

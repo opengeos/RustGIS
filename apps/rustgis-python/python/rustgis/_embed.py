@@ -18,7 +18,7 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
 
-from . import PathLike, RustGISError, Session, _Api, _native, _warn_losses
+from . import PathLike, RustGISError, Session, _Api, _warn_losses
 
 #: The web app the widgets show; ``RUSTGIS_WEB_URL`` points them at another build (a local
 #: ``trunk serve``, a self-hosted copy).
@@ -204,9 +204,9 @@ class _Embedded(_Api):
 
     def _push(self) -> None:
         """Sends the session's project to the app, when it changed."""
+        engine = self._session._engine
         try:
-            engine = self._session._engine
-            text, keys, notices = _native(engine, engine._peer_text)
+            text, keys, notices = engine._peer_text()
             # A new loss may leave the public project text unchanged.
             if text != self._project or notices != self._sent_notices:
                 self._hold([(notice, False) for notice in notices])
@@ -216,10 +216,16 @@ class _Embedded(_Api):
             self._sent_keys = keys
         except RustGISError as e:
             self._hold([(f"couldn't show the project in the app: {e}", True)])
+            _warn_losses(engine, e)
             return
+        except BaseException as failure:
+            _warn_losses(engine, failure)
+            raise
         if text != self._project:
             self._project = text
             self._send_project(text)
+        # Raised once the app has the project, which a warning filter can turn into an error.
+        _warn_losses(engine)
 
     def _hold(self, notices: List[Tuple[str, bool]]) -> None:
         """Keeps notices for :meth:`notices`.
