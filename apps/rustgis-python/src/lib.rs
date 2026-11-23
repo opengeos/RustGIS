@@ -182,16 +182,22 @@ impl Engine {
                     1 => session.warn(format!("{name}: 1 row couldn't be read and was left out")),
                     n => session.warn(format!("{name}: {n} rows couldn't be read and were left out")),
                 }
+                let mut read_zm = false;
                 for message in report.messages.into_iter().filter(|message| !opened_notes.contains(message)) {
+                    read_zm |= message.loss == Some(rustgis_engine::data::loss::LossCode::DroppedZm);
                     session.say(message);
                 }
-                // What GeoJSON, in WGS 84, lacks of it, as an export to GeoJSON says it.
-                for note in rustgis_engine::data::export_notes(
-                    [(&ds, ds.lonlat_extent())],
-                    &format!("{name} as GeoJSON"),
-                    rustgis_engine::data::raster::Crs::LonLat,
-                ) {
-                    session.say(note);
+                // What GeoJSON, in WGS 84, lacks of it, as an export to GeoJSON says it; a Z/M loss
+                // the read just said isn't said again, as the file writer leaves it
+                // (`share::coalesce_read_zm`).
+                let target = format!("{name} as GeoJSON");
+                let generic = rustgis_engine::data::zm_export_note([&ds], &target).filter(|_| read_zm);
+                for note in
+                    rustgis_engine::data::export_notes([(&ds, ds.lonlat_extent())], &target, rustgis_engine::data::raster::Crs::LonLat)
+                {
+                    if generic.as_ref() != Some(&note) {
+                        session.say(note);
+                    }
                 }
                 // GeoJSON is longitude/latitude, whatever system the source holds its coordinates in.
                 return Ok(rustgis_engine::data::io::to_geojson(&*ds.in_lonlat()?).to_string());
