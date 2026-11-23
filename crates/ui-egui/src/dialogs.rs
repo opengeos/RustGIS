@@ -1163,7 +1163,7 @@ fn xy_key(map: &rustgis_engine::map::Map, id: &str) -> String {
         "" => String::new(),
         "map" => format!("map {}", map.projection.code()),
         layer => map
-            .layer_by_name(layer)
+            .layer_by_name(layer.trim())
             .and_then(rustgis_engine::cmd::navigate::layer_coordinates_system)
             .map(|c| format!("layer {}", c.definition_text()))
             .unwrap_or_default(),
@@ -1183,7 +1183,9 @@ fn center_in(map: &rustgis_engine::map::Map, system: &str) -> Option<[String; 2]
     let at = match system {
         "" => return Some([format!("{:.4}", c.x), format!("{:.4}", c.y)]),
         "map" => map.flat().forward(c)?,
-        layer => rustgis_engine::cmd::navigate::layer_coordinates_system(map.layer_by_name(layer)?)?.transformer().ok()?.from_lonlat(c)?,
+        layer => {
+            rustgis_engine::cmd::navigate::layer_coordinates_system(map.layer_by_name(layer.trim())?)?.transformer().ok()?.from_lonlat(c)?
+        }
     };
     at.is_finite().then(|| [format!("{:.2}", at.x), format!("{:.2}", at.y)])
 }
