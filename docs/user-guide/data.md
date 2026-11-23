@@ -1439,7 +1439,8 @@ local file's view holds more than 250,000 features (100,000 in the web app), the
 evenly spread sample of them and its tooltip in Layers says so: zoom in to see them all. On a map
 in the file's own coordinate system (a UTM file on a UTM map), the view is read in map units: each
 feature's own bounding box is compared with it as the file holds it, with no coordinate
-converted, and a feature reaching past where longitude/latitude goes is read too. On any other
+converted, and a feature reaching past where longitude/latitude goes is read too (except from a
+GeoJSON file, which leaves such a feature out when it opens, and says so). On any other
 map, each feature is placed in longitude/latitude to be compared. Remote files have lower limits (see
 [Data formats](data-formats.md)). Smaller files load
 whole; `layer.addData` with `"stream": true` or `false` overrides the choice.

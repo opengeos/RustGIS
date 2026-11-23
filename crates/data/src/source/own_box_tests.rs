@@ -138,3 +138,17 @@ fn a_box_in_its_own_system_is_tested_without_converting() {
     assert!(lonlat_source.place(Geometry::Point(Coord::new(2.3, 48.85)), &req).unwrap().inside);
     assert!(notes.is_empty(), "{notes:?}");
 }
+
+#[test]
+fn a_coordinate_that_isnt_a_number_is_left_out_in_its_own_system_too() {
+    let mut notes = Vec::new();
+    let r = Reproject::from_crs(utm31(), &mut notes);
+    let (lonlat, utm) = around_paris();
+    let req = Request { extent: Some(lonlat), limit: 1, own: Some((utm31(), utm)) };
+    let missing = Geometry::Line(vec![vec![Coord::new(451_500.0, 5_411_500.0), Coord::new(f64::NAN, 5_411_500.0)]]);
+    // Left out for the reader to count, as without the box.
+    assert!(r.place(missing.clone(), &req).is_none());
+    assert!(r.place(missing, &Request { own: None, ..req }).is_none());
+    let clean = Geometry::Line(vec![vec![Coord::new(451_500.0, 5_411_500.0), Coord::new(452_000.0, 5_411_500.0)]]);
+    assert!(r.place(clean, &req).unwrap().inside);
+}

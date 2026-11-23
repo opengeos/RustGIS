@@ -228,3 +228,57 @@ fn a_stated_extent_too_small_hides_nothing_in_view() {
     sync(&mut map, &lonlat, &east);
     assert_eq!(asked.lock().unwrap().last().unwrap().own, Some((utm31(), east.padded(0.5, 0.0))));
 }
+
+/// Lines in UTM 31N as a FlatGeobuf: one at Paris and one from 1,200 km east to 1e9 m east, whose
+/// far end has no place in longitude/latitude, so the file's stated extent covers Paris only.
+fn far_lines() -> (Box<dyn FeatureSource>, Arc<Mutex<Vec<Request>>>) {
+    let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    let line = |a: (f64, f64), b: (f64, f64)| Some(Geometry::Line(vec![vec![Coord::new(a.0, a.1), Coord::new(b.0, b.1)]]));
+    ds.push(line((451_000.0, 5_411_000.0), (452_000.0, 5_412_000.0)), vec![Value::Text("paris".into())]);
+    ds.push(line((1_200_000.0, 5_411_000.0), (1e9, 5_411_000.0)), vec![Value::Text("far".into())]);
+    ds.held_in = utm31();
+    let (bytes, _) = rustgis_data::io::write_bytes_in(&ds, "fgb", utm31()).unwrap();
+    let inner = rustgis_data::source::open_bytes("far.fgb", bytes, None).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    (Box::new(Recording { inner, asked: asked.clone() }), asked)
+}
+
+#[test]
+fn a_complete_window_in_map_units_still_reads_a_feature_past_the_stated_extent() {
+    let (source, asked) = far_lines();
+    let stated = source.info().extent;
+    assert!(stated.max_x < 3.0, "the stated extent covers Paris only: {stated:?}");
+    let mut map = crate::Map::new("utm");
+    map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
+    let id = map.add_streamed("lines", SourceLayer::from_path("far.fgb", None, source));
+    let (lonlat, utm) = around_paris();
+    sync(&mut map, &lonlat, &utm);
+    let layer = map.layer(id).unwrap();
+    assert_eq!(names(layer), ["paris"]);
+    assert!(layer.source.as_ref().unwrap().window().unwrap().complete);
+    // Panned 750 km east, onto the far line: read, though the window read everything the stated
+    // extent holds.
+    let reads = asked.lock().unwrap().len();
+    let east = Extent::new(1_190_000.0, 5_400_000.0, 1_220_000.0, 5_420_000.0);
+    sync(&mut map, &Extent::new(12.0, 48.5, 13.0, 49.5), &east);
+    assert_eq!(asked.lock().unwrap().len(), reads + 1);
+    assert_eq!(names(map.layer(id).unwrap()), ["far"]);
+}
+
+#[test]
+fn a_window_read_in_longitude_latitude_isnt_reused_for_a_view_in_map_units() {
+    // Read first without the view in map units (the far line is left out there, as its far end
+    // has no place in longitude/latitude), then with it on the same map: read again, the far line
+    // with it.
+    let mut map = crate::Map::new("utm");
+    map.set_projection(crate::Projection::Custom("EPSG:32631".into()));
+    let (source, asked) = lines();
+    let id = map.add_streamed("lines", SourceLayer::from_path("lines.fgb", None, source));
+    let (lonlat, utm) = around_paris();
+    map.sync_sources(&lonlat, 1000.0, true);
+    assert_eq!(names(map.layer(id).unwrap()), ["paris"]);
+    let reads = asked.lock().unwrap().len();
+    sync(&mut map, &lonlat, &utm);
+    assert_eq!(asked.lock().unwrap().len(), reads + 1);
+    assert_eq!(names(map.layer(id).unwrap()), ["far east", "paris"]);
+}

@@ -1684,6 +1684,12 @@ fn row_extent(r: &postgres::Row) -> Option<Extent> {
     }
 }
 
+/// The box a read narrows its query by when the request gives it in the table's own system
+/// ([`Request::own`], [`Reproject::own_box`]); `None` otherwise, for the extent to be converted.
+fn own_query_box(reproject: Option<&Reproject>, req: &Request) -> Option<Extent> {
+    reproject.and_then(|r| r.own_box(req))
+}
+
 impl FeatureSource for PostgisSource {
     fn info(&self) -> &SourceInfo {
         &self.info
@@ -1699,7 +1705,13 @@ impl FeatureSource for PostgisSource {
     fn read(&self, req: &Request) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
         let mut out = Batch::default();
-        let native = req.extent.map(|e| self.lonlat_to_native(&e)).transpose()?;
+        // In the table's own system: the box the request gives there ([`Request::own`]), which
+        // a feature reaching past where longitude/latitude goes meets too, else its extent
+        // converted (refused when it can't be bounded).
+        let native = match own_query_box(self.reproject.as_ref(), req) {
+            Some(own) => Some(own),
+            None => req.extent.map(|e| self.lonlat_to_native(&e)).transpose()?,
+        };
         if limit == 0 {
             return Ok(out);
         }
@@ -1768,6 +1780,24 @@ impl FeatureSource for PostgisSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A read given its box in the table's own system narrows the query by it, not by its
+    /// longitude/latitude extent converted; one in another system, or a table in
+    /// longitude/latitude, goes by the extent as before.
+    #[test]
+    fn a_read_in_the_tables_own_system_queries_by_its_box() {
+        let utm = Crs::from_epsg(32631).unwrap();
+        let own = Extent::new(440_000.0, 5_400_000.0, 470_000.0, 5_420_000.0);
+        let lonlat = Some(Extent::new(2.2, 48.75, 2.5, 48.95));
+        let table = Reproject::from_crs(utm, &mut Vec::new());
+        assert_eq!(own_query_box(Some(&table), &Request { extent: lonlat, limit: 10, own: Some((utm, own)) }), Some(own));
+        let swiss = Crs::from_epsg(2056).unwrap();
+        assert_eq!(own_query_box(Some(&table), &Request { extent: lonlat, limit: 10, own: Some((swiss, own)) }), None);
+        assert_eq!(own_query_box(Some(&table), &Request { extent: lonlat, limit: 10, own: None }), None);
+        let geographic = Reproject::from_crs(Crs::LonLat, &mut Vec::new());
+        assert_eq!(own_query_box(Some(&geographic), &Request { extent: lonlat, limit: 10, own: Some((Crs::LonLat, own)) }), None);
+        assert_eq!(own_query_box(None, &Request { extent: lonlat, limit: 10, own: Some((utm, own)) }), None);
+    }
 
     #[test]
     fn families_of_declared_types() {
