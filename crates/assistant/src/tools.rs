@@ -996,28 +996,27 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
             }
         }
     }
-    // The codes before what is left of the result, saying it was cut where that fits: then only
-    // that the list was left out.
-    let bare = serde_json::Map::from_iter(success.map(|v| ("success".to_string(), v)));
-    let mut said_cut = bare.clone();
+    // The codes, saying the result (or the failure's error) was cut: then only that both were.
+    let mut said_cut = serde_json::Map::from_iter(success.map(|v| ("success".to_string(), v)));
     said_cut.insert("truncated".into(), json!(true));
     for form in forms.iter().skip(2) {
-        for base in [&said_cut, &bare] {
-            let v = with(base.clone(), form);
-            if v.to_string().len() <= max {
-                return v.to_string();
-            }
+        let v = with(said_cut.clone(), form);
+        if v.to_string().len() <= max {
+            return v.to_string();
         }
     }
-    let mut v = bare;
+    let mut v = said_cut;
     v.insert("lossesTrimmed".into(), json!(true));
     let v = Value::Object(v).to_string();
-    // The tightest budgets: the marker alone, then its name alone; below that (15 bytes) no
-    // marker fits, and nothing a client could misread is said.
+    // The tightest budgets: the markers alone, then the list's name alone; below that (15 bytes)
+    // no marker fits, and nothing a client could misread is said.
+    let both = json!({"truncated": true, "lossesTrimmed": true}).to_string();
     let marker = json!({"lossesTrimmed": true}).to_string();
     let name = json!("lossesTrimmed").to_string();
     if v.len() <= max {
         v
+    } else if both.len() <= max {
+        both
     } else if marker.len() <= max {
         marker
     } else if name.len() <= max {
@@ -1750,15 +1749,23 @@ mod tests {
             let out: Value = serde_json::from_str(&text).unwrap();
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
             assert_eq!((&out["lossesTrimmed"], &out["success"]), (&json!(true), &json!(true)), "{tokens}: {text}");
-            assert!(out["losses"].to_string().contains("dropped.value"), "{tokens}: {text}");
-            // A success cut this far is never said as an error; it is said to be cut where that
-            // fits beside the codes.
+            // A success cut this far is never said as an error, and always said to be cut: the
+            // codes go first.
             assert!(out.get("error").is_none(), "{tokens}: {text}");
-            assert_eq!(out.get("truncated").is_some(), tokens == 32, "{tokens}: {text}");
+            assert_eq!(out["truncated"], json!(true), "{tokens}: {text}");
+            assert_eq!(out["losses"].to_string().contains("dropped.value"), tokens == 32, "{tokens}: {text}");
         }
         for tokens in 1..=8 {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
             assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
+        }
+        // A failure whose error gives way says so, at every budget.
+        for tokens in 12..=24 {
+            let failed = json!({"success": false, "error": "e".repeat(5000)});
+            let text = finish_with_losses(&mut s, failed, vec![loss.clone()], tokens, Withheld::default(), true);
+            let out: Value = serde_json::from_str(&text).unwrap();
+            assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
+            assert_eq!(out["truncated"], json!(true), "{tokens}: {text}");
         }
         // A failure's error alone gives way to its losses, as JSON.
         let failed = json!({"success": false, "error": "e".repeat(5000)});

@@ -320,9 +320,9 @@ impl Engine {
     fn _take_losses(&self, py: Python<'_>) -> Vec<(String, String, String)> {
         let thread = std::thread::current().id();
         let losses = &self.losses;
-        // Never set aside while the session runs: its lock is taken inside the session's.
-        with_native(py, || {
-            let _session = self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // This thread's own call set them aside under the session's lock and has returned, so
+        // only their own lock is needed: taking them doesn't wait for another session's work.
+        py.detach(|| {
             let mut losses = losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let (mine, others) = std::mem::take(&mut losses.pending).into_iter().partition(|(t, _)| *t == thread);
             losses.pending = others;
