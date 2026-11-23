@@ -44,10 +44,16 @@ fn go_to_xy_takes_an_easting_and_northing_in_a_named_system() {
     away(&mut s);
     s.run("map.goToXY", &json!({"x": BERN.x, "y": BERN.y, "crs": "Cities"})).unwrap();
     assert!(near_bern(&s));
-    // Convert Position gives the same place.
+    // A system in degrees in a typed position: refused, as degrees are typed latitude first
+    // without one, and this form takes the easting first.
+    for system in ["EPSG:4326", "EPSG:4258"] {
+        let e = s.run("map.goToXY", &json!({"position": format!("40.7128, -74.006 {system}")})).unwrap_err();
+        assert!(e.contains("counts in degrees"), "{system}: {e}");
+    }
     // Both names of an axis: refused, not one passed over.
     let e = s.run("map.goToXY", &json!({"x": 2_600_000, "lon": 7.4, "y": 1_200_000, "crs": "EPSG:2056"})).unwrap_err();
     assert!(e.contains("not both"), "{e}");
+    // Convert Position gives the same place.
     let v = s.run("map.convertPosition", &json!({"x": 2_600_000, "y": 1_200_000, "crs": "EPSG:2056"})).unwrap();
     assert!((v["lon"].as_f64().unwrap() - BERN.x).abs() < 2e-3 && (v["lat"].as_f64().unwrap() - BERN.y).abs() < 2e-3, "{v}");
 }
