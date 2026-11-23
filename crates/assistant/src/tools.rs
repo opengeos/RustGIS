@@ -932,7 +932,12 @@ fn losses_since(s: &Session, said: &Said) -> Vec<Value> {
 fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usize, withheld: Withheld, always: bool) -> String {
     // What cleaning withheld is said first, so the sizes below are the final ones.
     let r = with_withheld(s, r, withheld);
-    let Value::Object(o) = r else { return bounded_json(&r, tokens) };
+    // A result that isn't an object goes under `result`, so the codes have their key.
+    let o = match r {
+        Value::Object(o) => o,
+        other if losses.is_empty() && !always => return bounded_json(&other, tokens),
+        other => serde_json::Map::from_iter([("result".to_string(), other)]),
+    };
     if losses.is_empty() && !always {
         return bounded_json(&Value::Object(o), tokens);
     }
@@ -1744,7 +1749,10 @@ mod tests {
         };
         assert_eq!(finish(json!({"notices": ["n"]}), true)["losses"], json!([]));
         assert!(finish(json!({"notices": ["n"]}), false).get("losses").is_none());
-        // A result with its own `losses` keeps it under `result`, beside the codes.
+        // A result that isn't an object, or has its own `losses`, goes under `result`, beside the codes.
+        let out: Value =
+            serde_json::from_str(&finish_with_losses(&mut s, json!([1, 2]), vec![small_loss()], 200, Withheld::default(), false)).unwrap();
+        assert_eq!((&out["result"], &out["losses"][0]["code"]), (&json!([1, 2]), &json!("dropped.value")), "{out}");
         let own = json!({"losses": 3});
         let out: Value =
             serde_json::from_str(&finish_with_losses(&mut s, own.clone(), vec![small_loss()], 200, Withheld::default(), false)).unwrap();

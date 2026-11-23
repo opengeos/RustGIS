@@ -253,6 +253,10 @@ class _Embedded(_Api):
                 self._hold([(f"the app's project couldn't be read: {e}", True)])
                 _warn_losses(engine, e)
                 return
+            except BaseException as failure:
+                # Whatever else stopped it, its losses are raised with it, not by a later call.
+                _warn_losses(engine, failure)
+                raise
             finally:
                 self._hold(self._session.notices())
             # The app's own text, not the session's re-serialised copy: the app then sees its
