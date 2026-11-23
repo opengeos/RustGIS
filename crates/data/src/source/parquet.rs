@@ -487,6 +487,10 @@ impl FeatureSource for ParquetSource {
     }
 
     /// Its own system, in which it gives its features as the file holds them.
+    fn reads_own_box(&self) -> bool {
+        true
+    }
+
     fn coord_crs(&self) -> crate::raster::Crs {
         self.reproject.crs()
     }
