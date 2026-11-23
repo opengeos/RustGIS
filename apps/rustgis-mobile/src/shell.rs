@@ -483,6 +483,10 @@ fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
 /// whether the file was left as it was or may be damaged (the project as saved `kept` there), and,
 /// while the project is still `open`, that Save again asks where.
 fn write_back_failure(name: &str, reason: &str, kept: Option<&Path>, open: bool) -> String {
+    // Turned down while busy: nothing was touched, and Save writes back there once it is done.
+    if reason == "code:busy" {
+        return i18n::fmt("{name} wasn't saved: another file is being chosen or saved. Save again once it is done.", &[("name", name)]);
+    }
     let reason = write_back_reason(reason);
     match (kept, open) {
         (None, true) => i18n::fmt(
@@ -914,6 +918,8 @@ mod tests {
         assert!(said(Some(kept), true).contains("may be damaged") && said(Some(kept), true).contains("Save again"));
         assert!(said(Some(kept), true).ends_with("kept at /data/saved/1/site.rgis."));
         assert!(said(Some(kept), false).contains("may be damaged") && !said(Some(kept), false).contains("Save again"));
+        let busy = write_back_failure("site.rgis", "code:busy", None, true);
+        assert_eq!(busy, "site.rgis wasn't saved: another file is being chosen or saved. Save again once it is done.");
         for (code, worded) in [
             ("code:busy", "another file is being chosen or saved"),
             ("code:storage", "the app's storage can't be written to"),

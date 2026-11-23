@@ -45,8 +45,9 @@ pub(crate) struct SavePromptState {
     /// back with it) once a save has decided it: the document a picker save wrote, which Save
     /// writes back to from then on, or `None` for the picker (a picker save the phone can't write
     /// back to, or a write-back that failed). A project with none here is written back to the
-    /// document it was opened from.
-    targets: std::collections::HashMap<u64, Option<String>>,
+    /// document it was opened from. With each document, whether it is that one (its address found
+    /// again after it moved).
+    targets: std::collections::HashMap<u64, Option<(String, bool)>>,
     /// The document a picker save reported, until its result comes.
     reported: Option<String>,
 }
@@ -58,6 +59,8 @@ struct PendingSave {
     project: u64,
     /// The document written back to, or `None` for a picker save.
     document: Option<String>,
+    /// Whether that document is the one the project was opened from.
+    opened_from: bool,
 }
 
 /// The document the open project is written back to on Save, and whether it is the one the project
@@ -66,7 +69,7 @@ struct PendingSave {
 fn document(app: &RustGisApp) -> Option<(String, bool)> {
     let prompt = &app.save_prompt;
     if let Some(target) = prompt.targets.get(&app.session.file_identity()) {
-        return target.clone().map(|document| (document, false));
+        return target.clone();
     }
     if app.session.opened_package().is_some() {
         return None;
@@ -103,16 +106,17 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     // folder isn't the copy's), keep them whole, as the download does.
     let copy_dir = app.session.path.as_deref().filter(|_| opened_from).and_then(std::path::Path::parent).map(std::path::Path::to_path_buf);
     let (text, report) = app.session.project.saved_text(copy_dir.as_deref())?;
-    if let Err(error) = save(&file, text.into_bytes(), target.as_deref()) {
-        // Refused before it started: the next Save asks where, as after a failed write-back.
-        if target.is_some() {
-            app.save_prompt.targets.insert(app.session.file_identity(), None);
-        }
-        return Err(error);
-    }
+    // Refused before it started (the phone busy with another file): nothing touched the document,
+    // so Save still writes back there.
+    save(&file, text.into_bytes(), target.as_deref())?;
     app.save_prompt.reported = None;
-    app.save_prompt.pending =
-        Some(PendingSave { snapshot: app.session.save_snapshot(), after: None, project: app.session.file_identity(), document: target });
+    app.save_prompt.pending = Some(PendingSave {
+        snapshot: app.session.save_snapshot(),
+        after: None,
+        project: app.session.file_identity(),
+        document: target,
+        opened_from,
+    });
     report.notify(&mut app.session);
     for note in notes {
         app.session.notify(note, false);
@@ -156,9 +160,9 @@ impl RustGisApp {
         // A write-back that reports its document again (iOS made its bookmark again, the file having
         // moved) writes there by the new one from now on.
         if saved.document.is_none() {
-            self.save_prompt.targets.insert(saved.project, reported);
+            self.save_prompt.targets.insert(saved.project, reported.map(|document| (document, false)));
         } else if let Some(fresh) = reported {
-            self.save_prompt.targets.insert(saved.project, Some(fresh));
+            self.save_prompt.targets.insert(saved.project, Some((fresh, saved.opened_from)));
         }
         if self.session.mark_snapshot_saved(saved.snapshot)
             && let Some(what) = saved.after
@@ -660,9 +664,10 @@ mod tests {
         assert_eq!(*asked.borrow(), [Some("bookmark-old".to_string()), Some("bookmark-new".to_string())]);
     }
 
-    /// A write-back the phone refuses before it starts makes the next Save ask where.
+    /// A write-back the phone refuses before it starts (busy with another file) touched nothing:
+    /// the next Save writes back there again.
     #[test]
-    fn a_refused_write_back_makes_the_next_save_ask_where() {
+    fn a_write_back_refused_before_it_starts_keeps_its_document() {
         use std::{cell::RefCell, rc::Rc};
         let mut h = launch();
         let asked: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
@@ -675,8 +680,8 @@ mod tests {
         h.state_mut().picked_document(copy.clone(), "content://site".into());
         h.state_mut().session.path = Some(copy);
         assert!(h.state_mut().run("ui.save", Value::Null).is_err());
-        h.state_mut().run("ui.save", Value::Null).unwrap();
-        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), None]);
+        assert!(h.state_mut().run("ui.save", Value::Null).is_err());
+        assert_eq!(*asked.borrow(), [Some("content://site".to_string()), Some("content://site".to_string())]);
     }
 
     /// Written back, a project names a file beside its copy as beside itself (`./…`), so the
@@ -703,6 +708,10 @@ mod tests {
         h.state_mut().picked_document(copy.clone(), "content://site".into());
         h.state_mut().session.path = Some(copy);
         h.state_mut().run("ui.save", Value::Null).unwrap();
+        // The original found again under a new address (iOS's bookmark made again).
+        h.state_mut().project_document("content://site-moved".into());
+        h.state_mut().complete_project_save(Ok("site.rgis".into()));
+        h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("site.rgis".into()));
         h.state_mut().run("ui.saveAs", Value::Null).unwrap();
         h.state_mut().project_document("content://copy".into());
@@ -711,12 +720,15 @@ mod tests {
         h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("copy.rgis".into()));
         let written = written.borrow();
+        let whole = serde_json::to_string(&roads.display().to_string()).unwrap();
         assert_eq!(written[0].0.as_deref(), Some("content://site"));
         assert!(written[0].1.contains("\"./roads.geojson\""), "written back with the link beside it");
-        assert_eq!(written[1].0, None);
-        assert!(written[1].1.contains(&serde_json::to_string(&roads.display().to_string()).unwrap()), "a picker save keeps it whole");
-        assert_eq!(written[2].0.as_deref(), Some("content://copy"));
-        assert!(written[2].1.contains(&serde_json::to_string(&roads.display().to_string()).unwrap()), "and so does Save after it");
+        assert_eq!(written[1].0.as_deref(), Some("content://site-moved"));
+        assert!(written[1].1.contains("\"./roads.geojson\""), "the original at its new address, still beside it");
+        assert_eq!(written[2].0, None);
+        assert!(written[2].1.contains(&whole), "a picker save keeps it whole");
+        assert_eq!(written[3].0.as_deref(), Some("content://copy"));
+        assert!(written[3].1.contains(&whole), "and so does Save after it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
