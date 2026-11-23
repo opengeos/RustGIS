@@ -1764,6 +1764,12 @@ pub fn download_within_with_origin(url: &str, max: usize, timeout: std::time::Du
     download_fetched_reaching(url, max, timeout, &[], Reaching::Any, Box::new(move |r| done(r.map_err(|f| f.message))));
 }
 
+/// Like [`download_limited`], preserving the final post-redirect [`crate::address::Origin`] and
+/// observed network reach alongside the bytes.
+pub fn download_limited_with_origin(url: &str, max: usize, done: FetchedDone) {
+    download_within_with_origin(url, max, DOWNLOAD_TIMEOUT, done);
+}
+
 /// Like [`download`], preserving the final post-redirect [`crate::address::Origin`] and observed
 /// network reach alongside the downloaded bytes.
 pub fn download_with_origin(url: &str, done: FetchedDone) {

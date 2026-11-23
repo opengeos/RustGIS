@@ -236,7 +236,8 @@ pub(crate) fn add_layer_from(
         if public {
             cache::restrict_to_public(&describe);
         }
-        let slot = crate::fetch_into(&describe);
+        // Recorded if read from the internet: the GetCoverage request built from it goes there too.
+        let slot = fetch_document_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin, opened: app.session.opened });
         return Ok(describing(&title));
     }
@@ -562,17 +563,28 @@ fn drawn(app: &mut RustGisApp, landed: &mut Landed, step: &mut Step) {
     }
 }
 
-/// A bounded description or retryable feature page fetched off the frame. Native downloads
-/// end at the timeout; the browser's late answer is discarded by the polling read.
-fn fetch_within(url: &str, max: usize, timeout: std::time::Duration) -> Slot<Result<Vec<u8>, String>> {
+/// A bounded description or feature page fetched off the frame. Native downloads end at the
+/// timeout, if it has one; the browser's late answer is discarded by the polling read. A page read
+/// from the internet is recorded under `page`, the address the next page is found from
+/// ([`Pages::next_url`]), so that one is fetched only from there ([`next_request`]); a page read
+/// from the local network leads anywhere, as before.
+fn fetch_page(url: &str, page: &str, max: usize, timeout: Option<std::time::Duration>) -> Slot<Result<Vec<u8>, String>> {
     let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
     let land = slot.clone();
-    rustgis_engine::render::rustgis_tiles::cache::download_within(
-        url,
-        max,
-        timeout,
-        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
-    );
+    let page = page.to_string();
+    let done: cache::FetchedDone = Box::new(move |r| {
+        let r = r.map(|fetched| {
+            if fetched.origin.reach() == Reach::Public {
+                cache::restrict_to_public(&page);
+            }
+            fetched.bytes
+        });
+        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+    });
+    match timeout {
+        Some(timeout) => cache::download_within_with_origin(url, max, timeout, done),
+        None => cache::download_limited_with_origin(url, max, done),
+    }
     slot
 }
 
@@ -659,11 +671,10 @@ pub(crate) fn go_on(app: &mut RustGisApp, mut landed: Landed, left: usize, mut s
                 let next = next_request(app, &landed.params, &pages);
                 let slot = match next {
                     // A layer's description: small, and soon given up on.
-                    Ok(url) if pages.describing() => fetch_within(&url, left.min(ogc::DESCRIPTION_MAX), ogc::DESCRIPTION_TIMEOUT),
-                    Ok(url) => match pages.page_timeout() {
-                        Some(timeout) => fetch_within(&url, left, timeout),
-                        None => fetch_into_limited(&url, left),
-                    },
+                    Ok(url) if pages.describing() => {
+                        fetch_page(&url, pages.next_url(), left.min(ogc::DESCRIPTION_MAX), Some(ogc::DESCRIPTION_TIMEOUT))
+                    }
+                    Ok(url) => fetch_page(&url, pages.next_url(), left, pages.page_timeout()),
                     Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
                 };
                 app.ui.service_pages.push(PageRead { landed, pages, left, slot, asked: web_time::Instant::now() });
@@ -738,6 +749,43 @@ mod tests {
             let asked = layer["offer"]["url"].as_str().unwrap();
             assert!(asked.starts_with(items), "{asked}");
             assert_eq!(cache::ceiling_for(asked) == Reach::Public, observed == Reach::Public, "observed {observed:?}");
+        }
+    }
+
+    /// The dialog reads a service's features page by page: a page read from the internet has the
+    /// next page it links to fetched only from there, however its name resolves, even when the
+    /// first page's address is the user's own. Pages read from the local network lead anywhere.
+    #[test]
+    fn feature_pages_read_from_the_internet_hold_the_next_page() {
+        use rustgis_engine::render::rustgis_tiles::address::{Origin, Reach};
+        let first = "https://pages-first.example/collections/parcels/items";
+        let next = "https://pages-next.example/collections/parcels/items?page=2";
+        for observed in [Reach::Public, Reach::Local] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let links =
+                    if clean.starts_with(first) { json!([{"rel":"next","type":"application/geo+json","href":next}]) } else { json!([]) };
+                let body = json!({"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}],"links":links});
+                // A fetch connects no wider than its ceiling.
+                let origin = Origin::with_observed_reach(&clean, observed.min(ceiling)).unwrap();
+                done(Ok(cache::Fetched { bytes: body.to_string().into_bytes(), origin }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            app.run("ui.addUrl", json!({"url": first, "name": "Parcels", "service": true})).unwrap();
+            for _ in 0..4 {
+                poll_pages(&mut app, &egui::Context::default());
+            }
+            let asked = asked.lock().unwrap();
+            assert_eq!(asked.len(), 2, "{asked:?}");
+            assert_eq!(asked[0].1, Reach::Local, "the first page is the user's own address");
+            assert!(asked[1].0.starts_with("https://pages-next.example/"), "{asked:?}");
+            assert_eq!(asked[1].1, observed, "the next page, the first observed {observed:?}");
+            let layer = app.session.map().layers.iter().find(|l| l.name == "Parcels");
+            assert_eq!(layer.map(|l| l.dataset.features.len()), Some(2), "{:?}", app.dialogs.error);
         }
     }
 

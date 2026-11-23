@@ -398,7 +398,11 @@ fn read_documents_with(
             }
         }
         histories.insert(address.clone(), crossed_origin);
-        reaches.insert(crate::render::rustgis_tiles::logins::inner(&address).to_string(), reach);
+        // A repeated dataset document is not read again: it keeps the reach its read observed,
+        // which the documents it links to are fetched within.
+        if !repeated {
+            reaches.insert(crate::render::rustgis_tiles::logins::inner(&address).to_string(), reach);
+        }
         seen.insert(address.clone());
         if result.service.kind.is_empty() {
             result.service.kind = service.kind.clone();
@@ -417,6 +421,8 @@ fn read_documents_with(
                 && let Offer::Style { url } = &layer.offer
                 && let Some(&style_crossed) = histories.get(url)
             {
+                // A stylesheet with no recorded reach (none: one in `histories` was read, which
+                // records its reach) is held to the internet, the narrower choice.
                 let public = reaches.get(crate::render::rustgis_tiles::logins::inner(url)).is_none_or(|r| *r == Reach::Public);
                 CapabilitySource { address: url.as_str().into(), crossed_origin: style_crossed, public }
             } else {
@@ -1482,6 +1488,8 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
                     };
                     let bytes = read.map_err(|e| format!("{}: {e}", c.id))?;
                     let info = rustgis_data::ogc::parse_describe(&c, &bytes)?;
+                    // Recorded by the read if it came from the internet, as in `coverage_request`.
+                    let public = public || cache::ceiling_for(&described) == Reach::Public;
                     let (get, area) = coverage_request_from(s, p, &c, &info, public)?;
                     (get, area, described)
                 }
@@ -1641,6 +1649,9 @@ fn coverage_request(s: &Session, p: &Value, c: &Coverage, anonymous: bool, publi
         Some(text) => rustgis_data::ogc::parse_describe(c, text.as_bytes())?,
         None => fetch_describe(c, &describe)?,
     };
+    // A description read from the internet (here, or by the app, which records it) holds the
+    // GetCoverage request built from it there too, however the endpoint's name resolves then.
+    let public = public || cache::ceiling_for(&describe) == Reach::Public;
     let (get, area) = coverage_request_from(s, p, c, &info, public)?;
     Ok((get, area, describe))
 }
@@ -1678,10 +1689,23 @@ fn coverage_request_from(
     Ok((get, area))
 }
 
+/// Reads a coverage's description, recording one that came from the internet
+/// ([`cache::restrict_to_public`]) so the GetCoverage request built from it goes only there.
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_describe(c: &Coverage, describe: &str) -> Result<rustgis_data::ogc::CoverageInfo, String> {
-    let bytes = crate::render::rustgis_tiles::cache::download_blocking(describe).map_err(|e| format!("{}: {e}", c.id))?;
-    rustgis_data::ogc::parse_describe(c, &bytes)
+    let fetched = cache::download_blocking_with_origin_within(
+        describe,
+        cache::MAX_DOWNLOAD,
+        cache::BLOCKING_TIMEOUT,
+        &[],
+        cache::ceiling_for(describe),
+    )
+    .map_err(cache::large_file_hint)
+    .map_err(|e| format!("{}: {e}", c.id))?;
+    if fetched.origin.reach() == Reach::Public {
+        cache::restrict_to_public(describe);
+    }
+    rustgis_data::ogc::parse_describe(c, &fetched.bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2113,6 +2137,80 @@ mod tests {
             assert_eq!(asked[1], ("https://looks-public.example/collections".to_string(), observed), "observed {observed:?}");
             assert_eq!(found.service.layers.len(), 1);
             assert_eq!(found.sources.iter().map(|source| source.public).collect::<Vec<_>>(), [observed == Reach::Public]);
+        }
+    }
+
+    /// A dataset document linked a second time is not read again, so it keeps the reach its read
+    /// observed: the documents it links to are fetched within that, whatever the reach of the
+    /// document that repeated the link. Here a landing on the local network lists a vector tile
+    /// list and a map tile list; the vector list links back to the map list, which links on to its
+    /// metadata.
+    #[test]
+    fn a_repeated_dataset_document_keeps_the_reach_it_was_read_at() {
+        use crate::render::rustgis_tiles::address::Origin;
+        let vector = "https://vector-list.example/tiles?f=json";
+        let map = "https://map-list.example/tiles?f=json";
+        let metadata = "https://map-list.example/metadata?f=json";
+        let landing = json!({"links":[{"rel":"tilesets-vector","href":vector},{"rel":"tilesets-map","href":map}]});
+        let vector_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"vector","links":[
+            {"rel":"self","type":"application/json","href":map}]}]});
+        let map_list = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad","dataType":"map","links":[
+            {"rel":"self","type":"application/json","href":metadata}]}]});
+        let map_metadata = json!({"tileMatrixSetId":"WebMercatorQuad","links":[
+            {"rel":"item","type":"image/png","href":"https://map-list.example/map/{tileMatrix}/{tileRow}/{tileCol}.png"}]});
+        // Where the vector list and the map list were observed; the map list's metadata is asked
+        // within the map list's reach either way.
+        for (vector_reach, map_reach) in [(Reach::Local, Reach::Public), (Reach::Public, Reach::Local)] {
+            let mut asked = Vec::new();
+            let mut s = Session::new(crate::Project::default());
+            let p = json!({"url": "https://service.example/dataset", "type": "ogcapi"});
+            let found = read_documents_with(&mut s, &p, false, None, &mut |url, ceiling| {
+                asked.push((url.to_string(), ceiling));
+                let (body, observed) = match url {
+                    u if u == vector => (&vector_list, vector_reach),
+                    u if u == map => (&map_list, map_reach),
+                    u if u == metadata => (&map_metadata, Reach::Local),
+                    _ => (&landing, Reach::Local),
+                };
+                let origin = Origin::with_observed_reach(url, observed.min(ceiling))?;
+                Ok(cache::Fetched { bytes: serde_json::to_vec(body).unwrap_or_default(), origin })
+            })
+            .unwrap();
+            let urls = asked.iter().map(|(url, _)| url.as_str()).collect::<Vec<_>>();
+            assert_eq!(urls, ["https://service.example/dataset?f=json", vector, map, metadata], "the repeat is not fetched");
+            assert_eq!(asked[3].1, map_reach, "vector list {vector_reach:?}, map list {map_reach:?}");
+            assert!(found.service.notes.iter().any(|n| n.contains("repeated addresses")), "{:?}", found.service.notes);
+            assert_eq!(found.service.layers.len(), 1, "{:?}", found.service.layers);
+            assert_eq!(found.sources.iter().map(|source| source.public).collect::<Vec<_>>(), [map_reach == Reach::Public]);
+        }
+    }
+
+    /// A coverage's GetCoverage request is built from its description: one read from the internet
+    /// (recorded, as the app and the native read record it) restricts the request to the internet
+    /// even when the capabilities listing the coverage came from the local network, so the
+    /// endpoint's name can't resolve locally when the request is sent. One read locally leaves it.
+    #[test]
+    fn a_coverage_description_read_from_the_internet_holds_its_request() {
+        let caps = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+        <ows:ServiceIdentification><ows:Title>Soils</ows:Title></ows:ServiceIdentification>
+        <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>soc</wcs:CoverageId><ows:Title>Soil carbon</ows:Title>
+          <ows:WGS84BoundingBox><ows:LowerCorner>5 49.2</ows:LowerCorner><ows:UpperCorner>5.8 50</ows:UpperCorner></ows:WGS84BoundingBox>
+        </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+        let describe = r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/4326" axisLabels="Lat Long">
+        <lowerCorner>49.2 5</lowerCorner><upperCorner>50 5.8</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#;
+        for public in [true, false] {
+            let url = format!("https://coverage-described-{public}.example/wcs");
+            let p = json!({"url": url, "layer": "soc", "text": caps, "describe": describe, "bbox": "full"});
+            let mut s = Session::new(crate::Project::default());
+            let first = s.run("service.coverage", &p).unwrap();
+            assert_eq!(cache::ceiling_for(first["url"].as_str().unwrap()), Reach::Local, "the capabilities are the user's own");
+            if public {
+                cache::restrict_to_public(first["describe"].as_str().unwrap());
+            }
+            let c = s.run("service.coverage", &p).unwrap();
+            let get = c["url"].as_str().unwrap();
+            assert!(get.contains("GetCoverage"), "{get}");
+            assert_eq!(cache::ceiling_for(get) == Reach::Public, public, "{get}");
         }
     }
 

@@ -127,6 +127,8 @@ const METADATA: [IpAddr; 2] =
 
 /// How far an IP address reaches.
 pub fn ip_reach(ip: IpAddr) -> Reach {
+    // The IPv6 metadata address; `v4_reach` checks the IPv4 one, however it is spelled (mapped,
+    // NAT64, the `inet_aton` forms in `reach`).
     if METADATA.contains(&ip) {
         return Reach::Forbidden;
     }

@@ -214,6 +214,8 @@ fn read(s: &mut Session, p: &Value) -> Result<(Value, Vec<(ServiceChild, Dataset
     }
     let mut bytes_read = 0usize;
     let mut reads = Vec::new();
+    // `listing` returns one reach per layer it lists (`service_json` writes one entry per layer),
+    // so the two never differ in length.
     for (layer, public) in layers.iter().zip(public) {
         let name = ps(layer, "title").unwrap_or("Collection");
         let url = layer.get("offer").and_then(|o| ps(o, "url")).ok_or("missing features address")?;
