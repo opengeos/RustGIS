@@ -1529,6 +1529,18 @@ impl Layer {
         fits
     }
 
+    /// Takes the rows of `kept`, a chunk of a streamed layer drawn before (a copy of this layer
+    /// with other rows), and the geometry drawing made of them: projected, and thinned for
+    /// display. Sharing them costs a pointer; this layer keeps its own look. What drawing makes
+    /// that `kept` lacks is made from the rows as usual.
+    pub fn draw_rows_of(&mut self, kept: &Layer) {
+        self.clear_cache();
+        self.dataset.features = kept.dataset.features.clone();
+        self.dataset.held_in = kept.dataset.held_in;
+        self.geometry_rev = kept.geometry_rev;
+        self.adopt_cache(kept);
+    }
+
     /// Whether the projected geometry cache is filled for a projection, from the layer's current
     /// rows and its coordinate system ([`Dataset::coord_crs`]).
     pub fn is_cached(&self, key: &str) -> bool {
@@ -3086,6 +3098,12 @@ impl Map {
                     if let Some(src) = &mut layer.source {
                         src.saved_selection = selected;
                     }
+                }
+                // A view kept for its frames fits in what its share leaves beside the rows it
+                // holds, hidden or not: a share shrunk by another streamed layer lets it go.
+                let room = bytes.saturating_sub(layer.view_cache_bytes());
+                if let Some(src) = &layer.source {
+                    src.trim_kept_view(room);
                 }
             }
         }
