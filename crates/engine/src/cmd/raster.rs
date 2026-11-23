@@ -685,7 +685,9 @@ pub(crate) type RasterRead = Result<(Raster, bool), String>;
 /// reading it in place loses nothing reading it whole keeps: its header reports no loss (a
 /// transparency mask, metadata that can't be read) and no `.aux.xml` or world file is beside it.
 /// Reads the file's header (a few reads of the file, on the fetch workers), afresh each time, as
-/// the file may have been written again; forgotten when it isn't read in place.
+/// the file may have been written again; forgotten when it isn't read in place. The wait for the
+/// header, and [`read_raster_as`]'s for the overview, don't look at Cancel: a local file answers
+/// in milliseconds, and a hung one (an unreachable mount) is given up after two minutes.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tiled_in_place(path: &str) -> bool {
     use crate::render::rustgis_tiles::cog;
