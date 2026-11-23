@@ -1075,7 +1075,7 @@ mod native {
             // RustGIS doesn't keep isn't left live without a word.
             if let Err(unsent) = revoke_all(vec![revocation]) {
                 // Every one is sent, whichever fail.
-                let failed = unsent.iter().filter(|r| post_form(&r.endpoint, &r.body).is_err()).count();
+                let failed = unsent.iter().filter(|r| !post_form(&r.endpoint, &r.body).is_ok_and(|b| revoked(&b))).count();
                 if failed > 0 {
                     return Err("the sign-in was cancelled, but the portal didn't confirm revoking its token: it may stay valid there until it expires".into());
                 }
@@ -1125,6 +1125,23 @@ mod native {
             }
         }
         super::authorization(url)
+    }
+
+    /// Whether a portal's answer to a revocation confirms it (`{"success": true}`): an OAuth error
+    /// or an answer that isn't JSON doesn't.
+    fn revoked(answer: &[u8]) -> bool {
+        use serde_json::Value;
+        serde_json::from_slice::<Value>(answer).ok().and_then(|v| v.get("success").and_then(Value::as_bool)) == Some(true)
+    }
+
+    /// Only an answer that says it succeeded confirms a revocation.
+    #[cfg(test)]
+    #[test]
+    fn a_revocation_is_confirmed_only_by_success() {
+        assert!(revoked(br#"{"success": true}"#));
+        assert!(!revoked(br#"{"success": false}"#));
+        assert!(!revoked(br#"{"error": {"code": 400, "error": "invalid_request"}}"#));
+        assert!(!revoked(b"<html>Bad Gateway</html>"));
     }
 
     /// Sends revocations off the caller's thread, on a best-effort basis. When the system refuses

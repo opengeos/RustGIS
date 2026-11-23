@@ -158,7 +158,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         && let Some(r) = take(slot)
     {
         st.names_job = None;
-        st.names = r.unwrap_or_default();
+        // Read once per database, so a failure (an unreadable database, a refused thread) is said once.
+        st.names = r.unwrap_or_else(|e| {
+            app.session.warn(crate::i18n::fmt("The database's table names for completion couldn't be read: {reason}", &[("reason", &e)]));
+            Vec::new()
+        });
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((sql, db, slot)) = &app.ui.sql.adding
