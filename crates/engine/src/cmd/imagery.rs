@@ -623,7 +623,7 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
                 held_bounds.expand(*c);
             }
             let mut unsized_by = 0usize;
-            let grid = spec.finish(|crs| {
+            let grid = spec.finish(&mut notes, |crs| {
                 if crs == held && projected {
                     return Ok(([held_bounds.min_x, held_bounds.min_y, held_bounds.max_x, held_bounds.max_y], None));
                 }
@@ -878,9 +878,10 @@ fn grid_param(
     crs: Crs,
     natural: impl FnOnce(Crs) -> Result<([f64; 4], Option<f64>), String>,
 ) -> Result<warp::Grid, String> {
-    let (spec, notes) = grid_spec(s, p, crs)?;
+    let (spec, mut notes) = grid_spec(s, p, crs)?;
+    let grid = spec.finish(&mut notes, natural);
     say(s, notes);
-    spec.finish(natural)
+    grid
 }
 
 /// What to say: a notice, or a warning (`true`).
@@ -933,8 +934,9 @@ enum Bounds {
 }
 
 impl Bounds {
-    /// In `crs`.
-    fn in_crs(self, crs: Crs) -> Result<[f64; 4], String> {
+    /// In `crs`; what it has to say (an extent layer's vertices that can't be placed) goes to
+    /// `notes`.
+    fn in_crs(self, crs: Crs, notes: &mut Notes) -> Result<[f64; 4], String> {
         match self {
             Bounds::Given(b) => Ok(b),
             Bounds::Layer { name, dataset, rows } => {
@@ -945,7 +947,7 @@ impl Bounds {
                 // Each vertex converted as `lonlat_extent_of` does it, Cancel looked at every few
                 // thousand features and vertices.
                 let to = dataset.lonlat_conversion()?;
-                let (mut e, mut seen) = (Extent::EMPTY, 0usize);
+                let (mut e, mut seen, mut unplaced) = (Extent::EMPTY, 0usize, 0usize);
                 let mut cancelled = None;
                 for row in rows {
                     if seen.is_multiple_of(4096) {
@@ -965,13 +967,27 @@ impl Bounds {
                         {
                             return;
                         }
-                        if let Some(l) = to.point(c) {
-                            e.expand(l);
+                        // A missing coordinate (NaN) is no vertex to place.
+                        match to.point(c) {
+                            Some(l) => e.expand(l),
+                            None if c.is_finite() => unplaced += 1,
+                            None => {}
                         }
                     });
                     if let Some(c) = cancelled {
                         return Err(c);
                     }
+                }
+                if unplaced > 0 {
+                    notes.push((
+                        format!(
+                            "{name}: {unplaced} {} that can't be placed in longitude/latitude {} left out of the grid's extent: check {} coordinates and the layer's coordinate system",
+                            if unplaced == 1 { "vertex" } else { "vertices" },
+                            if unplaced == 1 { "was" } else { "were" },
+                            if unplaced == 1 { "its" } else { "their" }
+                        ),
+                        false,
+                    ));
                 }
                 if e.is_empty() {
                     return Err(format!("{name} has no features to take an extent from"));
@@ -986,11 +1002,11 @@ impl GridSpec {
     /// The grid: `natural` gives, in its system, the bounds taken without an extent and the cell
     /// size taken without a cellSize (`None`: a cellSize is required); it is asked only when one of
     /// them is missing.
-    fn finish(self, natural: impl FnOnce(Crs) -> Result<([f64; 4], Option<f64>), String>) -> Result<warp::Grid, String> {
+    fn finish(self, notes: &mut Notes, natural: impl FnOnce(Crs) -> Result<([f64; 4], Option<f64>), String>) -> Result<warp::Grid, String> {
         match self {
             GridSpec::Fixed(g) => Ok(g),
             GridSpec::Build { crs, cell, origin, bounds } => {
-                let bounds = bounds.map(|b| b.in_crs(crs)).transpose()?;
+                let bounds = bounds.map(|b| b.in_crs(crs, notes)).transpose()?;
                 let (bounds, cell) = match (bounds, cell) {
                     (Some(b), Some(c)) => (b, c),
                     (b, c) => {

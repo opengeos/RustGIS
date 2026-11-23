@@ -2470,6 +2470,33 @@ fn a_layer_held_in_degrees_is_burned_in_the_system_it_was_read_in() {
     assert!((cells * 100.0 / area - 1.0).abs() < 0.03, "{cells} cells for {area} m²");
 }
 
+/// An extent layer with a vertex that can't be placed in longitude/latitude sizes the grid
+/// without it, and says so; clean input says nothing.
+#[test]
+fn an_extent_layers_unplaced_vertices_are_said() {
+    let (x0, y0) = (784_000.0, 5_401_300.0);
+    let square: Vec<Coord> =
+        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0), (0.0, 0.0)].iter().map(|(x, y)| Coord::new(x0 + x, y0 + y)).collect();
+    let far = vec![Coord::new(x0, y0), Coord::new(1e12, 1e12), Coord::new(x0, y0 + 500.0), Coord::new(x0, y0)];
+    let mut s = Session::new(Project::default());
+    add_in(&mut s, "Plot", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square.clone()]])], UTM);
+    add_in(&mut s, "Clean", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![square]])], UTM);
+    add_in(&mut s, "Odd", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![far]])], UTM);
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    let mark = s.notice_mark();
+    s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Clean", "name": "A"})).unwrap();
+    assert!(said(&s, mark).iter().all(|n| !n.contains("left out of the grid's extent")), "{:?}", said(&s, mark));
+    let mark = s.notice_mark();
+    s.run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Odd", "name": "B"})).unwrap();
+    assert!(
+        said(&s, mark)
+            .iter()
+            .any(|n| n.starts_with("Odd: 1 vertex that can't be placed in longitude/latitude was left out of the grid's extent")),
+        "{:?}",
+        said(&s, mark)
+    );
+}
+
 /// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,
 /// and says how many vertices it couldn't place there, left out of that box: a polygon held in UTM
 /// with a vertex far beyond any place UTM holds, burned onto a grid in degrees. With an extent
