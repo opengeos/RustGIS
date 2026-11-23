@@ -20,7 +20,10 @@ starting at the map's center. The position box (and the search box) also reads a
 northing followed by their system, as the right-click menu copies them in map coordinates
 (`2600000 mE  1200000 mN  EPSG:2056`, `2600000 1200000 EPSG:2056`; the system as a code, `Web
 Mercator`, a projection preset, or `map` for the map's own). A system in degrees is refused there,
-as degrees go without a system, latitude first. A unit written (`m`, `ft`, `ftUS`)
+as degrees go without a system, latitude first, and so are degrees typed before `map`. A layer in
+a projection of the Earth names no place on another body's map. X and Y are an easting and a
+northing: a system counted west or south, or northing first, is refused (and not offered in the
+dialog), and a raster layer gives the system its pixels are in. A unit written (`m`, `ft`, `ftUS`)
 must be the system's: feet in a system of metres are refused, not read as metres; the search
 box then says why, and `map.search` returns the reason as `positionError`. On another body's map, a
 system named by a code is the Earth's and is refused. `map.goToXY` takes the same: `lon` and `lat` as numbers or
