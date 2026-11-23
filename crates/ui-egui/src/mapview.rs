@@ -4181,13 +4181,14 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         if capabilities {
             let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
             replies.push((layer, app.session.run("identify.featureInfo", &p)));
-            // The service's other layers learned their requests from the same capabilities.
-            if replies.iter().all(|(_, r)| r.is_ok()) {
-                for other in also {
-                    let p = json!({"layer": other, "lon": lon, "lat": lat, "request": true});
-                    let r = app.session.run("identify.featureInfo", &p);
-                    replies.push((other, r));
-                }
+            // The service's other layers learned their requests from the same capabilities: each is
+            // asked whatever became of the first's (one refused, for reaching past its layer, is
+            // said by its own command; capabilities that couldn't be read leave the others nothing
+            // to ask).
+            for other in also {
+                let p = json!({"layer": other, "lon": lon, "lat": lat, "request": true});
+                let r = app.session.run("identify.featureInfo", &p);
+                replies.push((other, r));
             }
         } else {
             // With the request and the point: the service's error in one answer format asks again
@@ -5685,6 +5686,52 @@ mod tests {
         let pp = Popup::new(info, Coord::new(8.6, 46.65), 0, 0);
         assert_eq!(pp.asks.len(), 1, "asked once for both");
         assert_eq!(asked.lock().unwrap().clone(), [Reach::Public]);
+    }
+
+    /// A service's other layers are asked whatever became of the first's request: one refused for
+    /// reaching past its layer is said, and the next layer, whose request is within its own, is
+    /// asked.
+    #[test]
+    fn a_services_other_layers_are_asked_when_the_first_is_refused() {
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        let _turn = crate::fetching::turn();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: b"{}".to_vec(), origin }));
+        });
+        let host = "others-asked.example";
+        let caps = format!(
+            r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://{host}/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://192.168.9.5/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>a</Name><Title>A</Title></Layer><Layer><Name>b</Name><Title>B</Title></Layer></Layer></Capability></WMS_Capabilities>"#
+        );
+        let template = |layer: &str| {
+            format!(
+                "https://{host}/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS={layer}&STYLES=&CRS=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng"
+            )
+        };
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        s.run("map.addTiles", &json!({"url": template("a"), "name": "A", "overlay": true})).unwrap();
+        s.run("map.addTiles", &json!({"url": template("b"), "name": "B", "overlay": true})).unwrap();
+        // A was listed by a document read from the internet; B is the user's own.
+        cache::restrict_to_public(&template("a"));
+        s.run("map.goToXY", &json!({"lon": 8.6, "lat": 46.65, "scale": 10000})).unwrap();
+        let caps_url = rustgis_engine::data::ogc::wms_layer_of(&template("a")).unwrap().0;
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let info = json!({"featureInfo": [{"tileLayer": "A", "capabilities": caps_url}, {"tileLayer": "B", "capabilities": caps_url}]});
+        let mut pp = Popup::new(info, Coord::new(8.6, 46.65), map, opened);
+        // The capabilities answer as the service gives them.
+        pp.asks[0].slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Ok((caps.into_bytes(), Reach::Local)))));
+        app.map.popup = Some(pp);
+        let mark = app.session.notice_mark();
+        follow_asks(&mut app, &egui::Context::default());
+        let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.starts_with("A: ") && t.contains("local network")), "{told:?}");
+        let asked: Vec<_> = app.map.popup.as_ref().map(|pp| pp.asks.iter().map(|a| a.layer.clone()).collect()).unwrap_or_default();
+        assert_eq!(asked, ["B"], "B is asked");
     }
 
     /// Capabilities answer only the service they were asked of: a layer replaced meanwhile by

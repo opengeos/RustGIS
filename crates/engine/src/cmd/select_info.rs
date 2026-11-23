@@ -194,13 +194,14 @@ fn wms_layer(s: &Session, name: &str) -> Result<usize, String> {
 /// or doesn't offer for identify, isn't asked again. The map's other layers from the same service
 /// that don't know theirs learn it too, so the capabilities are read once.
 ///
-/// Capabilities read from the internet (as their record says now), or supplied by a caller that
-/// can't say where they were read (`untrusted`), leave each layer's request held there for good
-/// (`feature_info_public`). The capabilities' own address keeps its record: it is the layer's.
-fn learn(s: &mut Session, index: usize, capabilities: &[u8], untrusted: bool) -> Result<(), String> {
+/// Capabilities read from the internet (`public`: as the fetch reading them observed it, or a
+/// caller that can't say where they were read; or as their record says now) leave each layer's
+/// request held there for good (`feature_info_public`). The capabilities' own address keeps its
+/// record: it is the layer's.
+fn learn(s: &mut Session, index: usize, capabilities: &[u8], public: bool) -> Result<(), String> {
     let Some(t) = s.map().tiles.get(index) else { return Ok(()) };
     let Some((caps_url, _)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
-    let public = untrusted || cache::ceiling_for(&caps_url) == Reach::Public;
+    let public = public || cache::ceiling_for(&caps_url) == Reach::Public;
     // Read as an answer is (Latin-1 from older servers), in the app and natively alike.
     let service = ogc::parse(&caps_url, ogc::answer_text(capabilities)?.as_bytes())?;
     let info_of = |layer: String| {
@@ -307,7 +308,7 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
             if fetched.origin.reach() == Reach::Public {
                 cache::restrict_to_public(caps);
             }
-            learn(s, index, &fetched.bytes, false).map_err(named)?;
+            learn(s, index, &fetched.bytes, fetched.origin.reach() == Reach::Public).map_err(named)?;
             step = next(s).transpose().map_err(named)?;
         }
         // Each of the service's errors asks in a format read after the last, so this ends.
@@ -390,6 +391,12 @@ mod tests {
             };
             if app {
                 assert!(r.unwrap()["url"].as_str().is_some_and(|u| u.starts_with(&format!("http://192.168.{n}.5/info?"))));
+                // Capabilities the fetch observed on the internet hold what they name there, whatever
+                // the capabilities address's record says by then.
+                learn(&mut s, 0, caps.as_bytes(), true).unwrap();
+                assert!(s.map().tiles[0].feature_info_public);
+                let e = feature_info(&mut s, &json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "request": true})).unwrap_err();
+                assert!(e.contains("local network"), "{e}");
             } else {
                 let e = r.unwrap_err();
                 assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");

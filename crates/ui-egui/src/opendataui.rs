@@ -197,11 +197,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let Some(w) = app.ui.opendata.waiting.take() else { return };
     let replaced = !w.more && app.ui.opendata.zarr_open.is_some();
-    let mut refused = 0;
+    let mut refused = rustgis_engine::render::rustgis_tiles::portal::Refused::default();
     let parsed = r.and_then(|(b, reach)| {
         w.portal.parse(reach, &mut refused, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b), reach))
     });
-    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(refused) {
+    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(&refused) {
         app.session.notify(notice, false);
     }
     let st = &mut app.ui.opendata;
@@ -251,9 +251,9 @@ fn poll_listing(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some((i, portal, url, _)) = app.ui.opendata.listing.take() else { return };
-    let mut refused = 0;
+    let mut refused = rustgis_engine::render::rustgis_tiles::portal::Refused::default();
     let parsed = r.and_then(|(b, reach)| portal.parse_listing(&url, reach, &mut refused, &b).map(|files| (files, reach)));
-    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(refused) {
+    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(&refused) {
         app.session.notify(notice, false);
     }
     let st = &mut app.ui.opendata;
@@ -935,7 +935,7 @@ mod tests {
                 .session
                 .notices
                 .iter()
-                .filter(|n| n.text.contains("addresses the portal listed point where RustGIS won't fetch"))
+                .filter(|n| n.text.contains("1 address the portal listed is left out: http://10.0."))
                 .count();
             assert_eq!(said, usize::from(observed == Reach::Public), "the private file left out is said once, from the internet only");
             assert_eq!(h.state().ui.opendata.found[0].resources.len(), 1);

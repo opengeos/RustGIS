@@ -158,9 +158,9 @@ fn portal_search(s: &mut Session, p: &Value) -> CmdResult {
     let (portal, query, area, limit) = portal_query(s, p)?;
     let url = portal.search_url(&query, area, limit);
     let (bytes, reach) = fetch(&url)?;
-    let mut refused = 0;
+    let mut refused = portal::Refused::default();
     let found = portal.parse(reach, &mut refused, &bytes, area, &query)?;
-    say_refused(s, refused);
+    say_refused(s, &refused);
     Ok(json!({"portal": portal.label(), "count": found.len(), "datasets": found.iter().map(dataset_json).collect::<Vec<_>>()}))
 }
 
@@ -176,9 +176,9 @@ pub fn files_query(p: &Value) -> Result<(Portal, String), String> {
 fn portal_files(s: &mut Session, p: &Value) -> CmdResult {
     let (portal, url) = files_query(p)?;
     let (bytes, reach) = fetch(&url)?;
-    let mut refused = 0;
+    let mut refused = portal::Refused::default();
     let files = portal.parse_listing(&url, reach, &mut refused, &bytes)?;
-    say_refused(s, refused);
+    say_refused(s, &refused);
     let list: Vec<Value> = files
         .iter()
         .map(|r| match &r.using {
@@ -260,12 +260,16 @@ fn first_layer(s: &mut Session, url: &str, kind: &str) -> Result<String, String>
 
 /// Says how many addresses a portal's answer gave that were left out for pointing where RustGIS
 /// won't fetch for it (into the local network from an answer read from the internet, or a
-/// forbidden address from any answer).
-pub fn refused_notice(refused: usize) -> Option<String> {
-    (refused > 0).then(|| format!("{refused} addresses the portal listed point where RustGIS won't fetch and are left out"))
+/// forbidden address from any answer), with the first and why.
+pub fn refused_notice(refused: &portal::Refused) -> Option<String> {
+    let first = refused.first.as_deref()?;
+    Some(match refused.count {
+        1 => format!("1 address the portal listed is left out: {first}"),
+        n => format!("{n} addresses the portal listed are left out, such as {first}"),
+    })
 }
 
-fn say_refused(s: &mut Session, refused: usize) {
+fn say_refused(s: &mut Session, refused: &portal::Refused) {
     if let Some(notice) = refused_notice(refused) {
         s.notify(notice, false);
     }

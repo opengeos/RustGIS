@@ -822,8 +822,16 @@ fn catalogue(s: &mut Session, c: &Connection, text: &str, origin: &address::Orig
     found.matched = r.get("matched").and_then(Value::as_u64);
     found.truncated |= dropped || r.get("next").is_some_and(|n| !n.is_null());
     // The services the records link to, opened later, keep where the records were read.
-    let services: Vec<Value> =
-        found.children.iter().filter_map(|r| r.get("children")).filter_map(Value::as_array).flatten().cloned().collect();
+    // The services the records name (nodes): the downloads carry their reach in their parameters.
+    let services: Vec<Value> = found
+        .children
+        .iter()
+        .filter_map(|r| r.get("children"))
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter(|link| link.get("node").is_some())
+        .cloned()
+        .collect();
     if !remember_or_say(s, c, &services, origin, root) {
         for record in &mut found.children {
             if let Some(links) = record.get_mut("children").and_then(Value::as_array_mut) {
@@ -1248,11 +1256,15 @@ mod tests {
         let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("judged by its connection's address")), "{told:?}");
         let public = Origin::connected(&connection.address, "93.184.216.34".parse().unwrap()).unwrap();
-        let web = text.replace("http://10.0.19.4/wms", "https://csw-19-wms.example/wms");
+        let web = text.replace(
+            r#"<dc:URI protocol="OGC:WMS">http://10.0.19.4/wms</dc:URI>"#,
+            r#"<dc:URI protocol="OGC:WMS">https://csw-19-wms.example/wms</dc:URI><dc:URI protocol="WWW:DOWNLOAD">https://csw-19-files.example/a.geojson</dc:URI>"#,
+        );
         let mark = session.notice_mark();
         let found = super::catalogue(&mut session, &connection, &web, &public, false, &mut json!({})).unwrap();
         assert_eq!(found.children.len(), 1, "the record is still listed");
-        assert_eq!(found.children[0]["children"].as_array().map(Vec::len), Some(0), "its service is left out");
+        let kept: Vec<_> = found.children[0]["children"].as_array().unwrap().iter().map(|l| l["what"].clone()).collect();
+        assert_eq!(kept, [json!("download")], "its service is left out, its download kept");
         let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("1 entry this listing names are left out")), "{told:?}");
     }
