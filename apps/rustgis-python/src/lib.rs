@@ -91,10 +91,14 @@ struct Engine {
 }
 
 impl Engine {
+    /// Runs `operation` on the session, then sets aside the losses it reported for the thread that
+    /// called it, under the same lock, so a call on another thread can't take them.
     fn with_session<T: Send>(&self, py: Python<'_>, operation: impl FnOnce(&mut Session) -> T + Send) -> T {
         with_native(py, || {
             let mut session = self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            operation(&mut session)
+            let result = operation(&mut session);
+            self.losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).collect(&session);
+            result
         })
     }
 
@@ -110,16 +114,19 @@ impl Engine {
 
 /// See [`Engine::losses`].
 struct Losses {
-    pending: Vec<(String, String, String)>,
+    /// `(kind, code, text)` for the thread whose call reported it.
+    pending: Vec<(std::thread::ThreadId, (String, String, String))>,
     mark: u64,
     given: Vec<(LossCode, u64)>,
 }
 
 impl Losses {
-    /// Sets aside the losses `session` gave since the last call, while their notices are still in
-    /// its queue (before `take_notices` drains it). One the queue no longer keeps (past its last
-    /// 200) is set aside as one entry per code that says how many.
+    /// Sets aside the losses `session` gave since the last call, for the calling thread, while
+    /// their notices are still in its queue (after every call, so before `take_notices` drains
+    /// it). One the queue no longer keeps (past its last 200) is set aside as one entry per code
+    /// that says how many.
     fn collect(&mut self, session: &Session) {
+        let thread = std::thread::current().id();
         let kept: Vec<(LossCode, String)> =
             session.notices_since(self.mark).iter().filter_map(|n| n.loss().map(|code| (code, n.text.clone()))).collect();
         for &(code, given) in session.losses_given() {
@@ -128,10 +135,11 @@ impl Losses {
             let lost = given.saturating_sub(was).saturating_sub(held);
             if lost > 0 {
                 let spec = code.spec();
-                self.pending.push((spec.kind.id().into(), spec.id.into(), format!("{lost} further {} notice(s) were not kept", spec.id)));
+                let text = format!("{lost} further {} notice(s) were not kept", spec.id);
+                self.pending.push((thread, (spec.kind.id().into(), spec.id.into(), text)));
             }
         }
-        self.pending.extend(kept.into_iter().map(|(code, text)| (code.spec().kind.id().into(), code.spec().id.into(), text)));
+        self.pending.extend(kept.into_iter().map(|(code, text)| (thread, (code.spec().kind.id().into(), code.spec().id.into(), text))));
         self.mark = session.notice_mark();
         self.given = session.losses_given().to_vec();
     }
@@ -306,14 +314,19 @@ impl Engine {
         result.map_err(RustGISError::new_err)
     }
 
-    /// The classified losses given since the last call, as `(kind, code, text)`, oldest first,
-    /// which the package raises as warnings; `take_notices` still returns them too.
+    /// The classified losses this thread's calls reported since it last asked, as
+    /// `(kind, code, text)`, oldest first, which the package raises as warnings; `take_notices`
+    /// still returns them too.
     fn _take_losses(&self, py: Python<'_>) -> Vec<(String, String, String)> {
+        let thread = std::thread::current().id();
         let losses = &self.losses;
-        self.with_session(py, |session| {
+        // Never set aside while the session runs: its lock is taken inside the session's.
+        with_native(py, || {
+            let _session = self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut losses = losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            losses.collect(session);
-            std::mem::take(&mut losses.pending)
+            let (mine, others) = std::mem::take(&mut losses.pending).into_iter().partition(|(t, _)| *t == thread);
+            losses.pending = others;
+            mine.into_iter().map(|(_, loss)| loss).collect::<Vec<_>>()
         })
     }
 
@@ -323,7 +336,6 @@ impl Engine {
         let notices: Vec<(String, bool)> = self.with_session(py, |session| {
             // A client made on a background thread since the last command may have chosen the trust.
             session.notice_trust();
-            self.losses.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).collect(session);
             session.notices.drain(..).map(|n| (n.text, n.error)).collect()
         });
         self.flush(py);

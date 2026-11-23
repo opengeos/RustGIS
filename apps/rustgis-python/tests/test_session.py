@@ -162,6 +162,47 @@ def test_losses_are_warnings_with_their_code(tmp_path):
     assert not [w for w in seen if issubclass(w.category, rustgis.DataLossWarning)]
 
 
+def test_a_loss_is_raised_on_the_call_that_reported_it(tmp_path):
+    import threading
+
+    lossy = tmp_path / "lossy.rss"
+    lossy.write_text(_feed("1 x"))
+    s = rustgis.Session()
+    s._engine.run("layer.addData", json.dumps({"path": str(lossy)}))
+    # Another thread's call on the same session doesn't take this thread's loss.
+    other = []
+    thread = threading.Thread(target=lambda: other.extend(s._engine._take_losses()))
+    thread.start()
+    thread.join()
+    assert other == []
+    assert [code for _, code, _ in s._engine._take_losses()] == ["dropped.ring"]
+
+
+_WMS = (
+    '<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">'
+    "<Service><Title>Test WMS</Title></Service><Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get>"
+    '<OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>'
+    "<Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title><Style><Name>default</Name><LegendURL>"
+    '<Format>image/png</Format><OnlineResource xlink:href="https://maps.example.com/legends/' + "a" * 5000 + '.png"/>'
+    "</LegendURL></Style></Layer></Layer></Capability></WMS_Capabilities>"
+)
+
+
+def test_a_failed_command_keeps_its_error_and_still_says_its_loss():
+    # A legend left out is counted, so it is said even though the script failed after it.
+    add = json.dumps({"url": "https://maps.example.com/wms", "layer": "roads", "text": _WMS})
+    script = f"service.add {add}\nlayer.addDataText {json.dumps({'fileName': 'broken.geojson', 'text': '{'})}"
+    s = rustgis.Session()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", category=rustgis.DataLossWarning)
+        with pytest.raises(rustgis.RustGISError) as failed:
+            s.run("script.run", script=script)
+    assert any("DroppedWarning" in note and "[dropped.legend]" in note for note in failed.value.__notes__)
+    with pytest.warns(rustgis.DroppedWarning, match=r"\[dropped\.legend\]"):
+        with pytest.raises(rustgis.RustGISError):
+            s.run("script.run", script=script)
+
+
 @pytest.mark.parametrize("as_text", [False, True])
 def test_pmtiles_options_survive_a_project_round_trip(as_text):
     """The Python names reach the engine, including JSON-text styles and extensionless URLs."""

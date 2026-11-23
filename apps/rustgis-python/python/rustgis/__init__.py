@@ -97,7 +97,8 @@ _PACKAGE = (os.path.dirname(__file__),)
 
 
 def _warn_losses(engine: _Engine) -> None:
-    """Raises each loss the engine reported since the last call as a :class:`DataLossWarning`.
+    """Raises each loss this thread's calls reported since the last call as a
+    :class:`DataLossWarning`.
 
     Args:
         engine: The session's engine.
@@ -105,6 +106,33 @@ def _warn_losses(engine: _Engine) -> None:
     for kind, code, text in engine._take_losses():
         category = _LOSS_WARNINGS.get(kind, DataLossWarning)
         warnings.warn(category(f"{text} [{code}]", code), skip_file_prefixes=_PACKAGE)
+
+
+def _native(engine: _Engine, operation: Any, *args: Any) -> Any:
+    """Calls one of the engine's methods, then raises the losses it reported as warnings.
+
+    A failed call still raises them, as it can have lost data it couldn't take back, but its own
+    exception stays the one raised: a warning a filter turns into an error is added to it as a
+    note.
+
+    Args:
+        engine: The session's engine.
+        operation: The engine method.
+        *args: Its arguments.
+
+    Returns:
+        What the method returned.
+    """
+    try:
+        result = operation(*args)
+    except BaseException as failure:
+        try:
+            _warn_losses(engine)
+        except Warning as promoted:
+            failure.add_note(f"{type(promoted).__name__}: {promoted}")
+        raise
+    _warn_losses(engine)
+    return result
 
 
 def __getattr__(name: str) -> Any:
@@ -922,12 +950,7 @@ class Session(_Api):
             encoded = json.dumps(merged, default=_jsonable, allow_nan=False) if merged else ""
         except ValueError as e:
             raise ValueError(f"{command}: parameters must be finite numbers, text, lists and dicts ({e})") from e
-        try:
-            text = self._engine.run(command, encoded)
-        finally:
-            # A failed command can still have lost data it can't take back.
-            _warn_losses(self._engine)
-        return json.loads(text)
+        return json.loads(_native(self._engine, self._engine.run, command, encoded))
 
     def notices(self) -> List[Tuple[str, bool]]:
         """What commands have reported since the last call: warnings about a file, a tool's
@@ -945,10 +968,7 @@ class Session(_Api):
             layer: The layer's id.
             selected: Only its selected features.
         """
-        try:
-            return self._engine.layer_geojson(layer, selected)
-        finally:
-            _warn_losses(self._engine)
+        return _native(self._engine, self._engine.layer_geojson, layer, selected)
 
     def _root(self) -> "Session":
         """The session that holds the project: this one."""
@@ -970,10 +990,7 @@ class Session(_Api):
         Returns:
             The JSON text; ``run("project.openText", text=...)`` opens it.
         """
-        try:
-            return self._engine.project_json()
-        finally:
-            _warn_losses(self._engine)
+        return _native(self._engine, self._engine.project_json)
 
     # Maps ----------------------------------------------------------------------------------
 
@@ -996,16 +1013,15 @@ class Session(_Api):
         Returns:
             The PNG bytes.
         """
-        try:
-            png = bytes(
-                self._engine.render_png(
-                    None if width is None else float(width),
-                    None if height is None else float(height),
-                    None if dpi is None else float(dpi),
-                )
+        png = bytes(
+            _native(
+                self._engine,
+                self._engine.render_png,
+                None if width is None else float(width),
+                None if height is None else float(height),
+                None if dpi is None else float(dpi),
             )
-        finally:
-            _warn_losses(self._engine)
+        )
         if path is not None:
             with open(path, "wb") as f:
                 f.write(png)
