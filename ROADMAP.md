@@ -70,8 +70,7 @@ The shared pieces the everyday workflow stands on.
 A result is right, or RustGIS says what it lost or assumed
 ([AGENTS.md](AGENTS.md#never-silent)).
 - Known silent losses: the text readers' losses listed as `Silent` in `crates/engine/tests/integration/never_silent_reading.rs`, among them
-  unreadable coordinates, holes and parts in KML, GeoRSS and
-  DXF,
+  unreadable coordinates and parts in DXF,
   and attribute fields/values in XLSB short-cell workbooks (the original SheetJS 0.18.5 clean
   workbook retains its point but no attributes, without a notice). A fix makes
   its case `Said` or `Imported` _(open)_.

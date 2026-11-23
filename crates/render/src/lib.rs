@@ -600,8 +600,9 @@ pub fn picture_size(b64: &str) -> Option<(u32, u32)> {
 pub use picture::{MARKER_PIXELS, MARKER_PIXELS_SIDE, MarkerRefusal, RUN_MARKER_BYTES, RUN_MARKER_PIXELS};
 
 /// Base64 `b64` as a picture marker's image (one kept already, or one before it is set): its
-/// height for its width when it draws (a PNG or JPEG within [`MARKER_PIXELS`] and what the run has
-/// left of [`RUN_MARKER_PIXELS`] and [`RUN_MARKER_BYTES`], that decodes), or why it would be drawn
+/// height for its width when it draws (a PNG or JPEG within [`MARKER_PIXELS`], an SVG with as much
+/// to draw and no filters, within what the run has left of [`RUN_MARKER_PIXELS`] and
+/// [`RUN_MARKER_BYTES`], that decodes), or why it would be drawn
 /// as a circle. Decoded once for the run, where drawing it finds it.
 pub fn picture_marker_check(b64: &str) -> Result<f32, MarkerRefusal> {
     picture::check(b64)
@@ -3893,6 +3894,10 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
                 let own = layer.dataset.features.get(row).and_then(|f| f.geometry.as_ref())?.extent();
                 Some(to_lonlat.as_ref().map_or(rustgis_geom::Extent::EMPTY, |t| t.feature_extent(&own)))
             });
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "View Clipping's draw distance, tested for each feature every frame: a cut-off, not a measurement, within 0.6% of the ellipsoid's at its edge; the renderer and the map view test it alike"
+            )]
             if let (Some((centre, d)), Some(e)) = (clip, lonlat) {
                 let near = Coord::new(centre.x.clamp(e.min_x, e.max_x), centre.y.clamp(e.min_y, e.max_y));
                 if e.is_empty() || rustgis_geom::haversine_m(centre, near) > d {
@@ -4256,6 +4261,10 @@ impl Drop for TiltGlint {
 /// Leaves out of `rows` the features of `dataset` entirely beyond `d` metres of `centre` (the
 /// map's view distance, lon/lat): one reaching into it (its box's nearest point within the
 /// distance) is kept, one with no geometry isn't.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "View Clipping's draw distance, tested for each feature every frame: a cut-off, not a measurement, within 0.6% of the ellipsoid's at its edge; the renderer and the map view test it alike"
+)]
 pub(crate) fn within_view_distance(rows: &mut [bool], dataset: &rustgis_data::Dataset, centre: Coord, d: f64) {
     // Each box in longitude/latitude, from the dataset's own coordinates: none is drawn when they
     // can't be converted, as `Layer::projected_in` draws none.

@@ -403,7 +403,15 @@ fn block(osm: &mut Osm, data: &[u8]) -> Result<()> {
                     if osm.relations.len() >= MAX_RELATIONS {
                         osm.capped = true;
                     } else if matches!(tag(&t, "type"), Some("multipolygon" | "boundary")) {
-                        let omitted = mems.len().min(types.len()).min(roles.len()).saturating_sub(MAX_MEMBERS) as u64;
+                        if roles.len() != mems.len() || types.len() != mems.len() {
+                            return Err(DataError::Format(format!(
+                                "OSM relation {id} has mismatched member arrays (IDs: {}, roles: {}, types: {})",
+                                mems.len(),
+                                roles.len(),
+                                types.len()
+                            )));
+                        }
+                        let omitted = mems.len().saturating_sub(MAX_MEMBERS) as u64;
                         osm.omitted_members = osm.omitted_members.saturating_add(omitted);
                         let members = mems
                             .into_iter()
@@ -597,6 +605,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     let mut polys = Dataset::new(format!("{stem} multipolygons"), GeometryType::Polygon, fields);
     let mut missing = 0usize;
     let (mut missing_members, mut missing_rings, mut unclosed, mut outside, mut containment_limited) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut unsupported_members = 0u64;
     let mut short_ways = 0usize;
     let mut no_closed_outer = 0usize;
     // Ways in a multipolygon are drawn as its parts, not again on their own when their tags are
@@ -639,10 +648,15 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut outer_ways = Vec::new();
         let mut inner_ways = Vec::new();
         let (mut relation_missing_members, mut relation_missing_rings, mut relation_unclosed) = (0usize, 0usize, 0usize);
+        let mut relation_subrelations = 0usize;
         let mut unavailable_outer = false;
         // Places the member ways store themselves (LocationsOnWays), by node id.
         let mut local: HashMap<i64, Coord> = HashMap::new();
         for (ty, m, role) in members {
+            if *ty == 2 {
+                relation_subrelations += 1;
+                continue;
+            }
             if *ty != 1 {
                 continue;
             }
@@ -681,6 +695,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             }
             continue;
         }
+        unsupported_members = unsupported_members.saturating_add(relation_subrelations as u64);
         missing_members = missing_members.saturating_add(relation_missing_members as u64);
         missing_rings = missing_rings.saturating_add(relation_missing_rings as u64);
         unclosed = unclosed.saturating_add(relation_unclosed as u64);
@@ -735,6 +750,11 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         report.messages.push(format!("{missing} ways or relations refer to nodes or ways the file doesn't hold"));
     }
     for (count, one, many) in [
+        (
+            unsupported_members,
+            "OSM sub-relation member was omitted because nested relations are not supported",
+            "OSM sub-relation members were omitted because nested relations are not supported",
+        ),
         (
             missing_members,
             "OSM relation member way was omitted because it is unavailable",
@@ -944,6 +964,18 @@ pub(crate) mod tests {
     /// Native PBF builder for finite omission cases: a tagged point survives every bad way or
     /// relation, so successful imports must report the omitted data. All referenced nodes are present.
     fn finite_omission_file(ways: &[(u64, &[i64], bool)], members: Option<&[(i64, u64, u64)]>) -> Vec<u8> {
+        if let Some(members) = members {
+            let roles: Vec<_> = members.iter().map(|m| m.2).collect();
+            let ids: Vec<_> = members.iter().map(|m| m.0).collect();
+            let types: Vec<_> = members.iter().map(|m| m.1).collect();
+            finite_member_arrays_file(ways, &[(200, &roles, &ids, &types)])
+        } else {
+            finite_member_arrays_file(ways, &[])
+        }
+    }
+
+    /// Explicit parallel member arrays allow malformed input and actual nested relations in tests.
+    fn finite_member_arrays_file(ways: &[(u64, &[i64], bool)], relations: &[(u64, &[u64], &[i64], &[u64])]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut header = Vec::new();
         field_bytes(4, b"OsmSchema-V0.6", &mut header);
@@ -982,14 +1014,14 @@ pub(crate) mod tests {
             }
             field_bytes(3, &w, &mut group);
         }
-        if let Some(members) = members {
+        for (id, roles, ids, types) in relations {
             let mut r = Vec::new();
-            field_varint(1, 200, &mut r);
+            field_varint(1, *id, &mut r);
             field_bytes(2, &packed_of(&[5]), &mut r);
             field_bytes(3, &packed_of(&[6]), &mut r);
-            field_bytes(8, &packed_of(&members.iter().map(|m| m.2).collect::<Vec<_>>()), &mut r);
-            field_bytes(9, &delta(&members.iter().map(|m| m.0).collect::<Vec<_>>()), &mut r);
-            field_bytes(10, &packed_of(&members.iter().map(|m| m.1).collect::<Vec<_>>()), &mut r);
+            field_bytes(8, &packed_of(roles), &mut r);
+            field_bytes(9, &delta(ids), &mut r);
+            field_bytes(10, &packed_of(types), &mut r);
             field_bytes(4, &r, &mut group);
         }
         let mut block = Vec::new();
@@ -997,6 +1029,56 @@ pub(crate) mod tests {
         field_bytes(2, &group, &mut block);
         blob("OSMData", &block, false, &mut out);
         out
+    }
+
+    /// Unsupported sub-relations are counted only for parents whose direct ways produce geometry.
+    #[test]
+    fn relation_members_nested_geometry_is_reported() {
+        let ways: &[(u64, &[i64], bool)] = &[(100, &[1, 2, 3, 4, 1], false), (101, &[5, 6, 7, 5], false)];
+        let clean =
+            read("nested.pbf", &finite_member_arrays_file(ways, &[(200, &[7, 0], &[100, 1], &[1, 0]), (201, &[7], &[101], &[1])])).unwrap();
+        assert_eq!(clean.len(), 2);
+        assert_eq!(clean[1].0.features.len(), 2);
+        assert!(clean.iter().all(|(_, r)| r.messages.is_empty()));
+        let lossy = read(
+            "nested.pbf",
+            &finite_member_arrays_file(ways, &[(200, &[7, 0, 8], &[100, 1, 201], &[1, 0, 2]), (201, &[7], &[101], &[1])]),
+        )
+        .unwrap();
+        assert_eq!(lossy[1].0.features.iter().collect::<Vec<_>>(), clean[1].0.features.iter().collect::<Vec<_>>());
+        assert_eq!(lossy[0].1.skipped, 0);
+        assert_eq!(lossy[0].1.messages, ["1 OSM sub-relation member was omitted because nested relations are not supported"]);
+        assert!(lossy[1].1.messages.is_empty());
+        let omitted =
+            read("nested.pbf", &finite_member_arrays_file(ways, &[(200, &[8], &[201], &[2]), (201, &[7], &[101], &[1])])).unwrap();
+        assert_eq!(omitted[0].1.skipped, 1);
+        assert_eq!(omitted[0].1.messages, ["1 relation left out because it has no usable closed outer ring"]);
+    }
+
+    /// Parallel member arrays must agree; valid geometry must not hide an unmatched tail.
+    #[test]
+    fn relation_members_mismatched_arrays_are_refused() {
+        let ways: &[(u64, &[i64], bool)] = &[(100, &[1, 2, 3, 4, 1], false), (101, &[5, 6, 7, 5], false)];
+        let clean = read("arrays.pbf", &finite_member_arrays_file(ways, &[(200, &[7, 8], &[100, 101], &[1, 1])])).unwrap();
+        assert_eq!(clean[1].0.features.len(), 1);
+        assert!(clean.iter().all(|(_, r)| r.messages.is_empty()));
+        for (roles, ids, types) in
+            [(&[7][..], &[100, 101][..], &[1, 1][..]), (&[7, 8][..], &[100, 101][..], &[1][..]), (&[7, 8][..], &[100][..], &[1][..])]
+        {
+            let err = read("arrays.pbf", &finite_member_arrays_file(ways, &[(200, roles, ids, types)]))
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert_eq!(
+                err,
+                format!(
+                    "OSM relation 200 has mismatched member arrays (IDs: {}, roles: {}, types: {})",
+                    ids.len(),
+                    roles.len(),
+                    types.len()
+                )
+            );
+        }
     }
 
     /// Each hole needs two box-overlapping outer tests; the extra hole exceeds the real budget.
