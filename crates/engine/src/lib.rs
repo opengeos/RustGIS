@@ -4169,10 +4169,9 @@ impl Session {
             let flat = m.flat();
             if layers.iter().any(|l| l.in_map_units(&flat)) {
                 let boxed = layers.iter().fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent_on(&flat, of)));
-                if boxed.is_empty() {
-                    return None;
-                }
-                // A single point has no size to fit: framed as one in longitude/latitude is.
+                // None of it on this map (a layer in its system with nothing to frame, another
+                // wholly beyond the map), or a single point, which has no size to fit: framed in
+                // longitude/latitude, which says when the map can't show it.
                 if boxed.width() > 0.0 || boxed.height() > 0.0 {
                     let (w, h) = self.view_size;
                     if !self.map_mut().fit_map_extent(&boxed, w, h) {

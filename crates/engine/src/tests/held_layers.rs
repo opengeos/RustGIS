@@ -196,6 +196,33 @@ fn zooming_on_a_map_in_the_layers_system_frames_its_own_box() {
     centred(&s, &full, "full extent");
 }
 
+/// A layer in the map's system with nothing to frame doesn't make another layer, which the map
+/// can't show, look empty: zooming to both says the map can't show it, as zooming to that layer
+/// alone does.
+#[test]
+fn zooming_to_an_empty_layer_in_the_maps_system_and_one_beyond_the_map_says_so() {
+    let mut s = Session::new(Project::default());
+    s.view_size = (800.0, 600.0);
+    let mut empty = Dataset::new("Empty", GeometryType::Point, vec![]);
+    empty.held_in = UTM;
+    s.map_mut().add_dataset(empty);
+    let mut far = Dataset::new("Far", GeometryType::Point, vec![]);
+    far.push(Some(Geometry::Point(Coord::new(50.0, 48.8))), vec![]);
+    s.map_mut().add_dataset(far);
+    s.run("map.projection", &json!({"type": "EPSG:32632"})).unwrap();
+    let alone = s.run("layer.zoomTo", &json!({"layer": "Far"}));
+    let mark = s.notice_mark();
+    let both = s.run("layer.zoomTo", &json!({"layer": ["Empty", "Far"]}));
+    assert_eq!(both.is_ok(), alone.is_ok(), "{both:?} vs {alone:?}");
+    if let Err(e) = &both {
+        assert!(!e.contains("no features"), "{e}");
+    }
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    // 50°E is some 3,000 km east of UTM 32N's central meridian, beyond what the map shows.
+    assert!(s.map().flat().forward_checked(Coord::new(50.0, 48.8)).is_none());
+    assert!(said.iter().any(|t| t == crate::BEYOND_PROJECTION), "{said:?}");
+}
+
 /// Selecting by a box, a point, a radius and a polygon picks the same features.
 #[test]
 fn a_held_layer_is_selected_alike() {

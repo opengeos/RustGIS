@@ -7637,7 +7637,10 @@ fn square_lines(
             // A system that can't be converted squares nothing, as the map draws none of it.
             let Some(drawing) = &drawing else { continue };
             for g in layer.dataset.features.rows().filter_map(|r| r.geometry()) {
-                // On a map in its own system, as it is, with no copy.
+                // On a map in its own system, as it is, with no copy. A place that can't be given
+                // in longitude/latitude (`HeldDrawing::geometry`'s flag) is what the held read
+                // counts ([`note_held_read`]); one the map doesn't show breaks the line here, as
+                // the map's own drawing leaves it out, uncounted there too.
                 let drawn =
                     if drawing.is_identity() { std::borrow::Cow::Borrowed(g) } else { std::borrow::Cow::Owned(drawing.geometry(g).0) };
                 for part in outline_parts(&drawn) {
