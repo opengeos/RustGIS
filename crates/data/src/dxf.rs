@@ -464,10 +464,15 @@ fn sweep(s: f64, e: f64, full: f64) -> f64 {
     if d.is_finite() && d > 1e-12 { d } else { full }
 }
 
+/// The sampled segments of an arc, shared by drawing and omitted-coordinate counts.
+fn arc_steps(sweep: f64) -> usize {
+    ((sweep.abs() / TAU) * CIRCLE).ceil().clamp(2.0, CIRCLE) as usize
+}
+
 /// Points of an arc around `c` of radius `r` from angle `a0` sweeping `sweep` (radians), in the
 /// plane z = `z`.
 fn arc(c: [f64; 2], r: f64, a0: f64, sweep: f64, z: f64) -> Vec<P3> {
-    let n = ((sweep.abs() / TAU) * CIRCLE).ceil().clamp(2.0, CIRCLE) as usize;
+    let n = arc_steps(sweep);
     (0..=n)
         .map(|k| {
             let a = a0 + sweep * k as f64 / n as f64;
@@ -476,15 +481,24 @@ fn arc(c: [f64; 2], r: f64, a0: f64, sweep: f64, z: f64) -> Vec<P3> {
         .collect()
 }
 
+/// The sweep of a bulge, or no arc for the reader's straight and degenerate cases.
+fn bulge_sweep(chord: f64, b: f64) -> Option<f64> {
+    if b.abs() < 1e-9 || chord <= 0.0 || !b.is_finite() || b.abs() > 1e6 { None } else { Some(4.0 * b.atan()) }
+}
+
+/// The number of coordinates after a segment's start, without allocating its sampled points.
+fn bulge_steps(p1: P3, p2: P3, b: f64) -> usize {
+    let (dx, dy) = (p2[0] - p1[0], p2[1] - p1[1]);
+    let chord = (dx * dx + dy * dy).sqrt();
+    bulge_sweep(chord, b).map_or(1, arc_steps)
+}
+
 /// The points of a bulged segment after `p1`, up to `p2` (a bulge is the tangent of a quarter of
 /// the arc's angle; positive turns counter-clockwise).
 fn bulge(p1: P3, p2: P3, b: f64) -> Vec<P3> {
     let (dx, dy) = (p2[0] - p1[0], p2[1] - p1[1]);
     let chord = (dx * dx + dy * dy).sqrt();
-    if b.abs() < 1e-9 || chord <= 0.0 || !b.is_finite() || b.abs() > 1e6 {
-        return vec![p2];
-    }
-    let theta = 4.0 * b.atan();
+    let Some(theta) = bulge_sweep(chord, b) else { return vec![p2] };
     let r = chord / (2.0 * (theta / 2.0).sin()).abs();
     let h = (chord / 2.0) * (1.0 - b * b) / (2.0 * b);
     let (ux, uy) = (dx / chord, dy / chord);
@@ -512,7 +526,7 @@ fn bulged(vs: &[(P3, f64)], closed: bool, omitted: &mut u64) -> Option<Vec<P3>> 
         }
         let (Some(a), Some(b)) = (vs.get(i), vs.get((i + 1) % n)) else { break };
         if out.len() > MAX_VERTICES {
-            *omitted += bulge(a.0, b.0, a.1).len() as u64;
+            *omitted += bulge_steps(a.0, b.0, a.1) as u64;
         } else {
             out.extend(bulge(a.0, b.0, a.1));
         }
@@ -643,23 +657,16 @@ fn entity(kind: &'static str, g: &G, vertices: &[Record], loss: &mut PathLoss) -
         "LWPOLYLINE" => {
             let z = g.f(38).unwrap_or(0.0);
             let mut vs: Vec<(P3, f64)> = Vec::new();
-            let mut tail: Option<(bool, bool)> = None;
+            let mut tail = false;
             for (index, (c, v)) in g.p.iter().enumerate() {
                 if index % 1024 == 0 {
                     crate::progress::check().ok()?;
                 }
-                if vs.len() >= MAX_VERTICES && (*c == 10 || tail.is_some()) {
-                    match c {
-                        10 => {
-                            loss.capped += u64::from(tail.is_some_and(|(x, y)| x && y));
-                            tail = Some((num(v).is_some(), false));
-                        }
-                        20 => {
-                            if let Some((_, y)) = &mut tail {
-                                *y = num(v).is_some();
-                            }
-                        }
-                        _ => {}
+                if vs.len() >= MAX_VERTICES && (*c == 10 || tail) {
+                    if *c == 10 {
+                        // Count source vertices at the cap, including ones whose coordinates cannot be read.
+                        loss.capped += 1;
+                        tail = true;
                     }
                     continue;
                 }
@@ -672,7 +679,6 @@ fn entity(kind: &'static str, g: &G, vertices: &[Record], loss: &mut PathLoss) -
                     _ => {}
                 }
             }
-            loss.capped += u64::from(tail.is_some_and(|(x, y)| x && y));
             if vs.iter().any(|(p, _)| !p[1].is_finite()) {
                 return None;
             }
@@ -703,17 +709,15 @@ fn entity(kind: &'static str, g: &G, vertices: &[Record], loss: &mut PathLoss) -
                 if curved && vf & 16 != 0 {
                     continue;
                 }
+                if index >= MAX_VERTICES {
+                    loss.capped += 1;
+                    continue;
+                }
                 let Some(mut p) = vg.pt(10) else {
-                    if index < MAX_VERTICES {
-                        loss.unreadable_vertices += 1;
-                    }
+                    loss.unreadable_vertices += 1;
                     continue;
                 };
                 let invalid_z = three_d && vg.s(30).is_some() && vg.f(30).is_none();
-                if index >= MAX_VERTICES {
-                    loss.capped += u64::from(!invalid_z);
-                    continue;
-                }
                 if invalid_z {
                     loss.invalid_z += 1;
                     continue;
@@ -1945,40 +1949,62 @@ mod tests {
         use std::fmt::Write as _;
         for kind in ["LWPOLYLINE", "POLYLINE"] {
             for bulge in [false, true] {
-                let mut text = format!("0\nSECTION\n2\nENTITIES\n0\n{kind}\n");
-                for _ in 0..=MAX_VERTICES {
-                    if kind == "POLYLINE" {
-                        text.push_str("0\nVERTEX\n");
+                for unreadable_tail in [false, true] {
+                    let mut text = format!("0\nSECTION\n2\nENTITIES\n0\n{kind}\n");
+                    if kind == "POLYLINE" && unreadable_tail {
+                        text.push_str("70\n10\n");
                     }
-                    text.push_str("10\n0\n20\n0\n");
+                    for _ in 0..MAX_VERTICES {
+                        if kind == "POLYLINE" {
+                            text.push_str("0\nVERTEX\n");
+                        }
+                        text.push_str("10\n0\n20\n0\n");
+                    }
+                    let tail: &[&str] = if !unreadable_tail {
+                        &["10\n0\n20\n0\n"]
+                    } else if kind == "POLYLINE" {
+                        &["10\nbad\n20\n0\n", "10\n0\n20\nbad\n", "10\n0\n20\n0\n30\nbad\n"]
+                    } else {
+                        &["10\nbad\n20\n0\n", "10\n0\n20\nbad\n", "10\n0\n"]
+                    };
+                    for vertex in tail {
+                        if kind == "POLYLINE" {
+                            text.push_str("0\nVERTEX\n");
+                        }
+                        text.push_str(vertex);
+                    }
+                    if kind == "POLYLINE" && unreadable_tail {
+                        // A smoothed frame point is not an on-curve vertex, even beyond the limit.
+                        text.push_str("0\nVERTEX\n70\n16\n10\nbad\n");
+                    }
+                    // Distinct endpoints let the first segment expand beyond one vertex.
+                    if bulge {
+                        let start = if kind == "POLYLINE" { "0\nVERTEX\n10\n0\n20\n0\n" } else { "10\n0\n20\n0\n" };
+                        let at = text.find(start).unwrap() + start.len();
+                        text.insert_str(at, "42\n1\n");
+                        let at = at + "42\n1\n".len();
+                        let tail = &text[at..];
+                        let offset = tail.find("10\n0\n").unwrap();
+                        text.replace_range(at + offset..at + offset + 5, "10\n1\n");
+                    }
+                    if kind == "POLYLINE" {
+                        text.push_str("0\nSEQEND\n");
+                    }
+                    writeln!(text, "0\nENDSEC\n0\nEOF").unwrap();
+                    let layers = read("a.dxf", text.as_bytes(), &Options { crs: Some(Crs::LonLat), ..Options::default() }).unwrap();
+                    let Some(Geometry::Line(parts)) = &layers[0].0.features[0].geometry else { panic!("line") };
+                    let held = parts[0].len();
+                    let total = MAX_VERTICES + tail.len() + if bulge { 35 } else { 0 };
+                    assert_eq!(
+                        layers[0].1.messages,
+                        [format!(
+                            "{} polyline path {} left out at the per-entity vertex limit",
+                            total - held,
+                            if total - held == 1 { "coordinate was" } else { "coordinates were" }
+                        )]
+                    );
+                    assert_eq!(layers[0].1.skipped, 0);
                 }
-                // Distinct endpoints let the first segment expand beyond one vertex.
-                if bulge {
-                    let start = if kind == "POLYLINE" { "0\nVERTEX\n10\n0\n20\n0\n" } else { "10\n0\n20\n0\n" };
-                    let at = text.find(start).unwrap() + start.len();
-                    text.insert_str(at, "42\n1\n");
-                    let at = at + "42\n1\n".len();
-                    let tail = &text[at..];
-                    let offset = tail.find("10\n0\n").unwrap();
-                    text.replace_range(at + offset..at + offset + 5, "10\n1\n");
-                }
-                if kind == "POLYLINE" {
-                    text.push_str("0\nSEQEND\n");
-                }
-                writeln!(text, "0\nENDSEC\n0\nEOF").unwrap();
-                let layers = read("a.dxf", text.as_bytes(), &Options { crs: Some(Crs::LonLat), ..Options::default() }).unwrap();
-                let Some(Geometry::Line(parts)) = &layers[0].0.features[0].geometry else { panic!("line") };
-                let held = parts[0].len();
-                let total = MAX_VERTICES + 1 + if bulge { 35 } else { 0 };
-                assert_eq!(
-                    layers[0].1.messages,
-                    [format!(
-                        "{} polyline path {} left out at the per-entity vertex limit",
-                        total - held,
-                        if total - held == 1 { "coordinate was" } else { "coordinates were" }
-                    )]
-                );
-                assert_eq!(layers[0].1.skipped, 0);
             }
         }
     }
