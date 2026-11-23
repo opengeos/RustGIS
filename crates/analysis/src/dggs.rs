@@ -922,7 +922,9 @@ impl<'a> Grid<'a> {
             let (a, b) = (w[0], w[1]);
             let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
             let (j0, j1) = (((lo - size) / row_h).ceil() as i64, ((hi + size) / row_h).floor() as i64);
-            work.spend(u64::try_from(j1 - j0 + 1).unwrap_or(0), 4, res)?;
+            // An edge's band touches two rows at most unless the edge crosses more: those two
+            // are linear in the outline, as reading it is, so only the rows past them count.
+            work.spend(u64::try_from(j1 - j0 - 1).unwrap_or(0), 4, res)?;
             for j in j0..=j1 {
                 let (b0, b1) = (j as f64 * row_h - size, j as f64 * row_h + size);
                 let at = |y: f64| a.x + (y.clamp(lo, hi) - a.y) / (b.y - a.y) * (b.x - a.x);
@@ -987,7 +989,7 @@ fn overlaps(m: &geo::relate::IntersectionMatrix) -> bool {
 }
 
 /// What a run's coverings look at, over all its polygons: the cells tested (S2's and the hexagon
-/// grid's) and the rows crossed, capped at [`MAX_WORK`] so many polygons that each stay under
+/// grid's) and the rows an edge crosses past its own band, capped at [`MAX_WORK`] so many polygons that each stay under
 /// the cap don't add up to hours; and its pace, so Cancel stops it soon.
 #[derive(Default)]
 struct Work {
@@ -1735,6 +1737,23 @@ mod tests {
             let cells = layer(grid(&One(d, None), &p).unwrap_or_else(|e| panic!("{system}: {e}"))).features.len() as u64;
             assert!(cells > 0 && cells < MAX_CELLS / 4, "{system}: {cells}");
         }
+    }
+
+    /// A detailed outline isn't refused as work: an edge's own band of rows is linear in the
+    /// input, as reading it is, so only the rows an edge crosses past it count.
+    #[test]
+    fn a_detailed_outline_is_within_the_work_limit() {
+        let n = MAX_WORK as usize + 10_000;
+        let ring: Vec<Coord> = (0..=n)
+            .map(|i| {
+                let a = i as f64 / n as f64 * 2.0 * PI;
+                Coord::new(10.0 * a.cos(), 10.0 * a.sin())
+            })
+            .collect();
+        let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let p = serde_json::json!({"system": "Hexagon", "resolution": 2, "area": "Input Layer", "input": "pts"});
+        assert!(!layer(grid(&One(d, None), &p).unwrap()).features.is_empty());
     }
 
     /// The world in each system, counted against the system's own count, and the cap.
