@@ -2580,3 +2580,56 @@ fn a_point_its_own_system_cant_give_is_said_as_such() {
     assert!(said.iter().any(|t| t.contains(&own)), "{said:?}");
     assert!(!said.iter().any(|t| t.contains("beyond what")), "{said:?}");
 }
+
+/// Topology is checked in a held layer's own system (#2032 C2e-5): overlapping squares, a
+/// bow-tie, dangling ends (a tolerance of a metre, flat in UTM) and a point outside the blocks are
+/// found as they are for the same layers in longitude/latitude, at the same places.
+#[test]
+fn topology_is_checked_in_a_held_layers_own_system() {
+    let o = (650_000.0, 5_400_000.0);
+    let at = |x: f64, y: f64| Coord::new(o.0 + x, o.1 + y);
+    let ring = |pts: &[(f64, f64)]| pts.iter().map(|&(x, y)| at(x, y)).collect::<Vec<_>>();
+    let blocks = vec![
+        Geometry::Polygon(vec![vec![ring(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)])]]),
+        Geometry::Polygon(vec![vec![ring(&[(50.0, 0.0), (150.0, 0.0), (150.0, 100.0), (50.0, 100.0), (50.0, 0.0)])]]),
+        Geometry::Polygon(vec![vec![ring(&[(300.0, 0.0), (400.0, 100.0), (400.0, 0.0), (300.0, 100.0), (300.0, 0.0)])]]),
+    ];
+    let paths = vec![
+        Geometry::Line(vec![ring(&[(0.0, 200.0), (100.0, 200.0)])]),
+        // Starts half a metre from the first's end: they touch.
+        Geometry::Line(vec![ring(&[(100.5, 200.0), (200.0, 250.0)])]),
+        // Starts five metres from it: dangles.
+        Geometry::Line(vec![ring(&[(100.0, 205.0), (100.0, 300.0)])]),
+    ];
+    let wells = vec![Geometry::Point(at(50.0, 50.0)), Geometry::Point(at(1000.0, 1000.0))];
+    let to_lonlat = |g: &Geometry| g.map_coords(&|c| UTM.to(Crs::LonLat).unwrap().point(c).unwrap());
+    let checked = |crs: Crs| {
+        let mut s = Session::new(Project::default());
+        for (name, kind, geoms) in
+            [("Blocks", GeometryType::Polygon, &blocks), ("Paths", GeometryType::Polyline, &paths), ("Wells", GeometryType::Point, &wells)]
+        {
+            let geoms = geoms.iter().map(|g| if crs == UTM { g.clone() } else { to_lonlat(g) }).collect();
+            add_in(&mut s, name, kind, geoms, crs);
+        }
+        for rule in [
+            json!({"rule": "mustNotOverlap", "layer": "Blocks"}),
+            json!({"rule": "mustNotSelfIntersect", "layer": "Blocks"}),
+            json!({"rule": "mustNotHaveDangles", "layer": "Paths"}),
+            json!({"rule": "mustBeCoveredBy", "layer": "Wells", "by": "Blocks"}),
+        ] {
+            s.run("topology.rules", &json!({"add": rule})).unwrap();
+        }
+        s.run("topology.validate", &json!({"toleranceM": 1.0})).unwrap();
+        assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.coord_crs(), crs);
+        s.topology_errors.clone()
+    };
+    let (a, b) = (checked(Crs::LonLat), checked(UTM));
+    let found = |e: &[crate::TopologyIssue]| e.iter().map(|e| (e.rule.clone(), e.rows.clone())).collect::<Vec<_>>();
+    assert_eq!(found(&a), found(&b));
+    // An overlap, a bow-tie, four dangling ends (the first line's start, the second's end, both
+    // of the third's) and a well outside the blocks.
+    assert_eq!(a.len(), 1 + 1 + 4 + 1, "{a:?}");
+    for (p, q) in a.iter().zip(&b) {
+        assert!((p.lon - q.lon).abs() < 1e-6 && (p.lat - q.lat).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+}
