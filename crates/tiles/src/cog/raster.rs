@@ -123,14 +123,24 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                 // The values `f32` rounded as the overview's tiles were decoded, by band, as the
                 // whole-file reader counts them for the overview it reads: said when the layer is
                 // added.
+                // Only a tile's pixels inside the image count: an edge tile's padding isn't held.
+                let (tw, th, across) = (l.tile_width.max(1), l.tile_height.max(1), l.across().max(1));
                 let rounded: Vec<u64> = bands
                     .iter()
                     .map(|&b| {
-                        (0..l.tiles())
-                            .filter_map(|tile| i.layout.chunk(l, tile, b))
-                            .filter_map(|(c, at)| got.get(c as usize).and_then(|t| t.rounded.get(at)))
-                            .map(|bits| bits.iter().map(|w| u64::from(w.count_ones())).sum::<u64>())
-                            .sum()
+                        let mut n = 0u64;
+                        for tile in 0..l.tiles() {
+                            let Some((c, at)) = i.layout.chunk(l, tile, b) else { continue };
+                            let Some(t) = got.get(c as usize).filter(|t| t.rounded.get(at).is_some()) else { continue };
+                            let (x0, y0) = ((tile % across).saturating_mul(tw), (tile / across).saturating_mul(th));
+                            let (cols, rows) = (tw.min(w.saturating_sub(x0)), th.min(h.saturating_sub(y0)));
+                            for y in 0..rows {
+                                for x in 0..cols {
+                                    n += u64::from(t.rounded_at(at, (y * tw + x) as usize));
+                                }
+                            }
+                        }
+                        n
                     })
                     .collect();
                 if rounded.iter().any(|n| *n > 0) {

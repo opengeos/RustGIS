@@ -261,7 +261,9 @@ enum TileState {
     /// Decoded: its bands, how many samples they hold, and when it was last used (see
     /// [`Tiles::clock`]).
     Ready(Bands, usize, u64, crate::address::Reach),
-    Loading(Vec<Box<dyn FnOnce(Result<Bands, String>) + Send>>, crate::address::Reach),
+    /// Being read: who waits for it, the reach it is read under, and the header (`Info`, by its
+    /// address, alive while the read is) it is decoded with.
+    Loading(Vec<Box<dyn FnOnce(Result<Bands, String>) + Send>>, crate::address::Reach, usize),
 }
 
 #[derive(Default)]
@@ -1226,13 +1228,18 @@ fn get_tile_at(
     let per_band = (l.tile_width as usize) * (l.tile_height as usize);
     let samples = per_band * nb;
     let started_reach = ceiling.min(info.reach).min(crate::cache::ceiling_for(&url));
+    // The header this read decodes with. A local file's read in flight is joined only by a
+    // reader with the same header: one holding the header of a file written again since waits for
+    // it to land, then reads the tile again (#2814), so no old tile reaches its overview.
+    let header = Arc::as_ptr(&info) as usize;
+    let joins = |reach: crate::address::Reach, from: usize| reach == started_reach && (from == header || !is_local_file(&url));
     // A tile the file leaves out (GDAL's sparse files: no bytes) is empty: kept as any other, so
     // a window over it is whole at once rather than asking for it at every draw.
     if len == 0 {
         let key = (url.clone(), level, idx);
         let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(TileState::Loading(waiting, reach)) = t.map.get_mut(&key) {
-            if *reach == started_reach {
+        if let Some(TileState::Loading(waiting, reach, from)) = t.map.get_mut(&key) {
+            if joins(*reach, *from) {
                 waiting.push(then);
             } else {
                 waiting.push(crate::cache::caller_retry(Box::new(move |_| get_tile_at(info, url, level, idx, started_reach, then))));
@@ -1270,10 +1277,10 @@ fn get_tile_at(
                     t.samples = t.samples.saturating_sub(n);
                     t.order.remove(&used);
                 }
-                t.map.insert(key.clone(), TileState::Loading(vec![then], started_reach));
+                t.map.insert(key.clone(), TileState::Loading(vec![then], started_reach, header));
             }
-            Some(TileState::Loading(w, reach)) => {
-                if *reach == started_reach {
+            Some(TileState::Loading(w, reach, from)) => {
+                if joins(*reach, *from) {
                     w.push(then);
                 } else {
                     w.push(crate::cache::caller_retry(Box::new(move |_| get_tile_at(info, url, level, idx, started_reach, then))));
@@ -1281,7 +1288,7 @@ fn get_tile_at(
                 return;
             }
             None => {
-                t.map.insert(key.clone(), TileState::Loading(vec![then], started_reach));
+                t.map.insert(key.clone(), TileState::Loading(vec![then], started_reach, header));
             }
         }
     }
@@ -1314,7 +1321,7 @@ fn get_tile_at(
                     Err(_) => t.map.remove(&key),
                 };
                 match old {
-                    Some(TileState::Loading(w, _)) => w,
+                    Some(TileState::Loading(w, ..)) => w,
                     _ => Vec::new(),
                 }
             };
@@ -2605,10 +2612,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .map
-                .insert(key.clone(), TileState::Loading(vec![Box::new(move |r| old_tx.send(r).unwrap())], Reach::Local));
+                .insert(key.clone(), TileState::Loading(vec![Box::new(move |r| old_tx.send(r).unwrap())], Reach::Local, 0));
             let (new_tx, new_rx) = std::sync::mpsc::channel();
             get_tile(info, url.clone(), 0, 0, Box::new(move |r| new_tx.send(r).unwrap()));
-            let Some(TileState::Loading(waiting, _)) = tiles().lock().unwrap().map.remove(&key) else {
+            let Some(TileState::Loading(waiting, ..)) = tiles().lock().unwrap().map.remove(&key) else {
                 panic!("the old loader must remain")
             };
             assert_eq!(waiting.len(), 2);
@@ -2730,9 +2737,10 @@ mod tests {
         // Int32 values past 16,777,216: the odd ones `f32` rounds are counted, as the whole-file
         // reader counts them.
         let wide = dir.join("wide.tif");
-        std::fs::write(&wide, cog::example_with(&cog::Example { size: 256, tile: 128, wide: true, ..cog::Example::default() })).unwrap();
+        // 200 pixels a side in tiles of 128: the edge tiles' padding isn't counted.
+        std::fs::write(&wide, cog::example_with(&cog::Example { size: 200, tile: 128, wide: true, ..cog::Example::default() })).unwrap();
         let read = raster::overview_blocking(&wide.display().to_string()).unwrap();
-        assert_eq!(read.rounded, vec![256 * 256 / 2]);
+        assert_eq!(read.rounded, vec![200 * 200 / 2]);
         let (tx, rx) = std::sync::mpsc::channel();
         load(url.clone(), crate::address::Reach::Public, Box::new(move |r| tx.send(r.err()).unwrap()));
         let refused = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_or_default();
@@ -2745,8 +2753,28 @@ mod tests {
         // the one kept.
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, cog::example(256, 128)).unwrap();
-        let sizes: Vec<u32> = info_blocking(&url).unwrap().layout.levels.iter().map(|l| l.width).collect();
+        let info = info_blocking(&url).unwrap();
+        let sizes: Vec<u32> = info.layout.levels.iter().map(|l| l.width).collect();
         assert_eq!(sizes, vec![256, 128]);
+        // A read of a tile still in flight from before the rewrite (another header) isn't joined:
+        // given the old read's stale tile, the new reader reads the tile again from the file.
+        let key = (url.clone(), 0usize, 0u32);
+        let (old_tx, old_rx) = std::sync::mpsc::channel();
+        tiles()
+            .lock()
+            .unwrap()
+            .map
+            .insert(key.clone(), TileState::Loading(vec![Box::new(move |r| old_tx.send(r).unwrap())], crate::address::Reach::Local, 0));
+        let (new_tx, new_rx) = std::sync::mpsc::channel();
+        get_tile(info.clone(), url.clone(), 0, 0, Box::new(move |r| new_tx.send(r).unwrap()));
+        let Some(TileState::Loading(waiting, ..)) = tiles().lock().unwrap().map.remove(&key) else { panic!("the old read must remain") };
+        let stale: Bands = Arc::new(vec![vec![999.0; 128 * 128]].into());
+        for then in waiting {
+            then(Ok(stale.clone()));
+        }
+        assert_eq!(old_rx.recv().unwrap().unwrap().bands[0][0], 999.0);
+        let fresh = new_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(fresh.bands[0][1], 1.0, "pixel (1, 0) of the file, not the stale tile");
         forget_local_file(&url);
         let _ = std::fs::remove_dir_all(&dir);
     }
