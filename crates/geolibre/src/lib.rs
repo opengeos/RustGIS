@@ -868,25 +868,13 @@ fn json_not_tiff(bytes: &[u8]) -> Option<&[u8]> {
     (json.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')).then_some(json)
 }
 
-/// How much of a JSON document that doesn't parse is looked at for its `type` ([`is_geojson`]).
-const JSON_HEAD_BYTES: usize = 4096;
-
-/// A JSON object (after white space; [`json_not_tiff`] has left out a byte-order mark) whose
-/// `type` is one of GeoJSON's (a feature collection, a feature or a geometry), TopoJSON's or
-/// CityJSON's, which RustGIS reads as layers; or one that doesn't parse (cut short while it was written) whose own `type`, among its
-/// members in the first [`JSON_HEAD_BYTES`] and not inside them ([`own_members`]), is one of those,
-/// so the reader's error is shown rather than its text. Anything else is a report: a list, plain
-/// text, an object with no `type` or another one, and JSON that doesn't parse otherwise (JSON
-/// Lines, `NaN`).
+/// A JSON object (after white space; [`json_not_tiff`] has left out a byte-order mark) whose own
+/// `type` ([`own_type`]) is one of GeoJSON's (a feature collection, a feature or a geometry),
+/// TopoJSON's or CityJSON's, which RustGIS reads as layers. Whether the document parses doesn't
+/// matter: GeoJSON cut short while it was written is read, so the reader's error is shown rather
+/// than its text. Anything else is a report: a list, plain text, or an object with no `type`, with
+/// a `type` that isn't text, or with another one.
 fn is_geojson(json: &[u8]) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Head {
-        #[serde(rename = "type")]
-        ty: Option<Value>,
-    }
-    if json.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
-        return false;
-    }
     const TYPES: [&str; 11] = [
         "FeatureCollection",
         "Topology",
@@ -900,48 +888,112 @@ fn is_geojson(json: &[u8]) -> bool {
         "MultiPolygon",
         "GeometryCollection",
     ];
-    match serde_json::from_slice::<Head>(json) {
-        Ok(h) => h.ty.as_ref().and_then(Value::as_str).is_some_and(|t| TYPES.contains(&t)),
-        Err(_) => {
-            let own = own_members(&String::from_utf8_lossy(json.get(..JSON_HEAD_BYTES).unwrap_or(json)));
-            TYPES.iter().any(|t| own.contains(&format!("\"type\":\"{t}\"")))
-        }
-    }
+    json.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') && own_type(json).is_some_and(|t| TYPES.contains(&t.as_str()))
 }
 
-/// The members of the JSON object `text` starts with, without white space outside strings and
-/// without what is nested in them (a `crs`, a `bbox`, the features), whatever their order and
-/// wherever `text` stops: `{"crs":{…},"type":"Feature"` gives `"crs":,"type":"Feature"`.
-fn own_members(text: &str) -> String {
-    let (mut own, mut depth, mut in_string, mut escaped) = (String::new(), 0usize, false, false);
-    for c in text.chars() {
-        if in_string {
-            if depth == 1 {
-                own.push(c);
-            }
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_string = true;
+/// The `type` member of the JSON object `json` starts with, when its value is a string: among the
+/// object's own members, wherever it comes (after a `crs`, after the features), not one nested in
+/// them; names and values with their escapes decoded (`"\u0074ype"` is `"type"`). The first `type`
+/// counts, should there be two. One pass, stopping at the `type` or at the object's end, and the
+/// same whether the document is whole or cut short.
+fn own_type(json: &[u8]) -> Option<String> {
+    /// What the last of the object's own tokens was, as far as finding `"type": "…"` goes.
+    #[derive(PartialEq)]
+    enum Last {
+        Other,
+        TypeName,
+        TypeColon,
+    }
+    let (mut depth, mut i, mut last) = (0usize, 0usize, Last::Other);
+    while let Some(&b) = json.get(i) {
+        match b {
+            b'"' => {
+                let (text, next) = json_string(json, i + 1, depth == 1);
+                i = next;
                 if depth == 1 {
-                    own.push(c);
+                    if last == Last::TypeColon {
+                        return text;
+                    }
+                    last = if text.as_deref() == Some("type") { Last::TypeName } else { Last::Other };
+                }
+                continue;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                if depth == 2 {
+                    last = Last::Other;
                 }
             }
-            '{' | '[' => depth += 1,
-            '}' | ']' => depth = depth.saturating_sub(1),
-            _ if depth == 1 && !c.is_whitespace() => own.push(c),
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return None;
+                }
+            }
+            b':' if depth == 1 => last = if last == Last::TypeName { Last::TypeColon } else { Last::Other },
+            _ if b.is_ascii_whitespace() => {}
+            _ if depth == 1 => last = Last::Other,
             _ => {}
         }
+        i += 1;
     }
-    own
+    None
+}
+
+/// The JSON string whose text starts at `json[start]` (after its opening quote), its escapes
+/// decoded when `decode` (else `None`, only skipped), and where after its closing quote the
+/// document goes on (its end, when it is cut short inside the string).
+fn json_string(json: &[u8], start: usize, decode: bool) -> (Option<String>, usize) {
+    let mut out = Vec::new();
+    let mut i = start;
+    while let Some(&b) = json.get(i) {
+        match b {
+            b'"' => return (decode.then(|| String::from_utf8_lossy(&out).into_owned()), i + 1),
+            b'\\' => {
+                let Some(&e) = json.get(i + 1) else { break };
+                i += 2;
+                if !decode {
+                    continue;
+                }
+                match e {
+                    b'u' => {
+                        let hex = |at: usize| {
+                            json.get(at..at + 4)
+                                .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+                                .and_then(|h| std::str::from_utf8(h).ok())
+                                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                        };
+                        let Some(mut code) = hex(i) else { continue };
+                        i += 4;
+                        // A pair of surrogates is one character.
+                        if (0xD800..0xDC00).contains(&code)
+                            && json.get(i..i + 2) == Some(b"\\u".as_slice())
+                            && let Some(low) = hex(i + 2).filter(|l| (0xDC00..0xE000).contains(l))
+                        {
+                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                            i += 6;
+                        }
+                        let c = char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER);
+                        out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+                    }
+                    b'n' => out.push(b'\n'),
+                    b't' => out.push(b'\t'),
+                    b'r' => out.push(b'\r'),
+                    b'b' => out.push(0x08),
+                    b'f' => out.push(0x0C),
+                    other => out.push(other),
+                }
+                continue;
+            }
+            _ => {
+                if decode {
+                    out.push(b);
+                }
+            }
+        }
+        i += 1;
+    }
+    (decode.then(|| String::from_utf8_lossy(&out).into_owned()), json.len())
 }
 
 /// Reads one output file back as a layer, table or message. `dir` is the native working folder,
@@ -959,8 +1011,8 @@ fn load(
     // A tool whose manifest calls its vector output a raster writes GeoJSON into the `.tif` it is
     // given (Longest Flowpath, #2762): read by what it holds, GeoJSON as `.json` and another JSON
     // document (a report) as text. A JSON object is taken without its byte-order mark, which the
-    // JSON reader refuses; whether it is a layer ([`is_geojson`]) is worked out once, as it parses
-    // the whole document, and only where it decides something (not for a `.geojson`).
+    // JSON reader refuses; whether it is a layer ([`is_geojson`]) is worked out once, in a pass
+    // over its members up to its `type`, and only where it decides something (not for a `.geojson`).
     let object = if matches!(ext.as_str(), "tif" | "tiff" | "json" | "geojson") { json_not_tiff(bytes) } else { None };
     let layer = matches!(ext.as_str(), "tif" | "tiff" | "json") && object.is_some_and(is_geojson);
     let renamed;
@@ -1131,7 +1183,7 @@ fn text_message(bytes: &[u8], layer_name: &str, html: bool, messages: &mut Vec<S
         messages.push(format!("{layer_name}: the report's other {more} non-empty lines aren't shown"));
     }
     if cut > 0 {
-        messages.push(format!("{layer_name}: {cut} of the report's lines are cut at {REPORT_LINE_CHARS} characters"));
+        messages.push(format!("{layer_name}: lines of the report cut at {REPORT_LINE_CHARS} characters: {cut}"));
     }
 }
 

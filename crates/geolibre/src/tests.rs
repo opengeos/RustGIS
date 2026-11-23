@@ -854,7 +854,7 @@ fn a_vector_written_into_a_tif_comes_back_as_a_vector() {
     // A line past 500 characters (a JSON report on one line) is cut, and said.
     let wide = finish(&txt, &[("output.txt".into(), format!("{}\nshort\n", "x".repeat(600)).into_bytes())], &[], None);
     assert_eq!(wide.messages.first().map(|m| m.chars().count()), Some("Flowpaths:\n".chars().count() + 500 + "…\nshort".chars().count()));
-    assert_eq!(wide.messages.get(1).map(String::as_str), Some("Flowpaths: 1 of the report's lines are cut at 500 characters"));
+    assert_eq!(wide.messages.get(1).map(String::as_str), Some("Flowpaths: lines of the report cut at 500 characters: 1"));
     // GeoJSON cut short (the tool stopped while writing it) says why it can't be read, not shown as
     // a report; TopoJSON is taken for a layer too.
     let cut = finish(&job, &[("output.tif".into(), lines.get(..60).unwrap().as_bytes().to_vec())], &[], None);
@@ -873,7 +873,27 @@ fn a_vector_written_into_a_tif_comes_back_as_a_vector() {
     assert!(is_geojson(br#"{"crs":{"type":"name","properties":{"name":"EPSG:2056"}},"type":"FeatureCollection","features":[{"#));
     assert!(is_geojson(br#"{"features":[{"type":"Feature"}],"name":"Flow [m] {x}","type":"FeatureCollection","bbox":[1,"#));
     assert!(!is_geojson(br#"{"stats":{"type":"Point"},"note":"a \"type\":\"Point\" in text","n":NaN"#));
-    assert_eq!(own_members(r#"{ "a": {"b": [1, {"c": 2}]}, "s": "x { y", "type" : "Feature" }"#), r#""a":,"s":"x { y","type":"Feature""#);
+    // The object's own `type`: escapes decoded, a quote in a name not taken for its end, nothing
+    // nested, wherever it comes, also past the first 4 KB and in a document cut short.
+    assert_eq!(own_type(br#"{ "a": {"b": [1, {"c": 2}]}, "s": "x { y", "type" : "Feature" }"#).as_deref(), Some("Feature"));
+    assert_eq!(own_type(br#"{"\u0074ype":"Feature\u0043ollection","features":["#).as_deref(), Some("FeatureCollection"));
+    assert!(is_geojson(br#"{"\u0074ype":"FeatureCollection","features":["#));
+    assert_eq!(own_type(br#"{"a\"type":"Point","n":1}"#), None);
+    assert_eq!(own_type(br#"{"name":"\ud83d\ude00","type":"Point"}"#).as_deref(), Some("Point"));
+    assert_eq!(own_type(br#"{"type":{"type":"Point"}}"#), None);
+    assert_eq!(own_type(br#"{"a":1}, {"type":"Point"}"#), None, "only the first object");
+    let far = format!(r#"{{"crs":{{"name":"{}"}},"type":"FeatureCollection","features":[{{"#, "x".repeat(10_000));
+    assert!(is_geojson(far.as_bytes()));
+    assert_eq!(own_type(br#"{"type":"Fea"#), Some("Fea".into()), "cut inside the value");
+    assert_eq!(own_type(br#"{"\u+074ype":"Point"}"#), None, "four hex digits, no sign");
+    assert_eq!(own_type(br#"{"type":"Line\u0053tring","x":"\ud83d\ude00"}"#).as_deref(), Some("LineString"));
+    assert_eq!(own_type(br#"{"type":"Report","type":"Point"}"#).as_deref(), Some("Report"), "the first counts");
+    // Cut short anywhere, inside an escape or a surrogate pair too: an answer, never a panic.
+    let sample = br#"{"a":"\"\\\/\b\f\n\r\t\u00e9\ud83d\ude00\ud800x\u12","b":[{"c":"]}"}],"\u0074ype":"Feature\u0043ollection"}"#;
+    for end in 0..=sample.len() {
+        let _ = own_type(&sample[..end]);
+    }
+    assert_eq!(own_type(sample).as_deref(), Some("FeatureCollection"));
     assert!(
         json_not_tiff(b"\xEF\xBB\xBF{\"type\":\"Feature\"}").is_some_and(is_geojson) && is_geojson(b"{\"type\":\"Feature\",\"geometry\":{")
     );
