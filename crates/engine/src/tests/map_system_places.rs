@@ -159,6 +159,25 @@ fn another_bodys_projection_names_no_place_on_the_earth() {
     assert!(e.contains("a system of another body"), "{e}");
 }
 
+/// One body's projection names no place on another body's map either: Mars's inverse gives no
+/// place on the Moon. The Moon's own projection does.
+#[test]
+fn a_projection_of_mars_names_no_place_on_the_moon() {
+    let mut s = world();
+    s.run("map.body", &json!({"name": "moon", "basemap": false})).unwrap();
+    let p = json!({"x": 100_000, "y": 200_000, "crs": "+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs"});
+    let e = s.run("map.goToXY", &p).unwrap_err();
+    assert!(e.contains("a system of Mars"), "{e}");
+    let mut mars = rustgis_data::Dataset::new("Mars plan", rustgis_data::GeometryType::Point, vec![]);
+    mars.crs = Some(rustgis_data::raster::Crs::parse("+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs").unwrap());
+    s.map_mut().add_dataset(mars);
+    let e = s.run("map.convertPosition", &json!({"x": 100_000, "y": 200_000, "crs": "Mars plan"})).unwrap_err();
+    assert!(e.contains("a system of Mars"), "{e}");
+    let moon = json!({"x": 100_000, "y": 200_000, "crs": "+proj=eqc +a=1737400 +b=1737400 +units=m +no_defs"});
+    let v = s.run("map.convertPosition", &moon).unwrap_or_else(|e| panic!("{e}"));
+    assert!((v["lon"].as_f64().unwrap() - (100_000.0f64 / 1_737_400.0).to_degrees()).abs() < 1e-6, "{v}");
+}
+
 /// Degrees typed before `map` (latitude first, as without a system) are refused with the reason,
 /// not read as metres a few steps from the map's origin; in the search box too.
 #[test]
