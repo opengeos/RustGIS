@@ -145,8 +145,10 @@ A field package (`.rgisfield`) carries a map to the phone and its edits back.
 
 1. **On the computer**, with the map in view, **Data › Offline › Package for the Field** makes
    the package: a project of that map, the features in view, the MBTiles and PMTiles archives its
-   tile layers use, and the photos its features name (pictures named by their full path, while
-   they fit the package; the notice counts any left out). The package records the area it was made from in your project,
+   tile layers use, and the photos its loaded layers' features name (pictures named by their full
+   path, while they fit the package; the notice counts any left out). A layer read in place keeps
+   its photos at home: the notice counts them for a layer copied for reference, and names a layer
+   left out whole. The package records the area it was made from in your project,
    so save the project after packaging. A layer read in place from a supported local file is
    copied within the area while it fits the package budget. The copy is for reference, and
    Bring Back skips edits to it. The sender gets a notice about anything left behind, including
