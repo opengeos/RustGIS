@@ -1463,6 +1463,8 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
             let added = r["index"].as_u64().and_then(|i| usize::try_from(i).ok());
             if let Some(t) = added.and_then(|i| s.map_mut().tiles.get_mut(i)) {
                 t.feature_info = layer.feature_info.clone();
+                // Learned from a document read from the internet: asked only there.
+                t.feature_info_public = public;
                 if t.anonymous
                     && let Some(info) = &mut t.feature_info
                 {

@@ -258,14 +258,11 @@ fn first_layer(s: &mut Session, url: &str, kind: &str) -> Result<String, String>
         .ok_or_else(|| crate::sources::message_with_address(url, "the service lists no layer RustGIS can add"))
 }
 
-/// Says how many addresses a portal's answer gave that were left out for pointing where a
-/// document read from the internet may not send RustGIS (into the local network).
+/// Says how many addresses a portal's answer gave that were left out for pointing where RustGIS
+/// won't fetch for it (into the local network from an answer read from the internet, or a
+/// forbidden address from any answer).
 pub fn refused_notice(refused: usize) -> Option<String> {
-    (refused > 0).then(|| {
-        format!(
-            "{refused} addresses the portal listed point where RustGIS won't fetch for an answer read from the internet and are left out"
-        )
-    })
+    (refused > 0).then(|| format!("{refused} addresses the portal listed point where RustGIS won't fetch and are left out"))
 }
 
 fn say_refused(s: &mut Session, refused: usize) {

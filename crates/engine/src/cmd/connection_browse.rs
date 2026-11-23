@@ -277,7 +277,17 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
         Level::Database => database_schemas(s, &c, &mut out)?,
         Level::DatabaseSchema { schema } => database_schema(s, &c, schema, &mut out)?,
         Level::DatabaseDataset { dataset } => database_dataset(s, &c, dataset, &mut out)?,
-        Level::Service { url, kind, reach } => service(s, p, &mut out, &c, url, kind.as_deref(), *reach)?,
+        Level::Service { url, kind, reach } => {
+            // A listing the app read is judged by where its fetch connected; one a caller supplies
+            // says nothing trustworthy about where it was read, so it is taken as read from the
+            // internet. One read here: its documents' records say.
+            let read = match (ps(p, "answer"), &s.browse_response) {
+                (None, _) => *reach,
+                (Some(_), Some((id, supplied, origin))) if *id == c.id && supplied == node => (*reach).min(origin.reach()),
+                (Some(_), _) => address::Reach::Public,
+            };
+            service(s, p, &mut out, &c, url, kind.as_deref(), read)?
+        }
         Level::S3Root if url.is_none() => {
             buckets(c.options.get("buckets").map(String::as_str).unwrap_or("").split(',').map(str::to_string))
         }
@@ -703,11 +713,14 @@ fn service(
         .filter(|l| l.get("offer").and_then(|o| o.get("type")).and_then(Value::as_str) == Some("service"))
         .map(|l| (format!("service:arcgis:{}", text(&l["offer"], "url")), read_at(l)))
         .collect();
+    let mut children = children;
     for at in [address::Reach::Public, address::Reach::Local] {
         let nodes: Vec<Value> = services.iter().filter(|(_, r)| *r == at).map(|(node, _)| json!({"node": node})).collect();
         if !nodes.is_empty() {
             let origin = address::Origin::with_observed_reach(url, at)?;
-            remember_or_say(s, c, &nodes, &origin, false);
+            if !remember_or_say(s, c, &nodes, &origin, false) {
+                children.retain(|child| !nodes.iter().any(|n| n["node"] == child["node"]));
+            }
         }
     }
     let mut found = Found::new(children);
@@ -716,10 +729,17 @@ fn service(
 }
 
 /// [`remember_node_origins`], saying when the session's record is full instead of failing the
-/// listing: the nodes not recorded are then judged by their connection's address, as before.
-fn remember_or_say(s: &mut Session, c: &Connection, children: &[Value], origin: &address::Origin, root: bool) {
-    if let Err(e) = remember_node_origins(s, c, children, origin, root) {
+/// listing. Nodes a listing read on the local network names are then judged by their connection's
+/// address, as before; those a listing read from the internet names can't be held there without
+/// the record, so the caller leaves them out (`false`).
+fn remember_or_say(s: &mut Session, c: &Connection, children: &[Value], origin: &address::Origin, root: bool) -> bool {
+    let Err(e) = remember_node_origins(s, c, children, origin, root) else { return true };
+    if origin.reach() == address::Reach::Public {
+        s.notify(format!("{e}: {} services this listing names are left out", children.len()), false);
+        false
+    } else {
         s.notify(format!("{e}; what this listing names is judged by its connection's address"), false);
+        true
     }
 }
 
@@ -790,7 +810,13 @@ fn catalogue(s: &mut Session, c: &Connection, text: &str, origin: &address::Orig
     // The services the records link to, opened later, keep where the records were read.
     let services: Vec<Value> =
         found.children.iter().filter_map(|r| r.get("children")).filter_map(Value::as_array).flatten().cloned().collect();
-    remember_or_say(s, c, &services, origin, root);
+    if !remember_or_say(s, c, &services, origin, root) {
+        for record in &mut found.children {
+            if let Some(links) = record.get_mut("children").and_then(Value::as_array_mut) {
+                links.retain(|link| link.get("node").is_none());
+            }
+        }
+    }
     Ok(found)
 }
 
@@ -1201,8 +1227,20 @@ mod tests {
         let mark = session.notice_mark();
         let found = super::catalogue(&mut session, &connection, text, &origin, false, &mut json!({})).unwrap();
         assert_eq!(found.children.len(), 1);
+        // Read on the local network, its services are judged by the connection's address, as
+        // before; read from the internet, they can't be held there without the record, so they
+        // are left out.
+        assert_eq!(found.children[0]["children"].as_array().map(Vec::len), Some(1));
         let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("judged by its connection's address")), "{told:?}");
+        let public = Origin::connected(&connection.address, "93.184.216.34".parse().unwrap()).unwrap();
+        let web = text.replace("http://10.0.19.4/wms", "https://csw-19-wms.example/wms");
+        let mark = session.notice_mark();
+        let found = super::catalogue(&mut session, &connection, &web, &public, false, &mut json!({})).unwrap();
+        assert_eq!(found.children.len(), 1, "the record is still listed");
+        assert_eq!(found.children[0]["children"].as_array().map(Vec::len), Some(0), "its service is left out");
+        let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.contains("1 services this listing names are left out")), "{told:?}");
     }
 
     /// The folders a service lists keep where its listing was read: a directory a catalogue read
@@ -1220,11 +1258,37 @@ mod tests {
         let local = Origin::connected(&connection.address, "10.0.0.5".parse().unwrap()).unwrap();
         super::remember_node_origins(&mut session, &connection, &[json!({"node": node})], &local, false).unwrap();
         let listing = json!({"currentVersion": 11.1, "folders": ["Hydro"], "services": []}).to_string();
-        let out = super::browse(&mut session, &json!({"id": connection.id, "node": node, "answer": listing})).unwrap();
+        // As the app hands it over: read by its fetch, which connected on the local network.
+        let requested = super::browse(&mut session, &json!({"id": connection.id, "node": node, "probe": true})).unwrap()["fetch"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let read = Origin::connected(&requested, "10.0.20.5".parse().unwrap()).unwrap();
+        let opened = session.opened;
+        let out =
+            session.browse_from_origin(&json!({"id": connection.id, "node": node, "answer": listing}), &requested, opened, read).unwrap();
         let folder = out["children"].as_array().unwrap().iter().find_map(|c| c["node"].as_str().map(str::to_string)).unwrap();
         assert!(folder.starts_with("service:arcgis:http://10.0.20.5/"), "{folder}");
         let probe = super::browse(&mut session, &json!({"id": connection.id, "node": folder, "probe": true}));
         assert!(probe.is_ok(), "{probe:?}");
+        // A listing supplied by the Assistant says nothing trustworthy about where it was read: it
+        // is taken as read from the internet, so the folder it lists, at a public-looking name, is
+        // held to the internet when it is opened.
+        struct Live;
+        impl crate::policy::Revocation for Live {
+            fn allows(&self, _: crate::policy::Effects) -> bool {
+                true
+            }
+        }
+        let directory = "https://dir-20.corp-looks-public.example/arcgis/rest/services";
+        let node = format!("service:arcgis:{directory}");
+        super::remember_node_origins(&mut session, &connection, &[json!({"node": node})], &local, false).unwrap();
+        let scope = crate::policy::Scope::assistant(4_201_306, std::sync::Arc::new(Live));
+        let params = json!({"id": connection.id, "node": node, "answer": listing});
+        let out = session.with_scope(scope, |s| super::browse(s, &params)).unwrap().unwrap();
+        let folder = out["children"].as_array().unwrap().iter().find_map(|c| c["node"].as_str().map(str::to_string)).unwrap();
+        let probe = super::browse(&mut session, &json!({"id": connection.id, "node": folder, "probe": true})).unwrap();
+        assert_eq!(probe["fromDocument"], true, "{probe}");
     }
 
     #[test]

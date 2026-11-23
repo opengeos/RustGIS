@@ -69,9 +69,13 @@ fn askable(t: &rustgis_map::tiles::TileLayer, picked: bool) -> bool {
 /// How far a WMS tile layer's identify requests may reach: only the internet when its template is
 /// held there (a document read from the internet listed the layer) or its capabilities were read
 /// from there ([`cache::ceiling_for`] records both), else as far as the user's own address.
+///
+/// A request learned from a document read from the internet keeps that reach (`feature_info_public`),
+/// whatever the records say by the time it is asked.
 fn reach_of(t: &rustgis_map::tiles::TileLayer) -> Reach {
     let caps = ogc::wms_layer_of(&t.url).map_or(Reach::Local, |(caps, _)| cache::ceiling_for(&caps));
-    cache::ceiling_for(&t.url).min(caps)
+    let learned = if t.feature_info.is_some() && t.feature_info_public { Reach::Public } else { Reach::Local };
+    cache::ceiling_for(&t.url).min(caps).min(learned)
 }
 
 /// What to fetch to ask a WMS tile layer about a point: the GetFeatureInfo request, or the
@@ -189,9 +193,13 @@ fn wms_layer(s: &Session, name: &str) -> Result<usize, String> {
 /// Reads the layer's request from its service's capabilities; a layer the service doesn't list,
 /// or doesn't offer for identify, isn't asked again. The map's other layers from the same service
 /// that don't know theirs learn it too, so the capabilities are read once.
+///
+/// Capabilities read from the internet (as their record says now) leave each layer's request held
+/// there for good (`feature_info_public`).
 fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), String> {
     let Some(t) = s.map().tiles.get(index) else { return Ok(()) };
     let Some((caps_url, _)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
+    let public = cache::ceiling_for(&caps_url) == Reach::Public;
     // Read as an answer is (Latin-1 from older servers), in the app and natively alike.
     let service = ogc::parse(&caps_url, ogc::answer_text(capabilities)?.as_bytes())?;
     let info_of = |layer: String| {
@@ -210,6 +218,7 @@ fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), Strin
             && caps == caps_url
         {
             t.feature_info = Some(info_of(layer));
+            t.feature_info_public = public || cache::ceiling_for(&t.url) == Reach::Public;
         }
     }
     Ok(())
@@ -224,7 +233,6 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
         if caps.len() > MAX_TEXT {
             return Err(named(format!("the capabilities are larger than {} MB", MAX_TEXT >> 20)));
         }
-        learn(s, index, caps.as_bytes()).map_err(named)?;
         // Capabilities supplied by anything but the app say nothing trustworthy about where they
         // were read: the requests they name are asked only on the internet.
         if !s.policy_user()
@@ -232,6 +240,7 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
         {
             cache::restrict_to_public(&caps_url);
         }
+        learn(s, index, caps.as_bytes()).map_err(named)?;
     }
     if let Some(text) = ps(p, "text") {
         if text.len() > MAX_TEXT {
@@ -386,6 +395,14 @@ mod tests {
                 assert!(r.unwrap()["url"].as_str().is_some_and(|u| u.starts_with(&format!("http://192.168.{n}.5/info?"))));
             } else {
                 let e = r.unwrap_err();
+                assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");
+                // The request keeps the reach it was learned at, though the user names the service
+                // directly afterwards (which clears the addresses' records).
+                let caps_url = ogc::wms_layer_of(&template).unwrap().0;
+                cache::allow_named(&caps_url);
+                cache::allow_named(&template);
+                let p = json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "request": true});
+                let e = feature_info(&mut s, &p).unwrap_err();
                 assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");
             }
         }
