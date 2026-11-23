@@ -2495,6 +2495,13 @@ fn an_extent_layers_unplaced_vertices_are_said() {
         "{:?}",
         said(&s, mark)
     );
+    // Only vertices that can't be placed: refused, saying so, not that it has no features.
+    let nowhere = vec![Coord::new(1e12, 1e12), Coord::new(2e12, 1e12), Coord::new(2e12, 2e12), Coord::new(1e12, 1e12)];
+    add_in(&mut s, "Nowhere", GeometryType::Polygon, vec![Geometry::Polygon(vec![vec![nowhere]])], UTM);
+    let e = s
+        .run("raster.rasterize", &json!({"layer": "Plot", "cellSize": 0.001, "crs": "EPSG:4326", "extent": "Nowhere", "name": "C"}))
+        .unwrap_err();
+    assert!(e.contains("Nowhere has no vertex that can be placed in longitude/latitude"), "{e}");
 }
 
 /// Rasterize sizes its default grid in another system by the polygons' box in longitude/latitude,

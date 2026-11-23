@@ -533,7 +533,11 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
     Ok(Box::new(move || {
         let mut notes = notes;
         // What a run that fails had to say goes with its error.
+        // Taken by the work, so the layer's rows are let go of once its polygons are collected
+        // (an edit meanwhile then copies them only while they're still read).
+        let mut ds = Some(ds);
         let made = (|| -> Result<super::workflows::Made, String> {
+            let ds = ds.take().ok_or("the work ran twice")?;
             // The features burned: the selection, else all, in the layer's order (a later one wins).
             let mut rows: Vec<usize> = if selection.is_empty() { (0..ds.features.len()).collect() } else { selection };
             rows.sort_unstable();
@@ -587,6 +591,7 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             // Whole numbers: codes, one value, or a field that isn't a floating-point one.
             let whole_field = field.is_none_or(|(_, ty)| ty != FieldType::Double);
             let what = field.and_then(|(i, _)| ds.fields.get(i)).map_or("value", |f| f.name.as_str()).to_string();
+            drop(ds);
             let mut shapes = Vec::with_capacity(burns.len());
             let mut rounded = 0;
             for (k, (parts, v)) in burns.into_iter().enumerate() {
@@ -617,14 +622,15 @@ pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows:
             }
             // By default, the projected system the layer holds its coordinates in (else the one it was read in) and
             // the polygons' bounds.
-            let mut held_bounds = Extent::EMPTY;
-            for (k, c) in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).enumerate() {
-                look(k)?;
-                held_bounds.expand(*c);
-            }
             let mut unsized_by = 0usize;
             let grid = spec.finish(&mut notes, |crs| {
+                // (Asked for only when the grid's bounds aren't given.)
                 if crs == held && projected {
+                    let mut held_bounds = Extent::EMPTY;
+                    for (k, c) in shapes.iter().flat_map(|s| s.parts.iter().flatten().flatten()).enumerate() {
+                        look(k)?;
+                        held_bounds.expand(*c);
+                    }
                     return Ok(([held_bounds.min_x, held_bounds.min_y, held_bounds.max_x, held_bounds.max_y], None));
                 }
                 // Otherwise the bounds of the polygons' box in longitude/latitude, as before. A place the
@@ -990,7 +996,11 @@ impl Bounds {
                     ));
                 }
                 if e.is_empty() {
-                    return Err(format!("{name} has no features to take an extent from"));
+                    return Err(if unplaced > 0 {
+                        format!("{name} has no vertex that can be placed in longitude/latitude to take an extent from")
+                    } else {
+                        format!("{name} has no features to take an extent from")
+                    });
                 }
                 warp::bounds_in([e.min_x, e.min_y, e.max_x, e.max_y], crs)
             }
