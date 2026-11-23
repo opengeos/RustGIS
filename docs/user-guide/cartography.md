@@ -108,10 +108,11 @@ paints, not its size: a few kilobytes of dashes finer than a pixel, or of see-th
 up, can take minutes. So one with more to draw than a 2048 × 2048 image isn't taken either, nor
 one past 10,000 elements or 200,000 points of its shapes once each `<use>` is counted where it
 repeats, nor one with a marker on a shape inside another marker (drawn on each of its vertices
-wherever it is). An arc is counted as the curves it is drawn with, more the larger its radius: one of more
-than a thousand curves isn't taken, nor is a circle, an ellipse or a rounded corner whose radius
-is in em, ex or %, which may come to any size. Each image is decoded
-once until RustGIS restarts, and kept decoded, at most 700 pixels a side: in all at most
+wherever it is). An arc is counted as the curves it is drawn with, more the larger its radius:
+one of more than 200 curves isn't taken, nor is a circle, an ellipse or a rounded corner whose
+radius is in em or ex, which may come to any size. A radius in % is counted as that share of the
+largest size the SVG gives itself, unless a size inside it is in %, em or ex. Each image is
+decoded once until RustGIS restarts, and kept decoded, at most 700 pixels a side: in all at most
 256 megapixels of different marker images and 128 MiB once decoded (as many images as it keeps,
 at 177 × 177 each), so that a crafted file can't hold it for minutes; past it a new image is
 refused, or drawn as a circle, with a notice saying so, until RustGIS is restarted. A vector
@@ -726,7 +727,10 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
 - **Other places along lines**: a Parallel or Curved label whose place at the middle is taken, or
   (curved) where the line bends too sharply, tries up to seven others along the same stretch,
   nearest the middle first, and goes to the first that will do (Labeling pane › Position › Along
-  lines › **Try other places along the line**). If none will, it is left out, as with this off. A
+  lines › **Try other places along the line**). Set off the line (**Distance from the line**), it
+  tries each of the four places nearest the middle on its own side first and then on the other,
+  before moving on, so a name kept above a river goes below it where above is taken or (curved)
+  inside a bend too tight. If none will, it is left out, as with this off. A
   line with a repeat keeps its repeats where they are, so the box is hidden while Repeat is on, and
   the setting does nothing there or at a position off the line. Off by default, for the same reason
   as round points, and Lock keeps the place each label took
