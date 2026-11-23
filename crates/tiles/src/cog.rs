@@ -372,6 +372,9 @@ pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
     crate::cache::check_still(&crate::cache::current_still())?;
     crate::logins::check(url).map_err(str::to_string)?;
     let url = split(url).0;
+    // A local file written again since its header was read is read again (as with `with_info`).
+    #[cfg(not(target_arch = "wasm32"))]
+    forget_if_rewritten(url);
     {
         let i = infos().lock().unwrap_or_else(|e| e.into_inner());
         match i.get(url) {
@@ -2708,6 +2711,7 @@ mod tests {
     /// header and overview, as a web address's are by range. Refused for a document that may reach
     /// only public addresses; a path that isn't a full one to a `.tif` or `.tiff` isn't taken for
     /// one, nor is a web address.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_local_geotiff_is_read_in_place_from_its_file() {
         let _turn = crate::cache::turn();
@@ -2722,6 +2726,13 @@ mod tests {
         assert_eq!(sizes, vec![512, 256, 128]);
         let overview = raster::overview_blocking(&url).unwrap();
         assert_eq!((overview.width, overview.overview), (512, None), "small enough to hold its full image as the overview");
+        assert!(overview.rounded.is_empty(), "bytes round nothing");
+        // Int32 values past 16,777,216: the odd ones `f32` rounds are counted, as the whole-file
+        // reader counts them.
+        let wide = dir.join("wide.tif");
+        std::fs::write(&wide, cog::example_with(&cog::Example { size: 256, tile: 128, wide: true, ..cog::Example::default() })).unwrap();
+        let read = raster::overview_blocking(&wide.display().to_string()).unwrap();
+        assert_eq!(read.rounded, vec![256 * 256 / 2]);
         let (tx, rx) = std::sync::mpsc::channel();
         load(url.clone(), crate::address::Reach::Public, Box::new(move |r| tx.send(r.err()).unwrap()));
         let refused = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_or_default();

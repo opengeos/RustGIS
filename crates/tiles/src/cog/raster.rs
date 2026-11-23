@@ -120,6 +120,22 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                     i.layout.data_type,
                 )
                 .map_err(|e| format!("{url}: {e}"))?;
+                // The values `f32` rounded as the overview's tiles were decoded, by band, as the
+                // whole-file reader counts them for the overview it reads: said when the layer is
+                // added.
+                let rounded: Vec<u64> = bands
+                    .iter()
+                    .map(|&b| {
+                        (0..l.tiles())
+                            .filter_map(|tile| i.layout.chunk(l, tile, b))
+                            .filter_map(|(c, at)| got.get(c as usize).and_then(|t| t.rounded.get(at)))
+                            .map(|bits| bits.iter().map(|w| u64::from(w.count_ones())).sum::<u64>())
+                            .sum()
+                    })
+                    .collect();
+                if rounded.iter().any(|n| *n > 0) {
+                    r.rounded = rounded;
+                }
                 if let Some(full) = i.layout.levels.first().filter(|_| level > 0) {
                     r.overview = Some((full.width, full.height));
                 }
@@ -523,6 +539,7 @@ mod tests {
             stretching: Mutex::default(),
             stretch_failed: Mutex::default(),
             alpha: None,
+            #[cfg(not(target_arch = "wasm32"))]
             revision: std::sync::OnceLock::new(),
         }
     }
