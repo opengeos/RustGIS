@@ -133,6 +133,51 @@ fn an_earth_system_names_no_place_on_another_body() {
     assert!((lon - (100_000.0f64 / 3_396_190.0).to_degrees()).abs() < 1e-6, "{v}");
 }
 
+/// Degrees typed before a projected system's code are refused as before `map`; with units written
+/// they are its units.
+#[test]
+fn degrees_typed_with_a_systems_code_are_refused() {
+    let mut s = world();
+    let e = s.run("map.goToXY", &json!({"position": "46.95 7.44 EPSG:2056"})).unwrap_err();
+    assert!(e.contains("reads as degrees") && e.contains("46.95 mE"), "{e}");
+    let v = s.run("map.search", &json!({"query": "46.95 7.44 EPSG:2056"})).unwrap();
+    assert!(v["positionError"].as_str().is_some_and(|e| e.contains("reads as degrees")), "{v}");
+}
+
+/// Another body's projection names no place on the Earth's map: its inverse gives that body's
+/// degrees, not the Earth's.
+#[test]
+fn another_bodys_projection_names_no_place_on_the_earth() {
+    let mut s = world();
+    let p = json!({"x": 100_000, "y": 200_000, "crs": "+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs"});
+    let e = s.run("map.goToXY", &p).unwrap_err();
+    assert!(e.contains("a system of another body"), "{e}");
+    let mut mars = rustgis_data::Dataset::new("Mars plan", rustgis_data::GeometryType::Point, vec![]);
+    mars.crs = Some(rustgis_data::raster::Crs::parse("+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs").unwrap());
+    s.map_mut().add_dataset(mars);
+    let e = s.run("map.convertPosition", &json!({"x": 100_000, "y": 200_000, "crs": "Mars plan"})).unwrap_err();
+    assert!(e.contains("a system of another body"), "{e}");
+}
+
+/// One body's projection names no place on another body's map either: Mars's inverse gives no
+/// place on the Moon. The Moon's own projection does.
+#[test]
+fn a_projection_of_mars_names_no_place_on_the_moon() {
+    let mut s = world();
+    s.run("map.body", &json!({"name": "moon", "basemap": false})).unwrap();
+    let p = json!({"x": 100_000, "y": 200_000, "crs": "+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs"});
+    let e = s.run("map.goToXY", &p).unwrap_err();
+    assert!(e.contains("a system of Mars"), "{e}");
+    let mut mars = rustgis_data::Dataset::new("Mars plan", rustgis_data::GeometryType::Point, vec![]);
+    mars.crs = Some(rustgis_data::raster::Crs::parse("+proj=eqc +a=3396190 +b=3396190 +units=m +no_defs").unwrap());
+    s.map_mut().add_dataset(mars);
+    let e = s.run("map.convertPosition", &json!({"x": 100_000, "y": 200_000, "crs": "Mars plan"})).unwrap_err();
+    assert!(e.contains("a system of Mars"), "{e}");
+    let moon = json!({"x": 100_000, "y": 200_000, "crs": "+proj=eqc +a=1737400 +b=1737400 +units=m +no_defs"});
+    let v = s.run("map.convertPosition", &moon).unwrap_or_else(|e| panic!("{e}"));
+    assert!((v["lon"].as_f64().unwrap() - (100_000.0f64 / 1_737_400.0).to_degrees()).abs() < 1e-6, "{v}");
+}
+
 /// Degrees typed before `map` (latitude first, as without a system) are refused with the reason,
 /// not read as metres a few steps from the map's origin; in the search box too.
 #[test]
@@ -238,6 +283,16 @@ fn fit_to_view_places_the_raster_in_the_maps_system() {
         )
         .unwrap_err();
     assert!(e.contains("an extent or control points, not both"), "{e}");
+    // What only a warp uses is refused without a transform, the layer placed nowhere new.
+    for (key, value) in
+        [("name", json!("aligned")), ("path", json!("aligned.tif")), ("cellSize", json!(0.01)), ("resampling", json!("cubic"))]
+    {
+        let mut p = json!({"layer": "scan", "extent": [7.0, 46.0, 8.0, 47.0]});
+        p[key] = value;
+        let e = s.run("raster.georeference", &p).unwrap_err();
+        assert!(e.contains(&format!("{key} goes with a transform")), "{key}: {e}");
+    }
+    assert!(s.map().layer_by_name("aligned").is_none());
     assert_eq!(s.map().layer_by_name("scan").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().transform, before);
     // An entry that isn't a number is refused, not passed over, and nothing is placed.
     let before = s.map().layers.len();
