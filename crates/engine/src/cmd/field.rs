@@ -1011,7 +1011,9 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
     // The names are borrowed from the map's rows, not copied.
     let (mut named, mut seen, mut taken): (Vec<&str>, std::collections::HashSet<&str>, std::collections::HashSet<String>) =
         (Vec::new(), std::collections::HashSet::new(), std::collections::HashSet::new());
-    for l in map.layers.iter().filter(|l| !l.is_raster()) {
+    // A streamed layer's photos are left to its copy for reference, which counts them as staying
+    // home (or leaves the layer out): the rows it holds now aren't what the package will hold.
+    for l in map.layers.iter().filter(|l| !l.is_raster() && !l.is_streamed()) {
         let Some(fi) = photos_field(l) else { continue };
         for value in l.dataset.features.column(fi) {
             // Reading a field's paths can look at the disk (a path with a `;` in it).
@@ -2752,6 +2754,42 @@ mod tests {
         assert_eq!(std::fs::read(&copied).unwrap(), b"taken in the field");
         assert!(!temp.path().join("Away photos").join("kept.jpg").exists());
         assert!(home.project.offline_areas[0].conflicts.is_empty());
+    }
+
+    /// A streamed layer's photos aren't packed with the home photos: its copy for reference (or
+    /// its absence) decides what goes, and its photos are counted as staying home.
+    #[test]
+    fn a_streamed_layers_photos_stay_home_and_are_counted() {
+        let temp = Temp::new("stream-photos");
+        let photo = temp.path().join("site.jpg");
+        std::fs::write(&photo, b"a streamed layer's photo").unwrap();
+        let source = temp.path().join("sites.gpkg");
+        let mut seed = Session::new(Project::default());
+        let fields = vec![rustgis_data::Field::new("photos", rustgis_data::FieldType::Text)];
+        let mut sites = rustgis_data::Dataset::new("Sites", rustgis_data::GeometryType::Point, fields);
+        sites.crs = rustgis_data::raster::Crs::from_epsg(4326);
+        let point = rustgis_data::Geometry::Point(rustgis_data::Coord::new(1.0, 1.0));
+        sites.push(Some(point), vec![rustgis_data::Value::Text(photo.display().to_string())]);
+        let id = seed.map_mut().add_dataset(sites);
+        seed.run("share.exportLayer", &json!({"layer": id, "path": source})).unwrap();
+        let mut home = Session::new(Project::default());
+        home.path = Some(temp.path().join("home.rgis"));
+        home.run("layer.addData", &json!({"name": "Streamed", "path": source, "layer": "Sites", "stream": true})).unwrap();
+        assert!(home.map().layer_by_name("Streamed").unwrap().is_streamed());
+        // The rows a drawn view has read from the source, as the area's map may hold them.
+        let streamed = home.map_mut().layers.iter_mut().find(|l| l.name == "Streamed").unwrap();
+        let point = rustgis_data::Geometry::Point(rustgis_data::Coord::new(1.0, 1.0));
+        let fi = streamed.dataset.field_index("photos").unwrap();
+        let mut values = vec![rustgis_data::Value::Null; streamed.dataset.fields.len()];
+        values[fi] = rustgis_data::Value::Text(photo.display().to_string());
+        streamed.dataset.push(Some(point), values);
+        let mut budget = u64::MAX;
+        assert!(collect_photos(home.map(), &mut budget, usize::MAX).unwrap().entries.is_empty());
+        let mark = home.notice_mark();
+        let (_, out) = package(&mut home, &json!({"name": "Streams", "extent": [0, 0, 2, 2]})).unwrap();
+        assert!(rustgis_data::zip::read(&out).unwrap().iter().all(|(n, _)| !n.starts_with("photos/")));
+        let said: Vec<String> = home.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 photo reference(s) of layer(s) copied for reference stayed home")), "{said:?}");
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:
