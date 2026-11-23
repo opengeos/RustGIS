@@ -51091,6 +51091,12 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert!(e.contains("cellSize is required"), "{e}");
     let e = s.run("raster.rasterize", &json!({"layer": "soils", "nodata": 1, "cellSize": 1})).unwrap_err();
     assert!(e.contains("no-data value"), "{e}");
+    // An extent layer with no features: refused (as the run sizes its grid), nothing added.
+    crate::cmd::layer::add_dataset(&mut s, Dataset::new("nothing", GeometryType::Polygon, vec![Field::new("unit", FieldType::Text)]));
+    let e = s.run("raster.rasterize", &json!({"layer": "soils", "field": "unit", "cellSize": 1, "extent": "nothing"})).unwrap_err();
+    assert!(e.contains("nothing has no features to take an extent from"), "{e}");
+    let layers = layers + 1;
+    assert_eq!((s.map().layers.len(), s.project.tables.len()), (layers, tables), "nothing added by a refused run");
     // A GeoTIFF that can't be put in its place (a folder holds its name): refused, with what the
     // run had to say, and nothing added.
     let dir = std::env::temp_dir().join(format!("rustgis-rasterize-commit-{}", std::process::id()));

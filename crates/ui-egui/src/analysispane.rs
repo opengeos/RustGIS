@@ -3066,8 +3066,8 @@ mod tests {
         }
     }
 
-    /// A command that makes a raster, asked for through the app's dispatch (Command Search, the
-    /// assistant) rather than a section, runs on a thread of its own too: Polygons to Raster from a
+    /// A command that makes a raster, asked for through the app's dispatch (Command Search) rather
+    /// than a section, runs on a thread of its own too: Polygons to Raster from a
     /// text field answers that it started, the pane shows it running, and its layer and class table
     /// land with it.
     #[cfg(not(target_arch = "wasm32"))]
