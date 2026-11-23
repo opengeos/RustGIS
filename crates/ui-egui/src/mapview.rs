@@ -4174,6 +4174,8 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
             replies.push((layer.clone(), app.session.run("identify.featureInfo", &p)));
         }
         for (layer, r) in replies {
+            // A failure (a request refused because it reaches past the layer, too) was told by the
+            // command, as every command's error is.
             let Ok(v) = r else { continue };
             if let Some(url) = v["url"].as_str() {
                 let slot = ask_within(&v, url);
@@ -5605,6 +5607,38 @@ mod tests {
             follow_asks(&mut app, &egui::Context::default());
             assert_eq!(cache::ceiling_for(&caps), observed, "capabilities observed {observed:?}");
         }
+    }
+
+    /// A layer held to the internet whose capabilities name a GetFeatureInfo request on the local
+    /// network isn't asked there, and the pop-up says so, naming the request.
+    #[test]
+    fn a_refused_identify_request_is_said() {
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        let _turn = crate::fetching::turn();
+        const CAPS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://identify-refused.example/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://192.168.7.5/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>over</Name><Title>Over</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: CAPS.as_bytes().to_vec(), origin }));
+        });
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        let template = "https://identify-refused.example/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=over&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng";
+        s.run("map.addTiles", &json!({"url": template, "name": "Over", "overlay": true})).unwrap();
+        // Listed by a document read from the internet.
+        cache::restrict_to_public(template);
+        s.run("map.goToXY", &json!({"lon": 8.6, "lat": 46.65, "scale": 10000})).unwrap();
+        let caps = rustgis_engine::data::ogc::wms_layer_of(template).unwrap().0;
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let info = json!({"featureInfo": [{"tileLayer": "Over", "capabilities": caps, "public": true}]});
+        app.map.popup = Some(Popup::new(info, Coord::new(8.6, 46.65), map, opened));
+        let mark = app.session.notice_mark();
+        follow_asks(&mut app, &egui::Context::default());
+        let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.contains("http://192.168.7.5/info") && t.contains("local network")), "{told:?}");
     }
 
     /// Answers that land while the pop-up waits open it on the top result, with its feature

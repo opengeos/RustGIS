@@ -217,6 +217,13 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
             return Err(named(format!("the capabilities are larger than {} MB", MAX_TEXT >> 20)));
         }
         learn(s, index, caps.as_bytes()).map_err(named)?;
+        // Capabilities supplied by anything but the app say nothing trustworthy about where they
+        // were read: the requests they name are asked only on the internet.
+        if !s.policy_user()
+            && let Some((caps_url, _)) = s.map().tiles.get(index).and_then(|t| ogc::wms_layer_of(&t.url))
+        {
+            cache::restrict_to_public(&caps_url);
+        }
     }
     if let Some(text) = ps(p, "text") {
         if text.len() > MAX_TEXT {
@@ -327,5 +334,52 @@ fn answered(s: &mut Session, index: usize, request: &str) {
     let Some(t) = s.map_mut().tiles.get_mut(index) else { return };
     if let Some(next) = t.feature_info.as_ref().and_then(|fi| fi.answered(request)) {
         t.feature_info = Some(next);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// Capabilities supplied by anything but the app (the Assistant, MCP, a plugin) say nothing
+    /// trustworthy about where they were read: the GetFeatureInfo request they name on the local
+    /// network is refused, naming it. The app's own are asked there, as read where it read them.
+    #[test]
+    fn capabilities_supplied_by_anything_but_the_app_hold_their_requests_to_the_internet() {
+        use crate::policy::{Effects, Revocation, Scope};
+        struct Live;
+        impl Revocation for Live {
+            fn allows(&self, _: Effects) -> bool {
+                true
+            }
+        }
+        for (n, app) in [(1, true), (2, false)] {
+            let host = format!("identify-supplied-{n}.example");
+            let caps = format!(
+                r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://{host}/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://192.168.{n}.5/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title></Layer></Layer></Capability></WMS_Capabilities>"#
+            );
+            let mut s = Session::new(crate::Project::default());
+            let template = format!(
+                "https://{host}/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT=image/png"
+            );
+            s.run("map.addTiles", &json!({"url": template, "name": "Roads"})).unwrap();
+            s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+            let p = json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "capabilities": caps, "request": true});
+            let r = if app {
+                feature_info(&mut s, &p)
+            } else {
+                s.with_scope(Scope::assistant(4_201_303, std::sync::Arc::new(Live)), |s| feature_info(s, &p)).unwrap()
+            };
+            if app {
+                assert!(r.unwrap()["url"].as_str().is_some_and(|u| u.starts_with(&format!("http://192.168.{n}.5/info?"))));
+            } else {
+                let e = r.unwrap_err();
+                assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");
+            }
+        }
     }
 }

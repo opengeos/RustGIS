@@ -963,8 +963,9 @@ mod tests {
             let _turn = crate::fetching::turn();
             let base = format!("https://import-{n}.corp-looks-public.example/ogc");
             let next = format!("http://10.0.{n}.8/collections");
+            // The plan records a document it names after one read from the internet.
             if observed == Reach::Public {
-                cache::restrict_to_public(&base);
+                cache::restrict_to_public(&next);
             }
             let task = Import {
                 params: json!({"url": base}),
@@ -1017,9 +1018,11 @@ mod tests {
             assert_eq!(asked.lock().unwrap().clone(), [(caps.clone(), want)]);
             assert_eq!(cache::ceiling_for(&caps), want);
             if public {
+                app.dialogs.open = None;
                 let e = app.run("ui.addService", json!({"url": "http://10.0.5.9/wms", "type": "wms", "fromDocument": true})).unwrap_err();
                 assert!(e.contains("10.0.5.9") && e.contains("local network"), "{e}");
                 assert_eq!(asked.lock().unwrap().len(), 1, "a refused service is not asked");
+                assert_eq!(app.dialogs.open, None, "nothing opens for a refused service");
             }
         }
     }

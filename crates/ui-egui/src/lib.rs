@@ -4442,6 +4442,13 @@ impl RustGisApp {
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
                     return self.run("ui.dialog", json!({"name": "addService"}));
                 };
+                // An address a document read from the internet named (`fromDocument`, below) may not
+                // point into the local network: refused before anything opens.
+                let from_document = p.get("fromDocument").and_then(Value::as_bool) == Some(true);
+                if from_document {
+                    rustgis_engine::render::rustgis_tiles::address::check_reach(url, Reach::Public)
+                        .map_err(|e| connectionui::translated(&e))?;
+                }
                 let connection = p
                     .get("connection")
                     .and_then(Value::as_str)
@@ -4491,9 +4498,7 @@ impl RustGisApp {
                 // entry, `fromDocument`) leads only there: its capabilities, the documents they
                 // link to and the layers they list (`service.layers` reads the address's record).
                 // It can only narrow what the address may reach.
-                if p.get("fromDocument").and_then(Value::as_bool) == Some(true) {
-                    rustgis_engine::render::rustgis_tiles::address::check_reach(url, Reach::Public)
-                        .map_err(|e| connectionui::translated(&e))?;
+                if from_document {
                     cache::restrict_to_public(url);
                     cache::restrict_to_public(&caps);
                 }

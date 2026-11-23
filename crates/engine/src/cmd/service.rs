@@ -294,9 +294,12 @@ fn read_documents_with(
         // one inherits its document's reach (a document not recorded, which can't happen, reaches
         // only the internet). Either is judged by that reach, never by how the document's address
         // is spelled: a public-looking name may connect on the local network, and its local links
-        // are then the service's own.
+        // are then the service's own. A document the app supplies was recorded by its fetch if it
+        // came from the internet; one supplied by anything else (the Assistant, MCP, a plugin) says
+        // nothing trustworthy about where it was read, so it is taken as read from the internet.
         let inherited = if seen.is_empty() {
-            cache::ceiling_for(original)
+            let untrusted = supplied.is_some() && !s.policy_user();
+            cache::ceiling_for(original).min(if untrusted { Reach::Public } else { Reach::Local })
         } else {
             reaches.get(crate::render::rustgis_tiles::logins::inner(&parent)).copied().unwrap_or(Reach::Public)
         };
@@ -1817,6 +1820,8 @@ pub(super) fn catalog_search(s: &mut Session, p: &Value) -> CmdResult {
     // fetch recorded of it ([`cache::ceiling_for`]). The catalogue's own address is the user's
     // choice, unless a document read from the internet named it.
     let within = cache::ceiling_for(url).min(cache::ceiling_for(&request));
+    // An answer supplied by anything but the app says nothing trustworthy about where it was read.
+    let within = if ps(p, "text").is_some() && !s.policy_user() { within.min(Reach::Public) } else { within };
     let (page, reach) = match ps(p, "text") {
         Some(text) => (
             rustgis_data::ogc::parse_records(&request, text.as_bytes()).map_err(|e| crate::sources::message_with_address(url, &e))?,
@@ -2238,6 +2243,56 @@ mod tests {
                 assert!(e.contains(&linked) && e.contains("local network"), "{e}");
                 assert_eq!(asked.len(), 1, "the link is not fetched: {asked:?}");
             }
+        }
+    }
+
+    /// A document the app supplies without a record of an internet read was read where the app's
+    /// fetch connected, so its local links are followed; one supplied by the Assistant (or MCP, or a
+    /// plugin) says nothing trustworthy about where it was read and is taken as read from the
+    /// internet: its link into the local network is refused, naming it and why.
+    #[test]
+    fn a_document_supplied_by_anything_but_the_app_is_taken_as_read_from_the_internet() {
+        use crate::policy::{Effects, Revocation, Scope};
+        struct Live;
+        impl Revocation for Live {
+            fn allows(&self, _: Effects) -> bool {
+                true
+            }
+        }
+        for (n, app) in [(13, true), (14, false)] {
+            let linked = format!("http://10.0.{n}.5/collections");
+            let landing = json!({"links":[{"rel":"data","type":"application/json","href":linked}]}).to_string();
+            let p = json!({"url": format!("https://gis-{n}.corp-looks-public.example/ogc"), "type": "ogcapi", "text": landing});
+            let mut s = Session::new(crate::Project::default());
+            let mut never = |_: &str, _: Reach| -> Result<cache::Fetched, String> { Err("nothing is fetched".into()) };
+            let found = if app {
+                read_documents_with(&mut s, &p, false, None, &mut never)
+            } else {
+                s.with_scope(Scope::assistant(4_201_301, std::sync::Arc::new(Live)), |s| {
+                    read_documents_with(s, &p, false, None, &mut never)
+                })
+                .unwrap()
+            };
+            if app {
+                let next = found.unwrap().next.unwrap_or_default();
+                assert!(next.starts_with(&linked), "the app's document leads on: {next}");
+            } else {
+                let e = found.err().unwrap_or_default();
+                assert!(e.contains(&linked) && e.contains("local network"), "{e}");
+            }
+            // A catalogue's answer the same way: its link into the local network is kept for the
+            // app, left out for the Assistant.
+            let record = format!(
+                r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="1"><csw:Record><dc:identifier>a</dc:identifier><dc:title>A</dc:title><dc:URI protocol="OGC:WMS">http://10.0.{n}.4/wms</dc:URI></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#
+            );
+            let p = json!({"url": format!("https://csw-{n}.corp-looks-public.example/csw"), "text": record});
+            let out = if app {
+                catalog_search(&mut s, &p).unwrap()
+            } else {
+                s.with_scope(Scope::assistant(4_201_302, std::sync::Arc::new(Live)), |s| catalog_search(s, &p)).unwrap().unwrap()
+            };
+            let links = out["records"][0]["links"].as_array().map_or(0, Vec::len);
+            assert_eq!(links, usize::from(app), "{out}");
         }
     }
 
