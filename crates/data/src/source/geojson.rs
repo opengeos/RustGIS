@@ -316,11 +316,11 @@ impl FeatureSource for GeoJsonSource {
         &self.info
     }
 
-    /// Its own system, in which it gives its features as the file holds them.
     fn reads_own_box(&self) -> bool {
         true
     }
 
+    /// Its own system, in which it gives its features as the file holds them.
     fn coord_crs(&self) -> crate::raster::Crs {
         self.reproject.crs()
     }

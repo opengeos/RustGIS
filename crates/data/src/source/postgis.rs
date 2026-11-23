@@ -1695,12 +1695,12 @@ impl FeatureSource for PostgisSource {
         &self.info
     }
 
-    /// The table's own system when RustGIS converts it itself, else longitude/latitude, which
-    /// the server gives.
     fn reads_own_box(&self) -> bool {
         true
     }
 
+    /// The table's own system when RustGIS converts it itself, else longitude/latitude, which
+    /// the server gives.
     fn coord_crs(&self) -> Crs {
         self.held
     }
