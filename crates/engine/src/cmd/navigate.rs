@@ -497,7 +497,9 @@ fn axes_refused(crs: rustgis_data::raster::Crs) -> Option<String> {
 
 /// The system a layer's coordinates are given in, as Go To XY reads them: a raster's, its
 /// pixels' (also one only assumed, as its pixels are placed in it); a layer of features', the one
-/// it was read in. `None` for one that names none (longitude and latitude). Not
+/// it was read in. `None` for a layer of features that names none (longitude and latitude), and
+/// for a raster with no pixels loaded, whose system is unknown ([`system_of`] refuses it, so check
+/// that before taking `None` for degrees). Not
 /// [`super::project::layer_system`], which leaves assumed systems out as the project's own.
 pub fn layer_coordinates_system(l: &rustgis_map::Layer) -> Option<rustgis_data::raster::Crs> {
     match &l.raster {
@@ -521,7 +523,12 @@ pub(crate) fn system_of(map: &Map, name: &str) -> Result<System, String> {
     }
     // A layer's name first, so a layer named as a system (`Albers`, `2056`) means the layer.
     if let Some(l) = map.layer_by_name(name) {
-        // A layer that names no system holds longitude and latitude.
+        // A raster with no pixels (still being read, or its file couldn't be) names no system: its
+        // system is unknown, not longitude and latitude.
+        if l.raster.as_ref().is_some_and(|r| r.data.is_none()) {
+            return Err(format!("layer '{name}' has no pixels loaded, so its system is unknown: wait until it has opened, or reload it"));
+        }
+        // A feature layer that names no system holds longitude and latitude.
         let crs = layer_coordinates_system(l).unwrap_or(rustgis_data::raster::Crs::LonLat);
         // A projection of the Earth names no place on another body's map, as its code doesn't;
         // degrees are that map's own, and another body's projection is its own.
