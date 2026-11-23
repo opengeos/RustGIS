@@ -637,8 +637,9 @@ pub fn read_download_shared_page(name: &str, bytes: std::sync::Arc<Vec<u8>>, pag
     raster::read_shared_page(name, bytes, page, place).map_err(|e| format!("{name}: {e}"))
 }
 
-/// The raster at `path` (a PDF's `page`), read whole; for a `scan`, as the file holds it, without
-/// the world file beside it (#2075).
+/// The raster at `path` (a PDF's `page`), read whole, or for a large tiled GeoTIFF on this
+/// computer its overview, read in place ([`tiled_in_place`]); for a `scan`, as the file holds it,
+/// without the world file beside it (#2075).
 pub(crate) fn read_raster_as(path: &str, page: Option<&str>, scan: bool) -> RasterRead {
     // A large tiled GeoTIFF: its overview, the part in view read as the map draws. Read whole
     // as before when its overview can't be read after all.
@@ -684,8 +685,8 @@ pub(crate) type RasterRead = Result<(Raster, bool), String>;
 /// when the file is tiled with overviews, too large to hold whole ([`raster::max_samples`]), and
 /// reading it in place loses nothing reading it whole keeps: its header reports no loss (a
 /// transparency mask, metadata that can't be read) and no `.aux.xml` or world file is beside it.
-/// Reads the file's header (a few reads of the file, on the fetch workers), afresh each time, as
-/// the file may have been written again; forgotten when it isn't read in place. The wait for the
+/// Reads the file's header (a few reads of the file, on the fetch workers), or takes the one kept
+/// while the file hasn't changed since; forgotten when it isn't read in place. The wait for the
 /// header, and [`read_raster_as`]'s for the overview, don't look at Cancel: a local file answers
 /// in milliseconds, and a hung one (an unreachable mount) is given up after two minutes.
 #[cfg(not(target_arch = "wasm32"))]
@@ -701,7 +702,8 @@ pub(crate) fn tiled_in_place(path: &str) -> bool {
     if !p.is_file() || raster::pam::read(p).is_some() || raster::world::beside(p).is_some() {
         return false;
     }
-    cog::forget_local_file(path);
+    // A header kept for the file is read again only when the file has changed since (see
+    // `cog::with_info`), so its tiles stay while it hasn't.
     let tiled = cog::info_blocking(path).is_ok_and(|info| {
         let l = &info.layout;
         let full = l.levels.first().map_or(0, |f| u64::from(f.width) * u64::from(f.height));

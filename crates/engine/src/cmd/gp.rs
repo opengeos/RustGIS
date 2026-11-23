@@ -1480,7 +1480,7 @@ fn inputs_of<'a>(
 /// installs before reading its inputs; a run made where the caller waits stops there only when
 /// the caller installed one, else after the read.
 /// Read only for [`Tiled::File`]: for [`Tiled::Overview`] each such layer's held overview is said,
-/// and for [`Tiled::ByPath`] nothing is read or said.
+/// and for [`Tiled::ByPath`] nothing is read or said, but a file no longer there is refused.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tiled_inputs(
     map: &rustgis_map::Map,
