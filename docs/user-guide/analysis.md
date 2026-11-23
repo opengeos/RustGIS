@@ -602,9 +602,8 @@ and features, before changing any fields. The attribute table's Calculate Geomet
 same for its chosen rows. Spatial Join's Largest overlap refuses affected selected target or
 join features before writing output. Ordinary polar caps and whole-world rectangles remain
 measurable. Measure Area explains the ambiguity and still shows the perimeter.
-Spatial Join's **Largest overlap** still measures area on a sphere of radius 6,371 km; it can
-differ from the ellipsoid by up to about 0.9 % (a small area near a pole). The same WGS 84
-measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the
+Spatial Join's **Largest overlap** ranks overlaps by their area or length on the same ellipsoid.
+The same WGS 84 measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the
 [expressions](expressions.md#values)' `$area`, `$perimeter` and `$length`, the map's
 **Measure** tools on the Earth, and every network tool's edge and route lengths, so all of these
 read the same number for the same geometry, with one exception. A polygon ring with a full-turn
@@ -1454,7 +1453,7 @@ The suite is an optional download, so RustGIS itself stays small: the **GeoLibre
 single `geolibre` program (about 20 MB to download). In the Tools pane, click
 **Install Whitebox and GeoLibre tools** under *Whitebox and GeoLibre tools*: RustGIS downloads the runner for your
 platform from the geolibre-rust release it was built and tested with
-([1.8.0](https://github.com/opengeos/geolibre-rust/releases/tag/v1.8.0), the same runner the browser
+([1.8.3](https://github.com/opengeos/geolibre-rust/releases/tag/v1.8.3), the same runner the browser
 uses), checks it against its published SHA-256 checksum (which catches a corrupted download; the
 release itself is trusted as when you download it by hand), checks that it starts and reports a
 version RustGIS works with, and only then installs it in its data folder
@@ -1469,6 +1468,16 @@ it installed and removes the `geolibre` folder only if it is empty. Other files 
 you located yourself, and one on your `PATH` are left alone; RustGIS looks for a runner again.
 You can install the tools again at any time. In the browser,
 **Remove** unloads the tools and stops loading them when RustGIS starts.
+
+An existing desktop runner is kept when RustGIS updates. To update a runner installed by RustGIS
+in place, run `gp.installGeolibre` from the command line in the updated RustGIS build. It downloads
+and checks the replacement before changing the installed program, so a download or verification
+failure leaves the installed runner in place. Restart the desktop app afterwards to reload its
+tools. For a runner you located yourself, download the new release and use **Locate…**.
+
+Runner 1.8.3 corrects the OSGB36 datum conversion that offset stream vectors from their raster.
+Rerun **Raster Streams to Vector** to create a corrected layer, then remove the old offset layer
+after checking the result. Save the project or export the corrected layer as needed.
 
 **In your language.** The tools' names, descriptions, parameters and toolboxes come in English.
 GeoLibre translates them into some twenty languages, in
