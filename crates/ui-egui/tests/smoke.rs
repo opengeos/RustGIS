@@ -1138,6 +1138,25 @@ fn the_active_view_tab_scrolls_into_view_however_it_is_activated() {
 }
 
 #[test]
+fn the_active_view_tab_stays_in_sight_when_tabs_before_it_change_width_but_not_the_total() {
+    let mut h = crowded_view_tabs();
+    let long = "Tab Map 9, with a much longer name than the others";
+    h.state_mut().run("map.rename", json!({"map": "Tab Map 9", "name": long})).unwrap();
+    activate_world(&mut h);
+    h.state_mut().run("map.activate", json!({"name": "Tab Map 5"})).unwrap();
+    settle(&mut h);
+    assert!(view_tab_in_sight(&h, "Tab Map 5"));
+    // A script swaps the names of a map before the active one and a map after it, in one go: the
+    // tabs' total width is the same, but the active tab moves right by the difference.
+    for (map, name) in [("Tab Map 1", "Swap"), (long, "Tab Map 1"), ("Swap", long)] {
+        h.state_mut().run("map.rename", json!({"map": map, "name": name})).unwrap();
+    }
+    assert_eq!(h.state().session.map().name, "Tab Map 5");
+    settle(&mut h);
+    assert!(view_tab_in_sight(&h, "Tab Map 5"));
+}
+
+#[test]
 fn view_tabs_lose_their_arrows_when_they_fit_and_the_wheel_moves_them_freely() {
     let mut h = crowded_view_tabs();
     activate_world(&mut h);

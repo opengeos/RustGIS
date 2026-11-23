@@ -167,8 +167,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 const SCROLL_BUTTON_W: f32 = 18.0;
 
 /// Whether a tab strip's active tab scrolls into view on this frame: for a few frames (a pass that
-/// egui discards drops its scroll request) after `key` changes, the key being the active tab, the
-/// strip's room and its tabs' widths. Then the wheel and the arrows move the strip freely.
+/// egui discards drops its scroll request) after `key` changes, the key being what puts the active
+/// tab where it is: which tab it is, the strip's room, and the widths that place it. Then the wheel
+/// and the arrows move the strip freely.
 pub(crate) fn follow_active<K: Clone + Default + PartialEq + Send + Sync + 'static>(ui: &Ui, id: egui::Id, key: K) -> bool {
     let (shown, scrolls): (K, u8) = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let scrolls = if shown == key { scrolls } else { 0 };

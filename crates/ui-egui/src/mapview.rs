@@ -4709,11 +4709,21 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let room = (r.width() - 6.0 - 4.0 - NEW_TAB_W - 4.0).max(60.0);
     let p = &app.session.project;
     let model = model_tab_name(app);
-    let widths: f32 =
-        p.maps.iter().map(|m| &m.name).chain(p.layouts.iter().map(|l| &l.name)).chain(&model).map(|n| view_tab_w(ui, n) + 2.0).sum();
     let in_view = if app.mb.shown() { (2, 0) } else { app.session.active_layout.map_or((0, p.active_map), |i| (1, i)) };
-    let follow =
-        crate::ribbon::follow_active(ui, egui::Id::unique("view_tabs_active"), (in_view, room.round() as i32, widths.round() as i32));
+    // Where the tab in view starts in the row, and how wide it is: it moves when a tab before it
+    // changes width, even when the row's total width doesn't (two names swapped across it).
+    let tabs = p.maps.iter().enumerate().map(|(i, m)| ((0, i), &m.name));
+    let tabs = tabs.chain(p.layouts.iter().enumerate().map(|(i, l)| ((1, i), &l.name))).chain(model.iter().map(|n| ((2, 0), n)));
+    let (mut start, mut span) = (0.0, (0.0, 0.0));
+    for (tab, n) in tabs {
+        let w = view_tab_w(ui, n) + 2.0;
+        if tab == in_view {
+            span = (start, w);
+        }
+        start += w;
+    }
+    let key = (in_view, room.round() as i32, span.0.round() as i32, span.1.round() as i32);
+    let follow = crate::ribbon::follow_active(ui, egui::Id::unique("view_tabs_active"), key);
     let strip = Rect::from_min_size(pos2(r.min.x + 6.0, r.min.y), vec2(room, r.height()));
     let mut tabs_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::left_to_right(egui::Align::Min)));
     let area = egui::ScrollArea::horizontal().id_salt("view_tabs").max_width(room);
