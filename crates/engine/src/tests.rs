@@ -3302,6 +3302,36 @@ fn unique_values_by_expression_keep_their_classes_and_say_scales() {
     assert_eq!(kept.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["overview"]);
 }
 
+/// A calculation rule and Calculate Field refuse quoted text past the expression language's length
+/// limit, as the language refuses any other expression that long (#2783): no rule is kept and no
+/// value changes.
+#[test]
+fn a_calculation_past_the_length_limit_is_refused_by_rules_and_calculate_field() {
+    let mut s = numbered_points(&[1]);
+    let long = format!("'{}'", "a".repeat(rustgis_data::query::MAX_LEN - 1));
+    let rule = json!({"layer": "Herds", "name": "Long", "kind": "calculation", "field": "name", "expression": long});
+    let refused = s.run("data.attributeRule", &rule).err();
+    assert_eq!(refused.as_deref(), Some("the expression is too long"), "the rule");
+    assert!(s.map().layer_by_name("Herds").unwrap().design.rules.is_empty(), "no rule kept");
+    let refused = s.run("edit.calculateField", &json!({"layer": "Herds", "field": "name", "expression": long})).err();
+    assert_eq!(refused.as_deref(), Some("the expression is too long"), "Calculate Field");
+    let ds = &s.map().layer_by_name("Herds").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("name").unwrap()).to_string(), "h1");
+    // One already in a project (an earlier version, a hand-edited file) is a rule that doesn't
+    // read, skipped as such: an edit goes through and the rule writes nothing.
+    let id = s.map().layer_by_name("Herds").unwrap().id;
+    let kept = rustgis_map::design::AttributeRule {
+        name: "Long".into(),
+        kind: rustgis_map::design::RuleKind::Calculation,
+        field: "name".into(),
+        expression: long,
+    };
+    s.map_mut().layer_mut(id).unwrap().design.rules.push(kept);
+    s.run("edit.setValue", &json!({"layer": "Herds", "row": 0, "field": "n", "value": 2})).unwrap();
+    let ds = &s.map().layer_by_name("Herds").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("name").unwrap()).to_string(), "h1", "the rule wrote nothing");
+}
+
 /// A layer of points read from GeoJSON, one for each value given, in that order: the integer
 /// field `n` holds it, the text field `code` its digits, the text field `name` "h" and them.
 fn numbered_points(values: &[i64]) -> Session {

@@ -1585,6 +1585,11 @@ pub(crate) enum Calculation {
 impl Calculation {
     /// Parses `expr`; when neither reads it, the error is the expression language's.
     pub(crate) fn parse(expr: &str, ds: &rustgis_data::Dataset) -> Result<Calculation, String> {
+        // The language's length limit holds for the earlier calculator too, which both routes to it
+        // below would otherwise skip: a rule or Calculate Field reads no longer text than a query.
+        if expr.chars().count() > rustgis_data::query::MAX_LEN {
+            return Err("the expression is too long".into());
+        }
         // A field named like a literal was read as the field (`null + 1`), so what the earlier
         // calculator reads with such a field keeps its meaning (quoted text needn't).
         // A date field in arithmetic, which the language refuses, isn't the earlier calculator's
@@ -1970,5 +1975,21 @@ mod tests {
         // Text that doesn't read the field means what it does elsewhere.
         assert_eq!(v("'it''s'"), Value::Text("it's".into()));
         assert_eq!(v("'a' || 'b'"), Value::Text("ab".into()));
+    }
+
+    /// A calculation past the expression language's length limit is refused, however the earlier
+    /// calculator would read it: as quoted text, or with a field named like a literal (#2783).
+    #[test]
+    fn a_calculation_longer_than_the_limit_is_refused() {
+        use rustgis_data::query::MAX_LEN;
+        let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("null", FieldType::Integer)]);
+        ds.push(None, vec![Value::Int(4)]);
+        // Counted in characters, as the language counts them: `é` is two bytes.
+        for (prefix, at) in [("", "quoted"), ("null + ", "joined to a field named null")] {
+            let expr = |chars: usize| format!("{prefix}'{}'", "é".repeat(chars - prefix.len() - 2));
+            assert!(Calculation::parse(&expr(MAX_LEN), &ds).is_ok(), "{at}, at the limit");
+            let refused = Calculation::parse(&expr(MAX_LEN + 1), &ds).err();
+            assert_eq!(refused.as_deref(), Some("the expression is too long"), "{at}, one past it");
+        }
     }
 }
