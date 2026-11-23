@@ -960,13 +960,15 @@ impl<'a> Grid<'a> {
         }
         let Some(polygon) = geo_polygon(&rings) else { return Ok(()) };
         let prepared = PreparedGeometry::from(polygon);
+        // Each test locates the cell against the whole outline, so it's paced by its vertices.
+        let per_test = rings.iter().map(Vec::len).fold(64usize, usize::saturating_add);
         let fits = |v: i64| i32::try_from(v).is_ok();
         for (j, q0, q1) in rows {
             for q in q0..=q1 {
                 if !fits(q) || !fits(j) {
                     return Err(reach());
                 }
-                work.spend(1, 64, res)?;
+                work.spend(1, per_test, res)?;
                 let keep = if center {
                     let c = self.hex.centre(q, j);
                     prepared.relate(&geo::Point::new(c.x, c.y)).is_intersects()
@@ -1757,6 +1759,22 @@ mod tests {
         d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
         let p = serde_json::json!({"system": "Hexagon", "resolution": 2, "area": "Input Layer", "input": "pts"});
         assert!(!layer(grid(&One(d, None), &p).unwrap()).features.is_empty());
+        // Each cell's test grows with the outline, so Cancel is looked at by its vertices too.
+        let looks = |n: usize| {
+            let ring: Vec<Coord> = (0..=n)
+                .map(|i| {
+                    let a = i as f64 / n as f64 * 2.0 * PI;
+                    Coord::new(10.0 * a.cos(), 10.0 * a.sin())
+                })
+                .collect();
+            let mut d = Dataset::new("pts", GeometryType::Polygon, vec![]);
+            d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+            let p = serde_json::json!({"system": "Hexagon", "resolution": 5, "area": "Input Layer", "input": "pts"});
+            let cancel = control::Control::cancelled_at_look(u64::MAX);
+            crate::run_under("Grid", &cancel, || grid(&One(d, None), &p)).unwrap();
+            cancel.looked()
+        };
+        assert!(looks(100_000) >= looks(1_000) + 2);
     }
 
     /// A zigzag outline whose edges each cross many rows is still held to the work limit, with
