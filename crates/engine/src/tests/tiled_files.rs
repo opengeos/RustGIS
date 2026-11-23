@@ -227,6 +227,7 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
 /// A batch reads a raster file read in place once for its items (kept only while it runs), and
 /// each item reads the file, not the overview the layer holds: Zonal Statistics batched over two
 /// zone layers counts every pixel of the file in each.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_batch_over_a_tiled_file_reads_the_file_for_each_item() {
     let d = dir("batch");

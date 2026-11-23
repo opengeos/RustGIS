@@ -544,8 +544,8 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     })?;
     // What reading its inputs approximated (a raster's overview read for a file read in place),
     // said now: the run's result is the plugin's own.
-    for m in said {
-        s.notify(format!("{}: {m}", spec.name), false);
+    if !said.is_empty() {
+        s.notify(format!("{}: {}", spec.name, said.join("; ")), false);
     }
     let read = read_layers(s, spec, resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
@@ -1546,7 +1546,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 thread_local! {
     /// How many raster files read in place [`tiled_inputs`] has read from their file on this
     /// thread, under test.
@@ -1554,7 +1554,7 @@ thread_local! {
 }
 
 /// Whether a batch's reads are kept on this thread now ([`BATCH_READS`]), under test.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn batch_reads_kept() -> bool {
     BATCH_READS.with(|b| b.borrow().is_some())
 }
