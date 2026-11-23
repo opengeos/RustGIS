@@ -26,7 +26,8 @@ after each number they are the system's. A layer in a projection of the Earth na
 no place on another body's map, nor does another body's projection on the Earth's map (or on a
 third body's: Mars's on the Moon's), and the dialog doesn't offer one. X and Y are an easting and a
 northing: a system counted west or south, or northing first, is refused (and not offered in the
-dialog), and a raster layer gives the system its pixels are in. A unit written (`m`, `ft`, `ftUS`)
+dialog), and a raster layer gives the system its pixels are in (one whose
+file couldn't be read gives none and is refused). A unit written (`m`, `ft`, `ftUS`)
 must be the system's: feet in a system of metres are refused, not read as metres; the search
 box then says why, and `map.search` returns the reason as `positionError`. On another body's map, a
 system named by a code is the Earth's and is refused. `map.goToXY` takes the same: `lon` and `lat` as numbers or

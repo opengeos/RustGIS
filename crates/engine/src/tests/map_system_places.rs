@@ -159,6 +159,18 @@ fn another_bodys_projection_names_no_place_on_the_earth() {
     assert!(e.contains("a system of another body"), "{e}");
 }
 
+/// A raster whose pixels couldn't be read names no system: refused with the reason, not taken
+/// for longitude and latitude.
+#[test]
+fn a_raster_with_no_pixels_names_no_system() {
+    let mut s = world();
+    scan_layer(&mut s, "relief");
+    let id = s.map().layer_by_name("relief").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = None;
+    let e = s.run("map.goToXY", &json!({"x": 40, "y": 30, "crs": "relief"})).unwrap_err();
+    assert!(e.contains("has no pixels loaded"), "{e}");
+}
+
 /// One body's projection names no place on another body's map either: Mars's inverse gives no
 /// place on the Moon. The Moon's own projection does.
 #[test]

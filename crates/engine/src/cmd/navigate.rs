@@ -521,7 +521,12 @@ pub(crate) fn system_of(map: &Map, name: &str) -> Result<System, String> {
     }
     // A layer's name first, so a layer named as a system (`Albers`, `2056`) means the layer.
     if let Some(l) = map.layer_by_name(name) {
-        // A layer that names no system holds longitude and latitude.
+        // A raster whose pixels couldn't be read names no system: its system is unknown, not
+        // longitude and latitude.
+        if l.raster.as_ref().is_some_and(|r| r.data.is_none()) {
+            return Err(format!("layer '{name}' has no pixels loaded, so its system is unknown: reload it"));
+        }
+        // A feature layer that names no system holds longitude and latitude.
         let crs = layer_coordinates_system(l).unwrap_or(rustgis_data::raster::Crs::LonLat);
         // A projection of the Earth names no place on another body's map, as its code doesn't;
         // degrees are that map's own, and another body's projection is its own.
