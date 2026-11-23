@@ -236,7 +236,8 @@ impl Notes {
         self.0.iter().map(Note::as_str)
     }
 
-    /// Whether one of them is the plain text `text`.
+    /// Whether one of them has the text `text`, whatever its code: a match by wording alone,
+    /// where `==` with a string matches a plain note only.
     pub fn says(&self, text: &str) -> bool {
         self.0.iter().any(|n| n.text == text)
     }

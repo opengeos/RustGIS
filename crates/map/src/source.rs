@@ -920,7 +920,12 @@ impl SourceLayer {
     /// kinds, one last note says there are more.
     pub fn saw_read_notes(&mut self, notes: &[rustgis_data::loss::Note]) {
         for note in notes.iter().filter(|n| !n.text.trim().is_empty()) {
-            let kind = note_kind(&note.text);
+            // A kind is its wording without its counts, and its loss code: a coded note isn't
+            // folded into a plain one that reads the same.
+            let kind = match note.loss {
+                Some(code) => format!("{}\u{1f}{}", note_kind(&note.text), code.spec().id),
+                None => note_kind(&note.text),
+            };
             if self.read_note_kinds.contains(&kind) {
                 continue;
             }
@@ -2266,6 +2271,18 @@ mod tests {
         source.forget_read_notes();
         source.saw_read_notes(&[note(4)]);
         assert_eq!(source.take_read_notes(), [note(4)]);
+    }
+
+    /// A note that reports a loss isn't folded into a plain one that reads the same: its code
+    /// is said too, once.
+    #[test]
+    fn a_coded_read_note_is_its_own_kind() {
+        use rustgis_data::loss::{LossCode, Note};
+        let mut source = super::SourceLayer::default();
+        let plain = Note::plain("2 rings left out");
+        let coded = Note::loss(LossCode::DroppedRing, "3 rings left out");
+        source.saw_read_notes(&[plain.clone(), coded.clone(), coded.clone()]);
+        assert_eq!(source.take_read_notes(), [plain, coded]);
     }
 
     /// Only counts make two notes one kind: notes differing in another number stay apart.
