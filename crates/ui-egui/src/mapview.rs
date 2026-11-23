@@ -583,6 +583,11 @@ impl MapView {
         self.tex_camera
     }
 
+    /// The camera the GPU scene on screen is drawn for now (diagnostics and tests).
+    pub fn scene_camera(&self) -> Option<Camera> {
+        self.gpu_frame.as_ref().map(|f| f.camera())
+    }
+
     /// Whether the map shown is a GPU scene that moves with the camera (vector meshes and raster
     /// tiles) rather than a picture shifted and scaled until it is drawn again (diagnostics and
     /// tests).
@@ -979,7 +984,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // pictures drawn on the CPU (tiles, rasters…). Vector scenes re-project in the vertex
     // shader; image scenes shift and scale as cached pictures while navigating.
     // A decline holds at its revision and zoom level (what it shows depends on both).
-    let rev = (app.session.revision, (cam.res.max(1e-9).log2().round()) as i32);
+    let rev = declined_at(app.session.revision, &cam);
     let turned_view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
     let gpu_ok = app.map.gpu_enabled
         && app.map.render_state.is_some()
@@ -1127,7 +1132,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // drawn on the UI thread, as before: a refused thread costs smoothness, not the frame.
         && !app.map.tilt_settle.failed(key);
     // A turned or tilted map on the GPU re-projects its scene as the camera moves, but only so far
-    // (`GpuFrame::fits`): turned or tilted half a degree, zoomed by 0.7 or 1.4 or panned a quarter
+    // (`SceneBuffers::fits`): turned or tilted half a degree, zoomed by 0.7 or 1.4 or panned a quarter
     // of the view, it needs a scene of its own. Made on the UI thread, each one stopped the window
     // for as long as tessellating every layer took, again and again through a turn, a tilt or a
     // quick zoom. So, like a flat map's frames (#1750), it is made off the UI thread, while it
@@ -1200,7 +1205,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         // A turned or tilted view the GPU declined stays on the CPU, as when it is
                         // drawn here, until the map or its data change.
                         if !globe_view && (done.view.camera.bearing != 0.0 || done.view.camera.pitch != 0.0) && gpu_ok {
-                            app.map.gpu_turn_declined = Some(rev);
+                            app.map.gpu_turn_declined = Some(declined_at(k.rev, &done.view.camera));
                         }
                         app.map.gpu_frame = None;
                         show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, globe_view);
@@ -1306,7 +1311,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 match r {
                     rustgis_engine::render::RenderOutput::Cpu(r) => {
                         if gpu_ok && (done.view.camera.bearing != 0.0 || done.view.camera.pitch != 0.0) {
-                            app.map.gpu_turn_declined = Some(rev);
+                            app.map.gpu_turn_declined = Some(declined_at(k.rev, &done.view.camera));
                         }
                         app.map.gpu_frame = None;
                         show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, false);
@@ -1574,6 +1579,19 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // vector-only scenes re-project in their shaders. Both draw inside egui's wgpu pass. The GPU
     // backend only serves flat maps, so the globe's drape never meets it.
     // Not under the tilted map's drape: a flat GPU frame from before the tilt would cover it.
+    // A scene that re-projects is drawn for the view's camera. One that followed a camera jump
+    // (a zoom box, a bookmark) while the worker made the scene for it stayed at that camera when
+    // the view came back to the one it was made for before that scene landed: then nothing above
+    // is out of date, and nothing else moves it back.
+    if app.map.key == Some(key)
+        && !tilt_draped
+        && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
+        && !gf.has_images
+        && gf.follows(&cam)
+        && gf.camera() != cam
+    {
+        gf.set_camera(&rs.queue, &cam);
+    }
     if let (Some(gf), Some(gr)) = (app.map.gpu_frame.as_ref().filter(|_| !tilt_draped), &app.map.gpu_renderer) {
         // A scene with pictures (or drawn for another size, a pane being dragged) is shown as a
         // picture of itself, shifted and scaled until it is drawn again.
@@ -1718,6 +1736,12 @@ fn casts_shadows(m: &rustgis_engine::map::Map) -> bool {
 /// through the tile cache, and the map is drawn again as it does.
 fn reads_in_place(m: &rustgis_engine::map::Map) -> bool {
     m.layers.iter().any(|l| l.raster.as_ref().is_some_and(|r| r.in_place))
+}
+
+/// What a turned or tilted view the GPU declined is held at (`gpu_turn_declined`): the map's
+/// revision and the camera's zoom level, what the decline depends on.
+fn declined_at(revision: u64, cam: &Camera) -> (u64, i32) {
+    (revision, (cam.res.max(1e-9).log2().round()) as i32)
 }
 
 /// The GPU scene buffers a worker uploaded for its frame (see [`gpu_upload`]), if it did.
