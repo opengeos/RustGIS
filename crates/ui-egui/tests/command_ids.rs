@@ -17,8 +17,10 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Last words of dotted literals that are file names or host names, not ids (`layer.json`,
-/// `data.seattle.gov`). The test checks that no registered id ends in one, so this can't hide a
-/// dangling id. A literal that ends in one of these needs no entry in [`EXEMPT`].
+/// `data.seattle.gov`). The test checks that no registered id ends in one, so a command added
+/// with such an id fails it; a removed command whose id ended in one is not caught, as the check
+/// sees only the ids still registered. A literal that ends in one of these needs no entry in
+/// [`EXEMPT`].
 const NOT_IDS: &[&str] = &[
     "json", "geojson", "csv", "tif", "tiff", "parquet", "shp", "gpkg", "kml", "gpx", "svg", "png", "jpg", "pdf", "qml", "html", "txt",
     "md", "xml", "zarr", "pmtiles", "wasm", "com", "gov", "org", "net", "us",
@@ -208,8 +210,23 @@ fn non_test(tokens: Vec<Lexed<'_>>) -> Vec<Lexed<'_>> {
         } else {
             0
         };
-        // The item after the attribute, past a visibility such as `pub(crate)`.
+        // The item after the attributes, past any more of them and a visibility such as `pub(crate)`.
         let mut j = i + attr;
+        while attr > 0 && punct(t, j, '#') && punct(t, j + 1, '[') {
+            let mut depth = 0;
+            while j < t.len() {
+                if punct(t, j, '[') {
+                    depth += 1;
+                } else if punct(t, j, ']') {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            j += 1;
+        }
         if attr > 0 && word(t, j, "pub") {
             j += 1;
             if punct(t, j, '(') {
@@ -220,17 +237,20 @@ fn non_test(tokens: Vec<Lexed<'_>>) -> Vec<Lexed<'_>> {
             }
         }
         if attr > 0 && items.iter().any(|k| word(t, j, k)) {
-            let mut depth = 0;
+            // To the item's closing brace, or its semicolon outside any bracket (`[&str; 2]`).
+            let (mut depth, mut open) = (0usize, 0usize);
             while j < t.len() {
                 match t[j].1 {
                     Tok::Punct('{') => depth += 1,
                     Tok::Punct('}') => {
-                        depth -= 1;
+                        depth = depth.saturating_sub(1);
                         if depth == 0 {
                             break;
                         }
                     }
-                    Tok::Punct(';') if depth == 0 => break,
+                    Tok::Punct('(' | '[') => open += 1,
+                    Tok::Punct(')' | ']') => open = open.saturating_sub(1),
+                    Tok::Punct(';') if depth == 0 && open == 0 => break,
                     _ => {}
                 }
                 j += 1;
@@ -251,11 +271,32 @@ fn is_arm(tokens: &[Lexed<'_>], mut at: usize) -> bool {
     loop {
         match (tokens.get(at), tokens.get(at + 1)) {
             (Some((_, Tok::Punct('='))), Some((_, Tok::Punct('>')))) => return true,
-            (Some((_, Tok::Word(w))), _) if *w == "if" => return true,
+            (Some((_, Tok::Word(w))), _) if *w == "if" => return guard_ends_in_arrow(tokens, at + 1),
             (Some((_, Tok::Punct('|'))), Some((_, Tok::Str(_)))) => at += 2,
             _ => return false,
         }
     }
+}
+
+/// Whether the guard that starts at `from` is followed by `=>` before the delimiter around it
+/// closes: a match arm's guard, not the guard of a `matches!(id, "x" if cond)`.
+fn guard_ends_in_arrow(tokens: &[Lexed<'_>], from: usize) -> bool {
+    let mut open = 0usize;
+    for (n, (_, tok)) in tokens.iter().enumerate().skip(from) {
+        match tok {
+            Tok::Punct('(' | '[' | '{') => open += 1,
+            Tok::Punct(')' | ']' | '}') => {
+                if open == 0 {
+                    return false;
+                }
+                open -= 1;
+            }
+            Tok::Punct(';') if open == 0 => return false,
+            Tok::Punct('=') if open == 0 && matches!(tokens.get(n + 1), Some((_, Tok::Punct('>')))) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The id-shaped string literals in the non-test code of `text`: (offset, literal, whether it is a
@@ -290,18 +331,39 @@ mod tests {
     const X: &str = "a.test_only";
 }
 const LATER: &str = r#"a.after_tests"#;
+#[cfg(test)]
+#[allow(dead_code)]
+mod more {
+    const Y: &str = "a.second_attribute";
+}
+#[cfg(test)]
+const CASES: [&str; 2] = ["a.in_array", "a.in_array_too"];
+const AFTER: &str = "a.after_array";
 #[test]
 fn alone() { let _ = "a.single_test"; }
 fn arm(id: &str) {
     match id { "ui.one" | "ui.two" => {} "ui.three" if true => {} _ => {} }
     let _ = matches!(id, "ui.four" | "ui.five");
+    let _ = matches!(id, "ui.six" if id.len() > 1);
 }
 "####;
     let found = literals(text);
     let ids: Vec<&str> = found.iter().map(|(_, id, _)| *id).collect();
     assert_eq!(
         ids,
-        ["a.first", "a.raw", "a.after_char", "a.after_tests", "ui.one", "ui.two", "ui.three", "ui.four", "ui.five"],
+        [
+            "a.first",
+            "a.raw",
+            "a.after_char",
+            "a.after_tests",
+            "a.after_array",
+            "ui.one",
+            "ui.two",
+            "ui.three",
+            "ui.four",
+            "ui.five",
+            "ui.six"
+        ],
         "{found:?}"
     );
     let arms: Vec<&str> = found.iter().filter(|(_, _, arm)| *arm).map(|(_, id, _)| *id).collect();
