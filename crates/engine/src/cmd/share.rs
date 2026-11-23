@@ -659,7 +659,7 @@ pub fn coalesce_read_zm(notes: &mut rustgis_data::loss::Notes, file: &str, ds: &
     if lost.zm_noted
         && let Some(generic) = rustgis_data::zm_export_note([ds], file)
     {
-        notes.retain(|note| note.text != generic);
+        notes.retain(|note| *note != generic);
     }
 }
 

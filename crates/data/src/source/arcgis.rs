@@ -377,7 +377,7 @@ impl ArcgisSource {
     /// What a read's pages lost, said: Z values only when the layer didn't say it has them, and,
     /// for a view, as counted in the pages read for it, which hold features around it (and those
     /// crossing its cells twice).
-    fn notes(&self, mut losses: crate::esripbf::Losses, view: bool) -> Vec<String> {
+    fn notes(&self, mut losses: crate::esripbf::Losses, view: bool) -> crate::loss::Notes {
         if self.info.zm_dropped {
             losses.with_zm = 0;
         }
@@ -386,8 +386,8 @@ impl ArcgisSource {
         }
         // Features without usable coordinates are left out of a view, not kept.
         let unplaced = std::mem::take(&mut losses.unprojected);
-        let mut notes: Vec<String> =
-            losses.messages().into_iter().map(|n| format!("{n}, counted in the pages read for the view")).collect();
+        let mut notes: crate::loss::Notes =
+            losses.messages().into_iter().map(|n| n.map_text(|t| format!("{t}, counted in the pages read for the view"))).collect();
         if unplaced > 0 {
             notes.push(format!(
                 "{unplaced} features have coordinates outside their coordinate system, so are left out of the view, counted in the pages read for it"

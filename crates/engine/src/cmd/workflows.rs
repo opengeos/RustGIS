@@ -2086,8 +2086,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let target = ds.name.clone();
     let query_note = super::share::query_export_note(&target, &layer.name, &report);
     drop(ds);
-    for note in notes.into_iter().chain(construction_notes) {
-        s.notify(note, false);
+    for note in notes.into_iter().chain(construction_notes.into_iter().map(rustgis_data::loss::Note::plain)) {
+        s.say(note);
     }
     super::share::notify_null_numbers(s, &target, null_numbers);
     if let Some(note) = query_note {
@@ -2210,7 +2210,7 @@ fn conversion_format(p: &Value) -> Result<&str, String> {
 }
 
 /// Serializes a complete dataset and collects its loss notices for delivery after success.
-fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
+fn converted(ds: &Dataset, p: &Value) -> Result<(String, rustgis_data::loss::Notes), String> {
     let name_field =
         ps(p, "nameField").and_then(|n| ds.field_index(n)).or_else(|| ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name")));
     let format = conversion_format(p)?;

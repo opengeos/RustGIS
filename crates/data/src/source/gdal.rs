@@ -463,6 +463,7 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
         Err(error) => converted.notes.push(format!("{}: couldn't check how many features GDAL's conversion kept ({error})", info.name)),
     }
     let mut zm_dropped = false;
+    let mut zm_note = None;
     // A layer declaring Z or M may still hold features with only XY: those that carry them are
     // counted, as for a layer of several types.
     if (info.has_zm || info.family.is_none()) && !converted.empty {
@@ -470,20 +471,26 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
             Ok(0) => {}
             Ok(count) => {
                 zm_dropped = true;
-                converted.notes.push(format!(
-                    "GDAL: '{layer}' contains Z or M coordinates on {count} source feature(s); conversion keeps only XY coordinates"
+                zm_note = Some(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedZm,
+                    format!(
+                        "GDAL: '{layer}' contains Z or M coordinates on {count} source feature(s); conversion keeps only XY coordinates"
+                    ),
                 ));
             }
             Err(_) => {
-                // A layer that declares them had them dropped, though how many is unknown.
+                // A layer that declares them had them dropped, though how many is unknown: said,
+                // without a code, as it may have lost none.
                 zm_dropped = info.has_zm;
-                converted.notes.push(format!(
+                zm_note = Some(crate::loss::Note::plain(format!(
                     "GDAL: '{layer}': an unknown number of source feature(s) may have had Z or M coordinates dropped; conversion keeps only XY coordinates"
-                ));
+                )));
             }
         }
     }
-    Ok(FreshConverted { path: converted.path, notes: converted.notes.into(), empty: converted.empty, zm_dropped, workspace })
+    let mut notes: crate::loss::Notes = converted.notes.into();
+    notes.extend(zm_note);
+    Ok(FreshConverted { path: converted.path, notes, empty: converted.empty, zm_dropped, workspace })
 }
 
 /// A counted loss, or an honest diagnostic when a nonempty replacement's source count is unknown.

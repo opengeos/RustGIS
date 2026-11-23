@@ -186,7 +186,7 @@ impl Engine {
                     session.say(message);
                 }
                 if let Some(note) = rustgis_engine::data::zm_export_note([&ds], &format!("{name} as GeoJSON")) {
-                    session.notify(note, false);
+                    session.say(note);
                 }
                 // GeoJSON is longitude/latitude, whatever system the source holds its coordinates in.
                 return Ok(rustgis_engine::data::io::to_geojson(&*ds.in_lonlat()?).to_string());
@@ -195,7 +195,7 @@ impl Engine {
                 let text = rustgis_engine::data::io::to_geojson(&*found.dataset.in_lonlat()?).to_string();
                 let note = rustgis_engine::data::zm_export_note([&found.dataset], &format!("{} as GeoJSON", found.name));
                 if let Some(note) = note {
-                    session.notify(note, false);
+                    session.say(note);
                 }
                 return Ok(text);
             }
@@ -222,7 +222,7 @@ impl Engine {
             }
             let text = rustgis_engine::data::io::to_geojson(&ds).to_string();
             if let Some(note) = rustgis_engine::data::zm_export_note([&ds], &format!("{} as GeoJSON", ds.name)) {
-                session.notify(note, false);
+                session.say(note);
             }
             Ok::<String, String>(text)
         });

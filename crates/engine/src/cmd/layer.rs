@@ -4347,7 +4347,7 @@ pub(crate) fn duckdb_parts(
     // Z and M values are dropped as DuckDB writes the result: one notice for all its parts.
     let zm = out.parts.iter().fold(0u64, |n, p| n.saturating_add(p.zm_dropped));
     if zm > 0 {
-        s.notify(format!("{name}: {}", rustgis_data::zm_note(Some(zm))), false);
+        s.notify_loss(rustgis_data::loss::LossCode::DroppedZm, format!("{name}: {}", rustgis_data::zm_note(Some(zm))).into());
     }
     let mixed = out.parts.len() > 1;
     out.parts.sort_by_key(|p| bottom_first(p.family));
