@@ -664,7 +664,9 @@ pub struct TilesResolve {
     pub vector: bool,
     /// The usual-path template, when the advertised one can't be read.
     pub fallback: String,
-    pub slot: Slot<Result<Vec<u8>, String>>,
+    /// The document's answer, with the reach it was read at: what it names is judged by that,
+    /// whatever the address's record says by the time it lands.
+    pub slot: Slot<Result<(Vec<u8>, Reach), String>>,
 }
 
 /// A service layer waiting on a document before it is added. `dialog` tells whether the add came
@@ -676,7 +678,14 @@ pub enum ServiceStep {
     Tiles { resolve: TilesResolve, dialog: bool, origin: Option<String>, opened: u64 },
     /// A WCS coverage whose description is being read before it is asked for: `service.coverage`'s
     /// parameters and the description on its way.
-    Coverage { params: Value, slot: Slot<Result<Vec<u8>, String>>, dialog: bool, origin: Option<String>, opened: u64 },
+    Coverage {
+        params: Value,
+        describe: String,
+        slot: Slot<Result<(Vec<u8>, Reach), String>>,
+        dialog: bool,
+        origin: Option<String>,
+        opened: u64,
+    },
 }
 
 impl ServiceStep {
@@ -753,6 +762,29 @@ pub(crate) fn fetch_within(
         *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
     });
     cache::download_limited_reaching_with_origin(url, max, timeout, ceiling, done);
+    slot
+}
+
+/// [`fetch_document_into`], landing with the reach the document was read at (recorded too, if
+/// from the internet), for a step that judges what the document names when it lands.
+pub(crate) fn fetch_document_reaching(url: &str) -> Slot<Result<(Vec<u8>, Reach), String>> {
+    let slot: Slot<Result<(Vec<u8>, Reach), String>> = Slot::default();
+    let land = slot.clone();
+    let asked = url.to_string();
+    cache::download_detailed_with_origin(
+        url,
+        cache::MAX_DOWNLOAD,
+        Box::new(move |r| {
+            let r = r.map_err(|failure| failure.message).map(|fetched| {
+                let reach = fetched.origin.reach();
+                if reach == Reach::Public {
+                    cache::restrict_to_public(&asked);
+                }
+                (fetched.bytes, reach)
+            });
+            *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+        }),
+    );
     slot
 }
 
@@ -4461,6 +4493,11 @@ impl RustGisApp {
                     }
                     self.dialogs.mode = "csw";
                     self.dialogs.connection = connection;
+                    // A catalogue a document read from the internet named is searched only there
+                    // (its requests follow its record, `cswui::search`).
+                    if from_document {
+                        cache::restrict_to_public(url);
+                    }
                     self.ui.csw.url = url.to_string();
                     self.ui.csw.query = p.get("query").and_then(Value::as_str).unwrap_or("").to_string();
                     self.ui.csw.use_view = p.get("bbox").and_then(Value::as_str) == Some("view");
@@ -6534,7 +6571,14 @@ impl RustGisApp {
                         self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog, origin, opened });
                         continue;
                     };
-                    let next = r.ok().and_then(|body| resolve_tiles(&resolve.list, &resolve.doc, &body, resolve.vector));
+                    // Where the document was read, as its fetch observed it (one that failed: what
+                    // it was asked within). Recorded again for one read from the internet, so
+                    // `service.add` sees it whatever the record says by now.
+                    let read_at = r.as_ref().map_or_else(|_| cache::ceiling_for(&resolve.doc), |(_, reach)| *reach);
+                    if read_at == Reach::Public {
+                        cache::restrict_to_public(&resolve.doc);
+                    }
+                    let next = r.ok().and_then(|(body, _)| resolve_tiles(&resolve.list, &resolve.doc, &body, resolve.vector));
                     let next = next.map(|resolved| {
                         resolve.withheld_addresses = resolve.withheld_addresses.saturating_add(resolved.withheld_addresses);
                         resolved.step
@@ -6546,16 +6590,16 @@ impl RustGisApp {
                             // its absence. A saved connection must not restore it after a hop.
                             // Judged by where the list was read (its record), not by how its
                             // address is spelled: a public-looking name may connect on the local network.
-                            match rustgis_engine::render::rustgis_tiles::address::check_reach(&next, cache::ceiling_for(&resolve.doc)) {
+                            match rustgis_engine::render::rustgis_tiles::address::check_reach(&next, read_at) {
                                 Ok(()) => {
                                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
                                         != rustgis_engine::render::rustgis_tiles::logins::origin(&next);
                                     // A tile set document read from the internet leads only there.
-                                    if cache::ceiling_for(&resolve.doc) == Reach::Public {
+                                    if read_at == Reach::Public {
                                         cache::restrict_to_public(&next);
                                     }
                                     resolve.doc = next;
-                                    resolve.slot = fetch_document_into(&resolve.doc);
+                                    resolve.slot = fetch_document_reaching(&resolve.doc);
                                 }
                                 Err(e) => {
                                     self.notice_service_query_loss(resolve.withheld_addresses);
@@ -6574,7 +6618,7 @@ impl RustGisApp {
                     };
                     // After a tile set document read from the internet, the tiles come only from
                     // there: the template it names, or the usual one in its place.
-                    if cache::ceiling_for(&resolve.doc) == Reach::Public {
+                    if read_at == Reach::Public {
                         cache::restrict_to_public(&template);
                     }
                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
@@ -6596,7 +6640,7 @@ impl RustGisApp {
                     self.report_step(dialog, pending.as_deref(), r);
                     self.map.invalidate();
                 }
-                ServiceStep::Coverage { mut params, slot, dialog, origin, opened } => {
+                ServiceStep::Coverage { mut params, describe, slot, dialog, origin, opened } => {
                     if !self.service_read_current(
                         opened,
                         params.get("url").and_then(Value::as_str).unwrap_or(""),
@@ -6605,11 +6649,16 @@ impl RustGisApp {
                         continue;
                     }
                     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-                        self.ui.service_steps.push(ServiceStep::Coverage { params, slot, dialog, origin, opened });
+                        self.ui.service_steps.push(ServiceStep::Coverage { params, describe, slot, dialog, origin, opened });
                         continue;
                     };
                     let title = params["name"].as_str().unwrap_or("").to_string();
-                    let r = r.and_then(|bytes| {
+                    let r = r.and_then(|(bytes, reach)| {
+                        // Recorded again for one read from the internet, so `service.coverage`
+                        // holds the request built from it there whatever the record says by now.
+                        if reach == Reach::Public {
+                            cache::restrict_to_public(&describe);
+                        }
                         params["describe"] = json!(String::from_utf8_lossy(&bytes));
                         // Not `self.run`: an error belongs where the step reports, not the notices.
                         let c = self.session.run("service.coverage", &params)?;
@@ -8589,7 +8638,7 @@ mod download_service_tests {
                 withheld_addresses: 0,
                 vector: false,
                 fallback: "https://h.invalid/svc/tiles/{z}/{y}/{x}".into(),
-                slot: std::sync::Arc::new(std::sync::Mutex::new(Some(Ok(body)))),
+                slot: std::sync::Arc::new(std::sync::Mutex::new(Some(Ok((body, super::Reach::Local))))),
             };
             app.ui.service_steps.push(super::ServiceStep::Tiles { resolve, dialog: true, origin: None, opened: app.session.opened });
             app.poll_service_steps();
@@ -8611,8 +8660,8 @@ mod download_service_tests {
         for (query, count) in [("collections=roads", 0), ("token=RGSYNTH_ui_refused&collections=roads", 1)] {
             let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
             let list = format!("https://h.invalid/svc/tiles?{query}");
-            // The list was read from the internet (the dialog's fetch records it).
-            rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(&list);
+            // The list was read from the internet, as its fetch observed it; its record may since
+            // have been cleared (a direct add of the same address), which changes nothing.
             let body = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad",
                 "links":[{"rel":"self", "href":"http://127.0.0.1/tiles"}]}]})
             .to_string()
@@ -8626,7 +8675,7 @@ mod download_service_tests {
                 withheld_addresses: 0,
                 vector: false,
                 fallback: "https://h.invalid/svc/tiles/{z}/{y}/{x}".into(),
-                slot: std::sync::Arc::new(std::sync::Mutex::new(Some(Ok(body)))),
+                slot: std::sync::Arc::new(std::sync::Mutex::new(Some(Ok((body, super::Reach::Public))))),
             };
             app.ui.service_steps.push(super::ServiceStep::Tiles { resolve, dialog: false, origin: None, opened: app.session.opened });
             app.poll_service_steps();
@@ -8837,7 +8886,14 @@ mod download_service_tests {
             let params = json!({"url":"https://h.invalid/wcs", "name":"Heights"});
             let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Err("the server is down".to_string()))));
             let opened = app.session.opened;
-            app.ui.service_steps.push(super::ServiceStep::Coverage { params, slot, dialog: true, origin: None, opened });
+            app.ui.service_steps.push(super::ServiceStep::Coverage {
+                params,
+                describe: String::new(),
+                slot,
+                dialog: true,
+                origin: None,
+                opened,
+            });
             app.dialogs.info = Some(if newer { "Reading the tileset of Roads" } else { "Describing Heights" }.into());
             app.dialogs.open = open.then_some("addService");
             app.poll_service_steps();
@@ -8864,9 +8920,16 @@ mod download_service_tests {
                 let opened = app.session.opened;
                 let params = json!({"url":"https://retired.invalid/service", "name":"Old read"});
                 let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-                let step = |opened, slot: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<u8>, String>>>>| {
+                let step = |opened, slot: std::sync::Arc<std::sync::Mutex<Option<Result<(Vec<u8>, super::Reach), String>>>>| {
                     if coverage {
-                        super::ServiceStep::Coverage { params: params.clone(), slot, dialog: true, origin: None, opened }
+                        super::ServiceStep::Coverage {
+                            params: params.clone(),
+                            describe: String::new(),
+                            slot,
+                            dialog: true,
+                            origin: None,
+                            opened,
+                        }
                     } else {
                         super::ServiceStep::Tiles {
                             resolve: super::TilesResolve {
@@ -8893,7 +8956,7 @@ mod download_service_tests {
                     app.ui.service_steps.push(step(app.session.opened, Default::default()));
                 }
                 app.dialogs.info = Some(if newer == 1 { "New operation" } else { pending }.into());
-                *slot.lock().unwrap() = Some(Ok(b"late completion".to_vec()));
+                *slot.lock().unwrap() = Some(Ok((b"late completion".to_vec(), super::Reach::Local)));
                 app.poll_service_steps();
                 assert_eq!(app.ui.service_steps.len(), usize::from(newer == 2));
                 assert!(app.session.map().tiles.is_empty() && app.session.map().layers.is_empty());

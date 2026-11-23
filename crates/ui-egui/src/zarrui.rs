@@ -223,7 +223,6 @@ pub(crate) fn connect(app: &mut RustGisApp) {
 /// fetched only from there, however its name resolves.
 pub(crate) fn connect_within(app: &mut RustGisApp, public: bool) {
     let st = &mut app.ui.zarr;
-    st.public = public;
     let a = st.address.trim().trim_end_matches('/').to_string();
     st.error = None;
     st.info = None;
@@ -237,6 +236,9 @@ pub(crate) fn connect_within(app: &mut RustGisApp, public: bool) {
     st.web = lower.starts_with("http://") || lower.starts_with("https://");
     if st.web {
         let keys = zarr::METADATA_KEYS.iter().map(|k| k.to_string()).collect();
+        // Set with the batch it is for, so a connect that starts none leaves a batch under way as
+        // it was.
+        st.public = public;
         st.fetch(keys, Phase::Meta);
         return;
     }
@@ -485,6 +487,33 @@ mod tests {
             let want = if public { Reach::Public } else { Reach::Local };
             assert!(!asked.is_empty() && asked.iter().all(|c| *c == want), "{asked:?}");
         }
+    }
+
+    /// A connect that starts no batch (a blank address) leaves the reach of a batch under way as it
+    /// was: a store a document named stays read only from the internet.
+    #[test]
+    fn a_connect_that_starts_nothing_leaves_a_batch_under_way_as_it_was() {
+        use rustgis_engine::render::rustgis_tiles::{
+            address::{Origin, Reach},
+            cache,
+        };
+        let _turn = crate::fetching::turn();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            log.lock().unwrap().push(ceiling);
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: b"{}".to_vec(), origin }));
+        });
+        let mut app = RustGisApp::new(Session::new(Project::default()));
+        app.ui.zarr.address = "https://store-batch.example/data.zarr".into();
+        connect_within(&mut app, true);
+        // Another connect, with nothing to connect to, before the batch is fetched.
+        app.ui.zarr.address = String::new();
+        connect(&mut app);
+        poll(&mut app, &egui::Context::default());
+        let asked = asked.lock().unwrap().clone();
+        assert!(!asked.is_empty() && asked.iter().all(|c| *c == Reach::Public), "{asked:?}");
     }
 
     /// A slice keeps its geographic system through its GeoTIFF handoff: another body's (an ESRI PE

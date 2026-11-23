@@ -237,8 +237,8 @@ pub(crate) fn add_layer_from(
             cache::restrict_to_public(&describe);
         }
         // Recorded if read from the internet: the GetCoverage request built from it goes there too.
-        let slot = fetch_document_into(&describe);
-        app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin, opened: app.session.opened });
+        let slot = crate::fetch_document_reaching(&describe);
+        app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, describe, slot, dialog, origin, opened: app.session.opened });
         return Ok(describing(&title));
     }
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
@@ -271,7 +271,7 @@ pub(crate) fn add_layer_from(
                 cache::restrict_to_public(&list);
             }
             // (Recording one read from the internet: what it names is fetched only from there.)
-            let slot = crate::fetch_document_into(&list);
+            let slot = crate::fetch_document_reaching(&list);
             let resolve = crate::TilesResolve {
                 params: p,
                 list: list.clone(),
@@ -1072,12 +1072,12 @@ mod tests {
                 }
                 let params = match &app.ui.service_steps[0] {
                     crate::ServiceStep::Coverage { params, slot, .. } => {
-                        *slot.lock().unwrap() = Some(Ok(describe.to_vec()));
+                        *slot.lock().unwrap() = Some(Ok((describe.to_vec(), Reach::Local)));
                         params
                     }
                     crate::ServiceStep::Tiles { resolve, .. } => {
                         assert_eq!(resolve.crossed_origin, anonymous);
-                        *resolve.slot.lock().unwrap() = Some(Ok(br#"{"links":[{"rel":"item","type":"image/png","href":"https://anonymous-offer.invalid/{tileMatrix}/{tileRow}/{tileCol}"}]}"#.to_vec()));
+                        *resolve.slot.lock().unwrap() = Some(Ok((br#"{"links":[{"rel":"item","type":"image/png","href":"https://anonymous-offer.invalid/{tileMatrix}/{tileRow}/{tileCol}"}]}"#.to_vec(), Reach::Local)));
                         &resolve.params
                     }
                 };

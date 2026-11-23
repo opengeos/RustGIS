@@ -4,6 +4,7 @@
 //! off the frame; `catalog.search` reads the answers.
 
 use egui::vec2;
+use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use serde_json::{Value, json};
 
 use crate::{RustGisApp, Slot};
@@ -80,7 +81,11 @@ pub fn search(app: &mut RustGisApp, start: u64) {
                 st.next = None;
                 st.asked = asked;
             }
-            // Recorded if read from the internet, so `catalog.search` holds the links it lists there.
+            // A catalogue held to the internet is searched only there; an answer read from the
+            // internet is recorded, so `catalog.search` holds the links it lists there.
+            if p.get("url").and_then(Value::as_str).is_some_and(|url| cache::ceiling_for(url) == Reach::Public) {
+                cache::restrict_to_public(&request);
+            }
             st.waiting = Some((p, crate::fetch_document_into(&request)));
         }
         Err(e) => app.ui.csw.error = Some(e),
@@ -311,6 +316,29 @@ mod tests {
             let asked = asked.lock().unwrap().clone();
             assert!(asked.contains(&(caps.clone(), observed)), "the service, its catalogue read {observed:?}: {asked:?}");
             assert_eq!(cache::ceiling_for(&caps), observed);
+        }
+    }
+
+    /// A catalogue a document read from the internet named (`fromDocument`) is searched only there.
+    #[test]
+    fn a_catalogue_a_document_named_is_searched_only_on_the_internet() {
+        for public in [true, false] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                log.lock().unwrap().push(ceiling);
+                let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+                done(Ok(cache::Fetched {
+                    bytes: b"<csw:GetRecordsResponse xmlns:csw=\"http://www.opengis.net/cat/csw/2.0.2\"/>".to_vec(),
+                    origin,
+                }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            let csw = format!("https://csw-named-{public}.example/csw");
+            app.run("ui.addService", json!({"url": csw, "type": "csw", "fromDocument": public})).unwrap();
+            let want = if public { Reach::Public } else { Reach::Local };
+            assert_eq!(asked.lock().unwrap().clone(), [want]);
         }
     }
 }

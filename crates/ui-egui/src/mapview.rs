@@ -107,8 +107,8 @@ pub struct Ask {
     /// The other layers waiting for the same capabilities: fetched and read once for all.
     also: Vec<String>,
     capabilities: bool,
-    /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
-    /// ask next after the service's error.
+    /// The GetFeatureInfo request asked, whose answer format tells what to ask next after the
+    /// service's error; or the capabilities asked for, which only layers of that service take.
     request: Option<String>,
     /// The answer, with the reach it was read at.
     slot: crate::Slot<Result<(Vec<u8>, Reach), String>>,
@@ -144,7 +144,7 @@ impl Popup {
                 fetched.push((url.to_string(), asks.len()));
             }
             let slot = ask_within(a, url);
-            let request = (!capabilities).then(|| url.to_string());
+            let request = Some(url.to_string());
             asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
         Popup { info, at, index: 0, map, opened, asks, since: web_time::Instant::now() }
@@ -4131,8 +4131,22 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer && t.draws());
     for (layer, also, capabilities, request, r) in landed {
         // Layers removed, renamed or hidden while the answer came: nothing to show, nothing to
-        // tell. The first of a service's layers still there takes the capabilities for the rest.
-        let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
+        // tell. The first of a service's layers still there takes the capabilities for the rest;
+        // capabilities go only to layers still of the service they were asked of (not another
+        // layer since given the same name).
+        let of_service = |app: &RustGisApp, l: &str| {
+            !capabilities
+                || app
+                    .session
+                    .map()
+                    .tiles
+                    .iter()
+                    .find(|t| t.name == l)
+                    .and_then(|t| rustgis_engine::data::ogc::wms_layer_of(&t.url))
+                    .map(|(c, _)| c)
+                    == request
+        };
+        let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l) && of_service(app, l));
         let Some(layer) = group.next() else { continue };
         let also: Vec<String> = group.collect();
         // The fetch's failure, or an answer that isn't text, is told here; the command tells its
@@ -4142,10 +4156,9 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
             // own read does (the layer then lists them with `"public"`).
             if capabilities
                 && reach == Reach::Public
-                && let Some((caps, _)) =
-                    app.session.map().tiles.iter().find(|t| t.name == layer).and_then(|t| rustgis_engine::data::ogc::wms_layer_of(&t.url))
+                && let Some(caps) = &request
             {
-                cache::restrict_to_public(&caps);
+                cache::restrict_to_public(caps);
             }
             rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)
         }) {
@@ -5639,6 +5652,38 @@ mod tests {
         follow_asks(&mut app, &egui::Context::default());
         let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("http://192.168.7.5/info") && t.contains("local network")), "{told:?}");
+    }
+
+    /// Capabilities answer only the service they were asked of: a layer replaced meanwhile by
+    /// another service's, under the same name, neither learns from them nor has its own
+    /// capabilities held to the internet by them.
+    #[test]
+    fn capabilities_answer_only_the_service_they_were_asked_of() {
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        let _turn = crate::fetching::turn();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling.min(Reach::Public)).unwrap();
+            done(Ok(cache::Fetched { bytes: b"<WMS_Capabilities version=\"1.3.0\"/>".to_vec(), origin }));
+        });
+        let template = |host: &str| {
+            format!(
+                "https://{host}/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=over&STYLES=&CRS=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng"
+            )
+        };
+        let (first, second) = (template("caps-asked.example"), template("caps-replacement.example"));
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        s.run("map.addTiles", &json!({"url": first, "name": "Over", "overlay": true})).unwrap();
+        let (asked, replacement) =
+            (rustgis_engine::data::ogc::wms_layer_of(&first).unwrap().0, rustgis_engine::data::ogc::wms_layer_of(&second).unwrap().0);
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        app.map.popup =
+            Some(Popup::new(json!({"featureInfo": [{"tileLayer": "Over", "capabilities": asked}]}), Coord::new(8.6, 46.65), map, opened));
+        // The layer is replaced by another service's, with the same name, while the answer comes.
+        app.session.map_mut().tiles[0].url = second.clone();
+        follow_asks(&mut app, &egui::Context::default());
+        assert_eq!(cache::ceiling_for(&replacement), Reach::Local, "the replacement's own capabilities aren't held by another's answer");
+        assert!(app.session.map().tiles[0].feature_info.is_none(), "nor learned from it");
     }
 
     /// Answers that land while the pop-up waits open it on the top result, with its feature

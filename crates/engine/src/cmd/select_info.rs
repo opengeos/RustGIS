@@ -109,26 +109,18 @@ fn fetch_value(t: &rustgis_map::tiles::TileLayer, key: &str, url: String) -> Res
 }
 
 /// The WMS tile layers drawn at a point to ask what is there, topmost first as drawn (a higher
-/// depth priority on top, #2488; only the topmost when `first_layer`), each with what to fetch;
-/// and the notice for those whose request was refused (it reaches past the layer), naming the
-/// first of them, its address and why.
-pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picked: Option<usize>) -> (Vec<Value>, Option<String>) {
-    let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return (Vec::new(), None) };
+/// depth priority on top, #2488; only the topmost when `first_layer`), each with what to fetch.
+/// One whose request reaches past it isn't asked ([`refused`] says so).
+pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picked: Option<usize>) -> Vec<Value> {
+    let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return Vec::new() };
     let wanted = if first_layer { 1 } else { MAX_ASKED };
     let map = s.map();
-    let mut refused = Vec::new();
     let mut asks: Vec<Value> = map
         .tiles_in_draw_order()
         .into_iter()
         .filter_map(|i| Some((i, map.tiles.get(i)?)))
         .filter(|(i, t)| picked.is_none_or(|p| p == *i) && askable(t, picked.is_some()))
-        .filter_map(|(_, t)| match next_fetch(t, lon, lat, at, m_per_px)? {
-            Ok(ask) => Some(ask),
-            Err(e) => {
-                refused.push((t.name.clone(), e));
-                None
-            }
-        })
+        .filter_map(|(_, t)| next_fetch(t, lon, lat, at, m_per_px)?.ok())
         .take(wanted)
         .collect();
     if !s.policy_user() {
@@ -136,11 +128,27 @@ pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picke
             crate::sources::redact_url_fields(ask);
         }
     }
-    let notice = refused.first().map(|(layer, e)| match refused.len() {
+    asks
+}
+
+/// The notice for the WMS tile layers drawn at a point whose request reaches past the layer, so
+/// they are never asked there, whichever layer identify reports: one notice, naming the first of
+/// them, its address and why, with how many.
+pub(super) fn refused(s: &Session, lon: f64, lat: f64, picked: Option<usize>) -> Option<String> {
+    let (at, m_per_px) = merc_at(s, lon, lat)?;
+    let map = s.map();
+    let refused: Vec<(String, String)> = map
+        .tiles_in_draw_order()
+        .into_iter()
+        .filter_map(|i| Some((i, map.tiles.get(i)?)))
+        .filter(|(i, t)| picked.is_none_or(|p| p == *i) && askable(t, picked.is_some()))
+        .filter_map(|(_, t)| next_fetch(t, lon, lat, at, m_per_px)?.err().map(|e| (t.name.clone(), e)))
+        .collect();
+    let (layer, e) = refused.first()?;
+    Some(match refused.len() {
         1 => format!("{layer} wasn't asked what is here: {e}"),
         n => format!("{n} WMS layers weren't asked what is here, such as {layer}: {e}"),
-    });
-    (asks, notice)
+    })
 }
 
 /// The index of the topmost WMS tile layer, as drawn, that can be asked what is at a point (it

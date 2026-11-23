@@ -25113,6 +25113,32 @@ fn identify_asks_wms_layers() {
     }
 }
 
+/// A WMS layer whose request reaches past it is said whichever layer identify reports: under
+/// Topmost, a feature found over it is reported and the refusal said too.
+#[test]
+fn a_refused_wms_layer_is_said_under_topmost_too() {
+    let host = "maps-topmost-web.example.com";
+    let caps = format!(
+        r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://{host}/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://192.168.21.5/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title></Layer></Layer></Capability></WMS_Capabilities>"#
+    );
+    let url = format!("https://{host}/wms");
+    crate::render::rustgis_tiles::cache::restrict_to_public(&rustgis_data::ogc::capabilities_url(&url, None));
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": caps})).unwrap();
+    let points = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"Here"},"geometry":{"type":"Point","coordinates":[8.5,47.4]}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "here.geojson", "text": points})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let mark = s.notice_mark();
+    let v = s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "topmost", "tolerancePx": 8})).unwrap();
+    assert_eq!(v["attributes"]["name"], "Here", "{v}");
+    let told: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(told.iter().any(|t| t.starts_with("Roads wasn't asked what is here: http://192.168.21.5/info")), "{told:?}");
+}
+
 /// A tile layer picked in Layers (`map.selectTiles`, view state like `layer.select`) is the one
 /// Selected in Layers identifies, whichever it is (a basemap too, which the other modes leave
 /// out); it stays picked when moved, and a map layer made active ends the pick for good.

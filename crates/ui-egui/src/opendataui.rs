@@ -197,8 +197,15 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let Some(w) = app.ui.opendata.waiting.take() else { return };
     let replaced = !w.more && app.ui.opendata.zarr_open.is_some();
+    let mut refused = 0;
+    let parsed = r.and_then(|(b, reach)| {
+        w.portal.parse(reach, &mut refused, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b), reach))
+    });
+    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(refused) {
+        app.session.notify(notice, false);
+    }
     let st = &mut app.ui.opendata;
-    match r.and_then(|(b, reach)| w.portal.parse(reach, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b), reach))) {
+    match parsed {
         Ok((found, (total, next), reach)) => {
             let first = if w.more { st.found.len() } else { 0 };
             if w.more {
@@ -244,8 +251,13 @@ fn poll_listing(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some((i, portal, url, _)) = app.ui.opendata.listing.take() else { return };
+    let mut refused = 0;
+    let parsed = r.and_then(|(b, reach)| portal.parse_listing(&url, reach, &mut refused, &b).map(|files| (files, reach)));
+    if let Some(notice) = rustgis_engine::cmd::portals::refused_notice(refused) {
+        app.session.notify(notice, false);
+    }
     let st = &mut app.ui.opendata;
-    match r.and_then(|(b, reach)| portal.parse_listing(&url, reach, &b).map(|files| (files, reach))) {
+    match parsed {
         Ok((files, reach)) => {
             // The files came in the listing: they reach no further than it was read.
             if let Some(r) = st.reaches.get_mut(i) {
@@ -888,7 +900,14 @@ mod tests {
             } else {
                 format!("http://10.0.{n}.3/p.geojson")
             };
-            let answer = json!({"results":[{"slug":"parks","title":"Parks","organization":{"name":"City"},"dcat":{"distribution":[{"downloadURL":file,"mediaType":"application/geo+json"}]}}]}).to_string();
+            // Read from the internet, the answer also lists a file on a private address: left out,
+            // and said. (Read locally, its one file is on a private address already.)
+            let mut files = vec![json!({"downloadURL":file,"mediaType":"application/geo+json"})];
+            if observed == Reach::Public {
+                files.push(json!({"downloadURL":format!("http://10.0.{n}.4/q.csv"),"mediaType":"text/csv"}));
+            }
+            let answer = json!({"results":[{"slug":"parks","title":"Parks","organization":{"name":"City"},"dcat":{"distribution":files}}]})
+                .to_string();
             let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let log = asked.clone();
             cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
@@ -911,6 +930,15 @@ mod tests {
             h.run_steps(3);
             assert_eq!(h.state().ui.opendata.found.len(), 1, "{:?}", h.state().ui.opendata.error);
             assert_eq!(h.state().ui.opendata.reaches, [observed]);
+            let said = h
+                .state()
+                .session
+                .notices
+                .iter()
+                .filter(|n| n.text.contains("addresses the portal listed point where RustGIS won't fetch"))
+                .count();
+            assert_eq!(said, usize::from(observed == Reach::Public), "the private file left out is said once, from the internet only");
+            assert_eq!(h.state().ui.opendata.found[0].resources.len(), 1);
             h.get_by_label("Add").click();
             h.run_steps(3);
             let asked = asked.lock().unwrap().clone();

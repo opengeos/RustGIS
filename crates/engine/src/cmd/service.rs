@@ -294,16 +294,18 @@ fn read_documents_with(
         // one inherits its document's reach (a document not recorded, which can't happen, reaches
         // only the internet). Either is judged by that reach, never by how the document's address
         // is spelled: a public-looking name may connect on the local network, and its local links
-        // are then the service's own. A document the app supplies was recorded by its fetch if it
-        // came from the internet; one supplied by anything else (the Assistant, MCP, a plugin) says
-        // nothing trustworthy about where it was read, so it is taken as read from the internet.
+        // are then the service's own.
         let inherited = if seen.is_empty() {
-            let untrusted = supplied.is_some() && !s.policy_user();
-            cache::ceiling_for(original).min(if untrusted { Reach::Public } else { Reach::Local })
+            cache::ceiling_for(original)
         } else {
             reaches.get(crate::render::rustgis_tiles::logins::inner(&parent)).copied().unwrap_or(Reach::Public)
         };
         let ceiling = inherited.min(cache::ceiling_for(&address));
+        // A document the app supplies was recorded by its fetch if it came from the internet; one
+        // supplied by anything else (the Assistant, MCP, a plugin) says nothing trustworthy about
+        // where it was read, so what it names is taken as named on the internet. Its address
+        // itself stays the caller's own choice.
+        let read_within = if seen.is_empty() && supplied.is_some() && !s.policy_user() { ceiling.min(Reach::Public) } else { ceiling };
         let rejected = match crate::render::rustgis_tiles::address::check_reach(&address, ceiling) {
             Ok(()) => false,
             Err(_) if dataset_document => true,
@@ -354,7 +356,7 @@ fn read_documents_with(
                 result.dataset_notes(dataset.as_ref());
                 return Ok(result);
             };
-            parse(text.as_bytes(), ceiling)
+            parse(text.as_bytes(), read_within)
         } else if left {
             let Some(read) = s.left_document(&address).map_err(|e| crate::sources::message_with_address(original, &e))? else {
                 result.next = Some(address);
@@ -377,13 +379,13 @@ fn read_documents_with(
                 .and_then(|(bytes, reach)| parse(&bytes, reach))
         };
         // Natively, where the fetch connected; otherwise what the app's fetch was held to.
-        let reach = observed.unwrap_or(ceiling);
+        let reach = observed.unwrap_or(read_within);
         let parsed = parsed.map_err(|e| crate::sources::message_with_address(&address, &e));
         let mut service = match parsed {
             Ok(s) => {
                 let before = s.layers.len();
                 result.incomplete |= s.incomplete;
-                let vetted = vet(s, reach);
+                let vetted = vet(s, reach, dataset_document, &reaches);
                 result.excluded_layers |= vetted.layers.len() != before;
                 vetted
             }
@@ -495,13 +497,21 @@ fn fetch_document(url: &str, ceiling: Reach) -> Result<cache::Fetched, String> {
 /// network (unless the service itself is there) or a forbidden address. `reach` is where the
 /// capabilities were read, as their fetch observed it: a service at a public-looking name that
 /// connected on the local network keeps its local layers.
-fn vet(mut svc: Service, reach: Reach) -> Service {
+///
+/// In a dataset document (`completing`), a stylesheet read earlier in the same discovery (a
+/// TileJSON completing it names it again) is judged by the reach it was itself read at (`read`, by
+/// address without a login), not by the completing document's.
+fn vet(mut svc: Service, reach: Reach, completing: bool, read: &std::collections::HashMap<String, Reach>) -> Service {
     let before = svc.layers.len();
     svc.layers.retain(|l| {
         let u = match &l.offer {
             Offer::Tiles { template } | Offer::VectorTiles { template, .. } => template,
             Offer::Features { url } | Offer::Style { url } | Offer::Service { url } => url,
             Offer::Coverage(Coverage { endpoint, .. }) => endpoint,
+        };
+        let reach = match &l.offer {
+            Offer::Style { url } if completing => read.get(crate::render::rustgis_tiles::logins::inner(url)).copied().unwrap_or(reach),
+            _ => reach,
         };
         crate::render::rustgis_tiles::address::check_reach(u, reach).is_ok()
     });
@@ -1369,7 +1379,8 @@ fn add_discovered(s: &mut Session, p: &Value, url: &str, want: &str, found: &Dis
             )?),
             crossed_origin: crosses_origin(source, list) || crosses_origin(list, t),
             fallback: None,
-            public: cache::ceiling_for(t) == Reach::Public,
+            // Held to the internet when the template or the list naming it was read from there.
+            public: cache::ceiling_for(t) == Reach::Public || cache::ceiling_for(list) == Reach::Public,
         },
         (Some(list), None) if leaving => {
             match left_template(s, source, list, matches!(layer.offer, Offer::VectorTiles { .. }), withheld, public)? {
@@ -1812,6 +1823,12 @@ pub(crate) fn coverage_check(name: &str, bytes: &[u8]) -> Result<(), String> {
 /// `catalog.search`: a page of a catalogue's (CSW) records matching words and an area, with the
 /// links RustGIS can follow (those pointing where a document on the web may not send it left out).
 pub(super) fn catalog_search(s: &mut Session, p: &Value) -> CmdResult {
+    catalog_search_read(s, p, None)
+}
+
+/// [`catalog_search`], with the supplied answer read at `read` when the engine itself fetched it
+/// (a connection's browse, which knows where its fetch connected) rather than a caller.
+pub(super) fn catalog_search_read(s: &mut Session, p: &Value, read: Option<Reach>) -> CmdResult {
     let bound = crate::service_logins::request_params(s, p)?;
     let p = bound.as_ref();
     let url = url_of(p)?;
@@ -1821,7 +1838,11 @@ pub(super) fn catalog_search(s: &mut Session, p: &Value) -> CmdResult {
     // choice, unless a document read from the internet named it.
     let within = cache::ceiling_for(url).min(cache::ceiling_for(&request));
     // An answer supplied by anything but the app says nothing trustworthy about where it was read.
-    let within = if ps(p, "text").is_some() && !s.policy_user() { within.min(Reach::Public) } else { within };
+    let within = match read {
+        Some(read) => within.min(read),
+        None if ps(p, "text").is_some() && !s.policy_user() => within.min(Reach::Public),
+        None => within,
+    };
     let (page, reach) = match ps(p, "text") {
         Some(text) => (
             rustgis_data::ogc::parse_records(&request, text.as_bytes()).map_err(|e| crate::sources::message_with_address(url, &e))?,
@@ -2293,6 +2314,79 @@ mod tests {
             };
             let links = out["records"][0]["links"].as_array().map_or(0, Vec::len);
             assert_eq!(links, usize::from(app), "{out}");
+        }
+    }
+
+    /// The Assistant's own service address on the local network stays its choice: a document it
+    /// supplies for that address has what it names taken as named on the internet, but the address
+    /// itself isn't refused.
+    #[test]
+    fn a_callers_own_local_address_stays_its_choice_with_a_supplied_document() {
+        use crate::policy::{Effects, Revocation, Scope};
+        struct Live;
+        impl Revocation for Live {
+            fn allows(&self, _: Effects) -> bool {
+                true
+            }
+        }
+        let own = "http://10.0.15.5/collections";
+        let items = "https://public-items-15.example/collections/parcels/items";
+        let collections = json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
+        let p = json!({"url": own, "type": "ogcapi", "text": collections.to_string()});
+        let mut s = Session::new(crate::Project::default());
+        let mut never = |_: &str, _: Reach| -> Result<cache::Fetched, String> { Err("nothing is fetched".into()) };
+        let found = s
+            .with_scope(Scope::assistant(4_201_304, std::sync::Arc::new(Live)), |s| read_documents_with(s, &p, false, None, &mut never))
+            .unwrap();
+        let found = found.unwrap();
+        assert_eq!(found.service.layers.len(), 1);
+        assert_eq!(found.sources.iter().map(|source| source.public).collect::<Vec<_>>(), [true], "what it names is held to the internet");
+    }
+
+    /// In a dataset document, a stylesheet read earlier (a TileJSON completing it names it again)
+    /// is judged by where it was itself read: one read on the local network is kept under a
+    /// TileJSON read from the internet. Outside completion, a style is judged by its document.
+    #[test]
+    fn a_completed_stylesheet_is_judged_by_where_it_was_read() {
+        let style = "http://10.0.16.5/style.json";
+        let service = || Service {
+            layers: vec![rustgis_data::ogc::ServiceLayer {
+                name: "s".into(),
+                title: "S".into(),
+                offer: Offer::Style { url: style.into() },
+                bbox: None,
+                tilesets: None,
+                time: None,
+                feature_info: None,
+                legends: Vec::new(),
+                zooms: None,
+            }],
+            ..Service::default()
+        };
+        let read = std::collections::HashMap::from([(style.to_string(), Reach::Local)]);
+        assert_eq!(vet(service(), Reach::Public, true, &read).layers.len(), 1, "completing: the stylesheet's own reach");
+        assert_eq!(vet(service(), Reach::Public, false, &read).layers.len(), 0, "an ordinary document: its own reach");
+    }
+
+    /// A template the app read and gives `service.add` is held to the internet when the tile list
+    /// naming it was read from there, whatever the template's own record.
+    #[test]
+    fn a_given_template_is_held_where_its_list_was_read() {
+        for (n, recorded) in [(17, true), (18, false)] {
+            let list = format!("https://tiles-list-{n}.example/relief/map/tiles");
+            let tiled = json!({"collections": [{"id": "relief", "links": [{"rel": "tilesets-map", "href": list}]}]}).to_string();
+            let template = format!("https://tiles-paint-{n}.example/relief/{{z}}/{{y}}/{{x}}.png");
+            let mut s = Session::new(crate::Project::default());
+            let api = format!("https://tiles-api-{n}.example/collections");
+            // The list as the app reads it (the layer's `tilesets`), recorded by its fetch.
+            let listed = s.run("service.layers", &json!({"url": api, "text": tiled})).unwrap();
+            let read = listed["layers"].as_array().and_then(|l| l.iter().find_map(|l| l["tilesets"].as_str())).unwrap().to_string();
+            assert!(read.starts_with(&list), "{read}");
+            if recorded {
+                cache::restrict_to_public(&read);
+            }
+            s.run("service.add", &json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "tiles": template})).unwrap();
+            assert_eq!(cache::ceiling_for(&template) == Reach::Public, recorded, "{template}");
         }
     }
 

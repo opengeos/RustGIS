@@ -158,7 +158,9 @@ fn portal_search(s: &mut Session, p: &Value) -> CmdResult {
     let (portal, query, area, limit) = portal_query(s, p)?;
     let url = portal.search_url(&query, area, limit);
     let (bytes, reach) = fetch(&url)?;
-    let found = portal.parse(reach, &bytes, area, &query)?;
+    let mut refused = 0;
+    let found = portal.parse(reach, &mut refused, &bytes, area, &query)?;
+    say_refused(s, refused);
     Ok(json!({"portal": portal.label(), "count": found.len(), "datasets": found.iter().map(dataset_json).collect::<Vec<_>>()}))
 }
 
@@ -171,10 +173,12 @@ pub fn files_query(p: &Value) -> Result<(Portal, String), String> {
     Ok((portal, url))
 }
 
-fn portal_files(_s: &mut Session, p: &Value) -> CmdResult {
+fn portal_files(s: &mut Session, p: &Value) -> CmdResult {
     let (portal, url) = files_query(p)?;
     let (bytes, reach) = fetch(&url)?;
-    let files = portal.parse_listing(&url, reach, &bytes)?;
+    let mut refused = 0;
+    let files = portal.parse_listing(&url, reach, &mut refused, &bytes)?;
+    say_refused(s, refused);
     let list: Vec<Value> = files
         .iter()
         .map(|r| match &r.using {
@@ -252,6 +256,22 @@ fn first_layer(s: &mut Session, url: &str, kind: &str) -> Result<String, String>
         .and_then(|l| l["name"].as_str())
         .map(str::to_string)
         .ok_or_else(|| crate::sources::message_with_address(url, "the service lists no layer RustGIS can add"))
+}
+
+/// Says how many addresses a portal's answer gave that were left out for pointing where a
+/// document read from the internet may not send RustGIS (into the local network).
+pub fn refused_notice(refused: usize) -> Option<String> {
+    (refused > 0).then(|| {
+        format!(
+            "{refused} addresses the portal listed point where RustGIS won't fetch for an answer read from the internet and are left out"
+        )
+    })
+}
+
+fn say_refused(s: &mut Session, refused: usize) {
+    if let Some(notice) = refused_notice(refused) {
+        s.notify(notice, false);
+    }
 }
 
 /// A fetch the command waits for (the command line and the assistant; the app fetches off the

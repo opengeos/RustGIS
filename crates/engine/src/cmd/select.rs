@@ -428,11 +428,13 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     // all the map's layers, as all were before #808, isn't asked over what they found).
     let over_top =
         |i: usize| map.tiles.get(i).is_some_and(|t| t.over.is_some()) && top.is_some_and(|top| place(rustgis_map::Drawn::Tile(i)) < top);
-    let (asks, refused) = if web && (!first_layer || results.is_empty() || info::topmost(s, lon, lat).is_some_and(over_top)) {
+    let asks = if web && (!first_layer || results.is_empty() || info::topmost(s, lon, lat).is_some_and(over_top)) {
         info::requests(s, lon, lat, first_layer, picked)
     } else {
-        (Vec::new(), None)
+        Vec::new()
     };
+    // Said whichever layer is reported: a WMS layer whose request reaches past it is never asked.
+    let refused = if web { info::refused(s, lon, lat, picked) } else { None };
     let out = (|| -> CmdResult {
         let mut out = match results.first().cloned() {
             Some(first) => first,

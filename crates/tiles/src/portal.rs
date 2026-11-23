@@ -458,7 +458,16 @@ impl Portal {
     /// The datasets in a search's answer (read within `reach`, as its fetch observed it, which the
     /// resources' own addresses are judged by), with the resources RustGIS can add; datasets
     /// without one are left out, as are those outside `bbox` when they say where they are.
-    pub fn parse(&self, reach: Reach, bytes: &[u8], bbox: Option<[f64; 4]>, query: &str) -> Result<Vec<Dataset>, String> {
+    /// `refused` counts the addresses (resources and pictures) left out for reaching past `reach`,
+    /// for the caller to say.
+    pub fn parse(
+        &self,
+        reach: Reach,
+        refused: &mut usize,
+        bytes: &[u8],
+        bbox: Option<[f64; 4]>,
+        query: &str,
+    ) -> Result<Vec<Dataset>, String> {
         let v: Value = serde_json::from_slice(bytes).map_err(|_| format!("{}: the answer isn't JSON", self.label()))?;
         // The words a portal whose search takes none is kept to here: every one in the title,
         // description or provider.
@@ -539,9 +548,13 @@ impl Portal {
             // The portal's answer is hostile input: an address it gives may not reach past where
             // the answer was read (into the local network, unless the portal is there) or a
             // forbidden address, however the portal's own address is spelled.
+            let listed = d.resources.len();
             d.resources.retain(|r| crate::address::check_reach(&r.url, reach).is_ok());
+            *refused = refused.saturating_add(listed - d.resources.len());
             // So may its pictures', fetched as results are shown.
+            let pictured = d.thumbnail.is_some();
             d.thumbnail = d.thumbnail.take().filter(|u| crate::address::check_reach(u, reach).is_ok());
+            *refused = refused.saturating_add(usize::from(pictured && d.thumbnail.is_none()));
             d.resources.sort_by_key(|r| rank(&r.format));
             d.resources.truncate(MAX_RESOURCES);
         }
@@ -840,9 +853,9 @@ fn arcgis_words(q: &str) -> String {
 
 /// A web map's layers (its operational layers, those in groups too) RustGIS adds: ArcGIS services,
 /// named by their titles.
-fn web_map_layers(v: &Value, reach: Reach) -> Result<Vec<Resource>, String> {
+fn web_map_layers(v: &Value, reach: Reach, refused: &mut usize) -> Result<Vec<Resource>, String> {
     // A layer in a group is named after the group too (groups often repeat their layers' titles).
-    fn walk(layers: &Value, depth: usize, group: &str, out: &mut Vec<Resource>, reach: Reach) {
+    fn walk(layers: &Value, depth: usize, group: &str, out: &mut Vec<Resource>, reach: Reach, refused: &mut usize) {
         for l in layers.as_array().into_iter().flatten().take(500) {
             if out.len() >= MAX_FILES {
                 return;
@@ -856,10 +869,14 @@ fn web_map_layers(v: &Value, reach: Reach) -> Result<Vec<Resource>, String> {
             if depth < 6
                 && let Some(inner) = l.get("layers")
             {
-                walk(inner, depth + 1, &named, out, reach);
+                walk(inner, depth + 1, &named, out, reach, refused);
             }
             let url = text(l, "url", 2048);
-            if let Some(mut r) = classify("ArcGIS REST", "", &url).filter(|r| crate::address::check_reach(&r.url, reach).is_ok()) {
+            if let Some(mut r) = classify("ArcGIS REST", "", &url) {
+                if crate::address::check_reach(&r.url, reach).is_err() {
+                    *refused = refused.saturating_add(1);
+                    continue;
+                }
                 if !named.is_empty() {
                     r.format = named;
                 }
@@ -869,7 +886,7 @@ fn web_map_layers(v: &Value, reach: Reach) -> Result<Vec<Resource>, String> {
     }
     let ops = v.get("operationalLayers").ok_or("not an ArcGIS web map (it has no operational layers)")?;
     let mut out = Vec::new();
-    walk(ops, 0, "", &mut out, reach);
+    walk(ops, 0, "", &mut out, reach, refused);
     Ok(out)
 }
 
@@ -1237,10 +1254,11 @@ impl Portal {
     /// The files a dataset's listing ([`Dataset::listing`], fetched from `from` and read within
     /// `reach`, which the files' addresses are judged by) offers: those RustGIS adds, named by
     /// their path in the dataset.
-    pub fn parse_listing(&self, from: &str, reach: Reach, bytes: &[u8]) -> Result<Vec<Resource>, String> {
+    /// `refused` counts the files left out for reaching past `reach`, for the caller to say.
+    pub fn parse_listing(&self, from: &str, reach: Reach, refused: &mut usize, bytes: &[u8]) -> Result<Vec<Resource>, String> {
         let v: Value = serde_json::from_slice(bytes).map_err(|_| format!("{}: the listing isn't JSON", self.label()))?;
         if self.kind == Kind::ArcGis {
-            return web_map_layers(&v, reach);
+            return web_map_layers(&v, reach, refused);
         }
         let entries = v.as_array().ok_or_else(|| format!("{}: not a listing of files", self.label()))?;
         // `…/api/datasets/{owner}/{name}/tree/…`: the dataset.
@@ -1283,7 +1301,11 @@ impl Portal {
                 .any(|x| lower.ends_with(x));
                 addable.then_some(Resource { format: path, url, using: Use::File })
             })
-            .filter(|r| crate::address::check_reach(&r.url, reach).is_ok())
+            .filter(|r| {
+                let ok = crate::address::check_reach(&r.url, reach).is_ok();
+                *refused = refused.saturating_add(usize::from(!ok));
+                ok
+            })
             .take(MAX_FILES)
             .collect();
         out.sort_by(|a, b| a.format.cmp(&b.format));
@@ -1357,8 +1379,10 @@ mod tests {
     fn answers() {
         let dg = br#"{"results":[{"slug":"parks","title":"Parks","description":"Parks of a city","organization":{"name":"City"},"spatial_shape":{"type":"Polygon","coordinates":[[[-122.5,47.5],[-122.2,47.5],[-122.2,47.7],[-122.5,47.5]]]},"dcat":{"distribution":[{"downloadURL":"https://x.org/p.csv","mediaType":"text/csv"},{"downloadURL":"https://x.org/p.geojson","mediaType":"application/geo+json"},{"accessURL":"http://127.0.0.1/p.geojson","format":"GeoJSON"},{"downloadURL":"https://x.org/p.html","format":"HTML"}]}},{"slug":"report","title":"A report","dcat":{"distribution":[{"downloadURL":"https://x.org/r.pdf"}]}}],"sort":"relevance"}"#;
         let p = Portal::new(None, None).unwrap();
-        let ds = p.parse(Reach::Public, dg, None, "").unwrap();
+        let mut refused = 0;
+        let ds = p.parse(Reach::Public, &mut refused, dg, None, "").unwrap();
         assert_eq!(ds.len(), 1, "a dataset with nothing to add is left out");
+        assert_eq!(refused, 1, "the local-network address is counted, for the caller to say");
         let d = &ds[0];
         assert_eq!((d.title.as_str(), d.organization.as_str()), ("Parks", "City"));
         assert_eq!(d.page.as_deref(), Some("https://catalog.data.gov/dataset/parks"));
@@ -1367,33 +1391,35 @@ mod tests {
         assert_eq!(d.resources.iter().map(|r| r.format.as_str()).collect::<Vec<_>>(), vec!["GeoJSON", "CSV"]);
         // An answer read on the local network (a portal there, whatever its name) keeps it: the
         // addresses are judged by where the answer was read.
-        let local = p.parse(Reach::Local, dg, None, "").unwrap();
+        let mut refused = 0;
+        let local = p.parse(Reach::Local, &mut refused, dg, None, "").unwrap();
+        assert_eq!(refused, 0, "nothing left out of an answer read locally");
         assert!(local[0].resources.iter().any(|r| r.url == "http://127.0.0.1/p.geojson"), "{:?}", local[0].resources);
         // Kept to a box: a dataset elsewhere goes.
-        assert!(p.parse(Reach::Public, dg, Some([0.0, 0.0, 1.0, 1.0]), "").unwrap().is_empty());
-        assert_eq!(p.parse(Reach::Public, dg, Some([-123.0, 47.0, -122.0, 48.0]), "").unwrap().len(), 1);
-        assert!(p.parse(Reach::Public, b"<html>", None, "").is_err() && p.parse(Reach::Public, b"{}", None, "").is_err());
+        assert!(p.parse(Reach::Public, &mut 0, dg, Some([0.0, 0.0, 1.0, 1.0]), "").unwrap().is_empty());
+        assert_eq!(p.parse(Reach::Public, &mut 0, dg, Some([-123.0, 47.0, -122.0, 48.0]), "").unwrap().len(), 1);
+        assert!(p.parse(Reach::Public, &mut 0, b"<html>", None, "").is_err() && p.parse(Reach::Public, &mut 0, b"{}", None, "").is_err());
 
         let soc = br#"{"results":[{"resource":{"id":"enfh-gkve","name":"Parks Properties","type":"dataset","columns_datatype":["Text","MultiPolygon"]},"metadata":{"domain":"data.cityofnewyork.us"},"permalink":"https://data.cityofnewyork.us/d/enfh-gkve"},{"resource":{"id":"nc67-uf89","name":"Violations","type":"dataset","columns_datatype":["Text"]},"metadata":{"domain":"data.cityofnewyork.us"}},{"resource":{"id":"bad","name":"x","type":"dataset","columns_datatype":["Point"]},"metadata":{"domain":"evil host"}}]}"#;
         let s = Portal::new(Some("socrata"), None).unwrap();
-        let ds = s.parse(Reach::Public, soc, None, "").unwrap();
+        let ds = s.parse(Reach::Public, &mut 0, soc, None, "").unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].resources[0].url, "https://data.cityofnewyork.us/resource/enfh-gkve.geojson?%24limit=50000");
 
         let hub = br#"{"type":"FeatureCollection","features":[{"id":"c5ef","properties":{"id":"c5ef","title":"parks","type":"Feature Service","owner":"nyc","url":"https://services1.arcgis.com/S/arcgis/rest/services/parks/FeatureServer","extent":{"type":"Polygon","coordinates":[[[-73.9,40.76],[-73.87,40.76],[-73.87,40.74],[-73.9,40.76]]]}}},{"properties":{"title":"no url"}}]}"#;
         let h = Portal::new(Some("arcgis-hub"), None).unwrap();
-        let ds = h.parse(Reach::Public, hub, None, "").unwrap();
+        let ds = h.parse(Reach::Public, &mut 0, hub, None, "").unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].resources[0].using, Use::Service { kind: "arcgis", layer: None });
         assert_eq!(ds[0].bbox, Some([-73.9, 40.74, -73.87, 40.76]));
 
         let ckan = br#"{"success":true,"result":{"count":1,"results":[{"name":"lakes","title":"Lakes","notes":"All lakes","organization":{"title":"NRCan"},"extras":[{"key":"spatial","value":"{\"type\":\"Polygon\",\"coordinates\":[[[-80,43],[-79,43],[-79,44],[-80,43]]]}"}],"resources":[{"format":"WMS","url":"https://maps.example.ca/wms?service=WMS"},{"format":"SHP","url":"https://x.ca/lakes.zip"}]}]}}"#;
         let c = Portal::new(Some("ckan"), Some("https://open.canada.ca/data")).unwrap();
-        let ds = c.parse(Reach::Public, ckan, None, "").unwrap();
+        let ds = c.parse(Reach::Public, &mut 0, ckan, None, "").unwrap();
         assert_eq!(ds[0].page.as_deref(), Some("https://open.canada.ca/data/dataset/lakes"));
         assert_eq!(ds[0].resources.iter().map(|r| r.format.as_str()).collect::<Vec<_>>(), vec!["Shapefile", "WMS"]);
         assert!(
-            c.parse(Reach::Public, br#"{"success":false,"error":{"message":"Bad request"}}"#, None, "")
+            c.parse(Reach::Public, &mut 0, br#"{"success":false,"error":{"message":"Bad request"}}"#, None, "")
                 .unwrap_err()
                 .contains("Bad request")
         );
@@ -1446,7 +1472,7 @@ mod tests {
     fn web_service_answers() {
         let agol = Portal::new(Some("arcgis-portal"), None).unwrap();
         let a = br#"{"total":3,"results":[{"id":"abc123","type":"Feature Service","title":"Parks","owner":"city","snippet":"City parks","url":"https://services.arcgis.com/x/arcgis/rest/services/Parks/FeatureServer/0","extent":[[-122.5,47.5],[-122.2,47.7]]},{"id":"def456","type":"GeoJson","title":"Trails"},{"id":"bad id","type":"Map Service","url":"https://x.org/arcgis/rest/services/a/MapServer"},{"id":"ghi789","type":"Image Service","title":"Imagery","url":"https://x.org/arcgis/rest/services/i/ImageServer"}]}"#;
-        let ds = agol.parse(Reach::Public, a, None, "").unwrap();
+        let ds = agol.parse(Reach::Public, &mut 0, a, None, "").unwrap();
         assert_eq!(ds.len(), 3, "the item with a bad id is left out");
         assert_eq!(ds[0].resources[0].using, Use::Service { kind: "arcgis", layer: Some("0".into()) });
         assert_eq!(ds[0].bbox, Some([-122.5, 47.5, -122.2, 47.7]));
@@ -1454,27 +1480,27 @@ mod tests {
         assert_eq!(ds[1].resources[0].url, "https://www.arcgis.com/sharing/rest/content/items/def456/data");
         assert_eq!(ds[2].resources[0].url, "https://x.org/arcgis/rest/services/i/ImageServer");
         assert!(
-            agol.parse(Reach::Public, br#"{"error":{"code":400,"message":"Invalid query"}}"#, None, "")
+            agol.parse(Reach::Public, &mut 0, br#"{"error":{"code":400,"message":"Invalid query"}}"#, None, "")
                 .unwrap_err()
                 .contains("Invalid query")
         );
 
         let oam = Portal::new(Some("openaerialmap"), None).unwrap();
         let o = br#"{"meta":{"found":2},"results":[{"_id":"1","uuid":"https://oin.s3.amazonaws.com/a/b.tif","title":"Village","provider":"HOT","platform":"uav","gsd":0.05,"acquisition_end":"2026-09-20T06:00:00Z","bbox":[-77.3,4.85,-77.2,4.86]},{"_id":"2","uuid":"https://oin.s3.amazonaws.com/a/c.tif","title":"Coast","bbox":[1,2,3]}]}"#;
-        let ds = oam.parse(Reach::Public, o, Some([-80.0, 0.0, -70.0, 10.0]), "").unwrap();
+        let ds = oam.parse(Reach::Public, &mut 0, o, Some([-80.0, 0.0, -70.0, 10.0]), "").unwrap();
         assert_eq!(ds.len(), 2, "an image whose box isn't one is kept");
         assert_eq!((ds[0].kind.as_str(), ds[0].date.as_str()), ("uav · 5 cm per pixel", "2026-09-20"));
-        assert_eq!(oam.parse(Reach::Public, o, None, "coast").unwrap()[0].title, "Coast");
+        assert_eq!(oam.parse(Reach::Public, &mut 0, o, None, "coast").unwrap()[0].title, "Coast");
 
         let dem = Portal::new(Some("usgs-dem"), None).unwrap();
         let d = br#"{"total":3,"items":[{"title":"USGS 1/3 Arc Second n47w123 20121001","downloadURL":"https://prd-tnm.s3.amazonaws.com/x/historical/n47w123/a.tif","publicationDate":"2012-10-01","boundingBox":{"minX":-123,"minY":46,"maxX":-122,"maxY":47}},{"title":"USGS 1/3 Arc Second n47w123 20240101","downloadURL":"https://prd-tnm.s3.amazonaws.com/x/current/n47w123/b.tif","publicationDate":"2024-01-01"},{"title":"USGS 1/3 Arc Second n47w123 20250813","downloadURL":"https://prd-tnm.s3.amazonaws.com/x/historical/n47w123/c.tif","publicationDate":"2025-08-13"}]}"#;
-        let ds = dem.parse(Reach::Public, d, None, "").unwrap();
+        let ds = dem.parse(Reach::Public, &mut 0, d, None, "").unwrap();
         assert_eq!(ds.len(), 1, "one per tile");
         assert!(ds[0].resources[0].url.ends_with("/current/n47w123/b.tif"), "the current edition");
 
         let ign = Portal::new(Some("ign-lidar"), None).unwrap();
         let i = br#"{"features":[{"id":"metadata.1","geometry":{"type":"Polygon","coordinates":[[[2.3,48.8],[2.31,48.8],[2.31,48.81],[2.3,48.8]]]},"properties":{"coordonnees_nw":"0650-6858","nombre_points":17455527,"date_fin_acquisition":"2023-03-01Z","url_npl":"https://data.geopf.fr/telechargement/download/x/LHD_FXX_0650_6858_PTS_LAMB93_IGN69.copc.laz"}},{"id":"metadata.2","properties":{"url_npl":"http://x.org/a.laz"}}]}"#;
-        let ds = ign.parse(Reach::Public, i, None, "").unwrap();
+        let ds = ign.parse(Reach::Public, &mut 0, i, None, "").unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(
             (ds[0].title.as_str(), ds[0].kind.as_str(), ds[0].date.as_str()),
@@ -1483,30 +1509,30 @@ mod tests {
 
         let gl = Portal::new(Some("geolens"), None).unwrap();
         let g = br#"{"type":"FeatureCollection","features":[{"id":"8c26-1","properties":{"title":"Tracks","record_type":"vector_dataset","geometry_type":"MULTILINESTRING","feature_count":12}},{"id":"r1","properties":{"title":"DEM","record_type":"raster_dataset","band_count":1}},{"id":"../x","properties":{"title":"Bad"}}]}"#;
-        let ds = gl.parse(Reach::Public, g, None, "").unwrap();
+        let ds = gl.parse(Reach::Public, &mut 0, g, None, "").unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].resources[0].url, "https://datasets.geolibre.app/api/collections/8c26-1/items?limit=1000");
         assert_eq!(ds[0].resources[0].using, Use::Features, "read page by page");
 
         let hf = Portal::new(Some("huggingface"), None).unwrap();
         let h = br#"[{"id":"giswqs/geospatial","downloads":10,"gated":false,"private":false,"tags":["license:mit","region:us"]},{"id":"a/gated","gated":"manual"},{"id":"noslash"}]"#;
-        let ds = hf.parse(Reach::Public, h, None, "").unwrap();
+        let ds = hf.parse(Reach::Public, &mut 0, h, None, "").unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!((ds[0].kind.as_str(), ds[0].description.as_str(), ds[0].resources.len()), ("Dataset · 10 downloads", "license: mit", 0));
         let listing = ds[0].listing.clone().unwrap();
         assert_eq!(Some(listing.clone()), hf.listing_of("giswqs/geospatial"));
         let files = br#"[{"type":"directory","path":"naip"},{"type":"file","path":"naip/a b.tif"},{"type":"file","path":"README.md"},{"type":"file","path":"x/../../etc.geojson"},{"type":"file","path":"z.pmtiles"}]"#;
-        let r = hf.parse_listing(&listing, Reach::Public, files).unwrap();
+        let r = hf.parse_listing(&listing, Reach::Public, &mut 0, files).unwrap();
         assert_eq!(r.iter().map(|r| r.format.as_str()).collect::<Vec<_>>(), vec!["naip/a b.tif", "z.pmtiles"]);
         assert_eq!(r[0].url, "https://huggingface.co/datasets/giswqs/geospatial/resolve/main/naip/a%20b.tif");
-        assert!(hf.parse_listing("https://huggingface.co/api/datasets/../tree/main", Reach::Public, files).is_err());
-        assert!(hf.parse_listing(&listing, Reach::Public, b"{}").is_err());
+        assert!(hf.parse_listing("https://huggingface.co/api/datasets/../tree/main", Reach::Public, &mut 0, files).is_err());
+        assert!(hf.parse_listing(&listing, Reach::Public, &mut 0, b"{}").is_err());
 
         let odp = Portal::new(Some("ocean-data"), None).unwrap();
         let o = br#"{"features":[{"id":"cd48-1","bbox":[-64.6,17.7,-64.5,17.8],"properties":{"title":"Published - Coral sites","description":"Reef survey"}},{"id":"x2","bbox":[10,50,11,51],"properties":{"title":"Kelp"}}]}"#;
-        let ds = odp.parse(Reach::Public, o, None, "coral").unwrap();
+        let ds = odp.parse(Reach::Public, &mut 0, o, None, "coral").unwrap();
         assert_eq!((ds.len(), ds[0].title.as_str()), (1, "Coral sites"));
-        assert_eq!(odp.parse(Reach::Public, o, Some([9.0, 49.0, 12.0, 52.0]), "").unwrap()[0].title, "Kelp");
+        assert_eq!(odp.parse(Reach::Public, &mut 0, o, Some([9.0, 49.0, 12.0, 52.0]), "").unwrap()[0].title, "Kelp");
 
         // Hostile answers: never a panic, an error or nothing.
         for k in ["arcgis-portal", "openaerialmap", "usgs-dem", "ign-lidar", "geolens", "huggingface", "ocean-data"] {
@@ -1519,8 +1545,8 @@ mod tests {
                 b"{\"features\":[{\"properties\":7}]}",
                 b"{\"items\":\"x\"}",
             ] {
-                let _ = p.parse(Reach::Public, junk, Some([0.0, 0.0, 1.0, 1.0]), "a");
-                let _ = p.parse_listing("https://huggingface.co/api/datasets/a/b/tree/main", Reach::Public, junk);
+                let _ = p.parse(Reach::Public, &mut 0, junk, Some([0.0, 0.0, 1.0, 1.0]), "a");
+                let _ = p.parse_listing("https://huggingface.co/api/datasets/a/b/tree/main", Reach::Public, &mut 0, junk);
             }
         }
     }
@@ -1546,7 +1572,7 @@ mod tests {
         assert_eq!(oam.paging(&ou, b"junk"), (None, None));
         // A web map's item, its kind, date and picture, and its layers.
         let a = br#"{"results":[{"id":"w1","type":"Web Map","title":"Isaias","owner":"patrick_rea","modified":1792108800000,"thumbnail":"thumbnail/t.png"}]}"#;
-        let ds = p.parse(Reach::Public, a, None, "").unwrap();
+        let ds = p.parse(Reach::Public, &mut 0, a, None, "").unwrap();
         let d = &ds[0];
         assert_eq!((d.kind.as_str(), d.date.as_str()), ("Web map", "2026-10-16"));
         assert_eq!(
@@ -1556,10 +1582,10 @@ mod tests {
         let listing = d.listing.clone().unwrap();
         assert_eq!(Some(listing.clone()), p.listing_of("w1"));
         let wm = br#"{"operationalLayers":[{"title":"Optical","url":"https://gis.earthdata.nasa.gov/portal/rest/services/a/ImageServer"},{"layerType":"GroupLayer","title":"Sept","layers":[{"title":"Flood","url":"https://gis.earthdata.nasa.gov/portal/rest/services/b/MapServer/2"}]},{"title":"Notes"},{"title":"Local","url":"http://169.254.169.254/rest/services/c/FeatureServer/0"}]}"#;
-        let layers = p.parse_listing(&listing, Reach::Public, wm).unwrap();
+        let layers = p.parse_listing(&listing, Reach::Public, &mut 0, wm).unwrap();
         assert_eq!(layers.iter().map(|r| r.format.as_str()).collect::<Vec<_>>(), vec!["Optical", "Sept › Flood"]);
         assert_eq!(layers[1].using, Use::Service { kind: "arcgis", layer: Some("2".into()) });
-        assert!(p.parse_listing(&listing, Reach::Public, b"{}").is_err());
+        assert!(p.parse_listing(&listing, Reach::Public, &mut 0, b"{}").is_err());
         assert_eq!(day_of_ms(0.0), "1970-01-01");
         assert_eq!(day_of_ms(951_782_400_000.0), "2000-02-29");
         assert_eq!(day_of_ms(f64::NAN), "");
@@ -1572,7 +1598,7 @@ mod tests {
         assert!(!p.needs_query() && !p.needs_place());
         assert_eq!(p.search_url("", None, 20), "https://stac.dynamical.org/catalog.json");
         let c = br#"{"links":[{"rel":"root","href":"https://stac.dynamical.org/catalog.json"},{"rel":"child","href":"https://stac.dynamical.org/noaa-gfs-forecast/collection.json","title":"NOAA GFS forecast"},{"rel":"child","href":"https://stac.dynamical.org/noaa-gfs-forecast-virtual/collection.json","title":"virtual"},{"rel":"child","href":"https://stac.dynamical.org/ecmwf-ifs-ens-forecast-15-day-0-25-degree/collection.json"},{"rel":"child","href":"https://stac.dynamical.org/odd/collection.json"}]}"#;
-        let ds = p.parse(Reach::Public, c, None, "").unwrap();
+        let ds = p.parse(Reach::Public, &mut 0, c, None, "").unwrap();
         assert_eq!(
             ds.iter().map(|d| d.resources[0].url.as_str()).collect::<Vec<_>>(),
             vec![
@@ -1582,7 +1608,7 @@ mod tests {
         );
         assert_eq!((ds[0].title.as_str(), ds[0].organization.as_str(), ds[0].kind.as_str()), ("NOAA GFS forecast", "NOAA", "Forecast"));
         assert_eq!(ds[0].resources[0].using, Use::Zarr);
-        assert_eq!(p.parse(Reach::Public, c, None, "ecmwf").unwrap().len(), 1);
+        assert_eq!(p.parse(Reach::Public, &mut 0, c, None, "ecmwf").unwrap().len(), 1);
     }
 
     #[test]
