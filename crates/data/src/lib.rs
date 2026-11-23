@@ -1188,7 +1188,10 @@ impl Dataset {
     /// not the layer. Refused, naming the first feature, when one
     /// of its places can't be held in its system. A feature of the results without geometry whose
     /// stored one has a place that can't be given in longitude/latitude, so it was read without it
-    /// ([`Dataset::in_lonlat_leaving_out`]), is left as stored, a field the results add empty.
+    /// ([`Dataset::in_lonlat_leaving_out`]), is left as stored, a field the results add empty:
+    /// every result field of it is taken from the stored feature (or empty), which assumes the
+    /// update's fields are worked out from geometry, as Calculate Geometry Attributes' are, the
+    /// only in-place update today. A tool updating attributes alone would need its own values kept.
     pub fn results_from_lonlat(&self, mut results: Dataset) -> std::result::Result<Dataset, String> {
         // Exact through WGS 84 both ways, as the results were read (`in_lonlat`), whatever map
         // the layer is shown on.

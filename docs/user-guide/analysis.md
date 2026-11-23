@@ -201,6 +201,9 @@ another geographic system is worked on in longitude/latitude, as before. There, 
 that can't be given in longitude/latitude (one far past where its layer's own system reaches) is read
 without its geometry, and the tool's message says how many of each layer were; a tool that updates
 its input in place, as Calculate Geometry Attributes does, leaves that feature's geometry as it was.
+A layer read in place from its file (streamed) holds only the part the map shows: an update of it
+worked in longitude/latitude that read such a feature without its geometry is refused until you
+Load All Features, since that feature's stored geometry may not be in that part.
 In a projected system a
 tool works in, distances in metres (Buffer's, Simplify's tolerance, Points Along Lines' spacing,
 Near's, and the search distances of Select Layer By Location and Spatial Join) are measured flat
