@@ -29,7 +29,7 @@ fn wildcard(pattern: &str, text: &str) -> bool {
 }
 
 /// The paths and patterns `ATTRIBUTION.md` names: everything in backticks that has a `/` in it (the
-/// path of a file may hold spaces) or is a single word with a `.` (a file at the root), each with
+/// path of a file may hold spaces) or is a single word with a `.` or `*` (a file at the root), each with
 /// a trailing `/` taken off and whether it had a `/` at all.
 fn named(attribution: &str) -> Vec<(&str, bool)> {
     // Backticks pair up within a line, so a stray one can't shift the pairing of every later row.
@@ -37,7 +37,7 @@ fn named(attribution: &str) -> Vec<(&str, bool)> {
         .lines()
         .flat_map(|line| line.split('`').skip(1).step_by(2))
         .filter(|t| !t.contains(['\n', '\t']) && !t.starts_with('/'))
-        .filter(|t| t.contains('/') || (t.contains('.') && !t.contains(' ')))
+        .filter(|t| t.contains('/') || ((t.contains('.') || t.contains('*')) && !t.contains(' ')))
         .map(|t| (t.trim_end_matches('/'), t.contains('/')))
         .filter(|(t, _)| !t.is_empty())
         .collect()
@@ -49,7 +49,7 @@ fn uncovered<'a>(files: &[&'a str], attribution: &str) -> Vec<&'a str> {
     files
         .iter()
         .copied()
-        .filter(|f| f.rsplit_once('.').is_some_and(|(_, ext)| ASSET_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())))
+        .filter(|f| is_asset(f))
         .filter(|f| {
             !named.iter().any(|(n, path)| {
                 if *path { f == n || f.starts_with(&format!("{n}/")) || wildcard(n, f) } else { !f.contains('/') && wildcard(n, f) }
@@ -58,11 +58,19 @@ fn uncovered<'a>(files: &[&'a str], attribution: &str) -> Vec<&'a str> {
         .collect()
 }
 
-/// The names in `git ls-files -z` output, or an error naming one that isn't valid UTF-8: the
-/// output was decoded lossily, so such a file would otherwise look missing and be skipped.
+/// Whether the file's extension is one of an image or a font.
+fn is_asset(file: &str) -> bool {
+    file.rsplit_once('.').is_some_and(|(_, ext)| ASSET_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// The names in `git ls-files -z` output, or an error naming an image or font one that isn't valid
+/// UTF-8: the output was decoded lossily, so such a file would otherwise look missing and be
+/// skipped. (A name whose bad bytes are in its extension can't be told from an asset, so it counts.)
 fn names(listed: &str) -> Result<Vec<&str>, String> {
     let names: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty()).collect();
-    match names.iter().find(|f| f.contains('\u{FFFD}')) {
+    let unreadable =
+        |f: &str| f.contains('\u{FFFD}') && (is_asset(f) || f.rsplit_once('.').is_none_or(|(_, ext)| ext.contains('\u{FFFD}')));
+    match names.iter().copied().find(|f| unreadable(f)) {
         Some(bad) => Err(format!("attribution: `{bad}` is not a valid UTF-8 file name, so it can't be checked: rename it")),
         None => Ok(names),
     }
@@ -145,6 +153,15 @@ mod tests {
         assert_eq!(names("a/b.png\0c.otf\0").unwrap(), vec!["a/b.png", "c.otf"]);
         let lossy = String::from_utf8_lossy(b"a/ok.png\0a/bad\xff.png\0");
         assert!(names(&lossy).unwrap_err().contains("bad\u{FFFD}.png"));
+        // A name that is no image or font is none of this check's business, however it is spelt.
+        assert_eq!(names(&String::from_utf8_lossy(b"src/bad\xff.rs\0")).unwrap().len(), 1);
+        assert!(names(&String::from_utf8_lossy(b"a/b.p\xffg\0")).is_err());
+    }
+
+    #[test]
+    fn a_root_pattern_without_a_dot_covers_only_root_files() {
+        let table = "| Logos (`logo*`) | us |\n";
+        assert_eq!(uncovered(&["logo.png", "logo-dark.svg", "assets/logo.png"], table), vec!["assets/logo.png"]);
     }
 
     #[test]
