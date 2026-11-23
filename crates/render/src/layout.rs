@@ -4430,7 +4430,7 @@ impl ChartBars<'_> {
             for (start, share, colour) in self.stretches(i, *v) {
                 let w = (bar_area * share.abs()).max(1.0);
                 let x = zero + bar_area * start - if share < 0.0 { w } else { 0.0 };
-                fill(pm, colour, place(x, w), y + bh * 0.15, w, bh * 0.7);
+                self.bar(pm, colour, place(x, w), y + bh * 0.15, w, bh * 0.7);
                 (left, right_end) = (left.min(x), right_end.max(x + w));
             }
             if labelled {
@@ -4486,7 +4486,7 @@ impl ChartBars<'_> {
             for (start, share, colour) in self.stretches(i, *v) {
                 let h = (plot_h * share.abs()).max(1.0);
                 let y = zero - plot_h * start - if share < 0.0 { 0.0 } else { h };
-                fill(pm, colour, cx - slot * 0.35, place(y, h), slot * 0.7, h);
+                self.bar(pm, colour, cx - slot * 0.35, place(y, h), slot * 0.7, h);
                 (top_end, bottom) = (top_end.min(y), bottom.max(y + h));
             }
             if let Some(t) = self.values.get(i) {
@@ -4512,6 +4512,18 @@ fn mirrored(align: text::Align) -> text::Align {
         text::Align::Left => text::Align::Right,
         text::Align::Right => text::Align::Left,
         other => other,
+    }
+}
+
+impl ChartBars<'_> {
+    /// A bar, or a stretch of one, filled with `colour` and with the look's outline round it
+    /// (#2487 part 4b).
+    fn bar(&self, pm: &mut Canvas, colour: Rgba, x: f32, y: f32, w: f32, h: f32) {
+        fill(pm, colour, x, y, w, h);
+        if let (Some(o), Some(b)) = (self.look.bar_outline, Rect::from_xywh(x, y, w, h)) {
+            let stroke = Stroke { width: o.width as f32 * self.ppp, ..Stroke::default() };
+            pm.stroke_path(&PathBuilder::from_rect(b), &paint(o.color, 1.0), &stroke, Transform::identity(), None);
+        }
     }
 }
 
@@ -4927,6 +4939,43 @@ mod tests {
         // Bars all at zero still draw the placeholder, as they do on their own scale.
         let zeros = |extra| chart_drawn(&[(0.0, "a"), (0.0, "b")], extra).pixmap().data().to_vec();
         assert_eq!(zeros(json!({"max": 100.0})), zeros(json!({})));
+    }
+
+    /// A bar outline (#2487 part 4b) runs round each bar, across, mirrored and as columns, and
+    /// round each stretch of a stacked bar; none where it isn't given.
+    #[test]
+    fn a_charts_bar_outline_runs_round_each_bar() {
+        use serde_json::json;
+        let red = |c: &Canvas, x: u32, y: u32| c.pixmap().pixel(x, y).is_some_and(|p| p.red() > 150 && p.blue() < 100);
+        let outline = json!({"bar_outline": {"color": [208, 16, 16, 255], "width": 2.0}});
+        let plain = chart_drawn(&[(50.0, "a")], json!({}));
+        assert!(!red(&plain, 100, 19) && bar_blue(&plain, 100, 25), "no outline unless given");
+        let c = chart_drawn(&[(50.0, "a")], outline.clone());
+        assert!(red(&c, 100, 19) && red(&c, 100, 31) && bar_blue(&c, 100, 25), "along its top and bottom, filled within");
+        let mut mirrored = outline.clone();
+        mirrored["mirror"] = json!(true);
+        let c = chart_drawn(&[(50.0, "a"), (25.0, "b")], mirrored);
+        assert!(red(&c, 199, 25) && red(&c, 150, 36) && bar_blue(&c, 150, 43), "round the bars from the right");
+        assert!(red(&c, 102, 43) && !bar_blue(&c, 50, 43), "the shorter bar's line where it ends, on the left");
+        let mut columns = outline.clone();
+        (columns["orientation"], columns["title"]) = (json!("Vertical"), json!(""));
+        let c = chart_drawn(&[(50.0, "a")], columns);
+        assert!(red(&c, 100, 0) && red(&c, 30, 60) && red(&c, 170, 60) && bar_blue(&c, 100, 60), "round the column");
+        // Round each stretch: a line between the two of a bar split 6 to 4.
+        let stacked = rustgis_map::layout::ChartData {
+            bars: vec![(10.0, String::new())],
+            key: vec![("a".into(), Rgba::rgb(0x10, 0x10, 0xD0)), ("b".into(), Rgba::rgb(0x10, 0x10, 0xD0))],
+            stretches: vec![vec![6.0, 4.0]],
+            ..Default::default()
+        };
+        let look = ChartLook {
+            bar_outline: Some(rustgis_map::layout::ChartOutline { color: Rgba::rgb(0xD0, 0x10, 0x10), width: 2.0 }),
+            ..ChartLook::default()
+        };
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &stacked, &look, INK, 1.0, false);
+        let between = (100..140).filter(|x| red(&c, *x, 23)).count();
+        assert!(between > 0 && between < 6, "a line between the stretches, {between} px");
     }
 
     /// Hidden labels leave their column, or their row under columns, to the bars.

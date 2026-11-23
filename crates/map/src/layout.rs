@@ -1211,6 +1211,9 @@ pub enum ElementKind {
         /// Its labels left out, their room given to the bars.
         #[serde(default, skip_serializing_if = "is_false")]
         hide_labels: bool,
+        /// A line round each bar, or each stretch of a stacked one; none by default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bar_outline: Option<ChartOutline>,
     },
     /// A rectangle drawn on the page (a neatline or a backdrop). `width` is the outline's, in
     /// points (0: none).
@@ -1330,6 +1333,25 @@ pub struct ChartLook {
     /// The value at the far end of its bars' room, above 0; none, its bars' own.
     pub max: Option<f64>,
     pub hide_labels: bool,
+    /// The line round each bar, as it is read ([`chart_outline`]); none, no line.
+    pub bar_outline: Option<ChartOutline>,
+}
+
+/// A chart's bar outline (#2487 part 4b): its colour and width in points.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChartOutline {
+    pub color: Rgba,
+    pub width: f64,
+}
+
+/// A bar outline's colour and width when first given, and the widest it is drawn.
+pub const CHART_OUTLINE: ChartOutline = ChartOutline { color: Rgba::rgb(0x22, 0x22, 0x22), width: 0.5 };
+pub const MAX_CHART_OUTLINE_WIDTH: f64 = 5.0;
+
+/// A chart's bar outline as it is read: a width above 0 and finite, drawn at most
+/// [`MAX_CHART_OUTLINE_WIDTH`]; else none.
+pub fn chart_outline(o: Option<ChartOutline>) -> Option<ChartOutline> {
+    o.filter(|o| o.width.is_finite() && o.width > 0.0).map(|o| ChartOutline { width: o.width.min(MAX_CHART_OUTLINE_WIDTH), ..o })
 }
 
 impl Default for ChartLook {
@@ -1343,6 +1365,7 @@ impl Default for ChartLook {
             mirror: false,
             max: None,
             hide_labels: false,
+            bar_outline: None,
         }
     }
 }
@@ -1511,11 +1534,11 @@ impl ElementKind {
     }
 
     /// Whether `key` given as null changes an element of this kind, giving it back its default:
-    /// an ink's `color`, a chart's `title` (the title it is given), `barColor` and `max` (its bars'
-    /// own scale), and a legend's or scale bar's `textSize` (#2581).
+    /// an ink's `color`, a chart's `title` (the title it is given), `barColor`, `max` (its bars'
+    /// own scale) and `barOutline` (none), and a legend's or scale bar's `textSize` (#2581).
     pub fn null_resets(&self, key: &str) -> bool {
         (self.takes_ink() && key == "color")
-            || (matches!(self, ElementKind::Chart { .. }) && matches!(key, "title" | "barColor" | "max"))
+            || (matches!(self, ElementKind::Chart { .. }) && matches!(key, "title" | "barColor" | "max" | "barOutline"))
             || (matches!(self, ElementKind::Legend { .. } | ElementKind::ScaleBar { .. }) && key == "textSize")
     }
 
@@ -1868,7 +1891,7 @@ impl ElementKind {
     /// is given, and save it again without them.
     pub fn chart_uses_look_options(&self) -> bool {
         // Only part 2's options: facing another chart is its own capability ([`Self::chart_uses_facing`]).
-        let part_two = |l: ChartLook| ChartLook { mirror: false, max: None, hide_labels: false, ..l };
+        let part_two = |l: ChartLook| ChartLook { mirror: false, max: None, hide_labels: false, bar_outline: None, ..l };
         matches!(self, ElementKind::Chart { title: Some(_), .. }) || self.chart_look().is_some_and(|l| part_two(l) != ChartLook::default())
     }
 
@@ -1901,7 +1924,8 @@ impl ElementKind {
 
     /// How a chart draws its bars; `None` for another kind.
     pub fn chart_look(&self) -> Option<ChartLook> {
-        let ElementKind::Chart { orientation, values, decimals, bar_color, label_align, mirror, max, hide_labels, .. } = self else {
+        let ElementKind::Chart { orientation, values, decimals, bar_color, label_align, mirror, max, hide_labels, bar_outline, .. } = self
+        else {
             return None;
         };
         Some(ChartLook {
@@ -1913,6 +1937,7 @@ impl ElementKind {
             mirror: *mirror,
             max: chart_max(*max),
             hide_labels: *hide_labels,
+            bar_outline: chart_outline(*bar_outline),
         })
     }
 
@@ -1922,6 +1947,12 @@ impl ElementKind {
     /// when the layout is read ([`Layout::clamp`]), so a stored one is always drawn to.
     pub fn chart_uses_facing(&self) -> bool {
         matches!(self, ElementKind::Chart { mirror, max, hide_labels, .. } if *mirror || *hide_labels || max.is_some())
+    }
+
+    /// Whether a chart draws a line round its bars, which a chart had no way to before #2487 part
+    /// 4b: an older reader would draw them without, and save it again without.
+    pub fn chart_uses_outline(&self) -> bool {
+        matches!(self, ElementKind::Chart { bar_outline, .. } if chart_outline(*bar_outline).is_some())
     }
 }
 
