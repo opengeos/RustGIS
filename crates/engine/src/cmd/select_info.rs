@@ -5,6 +5,10 @@
 //!
 //! A layer added from the service knows its request from the capabilities; one from a project
 //! (which doesn't keep it) is asked for its service's capabilities first.
+//!
+//! Both requests are made within the layer's reach ([`reach_of`]): a layer a document read from
+//! the internet listed, or whose capabilities were read from there, asks only there, however the
+//! service's names resolve; the listed requests say so (`"public": true`) for the app's fetch.
 
 use rustgis_data::ogc::{self, FeatureInfo, InfoFeature};
 use rustgis_geom::Coord;
@@ -12,6 +16,7 @@ use rustgis_map::tiles::TileKind;
 use serde_json::{Value, json};
 
 use super::super::{b, f, ps};
+use crate::render::rustgis_tiles::{address::Reach, cache};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Most WMS layers one identify asks.
@@ -61,44 +66,69 @@ fn askable(t: &rustgis_map::tiles::TileLayer, picked: bool) -> bool {
         }
 }
 
+/// How far a WMS tile layer's identify requests may reach: only the internet when its template is
+/// held there (a document read from the internet listed the layer) or its capabilities were read
+/// from there ([`cache::ceiling_for`] records both), else as far as the user's own address.
+fn reach_of(t: &rustgis_map::tiles::TileLayer) -> Reach {
+    let caps = ogc::wms_layer_of(&t.url).map_or(Reach::Local, |(caps, _)| cache::ceiling_for(&caps));
+    cache::ceiling_for(&t.url).min(caps)
+}
+
 /// What to fetch to ask a WMS tile layer about a point: the GetFeatureInfo request, or the
-/// service's capabilities when the layer doesn't know it. `None` when it can't be asked there.
-fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Value> {
+/// service's capabilities when the layer doesn't know it. `None` when it can't be asked there;
+/// an error, naming the address and why, when what it would ask reaches past the layer.
+fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Result<Value, String>> {
     if t.bounds.is_some_and(|[w, s, e, n]| !(w <= lon && lon <= e && s <= lat && lat <= n)) {
         return None;
     }
     match &t.feature_info {
         Some(fi) => ask(t, fi, at, m_per_px),
         // The capabilities address comes from the layer's template (a project's, untrusted too).
-        None => ogc::wms_layer_of(&t.url)
-            .filter(|(caps, _)| crate::render::rustgis_tiles::address::check(caps, Some(&t.url)).is_ok())
-            .map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
+        None => ogc::wms_layer_of(&t.url).map(|(caps, _)| fetch_value(t, "capabilities", caps)),
     }
 }
 
 /// A WMS tile layer's GetFeatureInfo request for a point, in `fi`'s terms.
-fn ask(t: &rustgis_map::tiles::TileLayer, fi: &FeatureInfo, at: Coord, m_per_px: f64) -> Option<Value> {
-    // The request's address comes from the capabilities (hostile input): it must not reach into
-    // the local network from a service on the web.
-    // At the time the layer draws (a WMS layer with a time dimension).
-    fi.request(at.x, at.y, m_per_px)
-        .map(|url| ogc::at_map_time(url, &t.url))
-        .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
-        .map(|url| json!({"tileLayer": t.name, "url": url}))
+fn ask(t: &rustgis_map::tiles::TileLayer, fi: &FeatureInfo, at: Coord, m_per_px: f64) -> Option<Result<Value, String>> {
+    // The request's address comes from the capabilities (hostile input): it must not reach past
+    // the layer's reach. At the time the layer draws (a WMS layer with a time dimension).
+    fi.request(at.x, at.y, m_per_px).map(|url| ogc::at_map_time(url, &t.url)).map(|url| fetch_value(t, "url", url))
+}
+
+/// What identify lists for a layer to fetch (`key`: `url` or `capabilities`), when `url` is within
+/// the layer's reach ([`reach_of`]), with `"public"` when that is only the internet; otherwise why
+/// not, naming the address.
+fn fetch_value(t: &rustgis_map::tiles::TileLayer, key: &str, url: String) -> Result<Value, String> {
+    let reach = reach_of(t);
+    crate::render::rustgis_tiles::address::check_reach(&url, reach)?;
+    let mut out = json!({"tileLayer": t.name, key: url});
+    if reach == Reach::Public {
+        out["public"] = json!(true);
+    }
+    Ok(out)
 }
 
 /// The WMS tile layers drawn at a point to ask what is there, topmost first as drawn (a higher
-/// depth priority on top, #2488; only the topmost when `first_layer`), each with what to fetch.
-pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picked: Option<usize>) -> Vec<Value> {
-    let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return Vec::new() };
+/// depth priority on top, #2488; only the topmost when `first_layer`), each with what to fetch;
+/// and the notice for those whose request was refused (it reaches past the layer), naming the
+/// first of them, its address and why.
+pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picked: Option<usize>) -> (Vec<Value>, Option<String>) {
+    let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return (Vec::new(), None) };
     let wanted = if first_layer { 1 } else { MAX_ASKED };
     let map = s.map();
+    let mut refused = Vec::new();
     let mut asks: Vec<Value> = map
         .tiles_in_draw_order()
         .into_iter()
         .filter_map(|i| Some((i, map.tiles.get(i)?)))
         .filter(|(i, t)| picked.is_none_or(|p| p == *i) && askable(t, picked.is_some()))
-        .filter_map(|(_, t)| next_fetch(t, lon, lat, at, m_per_px))
+        .filter_map(|(_, t)| match next_fetch(t, lon, lat, at, m_per_px)? {
+            Ok(ask) => Some(ask),
+            Err(e) => {
+                refused.push((t.name.clone(), e));
+                None
+            }
+        })
         .take(wanted)
         .collect();
     if !s.policy_user() {
@@ -106,7 +136,11 @@ pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picke
             crate::sources::redact_url_fields(ask);
         }
     }
-    asks
+    let notice = refused.first().map(|(layer, e)| match refused.len() {
+        1 => format!("{layer} wasn't asked what is here: {e}"),
+        n => format!("{n} WMS layers weren't asked what is here, such as {layer}: {e}"),
+    });
+    (asks, notice)
 }
 
 /// The index of the topmost WMS tile layer, as drawn, that can be asked what is at a point (it
@@ -116,7 +150,7 @@ pub(super) fn topmost(s: &Session, lon: f64, lat: f64) -> Option<usize> {
     let map = s.map();
     map.tiles_in_draw_order()
         .into_iter()
-        .find(|i| map.tiles.get(*i).is_some_and(|t| askable(t, false) && next_fetch(t, lon, lat, at, m_per_px).is_some()))
+        .find(|i| map.tiles.get(*i).is_some_and(|t| askable(t, false) && next_fetch(t, lon, lat, at, m_per_px).is_some_and(|r| r.is_ok())))
 }
 
 /// The answer's features as identify's results.
@@ -206,11 +240,14 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
                     _ => None,
                 };
                 if !s.policy_user()
-                    && let Some(out) = &mut retry
+                    && let Some(Ok(out)) = &mut retry
                 {
                     crate::sources::redact_url_fields(out);
                 }
-                retry.ok_or_else(|| named(e))
+                match retry {
+                    Some(next) => next.map_err(named),
+                    None => Err(named(e)),
+                }
             }
         };
     }
@@ -220,7 +257,7 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
     let next = |s: &Session| s.map().tiles.get(index).and_then(|t| next_fetch(t, lon, lat, at, m_per_px));
     if b(p, "request") == Some(true) {
         // Nothing to ask (not queryable, or outside the layer): no results.
-        let mut out = next(s).unwrap_or_else(|| json!({"results": []}));
+        let mut out = next(s).transpose().map_err(named)?.unwrap_or_else(|| json!({"results": []}));
         if !s.policy_user() {
             crate::sources::redact_url_fields(&mut out);
         }
@@ -233,27 +270,39 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let fetch = |url: &str| {
-            crate::render::rustgis_tiles::cache::download_blocking_limited(url, ogc::MAX_INFO_BYTES).map_err(|e| format!("{name}: {e}"))
+        // Within the layer's reach, which the listed step says.
+        let fetch = |step: &Value, url: &str| {
+            let ceiling = if step["public"] == true { Reach::Public } else { Reach::Local };
+            cache::download_blocking_with_origin_within(url, ogc::MAX_INFO_BYTES, cache::BLOCKING_TIMEOUT, &[], ceiling)
+                .map_err(cache::large_file_hint)
+                .map_err(|e| format!("{name}: {e}"))
         };
-        let mut step = next(s);
-        if let Some(caps) = step.as_ref().and_then(|v| v["capabilities"].as_str()).map(str::to_string) {
-            learn(s, index, &fetch(&caps)?).map_err(named)?;
-            step = next(s);
+        let mut step = next(s).transpose().map_err(named)?;
+        if let Some(v) = &step
+            && let Some(caps) = v["capabilities"].as_str()
+        {
+            let fetched = fetch(v, caps)?;
+            // Capabilities read from the internet hold the requests they name there.
+            if fetched.origin.reach() == Reach::Public {
+                cache::restrict_to_public(caps);
+            }
+            learn(s, index, &fetched.bytes).map_err(named)?;
+            step = next(s).transpose().map_err(named)?;
         }
         // Each of the service's errors asks in a format read after the last, so this ends.
         loop {
-            let Some(url) = step.as_ref().and_then(|v| v["url"].as_str()).map(str::to_string) else {
+            let Some(v) = step.as_ref() else { return Ok(json!({"results": []})) };
+            let Some(url) = v["url"].as_str().map(str::to_string) else {
                 return Ok(json!({"results": []}));
             };
-            let answer = fetch(&url)?;
+            let answer = fetch(v, &url)?.bytes;
             match ogc::read_feature_info(&answer) {
                 Ok(features) => {
                     answered(s, index, &url);
                     return Ok(results(&name, features));
                 }
                 Err(e) => match retry(s, index, &url, lon, lat, at, m_per_px) {
-                    Some(next) if ogc::may_answer_in_another_format(&answer) => step = Some(next),
+                    Some(next) if ogc::may_answer_in_another_format(&answer) => step = Some(next.map_err(named)?),
                     _ => return Err(named(e)),
                 },
             }
@@ -263,7 +312,7 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
 
 /// After the service answered `request` with its error: the request in the next answer format
 /// the layer offers, when there is one. The layer keeps its own until another format answers.
-fn retry(s: &Session, index: usize, request: &str, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Value> {
+fn retry(s: &Session, index: usize, request: &str, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Result<Value, String>> {
     let t = s.map().tiles.get(index)?;
     if t.bounds.is_some_and(|[w, s, e, n]| !(w <= lon && lon <= e && s <= lat && lat <= n)) {
         return None;

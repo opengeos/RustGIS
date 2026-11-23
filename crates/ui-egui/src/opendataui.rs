@@ -7,14 +7,16 @@
 //! service opens Add From Service connected to it.
 
 use egui::vec2;
-use rustgis_engine::render::rustgis_tiles::cache;
 use rustgis_engine::render::rustgis_tiles::portal::{DEM_DATASETS, Dataset, Portal, Use};
 use rustgis_engine::render::rustgis_tiles::usgis::{self, Search, Set};
+use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use serde_json::json;
 
 use crate::{RustGisApp, Slot};
 
-type Answer = Slot<Result<Vec<u8>, String>>;
+/// An answer with the reach it was read at, which the addresses it gives are judged by and
+/// fetched within.
+type Read = Slot<Result<(Vec<u8>, Reach), String>>;
 
 /// The portals Search Open Data offers: the kind, its name, and what its address field takes.
 const PORTALS: [(&str, &str, &str); 3] = [
@@ -75,12 +77,12 @@ struct Pending {
     query: String,
     source: String,
     more: bool,
-    slot: Answer,
+    slot: Read,
 }
 
 /// A result's picture: being fetched, ready, or not to be had.
 enum Thumb {
-    Loading(Answer),
+    Loading(Read),
     Ready(egui::TextureHandle),
     Failed,
 }
@@ -111,16 +113,20 @@ pub struct State {
     waiting: Option<Pending>,
     /// A dataset's files or layers being listed: the dataset (its place in `found`), the portal,
     /// the listing's address.
-    listing: Option<(usize, Portal, String, Answer)>,
+    listing: Option<(usize, Portal, String, Read)>,
     pub found: Vec<Dataset>,
-    /// How many the search found in all, when the portal says, and its next page's address.
+    /// Where each of `found` was read (its page's answer, as the fetch observed it): what it
+    /// names (its pictures, its listing, its files and services) is fetched within it.
+    reaches: Vec<Reach>,
+    /// How many the search found in all, when the portal says, and its next page's address
+    /// with the reach of the page that named it.
     total: Option<u64>,
-    next: Option<(Portal, String, Option<[f64; 4]>, String, String)>,
+    next: Option<(Portal, String, Option<[f64; 4]>, String, String, Reach)>,
     /// The results whose details are shown.
     open: std::collections::HashSet<usize>,
     thumbs: std::collections::HashMap<String, Thumb>,
     /// The Zarr stores being checked (by their result's place), which some datasets lack.
-    probes: Vec<(usize, Answer)>,
+    probes: Vec<(usize, Read)>,
     /// The result whose Zarr store is open in the pane, to pick its variable and steps.
     zarr_open: Option<String>,
     pub error: Option<String>,
@@ -142,6 +148,7 @@ impl Default for State {
             waiting: None,
             listing: None,
             found: Vec::new(),
+            reaches: Vec::new(),
             total: None,
             next: None,
             open: Default::default(),
@@ -172,12 +179,10 @@ impl State {
     }
 }
 
-/// Starts fetching `url` off the frame.
-fn fetch(url: &str) -> Answer {
-    let slot: Answer = Slot::default();
-    let land = slot.clone();
-    cache::download(url, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
-    slot
+/// Starts fetching `url` off the frame, within `ceiling`: the reach of the answer that named it
+/// (`Reach::Local` for the portal the user picked).
+fn fetch(url: &str, ceiling: Reach) -> Read {
+    crate::fetch_within(url, cache::MAX_DOWNLOAD, None, ceiling)
 }
 
 /// Lands the search's answer, a dataset's listing and the results' pictures.
@@ -193,12 +198,14 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(w) = app.ui.opendata.waiting.take() else { return };
     let replaced = !w.more && app.ui.opendata.zarr_open.is_some();
     let st = &mut app.ui.opendata;
-    match r.and_then(|b| w.portal.parse(&w.url, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b)))) {
-        Ok((found, (total, next))) => {
+    match r.and_then(|(b, reach)| w.portal.parse(reach, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b), reach))) {
+        Ok((found, (total, next), reach)) => {
             let first = if w.more { st.found.len() } else { 0 };
             if w.more {
+                st.reaches.extend(std::iter::repeat_n(reach, found.len()));
                 st.found.extend(found);
             } else {
+                st.reaches = vec![reach; found.len()];
                 st.found = found;
                 st.zarr_open = None;
                 // The earlier list's checks would land on these results' places.
@@ -207,11 +214,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             // A dynamical.org store (Zarr 3) is checked before it is offered.
             for (i, d) in st.found.iter().enumerate().skip(first) {
                 if let Some(r) = d.resources.iter().find(|r| r.using == Use::Zarr && r.url.starts_with("https://data.dynamical.org/")) {
-                    st.probes.push((i, fetch(&format!("{}/zarr.json", r.url))));
+                    st.probes.push((i, fetch(&format!("{}/zarr.json", r.url), reach)));
                 }
             }
             st.total = total;
-            st.next = next.map(|n| (w.portal.clone(), n, w.area, w.query.clone(), w.source.clone()));
+            st.next = next.map(|n| (w.portal.clone(), n, w.area, w.query.clone(), w.source.clone(), reach));
             let shown = st.found.len().to_string();
             st.info = Some(match total {
                 _ if st.found.is_empty() => tl!("No datasets with data RustGIS can add").to_string(),
@@ -238,8 +245,12 @@ fn poll_listing(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let Some((i, portal, url, _)) = app.ui.opendata.listing.take() else { return };
     let st = &mut app.ui.opendata;
-    match r.and_then(|b| portal.parse_listing(&url, &b)) {
-        Ok(files) => {
+    match r.and_then(|(b, reach)| portal.parse_listing(&url, reach, &b).map(|files| (files, reach))) {
+        Ok((files, reach)) => {
+            // The files came in the listing: they reach no further than it was read.
+            if let Some(r) = st.reaches.get_mut(i) {
+                *r = (*r).min(reach);
+            }
             if files.is_empty() {
                 st.info = Some(tl!("The dataset has nothing RustGIS can add").to_string());
             }
@@ -286,7 +297,7 @@ fn poll_thumbs(app: &mut RustGisApp, ctx: &egui::Context) {
             waiting = true;
             continue;
         };
-        *thumb = match r.and_then(|b| cache::decode_image(&b)) {
+        *thumb = match r.and_then(|(b, _)| cache::decode_image(&b)) {
             Ok(pm) => {
                 let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
                 Thumb::Ready(ctx.load_texture(format!("webdata_thumb_{url}"), img, egui::TextureOptions::LINEAR))
@@ -380,8 +391,8 @@ fn params(st: &State) -> serde_json::Value {
 /// Starts a search for the pane's choices, or (`more`) its next page.
 fn search(app: &mut RustGisApp, more: bool) {
     if more {
-        let Some((portal, url, area, query, source)) = app.ui.opendata.next.take() else { return };
-        let slot = fetch(&url);
+        let Some((portal, url, area, query, source, reach)) = app.ui.opendata.next.take() else { return };
+        let slot = fetch(&url, reach);
         app.ui.opendata.waiting = Some(Pending { portal, url, area, query, source, more, slot });
         return;
     }
@@ -389,9 +400,10 @@ fn search(app: &mut RustGisApp, more: bool) {
     match rustgis_engine::cmd::portals::portal_query(&app.session, &p) {
         Ok((portal, query, area, limit)) => {
             let url = portal.search_url(&query, area, limit);
-            let slot = fetch(&url);
+            let slot = fetch(&url, Reach::Local);
             let st = &mut app.ui.opendata;
             st.found.clear();
+            st.reaches.clear();
             st.open.clear();
             st.probes.clear();
             // Pictures of the earlier results go (and their textures).
@@ -410,9 +422,11 @@ fn search(app: &mut RustGisApp, more: bool) {
 fn list_files(app: &mut RustGisApp, i: usize) {
     let st = &app.ui.opendata;
     let Some(url) = st.found.get(i).and_then(|d| d.listing.clone()) else { return };
+    // The listing's address came from the search's answer: it reaches no further.
+    let reach = st.reaches.get(i).copied().unwrap_or(Reach::Public);
     match Portal::new(Some(st.portal), None) {
         Ok(portal) => {
-            let slot = fetch(&url);
+            let slot = fetch(&url, reach);
             app.ui.opendata.listing = Some((i, portal, url, slot));
         }
         Err(e) => app.ui.opendata.error = Some(e),
@@ -608,17 +622,20 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut act = None;
     let mut wanted = Vec::new();
     for (i, d) in st.found.iter().enumerate() {
+        // What a result names reaches no further than the answer it came in (one not recorded,
+        // which can't happen, only the internet).
+        let reach = st.reaches.get(i).copied().unwrap_or(Reach::Public);
         let thumb = d.thumbnail.as_ref().and_then(|u| match st.thumbs.get(u) {
             Some(Thumb::Ready(tex)) => Some(tex.clone()),
             None => {
-                wanted.push(u.clone());
+                wanted.push((u.clone(), reach));
                 None
             }
             _ => None,
         });
         ui.push_id(i, |ui| {
             if let Some(a) = card(ui, &t, d, thumb, st.open.contains(&i), i, busy || listing) {
-                act = Some(a);
+                act = Some((a, reach));
             }
         });
     }
@@ -628,52 +645,53 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     // Pictures of the results shown, fetched once each.
     let st = &mut app.ui.opendata;
-    for u in wanted {
+    for (u, reach) in wanted {
         if st.thumbs.len() >= MAX_THUMBS {
             break;
         }
-        let slot = fetch(&u);
+        let slot = fetch(&u, reach);
         st.thumbs.insert(u, Thumb::Loading(slot));
     }
     match act {
-        Some(Act::Details(i)) if !st.open.remove(&i) => {
+        Some((Act::Details(i), _)) if !st.open.remove(&i) => {
             st.open.insert(i);
         }
-        Some(Act::Zoom(b)) => {
+        Some((Act::Zoom(b), _)) => {
             if let Err(e) = app.run("map.zoomToExtent", json!({"extent": b})) {
                 app.ui.opendata.error = Some(e);
             }
         }
-        Some(Act::List(i)) => {
+        Some((Act::List(i), _)) => {
             app.ui.opendata.error = None;
             list_files(app, i);
         }
-        Some(Act::Add(url, Use::Zarr, title)) => {
+        Some((Act::Add(url, Use::Zarr, title), reach)) => {
             // Its variable and steps are picked in the pane.
             app.ui.zarr.title = Some(title.clone());
             app.ui.opendata.zarr_open = Some(title);
             app.ui.zarr.address = url;
-            crate::zarrui::connect(app);
+            crate::zarrui::connect_within(app, reach == Reach::Public);
         }
-        Some(Act::Add(url, using, title)) => {
+        Some((Act::Add(url, using, title), reach)) => {
             app.ui.opendata.error = None;
-            if let Err(e) = add(app, &url, &using, &title) {
+            if let Err(e) = add(app, &url, &using, &title, reach == Reach::Public) {
                 app.ui.opendata.error = Some(e);
             }
         }
-        None | Some(Act::Details(_)) => {}
+        None | Some((Act::Details(_), _)) => {}
     }
 }
 
 /// Adds a result's resource: a file by its address, a service's features page by page, or a
-/// service through Add From Service, connected, to pick its layer.
-fn add(app: &mut RustGisApp, url: &str, using: &Use, title: &str) -> Result<(), String> {
+/// service through Add From Service, connected, to pick its layer. With `public` (the result came
+/// in an answer read from the internet), what it adds is fetched only from there (`fromDocument`).
+fn add(app: &mut RustGisApp, url: &str, using: &Use, title: &str, public: bool) -> Result<(), String> {
     match using {
-        Use::File | Use::Zarr => app.run("ui.addUrl", json!({"url": url, "name": title})).map(|_| ()),
-        Use::Features => app.run("ui.addUrl", json!({"url": url, "name": title, "service": true})).map(|_| ()),
+        Use::File | Use::Zarr => app.run("ui.addUrl", json!({"url": url, "name": title, "fromDocument": public})).map(|_| ()),
+        Use::Features => app.run("ui.addUrl", json!({"url": url, "name": title, "service": true, "fromDocument": public})).map(|_| ()),
         Use::Service { kind, .. } => app
             .run("ui.dialog", json!({"name": "addService"}))
-            .and_then(|_| app.run("ui.addService", json!({"url": url, "type": kind})))
+            .and_then(|_| app.run("ui.addService", json!({"url": url, "type": kind, "fromDocument": public})))
             .map(|_| ()),
     }
 }
@@ -855,6 +873,52 @@ mod tests {
         base
     }
 
+    /// A search's answer is read within its reach and what its results name inherits it: a
+    /// result's file is added only from the internet when the answer came from there; from an
+    /// answer read on the local network, a file on a private address is kept and added as the
+    /// user's own would be.
+    #[test]
+    fn search_results_are_added_within_the_reach_of_the_answer_naming_them() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        for (n, observed) in [(1, Reach::Public), (2, Reach::Local)] {
+            let _turn = crate::fetching::turn();
+            let file = if observed == Reach::Public {
+                format!("https://open-data-{n}.example/p.geojson")
+            } else {
+                format!("http://10.0.{n}.3/p.geojson")
+            };
+            let answer = json!({"results":[{"slug":"parks","title":"Parks","organization":{"name":"City"},"dcat":{"distribution":[{"downloadURL":file,"mediaType":"application/geo+json"}]}}]}).to_string();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let origin = Origin::with_observed_reach(&clean, observed.min(ceiling)).unwrap();
+                let body =
+                    if clean.ends_with(".geojson") { r#"{"type":"FeatureCollection","features":[]}"#.to_string() } else { answer.clone() };
+                done(Ok(cache::Fetched { bytes: body.into_bytes(), origin }));
+            });
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(16).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default())),
+            );
+            h.state_mut().run("ui.searchOpenData", json!({"query": "parks"})).unwrap();
+            h.run_steps(3);
+            assert_eq!(h.state().ui.opendata.found.len(), 1, "{:?}", h.state().ui.opendata.error);
+            assert_eq!(h.state().ui.opendata.reaches, [observed]);
+            h.get_by_label("Add").click();
+            h.run_steps(3);
+            let asked = asked.lock().unwrap().clone();
+            assert_eq!(asked.first().map(|(_, c)| *c), Some(Reach::Local), "the search RustGIS names: {asked:?}");
+            assert!(asked.iter().any(|(u, c)| u.starts_with(&file) && *c == observed), "the file, its answer read {observed:?}: {asked:?}");
+        }
+    }
+
     /// Web Data's Add reads a GeoLens dataset's every page, not only the server's first 1,000.
     #[test]
     fn a_geolens_dataset_is_added_page_by_page() {
@@ -870,7 +934,7 @@ mod tests {
                 RustGisApp::with_sample(),
             );
         let url = format!("{base}/api/collections/trees/items?limit=1000");
-        add(h.state_mut(), &url, &Use::Features, "Street Trees").unwrap();
+        add(h.state_mut(), &url, &Use::Features, "Street Trees", false).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while h.state().session.map().layer_by_name("Street Trees").is_none() {
             assert!(std::time::Instant::now() < deadline, "timed out waiting");

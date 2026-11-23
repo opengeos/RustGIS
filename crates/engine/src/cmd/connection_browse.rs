@@ -34,6 +34,9 @@ enum Level {
     Service {
         url: String,
         kind: Option<String>,
+        /// How far it may reach: the connection's own address is the user's choice; one a
+        /// catalogue's record links to reaches no further than where that catalogue was read.
+        reach: address::Reach,
     },
     Catalogue,
     StacRoot {
@@ -73,8 +76,10 @@ fn level(c: &Connection, node: &str, observed: Option<&address::Origin>) -> Resu
                 }
                 Level::Database
             }
-            "service" => Level::Service { url: c.address.clone(), kind: None },
-            "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" => Level::Service { url: c.address.clone(), kind: Some(c.kind.clone()) },
+            "service" => Level::Service { url: c.address.clone(), kind: None, reach: address::Reach::Local },
+            "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" => {
+                Level::Service { url: c.address.clone(), kind: Some(c.kind.clone()), reach: address::Reach::Local }
+            }
             "csw" => Level::Catalogue,
             "stac" => Level::StacRoot { api: stac::api(Some(&c.address))? },
             "s3" => Level::S3Root,
@@ -86,9 +91,12 @@ fn level(c: &Connection, node: &str, observed: Option<&address::Origin>) -> Resu
             return Err(not_a_node());
         }
         let (t, url) = rest.split_once(':').filter(|(t, _)| SERVICE_TYPES.contains(t)).ok_or_else(not_a_node)?;
-        // Judged as a document of the connection would be: a link may not lead into the local network.
-        address::check(url, Some(&c.address))?;
-        return Ok(Level::Service { url: url.to_string(), kind: (t != "auto").then(|| t.to_string()) });
+        // Judged by where the document listing it was read (a catalogue's records, recorded when
+        // they were browsed), not by how the connection's address is spelled; one not recorded,
+        // conservatively, as a document at that address would be.
+        let origin = observed.cloned().unwrap_or_else(|| address::Origin::named(&c.address));
+        origin.check(url)?;
+        return Ok(Level::Service { url: url.to_string(), kind: (t != "auto").then(|| t.to_string()), reach: origin.reach() });
     }
     // A schema's or a geodatabase dataset's name, as `schemas` and `geodatabase_tree` encode it.
     let named = |encoded: &str| {
@@ -169,7 +177,7 @@ fn s3_login(s: &mut Session, c: &Connection, level: &Level) -> Result<Option<s3:
 fn fetch_url(s: &Session, c: &Connection, level: &Level, conn: Option<&s3::Connection>) -> Result<Option<String>, String> {
     Ok(match level {
         Level::Database | Level::DatabaseSchema { .. } | Level::DatabaseDataset { .. } => None,
-        Level::Service { url, kind } => Some(rustgis_data::ogc::capabilities_url(url, kind.as_deref())),
+        Level::Service { url, kind, .. } => Some(rustgis_data::ogc::capabilities_url(url, kind.as_deref())),
         Level::Catalogue => Some(super::super::service::records_request(s, &json!({"url": c.address}))?),
         Level::StacRoot { api } => Some(if stac::catalog::is_static(api) { api.clone() } else { stac::collections_url(api) }),
         Level::StacCollection { api, id } => {
@@ -242,6 +250,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
     let level = level(&c, node, observed.as_ref())?;
     let ceiling = match &level {
         Level::StacCatalog { origin, .. } | Level::StacItem { origin, .. } => origin.reach(),
+        Level::Service { reach, .. } => *reach,
         _ => address::Reach::Local,
     };
     let conn = s3_login(s, &c, &level)?;
@@ -267,7 +276,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
         Level::Database => database_schemas(s, &c, &mut out)?,
         Level::DatabaseSchema { schema } => database_schema(s, &c, schema, &mut out)?,
         Level::DatabaseDataset { dataset } => database_dataset(s, &c, dataset, &mut out)?,
-        Level::Service { url, kind } => service(s, p, &mut out, &c, url, kind.as_deref())?,
+        Level::Service { url, kind, .. } => service(s, p, &mut out, &c, url, kind.as_deref())?,
         Level::S3Root if url.is_none() => {
             buckets(c.options.get("buckets").map(String::as_str).unwrap_or("").split(',').map(str::to_string))
         }
@@ -288,7 +297,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
             };
             let bytes = text.as_bytes();
             let found = match &level {
-                Level::Catalogue => catalogue(s, &c, &text, &mut out)?,
+                Level::Catalogue => catalogue(s, &c, &text, &origin, node.is_empty(), &mut out)?,
                 Level::StacRoot { api } if stac::catalog::is_static(api) => catalogs(s, bytes, &origin)?,
                 Level::StacRoot { .. } => collections(bytes)?,
                 Level::StacCatalog { .. } => catalogs(s, bytes, &origin)?,
@@ -674,10 +683,17 @@ fn service(s: &mut Session, p: &Value, out: &mut Value, c: &Connection, url: &st
     Ok(found)
 }
 
-/// A catalogue's records, each with the services and files it links to.
-fn catalogue(s: &mut Session, c: &Connection, text: &str, out: &mut Value) -> Result<Found, String> {
+/// A catalogue's records, each with the services and files it links to, read at `origin`: what
+/// they link to reaches no further than that, the services when they are opened ([`level`]) and
+/// the files when they are added (`fromDocument`).
+fn catalogue(s: &mut Session, c: &Connection, text: &str, origin: &address::Origin, root: bool, out: &mut Value) -> Result<Found, String> {
     let url = crate::service_logins::request(s, Some(&c.id), &c.address)?;
-    let r = super::super::service::catalog_search(s, &json!({"url": url, "connection": c.id, "text": text}))?;
+    let params = json!({"url": url, "connection": c.id, "text": text});
+    // `catalog.search` judges the answer by its address's record.
+    if origin.reach() == address::Reach::Public {
+        crate::render::rustgis_tiles::cache::restrict_to_public(&super::super::service::records_request(s, &params)?);
+    }
+    let r = super::super::service::catalog_search(s, &params)?;
     if let Some(n) = r.get("notes") {
         out["notes"] = n.clone();
     }
@@ -713,11 +729,15 @@ fn catalogue(s: &mut Session, c: &Connection, text: &str, out: &mut Value) -> Re
                             let last = url.split(['?', '#']).next().unwrap_or("").trim_end_matches('/').rsplit('/').next().unwrap_or("");
                             let shown: String = if name.is_empty() { last } else { name.as_str() }.chars().take(200).collect();
                             let named: String = title.chars().take(200).collect();
+                            let mut params = json!({"url": url, "name": named});
+                            if l.get("fromDocument").and_then(Value::as_bool) == Some(true) {
+                                params["fromDocument"] = json!(true);
+                            }
                             Some(json!({
                                 "key": url,
                                 "name": shown,
                                 "what": "download",
-                                "add": {"command": "layer.addUrl", "params": {"url": url, "name": named}},
+                                "add": {"command": "layer.addUrl", "params": params},
                             }))
                         }
                         _ => None,
@@ -731,6 +751,10 @@ fn catalogue(s: &mut Session, c: &Connection, text: &str, out: &mut Value) -> Re
     let mut found = Found::new(children);
     found.matched = r.get("matched").and_then(Value::as_u64);
     found.truncated |= dropped || r.get("next").is_some_and(|n| !n.is_null());
+    // The services the records link to, opened later, keep where the records were read.
+    let services: Vec<Value> =
+        found.children.iter().filter_map(|r| r.get("children")).filter_map(Value::as_array).flatten().cloned().collect();
+    remember_node_origins(s, c, &services, origin, root)?;
     Ok(found)
 }
 
@@ -1063,6 +1087,48 @@ mod tests {
             }
         }
     }
+    /// A catalogue connection's records are judged by where its answer was read, and what they link
+    /// to keeps that: a catalogue at a public-looking name read on the local network keeps a
+    /// service on a private address and opens it as the user's own; one read from the internet
+    /// leaves that out, opens the service it keeps only from the internet, and has its files added
+    /// the same way (`fromDocument`).
+    #[test]
+    fn a_catalogue_connections_links_keep_where_its_answer_was_read() {
+        use crate::render::rustgis_tiles::address::Origin;
+        for (n, peer) in [(1, "10.0.0.5"), (2, "93.184.216.34")] {
+            let public = n == 2;
+            let mut session = crate::Session::new(crate::Project::default());
+            let address = format!("https://csw-{n}.corp-looks-public.example/csw");
+            let saved = session.run("connection.new", &json!({"kind":"csw","address":address})).unwrap();
+            let connection = session.connections.connections.iter().find(|c| c.id == saved["id"].as_str().unwrap()).unwrap().clone();
+            let (local, web, file) = (
+                format!("http://10.0.{n}.4/wms"),
+                format!("https://csw-wms-{n}.example/wms"),
+                format!("https://csw-files-{n}.example/a.geojson"),
+            );
+            let text = format!(
+                r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="1"><csw:Record><dc:identifier>a</dc:identifier><dc:title>Roads</dc:title><dc:URI protocol="OGC:WMS">{local}</dc:URI><dc:URI protocol="OGC:WMS">{web}</dc:URI><dc:URI protocol="WWW:DOWNLOAD">{file}</dc:URI></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#
+            );
+            let origin = Origin::connected(&connection.address, peer.parse().unwrap()).unwrap();
+            let mut out = json!({});
+            let found = super::catalogue(&mut session, &connection, &text, &origin, true, &mut out).unwrap();
+            let links = found.children[0]["children"].as_array().cloned().unwrap_or_default();
+            let nodes: Vec<_> = links.iter().filter_map(|l| l["node"].as_str().map(str::to_string)).collect();
+            let want = if public {
+                vec![format!("service:wms:{web}")]
+            } else {
+                vec![format!("service:wms:{local}"), format!("service:wms:{web}")]
+            };
+            assert_eq!(nodes, want, "{links:?}");
+            for node in &nodes {
+                let probe = super::browse(&mut session, &json!({"id":connection.id,"node":node,"probe":true})).unwrap();
+                assert_eq!(probe.get("fromDocument").and_then(Value::as_bool).unwrap_or(false), public, "{node}: {probe}");
+            }
+            let download = links.iter().find(|l| l["what"] == "download").unwrap();
+            assert_eq!(download["add"]["params"].get("fromDocument").and_then(Value::as_bool).unwrap_or(false), public, "{download}");
+        }
+    }
+
     #[test]
     fn admitted_intranet_nodes_keep_their_origin_and_cannot_be_granted_by_json() {
         use crate::render::rustgis_tiles::address::Origin;

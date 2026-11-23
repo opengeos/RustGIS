@@ -733,6 +733,29 @@ fn fetch_document_as<E: Send + 'static>(url: &str, told: fn(Failure) -> E) -> Sl
     slot
 }
 
+/// Fetches an address off the frame, connecting no wider than `ceiling`: the reach of the
+/// document that named it, as that document's fetch observed it (`Reach::Local` for the user's own
+/// address). It lands with the bytes and the reach it was read at, which the addresses it names in
+/// turn are fetched within. Nothing is recorded for its address, so a long chain of reads (a
+/// service's feature pages, a catalogue's results) adds nothing to the restricted addresses
+/// ([`cache::restrict_to_public`]). Native downloads end at `timeout`, if it has one (the usual
+/// download's otherwise); the browser's late answer is discarded by the polling read.
+pub(crate) fn fetch_within(
+    url: &str,
+    max: usize,
+    timeout: Option<std::time::Duration>,
+    ceiling: Reach,
+) -> Slot<Result<(Vec<u8>, Reach), String>> {
+    let slot: Slot<Result<(Vec<u8>, Reach), String>> = Slot::default();
+    let land = slot.clone();
+    let done: cache::FetchedDone = Box::new(move |r| {
+        let r = r.map(|fetched| (fetched.bytes, fetched.origin.reach()));
+        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+    });
+    cache::download_limited_reaching_with_origin(url, max, timeout, ceiling, done);
+    slot
+}
+
 pub(crate) fn fetch_into_limited(url: &str, max: usize) -> Slot<Result<Vec<u8>, String>> {
     let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
     let land = slot.clone();
@@ -4464,6 +4487,16 @@ impl RustGisApp {
                 let resolved_connection = bound.get("connection").and_then(Value::as_str).map(str::to_string);
                 let url = bound.get("url").and_then(Value::as_str).unwrap_or(url);
                 let caps = rustgis_engine::data::ogc::capabilities_url(url, (kind != "auto").then_some(kind));
+                // An address a document read from the internet named (a catalogue's or a portal's
+                // entry, `fromDocument`) leads only there: its capabilities, the documents they
+                // link to and the layers they list (`service.layers` reads the address's record).
+                // It can only narrow what the address may reach.
+                if p.get("fromDocument").and_then(Value::as_bool) == Some(true) {
+                    rustgis_engine::render::rustgis_tiles::address::check_reach(url, Reach::Public)
+                        .map_err(|e| connectionui::translated(&e))?;
+                    cache::restrict_to_public(url);
+                    cache::restrict_to_public(&caps);
+                }
                 // A refusal is told with what the server said (#509).
                 let slot = fetch_detailed_into(&caps);
                 // The dialog shows the address connected to, however the connection was asked for.
@@ -6506,7 +6539,9 @@ impl RustGisApp {
                             resolve.read += 1;
                             // The resolver already carried the current document's binding, or
                             // its absence. A saved connection must not restore it after a hop.
-                            match rustgis_engine::render::rustgis_tiles::address::check(&next, Some(&resolve.doc)) {
+                            // Judged by where the list was read (its record), not by how its
+                            // address is spelled: a public-looking name may connect on the local network.
+                            match rustgis_engine::render::rustgis_tiles::address::check_reach(&next, cache::ceiling_for(&resolve.doc)) {
                                 Ok(()) => {
                                     resolve.crossed_origin |= rustgis_engine::render::rustgis_tiles::logins::origin(&resolve.doc)
                                         != rustgis_engine::render::rustgis_tiles::logins::origin(&next);
@@ -8571,6 +8606,8 @@ mod download_service_tests {
         for (query, count) in [("collections=roads", 0), ("token=RGSYNTH_ui_refused&collections=roads", 1)] {
             let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
             let list = format!("https://h.invalid/svc/tiles?{query}");
+            // The list was read from the internet (the dialog's fetch records it).
+            rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(&list);
             let body = json!({"tilesets":[{"tileMatrixSetId":"WebMercatorQuad",
                 "links":[{"rel":"self", "href":"http://127.0.0.1/tiles"}]}]})
             .to_string()

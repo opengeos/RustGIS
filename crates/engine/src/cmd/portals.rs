@@ -63,7 +63,7 @@ fn osm_download(s: &mut Session, p: &Value) -> CmdResult {
     let url = q.url(ps(p, "url"))?;
     let bytes = match ps(p, "answer") {
         Some(a) => a.as_bytes().to_vec(),
-        None => fetch(&url)?,
+        None => fetch(&url)?.0,
     };
     let answer = overpass::parse(&bytes)?;
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| q.title());
@@ -92,8 +92,10 @@ fn boundaries_add(s: &mut Session, p: &Value) -> CmdResult {
     let (text, title) = match ps(p, "text") {
         Some(t) => (t.to_string(), None),
         None => {
-            let meta = boundaries::parse_meta(&fetch(&boundaries::meta_url(&country, &level))?)?;
-            let bytes = fetch(&meta.geojson)?;
+            let (meta, reach) = fetch(&boundaries::meta_url(&country, &level))?;
+            let meta = boundaries::parse_meta(&meta)?;
+            // The answer names where the boundaries are: they are read no further than it was.
+            let (bytes, _) = fetch_within(&meta.geojson, reach)?;
             (String::from_utf8(bytes).map_err(|_| "the boundaries aren't UTF-8 text".to_string())?, Some(meta.name))
         }
     };
@@ -113,7 +115,7 @@ fn boundaries_add(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn boundaries_countries(_s: &mut Session, _p: &Value) -> CmdResult {
-    let list = boundaries::parse_countries(&fetch(&boundaries::countries_url())?)?;
+    let list = boundaries::parse_countries(&fetch(&boundaries::countries_url())?.0)?;
     Ok(json!({"count": list.len(), "countries": list.iter().map(|(iso, name)| json!({"iso": iso, "name": name})).collect::<Vec<_>>()}))
 }
 
@@ -155,7 +157,8 @@ pub fn dataset_json(d: &portal::Dataset) -> Value {
 fn portal_search(s: &mut Session, p: &Value) -> CmdResult {
     let (portal, query, area, limit) = portal_query(s, p)?;
     let url = portal.search_url(&query, area, limit);
-    let found = portal.parse(&url, &fetch(&url)?, area, &query)?;
+    let (bytes, reach) = fetch(&url)?;
+    let found = portal.parse(reach, &bytes, area, &query)?;
     Ok(json!({"portal": portal.label(), "count": found.len(), "datasets": found.iter().map(dataset_json).collect::<Vec<_>>()}))
 }
 
@@ -170,7 +173,8 @@ pub fn files_query(p: &Value) -> Result<(Portal, String), String> {
 
 fn portal_files(_s: &mut Session, p: &Value) -> CmdResult {
     let (portal, url) = files_query(p)?;
-    let files = portal.parse_listing(&url, &fetch(&url)?)?;
+    let (bytes, reach) = fetch(&url)?;
+    let files = portal.parse_listing(&url, reach, &bytes)?;
     let list: Vec<Value> = files
         .iter()
         .map(|r| match &r.using {
@@ -251,10 +255,22 @@ fn first_layer(s: &mut Session, url: &str, kind: &str) -> Result<String, String>
 }
 
 /// A fetch the command waits for (the command line and the assistant; the app fetches off the
-/// frame and passes the answer).
+/// frame and passes the answer), with the reach it was read at: the addresses the answer gives are
+/// judged by it.
+fn fetch(url: &str) -> Result<(Vec<u8>, crate::render::rustgis_tiles::address::Reach), String> {
+    fetch_within(url, crate::render::rustgis_tiles::address::Reach::Local)
+}
+
+/// [`fetch`], connecting no wider than `ceiling` (the reach of the answer that named `url`).
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    crate::render::rustgis_tiles::cache::download_blocking(url).map_err(|e| {
+fn fetch_within(
+    url: &str,
+    ceiling: crate::render::rustgis_tiles::address::Reach,
+) -> Result<(Vec<u8>, crate::render::rustgis_tiles::address::Reach), String> {
+    use crate::render::rustgis_tiles::cache;
+    let fetched = cache::download_blocking_with_origin_within(url, cache::MAX_DOWNLOAD, cache::BLOCKING_TIMEOUT, &[], ceiling)
+        .map_err(cache::large_file_hint);
+    fetched.map(|f| (f.bytes, f.origin.reach())).map_err(|e| {
         if e.contains("timeout") || e.contains("timed out") {
             "the server didn't answer within a minute (it may be busy): try again later, or a smaller area".to_string()
         } else if e.contains("504") || e.contains("429") {
@@ -266,7 +282,10 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn fetch(_url: &str) -> Result<Vec<u8>, String> {
+fn fetch_within(
+    _url: &str,
+    _: crate::render::rustgis_tiles::address::Reach,
+) -> Result<(Vec<u8>, crate::render::rustgis_tiles::address::Reach), String> {
     Err("in the web app, use Home › Add › Web Data › OpenStreetMap…, Boundaries… or Search Open Data…".into())
 }
 

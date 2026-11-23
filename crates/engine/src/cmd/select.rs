@@ -428,38 +428,46 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     // all the map's layers, as all were before #808, isn't asked over what they found).
     let over_top =
         |i: usize| map.tiles.get(i).is_some_and(|t| t.over.is_some()) && top.is_some_and(|top| place(rustgis_map::Drawn::Tile(i)) < top);
-    let asks = if web && (!first_layer || results.is_empty() || info::topmost(s, lon, lat).is_some_and(over_top)) {
+    let (asks, refused) = if web && (!first_layer || results.is_empty() || info::topmost(s, lon, lat).is_some_and(over_top)) {
         info::requests(s, lon, lat, first_layer, picked)
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
-    let mut out = match results.first().cloned() {
-        Some(first) => first,
-        // Only the tile layer picked is asked, not a raster's pixel.
-        None if picked.is_some() && asks.is_empty() => return Ok(Value::Null),
-        None if picked.is_some() => json!({}),
-        // Nothing found (Topmost and Visible looked at the rasters already): Selectable and
-        // Selected in Layers report the pixel of the topmost raster instead.
-        None if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) => {
-            return Ok(Value::Null);
+    let out = (|| -> CmdResult {
+        let mut out = match results.first().cloned() {
+            Some(first) => first,
+            // Only the tile layer picked is asked, not a raster's pixel.
+            None if picked.is_some() && asks.is_empty() => return Ok(Value::Null),
+            None if picked.is_some() => json!({}),
+            // Nothing found (Topmost and Visible looked at the rasters already): Selectable and
+            // Selected in Layers report the pixel of the topmost raster instead.
+            None if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) => {
+                return Ok(Value::Null);
+            }
+            // (Topmost and Visible found no pixel either: no raster has one there.)
+            None => match if matches!(mode, PopupMode::Topmost | PopupMode::Visible) { None } else { super::raster::identify(s, lon, lat) }
+            {
+                Some(pixel) => pixel,
+                None if asks.is_empty() => return Ok(Value::Null),
+                None => json!({}),
+            },
+        };
+        if let Value::Object(o) = &mut out {
+            // A raster's pixel found alone answers as before, without a list.
+            if results.len() > 1 || results.first().is_some_and(|r| r["raster"] != true) {
+                o.insert("results".into(), Value::Array(results));
+            }
+            if !asks.is_empty() {
+                o.insert("featureInfo".into(), Value::Array(asks));
+            }
         }
-        // (Topmost and Visible found no pixel either: no raster has one there.)
-        None => match if matches!(mode, PopupMode::Topmost | PopupMode::Visible) { None } else { super::raster::identify(s, lon, lat) } {
-            Some(pixel) => pixel,
-            None if asks.is_empty() => return Ok(Value::Null),
-            None => json!({}),
-        },
-    };
-    if let Value::Object(o) = &mut out {
-        // A raster's pixel found alone answers as before, without a list.
-        if results.len() > 1 || results.first().is_some_and(|r| r["raster"] != true) {
-            o.insert("results".into(), Value::Array(results));
-        }
-        if !asks.is_empty() {
-            o.insert("featureInfo".into(), Value::Array(asks));
-        }
+        Ok(out)
+    })();
+    // A WMS layer whose request reaches past it isn't asked, and says so.
+    if let Some(notice) = refused {
+        s.notify(notice, false);
     }
-    Ok(out)
+    out
 }
 
 /// Whether identify lists a tile layer's features: archives, vector tiles and overlays added as

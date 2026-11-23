@@ -15,6 +15,7 @@ use rustgis_engine::map::layout::TextAlign;
 use rustgis_engine::map::projection::Flat;
 use rustgis_engine::map::{Camera, Globe, Projection};
 use rustgis_engine::render::rustgis_tiles::Unfinished;
+use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use rustgis_engine::render::{PlacedLabel, Rendered, View};
 use serde_json::{Value, json};
 
@@ -109,7 +110,15 @@ pub struct Ask {
     /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
     /// ask next after the service's error.
     request: Option<String>,
-    slot: crate::Slot<Result<Vec<u8>, String>>,
+    /// The answer, with the reach it was read at.
+    slot: crate::Slot<Result<(Vec<u8>, Reach), String>>,
+}
+
+/// Asks for a request identify listed, within the layer's reach (`"public"`: a document read from
+/// the internet listed the layer, or its capabilities were read from there).
+fn ask_within(a: &Value, url: &str) -> crate::Slot<Result<(Vec<u8>, Reach), String>> {
+    let ceiling = if a["public"] == true { Reach::Public } else { Reach::Local };
+    crate::fetch_within(url, rustgis_engine::data::ogc::MAX_INFO_BYTES, None, ceiling)
 }
 
 impl Popup {
@@ -134,7 +143,7 @@ impl Popup {
             if capabilities {
                 fetched.push((url.to_string(), asks.len()));
             }
-            let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+            let slot = ask_within(a, url);
             let request = (!capabilities).then(|| url.to_string());
             asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
@@ -4128,7 +4137,18 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         let also: Vec<String> = group.collect();
         // The fetch's failure, or an answer that isn't text, is told here; the command tells its
         // own errors (naming the layer).
-        let text = match r.and_then(|bytes| rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)) {
+        let text = match r.and_then(|(bytes, reach)| {
+            // Capabilities read from the internet hold the requests they name there, as identify's
+            // own read does (the layer then lists them with `"public"`).
+            if capabilities
+                && reach == Reach::Public
+                && let Some((caps, _)) =
+                    app.session.map().tiles.iter().find(|t| t.name == layer).and_then(|t| rustgis_engine::data::ogc::wms_layer_of(&t.url))
+            {
+                cache::restrict_to_public(&caps);
+            }
+            rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)
+        }) {
             Ok(text) => text,
             Err(e) => {
                 app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true);
@@ -4156,7 +4176,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         for (layer, r) in replies {
             let Ok(v) = r else { continue };
             if let Some(url) = v["url"].as_str() {
-                let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+                let slot = ask_within(&v, url);
                 next.push(Ask { layer, also: Vec::new(), capabilities: false, request: Some(url.to_string()), slot });
             }
             found.extend(v["results"].as_array().cloned().unwrap_or_default());
@@ -5545,6 +5565,48 @@ mod tests {
         }
     }
 
+    /// The WMS requests identify lists are fetched within the layer's reach (`"public"`: only the
+    /// internet), and capabilities read from the internet are recorded so the requests they name
+    /// are held there; read on the local network, neither.
+    #[test]
+    fn identify_requests_are_fetched_within_the_layers_reach() {
+        use rustgis_engine::render::rustgis_tiles::address::Origin;
+        for observed in [Reach::Public, Reach::Local] {
+            let _turn = crate::fetching::turn();
+            let host = if observed == Reach::Public { "identify-web.example" } else { "identify-intranet.example" };
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let clean = cache::split_download_limit(&url).0.to_string();
+                log.lock().unwrap().push((clean.clone(), ceiling));
+                let origin = Origin::with_observed_reach(&clean, observed.min(ceiling)).unwrap();
+                done(Ok(cache::Fetched { bytes: b"<WMS_Capabilities version=\"1.3.0\"/>".to_vec(), origin }));
+            });
+            let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+            let template = format!(
+                "https://{host}/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=over&STYLES=&CRS=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng"
+            );
+            s.run("map.addTiles", &json!({"url": template, "name": "Over", "overlay": true})).unwrap();
+            let caps = rustgis_engine::data::ogc::wms_layer_of(&template).unwrap().0;
+            let (map, opened) = (s.project.active_map, s.opened);
+            let mut app = RustGisApp::new(s);
+            let request = format!("https://{host}/info?REQUEST=GetFeatureInfo");
+            let info = json!({"featureInfo": [
+                {"tileLayer": "Over", "url": request, "public": observed == Reach::Public},
+                {"tileLayer": "Over", "capabilities": caps},
+            ]});
+            app.map.popup = Some(Popup::new(info, Coord::new(8.6, 46.65), map, opened));
+            {
+                let asked = asked.lock().unwrap();
+                assert_eq!(asked.len(), 2, "{asked:?}");
+                assert_eq!(asked[0], (request.clone(), observed), "the request, listed within {observed:?}");
+                assert_eq!(asked[1], (caps.clone(), Reach::Local), "the capabilities of the user's own layer");
+            }
+            follow_asks(&mut app, &egui::Context::default());
+            assert_eq!(cache::ceiling_for(&caps), observed, "capabilities observed {observed:?}");
+        }
+    }
+
     /// Answers that land while the pop-up waits open it on the top result, with its feature
     /// selected: drawn over Countries, Over's feature comes first, and Switzerland, selected by the
     /// click, no longer is.
@@ -5564,7 +5626,7 @@ mod tests {
         let mut app = RustGisApp::new(s);
         let mut pp = Popup::new(info, Coord::new(8.6, 46.65), map, opened);
         let answer = br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"Bern"},"geometry":null}]}"#;
-        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Ok(answer.to_vec()))));
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Ok((answer.to_vec(), Reach::Local)))));
         pp.asks.push(Ask { layer: "Over".into(), also: Vec::new(), capabilities: false, request: None, slot });
         app.map.popup = Some(pp);
         follow_asks(&mut app, &egui::Context::default());
