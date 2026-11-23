@@ -970,8 +970,10 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
-        Ok(Value::String(preview)) if failed => serde_json::Map::from_iter([("error".to_string(), json!(preview))]),
-        _ if failed => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
+        Ok(Value::String(preview)) if failed => {
+            serde_json::Map::from_iter([("error".to_string(), json!(preview)), ("truncated".to_string(), json!(true))])
+        }
+        _ if failed => serde_json::Map::from_iter([("error".to_string(), json!(text)), ("truncated".to_string(), json!(true))]),
         // No room for any of a result that didn't fail: only that it was cut.
         _ => serde_json::Map::from_iter([("truncated".to_string(), json!(true))]),
     };
@@ -1765,6 +1767,7 @@ mod tests {
         let out: Value = serde_json::from_str(&text).unwrap();
         assert_eq!((&out["success"], &out["losses"][0]["code"]), (&json!(false), &json!("dropped.value")), "{out}");
         assert!(out["error"].as_str().unwrap().starts_with("error: eee"), "the error as text, not encoded twice: {out}");
+        assert_eq!(out["truncated"], json!(true), "the error is said to be cut: {out}");
         let mut finish = |r: Value, always: bool| -> Value {
             serde_json::from_str(&finish_with_losses(&mut s, r, vec![], 200, Withheld::default(), always)).unwrap()
         };

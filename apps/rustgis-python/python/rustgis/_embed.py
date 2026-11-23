@@ -222,9 +222,13 @@ class _Embedded(_Api):
         except BaseException as failure:
             _warn_losses(engine, failure)
             raise
-        if text != self._project:
-            self._project = text
-            self._send_project(text)
+        try:
+            if text != self._project:
+                self._project = text
+                self._send_project(text)
+        except BaseException as failure:
+            _warn_losses(engine, failure)
+            raise
         # Raised once the app has the project, which a warning filter can turn into an error.
         _warn_losses(engine)
 
