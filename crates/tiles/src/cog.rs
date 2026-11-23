@@ -339,6 +339,15 @@ pub(crate) fn forget_file(url: &str) {
     forget_file_in(&mut tiles().lock().unwrap_or_else(|e| e.into_inner()), url);
 }
 
+/// Forgets what was read of a GeoTIFF on this computer ([`is_local_file`]), so its header and
+/// tiles are read again from the file as it is now: it is added or reloaded after it may have
+/// been written again. Nothing for a web address, whose reads follow the tile cache's.
+pub fn forget_local_file(url: &str) {
+    if is_local_file(url) {
+        forget_file(url);
+    }
+}
+
 /// Forgets a file's tiles kept (not those loading) from `t`.
 fn forget_file_in(t: &mut Tiles, url: &str) {
     let mut freed = 0;
@@ -496,7 +505,8 @@ fn with_info_at(url: &str, ceiling: crate::address::Reach, then: Box<dyn FnOnce(
     );
 }
 
-/// Reads `len` bytes at `at` of the file at `url`.
+/// Reads `len` bytes at `at` of the file at `url`: by range from its web address, or from the
+/// file on this computer that a local path names ([`is_local_file`]).
 fn read(url: &str, at: u64, len: u64, ceiling: crate::address::Reach, done: Done) {
     if len == 0 {
         done(Ok(Vec::new()));
@@ -507,7 +517,36 @@ fn read(url: &str, at: u64, len: u64, ceiling: crate::address::Reach, done: Done
         return;
     }
     let end = at.saturating_add(len) - 1;
+    if is_local_file(url) {
+        if let Err(e) = local_read_allowed(url, ceiling) {
+            done(Err(e));
+            return;
+        }
+        // Read on the fetch workers, as a web address's ranges are, never on the frame; not kept
+        // in the tile cache, as the file is at hand.
+        crate::cache::fetch_local(format!("{url}{RANGE}{at}-{end}"), done);
+        return;
+    }
     crate::cache::fetch_counted_with_ceiling(format!("{url}{RANGE}{at}-{end}"), ceiling, done);
+}
+
+/// Whether `url` names a GeoTIFF on this computer, by its full path: the desktop reads a large
+/// local tiled GeoTIFF in place, as it reads a web address's (#2761).
+pub fn is_local_file(url: &str) -> bool {
+    crate::pmtiles::is_local(url) && crate::pmtiles::check_local_path(url, "a GeoTIFF read in place", &["tif", "tiff"]).is_ok()
+}
+
+/// Whether a local GeoTIFF may be read in place: a full path to a `.tif` or `.tiff` file, asked
+/// for where this computer may be reached (never by a document limited to public addresses), and
+/// not in the browser, which has no files to read by path.
+fn local_read_allowed(url: &str, ceiling: crate::address::Reach) -> Result<(), String> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(message_with_address(url, "the web app reads GeoTIFFs in place from web addresses only"));
+    }
+    if ceiling != crate::address::Reach::Local {
+        return Err(message_with_address(url, "a file on this computer can't be read from here"));
+    }
+    crate::pmtiles::check_local_path(url, "a GeoTIFF read in place", &["tif", "tiff"])
 }
 
 /// Reads a file's header (then its stretch): the start, then whatever more the IFDs need.
@@ -519,6 +558,14 @@ fn read(url: &str, at: u64, len: u64, ceiling: crate::address::Reach, done: Done
 /// would send its whole answer); a GeoTIFF mislabelled so on a server that answers ranges is still
 /// read. Without an answer, the first [`HEAD`] bytes are read as for any other file.
 fn load(url: String, ceiling: crate::address::Reach, done: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
+    // A file on this computer: its header read from the file, as any other part of it is.
+    if is_local_file(&url) {
+        if let Err(e) = local_read_allowed(&url, ceiling) {
+            done(Err(e));
+            return;
+        }
+        return read_header(url, HEAD, ceiling, done);
+    }
     if let Err(e) = crate::address::check_reach(&url, ceiling) {
         done(Err(e));
         return;
@@ -2602,5 +2649,35 @@ mod tests {
             }
             forget_file(&url);
         }
+    }
+
+    /// A GeoTIFF on this computer is read in place from its file, by its full path (#2761): its
+    /// header and overview, as a web address's are by range. Refused for a document that may reach
+    /// only public addresses; a path that isn't a full one to a `.tif` or `.tiff` isn't taken for
+    /// one, nor is a web address.
+    #[test]
+    fn a_local_geotiff_is_read_in_place_from_its_file() {
+        let _turn = crate::cache::turn();
+        let dir = std::env::temp_dir().join(format!("rustgis-cog-local-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("local.tif");
+        std::fs::write(&path, cog::example(512, 128)).unwrap();
+        let url = path.display().to_string();
+        assert!(is_local_file(&url));
+        let info = info_blocking(&url).unwrap();
+        let sizes: Vec<u32> = info.layout.levels.iter().map(|l| l.width).collect();
+        assert_eq!(sizes, vec![512, 256, 128]);
+        let overview = raster::overview_blocking(&url).unwrap();
+        assert_eq!((overview.width, overview.overview), (512, None), "small enough to hold its full image as the overview");
+        let (tx, rx) = std::sync::mpsc::channel();
+        load(url.clone(), crate::address::Reach::Public, Box::new(move |r| tx.send(r.err()).unwrap()));
+        let refused = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_or_default();
+        assert!(refused.contains("a file on this computer can't be read from here"), "{refused}");
+        for not in ["local.tif", "./local.tif", "//server/share/local.tif", "https://example.com/local.tif"] {
+            assert!(!is_local_file(not), "{not}");
+        }
+        assert!(!is_local_file(&dir.join("local.png").display().to_string()));
+        forget_local_file(&url);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

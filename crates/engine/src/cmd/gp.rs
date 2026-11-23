@@ -395,7 +395,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             return Err(format!("no GeoLibre tool '{tool}'"));
         }
         let params = params.clone();
-        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params)?, &params))?;
+        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params, false)?, &params))?;
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun {
@@ -535,7 +535,7 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     let plugin = pin.plugin().ok_or_else(|| format!("no plugin tool '{tool}'"))?;
     let (_, tid) = rustgis_plugins::split_id(spec.id).ok_or("invalid plugin tool id")?;
     let (job, full_ids) = preparing(&continuation, || {
-        let inputs = map_inputs(s, Some(spec), resolved)?;
+        let inputs = map_inputs(s, Some(spec), resolved, false)?;
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rustgis_plugins::tools::prepare_pinned(plugin.plugin(), tid, &inputs, resolved)
         }))
@@ -710,7 +710,7 @@ impl ToolRun {
         // A bug in reading the inputs, like one in a tool, must not take the app down.
         let mut done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::render::rustgis_tiles::cache::with_still(still, || {
-                let inputs = match inputs_of(snap, Some(spec), &params) {
+                let inputs = match inputs_of(snap, Some(spec), &params, true) {
                     Ok(inputs) => inputs,
                     // A Cancel while the inputs are read names the tool, as one while it runs does.
                     Err(_) if control.is_cancelled() => {
@@ -1309,6 +1309,9 @@ struct MapInputs<'a> {
     /// Import warnings from local file inputs, kept in the tool result and history.
     messages: Vec<String>,
     losses: Vec<LossMessage>,
+    /// Raster layers read in place from a file on this computer, read again from it for the run
+    /// ([`tiled_inputs`]), by lowercase name.
+    rasters: std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>,
     /// The flat map's projection (its name, the projection and its unit in metres), built the
     /// first time a tool asks for it (Tissot's indicatrix does), once for the run; `None` on the
     /// globe.
@@ -1363,14 +1366,28 @@ impl MapInputs<'_> {
     }
 }
 
-fn map_inputs<'a>(s: &'a Session, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
-    inputs_of(Snapshot::of(s), spec, params)
+/// [`inputs_of`] from the session as it is; `read_tiled` as there.
+fn map_inputs<'a>(
+    s: &'a Session,
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
+    read_tiled: bool,
+) -> Result<MapInputs<'a>, String> {
+    inputs_of(Snapshot::of(s), spec, params, read_tiled)
 }
 
 /// A tool's inputs from what it read of the session: the streamed layers and files it names read
 /// whole, and the rows of each layer it runs on. It reads, so a background run does this on its
-/// thread.
-fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
+/// thread. With `read_tiled`, the raster layers it reads that are read in place from a file on
+/// this computer are read from the file ([`tiled_inputs`]): only where the read may take long (a
+/// built-in tool's run), never for a plugin's run or a suite tool's preparation on the app's
+/// thread, which read the overview the layer holds, or the file by its path.
+fn inputs_of<'a>(
+    snap: Snapshot<'a>,
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
+    read_tiled: bool,
+) -> Result<MapInputs<'a>, String> {
     let (full, said) = streamed_inputs(&snap.map, spec, params)?;
     let (mut messages, mut losses) = (Vec::new(), Vec::new());
     for m in said {
@@ -1401,6 +1418,13 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
     let mut rows = env_inputs(&snap.map, &full, &snap.env, params)?;
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
+    #[cfg(not(target_arch = "wasm32"))]
+    let rasters = if read_tiled { tiled_inputs(&snap.map, spec, params, &mut messages)? } else { std::collections::HashMap::new() };
+    #[cfg(target_arch = "wasm32")]
+    let rasters = {
+        let _ = read_tiled;
+        std::collections::HashMap::new()
+    };
     Ok(MapInputs {
         snap,
         rows,
@@ -1409,9 +1433,52 @@ fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, 
         unread,
         messages,
         losses,
+        rasters,
         flat: std::cell::OnceCell::new(),
         view: std::cell::OnceCell::new(),
     })
+}
+
+/// The raster layers `spec`'s parameters name that are read in place from a file on this
+/// computer ([`rustgis_map::raster::RasterLayer::tiled`]), each read again from the file for the
+/// run, by lowercase name: such a layer holds only the small overview the map draws from zoomed
+/// out, and a tool reads the finest level of the file it can hold, the full image when it fits
+/// (#2761). Read on the run's thread, stopping on its Cancel; one read from an overview is said.
+#[cfg(not(target_arch = "wasm32"))]
+fn tiled_inputs(
+    map: &rustgis_map::Map,
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
+    messages: &mut Vec<String>,
+) -> Result<std::collections::HashMap<String, std::sync::Arc<rustgis_data::raster::Raster>>, String> {
+    use rustgis_analysis::ParamKind;
+    let mut read = std::collections::HashMap::new();
+    let Some(spec) = spec else { return Ok(read) };
+    for parameter in spec.params {
+        let value = params.get(parameter.name).unwrap_or(&Value::Null);
+        let names: Vec<&str> = match parameter.kind {
+            ParamKind::RasterLayer => value.as_str().into_iter().collect(),
+            ParamKind::RasterLayers => rustgis_analysis::layer_list(value).unwrap_or_default(),
+            _ => continue,
+        };
+        for name in names {
+            let Some(l) = map.layer_by_name(name) else { continue };
+            let key = l.name.to_ascii_lowercase();
+            let Some(path) = l.raster.as_ref().filter(|rl| rl.tiled).and_then(|rl| rl.path.as_deref()) else { continue };
+            if read.contains_key(&key) {
+                continue;
+            }
+            let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), None, None).map_err(|e| format!("{}: {e}", l.name))?;
+            if let Some((fw, fh)) = r.overview {
+                messages.push(format!(
+                    "{}: read at its {} × {} overview of the {fw} × {fh} raster, the finest it can hold",
+                    l.name, r.width, r.height
+                ));
+            }
+            read.insert(key, std::sync::Arc::new(r));
+        }
+    }
+    Ok(read)
 }
 
 /// Narrows the rows a tool reads of each layer to the features its definition query keeps, as the
@@ -1990,9 +2057,11 @@ impl Inputs for MapInputs<'_> {
         *self.view.get_or_init(|| view_extent(&self.snap))
     }
     fn raster(&self, layer: &str) -> Option<RasterInput<'_>> {
-        let rl = self.snap.map.layer_by_name(layer)?.raster.as_ref()?;
+        let l = self.snap.map.layer_by_name(layer)?;
+        let rl = l.raster.as_ref()?;
+        let read = self.rasters.get(&l.name.to_ascii_lowercase()).map(std::sync::Arc::as_ref);
         Some(RasterInput {
-            raster: rl.data.as_deref()?,
+            raster: read.or(rl.data.as_deref())?,
             path: rl.path.as_deref(),
             embedded: rl.embedded.as_deref().map(|b| (rl.file_name.as_deref().unwrap_or("raster.tif"), b.as_slice())),
         })
@@ -3100,7 +3169,9 @@ pub(crate) fn execute(
             }
             #[cfg(not(target_arch = "wasm32"))]
             let read = recording.then(|| Snapshot::owned(s));
-            let inputs = match map_inputs(s, Some(spec), params) {
+            // A built-in tool run here (the command line, a script on its own thread) reads a
+            // raster file read in place, as one the app starts on a thread does.
+            let inputs = match map_inputs(s, Some(spec), params, pin.plugin().is_none()) {
                 Ok(inputs) => inputs,
                 // A batch item that can't read its input is kept in the history as a failed run.
                 Err(e) if opts.record.is_some() => return apply_with(s, run_of(t0), kept(), Err(e), now_ms().saturating_sub(t0), opts),
