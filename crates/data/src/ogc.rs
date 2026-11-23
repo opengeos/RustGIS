@@ -1962,8 +1962,8 @@ pub struct CoverageSystem {
     pub envelope: [f64; 4],
     /// WCS 2.0's axis labels, the east-west one first.
     pub axes: Option<(String, String)>,
-    /// WCS 2.0's grid axis labels for the same axes (`i j`), which scaling names: matched to the
-    /// system's axes by their offset vectors; the system's labels when the grid doesn't say.
+    /// WCS 2.0's grid axis labels for the same axes (`i j`), east-west first, which scaling names
+    /// ([`grid_labels`]); `None` when the grid gives no two labels, and the system's are used.
     pub grid_axes: Option<(String, String)>,
 }
 
@@ -2152,12 +2152,8 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             // axes decides, and the names only when that isn't known.
             let north_first =
                 north_first_labels(&a, &b, false).or_else(|| epsg_north_first(crs)).or_else(|| north_first_labels(&a, &b, true))?;
-            let grid = grid_labels(&root);
-            let (envelope, axes, grid_axes) = if north_first {
-                ([lo1, lo0, hi1, hi0], (b, a), grid.map(|[g0, g1]| (g1, g0)))
-            } else {
-                ([lo0, lo1, hi0, hi1], (a, b), grid.map(|[g0, g1]| (g0, g1)))
-            };
+            let grid_axes = grid_labels(&root, [&a, &b], north_first);
+            let (envelope, axes) = if north_first { ([lo1, lo0, hi1, hi0], (b, a)) } else { ([lo0, lo1, hi0, hi1], (a, b)) };
             Some(CoverageSystem { crs, name: srs.clone(), envelope: ordered(envelope)?, axes: Some(axes), grid_axes })
         });
         let bbox = bbox.or_else(|| own.as_ref().and_then(|o| lonlat_of(o.envelope, o.crs)));
@@ -2213,12 +2209,13 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
     Ok(CoverageInfo { format: tiff_format(formats.iter().map(String::as_str)), axes: None, bbox, native: own })
 }
 
-/// A WCS 2.0 coverage's grid axis labels (its `RectifiedGrid`'s), in the order of the axes of
-/// its system as the envelope gives them: each grid axis goes with the system axis its offset
-/// vector runs along, else (offsets that don't say) in the grid's own order, as grids are most
-/// often laid out. Scaling must name grid axes, so the grid's labels are used whenever it has
-/// two. `None` when it doesn't.
-fn grid_labels(root: &Node) -> Option<[String; 2]> {
+/// A WCS 2.0 coverage's grid axis labels (its `RectifiedGrid`'s), the east-west one first, for
+/// the system axes the envelope labels `env` name in its order (`north_first` when its first is
+/// the north one). A grid axis goes with the system axis of the same name (rasdaman repeats
+/// them), else the one its offset vector runs along, else the grid's first axis is the east one
+/// (its columns, as GeoServer's `i`). Scaling must name grid axes, so the grid's labels are used
+/// whenever it has two; `None` when it doesn't.
+fn grid_labels(root: &Node, env: [&str; 2], north_first: bool) -> Option<(String, String)> {
     let grid = root.descendants().find(|n| n.is_element() && local(n) == "RectifiedGrid")?;
     let text = child_text(&grid, "axisLabels").or_else(|| grid.attribute("axisLabels").map(str::to_string))?;
     let labels: Vec<&str> = text.split_whitespace().collect();
@@ -2233,11 +2230,20 @@ fn grid_labels(root: &Node) -> Option<[String; 2]> {
         let (x, y) = (c.first()?.abs(), c.get(1)?.abs());
         (x != y).then_some(usize::from(y > x))
     };
-    let offsets: Option<Vec<usize>> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect();
-    match offsets.as_deref() {
-        Some([1, 0]) => Some([l1.to_string(), l0.to_string()]),
-        _ => Some([l0.to_string(), l1.to_string()]),
-    }
+    // The grid's labels in the envelope's axis order.
+    let in_order = if [l0, l1] == env || [l1, l0] == env {
+        if [l0, l1] == env { [l0, l1] } else { [l1, l0] }
+    } else {
+        let offsets: Option<Vec<usize>> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect();
+        match offsets.as_deref() {
+            Some([0, 1]) => [l0, l1],
+            Some([1, 0]) => [l1, l0],
+            // Unknown: the grid's first axis runs east-west.
+            _ => return Some((l0.to_string(), l1.to_string())),
+        }
+    };
+    let [first, second] = in_order;
+    Some(if north_first { (second.to_string(), first.to_string()) } else { (first.to_string(), second.to_string()) })
 }
 
 /// The projected system a WCS GetCoverage address asks its coverage in, when the address says
@@ -2363,7 +2369,11 @@ pub fn get_coverage(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> (Strin
                 c.version,
                 encode(&c.id),
                 encode(&info.format),
-                crs = format!("http://www.opengis.net/def/crs/EPSG/0/{}", own.crs.epsg()),
+                // The code as the description writes it (a server lists its aliases, as 900913).
+                crs = format!(
+                    "http://www.opengis.net/def/crs/EPSG/0/{}",
+                    projected_system(&own.name).map_or(u32::from(own.crs.epsg()), |(n, _)| n)
+                ),
                 ge = own.grid_axes.as_ref().map_or(e, |g| &g.0),
                 gn = own.grid_axes.as_ref().map_or(n, |g| &g.1),
             )),
@@ -8832,6 +8842,10 @@ mod tests {
         assert!(get_coverage_url(&c2, &unmatched, unmatched.bbox.unwrap()).contains("SCALESIZE=i(2048),j(2048)"));
         let no_offsets = parse_describe(&c2, gridded("i j", "").as_bytes()).unwrap();
         assert_eq!(no_offsets.native.unwrap().grid_axes, Some(("i".into(), "j".into())));
+        // Grid labels repeating the envelope's pair by name.
+        let named =
+            parse_describe(&c2, gridded("N E", "<offsetVector>10 0</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
+        assert_eq!(named.native.unwrap().grid_axes, Some(("E".into(), "N".into())));
         // North first (Gauss-Krüger zone 3, `N E`): the grid's axes follow the file's order, then
         // turn with the system's.
         let gk = desc("http://www.opengis.net/def/crs/EPSG/0/31467", "N E", "5420000 3480000", "5440000 3500000").replace(
@@ -8841,6 +8855,18 @@ mod tests {
         let gk = parse_describe(&c2, gk.as_bytes()).unwrap();
         let get = get_coverage_url(&c2, &gk, gk.bbox.unwrap());
         assert!(get.contains("&SUBSET=E(3480000,3500000)&SUBSET=N(5420000,5440000)&SCALESIZE=i(2048),j(2048)"), "{get}");
+        // Without offsets, the grid's first axis is its columns, east-west, north first or not.
+        let gk = desc("http://www.opengis.net/def/crs/EPSG/0/31467", "N E", "5420000 3480000", "5440000 3500000")
+            .replace("<nativeFormat>", "<domainSet><RectifiedGrid><axisLabels>i j</axisLabels></RectifiedGrid></domainSet><nativeFormat>");
+        let gk = parse_describe(&c2, gk.as_bytes()).unwrap();
+        assert_eq!(gk.native.unwrap().grid_axes, Some(("i".into(), "j".into())));
+        // The system named by the code the description writes, an alias included.
+        let alias =
+            parse_describe(&c2, desc("http://www.opengis.net/def/crs/EPSG/0/900913", "x y", "800000 5900000", "850000 5950000").as_bytes())
+                .unwrap();
+        assert_eq!(alias.native.as_ref().map(|o| o.crs), Some(crate::raster::Crs::WebMercator));
+        let get = get_coverage_url(&c2, &alias, alias.bbox.unwrap());
+        assert!(get.contains("&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/900913&"), "{get}");
         // No axis names it knows: EPSG's order (LV95 is east first).
         let unnamed = parse_describe(&c2, desc(srs, "i j", "2590000 1190000", "2610000 1210000").as_bytes()).unwrap();
         assert_eq!(unnamed.native.unwrap().axes, Some(("i".into(), "j".into())));

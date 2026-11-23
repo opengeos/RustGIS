@@ -290,6 +290,17 @@ fn a_coverage_answer_without_its_system_is_read_in_the_one_asked_for() {
         }
         assert!(s.run("layer.addDownload", &q).is_err(), "{crs:?}");
     }
+    // A coverageCrs that isn't usable leaves it to the address; a usable one comes first.
+    s.downloaded.push((14, tiff.clone()));
+    let added = s
+        .run("layer.addDownload", &json!({"id": 14, "url": get, "name": "Terrain", "coverage": true, "coverageCrs": "EPSG:4326"}))
+        .unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), lv95);
+    s.downloaded.push((15, tiff.clone()));
+    let added = s
+        .run("layer.addDownload", &json!({"id": 15, "url": get, "name": "Terrain", "coverage": true, "coverageCrs": "EPSG:21781"}))
+        .unwrap();
+    assert_eq!(crs_of(&s, &added["layer"]), Crs::from_epsg(21781).unwrap());
     // Added by address, as the command line adds service.coverage's address: the address says
     // the system, or coverageCrs does.
     let added = s.run("layer.addUrl", &json!({"url": get, "name": "By address", "coverage": true})).unwrap();
