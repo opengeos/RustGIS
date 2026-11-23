@@ -814,12 +814,29 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 crate::exprcomplete::expr_edit(ui, id, &mut app.dialogs.text, ds, style).labelled_by(input_label.id);
                 // Read once no suggestion is offered: a word still being chosen isn't an error yet.
                 let text = app.dialogs.text.trim();
-                let reads = data(app)
-                    .filter(|_| !text.is_empty() && !crate::exprcomplete::offering(ui, id))
-                    .map(|d| rustgis_engine::cmd::edit::check_calculation(text, d));
-                if let Some(Err(e)) = reads {
-                    let t = Tokens::get(ui.ctx());
-                    ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
+                // Once it reads, what it would write in the rows Calculate writes first (#2817): the
+                // first three of the selection, in the order Calculate takes it, else the first three.
+                let selected = match app.dialogs.table {
+                    Some(_) => &[][..],
+                    None => app.session.active_layer.and_then(|id| app.session.map().layer(id)).map_or(&[][..], |l| &l.selection[..]),
+                };
+                let rows: Vec<usize> = if selected.is_empty() { (0..3).collect() } else { selected.iter().take(3).copied().collect() };
+                let field = Some(&app.dialogs.a).filter(|a| fields.contains(a));
+                let reads = data(app).filter(|_| !text.is_empty() && !crate::exprcomplete::offering(ui, id)).map(|d| {
+                    match field.and_then(|f| d.field_index(f)) {
+                        Some(fi) => rustgis_engine::cmd::edit::preview_calculation(text, d, fi, &rows).map(Some),
+                        None => rustgis_engine::cmd::edit::check_calculation(text, d).map(|()| None),
+                    }
+                });
+                match reads {
+                    Some(Err(e)) => {
+                        let t = Tokens::get(ui.ctx());
+                        ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
+                    }
+                    Some(Ok(Some(preview))) if !preview.is_empty() => {
+                        ui.label(egui::RichText::new(calculation_preview(&preview)).small());
+                    }
+                    _ => {}
                 }
                 // A standalone table has no selection: every row.
                 let help = if app.dialogs.table.is_some() {
@@ -3125,6 +3142,37 @@ fn calculation_fields(dataset: &rustgis_engine::data::Dataset) -> impl Iterator<
     dataset.fields.iter().enumerate().filter(|(i, field)| dataset.field_index(&field.name) == Some(*i)).map(|(_, field)| field)
 }
 
+/// Calculate Field's preview line: each row's value as the field would hold it, shortened to fit
+/// the line, with what writing it loses (`Preview: 2 (fraction dropped) · 4`).
+fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -> String {
+    const LONGEST: usize = 40;
+    let values: Vec<String> = rows
+        .iter()
+        .map(|p| {
+            let mut value = p.value.to_string();
+            if let Some((cut, _)) = value.char_indices().nth(LONGEST) {
+                value.truncate(cut);
+                value.push('…');
+            }
+            use rustgis_engine::cmd::edit::PreviewLoss;
+            // In logical order: the line as a whole is put in display form once, below.
+            let loss = match p.lost {
+                None => return value,
+                Some(PreviewLoss::Fraction) => tl_raw!("fraction dropped"),
+                Some(PreviewLoss::Range) => tl_raw!("past the 64-bit integer range"),
+                Some(PreviewLoss::NotANumber) => tl_raw!("not a number"),
+                Some(PreviewLoss::NotFinite) => tl_raw!("not a finite number"),
+                Some(PreviewLoss::Time) => tl_raw!("time dropped"),
+                Some(PreviewLoss::Unheld) => tl_raw!("not a value the field holds"),
+                // The phrases the run's notices give for the same errors.
+                Some(PreviewLoss::Error(fault)) => tl_raw!(fault.describe()),
+            };
+            crate::i18n::fmt_raw("{value} ({loss})", &[("value", &value), ("loss", loss)])
+        })
+        .collect();
+    crate::i18n::fmt("Preview: {values}", &[("values", &values.join(" · "))])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4002,6 +4050,73 @@ mod tests {
         assert_eq!(shown(&h, "continent"), continent, "the list closed");
         assert_eq!(h.state().dialogs.open, Some("selectByAttributes"), "Escape took the list, not the dialog");
         assert!(h.query_by_label_contains("Invalid:").is_some(), "the error once the list is closed");
+    }
+
+    /// Calculate Field previews what it would write (#2817): the first three rows of a table, as
+    /// the field holds them, with what writing them loses; nothing for an expression that doesn't
+    /// read, or while a suggestion is offered.
+    #[test]
+    fn calculate_field_previews_the_first_rows_of_a_table() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        app.run("layer.addDataText", json!({"fileName": "pops.csv", "text": "pop,n\n2.5,1\n4,2\n6,3\n8,4\n"})).unwrap();
+        let id = app.session.project.tables[0].id;
+        app.run("ui.dialog", json!({"name": "calculateField", "table": id})).unwrap();
+        app.dialogs.a = "pop".into();
+        app.dialogs.text = "pop * 2".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        assert!(h.query_by_label("Preview: 5 · 8 · 12").is_some(), "the first three rows");
+        // As the field holds it: a whole-number field drops the fraction, and says so.
+        h.state_mut().dialogs.a = "n".into();
+        h.state_mut().dialogs.text = "pop".into();
+        h.run_steps(2);
+        assert!(h.query_by_label("Preview: 2 (fraction dropped) · 4 · 6").is_some(), "the field's own values");
+        // An error in a row is said in place of the value.
+        h.state_mut().dialogs.text = "1 / (pop - 4)".into();
+        h.run_steps(2);
+        assert!(
+            h.query_by_label("Preview: 0 (fraction dropped) · <Null> (a division by zero) · 0 (fraction dropped)").is_some(),
+            "the error said in its row"
+        );
+        // An expression that doesn't read: its error, no preview.
+        h.state_mut().dialogs.text = "nosuch".into();
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("no field named 'nosuch'").is_some());
+        assert!(h.query_by_label_contains("Preview:").is_none(), "no preview of what doesn't read");
+        // While a suggestion is offered: neither.
+        h.state_mut().dialogs.text.clear();
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("cf_expression")));
+        h.run();
+        h.event(egui::Event::Text("po".into()));
+        h.run();
+        assert!(h.query_by_label_contains("Preview:").is_none(), "no preview while a word is chosen");
+    }
+
+    /// On a layer, the preview reads the first three selected rows (a selection is kept in the
+    /// table's order), or the first three rows when none is selected (#2817); an empty layer has
+    /// no preview.
+    #[test]
+    fn calculate_field_previews_the_selected_rows_of_a_layer() {
+        use egui_kittest::kittest::Queryable;
+        let point = |v: i64| json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [v, v]}, "properties": {"v": v}});
+        let points = json!({"type": "FeatureCollection", "features": (1..=5).map(point).collect::<Vec<_>>()});
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        app.run("layer.addDataText", json!({"fileName": "points.geojson", "text": points.to_string()})).unwrap();
+        let id = app.session.active_layer.unwrap();
+        app.session.map_mut().layer_mut(id).unwrap().selection = vec![1, 2, 3, 4];
+        app.run("ui.dialog", json!({"name": "calculateField"})).unwrap();
+        app.dialogs.a = "v".into();
+        app.dialogs.text = "v * 10".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        assert!(h.query_by_label("Preview: 20 · 30 · 40").is_some(), "the first three selected");
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().selection.clear();
+        h.run_steps(2);
+        assert!(h.query_by_label("Preview: 10 · 20 · 30").is_some(), "the first three rows");
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.features.clear();
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("Preview:").is_none(), "no rows, no preview");
     }
 
     /// The app in a harness, its fonts installed on the first pass (the dialog draws on the next).
