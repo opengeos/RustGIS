@@ -190,7 +190,8 @@ fn zigzag(v: u64) -> i64 {
     ((v >> 1) as i64) ^ -((v & 1) as i64)
 }
 
-/// The most values a packed field holds: writers put about 8,000 entities in a block, and a way
+/// The most values in one decoded list (the complete logical field for Relation arrays).
+/// Writers put about 8,000 entities in a block, and a way
 /// has at most 2,000 nodes, so this is far past real files and keeps a hostile block of one-byte
 /// varints from growing a vector to its whole 32 MiB.
 const MAX_PACKED: usize = 1 << 20;
@@ -206,6 +207,33 @@ fn packed(b: &[u8]) -> Result<Vec<u64>> {
         out.push(v);
     }
     Ok(out)
+}
+
+/// Appends one occurrence of a repeated relation field, bounded over the complete logical array.
+/// Protobuf permits packed and unpacked occurrences to interleave; no intermediate value list is built.
+fn append_repeated(out: &mut Vec<u64>, value: Wire<'_>) -> Result<()> {
+    crate::progress::check()?;
+    let mut push = |v| -> Result<()> {
+        if out.len() >= MAX_PACKED {
+            return Err(DataError::Format(format!("an OSM PBF block holds a list of more than {MAX_PACKED} values")));
+        }
+        if out.len().is_multiple_of(1024) {
+            crate::progress::check()?;
+        }
+        out.push(v);
+        Ok(())
+    };
+    match value {
+        Wire::Varint(v) => push(v),
+        Wire::Bytes(b) => {
+            let mut p = Pb::new(b);
+            while p.i < b.len() {
+                push(p.varint().ok_or_else(|| bad("a packed relation value"))?)?;
+            }
+            Ok(())
+        }
+        Wire::Other => Ok(()),
+    }
 }
 
 /// Delta-coded signed values of a packed field, summed.
@@ -390,14 +418,23 @@ fn block(osm: &mut Osm, data: &[u8]) -> Result<()> {
                     while let Some((rf, rv)) = r.next()? {
                         match (rf, rv) {
                             (1, Wire::Varint(x)) => id = x as i64,
-                            (2, Wire::Bytes(b)) => k = packed(b)?,
-                            (3, Wire::Bytes(b)) => vv = packed(b)?,
-                            (8, Wire::Bytes(b)) => roles = packed(b)?,
-                            (9, Wire::Bytes(b)) => mems = deltas(b)?,
-                            (10, Wire::Bytes(b)) => types = packed(b)?,
+                            (2, value) => append_repeated(&mut k, value)?,
+                            (3, value) => append_repeated(&mut vv, value)?,
+                            (8, value) => append_repeated(&mut roles, value)?,
+                            (9, value) => append_repeated(&mut mems, value)?,
+                            (10, value) => append_repeated(&mut types, value)?,
                             _ => {}
                         }
                     }
+                    // Member IDs are delta-coded across all field occurrences, not each payload.
+                    let mut previous = 0i64;
+                    let mems: Vec<i64> = mems
+                        .into_iter()
+                        .map(|v| {
+                            previous = previous.wrapping_add(zigzag(v));
+                            previous
+                        })
+                        .collect();
                     let t = tags(&strings, &k, &vv);
                     // Only the relations drawn are kept.
                     if osm.relations.len() >= MAX_RELATIONS {
@@ -976,6 +1013,15 @@ pub(crate) mod tests {
 
     /// Explicit parallel member arrays allow malformed input and actual nested relations in tests.
     fn finite_member_arrays_file(ways: &[(u64, &[i64], bool)], relations: &[(u64, &[u64], &[i64], &[u64])]) -> Vec<u8> {
+        finite_member_fields_file(ways, relations, field_bytes)
+    }
+
+    /// Relation scalar fields can use packed, split or unpacked wire encodings of the same values.
+    fn finite_member_fields_file(
+        ways: &[(u64, &[i64], bool)],
+        relations: &[(u64, &[u64], &[i64], &[u64])],
+        encode: impl Fn(u64, &[u8], &mut Vec<u8>),
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         let mut header = Vec::new();
         field_bytes(4, b"OsmSchema-V0.6", &mut header);
@@ -1017,11 +1063,11 @@ pub(crate) mod tests {
         for (id, roles, ids, types) in relations {
             let mut r = Vec::new();
             field_varint(1, *id, &mut r);
-            field_bytes(2, &packed_of(&[5]), &mut r);
-            field_bytes(3, &packed_of(&[6]), &mut r);
-            field_bytes(8, &packed_of(roles), &mut r);
-            field_bytes(9, &delta(ids), &mut r);
-            field_bytes(10, &packed_of(types), &mut r);
+            encode(2, &packed_of(&[5]), &mut r);
+            encode(3, &packed_of(&[6]), &mut r);
+            encode(8, &packed_of(roles), &mut r);
+            encode(9, &delta(ids), &mut r);
+            encode(10, &packed_of(types), &mut r);
             field_bytes(4, &r, &mut group);
         }
         let mut block = Vec::new();
@@ -1029,6 +1075,70 @@ pub(crate) mod tests {
         field_bytes(2, &group, &mut block);
         blob("OSMData", &block, false, &mut out);
         out
+    }
+
+    /// Split member fields preserve delta continuity; tag arrays also concatenate across occurrences.
+    #[test]
+    fn relation_members_split_fields_keep_geometry_and_tags() {
+        let ways: &[(u64, &[i64], bool)] = &[(100, &[1, 2, 3, 4, 1], false), (101, &[5, 6, 7, 5], false)];
+        let file = |mode| {
+            finite_member_fields_file(ways, &[(200, &[7, 8], &[100, 101], &[1, 1])], |field, bytes, out| {
+                let mut bytes = bytes.to_vec();
+                if field == 2 {
+                    bytes.extend(packed_of(&[1]));
+                }
+                if field == 3 {
+                    bytes.extend(packed_of(&[2]));
+                }
+                if mode == 0 || (mode == 1 && field != 8) {
+                    field_bytes(field, &bytes, out);
+                    return;
+                }
+                let mut values = Pb::new(&bytes);
+                let mut index = 0;
+                while let Some(value) = values.varint() {
+                    if mode == 3 || (mode == 4 && index % 2 == 1) {
+                        field_varint(field, value, out);
+                    } else {
+                        field_bytes(field, &packed_of(&[value]), out);
+                    }
+                    index += 1;
+                }
+            })
+        };
+        let clean = read("split.pbf", &file(0)).unwrap();
+        assert_eq!(clean.len(), 2);
+        assert!(clean.iter().all(|(_, report)| report.messages.is_empty() && report.skipped == 0));
+        let Some(Geometry::Polygon(parts)) = &clean[1].0.features[0].geometry else { panic!("polygon") };
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].len(), 2);
+        assert_eq!(clean[1].0.features[0].attrs[1], Value::Text("marker".into()));
+        for mode in 1..=4 {
+            let decoded = read("split.pbf", &file(mode)).unwrap();
+            assert_eq!(decoded.len(), clean.len());
+            for ((actual, report), (expected, _)) in decoded.iter().zip(&clean) {
+                assert_eq!(actual.fields, expected.fields);
+                assert_eq!(actual.features.iter().collect::<Vec<_>>(), expected.features.iter().collect::<Vec<_>>());
+                assert_eq!(actual.held_in, expected.held_in);
+                assert!(report.messages.is_empty());
+                assert_eq!(report.skipped, 0);
+            }
+        }
+    }
+
+    /// Splitting a logical member array cannot evade the existing packed-value allocation bound.
+    #[test]
+    fn relation_members_split_fields_share_the_value_limit() {
+        let file = finite_member_fields_file(&[], &[(200, &[7], &[100], &[1])], |field, bytes, out| {
+            if field == 8 {
+                field_bytes(field, &vec![0; MAX_PACKED], out);
+                field_varint(field, 0, out);
+            } else {
+                field_bytes(field, bytes, out);
+            }
+        });
+        let err = read("split.pbf", &file).err().map(|e| e.to_string()).unwrap_or_default();
+        assert_eq!(err, format!("an OSM PBF block holds a list of more than {MAX_PACKED} values"));
     }
 
     /// Unsupported sub-relations are counted only for parents whose direct ways produce geometry.
